@@ -34,7 +34,7 @@ struct TurbulenceTables {
   grad_y: array<f32, 2056>,  // [channel * 514 + index]
 }
 
-@group(0) @binding(0) var output_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(0) var output_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(1) var<storage, read> params: TurbulenceParams;
 @group(0) @binding(2) var<storage, read> tables: TurbulenceTables;
 

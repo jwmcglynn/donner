@@ -25,7 +25,7 @@ inline constexpr uint32_t kSubregionClipWorkgroupSize = 8;
 /// host that creates its bind group layout.
 enum class SubregionClipBinding : uint32_t {
   InputTexture = 0,   //!< Sampled `texture_2d<f32>` source.
-  OutputTexture = 1,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
+  OutputTexture = 1,  //!< `texture_storage_2d<rgba32float, write>` destination.
   Params = 2,         //!< Uniform buffer holding the inverse transform and the user-space
                       //!< rectangle to keep.
 };

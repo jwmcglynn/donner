@@ -65,7 +65,7 @@ TEST(ColorSpaceConvertProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, HasSubstr("@builtin(global_invocation_id) gid: vec3<u32>"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
   EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba8unorm, "
+              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
                         "write>;"));
   EXPECT_THAT(wgsl,
               HasSubstr("@group(0) @binding(2) var<uniform> params: ColorSpaceConvertParams;"));
@@ -76,32 +76,16 @@ TEST(ColorSpaceConvertProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, testing::Not(HasSubstr("cs_main_Output")));
 }
 
-TEST(ColorSpaceConvertProgramTests, WgslSpellsTheSrgbTransferExactly) {
+TEST(ColorSpaceConvertProgramTests, TransferUsesBoundedSamplesInsteadOfDevicePow) {
   const std::string wgsl = EmitColorSpaceConvertWgsl();
-
-  // Every constant of the transfer is pinned here, in both directions. These are the numbers the
-  // CPU filter path uses; a transfer that drifted from them by one digit would still look
-  // plausible and would disagree with the reference on every texel.
-  EXPECT_THAT(wgsl, HasSubstr("fn srgb_channel_to_linear(c: f32) -> f32 {\n"
-                              "  if ((c <= 0.04045f)) {\n"
-                              "    return (c / 12.92f);\n"
-                              "  }\n"
-                              "  return pow(((c + 0.055f) / 1.055f), 2.4f);\n"
-                              "}"));
-  EXPECT_THAT(wgsl, HasSubstr("fn linear_channel_to_srgb(c: f32) -> f32 {\n"
-                              "  if ((c <= 0.0031308f)) {\n"
-                              "    return (c * 12.92f);\n"
-                              "  }\n"
-                              "  return ((1.055f * pow(c, 0.41666666f)) - 0.055f);\n"
-                              "}"));
-}
-
-TEST(ColorSpaceConvertProgramTests, WgslBranchesRatherThanSelectsOverThePowCurve) {
-  const std::string wgsl = EmitColorSpaceConvertWgsl();
-
-  // pow is undefined for a negative base, and select evaluates both of its arms. The linear
-  // segment is what covers the inputs the curve cannot take, so it has to be a branch.
-  EXPECT_THAT(wgsl, testing::Not(HasSubstr("select(")));
+  EXPECT_THAT(
+      wgsl,
+      HasSubstr("@group(0) @binding(3) var<storage, read> transferTable: ColorTransferTable"));
+  EXPECT_THAT(wgsl, HasSubstr("if ((c > 0f))"));
+  EXPECT_THAT(wgsl, HasSubstr("min(c, 1f)"));
+  EXPECT_THAT(wgsl, HasSubstr("4095f"));
+  EXPECT_THAT(wgsl, HasSubstr("4096u"));
+  EXPECT_THAT(wgsl, testing::Not(HasSubstr("pow(")));
 }
 
 TEST(ColorSpaceConvertProgramTests, MslDeclaresTheKernelSurface) {

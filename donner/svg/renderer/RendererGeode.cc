@@ -1036,8 +1036,8 @@ private:
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
-    // Every current pool caller uses a single-sampled, one-mip 32-bit RGBA or BGRA texture.
-    return static_cast<uint64_t>(key.width) * static_cast<uint64_t>(key.height) * 4u;
+    return static_cast<uint64_t>(key.width) * key.height * key.sampleCount *
+           gpu::TextureFormatBytesPerTexel(key.format);
   }
 
   /// Destroys the backend object behind \p texture, not just this pool's name for it.
@@ -1755,10 +1755,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Charges one surface of \p size against the frame's surface budget.
   /// @param size Extent of the surface about to be allocated, in texels.
-  [[nodiscard]] bool reserveTextureSurface(const gpu::Extent2d& size) {
+  [[nodiscard]] bool reserveTextureSurface(
+      const gpu::Extent2d& size, gpu::TextureFormat format = gpu::TextureFormat::RGBA8Unorm) {
     if (!device || size.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
         size.height > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        !surfaceBudget->reserve(static_cast<int>(size.width), static_cast<int>(size.height))) {
+        !surfaceBudget->reserve(static_cast<int>(size.width), static_cast<int>(size.height), 1,
+                                gpu::TextureFormatBytesPerTexel(format))) {
       return false;
     }
     return true;
@@ -1768,7 +1770,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
-    if (!texturePool || !reserveTextureSurface(desc.size)) {
+    if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
     return texturePool->acquire(desc);
@@ -1795,7 +1797,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         desc.size.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
         desc.size.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
         surfaceBudget->release(static_cast<int>(desc.size.width),
-                               static_cast<int>(desc.size.height));
+                               static_cast<int>(desc.size.height), 1,
+                               gpu::TextureFormatBytesPerTexel(desc.format));
     UTILS_RELEASE_ASSERT(releasedSurface);
     if (texturePool) {
       texturePool->release(std::move(texture), desc);

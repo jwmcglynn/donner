@@ -65,7 +65,7 @@ TEST(OffsetProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, HasSubstr("@builtin(global_invocation_id) gid: vec3<u32>"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
   EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba8unorm, "
+              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
                         "write>;"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(2) var<uniform> params: OffsetParams;"));
   // The two trailing words are load-bearing: without them the two f32 members size the block at

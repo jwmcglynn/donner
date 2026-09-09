@@ -23,4 +23,8 @@ namespace donner::gpu::shader::programs {
  */
 ShaderResult<IrModule> BuildSubregionClipModule();
 
+/// Builds the final filter clip, resolving premultiplied float channels to RGBA8 with half-up
+/// rounding. Uses the same clipping parameters and entry point as BuildSubregionClipModule.
+ShaderResult<IrModule> BuildFilterResolveModule();
+
 }  // namespace donner::gpu::shader::programs

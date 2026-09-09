@@ -10,34 +10,12 @@ namespace donner::gpu::shader::programs {
 
 namespace {
 
-/// Channel value at or below which the sRGB transfer is its linear segment rather than its curve,
-/// expressed in the sRGB-encoded space the segment is read in.
-constexpr float kSrgbLinearSegmentEnd = 0.04045f;
-
-/// The same breakpoint expressed in linear light, which is where the inverse transfer reads it.
-constexpr float kLinearSegmentEnd = 0.0031308f;
-
-/// Slope of the linear segment, shared by the transfer and its inverse.
-constexpr float kLinearSegmentSlope = 12.92f;
-
-/// Offset the power curve is shifted by, so the two segments meet.
-constexpr float kCurveOffset = 0.055f;
-
-/// Scale the power curve is divided by on the way to linear and multiplied by on the way back.
-constexpr float kCurveScale = 1.055f;
-
-/// Exponent of the curve, from sRGB encoding to linear light.
-constexpr float kCurveExponent = 2.4f;
-
-/// Exponent of the curve, from linear light back to sRGB encoding.
-constexpr float kInverseCurveExponent = 1.0f / kCurveExponent;
-
 /// Binding index of \p binding as the module builder takes it.
 uint32_t BindingIndex(ColorSpaceConvertBinding binding) {
   return static_cast<uint32_t>(binding);
 }
 
-/// Adds the three module-scope bindings the entry point reads and writes.
+/// Adds the four module-scope bindings the entry point reads and writes.
 ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
   if (ShaderStatus status = builder.addTexture2d(
           0, BindingIndex(ColorSpaceConvertBinding::InputTexture), "inputTexture");
@@ -46,65 +24,50 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
   }
   if (ShaderStatus status = builder.addWriteOnlyStorageTexture2d(
           0, BindingIndex(ColorSpaceConvertBinding::OutputTexture), "outputTexture",
-          StorageTextureFormat::Rgba8Unorm);
+          StorageTextureFormat::Rgba32Float);
       status.hasError()) {
     return status;
   }
-  return builder.addUniformBuffer(0, BindingIndex(ColorSpaceConvertBinding::Params), "params",
-                                  paramsType);
+  if (ShaderStatus status = builder.addUniformBuffer(
+          0, BindingIndex(ColorSpaceConvertBinding::Params), "params", paramsType);
+      status.hasError()) {
+    return status;
+  }
+  auto tableType = IrType::SizedArray(IrType::F32(), 2 * kColorTransferSampleCount);
+  if (tableType.hasError()) {
+    return tableType.error();
+  }
+  auto blockType = IrType::Struct("ColorTransferTable", {{"samples", tableType.result()}});
+  if (blockType.hasError()) {
+    return blockType.error();
+  }
+  return builder.addReadOnlyStorageBuffer(0, BindingIndex(ColorSpaceConvertBinding::TransferTable),
+                                          "transferTable", blockType.result());
 }
 
-/// Declares `srgb_channel_to_linear(c: f32) -> f32`, the sRGB transfer's forward direction.
-/// @param builder Module to declare the function on.
-ShaderStatus AddSrgbChannelToLinear(ModuleBuilder& builder) {
+/// Declares one transfer direction using bounded nearest-sample indexing.
+/// @param builder Destination module. @param name Function name. @param offset Table half.
+ShaderStatus AddTransferFunction(ModuleBuilder& builder, const char* name, uint32_t offset) {
   ErrorLatch e;
-  ShaderResult<FunctionBuilder> created = builder.createFunction(
-      "srgb_channel_to_linear", {IrParam{"c", IrType::F32()}}, IrType::F32());
+  auto created = builder.createFunction(name, {IrParam{"c", IrType::F32()}}, IrType::F32());
   if (created.hasError()) {
     return std::move(created).error();
   }
   FunctionBuilder fn = std::move(created).result();
-
   const IrExpr c = e(fn.ref("c"));
-  e.ok(fn.beginIf(e(Le(c, LiteralF32(kSrgbLinearSegmentEnd)))));
-  e.ok(fn.returnValue(e(Div(c, LiteralF32(kLinearSegmentSlope)))));
+  const IrExpr unit = e(fn.addVar("unit", IrType::F32(), LiteralF32(0.0f)));
+  // The comparison maps NaN to zero before conversion to an integer index.
+  e.ok(fn.beginIf(e(Gt(c, LiteralF32(0.0f)))));
+  e.ok(fn.assign(unit, e(CallBuiltin(BuiltinFn::Min, {c, LiteralF32(1.0f)}))));
   e.ok(fn.endIf());
-  e.ok(fn.returnValue(e(CallBuiltin(
-      BuiltinFn::Pow, {e(Div(e(Add(c, LiteralF32(kCurveOffset))), LiteralF32(kCurveScale))),
-                       LiteralF32(kCurveExponent)}))));
+  const IrExpr scaled = e(fn.addLet(
+      "scaled", e(Mul(unit, LiteralF32(static_cast<float>(kColorTransferSampleCount - 1))))));
+  const IrExpr index =
+      e(fn.addLet("index", e(Convert(IrType::U32(), e(Add(scaled, LiteralF32(0.5f)))))));
+  e.ok(fn.returnValue(e(
+      Index(e(Member(e(fn.ref("transferTable")), "samples")), e(Add(index, LiteralU32(offset)))))));
   e.ok(fn.finish());
-
-  if (e.error) {
-    return *e.error;
-  }
-  return OkShaderStatus();
-}
-
-/// Declares `linear_channel_to_srgb(c: f32) -> f32`, the sRGB transfer's inverse.
-/// @param builder Module to declare the function on.
-ShaderStatus AddLinearChannelToSrgb(ModuleBuilder& builder) {
-  ErrorLatch e;
-  ShaderResult<FunctionBuilder> created = builder.createFunction(
-      "linear_channel_to_srgb", {IrParam{"c", IrType::F32()}}, IrType::F32());
-  if (created.hasError()) {
-    return std::move(created).error();
-  }
-  FunctionBuilder fn = std::move(created).result();
-
-  const IrExpr c = e(fn.ref("c"));
-  e.ok(fn.beginIf(e(Le(c, LiteralF32(kLinearSegmentEnd)))));
-  e.ok(fn.returnValue(e(Mul(c, LiteralF32(kLinearSegmentSlope)))));
-  e.ok(fn.endIf());
-  e.ok(fn.returnValue(
-      e(Sub(e(Mul(LiteralF32(kCurveScale),
-                  e(CallBuiltin(BuiltinFn::Pow, {c, LiteralF32(kInverseCurveExponent)})))),
-            LiteralF32(kCurveOffset)))));
-  e.ok(fn.finish());
-
-  if (e.error) {
-    return *e.error;
-  }
-  return OkShaderStatus();
+  return e.error ? ShaderStatus(*e.error) : OkShaderStatus();
 }
 
 /// `vec3<f32>(fn(v.x), fn(v.y), fn(v.z))`: a per-channel transfer applied to a color.
@@ -131,8 +94,8 @@ ShaderResult<IrModule> BuildColorSpaceConvertModule() {
        // is the size a host mirror declared with 16-byte alignment computes for the same member.
        IrType::Member{"pad0", u32}, IrType::Member{"pad1", u32}, IrType::Member{"pad2", u32}}));
   e.ok(AddBindings(builder, paramsType));
-  e.ok(AddSrgbChannelToLinear(builder));
-  e.ok(AddLinearChannelToSrgb(builder));
+  e.ok(AddTransferFunction(builder, "srgb_channel_to_linear", 0));
+  e.ok(AddTransferFunction(builder, "linear_channel_to_srgb", kColorTransferSampleCount));
 
   auto entryResult = builder.createComputeEntryPoint(
       RcString(kColorSpaceConvertEntryPoint),
@@ -169,9 +132,10 @@ ShaderResult<IrModule> BuildColorSpaceConvertModule() {
   // which is what the transfer of a zero channel produces anyway.
   const IrExpr straight = e(fn.addVar("straight", vec4f, transparentBlack));
   e.ok(fn.beginIf(e(Gt(e(Swizzle(source, "w")), LiteralF32(0.0f)))));
-  e.ok(fn.assign(straight, e(ConstructVector(
-                               vec4f, {e(Div(e(Swizzle(source, "xyz")), e(Swizzle(source, "w")))),
-                                       e(Swizzle(source, "w"))}))));
+  e.ok(fn.assign(
+      straight, e(ConstructVector(vec4f, {e(Mul(e(Swizzle(source, "xyz")),
+                                                e(Div(LiteralF32(1.0f), e(Swizzle(source, "w")))))),
+                                          e(Swizzle(source, "w"))}))));
   e.ok(fn.endIf());
 
   const IrExpr color = e(

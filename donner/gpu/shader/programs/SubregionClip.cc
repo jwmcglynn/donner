@@ -16,15 +16,15 @@ uint32_t BindingIndex(SubregionClipBinding binding) {
 }
 
 /// Adds the three module-scope bindings the entry point reads and writes.
-ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
+ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType,
+                         StorageTextureFormat format) {
   if (ShaderStatus status =
           builder.addTexture2d(0, BindingIndex(SubregionClipBinding::InputTexture), "inputTexture");
       status.hasError()) {
     return status;
   }
-  if (ShaderStatus status =
-          builder.addWriteOnlyStorageTexture2d(0, BindingIndex(SubregionClipBinding::OutputTexture),
-                                               "outputTexture", StorageTextureFormat::Rgba8Unorm);
+  if (ShaderStatus status = builder.addWriteOnlyStorageTexture2d(
+          0, BindingIndex(SubregionClipBinding::OutputTexture), "outputTexture", format);
       status.hasError()) {
     return status;
   }
@@ -32,9 +32,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
                                   paramsType);
 }
 
-}  // namespace
-
-ShaderResult<IrModule> BuildSubregionClipModule() {
+ShaderResult<IrModule> BuildClipModule(StorageTextureFormat format) {
   ErrorLatch e;
   ModuleBuilder builder;
 
@@ -50,7 +48,7 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
        // alignment computes for the same members, so one set of bytes describes the block on
        // both sides.
        IrType::Member{"pad0", IrType::U32()}, IrType::Member{"pad1", IrType::U32()}}));
-  e.ok(AddBindings(builder, paramsType));
+  e.ok(AddBindings(builder, paramsType, format));
 
   auto entryResult = builder.createComputeEntryPoint(
       RcString(kSubregionClipEntryPoint),
@@ -109,9 +107,15 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
                        e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f), LiteralF32(0.0f),
                                                            LiteralF32(0.0f), LiteralF32(0.0f)}))));
   e.ok(fn.elseBranch());
-  e.ok(fn.textureStore(
-      outputTexture, coords,
-      e(CallBuiltin(BuiltinFn::TextureLoad, {inputTexture, coords, LiteralI32(0)}))));
+  IrExpr color = e(CallBuiltin(BuiltinFn::TextureLoad, {inputTexture, coords, LiteralI32(0)}));
+  if (format == StorageTextureFormat::Rgba8Unorm) {
+    const IrExpr clamped = e(CallBuiltin(BuiltinFn::Saturate, {color}));
+    const IrExpr scaled = e(Mul(clamped, LiteralF32(255.0f)));
+    const IrExpr half = e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.5f)}));
+    const IrExpr rounded = e(CallBuiltin(BuiltinFn::Floor, {e(Add(scaled, half))}));
+    color = e(Div(rounded, LiteralF32(255.0f)));
+  }
+  e.ok(fn.textureStore(outputTexture, coords, color));
   e.ok(fn.endIf());
   e.ok(fn.finish());
 
@@ -119,6 +123,16 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
     return *e.error;
   }
   return builder.build();
+}
+
+}  // namespace
+
+ShaderResult<IrModule> BuildSubregionClipModule() {
+  return BuildClipModule(StorageTextureFormat::Rgba32Float);
+}
+
+ShaderResult<IrModule> BuildFilterResolveModule() {
+  return BuildClipModule(StorageTextureFormat::Rgba8Unorm);
 }
 
 }  // namespace donner::gpu::shader::programs

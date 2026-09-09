@@ -752,7 +752,7 @@
           "binding": 2,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",
@@ -808,7 +808,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "storage, read",
@@ -837,14 +837,18 @@
         "clamp",
         "if",
         "let",
+        "min",
+        "pow",
         "return",
-        "round",
+        "select",
+        "switch",
         "textureDimensions",
         "textureLoad",
         "textureStore",
         "var"
       ],
       "structs": [
+        "ChannelFunction",
         "ComponentTransferParams"
       ]
     },
@@ -860,7 +864,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "storage, read",
@@ -912,7 +916,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "storage, read",
@@ -975,7 +979,7 @@
           "binding": 2,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",
@@ -1036,7 +1040,7 @@
           "binding": 2,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",
@@ -1088,7 +1092,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",
@@ -1144,7 +1148,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",
@@ -1196,7 +1200,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "storage, read",
@@ -1253,7 +1257,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",
@@ -1297,7 +1301,7 @@
           "binding": 0,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "storage, read",
@@ -1358,7 +1362,7 @@
           "binding": 1,
           "group": 0,
           "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
+          "type": "texture_storage_2d<rgba32float, write>"
         },
         {
           "addressSpace": "uniform",

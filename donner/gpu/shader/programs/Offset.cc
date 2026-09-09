@@ -25,7 +25,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
   }
   if (ShaderStatus status =
           builder.addWriteOnlyStorageTexture2d(0, BindingIndex(OffsetBinding::OutputTexture),
-                                               "outputTexture", StorageTextureFormat::Rgba8Unorm);
+                                               "outputTexture", StorageTextureFormat::Rgba32Float);
       status.hasError()) {
     return status;
   }

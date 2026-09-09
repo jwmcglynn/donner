@@ -17,7 +17,7 @@ inline constexpr uint32_t kMergeWorkgroupSize = 8;
 enum class MergeBinding : uint32_t {
   SourceTexture = 0,       //!< Premultiplied source color.
   DestinationTexture = 1,  //!< Premultiplied backdrop color.
-  OutputTexture = 2,       //!< Write-only rgba8unorm result.
+  OutputTexture = 2,       //!< Write-only rgba32float result.
 };
 
 }  // namespace donner::gpu::shader::programs

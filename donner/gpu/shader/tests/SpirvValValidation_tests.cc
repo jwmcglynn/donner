@@ -183,6 +183,10 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
   return builder.build();
 }
 
+TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildFilterResolveModule(),
+                             "filter_resolve.spv");
+}
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
   ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
 }

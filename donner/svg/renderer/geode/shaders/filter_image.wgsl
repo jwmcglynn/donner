@@ -38,7 +38,7 @@ struct ImageParams {
 }
 
 @group(0) @binding(0) var image_tex: texture_2d<f32>;
-@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var output_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> params: ImageParams;
 
 // Edge-clamp source fetch (matches CPU sampleSrc: std::clamp to [0, dim-1]).

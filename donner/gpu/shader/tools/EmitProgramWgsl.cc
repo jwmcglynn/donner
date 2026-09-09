@@ -53,6 +53,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"offset", &programs::BuildOffsetModule},
     {"snapshot_unpremultiply", &programs::BuildSnapshotUnpremultiplyModule},
     {"subregion_clip", &programs::BuildSubregionClipModule},
+    {"filter_resolve", &programs::BuildFilterResolveModule},
 };
 
 /// Writes \p contents to \p path, returning false with a diagnostic on failure.

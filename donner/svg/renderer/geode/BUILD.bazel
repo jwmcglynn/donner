@@ -318,6 +318,7 @@ donner_cc_library(
         ":filter_color_matrix_wgsl",
         ":filter_composite_wgsl",
         ":filter_merge_wgsl",
+        ":filter_resolve_wgsl",
         ":flood_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
@@ -1069,6 +1070,7 @@ donner_cc_test(
         ":filter_color_matrix_wgsl",
         ":filter_composite_wgsl",
         ":filter_merge_wgsl",
+        ":filter_resolve_wgsl",
         ":flood_wgsl",
         ":offset_wgsl",
         ":snapshot_unpremultiply_wgsl",
@@ -1102,3 +1104,18 @@ donner_multi_transitioned_test(
 )
 
 donner_package()
+
+genrule(
+    name = "filter_resolve_generated",
+    outs = ["generated/filter_resolve.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_resolve " +
+          "$(location generated/filter_resolve.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "filter_resolve_wgsl",
+    header_output = "embed_resources/FilterResolveWgsl.h",
+    resources = {"kFilterResolveWgsl": "generated/filter_resolve.wgsl"},
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)

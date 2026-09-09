@@ -1,6 +1,8 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <deque>
 #include <iostream>
@@ -14,6 +16,7 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
@@ -34,6 +37,7 @@
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
+#include "embed_resources/FilterResolveWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SubregionClipWgsl.h"
@@ -53,7 +57,7 @@ namespace donner::geode {
 struct FilterResourceCache {
   std::mutex mutex;
 
-  /// Growable uniform scratch buffer.
+  /// Growable scratch for uniform and read-only storage parameters.
   ScopedWgpuHandle<wgpu::Buffer> uniformScratch;
   uint64_t uniformScratchSize = 0;
   /// Bump cursor inside the scratch; reset each frame.
@@ -77,7 +81,8 @@ struct FilterResourceCache {
       wgpu::BufferDescriptor desc = {};
       desc.label = wgpuLabel("FilterUniformScratch");
       desc.size = newSize;
-      desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+      desc.usage =
+          wgpu::BufferUsage::Uniform | wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
       if (uniformScratch) {
         // The old buffer may still be referenced by this frame's command
         // encoder, and every cached bind group references it. Defer its
@@ -176,6 +181,41 @@ struct FilterResourceArena {
 
   FilterResourceArena(const FilterResourceArena&) = delete;
   FilterResourceArena& operator=(const FilterResourceArena&) = delete;
+
+  /// Imports carry sRGB. A produced value records the space its primitive evaluated in.
+  bool isLinearRgb(const wgpu::Texture& texture) const {
+    return std::any_of(colorValues_.begin(), colorValues_.end(),
+                       [&](const auto& value) { return value.linear == texture; });
+  }
+
+  void markLinearRgb(const wgpu::Texture& texture, bool linear) {
+    if (linear && !isLinearRgb(texture)) {
+      colorValues_.push_back({{}, texture});
+    }
+  }
+
+  /// Reuses the requested representation when an earlier edge already converted this value.
+  wgpu::Texture convertedTexture(const wgpu::Texture& input, bool linear) const {
+    if (isLinearRgb(input) == linear) {
+      return input;
+    }
+    for (const auto& value : colorValues_) {
+      if (value.srgb == input || value.linear == input) {
+        return linear ? value.linear : value.srgb;
+      }
+    }
+    return {};
+  }
+
+  void rememberConversion(const wgpu::Texture& input, const wgpu::Texture& output, bool linear) {
+    for (auto& value : colorValues_) {
+      if (value.srgb == input || value.linear == input) {
+        (linear ? value.linear : value.srgb) = output;
+        return;
+      }
+    }
+    colorValues_.push_back(linear ? ColorValue{input, output} : ColorValue{output, input});
+  }
 
   /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
   /// ends. Null when the pool refuses the allocation.
@@ -466,11 +506,16 @@ private:
   std::vector<std::pair<WGPUTexture, const gpu::Texture*>> runtimeNameByBackendTexture_;
   std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> backendBuffers_;
+  struct ColorValue {
+    wgpu::Texture srgb;
+    wgpu::Texture linear;
+  };
+  std::vector<ColorValue> colorValues_;
 };
 
 namespace {
 
-constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
+constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA32Float;
 
 double boundedPositiveFilterPixels(double value) {
   if (!std::isfinite(value) || value <= 0.0) {
@@ -958,7 +1003,7 @@ uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeM
 wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::Device&,
                                         uint32_t width, uint32_t height, const char* label) {
   return arena.createTexture(gpu::TextureDescriptor{
-      RcString(label), gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      RcString(label), gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
 }
 
@@ -1011,7 +1056,7 @@ InputOutputUniformPipeline createInputOutputUniformPipeline(const wgpu::Device& 
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[0].texture.multisampled = false;
 
@@ -1068,14 +1113,14 @@ TwoInputUniformPipeline createTwoInputUniformPipeline(const wgpu::Device& dev, c
   // binding 0: in1 (texture_2d)
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[0].texture.multisampled = false;
 
   // binding 1: in2 (texture_2d)
   entries[1].binding = 1;
   entries[1].visibility = wgpu::ShaderStage::Compute;
-  entries[1].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[1].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   entries[1].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[1].texture.multisampled = false;
 
@@ -1217,19 +1262,19 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   return program;
 }
 
-/// The write-only rgba8unorm storage-texture entry every filter program declares for its
+/// The write-only storage-texture entry a filter program declares for its
 /// destination. @param binding Binding index.
-gpu::BindGroupLayoutEntry StorageOutputEntry(uint32_t binding) {
+gpu::BindGroupLayoutEntry StorageOutputEntry(
+    uint32_t binding, gpu::TextureFormat format = gpu::TextureFormat::RGBA32Float) {
   return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Compute,
-                                   gpu::BindingType::WriteOnlyStorageTexture2d,
-                                   gpu::TextureFormat::RGBA8Unorm};
+                                   gpu::BindingType::WriteOnlyStorageTexture2d, format};
 }
 
 /// The sampled float texture entry a filter program declares for its source.
 /// @param binding Binding index.
 gpu::BindGroupLayoutEntry SampledInputEntry(uint32_t binding) {
   return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Compute,
-                                   gpu::BindingType::SampledTexture2dFloat};
+                                   gpu::BindingType::SampledTexture2dUnfilterableFloat};
 }
 
 /// The uniform buffer entry a filter program declares for its parameters.
@@ -1261,12 +1306,10 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param input Source texture, borrowed. @param output Destination texture, borrowed.
 /// @param uniforms Parameter block to upload. @param label Debug label stem for the pass.
 /// @param workgroupSize Size the entry point declares, along x and y.
-[[nodiscard]] bool dispatchRuntimeInputOutputUniform(FilterResourceArena& arena,
-                                                     const RuntimeComputeProgram& program,
-                                                     const wgpu::Texture& input,
-                                                     const gpu::Texture& output,
-                                                     std::span<const uint8_t> uniforms,
-                                                     const char* label, uint32_t workgroupSize) {
+[[nodiscard]] bool dispatchRuntimeInputOutputUniform(
+    FilterResourceArena& arena, const RuntimeComputeProgram& program, const wgpu::Texture& input,
+    const gpu::Texture& output, std::span<const uint8_t> uniforms, const char* label,
+    uint32_t workgroupSize, const gpu::Buffer* transferTable = nullptr) {
   if (!program.pipeline.isValid()) {
     return false;
   }
@@ -1283,13 +1326,16 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
-  const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
-      program.bindGroupLayout,
-      {gpu::BindGroupEntry{0, gpu::TextureViewBinding{*sourceView}},
-       gpu::BindGroupEntry{1, gpu::TextureViewBinding{*destinationView}},
-       gpu::BindGroupEntry{
-           2, gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}}},
-      RcString(label));
+  std::vector<gpu::BindGroupEntry> entries(transferTable == nullptr ? 3 : 4);
+  entries[0] = {0, gpu::TextureViewBinding{*sourceView}};
+  entries[1] = {1, gpu::TextureViewBinding{*destinationView}};
+  entries[2] = {2, gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}};
+  if (transferTable != nullptr) {
+    entries[3] = {3, gpu::BufferBinding{*transferTable, 0,
+                                        sizeof(gpu::shader::programs::ColorTransferSamples())}};
+  }
+  const gpu::BindGroup* bindGroup =
+      arena.createRuntimeBindGroup(program.bindGroupLayout, std::move(entries), RcString(label));
   if (bindGroup == nullptr) {
     return false;
   }
@@ -1581,44 +1627,43 @@ uint32_t toConvolveEdgeMode(svg::components::filter_primitive::ConvolveMatrix::E
   return 0;
 }
 
-/// Build a 256-entry uint8 LUT for one channel's feComponentTransfer function.
-void buildChannelLut(const svg::components::filter_primitive::ComponentTransfer::Func& func,
-                     uint32_t* outLut) {
-  using FT = svg::components::filter_primitive::ComponentTransfer::FuncType;
-  for (int i = 0; i < 256; ++i) {
-    const double c = static_cast<double>(i) / 255.0;
-    double result = c;
+constexpr size_t kComponentTransferHeaderWords = 4 * 8;
+using ComponentTransferData = SmallVector<uint32_t, kComponentTransferHeaderWords + 1>;
 
-    switch (func.type) {
-      case FT::Identity: result = c; break;
-      case FT::Table: {
-        const auto& tv = func.tableValues;
-        if (tv.size() >= 2) {
-          const double k = c * static_cast<double>(tv.size() - 1);
-          const int idx = std::min(static_cast<int>(k), static_cast<int>(tv.size() - 2));
-          const double frac = k - static_cast<double>(idx);
-          result = tv[idx] * (1.0 - frac) + tv[idx + 1] * frac;
-        } else if (tv.size() == 1) {
-          result = tv[0];
-        }
-        break;
-      }
-      case FT::Discrete: {
-        const auto& tv = func.tableValues;
-        if (!tv.empty()) {
-          const int idx = std::min(static_cast<int>(c * static_cast<double>(tv.size())),
-                                   static_cast<int>(tv.size() - 1));
-          result = tv[idx];
-        }
-        break;
-      }
-      case FT::Linear: result = func.slope * c + func.intercept; break;
-      case FT::Gamma: result = func.amplitude * std::pow(c, func.exponent) + func.offset; break;
+/// Encodes four 32-byte function records followed by their unquantized table values.
+std::optional<ComponentTransferData> BuildComponentTransferData(
+    const svg::components::filter_primitive::ComponentTransfer& primitive) {
+  using Func = svg::components::filter_primitive::ComponentTransfer::Func;
+  const std::array<const Func*, 4> functions{&primitive.funcR, &primitive.funcG, &primitive.funcB,
+                                             &primitive.funcA};
+  size_t tableCount = 0;
+  for (const Func* function : functions) {
+    if (function->tableValues.size() > svg::components::kMaximumFilterTableValues) {
+      return std::nullopt;
     }
-
-    result = std::clamp(result, 0.0, 1.0);
-    outLut[i] = static_cast<uint32_t>(std::round(result * 255.0));
+    tableCount += function->tableValues.size();
   }
+  ComponentTransferData result;
+  // The runtime storage array requires one element even when no channel uses a table.
+  result.resize(kComponentTransferHeaderWords + std::max<size_t>(tableCount, 1));
+  uint32_t* word = result.data();
+  uint32_t offset = 0;
+  for (const Func* function : functions) {
+    *word++ = static_cast<uint32_t>(function->type);
+    *word++ = offset;
+    *word++ = static_cast<uint32_t>(function->tableValues.size());
+    for (double coefficient : {function->slope, function->intercept, function->amplitude,
+                               function->exponent, function->offset}) {
+      *word++ = std::bit_cast<uint32_t>(static_cast<float>(coefficient));
+    }
+    offset += static_cast<uint32_t>(function->tableValues.size());
+  }
+  for (const Func* function : functions) {
+    for (double value : function->tableValues) {
+      *word++ = std::bit_cast<uint32_t>(static_cast<float>(value));
+    }
+  }
+  return result;
 }
 
 }  // namespace
@@ -1716,13 +1761,13 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     morphologyPipeline_ = std::move(pipeline);
   }
 
-  // --- feComponentTransfer pipeline (input + output + storage buffer for LUT) ---
+  // --- feComponentTransfer pipeline (input + output + stored function parameters) ---
   {
     wgpu::BindGroupLayoutEntry entries[3]{};
 
     entries[0].binding = 0;
     entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
     entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
     entries[0].texture.multisampled = false;
 
@@ -1735,7 +1780,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     entries[2].binding = 2;
     entries[2].visibility = wgpu::ShaderStage::Compute;
     entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[2].buffer.minBindingSize = 1024 * sizeof(uint32_t);
+    entries[2].buffer.minBindingSize = (kComponentTransferHeaderWords + 1) * sizeof(uint32_t);
 
     wgpu::BindGroupLayoutDescriptor bglDesc{};
     bglDesc.label = wgpuLabel("FilterComponentTransferBGL");
@@ -1767,7 +1812,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
     entries[0].binding = 0;
     entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
     entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
     entries[0].texture.multisampled = false;
 
@@ -1861,7 +1906,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
     entries[0].binding = 0;
     entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
     entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
     entries[0].texture.multisampled = false;
 
@@ -1904,7 +1949,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
     entries[0].binding = 0;
     entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
     entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
     entries[0].texture.multisampled = false;
 
@@ -1976,6 +2021,15 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
          StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture)),
          UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))},
         gpu::shader::programs::kSubregionClipWorkgroupSize);
+    filterResolveProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterResolve",
+        EmbeddedWgsl(donner::embedded::kFilterResolveWgsl),
+        gpu::shader::programs::kSubregionClipEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture),
+                            gpu::TextureFormat::RGBA8Unorm),
+         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))},
+        gpu::shader::programs::kSubregionClipWorkgroupSize);
   }
 
   // --- sRGB to linear color space conversion pipeline, through the GPU runtime ---
@@ -1987,8 +2041,22 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kColorSpaceConvertEntryPoint,
         {SampledInputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::Params))},
+         UniformParamsEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::Params)),
+         {static_cast<uint32_t>(ColorSpaceConvertBinding::TransferTable), gpu::ShaderStage::Compute,
+          gpu::BindingType::ReadOnlyStorageBuffer}},
         gpu::shader::programs::kColorSpaceConvertWorkgroupSize);
+    const auto& samples = gpu::shader::programs::ColorTransferSamples();
+    auto table = device_.adapterDevice().createBuffer(
+        {"FilterColorTransferTable", sizeof(samples),
+         gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
+    if (table.hasResult()) {
+      colorTransferTable_ = std::move(table).result();
+      if (device_.adapterDevice()
+              .writeBuffer(colorTransferTable_, 0, UniformBytes(samples))
+              .hasError()) {
+        colorTransferTable_ = {};
+      }
+    }
   }
 }
 
@@ -2222,6 +2290,9 @@ private:
   }
 };
 
+namespace fp = svg::components::filter_primitive;
+
+/// Values and coordinates retained while one filter graph executes.
 struct FilterGraphExecution {
   FilterGraphExecution(GeodeFilterEngine& engine, const svg::components::FilterGraph& graph,
                        const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
@@ -2232,62 +2303,81 @@ struct FilterGraphExecution {
       : engine(engine),
         graph(graph),
         sourceGraphic(sourceGraphic),
-        filterRegion(filterRegion),
-        deviceFromFilter(deviceFromFilter),
-        textureAllocator(textureAllocator),
-        commandEncoder(commandEncoder),
         executionBudget(executionBudget),
-        device_(engine.device_),
-        resourceCache_(*engine.resourceCache_),
-        framePassesInCommandBuffer_(engine.framePassesInCommandBuffer_),
-        verbose_(engine.verbose_),
-        warnedUnsupported_(engine.warnedUnsupported_) {}
+        arena(engine.device_, textureAllocator, *engine.resourceCache_, commandEncoder,
+              engine.framePassesInCommandBuffer_),
+        coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter),
+        currentBuffer(sourceGraphic),
+        axisAligned(NearZero(deviceFromFilter.data[1], 1e-6) &&
+                    NearZero(deviceFromFilter.data[2], 1e-6)) {}
 
   wgpu::Texture run();
-
-#define DONNER_FORWARD_FILTER_OPERATION(name)        \
-  template <typename... Args>                        \
-  decltype(auto) name(Args&&... args) {              \
-    return engine.name(std::forward<Args>(args)...); \
-  }
-  DONNER_FORWARD_FILTER_OPERATION(applySourceAlpha)
-  DONNER_FORWARD_FILTER_OPERATION(applyGaussianBlur)
-  DONNER_FORWARD_FILTER_OPERATION(applyColorSpaceConversion)
-  DONNER_FORWARD_FILTER_OPERATION(applySubregionClip)
-  DONNER_FORWARD_FILTER_OPERATION(applyOffset)
-  DONNER_FORWARD_FILTER_OPERATION(applyColorMatrix)
-  DONNER_FORWARD_FILTER_OPERATION(applyFlood)
-  DONNER_FORWARD_FILTER_OPERATION(applyMerge)
-  DONNER_FORWARD_FILTER_OPERATION(applyComposite)
-  DONNER_FORWARD_FILTER_OPERATION(applyBlend)
-  DONNER_FORWARD_FILTER_OPERATION(applyMorphology)
-  DONNER_FORWARD_FILTER_OPERATION(applyComponentTransfer)
-  DONNER_FORWARD_FILTER_OPERATION(applyConvolveMatrix)
-  DONNER_FORWARD_FILTER_OPERATION(applyTurbulence)
-  DONNER_FORWARD_FILTER_OPERATION(applyDisplacementMap)
-  DONNER_FORWARD_FILTER_OPERATION(applyDiffuseLighting)
-  DONNER_FORWARD_FILTER_OPERATION(applySpecularLighting)
-  DONNER_FORWARD_FILTER_OPERATION(applyDropShadow)
-  DONNER_FORWARD_FILTER_OPERATION(applyImage)
-  DONNER_FORWARD_FILTER_OPERATION(applyTile)
-#undef DONNER_FORWARD_FILTER_OPERATION
+  wgpu::Texture inputFor(const svg::components::FilterNode& node, size_t index) const;
+  wgpu::Texture clip(const wgpu::Texture& input, const Box2d& region, bool transformed,
+                     bool resolve = false);
+  void record(const svg::components::FilterNode& node, const Box2d& subregion,
+              const wgpu::Texture& output);
 
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
   const wgpu::Texture& sourceGraphic;
-  const Box2d& filterRegion;
-  const Transform2d& deviceFromFilter;
-  FilterTextureAllocator& textureAllocator;
-  ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder;
   svg::components::FilterExecutionBudget* executionBudget;
-  GeodeDevice& device_;
-  FilterResourceCache& resourceCache_;
-  size_t& framePassesInCommandBuffer_;
-  bool& verbose_;
-  bool& warnedUnsupported_;
+  FilterResourceArena arena;
+  FilterExecutionCoordinates coordinates;
+  wgpu::Texture currentBuffer;
+  std::optional<wgpu::Texture> sourceAlpha;
+  std::unordered_map<std::string, wgpu::Texture> namedBuffers;
+  bool axisAligned;
 };
 
-wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution);
+/// The primitive visitor owns node-local conversion and clip decisions.
+struct FilterNodeExecution {
+  FilterNodeExecution(FilterGraphExecution& execution, const svg::components::FilterNode& node)
+      : execution(execution),
+        node(node),
+        engine(execution.engine),
+        arena(execution.arena),
+        coordinates(execution.coordinates),
+        input(execution.inputFor(node, 0)),
+        subregion(coordinates.computeNodeSubregion(node)),
+        linearRgb(
+            node.colorInterpolationFilters.value_or(execution.graph.colorInterpolationFilters) !=
+            svg::ColorInterpolationFilters::SRGB),
+        outputLinear(linearRgb) {}
+
+  wgpu::Texture run();
+  wgpu::Texture toNodeSpace(const wgpu::Texture& texture);
+  bool convertBinaryInputs(wgpu::Texture& second);
+  std::optional<Box2d> blurClip(double sx, double sy) const;
+  wgpu::Texture apply(const fp::GaussianBlur& primitive);
+  wgpu::Texture apply(const fp::Offset& primitive);
+  wgpu::Texture apply(const fp::ColorMatrix& primitive);
+  wgpu::Texture apply(const fp::Flood& primitive);
+  wgpu::Texture apply(const fp::Merge& primitive);
+  wgpu::Texture apply(const fp::Composite& primitive);
+  wgpu::Texture apply(const fp::Blend& primitive);
+  wgpu::Texture apply(const fp::Morphology& primitive);
+  wgpu::Texture apply(const fp::ComponentTransfer& primitive);
+  wgpu::Texture apply(const fp::ConvolveMatrix& primitive);
+  wgpu::Texture apply(const fp::Turbulence& primitive);
+  wgpu::Texture apply(const fp::DisplacementMap& primitive);
+  wgpu::Texture apply(const fp::DiffuseLighting& primitive);
+  wgpu::Texture apply(const fp::SpecularLighting& primitive);
+  wgpu::Texture apply(const fp::DropShadow& primitive);
+  wgpu::Texture apply(const fp::Image& primitive);
+  wgpu::Texture apply(const fp::Tile& primitive);
+
+  FilterGraphExecution& execution;
+  const svg::components::FilterNode& node;
+  GeodeFilterEngine& engine;
+  FilterResourceArena& arena;
+  FilterExecutionCoordinates& coordinates;
+  wgpu::Texture input;
+  Box2d subregion;
+  bool linearRgb;
+  bool outputLinear;
+  bool clipMergedIntoBlur = false;
+};
 
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
@@ -2301,53 +2391,38 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       .run();
 }
 
-wgpu::Texture FilterGraphExecution::run() {
-  return RunFilterGraphExecution(*this);
+wgpu::Texture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
+                                             size_t index) const {
+  return resolveInput(filterInputOrDefault(node, index), namedBuffers, currentBuffer, sourceGraphic,
+                      sourceAlpha ? &*sourceAlpha : nullptr);
 }
 
-wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
-  const auto& graph = execution.graph;
-  const auto& sourceGraphic = execution.sourceGraphic;
-  const auto& filterRegion = execution.filterRegion;
-  const auto& deviceFromFilter = execution.deviceFromFilter;
-  auto& textureAllocator = execution.textureAllocator;
-  auto& commandEncoder = execution.commandEncoder;
-  auto* executionBudget = execution.executionBudget;
-  auto& device_ = execution.device_;
-  auto& resourceCache_ = execution.resourceCache_;
-  auto& framePassesInCommandBuffer_ = execution.framePassesInCommandBuffer_;
-  auto& verbose_ = execution.verbose_;
-  auto& warnedUnsupported_ = execution.warnedUnsupported_;
-#define DONNER_BIND_FILTER_OPERATION(name)                        \
-  const auto name = [&](auto&&... args) -> decltype(auto) {       \
-    return execution.name(std::forward<decltype(args)>(args)...); \
+wgpu::Texture FilterGraphExecution::clip(const wgpu::Texture& input, const Box2d& region,
+                                         bool transformed, bool resolve) {
+  if (transformed) {
+    return engine.applySubregionClip(arena, input, coordinates.filterFromDevice, region.topLeft.x,
+                                     region.topLeft.y, region.bottomRight.x, region.bottomRight.y,
+                                     resolve);
   }
-  DONNER_BIND_FILTER_OPERATION(applySourceAlpha);
-  DONNER_BIND_FILTER_OPERATION(applyGaussianBlur);
-  DONNER_BIND_FILTER_OPERATION(applyColorSpaceConversion);
-  DONNER_BIND_FILTER_OPERATION(applySubregionClip);
-  DONNER_BIND_FILTER_OPERATION(applyOffset);
-  DONNER_BIND_FILTER_OPERATION(applyColorMatrix);
-  DONNER_BIND_FILTER_OPERATION(applyFlood);
-  DONNER_BIND_FILTER_OPERATION(applyMerge);
-  DONNER_BIND_FILTER_OPERATION(applyComposite);
-  DONNER_BIND_FILTER_OPERATION(applyBlend);
-  DONNER_BIND_FILTER_OPERATION(applyMorphology);
-  DONNER_BIND_FILTER_OPERATION(applyComponentTransfer);
-  DONNER_BIND_FILTER_OPERATION(applyConvolveMatrix);
-  DONNER_BIND_FILTER_OPERATION(applyTurbulence);
-  DONNER_BIND_FILTER_OPERATION(applyDisplacementMap);
-  DONNER_BIND_FILTER_OPERATION(applyDiffuseLighting);
-  DONNER_BIND_FILTER_OPERATION(applySpecularLighting);
-  DONNER_BIND_FILTER_OPERATION(applyDropShadow);
-  DONNER_BIND_FILTER_OPERATION(applyImage);
-  DONNER_BIND_FILTER_OPERATION(applyTile);
-#undef DONNER_BIND_FILTER_OPERATION
+  const Box2d pixelAABB = coordinates.deviceFromFilter.transformBox(region);
+  return engine.applySubregionClip(
+      arena, input, Transform2d(), std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y),
+      std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y), resolve);
+}
 
+void FilterGraphExecution::record(const svg::components::FilterNode& node, const Box2d& subregion,
+                                  const wgpu::Texture& output) {
+  if (node.result.has_value()) {
+    coordinates.namedSubregions[node.result->str()] = subregion;
+    namedBuffers[node.result->str()] = output;
+  }
+  coordinates.previousOutputSubregion = subregion;
+  currentBuffer = output;
+}
+
+wgpu::Texture FilterGraphExecution::run() {
   using namespace svg::components;
-
-  const std::uint64_t pixelCount =
-      static_cast<std::uint64_t>(sourceGraphic.getWidth()) * sourceGraphic.getHeight();
+  const uint64_t pixelCount = uint64_t{sourceGraphic.getWidth()} * sourceGraphic.getHeight();
   const bool fitsBudget =
       executionBudget != nullptr
           ? executionBudget->consume(graph, pixelCount, FilterMemoryModel::GpuAllNodes)
@@ -2355,474 +2430,233 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
   if (!fitsBudget) {
     return sourceGraphic;
   }
-
-  FilterResourceArena arena(device_, textureAllocator, resourceCache_, commandEncoder,
-                            framePassesInCommandBuffer_);
-  std::unordered_map<std::string, wgpu::Texture> namedBuffers;
-  wgpu::Texture currentBuffer = sourceGraphic;
-  std::optional<wgpu::Texture> sourceAlpha;
-  if (graphUsesStandardInput(graph, svg::components::FilterStandardInput::SourceAlpha)) {
-    sourceAlpha = applySourceAlpha(arena, sourceGraphic);
+  if (graphUsesStandardInput(graph, FilterStandardInput::SourceAlpha)) {
+    sourceAlpha = engine.applySourceAlpha(arena, sourceGraphic);
+    if (!*sourceAlpha) {
+      return {};
+    }
   }
+  for (const FilterNode& node : graph.nodes) {
+    FilterNodeExecution primitive(*this, node);
+    const wgpu::Texture output = primitive.run();
+    if (!output) {
+      return {};
+    }
+    record(node, primitive.subregion, output);
+  }
+  const wgpu::Texture srgb =
+      engine.applyColorSpaceConversion(arena, currentBuffer, /*srgbToLinear=*/false);
+  return srgb ? clip(srgb, coordinates.filterRegion, !axisAligned, /*resolve=*/true)
+              : wgpu::Texture();
+}
 
-  FilterExecutionCoordinates coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter);
-  const double scaleX = coordinates.scaleX;
-  const double scaleY = coordinates.scaleY;
+wgpu::Texture FilterNodeExecution::run() {
+  if (!input) {
+    return {};
+  }
+  wgpu::Texture output =
+      std::visit([this](const auto& primitive) { return apply(primitive); }, node.primitive);
+  if (!output) {
+    return {};
+  }
+  if (!clipMergedIntoBlur) {
+    const bool explicitSubregion = node.x || node.y || node.width || node.height;
+    output = execution.clip(output, subregion, explicitSubregion && !execution.axisAligned);
+  }
+  if (output) {
+    arena.markLinearRgb(output, outputLinear);
+  }
+  return output;
+}
+
+wgpu::Texture FilterNodeExecution::toNodeSpace(const wgpu::Texture& texture) {
+  return engine.applyColorSpaceConversion(arena, texture, linearRgb);
+}
+
+bool FilterNodeExecution::convertBinaryInputs(wgpu::Texture& second) {
+  second = execution.inputFor(node, 1);
+  input = toNodeSpace(input);
+  if (!input) {
+    return false;
+  }
+  second = toNodeSpace(second);
+  return static_cast<bool>(second);
+}
+
+std::optional<Box2d> FilterNodeExecution::blurClip(double sx, double sy) const {
+  if (!execution.axisAligned || (sx <= 0.0 && sy <= 0.0)) {
+    return std::nullopt;
+  }
+  const Box2d pixels = coordinates.deviceFromFilter.transformBox(subregion);
+  const Box2d rounded(Vector2d(std::floor(pixels.topLeft.x), std::floor(pixels.topLeft.y)),
+                      Vector2d(std::ceil(pixels.bottomRight.x), std::ceil(pixels.bottomRight.y)));
+  const std::array<double, 4> corners{rounded.topLeft.x, rounded.topLeft.y, rounded.bottomRight.x,
+                                      rounded.bottomRight.y};
+  // The folded clip uses i32 uniforms; extreme and NaN corners retain the separate float clip.
+  if (!std::all_of(corners.begin(), corners.end(), [](double value) {
+        return value >= double{std::numeric_limits<int32_t>::min()} &&
+               value <= double{std::numeric_limits<int32_t>::max()};
+      })) {
+    return std::nullopt;
+  }
+  return rounded;
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
+  const double sx = primitive.stdDeviationX >= 0
+                        ? boundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
+                        : 0.0;
+  const double sy = primitive.stdDeviationY >= 0
+                        ? boundedPositiveFilterPixels(coordinates.toPixelY(primitive.stdDeviationY))
+                        : 0.0;
+  const std::optional<Box2d> clip = blurClip(sx, sy);
+  clipMergedIntoBlur = clip.has_value();
+  return engine.applyGaussianBlur(arena, toNodeSpace(input), sx, sy,
+                                  toShaderEdgeMode(primitive.edgeMode), clip ? &*clip : nullptr);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Offset& primitive) {
+  const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
+  fp::Offset scaled = primitive;
+  scaled.dx = boundedSignedFilterPixels(offset.x);
+  scaled.dy = boundedSignedFilterPixels(offset.y);
+  outputLinear = arena.isLinearRgb(input);
+  return engine.applyOffset(arena, input, scaled);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::ColorMatrix& primitive) {
+  if (isIdentityColorMatrix(buildColorMatrix(primitive))) {
+    outputLinear = arena.isLinearRgb(input);
+    return input;
+  }
+  return engine.applyColorMatrix(arena, toNodeSpace(input), primitive);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Flood& primitive) {
+  outputLinear = false;
+  return engine.applyFlood(arena, input.getWidth(), input.getHeight(), primitive);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Merge&) {
+  return engine.applyMerge(arena, node, execution.namedBuffers, execution.currentBuffer,
+                           execution.sourceGraphic,
+                           execution.sourceAlpha ? &*execution.sourceAlpha : nullptr, linearRgb);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Composite& primitive) {
+  wgpu::Texture second;
+  return convertBinaryInputs(second) ? engine.applyComposite(arena, input, second, primitive)
+                                     : wgpu::Texture();
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Blend& primitive) {
+  wgpu::Texture second;
+  return convertBinaryInputs(second) ? engine.applyBlend(arena, input, second, primitive)
+                                     : wgpu::Texture();
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Morphology& primitive) {
+  // Test signed SVG radii before toPixelX/Y turn them into magnitudes.
+  if (primitive.radiusX < 0 || primitive.radiusY < 0 ||
+      (primitive.radiusX == 0 && primitive.radiusY == 0)) {
+    outputLinear = arena.isLinearRgb(input);
+    return input;
+  }
+  const int rx = boundedRoundedInt32(coordinates.toPixelX(primitive.radiusX), 0,
+                                     svg::components::kMaximumFilterPixelRadius);
+  const int ry = boundedRoundedInt32(coordinates.toPixelY(primitive.radiusY), 0,
+                                     svg::components::kMaximumFilterPixelRadius);
+  return engine.applyMorphology(arena, toNodeSpace(input), primitive, rx, ry);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::ComponentTransfer& primitive) {
+  return engine.applyComponentTransfer(arena, toNodeSpace(input), primitive);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::ConvolveMatrix& primitive) {
+  return engine.applyConvolveMatrix(arena, toNodeSpace(input), primitive);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Turbulence& primitive) {
+  return engine.applyTurbulence(arena, input.getWidth(), input.getHeight(), primitive,
+                                coordinates.deviceFromFilter);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
+  double scale = std::abs(primitive.scale);
+  if (coordinates.isObjectBoundingBox) {
+    scale *= std::sqrt(coordinates.boundingBoxWidth * coordinates.boundingBoxHeight);
+  }
+  scale *= std::sqrt(coordinates.scaleX * coordinates.scaleY);
+  wgpu::Texture second;
+  return convertBinaryInputs(second)
+             ? engine.applyDisplacementMap(arena, input, second, primitive, scale)
+             : wgpu::Texture();
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::DiffuseLighting& primitive) {
+  const Box2d bounds = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
+  return engine.applyDiffuseLighting(arena, input, primitive, execution.graph,
+                                     coordinates.deviceFromFilter, bounds, linearRgb);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::SpecularLighting& primitive) {
+  const Box2d bounds = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
+  return engine.applySpecularLighting(arena, input, primitive, execution.graph,
+                                      coordinates.deviceFromFilter, bounds, linearRgb);
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
+  const double sx = primitive.stdDeviationX >= 0
+                        ? boundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
+                        : 0.0;
+  const double sy = primitive.stdDeviationY >= 0
+                        ? boundedPositiveFilterPixels(coordinates.toPixelY(primitive.stdDeviationY))
+                        : 0.0;
+  const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
+  return engine.applyDropShadow(arena, toNodeSpace(input), primitive, sx, sy,
+                                boundedSignedFilterPixels(offset.x),
+                                boundedSignedFilterPixels(offset.y));
+}
+
+wgpu::Texture FilterNodeExecution::apply(const fp::Image& primitive) {
   const bool isOBB = coordinates.isObjectBoundingBox;
   const double bboxW = coordinates.boundingBoxWidth;
   const double bboxH = coordinates.boundingBoxHeight;
-  const double bboxX = coordinates.boundingBoxX;
-  const double bboxY = coordinates.boundingBoxY;
-  const Box2d& filterRegionSubregion = coordinates.filterRegion;
-  const Transform2d& filterFromDevice = coordinates.filterFromDevice;
-  auto& previousOutputSubregion = coordinates.previousOutputSubregion;
-  auto& namedSubregions = coordinates.namedSubregions;
-  const auto toPixelX = [&](double value) { return coordinates.toPixelX(value); };
-  const auto toPixelY = [&](double value) { return coordinates.toPixelY(value); };
-  const auto toPixelOffset = [&](double dx, double dy) {
-    return coordinates.toPixelOffset(dx, dy);
-  };
-  const auto resolveInputSubregion = [&](const FilterInput& input) {
-    return coordinates.resolveInputSubregion(input);
-  };
-  const auto resolvePrimitivePosition = [&](const Lengthd& length, Lengthd::Extent extent,
-                                            double origin, double boundingBoxDimension) {
-    return coordinates.resolvePrimitivePosition(length, extent, origin, boundingBoxDimension);
-  };
-  const auto resolvePrimitiveSize = [&](const Lengthd& length, Lengthd::Extent extent,
-                                        double boundingBoxDimension) {
-    return coordinates.resolvePrimitiveSize(length, extent, boundingBoxDimension);
-  };
+  const double x =
+      node.x ? coordinates.resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
+                                                    isOBB ? coordinates.boundingBoxX : 0.0, bboxW)
+             : coordinates.filterRegion.topLeft.x;
+  const double y =
+      node.y ? coordinates.resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
+                                                    isOBB ? coordinates.boundingBoxY : 0.0, bboxH)
+             : coordinates.filterRegion.topLeft.y;
+  const double width =
+      node.width ? coordinates.resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
+                 : coordinates.filterRegion.width();
+  const double height =
+      node.height ? coordinates.resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
+                  : coordinates.filterRegion.height();
+  outputLinear = false;
+  return engine.applyImage(arena, primitive, input.getWidth(), input.getHeight(), execution.graph,
+                           node, coordinates.deviceFromFilter,
+                           Box2d::FromXYWH(x, y, width, height));
+}
 
-  for (const FilterNode& node : graph.nodes) {
-    // Per-node clip bookkeeping: the subregion is computed up front so the
-    // blur path can fold the per-primitive clip into its final pass.
-    const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
-                                      node.width.has_value() || node.height.has_value();
-    const Box2d nodeSubregion = coordinates.computeNodeSubregion(node);
-    const bool ctmAxisAligned =
-        NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
-    bool clipMergedIntoBlur = false;
-
-    // Resolve the primary input texture for this node.
-    wgpu::Texture inputTex =
-        resolveInput(filterInputOrDefault(node, 0), namedBuffers, currentBuffer, sourceGraphic,
-                     sourceAlpha ? &*sourceAlpha : nullptr);
-
-    // Dispatch based on primitive type.
-    wgpu::Texture outputTex;
-    if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
-      const double sx = blur->stdDeviationX >= 0
-                            ? boundedPositiveFilterPixels(toPixelX(blur->stdDeviationX))
-                            : 0.0;
-      const double sy = blur->stdDeviationY >= 0
-                            ? boundedPositiveFilterPixels(toPixelY(blur->stdDeviationY))
-                            : 0.0;
-      const uint32_t em = toShaderEdgeMode(blur->edgeMode);
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      // Axis-aligned CTM: fold the per-primitive subregion clip into the
-      // blur's final pass (same floor/ceil round-out as the identity
-      // clip path), eliminating one full-canvas dispatch and intermediate
-      // per blur node. A zero-deviation blur dispatches no pass at all
-      // (applyGaussianBlur returns the input unchanged), so the clip
-      // cannot be folded; the dedicated clip pass handles that case.
-      const Box2d* blurClip = nullptr;
-      Box2d blurClipRect;
-      if (ctmAxisAligned && (sx > 0.0 || sy > 0.0)) {
-        const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
-        const Box2d rounded(
-            Vector2d(std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y)),
-            Vector2d(std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y)));
-        // The folded clip rides i32 uniform fields. A pathological CTM (a
-        // huge scale, or a near-singular transform producing inf/NaN
-        // corners) would make the double to int32 conversion undefined
-        // behavior; on x86 it collapses to INT32_MIN, which turns the clip
-        // into "reject every pixel" and blanks the whole blur output. Fold
-        // only when every corner fits; otherwise keep the dedicated clip
-        // pass, whose f32 uniforms degrade gracefully at extreme
-        // magnitudes. NaN corners fail fitsInt32 and take the same path.
-        const auto fitsInt32 = [](double v) {
-          return v >= static_cast<double>(std::numeric_limits<int32_t>::min()) &&
-                 v <= static_cast<double>(std::numeric_limits<int32_t>::max());
-        };
-        if (fitsInt32(rounded.topLeft.x) && fitsInt32(rounded.topLeft.y) &&
-            fitsInt32(rounded.bottomRight.x) && fitsInt32(rounded.bottomRight.y)) {
-          blurClipRect = rounded;
-          blurClip = &blurClipRect;
-          clipMergedIntoBlur = true;
-        }
-      }
-      if (nodeLinearRGB) {
-        wgpu::Texture linearInput =
-            applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        wgpu::Texture linearOutput = applyGaussianBlur(arena, linearInput, sx, sy, em, blurClip);
-        outputTex = applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false);
-      } else {
-        outputTex = applyGaussianBlur(arena, inputTex, sx, sy, em, blurClip);
-      }
-    } else if (const auto* offset = std::get_if<filter_primitive::Offset>(&node.primitive)) {
-      // Project the offset vector through the full CTM so rotation/skew
-      // maps correctly to device pixels.
-      const Vector2d pixelOffset = toPixelOffset(offset->dx, offset->dy);
-      filter_primitive::Offset scaled = *offset;
-      scaled.dx = boundedSignedFilterPixels(pixelOffset.x);
-      scaled.dy = boundedSignedFilterPixels(pixelOffset.y);
-      outputTex = applyOffset(arena, inputTex, scaled);
-    } else if (const auto* cm = std::get_if<filter_primitive::ColorMatrix>(&node.primitive)) {
-      // Per SVG spec, feColorMatrix operates in linearRGB by default (the
-      // `color-interpolation-filters` property). Match tiny-skia by
-      // wrapping the matrix operation with sRGB↔linear conversion, and
-      // short-circuiting identity matrices to avoid lossy round-trips.
-      FilterColorMatrixParams matrixParams = buildColorMatrix(*cm);
-      if (isIdentityColorMatrix(matrixParams)) {
-        outputTex = inputTex;
-      } else {
-        const bool nodeLinearRGB =
-            node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-            svg::ColorInterpolationFilters::SRGB;
-        if (nodeLinearRGB) {
-          wgpu::Texture linearInput =
-              applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-          wgpu::Texture matrixOutput = applyColorMatrix(arena, linearInput, *cm);
-          outputTex = applyColorSpaceConversion(arena, matrixOutput, /*srgbToLinear=*/false);
-        } else {
-          outputTex = applyColorMatrix(arena, inputTex, *cm);
-        }
-      }
-    } else if (const auto* flood = std::get_if<filter_primitive::Flood>(&node.primitive)) {
-      outputTex = applyFlood(arena, inputTex.getWidth(), inputTex.getHeight(), *flood);
-    } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      outputTex = applyMerge(arena, node, namedBuffers, currentBuffer, sourceGraphic,
-                             sourceAlpha ? &*sourceAlpha : nullptr, nodeLinearRGB);
-    } else if (const auto* composite = std::get_if<filter_primitive::Composite>(&node.primitive)) {
-      // Resolve second input (in2/backdrop).
-      wgpu::Texture in2Tex =
-          resolveInput(filterInputOrDefault(node, 1), namedBuffers, currentBuffer, sourceGraphic,
-                       sourceAlpha ? &*sourceAlpha : nullptr);
-      // Per SVG spec, feComposite operates in the filter's color-interpolation-
-      // filters space (linearRGB by default). The arithmetic operator in
-      // particular evaluates k1..k4 against the channel values, so the result
-      // depends on whether those are sRGB or linear. Match tiny-skia by wrapping
-      // the composite with sRGB↔linear conversion when the node resolves to
-      // linearRGB.
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      if (nodeLinearRGB) {
-        wgpu::Texture linearIn1 = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        if (!linearIn1) {
-          return {};
-        }
-        wgpu::Texture linearIn2 = applyColorSpaceConversion(arena, in2Tex, /*srgbToLinear=*/true);
-        if (!linearIn2) {
-          return {};
-        }
-        wgpu::Texture linearOutput = applyComposite(arena, linearIn1, linearIn2, *composite);
-        outputTex = linearOutput
-                        ? applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false)
-                        : wgpu::Texture{};
-      } else {
-        outputTex = applyComposite(arena, inputTex, in2Tex, *composite);
-      }
-    } else if (const auto* blend = std::get_if<filter_primitive::Blend>(&node.primitive)) {
-      // Resolve second input (in2/backdrop).
-      wgpu::Texture in2Tex =
-          resolveInput(filterInputOrDefault(node, 1), namedBuffers, currentBuffer, sourceGraphic,
-                       sourceAlpha ? &*sourceAlpha : nullptr);
-      // Per SVG spec, feBlend operates in the filter's color-interpolation-filters
-      // space (linearRGB by default). Match tiny-skia by wrapping the blend with
-      // sRGB↔linear conversion when the node resolves to linearRGB.
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      if (nodeLinearRGB) {
-        wgpu::Texture linearIn1 = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        wgpu::Texture linearIn2 = applyColorSpaceConversion(arena, in2Tex, /*srgbToLinear=*/true);
-        wgpu::Texture linearOutput = applyBlend(arena, linearIn1, linearIn2, *blend);
-        outputTex = applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false);
-      } else {
-        outputTex = applyBlend(arena, inputTex, in2Tex, *blend);
-      }
-    } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
-      // Per SVG Filter Effects §15.4, a negative radius (on either axis) or an
-      // all-zero radius disables the primitive - the result is the input image
-      // (pass-through), matching RendererTinySkia's FilterGraph. Check the SIGNED
-      // source radius here: `toPixelX/Y` take `std::abs`, which would otherwise
-      // turn a negative radius into a positive pixel radius and erode the input.
-      const bool morphDisabled =
-          morph->radiusX < 0 || morph->radiusY < 0 || (morph->radiusX == 0 && morph->radiusY == 0);
-      if (morphDisabled) {
-        outputTex = inputTex;
-      } else {
-        const int rx = boundedRoundedInt32(toPixelX(morph->radiusX), 0,
-                                           svg::components::kMaximumFilterPixelRadius);
-        const int ry = boundedRoundedInt32(toPixelY(morph->radiusY), 0,
-                                           svg::components::kMaximumFilterPixelRadius);
-        // feMorphology operates in the filter's color-interpolation-filters
-        // space (linearRGB by default). Erode/dilate are component-wise min/max
-        // on PREMULTIPLIED channels, and the un-premultiply → linearize →
-        // re-premultiply round-trip changes those premultiplied values, so the
-        // result depends on the space. Match tiny-skia (FilterGraph.cpp's
-        // Morphology branch wraps in srgbToLinear/linearToSrgb when the node
-        // resolves to linearRGB).
-        const bool nodeLinearRGB =
-            node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-            svg::ColorInterpolationFilters::SRGB;
-        if (nodeLinearRGB) {
-          wgpu::Texture linearInput =
-              applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-          wgpu::Texture morphOutput = applyMorphology(arena, linearInput, *morph, rx, ry);
-          outputTex = applyColorSpaceConversion(arena, morphOutput, /*srgbToLinear=*/false);
-        } else {
-          outputTex = applyMorphology(arena, inputTex, *morph, rx, ry);
-        }
-      }
-    } else if (const auto* ct = std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
-      // Per SVG spec, feComponentTransfer operates in the filter's color-
-      // interpolation-filters space (linearRGB by default). The per-channel
-      // transfer functions evaluate against the channel values, so the result
-      // depends on whether those are sRGB or linear. Match tiny-skia by wrapping
-      // the transfer with sRGB↔linear conversion when the node resolves to
-      // linearRGB.
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      if (nodeLinearRGB) {
-        wgpu::Texture linearInput =
-            applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        wgpu::Texture transferOutput = applyComponentTransfer(arena, linearInput, *ct);
-        outputTex = applyColorSpaceConversion(arena, transferOutput, /*srgbToLinear=*/false);
-      } else {
-        outputTex = applyComponentTransfer(arena, inputTex, *ct);
-      }
-    } else if (const auto* conv = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
-      // feConvolveMatrix operates in the filter's color-interpolation-filters
-      // space (linearRGB by default). The kernel sums channel values, so the
-      // result depends on the space. Match tiny-skia (sRGB→linear input, convolve,
-      // linear→sRGB output) when the node resolves to linearRGB.
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      if (nodeLinearRGB) {
-        wgpu::Texture linearInput =
-            applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        wgpu::Texture convOutput = applyConvolveMatrix(arena, linearInput, *conv);
-        outputTex = applyColorSpaceConversion(arena, convOutput, /*srgbToLinear=*/false);
-      } else {
-        outputTex = applyConvolveMatrix(arena, inputTex, *conv);
-      }
-    } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
-      // feTurbulence generates noise in the filter's color-interpolation-filters
-      // space (linearRGB by default), then the result is stored in sRGB. Match
-      // tiny-skia, which runs `linearToSrgb` on the generated noise when the node
-      // resolves to linearRGB. The generator has no input, so this is a one-way
-      // linear→sRGB conversion of the output (no input conversion).
-      outputTex = applyTurbulence(arena, inputTex.getWidth(), inputTex.getHeight(), *turb,
-                                  deviceFromFilter);
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      if (nodeLinearRGB) {
-        outputTex = applyColorSpaceConversion(arena, outputTex, /*srgbToLinear=*/false);
-      }
-    } else if (const auto* disp = std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
-      // Resolve second input (in2), the displacement map.
-      wgpu::Texture in2Tex =
-          resolveInput(filterInputOrDefault(node, 1), namedBuffers, currentBuffer, sourceGraphic,
-                       sourceAlpha ? &*sourceAlpha : nullptr);
-      // For objectBoundingBox, scale through sqrt(bboxW * bboxH) per the spec.
-      double pixelScale = std::abs(disp->scale);
-      if (isOBB) {
-        pixelScale *= std::sqrt(bboxW * bboxH);
-      }
-      pixelScale *= std::sqrt(scaleX * scaleY);
-      // feDisplacementMap operates in the filter's color-interpolation-filters
-      // space (linearRGB by default): tiny-skia converts BOTH inputs sRGB→linear,
-      // runs the displacement, then converts the output linear→sRGB. Match it so
-      // the displaced sampling and the in2 channel values use the same space.
-      const bool dispLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      if (dispLinearRGB) {
-        wgpu::Texture linearIn1 = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        wgpu::Texture linearIn2 = applyColorSpaceConversion(arena, in2Tex, /*srgbToLinear=*/true);
-        wgpu::Texture linearOut =
-            applyDisplacementMap(arena, linearIn1, linearIn2, *disp, pixelScale);
-        outputTex = applyColorSpaceConversion(arena, linearOut, /*srgbToLinear=*/false);
-      } else {
-        outputTex = applyDisplacementMap(arena, inputTex, in2Tex, *disp, pixelScale);
-      }
-    } else if (const auto* diffuse =
-                   std::get_if<filter_primitive::DiffuseLighting>(&node.primitive)) {
-      // Bounds for the buffer this pass actually reads: an unpopulated input slot resolves to
-      // the previous primitive's result, so its subregion has to follow that buffer rather than
-      // widening to the whole filter region.
-      const Box2d lightingInputSubregion = resolveInputSubregion(filterInputOrDefault(node, 0));
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      outputTex = applyDiffuseLighting(arena, inputTex, *diffuse, graph, deviceFromFilter,
-                                       lightingInputSubregion, nodeLinearRGB);
-    } else if (const auto* specular =
-                   std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
-      // Bounds for the buffer this pass actually reads: an unpopulated input slot resolves to
-      // the previous primitive's result, so its subregion has to follow that buffer rather than
-      // widening to the whole filter region.
-      const Box2d lightingInputSubregion = resolveInputSubregion(filterInputOrDefault(node, 0));
-      const bool nodeLinearRGB =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          svg::ColorInterpolationFilters::SRGB;
-      outputTex = applySpecularLighting(arena, inputTex, *specular, graph, deviceFromFilter,
-                                        lightingInputSubregion, nodeLinearRGB);
-    } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
-      // stdDeviation is magnitude only; dx/dy are directional and need
-      // the full CTM projection (matching feOffset).
-      double sx = drop->stdDeviationX >= 0
-                      ? boundedPositiveFilterPixels(toPixelX(drop->stdDeviationX))
-                      : 0.0;
-      double sy = drop->stdDeviationY >= 0
-                      ? boundedPositiveFilterPixels(toPixelY(drop->stdDeviationY))
-                      : 0.0;
-      const Vector2d pixelOffset = toPixelOffset(drop->dx, drop->dy);
-      outputTex =
-          applyDropShadow(arena, inputTex, *drop, sx, sy, boundedSignedFilterPixels(pixelOffset.x),
-                          boundedSignedFilterPixels(pixelOffset.y));
-    } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
-      // Resolve the feImage placement rect in user space, honoring percent/OBB
-      // units (via the same helpers used for subregion clipping) and defaulting
-      // each absent edge to the filter region. The image is then meet/slice-fit
-      // into this rect per preserveAspectRatio. Passing the resolved rect keeps
-      // unit logic in one place instead of re-deriving it inside applyImage.
-      const double ix = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
-                                                                      isOBB ? bboxX : 0.0, bboxW)
-                                           : filterRegionSubregion.topLeft.x;
-      const double iy = node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
-                                                                      isOBB ? bboxY : 0.0, bboxH)
-                                           : filterRegionSubregion.topLeft.y;
-      const double iw = node.width.has_value()
-                            ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
-                            : filterRegionSubregion.width();
-      const double ih = node.height.has_value()
-                            ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
-                            : filterRegionSubregion.height();
-      const Box2d imagePlacementRegion = Box2d::FromXYWH(ix, iy, iw, ih);
-      outputTex = applyImage(arena, *image, inputTex.getWidth(), inputTex.getHeight(), graph, node,
-                             deviceFromFilter, imagePlacementRegion);
-    } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
-      // FE1 §9.20: feTile repeats the INPUT primitive's subregion to fill
-      // feTile's own subregion. An unpopulated input slot resolves to the
-      // previous primitive's result, the same buffer the tile is read from, so
-      // the source bounds follow it instead of widening to the filter region.
-      const Box2d tileSourceSubregion = resolveInputSubregion(filterInputOrDefault(node, 0));
-      // An empty/inverted input subregion (topLeft > bottomRight, e.g. a flood
-      // whose explicit x/y/w/h lies entirely outside the filter region) must
-      // produce transparent output. transformBox() normalizes (min/max) the
-      // corners and would erase the inversion, so test emptiness on the
-      // user-space box first - matching the CPU path's `tileW > 0 && tileH > 0`
-      // gate in tiny-skia FilterGraph.cpp. A degenerate (0,0,0,0) source hits
-      // the tile shader's degenerate guard and writes transparent everywhere.
-      if (tileSourceSubregion.width() <= 0.0 || tileSourceSubregion.height() <= 0.0) {
-        outputTex = applyTile(arena, inputTex, 0, 0, 0, 0);
-      } else {
-        const Box2d sourcePixels = deviceFromFilter.transformBox(tileSourceSubregion);
-        constexpr int32_t kMaximumTileExtent = svg::components::kMaximumFilterPixelOffset;
-        int32_t srcX =
-            boundedFloorInt32(sourcePixels.topLeft.x, -kMaximumTileExtent, kMaximumTileExtent);
-        int32_t srcY =
-            boundedFloorInt32(sourcePixels.topLeft.y, -kMaximumTileExtent, kMaximumTileExtent);
-        int32_t srcW = boundedCeilInt32(sourcePixels.bottomRight.x - sourcePixels.topLeft.x, 0,
-                                        kMaximumTileExtent);
-        int32_t srcH = boundedCeilInt32(sourcePixels.bottomRight.y - sourcePixels.topLeft.y, 0,
-                                        kMaximumTileExtent);
-        outputTex = applyTile(arena, inputTex, srcX, srcY, srcW, srcH);
-      }
-    } else {
-      // Unsupported primitive - pass through unchanged.
-      if (verbose_ && !warnedUnsupported_) {
-        std::cerr << "GeodeFilterEngine: unsupported filter primitive "
-                     "(passthrough)\n";
-        warnedUnsupported_ = true;
-      }
-      outputTex = inputTex;
-    }
-
-    if (!outputTex) {
-      return {};
-    }
-
-    // Per-primitive subregion clipping: the user-space subregion was
-    // computed up front (computeNodeSubregion). Blur nodes with an
-    // axis-aligned CTM already folded the clip into their final pass;
-    // everything else runs the dedicated clip pass. The rotation case
-    // keeps the per-pixel point-in-rect test, which is the tightest
-    // representation that survives rotation.
-    if (!clipMergedIntoBlur) {
-      if (hasExplicitSubregion && !ctmAxisAligned) {
-        outputTex = applySubregionClip(arena, outputTex, filterFromDevice, nodeSubregion.topLeft.x,
-                                       nodeSubregion.topLeft.y, nodeSubregion.bottomRight.x,
-                                       nodeSubregion.bottomRight.y);
-      } else {
-        // AABB clip in pixel space - project the user-space subregion
-        // through the full CTM and clip to the axis-aligned bounding box.
-        // Round-out to integer pixel bounds to match the CPU path's
-        // floor/ceil cropping in tiny-skia's per-primitive clip.
-        const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
-        static const Transform2d kIdentity;
-        outputTex =
-            applySubregionClip(arena, outputTex, kIdentity, std::floor(pixelAABB.topLeft.x),
-                               std::floor(pixelAABB.topLeft.y), std::ceil(pixelAABB.bottomRight.x),
-                               std::ceil(pixelAABB.bottomRight.y));
-      }
-    }
-
-    if (!outputTex) {
-      return {};
-    }
-
-    // Record the subregion for downstream nodes.
-    if (node.result.has_value()) {
-      namedSubregions[node.result->str()] = nodeSubregion;
-    }
-    previousOutputSubregion = nodeSubregion;
-
-    if (node.result.has_value()) {
-      namedBuffers[node.result->str()] = outputTex;
-    }
-
-    currentBuffer = outputTex;
+wgpu::Texture FilterNodeExecution::apply(const fp::Tile&) {
+  outputLinear = arena.isLinearRgb(input);
+  const Box2d source = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
+  // transformBox normalizes inverted rectangles, so reject empty user-space bounds first.
+  if (source.width() <= 0.0 || source.height() <= 0.0) {
+    return engine.applyTile(arena, input, 0, 0, 0, 0);
   }
-
-  // Clip the final output to the filter region.  The SVG filter model
-  // requires pixels outside the filter region to be transparent.
-  // Use rotation-aware clipping (via the inverse CTM) so that skewed/rotated
-  // filter regions produce correctly-shaped parallelogram clips, matching the
-  // CPU path's per-pixel point-in-rect test in ClipFilterOutputToRegion.
-  // For axis-aligned CTMs we mirror the CPU's `floor/ceil` round-out so that
-  // half-pixel-aligned filter region edges keep the same row/column as
-  // tiny-skia's `clipFilterOutputToRegion`.
-  {
-    const bool ctmAxisAligned =
-        NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
-    if (ctmAxisAligned) {
-      const Box2d pixelAABB = deviceFromFilter.transformBox(filterRegion);
-      static const Transform2d kIdentity;
-      currentBuffer =
-          applySubregionClip(arena, currentBuffer, kIdentity, std::floor(pixelAABB.topLeft.x),
-                             std::floor(pixelAABB.topLeft.y), std::ceil(pixelAABB.bottomRight.x),
-                             std::ceil(pixelAABB.bottomRight.y));
-    } else {
-      currentBuffer = applySubregionClip(arena, currentBuffer, filterFromDevice,
-                                         filterRegion.topLeft.x, filterRegion.topLeft.y,
-                                         filterRegion.bottomRight.x, filterRegion.bottomRight.y);
-    }
-  }
-
-  return currentBuffer;
+  const Box2d pixels = coordinates.deviceFromFilter.transformBox(source);
+  constexpr int32_t kMaximumExtent = svg::components::kMaximumFilterPixelOffset;
+  return engine.applyTile(arena, input,
+                          boundedFloorInt32(pixels.topLeft.x, -kMaximumExtent, kMaximumExtent),
+                          boundedFloorInt32(pixels.topLeft.y, -kMaximumExtent, kMaximumExtent),
+                          boundedCeilInt32(pixels.width(), 0, kMaximumExtent),
+                          boundedCeilInt32(pixels.height(), 0, kMaximumExtent));
 }
 
 namespace {
@@ -2871,102 +2705,83 @@ BoxBlurPlan computeBoxPasses(double sigma) {
   return plan;
 }
 
+struct BlurDispatch {
+  uint32_t axis = 0;
+  float deviation = 0;
+  std::optional<BoxPass> box;
+};
+
+struct BlurDispatchPlan {
+  std::array<BlurDispatch, 6> passes{};
+  size_t count = 0;
+};
+
+BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviationY) {
+  BlurDispatchPlan result;
+  const std::array<double, 2> deviations{stdDeviationX, stdDeviationY};
+  for (uint32_t axis = 0; axis < deviations.size(); ++axis) {
+    const double deviation = deviations[axis];
+    if (!(deviation > 0.0)) {
+      continue;
+    }
+    const BoxBlurPlan boxes = deviation >= 2.0 ? computeBoxPasses(deviation) : BoxBlurPlan{};
+    if (boxes.numPasses == 0) {
+      result.passes[result.count++] =
+          BlurDispatch{axis, static_cast<float>(deviation), std::nullopt};
+    } else {
+      for (int i = 0; i < boxes.numPasses; ++i) {
+        result.passes[result.count++] = BlurDispatch{axis, 0, boxes.passes[i]};
+      }
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
                                                    const wgpu::Texture& input, double stdDeviationX,
                                                    double stdDeviationY, uint32_t edgeMode,
                                                    const Box2d* outputClip) {
+  if (!input) {
+    return {};
+  }
+
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
-
-  if (stdDeviationX <= 0.0 && stdDeviationY <= 0.0) {
-    return input;
-  }
-
-  // For sigma >= 2.0 use a 3-pass box approximation matching tiny-skia,
-  // which extends ~2.82*sigma instead of the pure Gaussian's 3*sigma.
-  // This eliminates faint coloured fringes at the extreme tails of the
-  // kernel that the software backend never produces.
-  constexpr double kBoxBlurThreshold = 2.0;
-
-  // Precompute the pass plans so the optional clip can be applied to the
-  // very last pass only.
-  BoxBlurPlan hPlan{};
-  BoxBlurPlan vPlan{};
-  if (stdDeviationX > 0.0 && stdDeviationX >= kBoxBlurThreshold) {
-    hPlan = computeBoxPasses(stdDeviationX);
-  }
-  if (stdDeviationY > 0.0 && stdDeviationY >= kBoxBlurThreshold) {
-    vPlan = computeBoxPasses(stdDeviationY);
-  }
-  const int hPasses = stdDeviationX > 0.0 ? (hPlan.numPasses > 0 ? hPlan.numPasses : 1) : 0;
-  const int vPasses = stdDeviationY > 0.0 ? (vPlan.numPasses > 0 ? vPlan.numPasses : 1) : 0;
-  const int totalPasses = hPasses + vPasses;
-  int passIndex = 0;
-  auto clipForPass = [&]() -> const Box2d* {
-    const bool isLast = (++passIndex == totalPasses);
-    return (outputClip != nullptr && isLast) ? outputClip : nullptr;
-  };
-
-  // Ping-pong pair of intermediates: every pass of one blur alternates
-  // between the two textures instead of allocating a fresh intermediate
-  // per pass (a 3-pass box blur on both axes used to hold six live
-  // textures at once). Each texture is created lazily on first use, so a
-  // single-pass blur only allocates one.
-  const wgpu::Device& dev = device_.device();
-  wgpu::Texture scratch[2] = {};
-  int scratchCursor = 0;
-  auto nextOutput = [&]() -> wgpu::Texture {
-    wgpu::Texture& out = scratch[scratchCursor];
-    if (!out) {
-      out = createIntermediateTexture(arena, dev, width, height, "GaussianBlurScratch");
+  const BlurDispatchPlan plan = CreateBlurDispatchPlan(stdDeviationX, stdDeviationY);
+  std::array<wgpu::Texture, 2> scratch{};
+  wgpu::Texture current = input;
+  for (size_t i = 0; i < plan.count; ++i) {
+    wgpu::Texture& output = scratch[i % scratch.size()];
+    if (!output) {
+      output =
+          createIntermediateTexture(arena, device_.device(), width, height, "GaussianBlurScratch");
     }
-    scratchCursor = 1 - scratchCursor;
-    return out;
-  };
-
-  wgpu::Texture afterHorizontal = input;
-  if (stdDeviationX > 0.0) {
-    if (hPlan.numPasses > 0) {
-      for (int i = 0; i < hPlan.numPasses; ++i) {
-        const wgpu::Texture output = nextOutput();
-        afterHorizontal =
-            runBoxBlurPass(arena, afterHorizontal, output, width, height, hPlan.passes[i].left,
-                           hPlan.passes[i].right, /*axis=*/0, edgeMode, clipForPass());
-      }
+    const BlurDispatch& pass = plan.passes[i];
+    const Box2d* clip = i + 1 == plan.count ? outputClip : nullptr;
+    if (pass.box) {
+      current = runBoxBlurPass(arena, current, output, width, height, pass.box->left,
+                               pass.box->right, pass.axis, edgeMode, clip);
     } else {
-      const wgpu::Texture output = nextOutput();
-      afterHorizontal =
-          runBlurPass(arena, input, output, width, height, static_cast<float>(stdDeviationX),
-                      /*axis=*/0, edgeMode, clipForPass());
+      current = runBlurPass(arena, current, output, width, height, pass.deviation, pass.axis,
+                            edgeMode, clip);
+    }
+    if (!current) {
+      return {};
     }
   }
-
-  wgpu::Texture afterVertical = afterHorizontal;
-  if (stdDeviationY > 0.0) {
-    if (vPlan.numPasses > 0) {
-      for (int i = 0; i < vPlan.numPasses; ++i) {
-        const wgpu::Texture output = nextOutput();
-        afterVertical =
-            runBoxBlurPass(arena, afterVertical, output, width, height, vPlan.passes[i].left,
-                           vPlan.passes[i].right, /*axis=*/1, edgeMode, clipForPass());
-      }
-    } else {
-      const wgpu::Texture output = nextOutput();
-      afterVertical =
-          runBlurPass(arena, afterHorizontal, output, width, height,
-                      static_cast<float>(stdDeviationY), /*axis=*/1, edgeMode, clipForPass());
-    }
-  }
-
-  return afterVertical;
+  return current;
 }
 
 wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
                                              const wgpu::Texture& output, uint32_t width,
                                              uint32_t height, float stdDeviation, uint32_t axis,
                                              uint32_t edgeMode, const Box2d* clip) {
+  if (!input || !output) {
+    return {};
+  }
+
   BlurParams params{};
   params.stdDeviation = stdDeviation;
   params.axis = axis;
@@ -2998,6 +2813,10 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
                                                 uint32_t height, int32_t boxLeft, int32_t boxRight,
                                                 uint32_t axis, uint32_t edgeMode,
                                                 const Box2d* clip) {
+  if (!input || !output) {
+    return {};
+  }
+
   BlurParams params{};
   params.stdDeviation = 0.0f;
   params.axis = axis;
@@ -3025,6 +2844,10 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
 wgpu::Texture GeodeFilterEngine::applyOffset(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::Offset& primitive) {
+  if (!input) {
+    return {};
+  }
+
   // Zero offset → passthrough.
   if (primitive.dx == 0.0 && primitive.dy == 0.0) {
     return input;
@@ -3032,7 +2855,7 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterOffsetOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
-      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
@@ -3056,6 +2879,10 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::ColorMatrix& primitive) {
+  if (!input) {
+    return {};
+  }
+
   FilterColorMatrixParams params = buildColorMatrix(primitive);
 
   // Match tiny-skia's identity shortcut: skip the shader to avoid the
@@ -3067,7 +2894,7 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
 
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterColorMatrixOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
-      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
@@ -3084,9 +2911,13 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
 
 wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
                                                   const wgpu::Texture& input) {
+  if (!input) {
+    return {};
+  }
+
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterSourceAlphaOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
-      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
@@ -3114,24 +2945,20 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   }
 
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterFloodOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      "FilterFloodOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
   }
 
-  // Resolve the flood color: CSS color → RGBA, then premultiply.  The filter
-  // pipeline operates in premultiplied alpha (consistent with TinySkia and the
-  // Porter-Duff compositing in feMerge).
+  // Authored flood colors enter both renderers as premultiplied bytes; subsequent math stays float.
   const css::RGBA rgba = primitive.floodColor.asRGBA();
-  const float alpha = (static_cast<float>(rgba.a) / 255.0f) *
-                      static_cast<float>(std::clamp(primitive.floodOpacity, 0.0, 1.0));
-
+  const double alpha = (rgba.a / 255.0) * std::clamp(primitive.floodOpacity, 0.0, 1.0);
   FloodParams params{};
-  params.color[0] = (static_cast<float>(rgba.r) / 255.0f) * alpha;
-  params.color[1] = (static_cast<float>(rgba.g) / 255.0f) * alpha;
-  params.color[2] = (static_cast<float>(rgba.b) / 255.0f) * alpha;
-  params.color[3] = alpha;
+  params.color[0] = static_cast<float>(std::round(rgba.r * alpha)) / 255.0f;
+  params.color[1] = static_cast<float>(std::round(rgba.g * alpha)) / 255.0f;
+  params.color[2] = static_cast<float>(std::round(rgba.b * alpha)) / 255.0f;
+  params.color[3] = static_cast<float>(std::round(255.0 * alpha)) / 255.0f;
 
   const gpu::TextureView* outputView =
       arena.createRuntimeTextureView(*output, "FilterFloodOutputView");
@@ -3180,17 +3007,12 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
     return applyFlood(arena, width, height, transparent);
   }
 
-  // feMerge composites in the filter's color-interpolation-filters space
-  // (linearRGB by default): tiny-skia converts every input sRGB→linear, merges,
-  // then converts the result linear→sRGB. Convert each resolved input on the way
-  // in and the accumulator on the way out so the alpha-over blends in the right
-  // space.
-  auto toLinear = [&](wgpu::Texture tex) {
-    return linearRGB ? applyColorSpaceConversion(arena, tex, /*srgbToLinear=*/true) : tex;
+  const auto inWorkingSpace = [&](const wgpu::Texture& texture) {
+    return applyColorSpaceConversion(arena, texture, linearRGB);
   };
 
   // Resolve first input as the initial accumulator.
-  wgpu::Texture accumulator = toLinear(
+  wgpu::Texture accumulator = inWorkingSpace(
       resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
 
   if (!accumulator) {
@@ -3199,16 +3021,12 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
 
   // Alpha-over composite each subsequent input on top.
   for (size_t i = 1; i < node.inputs.size(); ++i) {
-    wgpu::Texture src = toLinear(
+    wgpu::Texture src = inWorkingSpace(
         resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
     accumulator = runMergePass(arena, src, accumulator, width, height);
     if (!accumulator) {
       return {};
     }
-  }
-
-  if (linearRGB) {
-    accumulator = applyColorSpaceConversion(arena, accumulator, /*srgbToLinear=*/false);
   }
 
   return accumulator;
@@ -3222,7 +3040,7 @@ wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const 
   }
   const gpu::Extent2d extent{width, height};
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterMergeOutput", extent, gpu::TextureFormat::RGBA8Unorm,
+      "FilterMergeOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr ||
       !dispatchRuntimeTwoInput(arena, mergeProgram_, src, dst, *output, extent, {},
@@ -3240,7 +3058,7 @@ wgpu::Texture GeodeFilterEngine::applyComposite(
   }
   const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterCompositeOutput", extent, gpu::TextureFormat::RGBA8Unorm,
+      "FilterCompositeOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
@@ -3267,11 +3085,18 @@ wgpu::Texture GeodeFilterEngine::applyComposite(
 wgpu::Texture GeodeFilterEngine::applyBlend(
     FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
     const svg::components::filter_primitive::Blend& primitive) {
+  if (!in1 || !in2) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = in1.getWidth();
   const uint32_t height = in1.getHeight();
 
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterBlendOutput");
+  if (!output) {
+    return {};
+  }
 
   BlendParams params{};
   params.mode = static_cast<uint32_t>(primitive.mode);
@@ -3291,101 +3116,64 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::Morphology& primitive, int pixelRadiusX,
     int pixelRadiusY) {
-  const wgpu::Device& dev = device_.device();
+  if (!input) {
+    return {};
+  }
+
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
-
-  // Zero or negative radius → passthrough.
-  if (pixelRadiusX <= 0 && pixelRadiusY <= 0) {
-    return input;
-  }
-
-  // Morphology is separable: min/max over a 2D rectangle equals
-  // row-wise min/max followed by column-wise min/max. Decompose into
-  // horizontal (X-only) then vertical (Y-only) passes, each capped at
-  // kMaxRadius per pass to stay within the shader's loop limit.
-  constexpr int kMaxRadius = 31;
+  constexpr int kMaximumRadiusPerPass = 31;
+  const std::array<int, 2> radii{std::max(pixelRadiusX, 0), std::max(pixelRadiusY, 0)};
+  constexpr const char* kLabels[] = {"FilterMorphologyPassX", "FilterMorphologyPassY"};
   wgpu::Texture current = input;
-
-  // Horizontal passes (Y radius = 0).
-  int remainX = std::max(pixelRadiusX, 0);
-  while (remainX > 0) {
-    const int passX = std::min(remainX, kMaxRadius);
-
-    wgpu::Texture output =
-        createIntermediateTexture(arena, dev, width, height, "FilterMorphologyOutput");
-
-    using Op = svg::components::filter_primitive::Morphology::Operator;
-    MorphologyParams params{};
-    params.radiusX = passX;
-    params.radiusY = 0;
-    params.op = primitive.op == Op::Dilate ? 1u : 0u;
-    params.pad = 0;
-
-    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-
-    dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
-                               morphologyPipeline_.get(), current, output, uniformBuffer.buffer,
-                               uniformBuffer.offset, sizeof(MorphologyParams),
-                               "FilterMorphologyPassX");
-    current = output;
-    remainX -= passX;
+  for (uint32_t axis = 0; axis < radii.size(); ++axis) {
+    int remaining = radii[axis];
+    while (remaining > 0) {
+      const int radius = std::min(remaining, kMaximumRadiusPerPass);
+      wgpu::Texture output = createIntermediateTexture(arena, device_.device(), width, height,
+                                                       "FilterMorphologyOutput");
+      if (!output) {
+        return {};
+      }
+      using Op = svg::components::filter_primitive::Morphology::Operator;
+      MorphologyParams params{};
+      params.radiusX = axis == 0 ? radius : 0;
+      params.radiusY = axis == 1 ? radius : 0;
+      params.op = primitive.op == Op::Dilate ? 1u : 0u;
+      const auto uniform = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+      dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
+                                 morphologyPipeline_.get(), current, output, uniform.buffer,
+                                 uniform.offset, sizeof(params), kLabels[axis]);
+      current = output;
+      remaining -= radius;
+    }
   }
-
-  // Vertical passes (X radius = 0).
-  int remainY = std::max(pixelRadiusY, 0);
-  while (remainY > 0) {
-    const int passY = std::min(remainY, kMaxRadius);
-
-    wgpu::Texture output =
-        createIntermediateTexture(arena, dev, width, height, "FilterMorphologyOutput");
-
-    using Op = svg::components::filter_primitive::Morphology::Operator;
-    MorphologyParams params{};
-    params.radiusX = 0;
-    params.radiusY = passY;
-    params.op = primitive.op == Op::Dilate ? 1u : 0u;
-    params.pad = 0;
-
-    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-
-    dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
-                               morphologyPipeline_.get(), current, output, uniformBuffer.buffer,
-                               uniformBuffer.offset, sizeof(MorphologyParams),
-                               "FilterMorphologyPassY");
-    current = output;
-    remainY -= passY;
-  }
-
   return current;
 }
 
 wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::ComponentTransfer& primitive) {
+  if (!input) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterComponentTransferOutput");
+  if (!output) {
+    return {};
+  }
 
-  // Build 4 × 256-entry LUTs (R, G, B, A) as uint32 array (1024 entries).
-  std::array<uint32_t, 1024> lutData{};
-  buildChannelLut(primitive.funcR, &lutData[0]);
-  buildChannelLut(primitive.funcG, &lutData[256]);
-  buildChannelLut(primitive.funcB, &lutData[512]);
-  buildChannelLut(primitive.funcA, &lutData[768]);
-
-  // Upload as a storage buffer.
-  wgpu::BufferDescriptor bufDesc{};
-  bufDesc.label = wgpuLabel("ComponentTransferLUT");
-  bufDesc.size = lutData.size() * sizeof(uint32_t);
-  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  bufDesc.mappedAtCreation = false;
-  wgpu::Buffer lutBuffer = arena.createBuffer(dev, bufDesc);
-  device_.queue().writeBuffer(lutBuffer, 0, lutData.data(), bufDesc.size);
-  device_.countBufferWrite(bufDesc.size);
+  const auto data = BuildComponentTransferData(primitive);
+  if (!data) {
+    return {};
+  }
+  const size_t dataSize = data->size() * sizeof(uint32_t);
+  const auto parameters = writeUniformSlot(*resourceCache_, device_, data->data(), dataSize);
 
   // Build bind group.
   ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
@@ -3397,9 +3185,9 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   bgEntries[1].binding = 1;
   bgEntries[1].textureView = outputView.get();
   bgEntries[2].binding = 2;
-  bgEntries[2].buffer = lutBuffer;
-  bgEntries[2].offset = 0;
-  bgEntries[2].size = bufDesc.size;
+  bgEntries[2].buffer = parameters.buffer;
+  bgEntries[2].offset = parameters.offset;
+  bgEntries[2].size = dataSize;
 
   wgpu::BindGroupDescriptor bgDesc{};
   bgDesc.label = wgpuLabel("FilterComponentTransferBindGroup");
@@ -3426,9 +3214,23 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   return output;
 }
 
+namespace {
+
+bool HasValidConvolveKernel(const svg::components::filter_primitive::ConvolveMatrix& primitive,
+                            int requiredSize) {
+  return primitive.orderX > 0 && primitive.orderY > 0 && requiredSize <= 25 &&
+         static_cast<int>(primitive.kernelMatrix.size()) == requiredSize;
+}
+
+}  // namespace
+
 wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::ConvolveMatrix& primitive) {
+  if (!input) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -3452,11 +3254,9 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   // SVG spec validation: invalid parameters produce transparent black.
   // Matches the CPU reference's guard in FilterGraph.cpp.
   // The shader kernel array holds 25 elements, so any orderX*orderY <= 25 is valid.
-  const bool invalid =
-      primitive.orderX <= 0 || primitive.orderY <= 0 || primitive.orderX * primitive.orderY > 25 ||
-      static_cast<int>(primitive.kernelMatrix.size()) != requiredSize || targetX < 0 ||
-      targetX >= primitive.orderX || targetY < 0 || targetY >= primitive.orderY ||
-      (primitive.divisor.has_value() && primitive.divisor.value() == 0.0);
+  const bool invalid = !HasValidConvolveKernel(primitive, requiredSize) || targetX < 0 ||
+                       targetX >= primitive.orderX || targetY < 0 || targetY >= primitive.orderY ||
+                       (primitive.divisor.has_value() && primitive.divisor.value() == 0.0);
 
   if (invalid) {
     if (verbose_) {
@@ -3471,6 +3271,9 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterConvolveMatrixOutput");
+  if (!output) {
+    return {};
+  }
 
   ConvolveParams params{};
   params.orderX = primitive.orderX;
@@ -3557,6 +3360,9 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterTurbulenceOutput");
+  if (!output) {
+    return {};
+  }
 
   TurbulenceParams params{};
   params.baseFreqX = static_cast<float>(baseFrequencyX);
@@ -3651,12 +3457,19 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
 wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
     FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
     const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale) {
+  if (!in1 || !in2) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = in1.getWidth();
   const uint32_t height = in1.getHeight();
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterDisplacementMapOutput");
+  if (!output) {
+    return {};
+  }
 
   using Channel = svg::components::filter_primitive::DisplacementMap::Channel;
   auto toIndex = [](Channel ch) -> uint32_t {
@@ -3784,6 +3597,10 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
     const svg::components::filter_primitive::DiffuseLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
     const Box2d& sampleSubregion, bool linearRGB) {
+  if (!input) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -3800,6 +3617,9 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterDiffuseLightingOutput");
+  if (!output) {
+    return {};
+  }
 
   DiffuseLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
@@ -3884,9 +3704,6 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   pass.get().end();
   pass.reset();
 
-  if (linearRGB) {
-    output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
-  }
   return output;
 }
 
@@ -3895,6 +3712,10 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
     const svg::components::filter_primitive::SpecularLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
     const Box2d& sampleSubregion, bool linearRGB) {
+  if (!input) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -3908,6 +3729,9 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterSpecularLightingOutput");
+  if (!output) {
+    return {};
+  }
 
   SpecularLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
@@ -3997,9 +3821,6 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   pass.get().end();
   pass.reset();
 
-  if (linearRGB) {
-    output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
-  }
   return output;
 }
 
@@ -4007,6 +3828,10 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::DropShadow& primitive, double pixelStdDevX,
     double pixelStdDevY, double pixelDx, double pixelDy) {
+  if (!input) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -4016,9 +3841,15 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   // time is free because we already have to walk the taps.
   wgpu::Texture blurred =
       applyGaussianBlur(arena, input, pixelStdDevX, pixelStdDevY, /*edgeMode=*/0);
+  if (!blurred) {
+    return {};
+  }
 
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterDropShadowOutput");
+  if (!output) {
+    return {};
+  }
 
   const css::RGBA rgba = primitive.floodColor.asRGBA();
   const float floodA = (static_cast<float>(rgba.a) / 255.0f) *
@@ -4030,6 +3861,11 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   params.color[0] = static_cast<float>(rgba.r) / 255.0f;
   params.color[1] = static_cast<float>(rgba.g) / 255.0f;
   params.color[2] = static_cast<float>(rgba.b) / 255.0f;
+  if (arena.isLinearRgb(input)) {
+    for (size_t channel = 0; channel < 3; ++channel) {
+      params.color[channel] = srgbToLinearChannel(params.color[channel]);
+    }
+  }
   params.color[3] = floodA;
   params.dx = static_cast<float>(pixelDx);
   params.dy = static_cast<float>(pixelDy);
@@ -4045,9 +3881,10 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
 }
 
 bool HasSafeFilterImageSource(const svg::components::filter_primitive::Image& primitive,
-                              std::span<const uint8_t> imageData,
                               uint32_t maximumTextureDimension) {
-  return svg::HasExactRgbaPayload(imageData, primitive.imageWidth, primitive.imageHeight) &&
+  return primitive.imageData &&
+         svg::HasExactRgbaPayload(*primitive.imageData, primitive.imageWidth,
+                                  primitive.imageHeight) &&
          static_cast<uint32_t>(primitive.imageWidth) <= maximumTextureDimension &&
          static_cast<uint32_t>(primitive.imageHeight) <= maximumTextureDimension &&
          static_cast<uint32_t>(primitive.imageWidth) <= std::numeric_limits<uint32_t>::max() / 4u;
@@ -4095,6 +3932,34 @@ std::optional<ImageParams> CreateFragmentImageParams(
   return params;
 }
 
+wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
+                                                        const wgpu::Texture& output) {
+  wgpu::Texture emptyTex = arena.createTexture(gpu::TextureDescriptor{
+      "FilterImageEmptySource", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (!emptyTex) {
+    return {};
+  }
+  const uint8_t zero[4] = {0, 0, 0, 0};
+  wgpu::TexelCopyTextureInfo dstInfo{};
+  dstInfo.texture = emptyTex;
+  wgpu::TexelCopyBufferLayout layout{};
+  layout.bytesPerRow = 4;
+  layout.rowsPerImage = 1;
+  wgpu::Extent3D extent = {1, 1, 1};
+  device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
+  device_.countTextureWrite(4);
+
+  ImageParams params{};
+  params.m02 = -1000.0f;
+  params.m12 = -1000.0f;
+  auto ub = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
+                             emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams),
+                             "FilterImageEmptyPass");
+  return output;
+}
+
 wgpu::Texture GeodeFilterEngine::applyImage(
     FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
     uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
@@ -4102,40 +3967,16 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     const Box2d& placementRegionUser) {
   const wgpu::Device& dev = device_.device();
 
-  const std::span<const uint8_t> imageData = primitive.imageData
-                                                 ? std::span<const uint8_t>(*primitive.imageData)
-                                                 : std::span<const uint8_t>();
   const bool hasSafeTextureExtent =
-      HasSafeFilterImageSource(primitive, imageData, device_.maxTextureDimension2D());
+      HasSafeFilterImageSource(primitive, device_.maxTextureDimension2D());
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
-
-  const auto renderTransparentOutput = [&]() {
-    wgpu::Texture emptyTex = arena.createTexture(gpu::TextureDescriptor{
-        "FilterImageEmptySource", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
-        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-    const uint8_t zero[4] = {0, 0, 0, 0};
-    wgpu::TexelCopyTextureInfo dstInfo{};
-    dstInfo.texture = emptyTex;
-    wgpu::TexelCopyBufferLayout layout{};
-    layout.bytesPerRow = 4;
-    layout.rowsPerImage = 1;
-    wgpu::Extent3D extent = {1, 1, 1};
-    device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
-    device_.countTextureWrite(4);
-
-    ImageParams params{};
-    params.m02 = -1000.0f;
-    params.m12 = -1000.0f;
-    auto ub = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-    dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                               emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams),
-                               "FilterImageEmptyPass");
-    return output;
-  };
+  if (!output) {
+    return {};
+  }
 
   // Empty, malformed, degenerate, or device-oversized sources remain transparent.
   if (!hasSafeTextureExtent) {
-    return renderTransparentOutput();
+    return renderTransparentImage(arena, output);
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
@@ -4143,13 +3984,13 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   // (consistent with feFlood / feMerge).
   const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
   const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
-  const std::vector<uint8_t> premul = svg::PremultiplyRgba(imageData);
+  const std::vector<uint8_t> premul = svg::PremultiplyRgba(*primitive.imageData);
 
   wgpu::Texture imgTex = arena.createTexture(gpu::TextureDescriptor{
       "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   if (!imgTex) {
-    return renderTransparentOutput();
+    return {};
   }
 
   wgpu::TexelCopyTextureInfo dstInfo{};
@@ -4298,11 +4139,18 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
 wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgpu::Texture& input,
                                            int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH) {
+  if (!input) {
+    return {};
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterTileOutput");
+  if (!output) {
+    return {};
+  }
 
   TileParams params{};
   params.srcX = srcX;
@@ -4322,10 +4170,14 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
                                                     const wgpu::Texture& input,
                                                     const Transform2d& filterFromDevice,
                                                     double usrX0, double usrY0, double usrX1,
-                                                    double usrY1) {
+                                                    double usrY1, bool resolve) {
+  if (!input) {
+    return {};
+  }
+
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterSubregionClipOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
-      gpu::TextureFormat::RGBA8Unorm,
+      resolve ? gpu::TextureFormat::RGBA8Unorm : gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
@@ -4345,9 +4197,10 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   params.pad0 = 0;
   params.pad1 = 0;
 
-  if (!dispatchRuntimeInputOutputUniform(arena, subregionClipProgram_, input, *output,
-                                         UniformBytes(params), "FilterSubregionClipPass",
-                                         gpu::shader::programs::kSubregionClipWorkgroupSize)) {
+  if (!dispatchRuntimeInputOutputUniform(
+          arena, resolve ? filterResolveProgram_ : subregionClipProgram_, input, *output,
+          UniformBytes(params), "FilterSubregionClipPass",
+          gpu::shader::programs::kSubregionClipWorkgroupSize)) {
     return {};
   }
 
@@ -4360,9 +4213,14 @@ wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& 
   if (!input) {
     return {};
   }
+
+  if (const wgpu::Texture converted = arena.convertedTexture(input, srgbToLinear)) {
+    return converted;
+  }
+
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterColorSpaceConvertOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
-      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (output == nullptr) {
     return {};
@@ -4375,13 +4233,17 @@ wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& 
   params.pad1 = 0;
   params.pad2 = 0;
 
-  if (!dispatchRuntimeInputOutputUniform(arena, colorSpaceConvertProgram_, input, *output,
+  if (!colorTransferTable_.isValid() ||
+      !dispatchRuntimeInputOutputUniform(arena, colorSpaceConvertProgram_, input, *output,
                                          UniformBytes(params), "FilterColorSpaceConvertPass",
-                                         gpu::shader::programs::kColorSpaceConvertWorkgroupSize)) {
+                                         gpu::shader::programs::kColorSpaceConvertWorkgroupSize,
+                                         &colorTransferTable_)) {
     return {};
   }
 
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  const wgpu::Texture converted = device_.adapterDevice().wgpuTextureOf(*output);
+  arena.rememberConversion(input, converted, srgbToLinear);
+  return converted;
 }
 
 }  // namespace donner::geode
