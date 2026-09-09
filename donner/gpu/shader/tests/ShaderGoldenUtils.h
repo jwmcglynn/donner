@@ -46,7 +46,8 @@ inline std::string ReadShaderGolden(const std::string& name) {
 }
 
 /// Rewrites a golden when its update environment variable names a repository root, and returns
-/// true so the caller can skip the comparison.
+/// true so the caller can skip the comparison. Set the variable to
+/// `TEST_UNDECLARED_OUTPUTS_DIR` to export goldens from a sandboxed or remote test.
 ///
 /// Goldens are regenerated deliberately rather than on every run: a golden that rewrites itself
 /// records whatever the emitter currently does instead of what it is supposed to do.
@@ -60,7 +61,17 @@ inline bool MaybeUpdateShaderGolden(const char* environmentVariable, const std::
   if (updateRoot == nullptr) {
     return false;
   }
-  const std::string outPath = std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/" + name;
+  std::string outPath;
+  if (std::string(updateRoot) == "TEST_UNDECLARED_OUTPUTS_DIR") {
+    const char* outputDirectory = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+    if (outputDirectory == nullptr) {
+      ADD_FAILURE() << "TEST_UNDECLARED_OUTPUTS_DIR is required for golden export";
+      return true;
+    }
+    outPath = std::string(outputDirectory) + "/" + name;
+  } else {
+    outPath = std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/" + name;
+  }
   std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
   EXPECT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
   out << contents;
