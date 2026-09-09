@@ -316,11 +316,20 @@ private:
   /// Resets the per-pass binding state a begin or end transitions through.
   void resetPassBindings();
 
+  /// Whether a re-resolution also rejects a texture that aliases an active color attachment.
+  /// Only an operation that uses the group applies the check; binding one does not.
+  enum class AttachmentAliasPolicy {
+    Ignore,  //!< Re-resolve only. Used when a group is bound.
+    Reject,  //!< Also reject an alias with an active color attachment. Used at draw and dispatch.
+  };
+
   /// Re-resolves the resource one bind group entry references, failing closed when it was
   /// destroyed after the group was created.
   /// @param entry Entry to re-resolve.
   /// @param operation Operation name for diagnostics, e.g. `"draw"` or `"setBindGroup"`.
-  Status revalidateBindGroupEntry(const BindGroupEntry& entry, std::string_view operation);
+  /// @param attachmentAlias Whether to also reject an active color-attachment alias.
+  Status revalidateBindGroupEntry(const BindGroupEntry& entry, std::string_view operation,
+                                  AttachmentAliasPolicy attachmentAlias);
 
   /// Validates that a texture-to-texture copy's operands are distinct, share a format, and carry
   /// the CopySrc / CopyDst usages.

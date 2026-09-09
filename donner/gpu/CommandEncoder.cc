@@ -154,7 +154,8 @@ Result<CommandEncoder::ResolvedBindGroup> CommandEncoder::validateBoundBindGroup
                            index));
   }
   for (const BindGroupEntry& entry : group->descriptor.entries) {
-    if (Status status = revalidateBindGroupEntry(entry, operation); status.hasError()) {
+    if (Status status = revalidateBindGroupEntry(entry, operation, AttachmentAliasPolicy::Reject);
+        status.hasError()) {
       return std::move(status).error();
     }
   }
@@ -336,7 +337,12 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
                                 record.result()->layoutIdentity.slotIndex)));
   }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
-    const Status entryStatus = revalidateBindGroupEntry(entry, "setBindGroup");
+    // Binding a group is not using it. A group bound at an index the eventual pipeline layout
+    // does not declare, or replaced before the draw, never reaches the backend, so rejecting an
+    // attachment alias here would fail sequences that are harmless. The draw and dispatch path
+    // applies the check to exactly the groups the active pipeline uses.
+    const Status entryStatus =
+        revalidateBindGroupEntry(entry, "setBindGroup", AttachmentAliasPolicy::Ignore);
     if (entryStatus.hasError()) {
       return entryStatus;
     }
@@ -350,7 +356,8 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
 }
 
 Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry,
-                                                std::string_view operation) {
+                                                std::string_view operation,
+                                                AttachmentAliasPolicy attachmentAlias) {
   if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
     auto bufferRecord =
         device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
@@ -368,8 +375,9 @@ Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry,
     if (viewedTexture.hasError()) {
       return fail(std::move(viewedTexture).error());
     }
-    if (std::ranges::find(passAttachmentTextures_, viewRecord.result()->textureIdentity) !=
-        passAttachmentTextures_.end()) {
+    if (attachmentAlias == AttachmentAliasPolicy::Reject &&
+        std::ranges::find(passAttachmentTextures_, viewRecord.result()->textureIdentity) !=
+            passAttachmentTextures_.end()) {
       return fail(
           Err(GpuErrorType::UsageMismatch,
               std::format("{}: a texture binding aliases an active color attachment", operation)));
