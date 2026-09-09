@@ -85,6 +85,33 @@ void ExpectFilterChainMatches(const std::string& primitives, const char* caseNam
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      width="2000" height="1600" viewBox="0 0 1000 800">
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="1000" height="800">
+      <feFlood flood-color="#3973ad" flood-opacity="0.7" result="a"/>
+      <feFlood flood-color="#a75321" flood-opacity="0.4" result="b"/>
+      <feComposite in="a" in2="b" operator="arithmetic" k2="0.6" k3="0.4"/>
+    </filter></defs><rect width="1000" height="800" filter="url(#f)"/>
+  </svg>)svg";
+  ParseWarningSink warnings;
+  auto gpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+  auto cpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_TRUE(gpuDocument.hasResult());
+  ASSERT_TRUE(cpuDocument.hasResult());
+  ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+  svg::RendererGeode gpuRenderer;
+  svg::RendererTinySkia cpuRenderer;
+  gpuRenderer.draw(gpuDocument.result());
+  cpuRenderer.draw(cpuDocument.result());
+  const auto actual = gpuRenderer.takeSnapshot();
+  const auto expected = cpuRenderer.takeSnapshot();
+  ASSERT_EQ(actual.dimensions, Vector2i(2000, 1600));
+  ASSERT_EQ(expected.dimensions, actual.dimensions);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "dpr2_full_viewport_compositing",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(FilterChainPrecision, LinearFunctionsKeepFractionalValuesAcrossSeveralNodes) {
   const std::string operation = R"svg(<feComponentTransfer color-interpolation-filters="sRGB">
     <feFuncR type="linear" slope="0.8" intercept="0.03"/>
