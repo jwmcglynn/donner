@@ -1072,6 +1072,22 @@
         "TextureUsage"
       ]
     },
+    "donner/svg/renderer/geode/tests/GeodeFilterEngine_tests.cc": {
+      "operations": [
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "submit"
+      ],
+      "wgpuCFunctions": [
+        "wgpuTextureOf"
+      ],
+      "wgpuCppTokens": [
+        "CommandBuffer",
+        "CommandEncoder",
+        "Texture"
+      ]
+    },
     "donner/svg/renderer/geode/tests/GeodePerf_tests.cc": {
       "operations": [
         "draw"

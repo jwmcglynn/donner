@@ -314,7 +314,10 @@ donner_cc_library(
         "//examples:__pkg__",
     ],
     deps = [
+        ":color_space_convert_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_composite_wgsl",
+        ":filter_merge_wgsl",
         ":flood_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
@@ -468,6 +471,23 @@ embed_resources(
 )
 
 genrule(
+    name = "color_space_convert_generated",
+    outs = ["generated/color_space_convert.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) color_space_convert " +
+          "$(location generated/color_space_convert.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "color_space_convert_wgsl",
+    header_output = "embed_resources/ColorSpaceConvertWgsl.h",
+    resources = {
+        "kColorSpaceConvertWgsl": "generated/color_space_convert.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
     name = "filter_color_matrix_generated",
     outs = ["generated/filter_color_matrix.wgsl"],
     cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_color_matrix " +
@@ -538,22 +558,36 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feMerge alpha-over blit compute shader.
+genrule(
+    name = "emit_filter_merge",
+    outs = ["generated/filter_merge.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) merge " +
+          "$(location generated/filter_merge.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_merge_wgsl",
     header_output = "embed_resources/FilterMergeWgsl.h",
     resources = {
-        "kFilterMergeWgsl": "shaders/filter_merge.wgsl",
+        "kFilterMergeWgsl": "generated/filter_merge.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feComposite Porter-Duff compositing compute shader.
+genrule(
+    name = "emit_filter_composite",
+    outs = ["generated/filter_composite.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) composite " +
+          "$(location generated/filter_composite.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_composite_wgsl",
     header_output = "embed_resources/FilterCompositeWgsl.h",
     resources = {
-        "kFilterCompositeWgsl": "shaders/filter_composite.wgsl",
+        "kFilterCompositeWgsl": "generated/filter_composite.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -668,15 +702,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-embed_resources(
-    name = "filter_color_space_convert_wgsl",
-    header_output = "embed_resources/FilterColorSpaceConvertWgsl.h",
-    resources = {
-        "kFilterColorSpaceConvertWgsl": "shaders/filter_color_space_convert.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 # Snapshot readback: GPU-side unpremultiply of a render target into a
 # straight-alpha RGBA8 staging texture, then copied into the readback buffer.
 
@@ -688,15 +713,12 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
-        ":filter_color_space_convert_wgsl",
         ":filter_component_transfer_wgsl",
-        ":filter_composite_wgsl",
         ":filter_convolve_matrix_wgsl",
         ":filter_diffuse_lighting_wgsl",
         ":filter_displacement_map_wgsl",
         ":filter_drop_shadow_wgsl",
         ":filter_image_wgsl",
-        ":filter_merge_wgsl",
         ":filter_morphology_wgsl",
         ":filter_specular_lighting_wgsl",
         ":filter_tile_wgsl",
@@ -1043,7 +1065,10 @@ donner_cc_test(
     srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
     data = ["//donner/gpu/shader:program_goldens"],
     deps = [
+        ":color_space_convert_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_composite_wgsl",
+        ":filter_merge_wgsl",
         ":flood_wgsl",
         ":offset_wgsl",
         ":snapshot_unpremultiply_wgsl",
@@ -1052,6 +1077,28 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_test(
+    name = "geode_filter_engine_tests_impl",
+    srcs = ["tests/GeodeFilterEngine_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        ":geode_wgpu_util",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg/components/filter:components",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_filter_engine_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_filter_engine_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
 )
 
 donner_package()

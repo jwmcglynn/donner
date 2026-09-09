@@ -16,8 +16,11 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
+#include "donner/gpu/shader/programs/CompositeBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
+#include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/OffsetBindings.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -27,7 +30,10 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/ColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
+#include "embed_resources/FilterCompositeWgsl.h"
+#include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SubregionClipWgsl.h"
@@ -582,7 +588,7 @@ struct FloodParams {
   float color[4];  // RGBA flood color in straight alpha.
 };
 
-/// Uniform buffer layout matching the WGSL `CompositeParams` struct.
+/// Uniform buffer layout matching the typed program's `CompositeParams` struct.
 struct CompositeParams {
   uint32_t op;  // Operator index (0..6).
   uint32_t pad0;
@@ -593,6 +599,27 @@ struct CompositeParams {
   float k3;  // Arithmetic coefficient k3.
   float k4;  // Arithmetic coefficient k4.
 };
+
+static_assert(sizeof(CompositeParams) == 32);
+static_assert(offsetof(CompositeParams, k1) == 16);
+
+/// Encodes the SVG operator using the shader program's shared values.
+/// @param op SVG compositing operator.
+gpu::shader::programs::CompositeOperator ShaderCompositeOperator(
+    svg::components::filter_primitive::Composite::Operator op) {
+  using Op = svg::components::filter_primitive::Composite::Operator;
+  using ShaderOp = gpu::shader::programs::CompositeOperator;
+  switch (op) {
+    case Op::Over: return ShaderOp::Over;
+    case Op::In: return ShaderOp::In;
+    case Op::Out: return ShaderOp::Out;
+    case Op::Atop: return ShaderOp::Atop;
+    case Op::Xor: return ShaderOp::Xor;
+    case Op::Lighter: return ShaderOp::Lighter;
+    case Op::Arithmetic: return ShaderOp::Arithmetic;
+  }
+  return ShaderOp::Over;
+}
 
 /// Uniform buffer layout matching the WGSL `BlendParams` struct.
 struct BlendParams {
@@ -861,11 +888,12 @@ struct SubregionClipParams {
 };
 
 /// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
+/// Uniform buffer layout mirroring the shader program's `ColorSpaceConvertParams` struct.
 struct ColorSpaceConvertParams {
-  uint32_t direction;  // 0 = sRGB→linear, 1 = linear→sRGB.
-  uint32_t pad0;
-  uint32_t pad1;
-  uint32_t pad2;
+  uint32_t direction;  //!< Which way the transfer runs; the program's bindings header names both.
+  uint32_t pad0;       //!< Trailing word the program declares; the two sizes must agree.
+  uint32_t pad1;       //!< Trailing word the program declares; the two sizes must agree.
+  uint32_t pad2;       //!< Trailing word the program declares; the two sizes must agree.
 };
 
 /// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
@@ -1025,7 +1053,7 @@ InputOutputUniformPipeline createInputOutputUniformPipeline(const wgpu::Device& 
 }
 
 /// Helper to create a pipeline with a two-input (in1, in2, output, uniform) bind group layout.
-/// Used by feComposite and feBlend pipelines.
+/// Used by the remaining direct two-input filter pipelines.
 struct TwoInputUniformPipeline {
   ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout;
   ScopedWgpuHandle<wgpu::ComputePipeline> pipeline;
@@ -1271,6 +1299,49 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
                                    (width + workgroupSize - 1) / workgroupSize,
                                    (height + workgroupSize - 1) / workgroupSize);
+}
+
+/// Records a two-input pass, with an optional uniform block, through the runtime.
+/// @param arena Frame resources and encoder. @param program Pipeline and matching layout.
+/// @param source Source texture. @param destination Backdrop texture. @param output Result texture.
+/// @param extent Output dimensions. @param uniforms Optional parameters, bound at index three.
+/// @param label Debug label. @param workgroupSize Program's workgroup width and height.
+[[nodiscard]] bool dispatchRuntimeTwoInput(
+    FilterResourceArena& arena, const RuntimeComputeProgram& program, const wgpu::Texture& source,
+    const wgpu::Texture& destination, const gpu::Texture& output, gpu::Extent2d extent,
+    std::span<const uint8_t> uniforms, const char* label, uint32_t workgroupSize) {
+  if (!program.pipeline.isValid()) {
+    return false;
+  }
+  const gpu::Texture* runtimeSource = arena.importRuntimeTexture(source);
+  const gpu::Texture* runtimeDestination = arena.importRuntimeTexture(destination);
+  if (runtimeSource == nullptr || runtimeDestination == nullptr) {
+    return false;
+  }
+  const gpu::TextureView* sourceView =
+      arena.createRuntimeTextureView(*runtimeSource, RcString(label));
+  const gpu::TextureView* destinationView =
+      arena.createRuntimeTextureView(*runtimeDestination, RcString(label));
+  const gpu::TextureView* outputView = arena.createRuntimeTextureView(output, RcString(label));
+  if (sourceView == nullptr || destinationView == nullptr || outputView == nullptr) {
+    return false;
+  }
+  std::vector<gpu::BindGroupEntry> entries{{0, gpu::TextureViewBinding{*sourceView}},
+                                           {1, gpu::TextureViewBinding{*destinationView}},
+                                           {2, gpu::TextureViewBinding{*outputView}}};
+  if (!uniforms.empty()) {
+    const FilterResourceCache::RuntimeUniformSlot slot = arena.writeRuntimeUniformSlot(uniforms);
+    if (slot.buffer == nullptr) {
+      return false;
+    }
+    entries.push_back({3, gpu::BufferBinding{*slot.buffer, slot.offset, uniforms.size()}});
+  }
+  const gpu::BindGroup* bindGroup =
+      arena.createRuntimeBindGroup(program.bindGroupLayout, std::move(entries), RcString(label));
+  return bindGroup != nullptr &&
+         arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
+                                   (extent.width + workgroupSize - 1) / workgroupSize,
+                                   (extent.height + workgroupSize - 1) / workgroupSize);
 }
 
 /// Dispatch a compute shader with a standard (input, output, uniform) bind group.
@@ -1605,55 +1676,28 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kFloodWorkgroupSize);
   }
 
-  // --- feMerge alpha-over pipeline (src, dst → output) ---
   {
-    wgpu::BindGroupLayoutEntry entries[3]{};
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
-    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-    entries[0].texture.multisampled = false;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].texture.sampleType = wgpu::TextureSampleType::Float;
-    entries[1].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-    entries[1].texture.multisampled = false;
-
-    entries[2].binding = 2;
-    entries[2].visibility = wgpu::ShaderStage::Compute;
-    entries[2].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[2].storageTexture.format = kFormat;
-    entries[2].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterMergeBGL");
-    bglDesc.entryCount = 3;
-    bglDesc.entries = entries;
-    mergeBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterMergePipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {mergeBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterMergeShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterMergePipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    mergePipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::MergeBinding;
+    mergeProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterMerge", EmbeddedWgsl(donner::embedded::kFilterMergeWgsl),
+        gpu::shader::programs::kMergeEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(MergeBinding::SourceTexture)),
+         SampledInputEntry(static_cast<uint32_t>(MergeBinding::DestinationTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(MergeBinding::OutputTexture))},
+        gpu::shader::programs::kMergeWorkgroupSize);
   }
 
-  // --- feComposite Porter-Duff pipeline (two inputs + output + uniform) ---
   {
-    auto [bgl, pipeline] = createTwoInputUniformPipeline(
-        dev, "FilterComposite", createFilterCompositeShader(dev), sizeof(CompositeParams));
-    compositeBindGroupLayout_ = std::move(bgl);
-    compositePipeline_ = std::move(pipeline);
+    using gpu::shader::programs::CompositeBinding;
+    compositeProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterComposite",
+        EmbeddedWgsl(donner::embedded::kFilterCompositeWgsl),
+        gpu::shader::programs::kCompositeEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(CompositeBinding::SourceTexture)),
+         SampledInputEntry(static_cast<uint32_t>(CompositeBinding::DestinationTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(CompositeBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(CompositeBinding::Params))},
+        gpu::shader::programs::kCompositeWorkgroupSize);
   }
 
   // --- feBlend W3C blend-mode pipeline (two inputs + output + uniform) ---
@@ -1934,13 +1978,17 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kSubregionClipWorkgroupSize);
   }
 
-  // --- sRGB↔linearRGB color space conversion pipeline ---
+  // --- sRGB to linear color space conversion pipeline, through the GPU runtime ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterColorSpaceConvert", createFilterColorSpaceConvertShader(dev),
-        sizeof(ColorSpaceConvertParams));
-    colorSpaceConvertBindGroupLayout_ = std::move(bgl);
-    colorSpaceConvertPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::ColorSpaceConvertBinding;
+    colorSpaceConvertProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterColorSpaceConvert",
+        EmbeddedWgsl(donner::embedded::kColorSpaceConvertWgsl),
+        gpu::shader::programs::kColorSpaceConvertEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::Params))},
+        gpu::shader::programs::kColorSpaceConvertWorkgroupSize);
   }
 }
 
@@ -2467,9 +2515,17 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
           svg::ColorInterpolationFilters::SRGB;
       if (nodeLinearRGB) {
         wgpu::Texture linearIn1 = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        if (!linearIn1) {
+          return {};
+        }
         wgpu::Texture linearIn2 = applyColorSpaceConversion(arena, in2Tex, /*srgbToLinear=*/true);
+        if (!linearIn2) {
+          return {};
+        }
         wgpu::Texture linearOutput = applyComposite(arena, linearIn1, linearIn2, *composite);
-        outputTex = applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false);
+        outputTex = linearOutput
+                        ? applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false)
+                        : wgpu::Texture{};
       } else {
         outputTex = applyComposite(arena, inputTex, in2Tex, *composite);
       }
@@ -2695,6 +2751,10 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
       outputTex = inputTex;
     }
 
+    if (!outputTex) {
+      return {};
+    }
+
     // Per-primitive subregion clipping: the user-space subregion was
     // computed up front (computeNodeSubregion). Blur nodes with an
     // axis-aligned CTM already folded the clip into their final pass;
@@ -2718,6 +2778,10 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
                                std::floor(pixelAABB.topLeft.y), std::ceil(pixelAABB.bottomRight.x),
                                std::ceil(pixelAABB.bottomRight.y));
       }
+    }
+
+    if (!outputTex) {
+      return {};
     }
 
     // Record the subregion for downstream nodes.
@@ -3129,11 +3193,18 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
   wgpu::Texture accumulator = toLinear(
       resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
 
+  if (!accumulator) {
+    return {};
+  }
+
   // Alpha-over composite each subsequent input on top.
   for (size_t i = 1; i < node.inputs.size(); ++i) {
     wgpu::Texture src = toLinear(
         resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
     accumulator = runMergePass(arena, src, accumulator, width, height);
+    if (!accumulator) {
+      return {};
+    }
   }
 
   if (linearRGB) {
@@ -3146,72 +3217,37 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
 wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const wgpu::Texture& src,
                                               const wgpu::Texture& dst, uint32_t width,
                                               uint32_t height) {
-  const wgpu::Device& dev = device_.device();
-
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterMergeOutput");
-
-  ScopedWgpuHandle<wgpu::TextureView> srcView(src.createView());
-  ScopedWgpuHandle<wgpu::TextureView> dstView(dst.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = srcView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = dstView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].textureView = outputView.get();
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterMergeBindGroup");
-  bgDesc.layout = mergeBindGroupLayout_.get();
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterMergePass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(mergePipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  if (!src || !dst) {
+    return {};
+  }
+  const gpu::Extent2d extent{width, height};
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterMergeOutput", extent, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr ||
+      !dispatchRuntimeTwoInput(arena, mergeProgram_, src, dst, *output, extent, {},
+                               "FilterMergePass", gpu::shader::programs::kMergeWorkgroupSize)) {
+    return {};
+  }
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyComposite(
     FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
     const svg::components::filter_primitive::Composite& primitive) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = in1.getWidth();
-  const uint32_t height = in1.getHeight();
-
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterCompositeOutput");
-
-  // Map the Composite::Operator enum to the shader's uint index.
-  using Op = svg::components::filter_primitive::Composite::Operator;
-  uint32_t opIndex = 0;
-  switch (primitive.op) {
-    case Op::Over: opIndex = 0; break;
-    case Op::In: opIndex = 1; break;
-    case Op::Out: opIndex = 2; break;
-    case Op::Atop: opIndex = 3; break;
-    case Op::Xor: opIndex = 4; break;
-    case Op::Lighter: opIndex = 5; break;
-    case Op::Arithmetic: opIndex = 6; break;
+  if (!in1 || !in2) {
+    return {};
+  }
+  const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterCompositeOutput", extent, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
   }
 
   CompositeParams params{};
-  params.op = opIndex;
+  params.op = static_cast<uint32_t>(ShaderCompositeOperator(primitive.op));
   params.pad0 = 0;
   params.pad1 = 0;
   params.pad2 = 0;
@@ -3220,12 +3256,12 @@ wgpu::Texture GeodeFilterEngine::applyComposite(
   params.k3 = static_cast<float>(primitive.k3);
   params.k4 = static_cast<float>(primitive.k4);
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-
-  dispatchTwoInputUniform(arena, device_, compositeBindGroupLayout_.get(), compositePipeline_.get(),
-                          in1, in2, output, uniformBuffer.buffer, uniformBuffer.offset,
-                          sizeof(CompositeParams), "FilterCompositePass");
-  return output;
+  if (!dispatchRuntimeTwoInput(arena, compositeProgram_, in1, in2, *output, extent,
+                               UniformBytes(params), "FilterCompositePass",
+                               gpu::shader::programs::kCompositeWorkgroupSize)) {
+    return {};
+  }
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyBlend(
@@ -4321,23 +4357,31 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
 wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& arena,
                                                            const wgpu::Texture& input,
                                                            bool srgbToLinear) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
-
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterColorSpaceConvertOutput");
+  if (!input) {
+    return {};
+  }
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterColorSpaceConvertOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
   ColorSpaceConvertParams params{};
-  params.direction = srgbToLinear ? 0u : 1u;
+  params.direction = srgbToLinear ? gpu::shader::programs::kColorSpaceConvertSrgbToLinear
+                                  : gpu::shader::programs::kColorSpaceConvertLinearToSrgb;
+  params.pad0 = 0;
+  params.pad1 = 0;
+  params.pad2 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!dispatchRuntimeInputOutputUniform(arena, colorSpaceConvertProgram_, input, *output,
+                                         UniformBytes(params), "FilterColorSpaceConvertPass",
+                                         gpu::shader::programs::kColorSpaceConvertWorkgroupSize)) {
+    return {};
+  }
 
-  dispatchInputOutputUniform(arena, device_, colorSpaceConvertBindGroupLayout_.get(),
-                             colorSpaceConvertPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(ColorSpaceConvertParams),
-                             "FilterColorSpaceConvertPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 }  // namespace donner::geode

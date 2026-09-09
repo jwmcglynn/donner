@@ -17,7 +17,10 @@
 #include <string>
 
 #include "donner/base/tests/Runfiles.h"
+#include "embed_resources/ColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
+#include "embed_resources/FilterCompositeWgsl.h"
+#include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SnapshotUnpremultiplyWgsl.h"
@@ -43,6 +46,18 @@ std::string EmbeddedBytes(std::span<const unsigned char> resource) {
   return std::string(reinterpret_cast<const char*>(resource.data()), resource.size());
 }
 
+TEST(GeneratedShaderArtifacts, EmbeddedCompositeMatchesTheCommittedGolden) {
+  const std::string golden = ReadRunfile("donner/gpu/shader/tests/testdata/composite.wgsl");
+  ASSERT_THAT(golden, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(EmbeddedBytes(donner::embedded::kFilterCompositeWgsl), testing::Eq(golden));
+}
+
+TEST(GeneratedShaderArtifacts, EmbeddedMergeMatchesTheCommittedGolden) {
+  const std::string golden = ReadRunfile("donner/gpu/shader/tests/testdata/merge.wgsl");
+  ASSERT_THAT(golden, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(EmbeddedBytes(donner::embedded::kFilterMergeWgsl), testing::Eq(golden));
+}
+
 TEST(GeneratedShaderArtifacts, EmbeddedFilterColorMatrixMatchesTheCommittedGolden) {
   const std::string embedded = EmbeddedBytes(donner::embedded::kFilterColorMatrixWgsl);
   const std::string golden =
@@ -57,6 +72,17 @@ TEST(GeneratedShaderArtifacts, EmbeddedFilterColorMatrixMatchesTheCommittedGolde
 TEST(GeneratedShaderArtifacts, EmbeddedFloodMatchesTheCommittedGolden) {
   const std::string embedded = EmbeddedBytes(donner::embedded::kFloodWgsl);
   const std::string golden = ReadRunfile("donner/gpu/shader/tests/testdata/flood.wgsl");
+
+  ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
+  EXPECT_EQ(embedded, golden)
+      << "the embedded shader and its committed golden have diverged; regenerate the golden if "
+         "the emitter changed deliberately";
+}
+
+TEST(GeneratedShaderArtifacts, EmbeddedColorSpaceConvertMatchesTheCommittedGolden) {
+  const std::string embedded = EmbeddedBytes(donner::embedded::kColorSpaceConvertWgsl);
+  const std::string golden =
+      ReadRunfile("donner/gpu/shader/tests/testdata/color_space_convert.wgsl");
 
   ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
   EXPECT_EQ(embedded, golden)

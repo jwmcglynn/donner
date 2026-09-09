@@ -126,6 +126,113 @@
         "ColorMatrixParams"
       ]
     },
+    "donner/gpu/shader/tests/testdata/color_space_convert.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "ColorSpaceConvertParams"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "if",
+        "let",
+        "pow",
+        "return",
+        "saturate",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "ColorSpaceConvertParams"
+      ]
+    },
+    "donner/gpu/shader/tests/testdata/composite.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "sourceTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "destinationTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 2,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 3,
+          "group": 0,
+          "name": "params",
+          "type": "CompositeParams"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "if",
+        "let",
+        "return",
+        "saturate",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "CompositeParams"
+      ]
+    },
     "donner/gpu/shader/tests/testdata/filter_color_matrix.wgsl": {
       "bindings": [
         {
@@ -258,6 +365,53 @@
         "return",
         "saturate",
         "sign",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
+    },
+    "donner/gpu/shader/tests/testdata/merge.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "sourceTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "destinationTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 2,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "if",
+        "let",
+        "return",
+        "saturate",
+        "textureDimensions",
+        "textureLoad",
         "textureStore",
         "var"
       ],
@@ -642,57 +796,6 @@
         "BlendParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_color_space_convert.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "input_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 2,
-          "group": 0,
-          "name": "params",
-          "type": "Params"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "clamp",
-        "if",
-        "let",
-        "pow",
-        "return",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "Params"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_component_transfer.wgsl": {
       "bindings": [
         {
@@ -743,63 +846,6 @@
       ],
       "structs": [
         "ComponentTransferParams"
-      ]
-    },
-    "donner/svg/renderer/geode/shaders/filter_composite.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "in1_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "in2_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 2,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 3,
-          "group": 0,
-          "name": "params",
-          "type": "CompositeParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "clamp",
-        "if",
-        "let",
-        "return",
-        "switch",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "CompositeParams"
       ]
     },
     "donner/svg/renderer/geode/shaders/filter_convolve_matrix.wgsl": {
@@ -1085,53 +1131,6 @@
       "structs": [
         "ImageParams"
       ]
-    },
-    "donner/svg/renderer/geode/shaders/filter_merge.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "src_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "dst_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 2,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "clamp",
-        "if",
-        "let",
-        "return",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": []
     },
     "donner/svg/renderer/geode/shaders/filter_morphology.wgsl": {
       "bindings": [
