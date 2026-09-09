@@ -117,7 +117,8 @@ ShaderResult<IrModule> BuildClipModule(StorageTextureFormat format) {
     e.ok(fn.beginIf(e(Ne(e(Member(params, "pad0")), LiteralU32(0)))));
     const IrExpr alpha = e(fn.addLet("alpha", e(Swizzle(color, "w"))));
     e.ok(fn.beginIf(e(Gt(alpha, LiteralF32(0.0f)))));
-    const IrExpr straight = e(fn.addLet("straight", e(Div(e(Swizzle(color, "xyz")), alpha))));
+    const IrExpr straight =
+        e(fn.addLet("straight", e(Mul(e(Swizzle(color, "xyz")), e(Div(LiteralF32(1.0f), alpha))))));
     const IrExpr converted = e(ConstructVector(
         IrType::Vec3f(),
         {e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "x"))})),
