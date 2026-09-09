@@ -61,6 +61,8 @@ TEST(SubregionClipProgramTests, FinalResolveBuildsAndRoundsClampedChannelsHalfUp
   EXPECT_THAT(wgsl.result(), HasSubstr("floor("));
   EXPECT_THAT(wgsl.result(), HasSubstr("vec4<f32>(0.5f)"));
   EXPECT_THAT(wgsl.result(), HasSubstr("if (outside)"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("linear_channel_to_srgb"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("transferTable"));
 }
 
 TEST(SubregionClipProgramTests, EmitsDeterministically) {

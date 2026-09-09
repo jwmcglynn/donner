@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "donner/gpu/shader/IrExpr.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ErrorLatch.h"
 
 namespace donner::gpu::shader::programs {
@@ -49,6 +50,9 @@ ShaderResult<IrModule> BuildClipModule(StorageTextureFormat format) {
        // both sides.
        IrType::Member{"pad0", IrType::U32()}, IrType::Member{"pad1", IrType::U32()}}));
   e.ok(AddBindings(builder, paramsType, format));
+  if (format == StorageTextureFormat::Rgba8Unorm) {
+    e.ok(AddColorTransferFunctions(builder, 3));
+  }
 
   auto entryResult = builder.createComputeEntryPoint(
       RcString(kSubregionClipEntryPoint),
@@ -109,6 +113,21 @@ ShaderResult<IrModule> BuildClipModule(StorageTextureFormat format) {
   e.ok(fn.elseBranch());
   IrExpr color = e(CallBuiltin(BuiltinFn::TextureLoad, {inputTexture, coords, LiteralI32(0)}));
   if (format == StorageTextureFormat::Rgba8Unorm) {
+    color = e(fn.addVar("resolvedColor", IrType::Vec4f(), color));
+    e.ok(fn.beginIf(e(Ne(e(Member(params, "pad0")), LiteralU32(0)))));
+    const IrExpr alpha = e(fn.addLet("alpha", e(Swizzle(color, "w"))));
+    e.ok(fn.beginIf(e(Gt(alpha, LiteralF32(0.0f)))));
+    const IrExpr straight = e(fn.addLet("straight", e(Div(e(Swizzle(color, "xyz")), alpha))));
+    const IrExpr converted = e(ConstructVector(
+        IrType::Vec3f(),
+        {e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "x"))})),
+         e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "y"))})),
+         e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "z"))}))}));
+    e.ok(fn.assign(color, e(ConstructVector(IrType::Vec4f(), {e(Mul(converted, alpha)), alpha}))));
+    e.ok(fn.elseBranch());
+    e.ok(fn.assign(color, e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f)}))));
+    e.ok(fn.endIf());
+    e.ok(fn.endIf());
     const IrExpr clamped = e(CallBuiltin(BuiltinFn::Saturate, {color}));
     const IrExpr scaled = e(Mul(clamped, LiteralF32(255.0f)));
     const IrExpr half = e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.5f)}));

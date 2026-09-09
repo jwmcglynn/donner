@@ -33,16 +33,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
       status.hasError()) {
     return status;
   }
-  auto tableType = IrType::SizedArray(IrType::F32(), 2 * kColorTransferSampleCount);
-  if (tableType.hasError()) {
-    return tableType.error();
-  }
-  auto blockType = IrType::Struct("ColorTransferTable", {{"samples", tableType.result()}});
-  if (blockType.hasError()) {
-    return blockType.error();
-  }
-  return builder.addReadOnlyStorageBuffer(0, BindingIndex(ColorSpaceConvertBinding::TransferTable),
-                                          "transferTable", blockType.result());
+  return AddColorTransferFunctions(builder, BindingIndex(ColorSpaceConvertBinding::TransferTable));
 }
 
 /// Declares one transfer direction using bounded nearest-sample indexing.
@@ -82,6 +73,27 @@ IrExpr ConvertedChannels(ErrorLatch& e, FunctionBuilder& fn, const RcString& nam
 
 }  // namespace
 
+ShaderStatus AddColorTransferFunctions(ModuleBuilder& builder, uint32_t binding) {
+  auto tableType = IrType::SizedArray(IrType::F32(), 2 * kColorTransferSampleCount);
+  if (tableType.hasError()) {
+    return tableType.error();
+  }
+  auto blockType = IrType::Struct("ColorTransferTable", {{"samples", tableType.result()}});
+  if (blockType.hasError()) {
+    return blockType.error();
+  }
+  const ShaderStatus status =
+      builder.addReadOnlyStorageBuffer(0, binding, "transferTable", blockType.result());
+  if (status.hasError()) {
+    return status;
+  }
+  if (ShaderStatus transfer = AddTransferFunction(builder, "srgb_channel_to_linear", 0);
+      transfer.hasError()) {
+    return transfer;
+  }
+  return AddTransferFunction(builder, "linear_channel_to_srgb", kColorTransferSampleCount);
+}
+
 ShaderResult<IrModule> BuildColorSpaceConvertModule() {
   ErrorLatch e;
   ModuleBuilder builder;
@@ -94,8 +106,6 @@ ShaderResult<IrModule> BuildColorSpaceConvertModule() {
        // is the size a host mirror declared with 16-byte alignment computes for the same member.
        IrType::Member{"pad0", u32}, IrType::Member{"pad1", u32}, IrType::Member{"pad2", u32}}));
   e.ok(AddBindings(builder, paramsType));
-  e.ok(AddTransferFunction(builder, "srgb_channel_to_linear", 0));
-  e.ok(AddTransferFunction(builder, "linear_channel_to_srgb", kColorTransferSampleCount));
 
   auto entryResult = builder.createComputeEntryPoint(
       RcString(kColorSpaceConvertEntryPoint),

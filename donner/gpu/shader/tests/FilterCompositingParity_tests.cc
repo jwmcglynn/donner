@@ -86,6 +86,15 @@ void ExpectFilterChainMatches(const std::string& primitives, const char* caseNam
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(FilterChainPrecision, FinalDropShadowResolvePreservesLinearColorAndExplicitClip) {
+  ExpectFilterChainMatches(R"(<feDropShadow dx="0" dy="0" stdDeviation="0"
+      flood-color="#a75321" flood-opacity="0.4"/>)",
+                           "fused_drop_shadow_resolve");
+  ExpectFilterChainMatches(R"(<feDropShadow dx="0" dy="0" stdDeviation="0"
+      flood-color="#a75321" flood-opacity="0.4" x="2" y="3" width="7" height="5"/>)",
+                           "drop_shadow_explicit_final_clip");
+}
+
 TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) {
   const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg"
       width="2000" height="1600" viewBox="0 0 1000 800">

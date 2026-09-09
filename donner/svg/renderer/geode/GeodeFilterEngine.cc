@@ -2083,7 +2083,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture),
                             gpu::TextureFormat::RGBA8Unorm),
-         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))},
+         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params)),
+         {3, gpu::ShaderStage::Compute, gpu::BindingType::ReadOnlyStorageBuffer}},
         gpu::shader::programs::kSubregionClipWorkgroupSize);
   }
 
@@ -2439,6 +2440,7 @@ struct FilterNodeExecution {
   bool linearRgb;
   bool outputLinear;
   bool clipMergedIntoBlur = false;
+  bool finalResolve = false;
 };
 
 FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
@@ -2680,11 +2682,17 @@ wgpu::Texture FilterGraphExecution::runNodes() {
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const FilterNode& node = graph.nodes[index];
     FilterNodeExecution primitive(*this, node);
+    primitive.finalResolve = index + 1 == graph.nodes.size() &&
+                             std::holds_alternative<fp::DropShadow>(node.primitive) &&
+                             axisAligned && primitive.subregion == coordinates.filterRegion;
     const wgpu::Texture output = primitive.run();
     if (!output) {
       return {};
     }
     record(node, primitive.subregion, output, index);
+    if (primitive.finalResolve) {
+      return clip(currentBuffer, coordinates.filterRegion, false, true);
+    }
   }
   const wgpu::Texture srgb =
       engine.applyColorSpaceConversion(arena, currentBuffer, /*srgbToLinear=*/false);
@@ -2701,7 +2709,7 @@ wgpu::Texture FilterNodeExecution::run() {
   if (!output) {
     return {};
   }
-  if (!clipMergedIntoBlur) {
+  if (!clipMergedIntoBlur && !finalResolve) {
     const bool explicitSubregion = node.x || node.y || node.width || node.height;
     output = execution.clip(output, subregion, explicitSubregion && !execution.axisAligned);
   }
@@ -4454,7 +4462,7 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
                                                     const Transform2d& filterFromDevice,
                                                     double usrX0, double usrY0, double usrX1,
                                                     double usrY1, bool resolve) {
-  if (!input) {
+  if (!input || (resolve && !colorTransferTable_.isValid())) {
     return {};
   }
 
@@ -4477,13 +4485,14 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   params.userY0 = static_cast<float>(usrY0);
   params.userX1 = static_cast<float>(usrX1);
   params.userY1 = static_cast<float>(usrY1);
-  params.pad0 = 0;
+  params.pad0 = resolve && arena.isLinearRgb(input) ? 1u : 0u;
   params.pad1 = 0;
 
   if (!dispatchRuntimeInputOutputUniform(
           arena, resolve ? filterResolveProgram_ : subregionClipProgram_, input, *output,
           UniformBytes(params), "FilterSubregionClipPass",
-          gpu::shader::programs::kSubregionClipWorkgroupSize)) {
+          gpu::shader::programs::kSubregionClipWorkgroupSize,
+          resolve ? &colorTransferTable_ : nullptr)) {
     return {};
   }
 

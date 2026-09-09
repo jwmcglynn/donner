@@ -676,6 +676,7 @@
         "createView",
         "dispatchWorkgroups",
         "finish",
+        "release",
         "setBindGroup",
         "setPipeline",
         "submit",

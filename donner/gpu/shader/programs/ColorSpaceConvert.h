@@ -28,4 +28,8 @@ namespace donner::gpu::shader::programs {
  */
 ShaderResult<IrModule> BuildColorSpaceConvertModule();
 
+/// Adds the shared sampled transfer table and channel conversion functions to a module.
+/// @param builder Destination module. @param binding Read-only table binding in group zero.
+ShaderStatus AddColorTransferFunctions(ModuleBuilder& builder, uint32_t binding);
+
 }  // namespace donner::gpu::shader::programs
