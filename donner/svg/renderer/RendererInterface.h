@@ -170,6 +170,12 @@ public:
     return true;
   }
 
+  /// Tests additional capacity without changing counters or latching a rejection.
+  [[nodiscard]] bool canReserveBytes(std::uint64_t bytes, std::size_t surfaces) const {
+    return !rejected_ && bytes_ <= limits_.bytes && bytes <= limits_.bytes - bytes_ &&
+           surfaces_ <= limits_.surfaces && surfaces <= limits_.surfaces - surfaces_;
+  }
+
   /// Releases surfaces after their last submitted GPU use, restoring active-capacity accounting.
   [[nodiscard]] bool release(int width, int height, std::size_t surfaceCount = 1,
                              std::uint64_t bytesPerPixel = 4) {

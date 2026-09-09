@@ -1265,6 +1265,7 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                                                      const Transform2d& deviceFromFilter,
                                                      int viewportWidth, int viewportHeight,
                                                      components::FilterExecutionBudget& budget,
+                                                     const RendererSurfaceBudget& surfaceBudget,
                                                      const geode::GeodeFilterEngine& engine) {
   const std::optional<GeodeFilterBuffer> buffer = ComputeGeodeFilterBuffer(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
@@ -1294,10 +1295,33 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
   const std::uint64_t captureBytes = bufferPixels * 4u + localPixels.value_or(0) * 4u +
                                      (tiled ? plan.additionalTextureBytes() : 0) +
                                      viewportCopyBytes;
+  const uint64_t workPixels = tiled ? plan.workPixels() : executionPixels;
+  const uint64_t memoryPixels = tiled ? plan.pixels() : executionPixels;
+  const uint64_t executions = tiled ? plan.tiles : 1;
+  std::size_t surfaces = 0;
+  uint64_t graphBytes = 0;
+  uint64_t graphWork = 0;
+  if (components::FilterGraphExecutionCost(filterGraph, workPixels,
+                                           components::FilterMemoryModel::GpuAllNodes, graphWork,
+                                           graphBytes, memoryPixels, executions)) {
+    components::GpuFilterWorkingSet layout;
+    (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
+    surfaces = layout.floatTextures + 2 + (localPixels ? 1 : 0) + (tiled ? 2 : 0) +
+               (viewportCopyBytes ? 1 : 0);
+    surfaces +=
+        std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
+          return std::holds_alternative<components::filter_primitive::Image>(node.primitive);
+        });
+    if (budget.reservedGpuSurfaces() > RendererSurfaceBudget::kMaximumSurfaces ||
+        !surfaceBudget.canReserveBytes(captureBytes + graphBytes + budget.retainedGpuBytes(),
+                                       surfaces + budget.reservedGpuSurfaces())) {
+      budget.requireMemoryChunk();
+      return std::nullopt;
+    }
+  }
   auto reservation = budget.reserve(
-      filterGraph, tiled ? plan.workPixels() : executionPixels,
-      components::FilterMemoryModel::GpuAllNodes, captureBytes, engine.retainedBufferBytes(),
-      tiled ? plan.pixels() : executionPixels, tiled ? plan.tiles : 1);
+      filterGraph, workPixels, components::FilterMemoryModel::GpuAllNodes, captureBytes,
+      engine.retainedBufferBytes(), memoryPixels, executions, surfaces);
   if (!reservation.has_value()) {
     return std::nullopt;
   }
@@ -1786,26 +1810,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
     if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
-      std::cerr << "Filter surface refused label=" << desc.label.str()
-                << " width=" << desc.size.width << " height=" << desc.size.height
-                << " texelBytes=" << gpu::TextureFormatBytesPerTexel(desc.format)
-                << " retained=" << surfaceBudget->bytes() << " count=" << surfaceBudget->surfaces()
-                << " filterRetained=" << filterExecutionBudget->retainedBytes()
-                << " filterActive=" << filterExecutionBudget->activeGpuReservations() << std::endl;
-      if (!filterStack.empty()) {
-        const auto& frame = filterStack.back();
-        std::cerr << "Filter transform=" << frame.deviceFromFilter.data[0] << ","
-                  << frame.deviceFromFilter.data[1] << "," << frame.deviceFromFilter.data[2] << ","
-                  << frame.deviceFromFilter.data[3] << " nodes=" << frame.filterGraph.nodes.size()
-                  << " local=" << frame.transformedCaptureReserved << std::endl;
-        for (const auto& node : frame.filterGraph.nodes) {
-          if (const auto* blur =
-                  std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive)) {
-            std::cerr << "Blur deviation=" << blur->stdDeviationX << "," << blur->stdDeviationY
-                      << std::endl;
-          }
-        }
-      }
       return gpu::Texture{};
     }
     return texturePool->acquire(desc);
@@ -5524,14 +5528,16 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->filterStack.push_back({});
     return;
   }
-  std::optional<GeodeFilterAdmission> admission = AdmitGeodeFilter(
-      filterGraph, filterRegion, impl_->deviceFromLocalTransform, impl_->pixelWidth,
-      impl_->pixelHeight, *impl_->filterExecutionBudget, *impl_->filterEngine);
+  std::optional<GeodeFilterAdmission> admission =
+      AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
+                       *impl_->surfaceBudget, *impl_->filterEngine);
   if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
       impl_->submitFilterBudgetChunk()) {
-    admission = AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                                 impl_->pixelWidth, impl_->pixelHeight,
-                                 *impl_->filterExecutionBudget, *impl_->filterEngine);
+    admission =
+        AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
+                         *impl_->surfaceBudget, *impl_->filterEngine);
   }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();

@@ -490,6 +490,23 @@ TEST_F(GeodeFilterEngineTest, RefusedTileSurfacesStopBeforeFurtherAllocation) {
   runGraph(MakeGraph(true), "FilterTileInput");
 }
 
+TEST_F(GeodeFilterEngineTest, LargeBlurHalosUseBoundedStripsAtHighDprZoom) {
+  using namespace svg::components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 6, .stdDeviationY = 6};
+  graph.nodes.push_back(node);
+  const auto plan = engine_->executionPlan(graph, 2296, 1536, Transform2d::Scale(16));
+  ASSERT_GT(plan.tiles, 1u);
+  EXPECT_TRUE(plan.tileWidth == plan.width || plan.tileHeight == plan.height);
+  uint64_t work = 0;
+  uint64_t bytes = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
+                                       work, bytes, plan.pixels(), plan.tiles));
+  EXPECT_LT(bytes + plan.additionalTextureBytes() + uint64_t{2296} * 1536 * 4,
+            128u * 1024u * 1024u);
+}
+
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
                          testing::ValuesIn(AllocationRefusalCases()),
                          [](const testing::TestParamInfo<AllocationRefusalCase>& info) {

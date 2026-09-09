@@ -881,6 +881,7 @@ public:
     executions_ = 0;
     workUnits_ = 0;
     intermediateBytes_ = 0;
+    reservedGpuSurfaces_ = 0;
     persistentGpuBytes_ = 0;
     liveCpuCaptureBytes_ = 0;
     activeGpuReservations_ = 0;
@@ -896,6 +897,7 @@ public:
       return false;
     }
     intermediateBytes_ = 0;
+    reservedGpuSurfaces_ = 0;
     liveCpuCaptureBytes_ = 0;
     rejectionReason_ = RejectionReason::None;
     rejected_ = false;
@@ -914,7 +916,7 @@ public:
                                      FilterMemoryModel memoryModel, std::uint64_t captureBytes,
                                      std::uint64_t retainedGpuBufferBytes = 0,
                                      std::uint64_t memoryPixels = UINT64_MAX,
-                                     std::uint64_t executions = 1) {
+                                     std::uint64_t executions = 1, std::size_t gpuSurfaces = 0) {
     std::uint64_t graphWorkUnits = 0;
     std::uint64_t graphIntermediateBytes = 0;
     if (rejected_) {
@@ -929,7 +931,8 @@ public:
 
     const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
     const std::uint64_t persistentBytes = std::max(persistentGpuBytes_, retainedGpuBufferBytes);
-    if (gpu && persistentBytes > kMaximumFilterFrameBytes) {
+    if (gpu && (persistentBytes > kMaximumFilterFrameBytes ||
+                gpuSurfaces > std::numeric_limits<std::size_t>::max() - reservedGpuSurfaces_)) {
       rejectionReason_ = RejectionReason::MemoryLimit;
       rejected_ = true;
       return std::nullopt;
@@ -961,6 +964,7 @@ public:
     captureBytesReserved_ += captureBytes;
     if (gpu) {
       persistentGpuBytes_ = persistentBytes;
+      reservedGpuSurfaces_ += gpuSurfaces;
       intermediateBytes_ += captureBytes + graphIntermediateBytes;
       ++activeGpuReservations_;
     } else {
@@ -994,6 +998,17 @@ public:
     return true;
   }
 
+  /// Requests an ordered chunk when another shared GPU budget lacks forecast capacity.
+  void requireMemoryChunk() {
+    if (!rejected_) {
+      rejectionReason_ = RejectionReason::MemoryLimit;
+      rejected_ = true;
+    }
+  }
+
+  /// Forecast surface count retained by GPU executions until the next submitted chunk.
+  std::size_t reservedGpuSurfaces() const { return reservedGpuSurfaces_; }
+
   /// Latch the frame closed after an allocation or other external preflight failure.
   void reject() {
     rejectionReason_ = RejectionReason::External;
@@ -1020,6 +1035,7 @@ private:
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;
   std::uint64_t persistentGpuBytes_ = 0;
+  std::size_t reservedGpuSurfaces_ = 0;
   std::uint64_t liveCpuCaptureBytes_ = 0;
   std::uint64_t activeGpuReservations_ = 0;
   std::uint64_t captureBytesReserved_ = 0;

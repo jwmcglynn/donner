@@ -2451,13 +2451,71 @@ bool CanTileFilter(const svg::components::FilterGraph& graph, uint32_t width, ui
          NearZero(transform.data[1], 1e-6) && NearZero(transform.data[2], 1e-6);
 }
 
+/// One pass of a 3-pass box-blur approximation of a Gaussian.
+/// Mirrors tiny-skia's `computeBoxPasses` (third_party/tiny-skia-cpp/src/
+/// tiny_skia/filter/GaussianBlur.cpp) so the Geode and software backends
+/// match in pixel coverage and effective sigma.
+struct BoxPass {
+  int32_t left;
+  int32_t right;
+};
+
+struct BoxBlurPlan {
+  std::array<BoxPass, 3> passes{};
+  int numPasses = 0;
+};
+
+BoxBlurPlan computeBoxPasses(double sigma) {
+  // Same window-size formula as tiny-skia: window = round(sigma * 3*sqrt(2π)/4).
+  constexpr double kMaxSigma = svg::components::kMaximumFilterPixelRadius;
+  if (!std::isfinite(sigma) || sigma > kMaxSigma) {
+    sigma = kMaxSigma;
+  }
+  const double kWindowScale = 3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
+  const int window = std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
+
+  BoxBlurPlan plan;
+  if (window <= 1) {
+    return plan;
+  }
+
+  if ((window & 1) != 0) {
+    const int radius = window / 2;
+    for (int i = 0; i < 3; ++i) {
+      plan.passes[i] = {radius, radius};
+    }
+    plan.numPasses = 3;
+  } else {
+    const int half = window / 2;
+    plan.passes[0] = {half, half - 1};
+    plan.passes[1] = {half - 1, half};
+    plan.passes[2] = {half, half};
+    plan.numPasses = 3;
+  }
+  return plan;
+}
+
 /// Conservative sampling support of one graph in device pixels.
 struct FilterSamplingHalo {
   Vector2d scale;
   Vector2d halo = Vector2d::Zero();
 
   static double blur(double sigma, double scale) {
-    return sigma > 0 ? std::ceil(4 * boundedPositiveFilterPixels(sigma * scale)) + 4 : 0.0;
+    if (!(sigma > 0)) {
+      return 0;
+    }
+    const double deviation = boundedPositiveFilterPixels(sigma * scale);
+    const BoxBlurPlan boxes = deviation >= 2.0 ? computeBoxPasses(deviation) : BoxBlurPlan{};
+    if (boxes.numPasses != 0) {
+      int left = 0;
+      int right = 0;
+      for (int index = 0; index < boxes.numPasses; ++index) {
+        left += boxes.passes[index].left;
+        right += boxes.passes[index].right;
+      }
+      return std::max(left, right);
+    }
+    return std::min(std::ceil(3.0f * static_cast<float>(deviation)), 127.0f);
   }
 
   bool add(const fp::GaussianBlur& value) {
@@ -2523,9 +2581,9 @@ std::optional<Vector2d> ComputeFilterSamplingHalo(const svg::components::FilterG
   return support.halo;
 }
 
-FilterTilePlan FitFilterTiles(FilterTilePlan plan, Vector2d halo, uint32_t maximumExtent) {
-  const uint32_t tileWidth = std::min(plan.width, maximumExtent);
-  const uint32_t tileHeight = std::min(plan.height, maximumExtent);
+FilterTilePlan FitFilterTiles(FilterTilePlan plan, Vector2d halo, gpu::Extent2d maximumExtent) {
+  const uint32_t tileWidth = std::min(plan.width, maximumExtent.width);
+  const uint32_t tileHeight = std::min(plan.height, maximumExtent.height);
   if ((tileWidth < plan.width && halo.x * 2 >= tileWidth) ||
       (tileHeight < plan.height && halo.y * 2 >= tileHeight)) {
     return plan;
@@ -2541,6 +2599,49 @@ FilterTilePlan FitFilterTiles(FilterTilePlan plan, Vector2d halo, uint32_t maxim
   return plan;
 }
 
+bool FilterPlanFits(const svg::components::FilterGraph& graph, const FilterTilePlan& plan,
+                    uint64_t retainedBufferBytes, uint64_t& bytes) {
+  using namespace svg::components;
+  uint64_t work = 0;
+  if (!FilterGraphExecutionCost(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes, work,
+                                bytes, plan.pixels(), plan.tiles)) {
+    return false;
+  }
+  bytes +=
+      plan.additionalTextureBytes() + uint64_t{plan.width} * plan.height * 4 + retainedBufferBytes;
+  return bytes <= kMaximumFilterFrameBytes;
+}
+
+FilterTilePlan ChooseFilterTiles(const svg::components::FilterGraph& graph, FilterTilePlan full,
+                                 Vector2d halo, uint32_t preferredExtent, bool adaptive,
+                                 uint64_t retainedBufferBytes) {
+  const auto preferred = FitFilterTiles(full, halo, {preferredExtent, preferredExtent});
+  uint64_t bytes = 0;
+  if (preferred.tileWidth <= preferredExtent && preferred.tileHeight <= preferredExtent &&
+      FilterPlanFits(graph, preferred, retainedBufferBytes, bytes)) {
+    return preferred;
+  }
+  if (!adaptive) {
+    return full;
+  }
+  FilterTilePlan best = full;
+  uint64_t bestBytes = UINT64_MAX;
+  for (uint32_t extent = preferredExtent; extent < std::max(full.width, full.height);
+       extent += 128) {
+    const std::array<gpu::Extent2d, 3> extents{
+        {{extent, full.height}, {full.width, extent}, {extent, extent}}};
+    for (const auto& size : extents) {
+      const auto candidate = FitFilterTiles(full, halo, size);
+      if (candidate.tiles > 1 && FilterPlanFits(graph, candidate, retainedBufferBytes, bytes) &&
+          bytes < bestBytes) {
+        best = candidate;
+        bestBytes = bytes;
+      }
+    }
+  }
+  return best;
+}
+
 }  // namespace
 
 FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
@@ -2551,12 +2652,15 @@ FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGra
     return plan;
   }
   const auto halo = ComputeFilterSamplingHalo(graph, deviceFromFilter);
-  return halo ? FitFilterTiles(plan, *halo, maximumTileExtent_) : plan;
+  return halo ? ChooseFilterTiles(graph, plan, *halo, preferredTileExtent_, adaptiveTiles_,
+                                  retainedBufferBytes())
+              : plan;
 }
 
 void GeodeFilterEngine::setMaximumTileExtentForTesting(uint32_t extent) {
   UTILS_RELEASE_ASSERT(extent >= 16 && extent <= 512);
-  maximumTileExtent_ = extent;
+  preferredTileExtent_ = extent;
+  adaptiveTiles_ = false;
 }
 
 uint64_t GeodeFilterEngine::retainedBufferBytes() const {
@@ -2575,22 +2679,6 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   FilterGraphExecution execution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
                                  textureAllocator, commandEncoder, executionBudget);
   const wgpu::Texture output = execution.run();
-  if (!output) {
-    const auto plan =
-        executionPlan(graph, sourceGraphic.getWidth(), sourceGraphic.getHeight(), deviceFromFilter);
-    const auto halo = ComputeFilterSamplingHalo(graph, deviceFromFilter);
-    std::cerr << "Filter failed source=" << sourceGraphic.getWidth() << "x"
-              << sourceGraphic.getHeight() << " transform=" << deviceFromFilter.data[0] << ","
-              << deviceFromFilter.data[1] << "," << deviceFromFilter.data[2] << ","
-              << deviceFromFilter.data[3] << " tiles=" << plan.tiles
-              << " halo=" << (halo ? halo->x : -1) << "," << (halo ? halo->y : -1) << std::endl;
-    for (const auto& node : graph.nodes) {
-      if (const auto* blur = std::get_if<fp::GaussianBlur>(&node.primitive)) {
-        std::cerr << "Blur deviation=" << blur->stdDeviationX << "," << blur->stdDeviationY
-                  << std::endl;
-      }
-    }
-  }
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
   lastExecutionMemory_.tileExecutions = execution.executedTiles;
@@ -2966,50 +3054,6 @@ wgpu::Texture FilterNodeExecution::apply(const fp::Tile&) {
 }
 
 namespace {
-
-/// One pass of a 3-pass box-blur approximation of a Gaussian.
-/// Mirrors tiny-skia's `computeBoxPasses` (third_party/tiny-skia-cpp/src/
-/// tiny_skia/filter/GaussianBlur.cpp) so the Geode and software backends
-/// match in pixel coverage and effective sigma.
-struct BoxPass {
-  int32_t left;
-  int32_t right;
-};
-
-struct BoxBlurPlan {
-  std::array<BoxPass, 3> passes{};
-  int numPasses = 0;
-};
-
-BoxBlurPlan computeBoxPasses(double sigma) {
-  // Same window-size formula as tiny-skia: window = round(sigma * 3*sqrt(2π)/4).
-  constexpr double kMaxSigma = svg::components::kMaximumFilterPixelRadius;
-  if (!std::isfinite(sigma) || sigma > kMaxSigma) {
-    sigma = kMaxSigma;
-  }
-  const double kWindowScale = 3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
-  const int window = std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
-
-  BoxBlurPlan plan;
-  if (window <= 1) {
-    return plan;
-  }
-
-  if ((window & 1) != 0) {
-    const int radius = window / 2;
-    for (int i = 0; i < 3; ++i) {
-      plan.passes[i] = {radius, radius};
-    }
-    plan.numPasses = 3;
-  } else {
-    const int half = window / 2;
-    plan.passes[0] = {half, half - 1};
-    plan.passes[1] = {half - 1, half};
-    plan.passes[2] = {half, half};
-    plan.numPasses = 3;
-  }
-  return plan;
-}
 
 struct BlurDispatch {
   uint32_t axis = 0;

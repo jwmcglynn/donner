@@ -567,7 +567,8 @@ private:
   /// identities are not stable cache keys.
   std::unique_ptr<FilterResourceCache> resourceCache_;
   FilterExecutionMemory lastExecutionMemory_;
-  uint32_t maximumTileExtent_ = 512;
+  uint32_t preferredTileExtent_ = 512;
+  bool adaptiveTiles_ = true;
 };
 
 }  // namespace donner::geode

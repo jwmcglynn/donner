@@ -317,6 +317,38 @@ protected:
 
 // ----------------------------------------------------------------------------
 
+TEST_F(RendererGeodeTest, LargeBlurStripTilesMatchUntiledPixels) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="768" height="640">
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="768" height="640">
+      <feGaussianBlur stdDeviation="96"/>
+    </filter></defs><g filter="url(#f)">
+      <rect width="317" height="640" fill="#3973ad" opacity="0.7"/>
+      <rect x="280" y="132" width="450" height="265" fill="#b75d23" opacity="0.4"/>
+    </g></svg>)svg";
+  std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
+  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(referenceDevice);
+  ASSERT_TRUE(tiledDevice);
+  referenceDevice->filterEngine().setMaximumTileExtentForTesting(16);
+  ParseWarningSink warnings;
+  auto referenceDocument = parser::SVGParser::ParseSVG(source, warnings);
+  auto tiledDocument = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_TRUE(referenceDocument.hasResult());
+  ASSERT_TRUE(tiledDocument.hasResult());
+  ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+  RendererGeode reference(referenceDevice);
+  RendererGeode tiled(tiledDevice);
+  reference.draw(referenceDocument.result());
+  tiled.draw(tiledDocument.result());
+  EXPECT_FALSE(reference.resourceStats().filterBudgetRejected);
+  EXPECT_FALSE(tiled.resourceStats().filterBudgetRejected);
+  ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+  ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+  editor::tests::CompareBitmapToBitmap(tiled.takeSnapshot(), reference.takeSnapshot(),
+                                       "large_blur_strip_tiles",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundaries) {
   const std::array<const char*, 7> graphs = {
       R"(<feGaussianBlur stdDeviation="0.7 1.2"/>)",
