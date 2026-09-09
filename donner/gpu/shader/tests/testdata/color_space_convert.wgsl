@@ -7,22 +7,33 @@ struct ColorSpaceConvertParams {
   pad2: u32,
 }
 
+struct ColorTransferTable {
+  samples: array<f32, 8192>,
+}
+
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
-@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> params: ColorSpaceConvertParams;
+@group(0) @binding(3) var<storage, read> transferTable: ColorTransferTable;
 
 fn srgb_channel_to_linear(c: f32) -> f32 {
-  if ((c <= 0.04045f)) {
-    return (c / 12.92f);
+  var unit: f32 = 0f;
+  if ((c > 0f)) {
+    unit = min(c, 1f);
   }
-  return pow(((c + 0.055f) / 1.055f), 2.4f);
+  let scaled = (unit * 4095f);
+  let index = u32((scaled + 0.5f));
+  return transferTable.samples[(index + 0u)];
 }
 
 fn linear_channel_to_srgb(c: f32) -> f32 {
-  if ((c <= 0.0031308f)) {
-    return (c * 12.92f);
+  var unit: f32 = 0f;
+  if ((c > 0f)) {
+    unit = min(c, 1f);
   }
-  return ((1.055f * pow(c, 0.41666666f)) - 0.055f);
+  let scaled = (unit * 4095f);
+  let index = u32((scaled + 0.5f));
+  return transferTable.samples[(index + 4096u)];
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -35,7 +46,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let source = textureLoad(inputTexture, coords, 0i);
   var straight: vec4<f32> = vec4<f32>(0f);
   if ((source.w > 0f)) {
-    straight = vec4<f32>((source.xyz / source.w), source.w);
+    straight = vec4<f32>((source.xyz * (1f / source.w)), source.w);
   }
   var color: vec3<f32> = vec3<f32>(0f);
   if ((params.direction == 0u)) {

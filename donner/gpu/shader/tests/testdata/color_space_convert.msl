@@ -11,21 +11,31 @@ struct ColorSpaceConvertParams {
   uint pad2;
 };
 
-float srgb_channel_to_linear(texture2d<float> inputTexture, texture2d<float, access::write> outputTexture, constant ColorSpaceConvertParams& params, float c) {
-  if ((c <= 0.04045f)) {
-    return (c / 12.92f);
+struct ColorTransferTable {
+  float samples[8192];
+};
+
+float srgb_channel_to_linear(texture2d<float> inputTexture, texture2d<float, access::write> outputTexture, constant ColorSpaceConvertParams& params, device const ColorTransferTable& transferTable, float c) {
+  float unit = 0.0f;
+  if ((c > 0.0f)) {
+    unit = min(c, 1.0f);
   }
-  return pow(((c + 0.055f) / 1.055f), 2.4f);
+  const float scaled = (unit * 4095.0f);
+  const uint index = uint((scaled + 0.5f));
+  return transferTable.samples[(index + 0u)];
 }
 
-float linear_channel_to_srgb(texture2d<float> inputTexture, texture2d<float, access::write> outputTexture, constant ColorSpaceConvertParams& params, float c) {
-  if ((c <= 0.0031308f)) {
-    return (c * 12.92f);
+float linear_channel_to_srgb(texture2d<float> inputTexture, texture2d<float, access::write> outputTexture, constant ColorSpaceConvertParams& params, device const ColorTransferTable& transferTable, float c) {
+  float unit = 0.0f;
+  if ((c > 0.0f)) {
+    unit = min(c, 1.0f);
   }
-  return ((1.055f * pow(c, 0.41666666f)) - 0.055f);
+  const float scaled = (unit * 4095.0f);
+  const uint index = uint((scaled + 0.5f));
+  return transferTable.samples[(index + 4096u)];
 }
 
-kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float> inputTexture [[texture(0)]], texture2d<float, access::write> outputTexture [[texture(1)]], constant ColorSpaceConvertParams& params [[buffer(3)]]) {
+kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float> inputTexture [[texture(0)]], texture2d<float, access::write> outputTexture [[texture(1)]], constant ColorSpaceConvertParams& params [[buffer(3)]], device const ColorTransferTable& transferTable [[buffer(4)]]) {
   const uint2 extent = uint2(outputTexture.get_width(), outputTexture.get_height());
   if (((gid.x >= extent.x) || (gid.y >= extent.y))) {
     return;
@@ -34,13 +44,13 @@ kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float> inpu
   const float4 source = inputTexture.read(uint2(coords), uint(0));
   float4 straight = float4(0.0f);
   if ((source.w > 0.0f)) {
-    straight = float4((source.xyz / source.w), source.w);
+    straight = float4((source.xyz * (1.0f / source.w)), source.w);
   }
   float3 color = float3(0.0f);
   if ((params.direction == 0u)) {
-    color = float3(srgb_channel_to_linear(inputTexture, outputTexture, params, straight.x), srgb_channel_to_linear(inputTexture, outputTexture, params, straight.y), srgb_channel_to_linear(inputTexture, outputTexture, params, straight.z));
+    color = float3(srgb_channel_to_linear(inputTexture, outputTexture, params, transferTable, straight.x), srgb_channel_to_linear(inputTexture, outputTexture, params, transferTable, straight.y), srgb_channel_to_linear(inputTexture, outputTexture, params, transferTable, straight.z));
   } else {
-    color = float3(linear_channel_to_srgb(inputTexture, outputTexture, params, straight.x), linear_channel_to_srgb(inputTexture, outputTexture, params, straight.y), linear_channel_to_srgb(inputTexture, outputTexture, params, straight.z));
+    color = float3(linear_channel_to_srgb(inputTexture, outputTexture, params, transferTable, straight.x), linear_channel_to_srgb(inputTexture, outputTexture, params, transferTable, straight.y), linear_channel_to_srgb(inputTexture, outputTexture, params, transferTable, straight.z));
   }
   const float4 result = float4((color * straight.w), straight.w);
   outputTexture.write(saturate(result), uint2(coords));
