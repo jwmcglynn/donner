@@ -222,7 +222,9 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
 
 TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValidation) {
   auto device = donner::geode::GeodeDevice::CreateHeadless();
-  ASSERT_THAT(device, testing::NotNull());
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
   const auto module = BuildFloatStorageModule();
   ASSERT_THAT(module, HasShaderResult());
   const auto wgsl = EmitWgsl(module.result());
