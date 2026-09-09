@@ -319,36 +319,47 @@ protected:
 
 TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
   using namespace components;
-  FilterGraph graph;
-  graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
-  graph.elementBoundingBox = Box2d({0, 0}, {1.1, 1.1});
-  FilterNode blur;
-  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 1.9782261838087567,
-                                                  .stdDeviationY = 1.9782261838087567};
-  graph.nodes.push_back(blur);
-  std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
-  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
-  ASSERT_TRUE(referenceDevice);
-  ASSERT_TRUE(tiledDevice);
-  tiledDevice->filterEngine().setMaximumTileExtentForTesting(16);
-  const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device) {
-    RendererGeode renderer(device);
-    beginFrame(renderer);
-    renderer.setTransform(Transform2d::Scale(1.1));
-    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
-    renderer.setTransform(Transform2d());
-    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
-    renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
-    renderer.popFilterLayer();
-    renderer.endFrame();
-    return renderer.takeSnapshot();
-  };
-  const auto expected = render(referenceDevice);
-  const auto actual = render(tiledDevice);
-  ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
-  ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
-  editor::tests::CompareBitmapToBitmap(actual, expected, "object_bounds_halo_rounding",
-                                       editor::tests::PixelmatchIdentityParams());
+  for (bool nearAxisShear : {false, true}) {
+    SCOPED_TRACE(nearAxisShear);
+    FilterGraph graph;
+    graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+    graph.elementBoundingBox = Box2d({0, 0}, nearAxisShear ? Vector2d(1e7, 1) : Vector2d(1.1, 1.1));
+    FilterNode blur;
+    blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 1.9782261838087567,
+                                                    .stdDeviationY = 1.9782261838087567};
+    graph.nodes.push_back(blur);
+    std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
+    std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+    ASSERT_TRUE(referenceDevice);
+    ASSERT_TRUE(tiledDevice);
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(16);
+    const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device) {
+      RendererGeode renderer(device);
+      beginFrame(renderer);
+      Transform2d transform = Transform2d::Scale(1.1);
+      if (nearAxisShear) {
+        transform.data[0] = 1e-9;
+        transform.data[1] = 5e-7;
+        transform.data[3] = 1;
+      }
+      renderer.setTransform(transform);
+      renderer.pushFilterLayer(
+          graph,
+          Box2d({0, 0}, {nearAxisShear ? kViewportSize / 1e-9 : kViewportSize, kViewportSize}));
+      renderer.setTransform(Transform2d());
+      renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+      renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+      renderer.popFilterLayer();
+      renderer.endFrame();
+      return renderer.takeSnapshot();
+    };
+    const auto expected = render(referenceDevice);
+    const auto actual = render(tiledDevice);
+    ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    editor::tests::CompareBitmapToBitmap(actual, expected, "object_bounds_halo_rounding",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
