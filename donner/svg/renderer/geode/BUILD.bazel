@@ -342,6 +342,10 @@ donner_cc_test(
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:float_texture_slice",
+        "//donner/gpu/shader:float_storage_test_module",
+        "//donner/gpu/shader:wgsl_emitter",
+        "//donner/gpu/shader:module_interface",
         "//donner/gpu:sub_rectangle_copy_scene",
     ],
 )

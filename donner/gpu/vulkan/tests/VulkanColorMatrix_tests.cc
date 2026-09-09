@@ -129,12 +129,15 @@ TEST_F(VulkanColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
   const auto bindings = shader::BufferBindingsOf(module.result());
   ASSERT_FALSE(bindings.hasError()) << bindings.error();
   gpu::tests::CheckFloatTextureStorage(
-      *device_, ShaderModuleDescriptor{"float",
-                                       {},
-                                       ShaderSourceKind::Spirv,
-                                       emitted.result(),
-                                       shader::ComputeEntryPointsOf(module.result()),
-                                       bindings.result()});
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             {},
+                             ShaderSourceKind::Spirv,
+                             emitted.result(),
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 /// A compute pass must transition every texture it binds into the layout that pass's descriptors

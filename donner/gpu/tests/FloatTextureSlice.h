@@ -17,8 +17,10 @@ namespace donner::gpu::tests {
 /// Runs the shared float-storage module and checks all four returned float values exactly.
 /// @param device Native device with bounded wait/readback support.
 /// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
-template <typename DeviceType>
-void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor) {
+/// @param readback Reads the submitted buffer through the backend's host mapping API.
+template <typename DeviceType, typename Readback>
+void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+                              Readback readbackBuffer) {
   auto shader = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shader, HasResult());
   auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
@@ -77,7 +79,7 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   auto serial = device.submit(std::move(commands).result());
   ASSERT_THAT(serial, HasResult());
   ASSERT_THAT(device.waitForSerial(serial.result(), 5.0), testing::IsTrue());
-  const auto bytes = device.readBackBuffer(readback.result());
+  const auto bytes = readbackBuffer(readback.result());
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(sizeof(values))));
   std::array<float, 4> actual{};
@@ -85,7 +87,6 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   constexpr float increment = 1.0f / 4096.0f;
   EXPECT_THAT(actual, testing::ElementsAre(0.125f + increment, 0.25f + increment, 0.5f + increment,
                                            0.75f + increment));
-  EXPECT_THAT(device.lastErrorForTest(), testing::IsEmpty());
 }
 
 }  // namespace donner::gpu::tests

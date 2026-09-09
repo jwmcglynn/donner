@@ -234,12 +234,15 @@ TEST_F(MetalColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
   const auto bindings = shader::BufferBindingsOf(module.result());
   ASSERT_FALSE(bindings.hasError()) << bindings.error();
   gpu::tests::CheckFloatTextureStorage(
-      *device_, ShaderModuleDescriptor{"float",
-                                       RcString(emitted.result()),
-                                       ShaderSourceKind::Msl,
-                                       {},
-                                       shader::ComputeEntryPointsOf(module.result()),
-                                       bindings.result()});
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {

@@ -169,6 +169,13 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
           GpuErrorType::InvalidDescriptor,
           std::format("BindGroupLayoutEntry binding {} has empty visibility", entry.binding));
     }
+    if (entry.type == BindingType::WriteOnlyStorageTexture2d &&
+        entry.visibility != ShaderStage::Compute) {
+      return Err(GpuErrorType::Unsupported,
+                 std::format("BindGroupLayoutEntry binding {}: storage texture writes are "
+                             "compute-only",
+                             entry.binding));
+    }
     for (size_t j = i + 1; j < descriptor.entries.size(); ++j) {
       if (descriptor.entries[j].binding == entry.binding) {
         return Err(

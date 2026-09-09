@@ -447,6 +447,30 @@ TEST_F(ActiveTextureBindingsTests, RejectsSampledStorageAliasesInEitherGroupOrde
   }
 }
 
+TEST_F(ActiveTextureBindingsTests, RejectsUnfilterableStorageAliasesInEitherGroupOrder) {
+  sampledLayout_ = GetResultOrFail(device_.createBindGroupLayout(
+      {"unfilterable",
+       {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat}}}));
+  sampled_ = makeGroup(sampledLayout_, view_);
+  for (const bool sampledFirst : {true, false}) {
+    SCOPED_TRACE(sampledFirst);
+    encoder_ = GetResultOrFail(device_.createCommandEncoder());
+    const ComputePipeline pipeline = makePipeline(
+        sampledFirst ? std::vector<BindGroupLayoutRef>{sampledLayout_, storageLayout_}
+                     : std::vector<BindGroupLayoutRef>{storageLayout_, sampledLayout_});
+    ComputePassEncoder* pass = beginComputePass();
+    ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+    ASSERT_THAT(pass->setBindGroup(0, sampledFirst ? sampled_ : storage_), IsOk());
+    ASSERT_THAT(pass->setBindGroup(1, sampledFirst ? storage_ : sampled_), IsOk());
+    EXPECT_THAT(pass->dispatchWorkgroups(1),
+                IsGpuErrorWithMessage(
+                    GpuErrorType::UsageMismatch,
+                    AllOf(HasSubstr("sampled binding (0)"), HasSubstr("storage-write binding (0)"),
+                          HasSubstr("texture slot"))));
+    EXPECT_THAT(encoder_->finish(), IsGpuError(GpuErrorType::UsageMismatch));
+  }
+}
+
 TEST_F(ActiveTextureBindingsTests, AllowsTheSameTextureInReadOnlyGroups) {
   const ComputePipeline pipeline = makePipeline({sampledLayout_, sampledLayout_});
   ComputePassEncoder* pass = beginComputePass();
