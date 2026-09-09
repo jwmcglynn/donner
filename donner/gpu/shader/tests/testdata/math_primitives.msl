@@ -4,13 +4,18 @@
 
 using namespace metal;
 
-float round_half_away_from_zero(texture2d<float, access::write> outputTexture, device const float* values, float x) {
+template <typename T>
+T donner_msl_read(device const T* values, uint index, uint count) {
+  return index < count ? values[index] : T{};
+}
+
+float round_half_away_from_zero(texture2d<float, access::write> outputTexture, device const float* values, constant uint* donner_msl_lengths, float x) {
   return (sign(x) * floor((abs(x) + 0.5f)));
 }
 
-kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float, access::write> outputTexture [[texture(0)]], device const float* values [[buffer(2)]]) {
-  const float x = values[gid.x];
-  const float rounded = round_half_away_from_zero(outputTexture, values, x);
+kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float, access::write> outputTexture [[texture(0)]], device const float* values [[buffer(2)]], constant uint* donner_msl_lengths [[buffer(0)]]) {
+  const float x = donner_msl_read(values, uint(gid.x), donner_msl_lengths[1] / 4u);
+  const float rounded = round_half_away_from_zero(outputTexture, values, donner_msl_lengths, x);
   const float2 axes = float2((x * 0.25f), (x * -0.25f));
   const float2 axisSigns = sign(axes);
   const float2 axisFloors = floor(axes);

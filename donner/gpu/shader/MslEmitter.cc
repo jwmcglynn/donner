@@ -1,5 +1,6 @@
 #include "donner/gpu/shader/MslEmitter.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <functional>
@@ -83,10 +84,10 @@ ShaderStatus CheckMslIdentifier(const RcString& name, std::string_view context) 
   }
   // C++ reserves identifiers containing a double underscore; reject the leading form the same
   // way the WGSL emitter does.
-  if (!lexicallyValid || text.starts_with("__")) {
+  if (!lexicallyValid || text.starts_with("__") || text.starts_with("donner_msl_")) {
     return ShaderError{
         std::format("{}: \"{}\" is not a valid identifier (MSL identifiers match "
-                    "[A-Za-z_][A-Za-z0-9_]* and may not start with a double underscore)",
+                    "[A-Za-z_][A-Za-z0-9_]* and may not start with __ or donner_msl_)",
                     context, name.str()),
         "msl"};
   }
@@ -258,7 +259,11 @@ std::optional<std::vector<uint32_t>> ComputeMslMemberOffsets(const IrType& struc
 /// Emitter state: output text plus the first latched error.
 class Emitter {
 public:
-  explicit Emitter(const IrModule& module) : module_(module) {}
+  explicit Emitter(const IrModule& module)
+      : module_(module),
+        usesRuntimeArrays_(std::ranges::any_of(module.bindings(), [](const IrBinding& binding) {
+          return binding.type.kind() == IrType::Kind::RuntimeArray;
+        })) {}
 
   /// Runs emission. @return The MSL text or the first error.
   ShaderResult<std::string> emit();
@@ -286,6 +291,10 @@ private:
 
   std::string literalToMsl(const IrExpr::Node& node);
   std::string exprToMsl(const IrExpr& expr);
+  /// Emits a runtime-array read against its declared byte range; evaluates the index once.
+  std::string indexToMsl(const IrExpr::Node& node);
+  /// Emits the small typed read helper shared by runtime-array bindings.
+  void emitRuntimeArrayReadHelper();
   void emitStatement(const IrStmt& statement, const IrFunction& function);
   /// Emits `for (init; cond; continuing) { body }`.
   /// @param data Statement payload. @param function Enclosing function.
@@ -297,6 +306,12 @@ private:
 
   void collectStructs(const IrType& type, std::vector<IrType>& out);
   void verifyBufferStructLayouts(const IrType& type, AddressSpace addressSpace);
+  /// Verifies a representable array element and its native stride.
+  void verifyArrayLayout(const IrType& type, AddressSpace addressSpace);
+  /// Checks one binding's target layout and argument-table index.
+  void verifyBinding(const IrBinding& binding);
+  /// Rejects locations the fixed native argument mapping cannot represent.
+  void verifyBindingIndex(const IrBinding& binding);
   void emitStructDeclarations();
   void emitConstants();
   void emitFunction(const IrFunction& function);
@@ -363,6 +378,7 @@ private:
   }
 
   const IrModule& module_;
+  const bool usesRuntimeArrays_;
   std::string out_;
   int indent_ = 0;
   std::vector<RcString> userStructNames_;
@@ -410,8 +426,7 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
       return std::format("{}.{}", exprToMsl(node.children[0]), node.name.str());
     case IrExpr::Kind::Swizzle:
       return std::format("{}.{}", exprToMsl(node.children[0]), node.swizzle);
-    case IrExpr::Kind::Index:
-      return std::format("{}[{}]", exprToMsl(node.children[0]), exprToMsl(node.children[1]));
+    case IrExpr::Kind::Index: return indexToMsl(node);
     case IrExpr::Kind::Construct:
     case IrExpr::Kind::Convert: {
       std::string result = TypeToMsl(node.type);
@@ -470,6 +485,38 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
     }
   }
   return "0.0f";
+}
+
+std::string Emitter::indexToMsl(const IrExpr::Node& node) {
+  const IrExpr& base = node.children[0];
+  const std::string index = exprToMsl(node.children[1]);
+  if (base.type().kind() != IrType::Kind::RuntimeArray) {
+    return std::format("{}[{}]", exprToMsl(base), index);
+  }
+  const auto binding = std::ranges::find(module_.bindings(), base.node().name, &IrBinding::name);
+  if (base.kind() != IrExpr::Kind::Ref || base.node().refKind != RefKind::Resource ||
+      binding == module_.bindings().end()) {
+    latch(ShaderError{"runtime array access must reference a storage binding", "msl"});
+    return "0";
+  }
+  const auto stride = ComputeArrayStride(base.type(), AddressSpace::Storage);
+  if (stride.hasError()) {
+    latch(ShaderError{stride.error().message, "msl"});
+    return "0";
+  }
+  return std::format("donner_msl_read({}, uint({}), donner_msl_lengths[{}] / {}u)", exprToMsl(base),
+                     index, binding->binding, stride.result());
+}
+
+void Emitter::emitRuntimeArrayReadHelper() {
+  if (!usesRuntimeArrays_) {
+    return;
+  }
+  line("template <typename T>");
+  line("T donner_msl_read(device const T* values, uint index, uint count) {");
+  line("  return index < count ? values[index] : T{};");
+  line("}");
+  blank();
 }
 
 void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function) {
@@ -643,29 +690,34 @@ void Emitter::verifyBufferStructLayouts(const IrType& type, AddressSpace address
       return;
     }
     case IrType::Kind::SizedArray:
-    case IrType::Kind::RuntimeArray: {
-      // Array strides must also agree (the WGSL uniform 16-byte rounding has no MSL C-array
-      // equivalent without a wrapper).
-      ShaderResult<uint32_t> wgslStride = ComputeArrayStride(type, addressSpace);
-      const std::optional<MslLayout> element = ComputeMslLayout(type.elementType());
-      if (wgslStride.hasError() || !element) {
-        latch(ShaderError{"array element has no shared MSL/WGSL layout", "msl"});
-        return;
-      }
-      const uint32_t mslStride = RoundUp(element->alignBytes, element->sizeBytes);
-      if (mslStride != wgslStride.result()) {
-        latch(ShaderError{
-            std::format("array stride diverges between MSL ({}) and the WGSL layout ({}); a "
-                        "padded element wrapper would be required",
-                        mslStride, wgslStride.result()),
-            "msl"});
-        return;
-      }
-      verifyBufferStructLayouts(type.elementType(), addressSpace);
-      return;
-    }
+    case IrType::Kind::RuntimeArray: verifyArrayLayout(type, addressSpace); return;
     default: return;
   }
+}
+
+void Emitter::verifyArrayLayout(const IrType& type, AddressSpace addressSpace) {
+  if (type.elementType().kind() == IrType::Kind::SizedArray) {
+    latch(ShaderError{"nested array elements have no MSL declaration in this emitter", "msl"});
+    return;
+  }
+  // Array strides must also agree (the WGSL uniform 16-byte rounding has no MSL C-array
+  // equivalent without a wrapper).
+  ShaderResult<uint32_t> wgslStride = ComputeArrayStride(type, addressSpace);
+  const std::optional<MslLayout> element = ComputeMslLayout(type.elementType());
+  if (wgslStride.hasError() || !element) {
+    latch(ShaderError{"array element has no shared MSL/WGSL layout", "msl"});
+    return;
+  }
+  const uint32_t mslStride = RoundUp(element->alignBytes, element->sizeBytes);
+  if (mslStride != wgslStride.result()) {
+    latch(ShaderError{
+        std::format("array stride diverges between MSL ({}) and the WGSL layout ({}); a "
+                    "padded element wrapper would be required",
+                    mslStride, wgslStride.result()),
+        "msl"});
+    return;
+  }
+  verifyBufferStructLayouts(type.elementType(), addressSpace);
 }
 
 void Emitter::emitStructDeclarations() {
@@ -774,6 +826,9 @@ std::string Emitter::bindingForwardArgs() const {
     }
     result += binding.name.str();
   }
+  if (usesRuntimeArrays_) {
+    result += ", donner_msl_lengths";
+  }
   return result;
 }
 
@@ -871,6 +926,10 @@ std::vector<std::string> Emitter::entryPointParameters(const IrFunction& functio
   for (const IrBinding& binding : module_.bindings()) {
     parameters.push_back(bindingEntryParam(binding));
   }
+  if (usesRuntimeArrays_) {
+    parameters.push_back(
+        std::format("constant uint* donner_msl_lengths [[buffer({})]]", kMslBufferLengthsIndex));
+  }
   return parameters;
 }
 
@@ -878,6 +937,9 @@ std::vector<std::string> Emitter::plainFunctionParameters(const IrFunction& func
   std::vector<std::string> parameters;
   for (const IrBinding& binding : module_.bindings()) {
     parameters.push_back(bindingParam(binding));
+  }
+  if (usesRuntimeArrays_) {
+    parameters.push_back("constant uint* donner_msl_lengths");
   }
   for (const IrParam& param : function.params) {
     check(CheckMslIdentifier(param.name, "parameter"));
@@ -936,44 +998,62 @@ void Emitter::emitFunction(const IrFunction& function) {
   blank();
 }
 
+void Emitter::verifyBindingIndex(const IrBinding& binding) {
+  if (binding.group != 0) {
+    latch(ShaderError{std::format("binding {} is in group {}; the Metal binding map models only "
+                                  "bind group 0",
+                                  binding.binding, binding.group),
+                      "msl"});
+  }
+  const bool buffer = binding.kind == BindingKind::UniformBuffer ||
+                      binding.kind == BindingKind::ReadOnlyStorageBuffer;
+  const bool sampler = binding.kind == BindingKind::FilteringSampler;
+  const uint32_t limit = buffer    ? kMslBufferBindingCount
+                         : sampler ? kMslSamplerBindingCount
+                                   : kMslTextureBindingCount;
+  if (binding.binding < limit) {
+    return;
+  }
+  if (buffer) {
+    latch(ShaderError{
+        std::format("buffer binding {} collides with or exceeds the reserved stage-in vertex "
+                    "buffer index {}",
+                    binding.binding, kMslVertexBufferIndex),
+        "msl"});
+  } else {
+    latch(ShaderError{std::format("{} binding {} exceeds the Metal argument table",
+                                  sampler ? "sampler" : "texture", binding.binding),
+                      "msl"});
+  }
+}
+
+void Emitter::verifyBinding(const IrBinding& binding) {
+  check(CheckMslIdentifier(binding.name, "binding"));
+  verifyBindingIndex(binding);
+  switch (binding.kind) {
+    case BindingKind::UniformBuffer:
+      verifyBufferStructLayouts(binding.type, AddressSpace::Uniform);
+      break;
+    case BindingKind::ReadOnlyStorageBuffer:
+      verifyBufferStructLayouts(binding.type, AddressSpace::Storage);
+      break;
+    default: break;
+  }
+}
+
 ShaderResult<std::string> Emitter::emit() {
   out_ += "// Generated by donner::gpu::shader::MslEmitter. Do not edit.\n\n";
   out_ += "#include <metal_stdlib>\n\nusing namespace metal;\n\n";
 
-  // Verify every buffer-referenced struct's MSL natural layout matches the WGSL layout engine
-  // before emitting anything that depends on it.
   for (const IrBinding& binding : module_.bindings()) {
-    switch (binding.kind) {
-      case BindingKind::UniformBuffer:
-        verifyBufferStructLayouts(binding.type, AddressSpace::Uniform);
-        break;
-      case BindingKind::ReadOnlyStorageBuffer:
-        verifyBufferStructLayouts(binding.type, AddressSpace::Storage);
-        break;
-      default: break;
-    }
-    // The flat Metal argument-table map models only bind group 0 today (the solid-fill family
-    // is single-group); multi-group support arrives with later pipeline families.
-    if (binding.group != 0) {
-      latch(ShaderError{
-          std::format("binding {} is in group {}; the Metal binding map models only bind group "
-                      "0 today",
-                      binding.binding, binding.group),
-          "msl"});
-    }
-    if ((binding.kind == BindingKind::UniformBuffer ||
-         binding.kind == BindingKind::ReadOnlyStorageBuffer) &&
-        MslBufferIndex(binding.binding) >= kMslVertexBufferIndex) {
-      latch(ShaderError{
-          std::format("buffer binding {} maps to Metal buffer index {}, which collides with or "
-                      "exceeds the reserved stage-in vertex buffer index {}",
-                      binding.binding, MslBufferIndex(binding.binding), kMslVertexBufferIndex),
-          "msl"});
-    }
-    check(CheckMslIdentifier(binding.name, "binding"));
+    verifyBinding(binding);
+  }
+  if (error_) {
+    return *error_;
   }
 
   emitStructDeclarations();
+  emitRuntimeArrayReadHelper();
   emitConstants();
   for (const IrFunction& function : module_.functions()) {
     emitFunction(function);

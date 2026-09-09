@@ -153,4 +153,30 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "metal_buffer_bounds_tests",
+    srcs = [
+        "MetalBufferBounds_tests.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    env_inherit = ["GITHUB_ACTIONS"],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:msl_emitter",
+        "//donner/gpu/shader:programs",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()

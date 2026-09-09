@@ -8,10 +8,12 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -207,6 +209,7 @@ struct MetalDevice::Impl {
     /// are immutable value descriptors, so the copy stays correct even if the layout object is
     /// destroyed and its slot recycled; encode never looks the layout up by slot.
     BindGroupLayoutDescriptor layout;
+    std::array<uint32_t, shader::kMslBufferBindingCount> bufferLengths{};
   };
 
   /// A compiled render pipeline plus the encoder state every draw through it uses (cull mode
@@ -335,6 +338,11 @@ struct MetalDevice::Impl {
     PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
     /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
     WorkgroupSize currentWorkgroupSize;
+    // Bind-group records stay stable throughout synchronous submission encoding.
+    /// Identity of the bind group whose length table is already bound on this encoder, keyed
+    /// by (slot, generation) rather than by record address so a recycled slot cannot read as a
+    /// hit. Reset whenever an encoder begins.
+    std::optional<ResourceIdentity> lengthTableGroup;
     std::vector<id<MTLBuffer>> hostReadBuffers;  //!< GPU-written buffers needing CPU visibility.
   };
 
@@ -347,6 +355,14 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param setPipeline Recorded command.
   Status encodeSetPipeline(EncodingState& state, const SetPipelineCommand& setPipeline);
+
+  /// Uploads \p group's declared buffer lengths into the reserved argument slot of every stage
+  /// the active encoder has, skipping the upload when that group's table is already bound.
+  /// @param state Encoder state for the pass being recorded.
+  /// @param group Bind group whose declared lengths are uploaded.
+  /// @param groupId Identity of \p group, used to skip a redundant upload.
+  void encodeBufferLengths(EncodingState& state, const BindGroupRecord& group,
+                           const ResourceIdentity& groupId);
 
   /// Binds one buffer entry to the stages its layout entry declares.
   /// @param state Encoding state.
@@ -705,6 +721,18 @@ Status MetalDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescriptor&
 
 Status MetalDevice::onCreateBindGroupLayout(uint32_t slotIndex,
                                             const BindGroupLayoutDescriptor& descriptor) {
+  for (const BindGroupLayoutEntry& entry : descriptor.entries) {
+    const bool invalidBuffer = (entry.type == BindingType::UniformBuffer ||
+                                entry.type == BindingType::ReadOnlyStorageBuffer) &&
+                               entry.binding >= shader::kMslBufferBindingCount;
+    const bool invalidSampler = entry.type == BindingType::FilteringSampler &&
+                                entry.binding >= shader::kMslSamplerBindingCount;
+    if (invalidBuffer || invalidSampler) {
+      return GpuError{GpuErrorType::Unsupported,
+                      std::format("Metal {} binding {} exceeds the native argument table",
+                                  invalidBuffer ? "buffer" : "sampler", entry.binding)};
+    }
+  }
   SetSlot(impl_->bindGroupLayouts, slotIndex, std::optional<BindGroupLayoutDescriptor>(descriptor));
   return OkStatus();
 }
@@ -719,8 +747,21 @@ Status MetalDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescrip
                     std::format("bind group layout slot {} has no Metal-side descriptor",
                                 descriptor.layout.slotIndex())};
   }
-  SetSlot(impl_->bindGroups, slotIndex,
-          std::optional<Impl::BindGroupRecord>(Impl::BindGroupRecord{descriptor, *layout}));
+  Impl::BindGroupRecord record{descriptor, *layout};
+  for (const BindGroupEntry& entry : descriptor.entries) {
+    if (const auto* buffer = std::get_if<BufferBinding>(&entry.resource)) {
+      // createBindGroup enforces a bijection with the layout, and onCreateBindGroupLayout
+      // rejects buffer bindings at or above kMslBufferBindingCount, so this index is in range.
+      // kMaxBindings is larger than that, so state the invariant where the write happens.
+      UTILS_RELEASE_ASSERT_MSG(entry.binding < shader::kMslBufferBindingCount,
+                               "buffer binding is inside the Metal argument table");
+      static_assert(kMaxBufferByteSize <= std::numeric_limits<uint32_t>::max(),
+                    "buffer lengths are uploaded as uint32; raising the buffer size cap must not "
+                    "silently truncate a declared range");
+      record.bufferLengths[entry.binding] = static_cast<uint32_t>(buffer->sizeBytes);
+    }
+  }
+  SetSlot(impl_->bindGroups, slotIndex, std::optional<Impl::BindGroupRecord>(std::move(record)));
   return OkStatus();
 }
 
@@ -1048,6 +1089,7 @@ Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
                           attachment.clearColor[2], attachment.clearColor[3]);
   }
 
+  state.lengthTableGroup.reset();
   state.renderEncoder = [state.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (state.renderEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal render command encoder creation failed"};
@@ -1092,6 +1134,14 @@ Status MetalDevice::Impl::encodeBufferBinding(EncodingState& state, const BindGr
         GpuErrorType::InvalidState,
         std::format("setBindGroup: binding {} does not resolve to a Metal buffer", entry.binding)};
   }
+  // The buffer itself stays gated on the layout's declared visibility, unlike the length table
+  // above. That is a deliberate asymmetry with a known gap: the table is safe to over-bind, while
+  // binding a buffer to a stage its layout does not declare would silently accept a layout that
+  // disagrees with the shader. The gap is that a module with interface metadata omitted, which
+  // this backend still accepts, is not cross-checked against the layout, so a stage the IR reads
+  // but the layout does not declare leaves the generated code with a bounded index into a nil
+  // pointer. Closing it belongs with metadata admission, not here; supplying the facts makes
+  // pipeline creation reject the disagreement outright.
   if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Vertex)) {
     [state.renderEncoder setVertexBuffer:buffer
                                   offset:bufferBinding.offsetBytes
@@ -1177,6 +1227,37 @@ Status MetalDevice::Impl::encodeBindGroupEntry(EncodingState& state,
   return OkStatus();
 }
 
+void MetalDevice::Impl::encodeBufferLengths(EncodingState& state, const BindGroupRecord& group,
+                                            const ResourceIdentity& groupId) {
+  if (state.lengthTableGroup == groupId) {
+    return;
+  }
+  state.lengthTableGroup = groupId;
+  const uint32_t* lengths = group.bufferLengths.data();
+  constexpr size_t kLengthBytes = sizeof(group.bufferLengths);
+  // Bound to every stage the active encoder has, deliberately without consulting the layout.
+  // MslEmitter declares and dereferences donner_msl_lengths in every entry point of a module
+  // that holds any runtime-array binding, which is a fact about the IR; the bind-group layout's
+  // binding types and visibility are a different fact and can be narrower. Gating the upload on
+  // the layout leaves a shader dereferencing a nil constant uint* whenever the two disagree -
+  // for instance a buffer declared ReadOnlyStorageBuffer in the IR but UniformBuffer in the
+  // layout - which is exactly the unbounded read this table exists to prevent. Binding an
+  // argument index a pipeline does not read costs one setBytes of a fixed 116-byte table.
+  if (state.renderEncoder != nil) {
+    [state.renderEncoder setVertexBytes:lengths
+                                 length:kLengthBytes
+                                atIndex:shader::kMslBufferLengthsIndex];
+    [state.renderEncoder setFragmentBytes:lengths
+                                   length:kLengthBytes
+                                  atIndex:shader::kMslBufferLengthsIndex];
+  }
+  if (state.computeEncoder != nil) {
+    [state.computeEncoder setBytes:lengths
+                            length:kLengthBytes
+                           atIndex:shader::kMslBufferLengthsIndex];
+  }
+}
+
 Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                                              const SetBindGroupCommand& setBindGroup) {
   if (setBindGroup.index != 0) {
@@ -1196,6 +1277,7 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
       return bindStatus;
     }
   }
+  encodeBufferLengths(state, *bindGroup, setBindGroup.bindGroupId);
   return OkStatus();
 }
 
@@ -1344,6 +1426,7 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
 }
 
 Status MetalDevice::Impl::beginEncodedComputePass(EncodingState& state) {
+  state.lengthTableGroup.reset();
   state.computeEncoder = [state.commandBuffer computeCommandEncoder];
   if (state.computeEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal compute command encoder creation failed"};

@@ -12,7 +12,12 @@ struct ColorMatrixParams {
   float4 row4;
 };
 
-kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float> inputTexture [[texture(0)]], texture2d<float, access::write> outputTexture [[texture(1)]], constant ColorMatrixParams& params [[buffer(3)]], device const float4* bias [[buffer(4)]]) {
+template <typename T>
+T donner_msl_read(device const T* values, uint index, uint count) {
+  return index < count ? values[index] : T{};
+}
+
+kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float> inputTexture [[texture(0)]], texture2d<float, access::write> outputTexture [[texture(1)]], constant ColorMatrixParams& params [[buffer(3)]], device const float4* bias [[buffer(4)]], constant uint* donner_msl_lengths [[buffer(0)]]) {
   const uint2 extent = uint2(outputTexture.get_width(), outputTexture.get_height());
   if (((gid.x >= extent.x) || (gid.y >= extent.y))) {
     return;
@@ -20,7 +25,7 @@ kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float> inpu
   const int2 coords = int2(gid.xy);
   const float4 source = inputTexture.read(uint2(coords), uint(0));
   const uint biasIndex = ((gid.x > gid.y) ? 1u : 0u);
-  const float4 biasValue = bias[biasIndex];
+  const float4 biasValue = donner_msl_read(bias, uint(biasIndex), donner_msl_lengths[3] / 16u);
   const float4 weighted = ((((params.row0 * source.x) + (params.row1 * source.y)) + (params.row2 * source.z)) + (params.row3 * source.w));
   const float4 shifted = (weighted + params.row4);
   const float4 result = saturate((shifted + biasValue));

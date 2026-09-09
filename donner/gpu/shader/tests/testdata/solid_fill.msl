@@ -57,34 +57,39 @@ struct RayCoverage {
   float wgt;
 };
 
+template <typename T>
+T donner_msl_read(device const T* values, uint index, uint count) {
+  return index < count ? values[index] : T{};
+}
+
 constant uint kNoBand = 4294967295u;
 
-float clip_mask_coverage(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2 pixel_center) {
+float clip_mask_coverage(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2 pixel_center) {
   const int2 dims = int2(uint2(clipMaskTexture.get_width(), clipMaskTexture.get_height()));
   const int2 texel = clamp(int2(round((pixel_center - float2(0.5f)))), int2(0), (dims - int2(1)));
   const float4 sample = clipMaskTexture.read(uint2(texel), uint(0));
   return clamp(((((sample.x + sample.y) + sample.z) + sample.w) * 0.25f), 0.0f, 1.0f);
 }
 
-Quadratic load_h_curve(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, uint index) {
+Quadratic load_h_curve(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, uint index) {
   const uint base = (index * 6u);
   Quadratic q;
-  q.p0 = float2(curveData[(base + 0u)], curveData[(base + 1u)]);
-  q.p1 = float2(curveData[(base + 2u)], curveData[(base + 3u)]);
-  q.p2 = float2(curveData[(base + 4u)], curveData[(base + 5u)]);
+  q.p0 = float2(donner_msl_read(curveData, uint((base + 0u)), donner_msl_lengths[2] / 4u), donner_msl_read(curveData, uint((base + 1u)), donner_msl_lengths[2] / 4u));
+  q.p1 = float2(donner_msl_read(curveData, uint((base + 2u)), donner_msl_lengths[2] / 4u), donner_msl_read(curveData, uint((base + 3u)), donner_msl_lengths[2] / 4u));
+  q.p2 = float2(donner_msl_read(curveData, uint((base + 4u)), donner_msl_lengths[2] / 4u), donner_msl_read(curveData, uint((base + 5u)), donner_msl_lengths[2] / 4u));
   return q;
 }
 
-Quadratic load_v_curve(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, uint index) {
+Quadratic load_v_curve(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, uint index) {
   const uint base = (index * 6u);
   Quadratic q;
-  q.p0 = float2(vCurveData[(base + 0u)], vCurveData[(base + 1u)]);
-  q.p1 = float2(vCurveData[(base + 2u)], vCurveData[(base + 3u)]);
-  q.p2 = float2(vCurveData[(base + 4u)], vCurveData[(base + 5u)]);
+  q.p0 = float2(donner_msl_read(vCurveData, uint((base + 0u)), donner_msl_lengths[9] / 4u), donner_msl_read(vCurveData, uint((base + 1u)), donner_msl_lengths[9] / 4u));
+  q.p1 = float2(donner_msl_read(vCurveData, uint((base + 2u)), donner_msl_lengths[9] / 4u), donner_msl_read(vCurveData, uint((base + 3u)), donner_msl_lengths[9] / 4u));
+  q.p2 = float2(donner_msl_read(vCurveData, uint((base + 4u)), donner_msl_lengths[9] / 4u), donner_msl_read(vCurveData, uint((base + 5u)), donner_msl_lengths[9] / 4u));
   return q;
 }
 
-float2 solve_quadratic(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float a, float b, float c) {
+float2 solve_quadratic(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float a, float b, float c) {
   float2 roots = float2(-1.0f, -1.0f);
   if ((abs(a) < 1e-04f)) {
     if ((abs(b) > 1e-06f)) {
@@ -112,29 +117,29 @@ float2 solve_quadratic(constant Uniforms& uniforms, device const Band* bands, de
   return roots;
 }
 
-bool owns_axis_sample(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float start, float end, float sample) {
+bool owns_axis_sample(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float start, float end, float sample) {
   const float lo = min(start, end);
   const float hi = max(start, end);
   return ((sample >= lo) && (sample < hi));
 }
 
-RayCoverage accumulateHoriz(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, uint slot, float2 sample, float ppemX) {
+RayCoverage accumulateHoriz(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, uint slot, float2 sample, float ppemX) {
   RayCoverage result;
   result.cov = 0.0f;
   result.wgt = 0.0f;
   if ((slot == kNoBand)) {
     return result;
   }
-  const Band band = bands[slot];
+  const Band band = donner_msl_read(bands, uint(slot), donner_msl_lengths[1] / 32u);
   for (uint i = 0u; (i < band.curveCount); i = (i + 1u)) {
-    const Quadratic curve = load_h_curve(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, (band.curveStart + i));
-    if ((!owns_axis_sample(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, curve.p0.y, curve.p2.y, sample.y))) {
+    const Quadratic curve = load_h_curve(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, (band.curveStart + i));
+    if ((!owns_axis_sample(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, curve.p0.y, curve.p2.y, sample.y))) {
       continue;
     }
     const float a = ((curve.p0.y - (2.0f * curve.p1.y)) + curve.p2.y);
     const float b = (2.0f * (curve.p1.y - curve.p0.y));
     const float c = (curve.p0.y - sample.y);
-    const float2 roots = solve_quadratic(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, a, b, c);
+    const float2 roots = solve_quadratic(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, a, b, c);
     for (int k = 0; (k < 2); k = (k + 1)) {
       const float t = ((k == 0) ? roots.x : roots.y);
       if ((t < 0.0f)) {
@@ -152,23 +157,23 @@ RayCoverage accumulateHoriz(constant Uniforms& uniforms, device const Band* band
   return result;
 }
 
-RayCoverage accumulateVert(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, uint slot, float2 sample, float ppemY) {
+RayCoverage accumulateVert(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, uint slot, float2 sample, float ppemY) {
   RayCoverage result;
   result.cov = 0.0f;
   result.wgt = 0.0f;
   if ((slot == kNoBand)) {
     return result;
   }
-  const Band band = vBands[slot];
+  const Band band = donner_msl_read(vBands, uint(slot), donner_msl_lengths[8] / 32u);
   for (uint i = 0u; (i < band.curveCount); i = (i + 1u)) {
-    const Quadratic curve = load_v_curve(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, (band.curveStart + i));
-    if ((!owns_axis_sample(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, curve.p0.x, curve.p2.x, sample.x))) {
+    const Quadratic curve = load_v_curve(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, (band.curveStart + i));
+    if ((!owns_axis_sample(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, curve.p0.x, curve.p2.x, sample.x))) {
       continue;
     }
     const float a = ((curve.p0.x - (2.0f * curve.p1.x)) + curve.p2.x);
     const float b = (2.0f * (curve.p1.x - curve.p0.x));
     const float c = (curve.p0.x - sample.x);
-    const float2 roots = solve_quadratic(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, a, b, c);
+    const float2 roots = solve_quadratic(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, a, b, c);
     for (int k = 0; (k < 2); k = (k + 1)) {
       const float t = ((k == 0) ? roots.x : roots.y);
       if ((t < 0.0f)) {
@@ -186,13 +191,13 @@ RayCoverage accumulateVert(constant Uniforms& uniforms, device const Band* bands
   return result;
 }
 
-float calc_coverage(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, RayCoverage h, RayCoverage v) {
+float calc_coverage(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, RayCoverage h, RayCoverage v) {
   const float blended = (abs(((h.cov * h.wgt) + (v.cov * v.wgt))) / max((h.wgt + v.wgt), (1.0f / 65536.0f)));
   const float floor_cov = min(abs(h.cov), abs(v.cov));
   return max(blended, floor_cov);
 }
 
-bool sample_in_clip_polygon(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2 pixel_pos) {
+bool sample_in_clip_polygon(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2 pixel_pos) {
   if ((uniforms.hasClipPolygon == 0u)) {
     return true;
   }
@@ -205,33 +210,33 @@ bool sample_in_clip_polygon(constant Uniforms& uniforms, device const Band* band
   return true;
 }
 
-float2 load_bounding_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, uint index) {
+float2 load_bounding_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, uint index) {
   const float4 pair = uniforms.boundingVertices[(index / 2u)];
   return (((index % 2u) != 0u) ? pair.zw : pair.xy);
 }
 
-uint fan_polygon_index(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, uint vertex_index) {
+uint fan_polygon_index(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, uint vertex_index) {
   const uint triangle = (vertex_index / 3u);
   const uint corner = (vertex_index % 3u);
   return ((corner == 0u) ? 0u : (triangle + corner));
 }
 
-float axes_determinant(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2x2 axes) {
+float axes_determinant(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2x2 axes) {
   return ((axes[0u].x * axes[1u].y) - (axes[0u].y * axes[1u].x));
 }
 
-bool axes_are_well_conditioned(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2x2 axes) {
+bool axes_are_well_conditioned(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2x2 axes) {
   const float axis_scale = (length(axes[0u]) * length(axes[1u]));
-  const float determinant = axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes);
+  const float determinant = axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes);
   return (((axis_scale > 0.0f) && (axis_scale < 1e+30f)) && (abs(determinant) > (axis_scale * 1e-06f)));
 }
 
-float2 path_from_pixel_delta(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2x2 axes, float2 pixel_delta) {
-  const float determinant = axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes);
+float2 path_from_pixel_delta(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2x2 axes, float2 pixel_delta) {
+  const float determinant = axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes);
   return (float2(((axes[1u].y * pixel_delta.x) - (axes[1u].x * pixel_delta.y)), (((-axes[0u].y) * pixel_delta.x) + (axes[0u].x * pixel_delta.y))) / determinant);
 }
 
-float2x2 pixel_axes(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float4x4 effective_mvp) {
+float2x2 pixel_axes(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float4x4 effective_mvp) {
   const float2 pixel_scale = float2((uniforms.viewport.x * 0.5f), ((-uniforms.viewport.y) * 0.5f));
   const float2 origin_pixel = ((effective_mvp * float4(0.0f, 0.0f, 0.0f, 1.0f)).xy * pixel_scale);
   const float2 x_axis_pixel = (((effective_mvp * float4(1.0f, 0.0f, 0.0f, 1.0f)).xy * pixel_scale) - origin_pixel);
@@ -239,13 +244,13 @@ float2x2 pixel_axes(constant Uniforms& uniforms, device const Band* bands, devic
   return float2x2(x_axis_pixel, y_axis_pixel);
 }
 
-float conservative_path_aabb_expansion(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2x2 axes) {
+float conservative_path_aabb_expansion(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2x2 axes) {
   const float max_component = max(max(abs(axes[0u].x), abs(axes[0u].y)), max(abs(axes[1u].x), abs(axes[1u].y)));
   if ((!((max_component > 0.0f) && (max_component < 1e+30f)))) {
     return 0.0f;
   }
   const float2x2 scaled_axes = float2x2((axes[0u] / max_component), (axes[1u] / max_component));
-  const float scaled_determinant = abs(axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, scaled_axes));
+  const float scaled_determinant = abs(axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, scaled_axes));
   if ((!(scaled_determinant > 0.0f))) {
     return 0.0f;
   }
@@ -254,15 +259,15 @@ float conservative_path_aabb_expansion(constant Uniforms& uniforms, device const
   return (((expansion > 0.0f) && (expansion < 1e+30f)) ? expansion : 0.0f);
 }
 
-bool needs_device_aabb_fallback(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2x2 axes) {
-  if ((!axes_are_well_conditioned(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes))) {
+bool needs_device_aabb_fallback(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2x2 axes) {
+  if ((!axes_are_well_conditioned(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes))) {
     return false;
   }
-  const float orientation = ((axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes) > 0.0f) ? 1.0f : -1.0f);
+  const float orientation = ((axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes) > 0.0f) ? 1.0f : -1.0f);
   for (uint i = 0u; (i < uniforms.boundingVertexCount); i = (i + 1u)) {
-    const float2 previous = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, (((i + uniforms.boundingVertexCount) - 1u) % uniforms.boundingVertexCount));
-    const float2 position = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, i);
-    const float2 next = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, ((i + 1u) % uniforms.boundingVertexCount));
+    const float2 previous = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, (((i + uniforms.boundingVertexCount) - 1u) % uniforms.boundingVertexCount));
+    const float2 position = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, i);
+    const float2 next = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, ((i + 1u) % uniforms.boundingVertexCount));
     const float2 incoming = (axes * (position - previous));
     const float2 outgoing = (axes * (next - position));
     const float incoming_length = length(incoming);
@@ -286,27 +291,27 @@ bool needs_device_aabb_fallback(constant Uniforms& uniforms, device const Band* 
   return false;
 }
 
-float2 load_device_aabb_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float4x4 effective_mvp, float2x2 axes, uint polygon_index) {
+float2 load_device_aabb_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float4x4 effective_mvp, float2x2 axes, uint polygon_index) {
   const float2 pixel_scale = float2((uniforms.viewport.x * 0.5f), ((-uniforms.viewport.y) * 0.5f));
   const float2 origin_pixel = ((effective_mvp * float4(0.0f, 0.0f, 0.0f, 1.0f)).xy * pixel_scale);
   float2 pixel_min = float2(1e+30f, 1e+30f);
   float2 pixel_max = float2(-1e+30f, -1e+30f);
   for (uint i = 0u; (i < uniforms.boundingVertexCount); i = (i + 1u)) {
-    const float2 pixel = (origin_pixel + (axes * load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, i)));
+    const float2 pixel = (origin_pixel + (axes * load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, i)));
     pixel_min = min(pixel_min, pixel);
     pixel_max = max(pixel_max, pixel);
   }
   const bool left = ((polygon_index == 0u) || (polygon_index == 3u));
   const bool top = (polygon_index < 2u);
   const float2 pixel_corner = float2((left ? (pixel_min.x - 0.5f) : (pixel_max.x + 0.5f)), (top ? (pixel_min.y - 0.5f) : (pixel_max.y + 0.5f)));
-  return path_from_pixel_delta(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes, (pixel_corner - origin_pixel));
+  return path_from_pixel_delta(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes, (pixel_corner - origin_pixel));
 }
 
-float2 load_path_aabb_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float expansion, uint polygon_index) {
+float2 load_path_aabb_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float expansion, uint polygon_index) {
   float2 path_min = float2(1e+30f, 1e+30f);
   float2 path_max = float2(-1e+30f, -1e+30f);
   for (uint i = 0u; (i < uniforms.boundingVertexCount); i = (i + 1u)) {
-    const float2 position = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, i);
+    const float2 position = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, i);
     path_min = min(path_min, position);
     path_max = max(path_max, position);
   }
@@ -315,45 +320,45 @@ float2 load_path_aabb_vertex(constant Uniforms& uniforms, device const Band* ban
   return float2((left ? (path_min.x - expansion) : (path_max.x + expansion)), (lower ? (path_min.y - expansion) : (path_max.y + expansion)));
 }
 
-float2 dilated_bounding_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float2x2 axes, uint polygon_index) {
+float2 dilated_bounding_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float2x2 axes, uint polygon_index) {
   const uint count = uniforms.boundingVertexCount;
   const uint previous_index = (((polygon_index + count) - 1u) % count);
   const uint next_index = ((polygon_index + 1u) % count);
-  const float2 previous = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, previous_index);
-  const float2 position = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, polygon_index);
-  const float2 next = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, next_index);
-  if ((!axes_are_well_conditioned(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes))) {
+  const float2 previous = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, previous_index);
+  const float2 position = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, polygon_index);
+  const float2 next = load_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, next_index);
+  if ((!axes_are_well_conditioned(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes))) {
     return position;
   }
   const float2 previous_edge = normalize((axes * (position - previous)));
   const float2 next_edge = normalize((axes * (next - position)));
-  const float orientation = ((axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes) > 0.0f) ? 1.0f : -1.0f);
+  const float orientation = ((axes_determinant(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes) > 0.0f) ? 1.0f : -1.0f);
   const float2 previous_normal = (orientation * float2(previous_edge.y, (-previous_edge.x)));
   const float2 next_normal = (orientation * float2(next_edge.y, (-next_edge.x)));
   const float miter_denominator = (1.0f + dot(previous_normal, next_normal));
   const float2 pixel_delta = ((0.5f * (previous_normal + next_normal)) / miter_denominator);
-  return (position + path_from_pixel_delta(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes, pixel_delta));
+  return (position + path_from_pixel_delta(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes, pixel_delta));
 }
 
-float2 effective_bounding_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, float4x4 effective_mvp, uint vertex_index) {
-  const float2x2 axes = pixel_axes(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, effective_mvp);
-  const float path_aabb_expansion = conservative_path_aabb_expansion(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes);
-  const bool use_path_aabb = ((!axes_are_well_conditioned(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes)) && (path_aabb_expansion > 0.0f));
-  const bool use_device_aabb = needs_device_aabb_fallback(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes);
+float2 effective_bounding_vertex(constant Uniforms& uniforms, device const Band* bands, device const float* curveData, texture2d<float> patternTexture, sampler patternSampler, texture2d<float> clipMaskTexture, sampler clipMaskSampler, device const InstanceTransform* instanceTransforms, device const Band* vBands, device const float* vCurveData, device const uint* hBandGrid, device const uint* vBandGrid, constant uint* donner_msl_lengths, float4x4 effective_mvp, uint vertex_index) {
+  const float2x2 axes = pixel_axes(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, effective_mvp);
+  const float path_aabb_expansion = conservative_path_aabb_expansion(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes);
+  const bool use_path_aabb = ((!axes_are_well_conditioned(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes)) && (path_aabb_expansion > 0.0f));
+  const bool use_device_aabb = needs_device_aabb_fallback(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes);
   const bool use_aabb = (use_path_aabb || use_device_aabb);
   const uint effective_count = (use_aabb ? 4u : uniforms.boundingVertexCount);
   const uint triangle = (vertex_index / 3u);
   uint polygon_index = 0u;
   if ((triangle < (effective_count - 2u))) {
-    polygon_index = fan_polygon_index(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, vertex_index);
+    polygon_index = fan_polygon_index(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, vertex_index);
   }
   if (use_path_aabb) {
-    return load_path_aabb_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, path_aabb_expansion, polygon_index);
+    return load_path_aabb_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, path_aabb_expansion, polygon_index);
   }
   if (use_device_aabb) {
-    return load_device_aabb_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, effective_mvp, axes, polygon_index);
+    return load_device_aabb_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, effective_mvp, axes, polygon_index);
   }
-  return dilated_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, axes, polygon_index);
+  return dilated_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, axes, polygon_index);
 }
 
 
@@ -362,11 +367,11 @@ struct vs_main_Output {
   float2 sample_pos [[user(locn0)]];
 };
 
-vertex vs_main_Output vs_main(uint vertex_index [[vertex_id]], uint instance_index [[instance_id]], constant Uniforms& uniforms [[buffer(1)]], device const Band* bands [[buffer(2)]], device const float* curveData [[buffer(3)]], texture2d<float> patternTexture [[texture(3)]], sampler patternSampler [[sampler(4)]], texture2d<float> clipMaskTexture [[texture(5)]], sampler clipMaskSampler [[sampler(6)]], device const InstanceTransform* instanceTransforms [[buffer(8)]], device const Band* vBands [[buffer(9)]], device const float* vCurveData [[buffer(10)]], device const uint* hBandGrid [[buffer(11)]], device const uint* vBandGrid [[buffer(12)]]) {
-  const InstanceTransform xf = instanceTransforms[instance_index];
+vertex vs_main_Output vs_main(uint vertex_index [[vertex_id]], uint instance_index [[instance_id]], constant Uniforms& uniforms [[buffer(1)]], device const Band* bands [[buffer(2)]], device const float* curveData [[buffer(3)]], texture2d<float> patternTexture [[texture(3)]], sampler patternSampler [[sampler(4)]], texture2d<float> clipMaskTexture [[texture(5)]], sampler clipMaskSampler [[sampler(6)]], device const InstanceTransform* instanceTransforms [[buffer(8)]], device const Band* vBands [[buffer(9)]], device const float* vCurveData [[buffer(10)]], device const uint* hBandGrid [[buffer(11)]], device const uint* vBandGrid [[buffer(12)]], constant uint* donner_msl_lengths [[buffer(0)]]) {
+  const InstanceTransform xf = donner_msl_read(instanceTransforms, uint(instance_index), donner_msl_lengths[7] / 32u);
   const float4x4 instance_mat = float4x4(float4(xf.row0.x, xf.row1.x, 0.0f, 0.0f), float4(xf.row0.y, xf.row1.y, 0.0f, 0.0f), float4(0.0f, 0.0f, 1.0f, 0.0f), float4(xf.row0.z, xf.row1.z, 0.0f, 1.0f));
   const float4x4 effective_mvp = (uniforms.mvp * instance_mat);
-  const float2 dilated = effective_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, effective_mvp, vertex_index);
+  const float2 dilated = effective_bounding_vertex(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, effective_mvp, vertex_index);
   return vs_main_Output{(effective_mvp * float4(dilated, 0.0f, 1.0f)), dilated};
 }
 
@@ -379,7 +384,7 @@ struct fs_main_Output {
   float4 color [[color(0)]];
 };
 
-fragment fs_main_Output fs_main(fs_main_Input in [[stage_in]], constant Uniforms& uniforms [[buffer(1)]], device const Band* bands [[buffer(2)]], device const float* curveData [[buffer(3)]], texture2d<float> patternTexture [[texture(3)]], sampler patternSampler [[sampler(4)]], texture2d<float> clipMaskTexture [[texture(5)]], sampler clipMaskSampler [[sampler(6)]], device const InstanceTransform* instanceTransforms [[buffer(8)]], device const Band* vBands [[buffer(9)]], device const float* vCurveData [[buffer(10)]], device const uint* hBandGrid [[buffer(11)]], device const uint* vBandGrid [[buffer(12)]]) {
+fragment fs_main_Output fs_main(fs_main_Input in [[stage_in]], constant Uniforms& uniforms [[buffer(1)]], device const Band* bands [[buffer(2)]], device const float* curveData [[buffer(3)]], texture2d<float> patternTexture [[texture(3)]], sampler patternSampler [[sampler(4)]], texture2d<float> clipMaskTexture [[texture(5)]], sampler clipMaskSampler [[sampler(6)]], device const InstanceTransform* instanceTransforms [[buffer(8)]], device const Band* vBands [[buffer(9)]], device const float* vCurveData [[buffer(10)]], device const uint* hBandGrid [[buffer(11)]], device const uint* vBandGrid [[buffer(12)]], constant uint* donner_msl_lengths [[buffer(0)]]) {
   const float4 clip_pos = in.clip_pos;
   const float2 sample_pos = in.sample_pos;
   const float2 pixel_center = clip_pos.xy;
@@ -389,29 +394,29 @@ fragment fs_main_Output fs_main(fs_main_Input in [[stage_in]], constant Uniforms
   hCov.wgt = 0.0f;
   if ((uniforms.hBandCount > 0u)) {
     const int hi = clamp(int(((sample_pos.y - uniforms.yBase) / uniforms.hStride)), 0, (int(uniforms.hBandCount) - 1));
-    const uint slot = hBandGrid[hi];
-    hCov = accumulateHoriz(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, slot, sample_pos, ppem.x);
+    const uint slot = donner_msl_read(hBandGrid, uint(hi), donner_msl_lengths[10] / 4u);
+    hCov = accumulateHoriz(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, slot, sample_pos, ppem.x);
   }
   RayCoverage vCov;
   vCov.cov = 0.0f;
   vCov.wgt = 0.0f;
   if ((uniforms.vBandCount > 0u)) {
     const int vj = clamp(int(((sample_pos.x - uniforms.xBase) / uniforms.vStride)), 0, (int(uniforms.vBandCount) - 1));
-    const uint slot = vBandGrid[vj];
-    vCov = accumulateVert(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, slot, sample_pos, ppem.y);
+    const uint slot = donner_msl_read(vBandGrid, uint(vj), donner_msl_lengths[11] / 4u);
+    vCov = accumulateVert(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, slot, sample_pos, ppem.y);
   }
-  float coverage = calc_coverage(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, hCov, vCov);
+  float coverage = calc_coverage(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, hCov, vCov);
   if ((uniforms.fillRule == 0u)) {
     coverage = saturate(coverage);
   } else {
     coverage = (1.0f - abs((1.0f - (fract((coverage * 0.5f)) * 2.0f))));
   }
-  if ((!sample_in_clip_polygon(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, pixel_center))) {
+  if ((!sample_in_clip_polygon(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, pixel_center))) {
     coverage = 0.0f;
   }
   float clipCoverage = 1.0f;
   if ((uniforms.hasClipMask != 0u)) {
-    clipCoverage = clip_mask_coverage(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, pixel_center);
+    clipCoverage = clip_mask_coverage(uniforms, bands, curveData, patternTexture, patternSampler, clipMaskTexture, clipMaskSampler, instanceTransforms, vBands, vCurveData, hBandGrid, vBandGrid, donner_msl_lengths, pixel_center);
   }
   coverage = (coverage * clipCoverage);
   if ((coverage <= 0.0f)) {
