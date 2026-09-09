@@ -881,9 +881,14 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
               << " max)\n";
 
     const std::filesystem::path actualImagePath =
-        parityOutputDir() / escapeFilename(effectiveGoldenFilename);
+        parityOutputDir() / ("actual_" + escapeFilename(effectiveGoldenFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
                                               width, height, strideInPixels);
+
+    const std::filesystem::path expectedImagePath =
+        parityOutputDir() / ("expected_" + escapeFilename(effectiveGoldenFilename));
+    EXPECT_TRUE(RendererImageIO::writeRgbaPixelsToPngFile(
+        expectedImagePath.string().c_str(), goldenImage.data, width, height, strideInPixels));
 
     const std::filesystem::path diffFilePath =
         parityOutputDir() / ("diff_" + escapeFilename(effectiveGoldenFilename));
@@ -914,7 +919,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
 
     std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
-    std::cout << "Expected: " << effectiveGoldenFilename << "\n";
+    std::cout << "Expected: " << expectedImagePath.string() << "\n";
     std::cout << "Diff: " << diffFilePath.string() << "\n\n";
 
     const std::optional<TerminalPreviewConfig> previewConfig = PreviewConfigFromEnv(params);
