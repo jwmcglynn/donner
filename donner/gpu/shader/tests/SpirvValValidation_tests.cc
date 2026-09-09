@@ -21,8 +21,11 @@
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
@@ -180,6 +183,14 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
   return builder.build();
 }
 
+TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
+}
+
+TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildMergeModule(), "merge.spv");
+}
+
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSolidFillModule(), "solid_fill.spv");
@@ -211,6 +222,15 @@ TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
+}
+
+TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
+  // The first shipping program to reach the Pow extended instruction, and one whose functions
+  // return out of a structured branch, so the validator is what confirms the merge blocks the
+  // emitter writes around those returns are well formed.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildColorSpaceConvertModule(),
+                             "color_space_convert.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {

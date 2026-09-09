@@ -25,8 +25,11 @@
 
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -42,8 +45,11 @@ struct ProgramEntry {
 
 /// Programs this tool knows how to emit. A new IR program adds one row.
 constexpr ProgramEntry kPrograms[] = {
+    {"color_space_convert", &programs::BuildColorSpaceConvertModule},
     {"filter_color_matrix", &programs::BuildFilterColorMatrixModule},
     {"flood", &programs::BuildFloodModule},
+    {"merge", &programs::BuildMergeModule},
+    {"composite", &programs::BuildCompositeModule},
     {"offset", &programs::BuildOffsetModule},
     {"snapshot_unpremultiply", &programs::BuildSnapshotUnpremultiplyModule},
     {"subregion_clip", &programs::BuildSubregionClipModule},

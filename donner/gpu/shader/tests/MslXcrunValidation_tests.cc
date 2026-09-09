@@ -20,8 +20,11 @@
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
@@ -157,6 +160,16 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
   return output;
 }
 
+TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");
+}
+
+TEST(MslXcrunValidation, EmittedMergeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildMergeModule(), "merge");
+}
+
 TEST(MslXcrunValidation, APositionOnlyFragmentEntryCompilesWithMetalCompiler) {
   // The emitter omits the [[stage_in]] struct when nothing would go in it, because Metal rejects
   // an empty one. A fragment entry whose only input is the position builtin declares no location,
@@ -223,6 +236,11 @@ TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(BuildFloatStorageModule(), "float_storage");
+}
+
+TEST(MslXcrunValidation, EmittedColorSpaceConvertCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildColorSpaceConvertModule(), "color_space_convert");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {

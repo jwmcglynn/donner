@@ -447,13 +447,11 @@ private:
   // feFlood pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram floodProgram_;
 
-  // feMerge alpha-over blit pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> mergePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> mergeBindGroupLayout_;
+  /// Source-over merge pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram mergeProgram_;
 
-  // feComposite Porter-Duff pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> compositePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> compositeBindGroupLayout_;
+  /// Porter-Duff and arithmetic pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram compositeProgram_;
 
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
   ScopedWgpuHandle<wgpu::ComputePipeline> blendPipeline_;
@@ -502,9 +500,8 @@ private:
   // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram subregionClipProgram_;
 
-  // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> colorSpaceConvertPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> colorSpaceConvertBindGroupLayout_;
+  // sRGB to linear color space conversion pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram colorSpaceConvertProgram_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;
