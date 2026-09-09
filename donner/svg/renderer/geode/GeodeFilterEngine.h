@@ -91,6 +91,16 @@ public:
                                               const gpu::TextureDescriptor& desc) = 0;
 };
 
+/// GPU allocation bytes retained by an execution, excluding the caller's source/capture.
+struct FilterExecutionMemory {
+  uint64_t textures = 0;           //!< Texture descriptors, including dead reusable scratch.
+  uint64_t standaloneBuffers = 0;  //!< Per-execution buffers retained until submission.
+  uint64_t persistentBuffers = 0;  //!< Parameter arenas and immutable transfer tables.
+
+  /// Total retained allocation bytes.
+  uint64_t total() const { return textures + standaloneBuffers + persistentBuffers; }
+};
+
 /**
  * GPU filter-graph executor.
  *
@@ -183,6 +193,12 @@ public:
    * device).
    */
   void beginFrame();
+
+  /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
+  uint64_t retainedBufferBytes() const;
+
+  /// Observed allocation footprint of the most recent execution; does not own resources.
+  FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
 
 private:
   friend struct FilterGraphExecution;
@@ -522,6 +538,7 @@ private:
   /// the pooled textures a pass binds rotate across frames, so their
   /// identities are not stable cache keys.
   std::unique_ptr<FilterResourceCache> resourceCache_;
+  FilterExecutionMemory lastExecutionMemory_;
 };
 
 }  // namespace donner::geode

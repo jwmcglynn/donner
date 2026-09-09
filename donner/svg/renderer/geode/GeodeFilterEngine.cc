@@ -60,6 +60,8 @@ struct FilterResourceCache {
   /// Growable scratch for uniform and read-only storage parameters.
   ScopedWgpuHandle<wgpu::Buffer> uniformScratch;
   uint64_t uniformScratchSize = 0;
+  uint64_t retiredUniformBytes = 0;
+  uint64_t runtimeRetainedBytes = 0;
   /// Bump cursor inside the scratch; reset each frame.
   uint64_t uniformCursor = 0;
 
@@ -88,6 +90,7 @@ struct FilterResourceCache {
         // encoder, and every cached bind group references it. Defer its
         // destruction (drained at the next beginFrame, after submission)
         // and drop the cache.
+        retiredUniformBytes += uniformScratchSize;
         device.deferDestroy(uniformScratch.take());
       }
       uniformScratch.reset(device.device().createBuffer(desc));
@@ -134,6 +137,7 @@ struct FilterResourceCache {
       }
       // No count here: the runtime counts the buffer it creates.
       runtimeScratch.push_back(std::move(buffer).result());
+      runtimeRetainedBytes += newSize;
       runtimeScratchSize = newSize;
       runtimeCursor = 0;
     }
@@ -146,6 +150,8 @@ struct FilterResourceCache {
     std::lock_guard<std::mutex> lock(mutex);
     uniformCursor = 0;
     runtimeCursor = 0;
+    retiredUniformBytes = 0;
+    runtimeRetainedBytes = runtimeScratchSize;
     // Only the newest scratch is kept: it is the largest, and the frame that outgrew the smaller
     // ones has been submitted, so releasing them here cannot strand recorded work.
     while (runtimeScratch.size() > 1) {
@@ -260,6 +266,8 @@ struct FilterResourceArena {
       return nullptr;
     }
 
+    textureBytes +=
+        uint64_t{desc.size.width} * desc.size.height * gpu::TextureFormatBytesPerTexel(desc.format);
     textures_.push_back({std::move(texture), desc});
     const gpu::Texture* result = &textures_.back().texture;
     runtimeNameByBackendTexture_.emplace_back(
@@ -430,6 +438,7 @@ struct FilterResourceArena {
 
     device_.countBuffer();
     wgpu::Buffer result = buffer.get();
+    standaloneBufferBytes += desc.size;
     backendBuffers_.push_back(std::move(buffer));
     return result;
   }
@@ -537,6 +546,8 @@ private:
   /// both smaller and faster than a hash table over that many entries.
   std::vector<std::pair<WGPUTexture, const gpu::Texture*>> runtimeNameByBackendTexture_;
   std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
+  uint64_t textureBytes = 0;
+  uint64_t standaloneBufferBytes = 0;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> backendBuffers_;
   struct ColorValue {
     wgpu::Texture srgb;
@@ -2414,6 +2425,13 @@ struct FilterNodeExecution {
   bool clipMergedIntoBlur = false;
 };
 
+uint64_t GeodeFilterEngine::retainedBufferBytes() const {
+  std::lock_guard<std::mutex> lock(resourceCache_->mutex);
+  return resourceCache_->uniformScratchSize + resourceCache_->retiredUniformBytes +
+         resourceCache_->runtimeRetainedBytes +
+         (colorTransferTable_.isValid() ? svg::components::kGpuFilterTransferTableBytes : 0);
+}
+
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
                                          const Box2d& filterRegion,
@@ -2421,9 +2439,12 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                          FilterTextureAllocator& textureAllocator,
                                          ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
                                          svg::components::FilterExecutionBudget* executionBudget) {
-  return FilterGraphExecution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
-                              textureAllocator, commandEncoder, executionBudget)
-      .run();
+  FilterGraphExecution execution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
+                                 textureAllocator, commandEncoder, executionBudget);
+  const wgpu::Texture output = execution.run();
+  lastExecutionMemory_ = {execution.arena.textureBytes, execution.arena.standaloneBufferBytes,
+                          retainedBufferBytes()};
+  return output;
 }
 
 wgpu::Texture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
@@ -2488,7 +2509,8 @@ wgpu::Texture FilterGraphExecution::run() {
   const uint64_t pixelCount = uint64_t{sourceGraphic.getWidth()} * sourceGraphic.getHeight();
   const bool fitsBudget =
       executionBudget != nullptr
-          ? executionBudget->consume(graph, pixelCount, FilterMemoryModel::GpuAllNodes)
+          ? executionBudget->consume(graph, pixelCount, FilterMemoryModel::GpuAllNodes,
+                                     engine.retainedBufferBytes())
           : FilterGraphFitsExecutionBudget(graph, pixelCount, FilterMemoryModel::GpuAllNodes);
   if (!fitsBudget) {
     return sourceGraphic;

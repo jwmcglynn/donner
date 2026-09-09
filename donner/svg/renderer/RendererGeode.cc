@@ -1264,7 +1264,8 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                                                      const std::optional<Box2d>& filterRegion,
                                                      const Transform2d& deviceFromFilter,
                                                      int viewportWidth, int viewportHeight,
-                                                     components::FilterExecutionBudget& budget) {
+                                                     components::FilterExecutionBudget& budget,
+                                                     uint64_t retainedBufferBytes) {
   const std::optional<GeodeFilterBuffer> buffer = ComputeGeodeFilterBuffer(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
   if (!buffer.has_value()) {
@@ -1281,8 +1282,9 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                                             ? std::max(bufferPixels, *localPixels)
                                             : localPixels.value_or(bufferPixels);
   const std::uint64_t captureBytes = bufferPixels * 4u + localPixels.value_or(0) * 4u;
-  auto reservation = budget.reserve(filterGraph, executionPixels,
-                                    components::FilterMemoryModel::GpuAllNodes, captureBytes);
+  auto reservation =
+      budget.reserve(filterGraph, executionPixels, components::FilterMemoryModel::GpuAllNodes,
+                     captureBytes, retainedBufferBytes);
   if (!reservation.has_value()) {
     return std::nullopt;
   }
@@ -5491,12 +5493,14 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   }
   std::optional<GeodeFilterAdmission> admission =
       AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
+                       impl_->filterEngine->retainedBufferBytes());
   if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
       impl_->submitFilterBudgetChunk()) {
     admission =
         AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
+                         impl_->filterEngine->retainedBufferBytes());
   }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();

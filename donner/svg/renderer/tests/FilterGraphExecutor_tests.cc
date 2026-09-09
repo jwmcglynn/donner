@@ -410,6 +410,34 @@ TEST(FilterGraphExecutorTest, AccountsForDropShadowBlurWorkAndMemory) {
       graph, 7'000'000, components::FilterMemoryModel::GpuAllNodes));
 }
 
+TEST(FilterGraphExecutorTest, RetainedGpuParametersSurviveChunkAccounting) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::Flood{};
+  graph.nodes.push_back(node);
+  FilterExecutionBudget budget;
+  constexpr uint64_t kRetained = kMaximumFilterFrameBytes / 2;
+  auto first = budget.reserve(graph, 16, FilterMemoryModel::GpuAllNodes, 64, kRetained);
+  ASSERT_TRUE(first);
+  budget.release(*first);
+  EXPECT_GE(budget.retainedGpuBytes(), kRetained);
+  EXPECT_FALSE(budget.reserve(graph, 16, FilterMemoryModel::GpuAllNodes, kRetained, kRetained));
+  ASSERT_TRUE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.retainedGpuBytes(), kRetained);
+  EXPECT_FALSE(budget.reserve(graph, 16, FilterMemoryModel::GpuAllNodes, kRetained, kRetained));
+  budget.reset();
+  EXPECT_EQ(budget.retainedGpuBytes(), 0u);
+  EXPECT_FALSE(budget.reserve(graph, 16, FilterMemoryModel::GpuAllNodes, 0, UINT64_MAX));
+}
+
+TEST(FilterGraphExecutorTest, ParameterGrowthBoundRejectsOverflow) {
+  using namespace components;
+  EXPECT_EQ(GpuFilterParameterGrowthBound(65536, 256, 1024), 0u);
+  EXPECT_GT(GpuFilterParameterGrowthBound(UINT64_MAX, UINT64_MAX, 1), kMaximumFilterFrameBytes);
+  EXPECT_GT(GpuFilterParameterGrowthBound(0, 0, UINT64_MAX), kMaximumFilterFrameBytes);
+}
+
 TEST(FilterGraphExecutorTest, RejectsAggregateWorkAcrossSeparateFilterExecutions) {
   components::FilterGraph graph;
   components::FilterNode blur;

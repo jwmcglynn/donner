@@ -676,7 +676,6 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
   }
 
   std::uint64_t workUnits = 0;
-  std::uint64_t totalMergeInputs = 0;
   for (const FilterNode& node : graph.nodes) {
     // Every executed node performs its primitive pass plus a mandatory subregion clip. Default
     // linearRGB processing can add input/output conversion passes, and binary primitives convert
@@ -708,7 +707,6 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
       const std::uint64_t mergeInputs = static_cast<std::uint64_t>(node.inputs.size());
       // Linear merge converts and composites each input, then clips the node output.
       workMultiplier = std::max<std::uint64_t>(mergeInputs * 3 + 2, 5);
-      totalMergeInputs += mergeInputs;
     } else if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
       // Two-axis large-sigma blur uses six convolution passes plus two transposes. Include the
       // node copy and linear-RGB conversions in the conservative full-surface work estimate.
@@ -877,6 +875,7 @@ public:
     executions_ = 0;
     workUnits_ = 0;
     intermediateBytes_ = 0;
+    persistentGpuBytes_ = 0;
     liveCpuCaptureBytes_ = 0;
     activeGpuReservations_ = 0;
     captureBytesReserved_ = 0;
@@ -906,7 +905,8 @@ public:
    * intermediate textures remain charged until frame reset because command buffers retain them.
    */
   std::optional<Reservation> reserve(const FilterGraph& graph, std::uint64_t pixelCount,
-                                     FilterMemoryModel memoryModel, std::uint64_t captureBytes) {
+                                     FilterMemoryModel memoryModel, std::uint64_t captureBytes,
+                                     std::uint64_t retainedGpuBufferBytes = 0) {
     std::uint64_t graphWorkUnits = 0;
     std::uint64_t graphIntermediateBytes = 0;
     if (rejected_) {
@@ -920,7 +920,14 @@ public:
     }
 
     const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
-    const std::uint64_t retainedBeforeExecution = gpu ? intermediateBytes_ : liveCpuCaptureBytes_;
+    const std::uint64_t persistentBytes = std::max(persistentGpuBytes_, retainedGpuBufferBytes);
+    if (gpu && persistentBytes > kMaximumFilterFrameBytes) {
+      rejectionReason_ = RejectionReason::MemoryLimit;
+      rejected_ = true;
+      return std::nullopt;
+    }
+    const std::uint64_t retainedBeforeExecution =
+        gpu ? intermediateBytes_ + persistentBytes : liveCpuCaptureBytes_;
     if (executions_ >= kMaximumExecutions) {
       rejectionReason_ = RejectionReason::ExecutionLimit;
       rejected_ = true;
@@ -945,6 +952,7 @@ public:
     workUnits_ += graphWorkUnits;
     captureBytesReserved_ += captureBytes;
     if (gpu) {
+      persistentGpuBytes_ = persistentBytes;
       intermediateBytes_ += captureBytes + graphIntermediateBytes;
       ++activeGpuReservations_;
     } else {
@@ -967,8 +975,10 @@ public:
   }
 
   /// Consume a graph at execution time for direct callers without a capture preflight.
-  bool consume(const FilterGraph& graph, std::uint64_t pixelCount, FilterMemoryModel memoryModel) {
-    std::optional<Reservation> reservation = reserve(graph, pixelCount, memoryModel, 0);
+  bool consume(const FilterGraph& graph, std::uint64_t pixelCount, FilterMemoryModel memoryModel,
+               std::uint64_t retainedGpuBufferBytes = 0) {
+    std::optional<Reservation> reservation =
+        reserve(graph, pixelCount, memoryModel, 0, retainedGpuBufferBytes);
     if (!reservation.has_value()) {
       return false;
     }
@@ -985,11 +995,13 @@ public:
   [[nodiscard]] std::uint64_t executions() const { return executions_; }
   [[nodiscard]] std::uint64_t workUnits() const { return workUnits_; }
   [[nodiscard]] std::uint64_t retainedBytes() const {
-    return intermediateBytes_ + liveCpuCaptureBytes_;
+    return intermediateBytes_ + persistentGpuBytes_ + liveCpuCaptureBytes_;
   }
   [[nodiscard]] std::uint64_t captureBytesReserved() const { return captureBytesReserved_; }
   [[nodiscard]] std::uint64_t activeGpuReservations() const { return activeGpuReservations_; }
-  [[nodiscard]] std::uint64_t retainedGpuBytes() const { return intermediateBytes_; }
+  [[nodiscard]] std::uint64_t retainedGpuBytes() const {
+    return intermediateBytes_ + persistentGpuBytes_;
+  }
   /// Ordered GPU chunks submitted since this budget was constructed.
   [[nodiscard]] std::uint64_t chunks() const { return chunks_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
@@ -999,6 +1011,7 @@ private:
   std::uint64_t executions_ = 0;
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;
+  std::uint64_t persistentGpuBytes_ = 0;
   std::uint64_t liveCpuCaptureBytes_ = 0;
   std::uint64_t activeGpuReservations_ = 0;
   std::uint64_t captureBytesReserved_ = 0;

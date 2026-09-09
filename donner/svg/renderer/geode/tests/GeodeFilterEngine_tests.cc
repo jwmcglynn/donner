@@ -391,6 +391,53 @@ TEST_P(FilterAllocationRefusal, RefusalOrReusePreservesTheExecutionBoundary) {
   runGraph(graph, test.label, test.occurrence, test.expectsAllocation);
 }
 
+TEST_P(FilterAllocationRefusal, PreflightCoversObservedTexturesAndBuffers) {
+  using namespace svg::components;
+  const AllocationRefusalCase& test = GetParam();
+  FilterGraph graph;
+  graph.colorInterpolationFilters = test.linear ? svg::ColorInterpolationFilters::LinearRGB
+                                                : svg::ColorInterpolationFilters::SRGB;
+  FilterNode node;
+  node.primitive = test.primitive;
+  node.inputs = {FilterStandardInput::SourceGraphic, FilterStandardInput::SourceAlpha};
+  graph.nodes.push_back(node);
+  const uint64_t retainedBefore = engine_->retainedBufferBytes();
+  runGraph(graph, "");
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+  EXPECT_EQ(engine_->lastExecutionMemory().textures, allocator_->retainedTextureBytes);
+}
+
+TEST_F(GeodeFilterEngineTest, MaximumTablesAndNamedRedefinitionsStayWithinPreflight) {
+  using namespace svg::components;
+  FilterGraph graph;
+  filter_primitive::ComponentTransfer transfer;
+  for (auto* function : {&transfer.funcR, &transfer.funcG, &transfer.funcB, &transfer.funcA}) {
+    function->type = filter_primitive::ComponentTransfer::FuncType::Table;
+    function->tableValues.resize(kMaximumFilterTableValues, 0.5);
+  }
+  for (size_t index = 0; index < kMaximumFilterGraphNodes - 1; ++index) {
+    FilterNode node;
+    node.primitive = transfer;
+    node.result = RcString(index % 2 ? "a" : "b");
+    node.inputs = {index ? FilterInput(FilterInput::Named{RcString(index % 2 ? "b" : "a")})
+                         : FilterInput(FilterStandardInput::SourceAlpha)};
+    graph.nodes.push_back(node);
+  }
+  FilterNode merge;
+  merge.primitive = filter_primitive::Merge{};
+  merge.inputs.resize(kMaximumFilterMergeInputs, FilterInput::Named{RcString("a")});
+  graph.nodes.push_back(merge);
+  const uint64_t retainedBefore = engine_->retainedBufferBytes();
+  runGraph(graph, "");
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+}
+
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
                          testing::ValuesIn(AllocationRefusalCases()),
                          [](const testing::TestParamInfo<AllocationRefusalCase>& info) {
