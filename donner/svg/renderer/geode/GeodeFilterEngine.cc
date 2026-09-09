@@ -217,6 +217,23 @@ struct FilterResourceArena {
     colorValues_.push_back(linear ? ColorValue{input, output} : ColorValue{output, input});
   }
 
+  /// Makes dead intermediates available after a whole node has finished recording.
+  /// Both color representations of every retained logical value stay live.
+  void retainValues(std::span<const wgpu::Texture> values) {
+    const auto live = [&](const wgpu::Texture& texture) {
+      return texture && std::find(values.begin(), values.end(), texture) != values.end();
+    };
+    for (OwnedTexture& owned : textures_) {
+      const wgpu::Texture texture = device_.adapterDevice().wgpuTextureOf(owned.texture);
+      const bool representationIsLive =
+          std::any_of(colorValues_.begin(), colorValues_.end(), [&](const ColorValue& value) {
+            return (value.srgb == texture || value.linear == texture) &&
+                   (live(value.srgb) || live(value.linear));
+          });
+      owned.available = !live(texture) && !representationIsLive;
+    }
+  }
+
   /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
   /// ends. Null when the pool refuses the allocation.
   ///
@@ -224,6 +241,18 @@ struct FilterResourceArena {
   /// may hold it across further allocations.
   /// @param desc Descriptor the intermediate is allocated with.
   const gpu::Texture* createRuntimeTexture(const gpu::TextureDescriptor& desc) {
+    for (OwnedTexture& owned : textures_) {
+      if (owned.available && owned.desc.size == desc.size && owned.desc.format == desc.format &&
+          owned.desc.usage == desc.usage && owned.desc.sampleCount == desc.sampleCount) {
+        const wgpu::Texture texture = device_.adapterDevice().wgpuTextureOf(owned.texture);
+        // The physical allocation now carries a new logical value.
+        std::erase_if(colorValues_, [&](const ColorValue& value) {
+          return value.srgb == texture || value.linear == texture;
+        });
+        owned.available = false;
+        return &owned.texture;
+      }
+    }
     gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
     if (!texture.isValid()) {
       return nullptr;
@@ -487,6 +516,7 @@ private:
   struct OwnedTexture {
     gpu::Texture texture;
     gpu::TextureDescriptor desc;
+    bool available = false;
   };
 
   GeodeDevice& device_;
@@ -2316,7 +2346,9 @@ struct FilterGraphExecution {
   wgpu::Texture clip(const wgpu::Texture& input, const Box2d& region, bool transformed,
                      bool resolve = false);
   void record(const svg::components::FilterNode& node, const Box2d& subregion,
-              const wgpu::Texture& output);
+              const wgpu::Texture& output, size_t nodeIndex);
+  void findLastNamedUses();
+  void retainLiveValues(size_t nodeIndex);
 
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
@@ -2327,6 +2359,7 @@ struct FilterGraphExecution {
   wgpu::Texture currentBuffer;
   std::optional<wgpu::Texture> sourceAlpha;
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
+  std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
 };
 
@@ -2410,14 +2443,42 @@ wgpu::Texture FilterGraphExecution::clip(const wgpu::Texture& input, const Box2d
       std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y), resolve);
 }
 
+void FilterGraphExecution::findLastNamedUses() {
+  for (size_t index = 0; index < graph.nodes.size(); ++index) {
+    for (const svg::components::FilterInput& input : graph.nodes[index].inputs) {
+      if (const auto* named = std::get_if<svg::components::FilterInput::Named>(&input.value)) {
+        lastNamedUse[named->name.str()] = index;
+      }
+    }
+  }
+}
+
+void FilterGraphExecution::retainLiveValues(size_t nodeIndex) {
+  const auto expired = [&](const auto& entry) {
+    const auto last = lastNamedUse.find(entry.first);
+    return last == lastNamedUse.end() || last->second <= nodeIndex;
+  };
+  std::erase_if(namedBuffers, expired);
+  std::erase_if(coordinates.namedSubregions, expired);
+  SmallVector<wgpu::Texture, 8> live{sourceGraphic, currentBuffer};
+  if (sourceAlpha) {
+    live.push_back(*sourceAlpha);
+  }
+  for (const auto& [name, texture] : namedBuffers) {
+    live.push_back(texture);
+  }
+  arena.retainValues(std::span<const wgpu::Texture>(live.data(), live.size()));
+}
+
 void FilterGraphExecution::record(const svg::components::FilterNode& node, const Box2d& subregion,
-                                  const wgpu::Texture& output) {
+                                  const wgpu::Texture& output, size_t nodeIndex) {
   if (node.result.has_value()) {
     coordinates.namedSubregions[node.result->str()] = subregion;
     namedBuffers[node.result->str()] = output;
   }
   coordinates.previousOutputSubregion = subregion;
   currentBuffer = output;
+  retainLiveValues(nodeIndex);
 }
 
 wgpu::Texture FilterGraphExecution::run() {
@@ -2436,13 +2497,15 @@ wgpu::Texture FilterGraphExecution::run() {
       return {};
     }
   }
-  for (const FilterNode& node : graph.nodes) {
+  findLastNamedUses();
+  for (size_t index = 0; index < graph.nodes.size(); ++index) {
+    const FilterNode& node = graph.nodes[index];
     FilterNodeExecution primitive(*this, node);
     const wgpu::Texture output = primitive.run();
     if (!output) {
       return {};
     }
-    record(node, primitive.subregion, output);
+    record(node, primitive.subregion, output, index);
   }
   const wgpu::Texture srgb =
       engine.applyColorSpaceConversion(arena, currentBuffer, /*srgbToLinear=*/false);

@@ -2197,12 +2197,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     compositeEncoder->setLoadPreserve();
     encoder = std::move(compositeEncoder);
     updateEncoderScissor();
-    encoder->setTransform(deviceFromLocal);
-    encoder->drawTexture(importFilterResult(localFiltered),
-                         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
-                                         static_cast<double>(geometry->height)),
-                         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
-    encoder->setTransform(Transform2d());
+    if (localFiltered) {
+      encoder->setTransform(deviceFromLocal);
+      encoder->drawTexture(importFilterResult(localFiltered),
+                           Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
+                                           static_cast<double>(geometry->height)),
+                           kWholeTextureUv, 1.0, /*pixelated=*/false,
+                           /*sourceIsPremultiplied=*/true);
+      encoder->setTransform(Transform2d());
+    }
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
     frame.localRasterRequiredForBudget = false;
     return true;
@@ -5558,9 +5561,9 @@ void RendererGeode::popFilterLayer() {
   // another backend texture its own arena owns.
   const wgpu::Texture layerBackendTexture = impl_->backendTextureOf(frame.layerTexture);
   wgpu::Texture filteredTexture = layerBackendTexture;
-  const bool discardCapturedLayer = frame.localRasterRequiredForBudget;
   if (frame.localRasterRequiredForBudget) {
     impl_->filterExecutionBudget->reject();
+    filteredTexture = wgpu::Texture{};
   } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
              static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
                  components::kMaximumFilterSurfacePixels) {
@@ -5582,7 +5585,7 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  if (discardCapturedLayer) {
+  if (!filteredTexture) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;
