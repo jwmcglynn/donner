@@ -532,26 +532,17 @@ inline constexpr std::uint64_t kGpuFilterParameterBlockBytes = 64 * 1024;
 /// Two 4096-entry float transfer tables retained by the filter engine.
 inline constexpr std::uint64_t kGpuFilterTransferTableBytes = 2 * 4096 * sizeof(float);
 
-/// Bounds all allocations when a growable parameter arena consumes a batch of slots.
-/// @param capacity Current block size. @param used Bytes already used in that block.
-/// @param requested Conservative byte demand including slot-boundary padding.
-inline std::uint64_t GpuFilterParameterGrowthBound(std::uint64_t capacity, std::uint64_t used,
-                                                   std::uint64_t requested) {
-  if (requested == 0 || (used <= capacity && requested <= capacity - used)) {
+/// Bounds new fixed-block allocations, including a partially filled starting block.
+/// @param requested Conservative byte demand including aligned-slot padding.
+inline std::uint64_t GpuFilterParameterAllocationBound(std::uint64_t requested) {
+  if (!requested) {
     return 0;
   }
-  if (capacity > kMaximumFilterFrameBytes / 2 || requested > kMaximumFilterFrameBytes) {
+  // Slots occupy at most half a block, so at least half of every abandoned block was used.
+  if (requested > (kMaximumFilterFrameBytes - kGpuFilterParameterBlockBytes) / 2) {
     return kMaximumFilterFrameBytes + 1;
   }
-  std::uint64_t largest = std::max(capacity * 2, kGpuFilterParameterBlockBytes);
-  while (largest < requested) {
-    if (largest > kMaximumFilterFrameBytes / 2) {
-      return kMaximumFilterFrameBytes + 1;
-    }
-    largest *= 2;
-  }
-  // Every earlier block in geometric growth totals less than the largest block.
-  return largest > kMaximumFilterFrameBytes / 2 ? kMaximumFilterFrameBytes + 1 : largest * 2;
+  return requested * 2 + kGpuFilterParameterBlockBytes;
 }
 
 /// Derives a byte-format-aware bound without allocating or changing the CPU filter model.
@@ -807,10 +798,9 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
       return false;
     }
     const std::uint64_t bytesPerPixel = layout.floatTextures * 16 + (graph.empty() ? 0 : 4);
-    const std::uint64_t parameters =
-        GpuFilterParameterGrowthBound(0, 0, layout.uniformBytes) +
-        GpuFilterParameterGrowthBound(0, 0, layout.runtimeUniformBytes) +
-        layout.standaloneBufferBytes + kGpuFilterTransferTableBytes;
+    const std::uint64_t parameters = GpuFilterParameterAllocationBound(layout.uniformBytes) +
+                                     GpuFilterParameterAllocationBound(layout.runtimeUniformBytes) +
+                                     layout.standaloneBufferBytes + kGpuFilterTransferTableBytes;
     if (parameters > kMaximumFilterIntermediateBytes ||
         layout.imageBytes > kMaximumFilterIntermediateBytes - parameters ||
         (bytesPerPixel &&

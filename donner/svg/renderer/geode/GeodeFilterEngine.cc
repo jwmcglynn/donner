@@ -44,125 +44,101 @@
 
 namespace donner::geode {
 
-/// Persistent per-frame uniform scratch.
-///
-/// Every filter primitive pass used to allocate its own uniform buffer each
-/// frame. The scratch buffer gives each pass a stable 256-aligned (buffer,
-/// offset) uniform slot, and the cursor resets at
-/// `GeodeFilterEngine::beginFrame()`. If the scratch must grow mid-frame,
-/// the old buffer is deferred for destruction (drained at the next frame
-/// boundary, after submission). Pass bind groups are still created per
-/// pass: the pooled textures that a pass binds rotate across frames, so
-/// texture-identity keys are not stable enough to cache.
+/// Reusable fixed-size parameter blocks. New blocks never depend on a previous arena's size,
+/// so admission bounds remain valid when other filters consume slots before execution.
 struct FilterResourceCache {
   std::mutex mutex;
 
-  /// Growable scratch for uniform and read-only storage parameters.
-  ScopedWgpuHandle<wgpu::Buffer> uniformScratch;
-  uint64_t uniformScratchSize = 0;
-  uint64_t retiredUniformBytes = 0;
-  uint64_t runtimeRetainedBytes = 0;
-  /// Bump cursor inside the scratch; reset each frame.
-  uint64_t uniformCursor = 0;
-
-  /// One uniform slot inside the scratch, aligned to \ref kUniformOffsetAlignment.
   struct UniformSlot {
     wgpu::Buffer buffer;
-    uint64_t offset;
+    uint64_t offset = 0;
+  };
+
+  struct RuntimeUniformSlot {
+    const gpu::Buffer* buffer = nullptr;
+    uint64_t offset = 0;
+  };
+
+  struct UniformBlock {
+    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    uint64_t size = 0;
+  };
+  struct RuntimeBlock {
+    gpu::Buffer buffer;
+    uint64_t size = 0;
   };
 
   UniformSlot acquireUniformSlot(GeodeDevice& device, size_t size) {
     std::lock_guard<std::mutex> lock(mutex);
-    const uint64_t aligned = (static_cast<uint64_t>(size) + kUniformOffsetAlignment - 1u) &
-                             ~(kUniformOffsetAlignment - 1u);
-    if (!uniformScratch || uniformCursor + aligned > uniformScratchSize) {
-      uint64_t newSize = std::max<uint64_t>(uniformScratchSize * 2u, 64u * 1024u);
-      while (newSize < aligned) {
-        newSize *= 2u;
-      }
-      wgpu::BufferDescriptor desc = {};
-      desc.label = wgpuLabel("FilterUniformScratch");
-      desc.size = newSize;
-      desc.usage =
-          wgpu::BufferUsage::Uniform | wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-      if (uniformScratch) {
-        // The old buffer may still be referenced by this frame's command
-        // encoder, and every cached bind group references it. Defer its
-        // destruction (drained at the next beginFrame, after submission)
-        // and drop the cache.
-        retiredUniformBytes += uniformScratchSize;
-        device.deferDestroy(uniformScratch.take());
-      }
-      uniformScratch.reset(device.device().createBuffer(desc));
-      device.countBuffer();
-      uniformScratchSize = newSize;
+    const uint64_t aligned = align(size);
+    if (uniformIndex < uniforms.size() && aligned > uniforms[uniformIndex].size - uniformCursor) {
+      ++uniformIndex;
       uniformCursor = 0;
     }
-    UniformSlot slot{uniformScratch.get(), uniformCursor};
+    if (uniformIndex == uniforms.size()) {
+      const uint64_t bytes = std::max(aligned, svg::components::kGpuFilterParameterBlockBytes);
+      wgpu::BufferDescriptor desc = {};
+      desc.label = wgpuLabel("FilterUniformScratch");
+      desc.size = bytes;
+      desc.usage =
+          wgpu::BufferUsage::Uniform | wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+      ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
+      if (!buffer) {
+        return {};
+      }
+      device.countBuffer();
+      uniforms.push_back({std::move(buffer), bytes});
+      retainedBytes += bytes;
+    }
+    UniformSlot result{uniforms[uniformIndex].buffer.get(), uniformCursor};
     uniformCursor += aligned;
-    return slot;
+    return result;
   }
 
-  /// One uniform slot inside the runtime-side scratch, aligned to \ref kUniformOffsetAlignment.
-  struct RuntimeUniformSlot {
-    const gpu::Buffer* buffer = nullptr;  //!< Scratch buffer the slot lives in; null on failure.
-    uint64_t offset = 0;                  //!< Byte offset of the slot.
-  };
-
-  /**
-   * Bump-allocates a slot from the runtime-side uniform scratch, growing it when the frame's
-   * passes outrun the current buffer.
-   *
-   * Growth appends a buffer rather than replacing one, so a slot already handed out stays valid
-   * for the rest of the frame: a bind group naming a replaced buffer would go stale the moment
-   * the handle it names is released.
-   *
-   * @param device Device the scratch is allocated on.
-   * @param size Bytes the caller needs.
-   */
   RuntimeUniformSlot acquireRuntimeUniformSlot(GeodeDevice& device, size_t size) {
     std::lock_guard<std::mutex> lock(mutex);
-    const uint64_t aligned = (static_cast<uint64_t>(size) + kUniformOffsetAlignment - 1u) &
-                             ~(kUniformOffsetAlignment - 1u);
-    if (runtimeScratch.empty() || runtimeCursor + aligned > runtimeScratchSize) {
-      uint64_t newSize = std::max<uint64_t>(runtimeScratchSize * 2u, 64u * 1024u);
-      while (newSize < aligned) {
-        newSize *= 2u;
-      }
+    const uint64_t aligned = align(size);
+    if (runtimeIndex < runtime.size() && aligned > runtime[runtimeIndex].size - runtimeCursor) {
+      ++runtimeIndex;
+      runtimeCursor = 0;
+    }
+    if (runtimeIndex == runtime.size()) {
+      const uint64_t bytes = std::max(aligned, svg::components::kGpuFilterParameterBlockBytes);
       gpu::Result<gpu::Buffer> buffer = device.adapterDevice().createBuffer(
-          gpu::BufferDescriptor{"FilterRuntimeUniformScratch", newSize,
+          gpu::BufferDescriptor{"FilterRuntimeUniformScratch", bytes,
                                 gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
       if (!buffer.hasResult()) {
         return {};
       }
-      // No count here: the runtime counts the buffer it creates.
-      runtimeScratch.push_back(std::move(buffer).result());
-      runtimeRetainedBytes += newSize;
-      runtimeScratchSize = newSize;
-      runtimeCursor = 0;
+      runtime.push_back({std::move(buffer).result(), bytes});
+      retainedBytes += bytes;
     }
-    RuntimeUniformSlot slot{&runtimeScratch.back(), runtimeCursor};
+    RuntimeUniformSlot result{&runtime[runtimeIndex].buffer, runtimeCursor};
     runtimeCursor += aligned;
-    return slot;
+    return result;
   }
 
   void beginFrame() {
     std::lock_guard<std::mutex> lock(mutex);
-    uniformCursor = 0;
-    runtimeCursor = 0;
-    retiredUniformBytes = 0;
-    runtimeRetainedBytes = runtimeScratchSize;
-    // Only the newest scratch is kept: it is the largest, and the frame that outgrew the smaller
-    // ones has been submitted, so releasing them here cannot strand recorded work.
-    while (runtimeScratch.size() > 1) {
-      runtimeScratch.pop_front();
-    }
+    uniformIndex = runtimeIndex = 0;
+    uniformCursor = runtimeCursor = 0;
   }
 
-  /// Runtime-side uniform scratch; the back element is the live one (see
-  /// \ref acquireRuntimeUniformSlot).
-  std::deque<gpu::Buffer> runtimeScratch;
-  uint64_t runtimeScratchSize = 0;
+  uint64_t retainedBytes = 0;
+
+private:
+  static uint64_t align(size_t size) {
+    // Every parameter payload is bounded below one block by the graph and primitive limits.
+    UTILS_RELEASE_ASSERT(size <= svg::components::kGpuFilterParameterBlockBytes / 2);
+    return (static_cast<uint64_t>(size) + kUniformOffsetAlignment - 1u) &
+           ~(kUniformOffsetAlignment - 1u);
+  }
+
+  std::deque<UniformBlock> uniforms;
+  std::deque<RuntimeBlock> runtime;
+  size_t uniformIndex = 0;
+  size_t runtimeIndex = 0;
+  uint64_t uniformCursor = 0;
   uint64_t runtimeCursor = 0;
 };
 
@@ -1486,6 +1462,9 @@ void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
 FilterResourceCache::UniformSlot writeUniformSlot(FilterResourceCache& cache, GeodeDevice& device,
                                                   const void* data, size_t size) {
   FilterResourceCache::UniformSlot slot = cache.acquireUniformSlot(device, size);
+  if (!slot.buffer) {
+    return {};
+  }
   device.queue().writeBuffer(slot.buffer, slot.offset, data, size);
   device.countBufferWrite(size);
   return slot;
@@ -2429,8 +2408,7 @@ struct FilterNodeExecution {
 
 uint64_t GeodeFilterEngine::retainedBufferBytes() const {
   std::lock_guard<std::mutex> lock(resourceCache_->mutex);
-  return resourceCache_->uniformScratchSize + resourceCache_->retiredUniformBytes +
-         resourceCache_->runtimeRetainedBytes +
+  return resourceCache_->retainedBytes +
          (colorTransferTable_.isValid() ? svg::components::kGpuFilterTransferTableBytes : 0);
 }
 
@@ -2889,6 +2867,9 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
                              gaussianBlurPipeline_.get(), input, output, uniformBuffer.buffer,
@@ -2923,6 +2904,9 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
                              gaussianBlurPipeline_.get(), input, output, uniformBuffer.buffer,
@@ -3194,6 +3178,9 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
   params.pad2 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchTwoInputUniform(arena, device_, blendBindGroupLayout_.get(), blendPipeline_.get(), in1,
                           in2, output, uniformBuffer.buffer, uniformBuffer.offset,
@@ -3235,6 +3222,9 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
       params.radiusY = axis == 1 ? radius : 0;
       params.op = primitive.op == Op::Dilate ? 1u : 0u;
       const auto uniform = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+      if (!uniform.buffer) {
+        return {};
+      }
       dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
                                  morphologyPipeline_.get(), current, output, uniform.buffer,
                                  uniform.offset, sizeof(params), kLabels[axis]);
@@ -3269,6 +3259,9 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   }
   const size_t dataSize = data->size() * sizeof(uint32_t);
   const auto parameters = writeUniformSlot(*resourceCache_, device_, data->data(), dataSize);
+  if (!parameters.buffer) {
+    return {};
+  }
 
   // Build bind group.
   ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
@@ -3584,6 +3577,9 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
   params.pad = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchTwoInputUniform(arena, device_, displacementMapBindGroupLayout_.get(),
                           displacementMapPipeline_.get(), in1, in2, output, uniformBuffer.buffer,
@@ -3968,6 +3964,9 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchTwoInputUniform(arena, device_, dropShadowBindGroupLayout_.get(),
                           dropShadowPipeline_.get(), input, blurred, output, uniformBuffer.buffer,
@@ -4049,6 +4048,9 @@ wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& are
   params.m02 = -1000.0f;
   params.m12 = -1000.0f;
   auto ub = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!ub.buffer) {
+    return {};
+  }
   dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
                              emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams),
                              "FilterImageEmptyPass");
@@ -4101,6 +4103,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
           CreateFragmentImageParams(primitive, graph, deviceFromFilter)) {
     auto uniformBuffer =
         writeUniformSlot(*resourceCache_, device_, &*fragmentParams, sizeof(*fragmentParams));
+    if (!uniformBuffer.buffer) {
+      return {};
+    }
     dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
                                imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
                                sizeof(ImageParams), "FilterImageFragRefPass");
@@ -4225,6 +4230,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
                              imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
@@ -4254,6 +4262,9 @@ wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgp
   params.srcH = srcH;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!uniformBuffer.buffer) {
+    return {};
+  }
 
   dispatchInputOutputUniform(arena, device_, tileBindGroupLayout_.get(), tilePipeline_.get(), input,
                              output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(TileParams),

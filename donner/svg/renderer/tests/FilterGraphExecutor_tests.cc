@@ -441,11 +441,11 @@ TEST(FilterGraphExecutorTest, RetainedGpuParametersSurviveChunkAccounting) {
   EXPECT_FALSE(budget.reserve(graph, 16, FilterMemoryModel::GpuAllNodes, 0, UINT64_MAX));
 }
 
-TEST(FilterGraphExecutorTest, ParameterGrowthBoundRejectsOverflow) {
+TEST(FilterGraphExecutorTest, ParameterBlockBoundRejectsOverflow) {
   using namespace components;
-  EXPECT_EQ(GpuFilterParameterGrowthBound(65536, 256, 1024), 0u);
-  EXPECT_GT(GpuFilterParameterGrowthBound(UINT64_MAX, UINT64_MAX, 1), kMaximumFilterFrameBytes);
-  EXPECT_GT(GpuFilterParameterGrowthBound(0, 0, UINT64_MAX), kMaximumFilterFrameBytes);
+  EXPECT_EQ(GpuFilterParameterAllocationBound(0), 0u);
+  EXPECT_GE(GpuFilterParameterAllocationBound(1024), kGpuFilterParameterBlockBytes);
+  EXPECT_GT(GpuFilterParameterAllocationBound(UINT64_MAX), kMaximumFilterFrameBytes);
 }
 
 TEST(FilterGraphExecutorTest, RejectsAggregateWorkAcrossSeparateFilterExecutions) {
