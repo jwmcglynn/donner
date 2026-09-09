@@ -41,19 +41,44 @@ inline constexpr float kMathPrimitiveSignScale = 100.0f;
 /// over a half; both zeros; and whole numbers. The count is a whole number of workgroups, so the
 /// dispatch needs no bounds guard and every lane writes a texel.
 inline std::vector<float> MathPrimitiveInputValues() {
-  return {0.0f, -0.0f, 0.5f,   -0.5f,   1.5f,    -1.5f,    2.5f,    -2.5f,
-          3.5f, -3.5f, 12.5f,  -12.5f,  0.4999f, -0.4999f, 0.5001f, -0.5001f,
-          7.0f, -7.0f, 100.5f, -100.5f, 3.49f,   -3.49f,   42.0f,   -42.0f};
+  return {0.0f,
+          -0.0f,
+          0.5f,
+          -0.5f,
+          1.5f,
+          -1.5f,
+          2.5f,
+          -2.5f,
+          3.5f,
+          -3.5f,
+          12.5f,
+          -12.5f,
+          0.4999f,
+          -0.4999f,
+          0.5001f,
+          -0.5001f,
+          7.0f,
+          -7.0f,
+          100.5f,
+          -100.5f,
+          3.49f,
+          -3.49f,
+          42.0f,
+          -42.0f,
+          std::nextafter(0.5f, 0.0f),
+          std::nextafter(-0.5f, 0.0f),
+          std::nextafter(0.5f, 1.0f),
+          std::nextafter(-0.5f, -1.0f),
+          std::nextafter(1.5f, 0.0f),
+          std::nextafter(-1.5f, 0.0f),
+          std::nextafter(1.5f, 2.0f),
+          std::nextafter(-1.5f, -2.0f)};
 }
 
-/// The module's rounding recipe evaluated on the host, in the same order and the same precision,
-/// so a divergence between it and `std::round` is a statement about the recipe rather than about
-/// two different formulas.
-///
-/// @param value Value to round.
+/// CPU filter rounding reference, independent of the shader implementation.
+/// @param value Pixel shift to round.
 inline float RoundHalfAwayFromZeroOnHost(float value) {
-  const float sign = (value > 0.0f) ? 1.0f : ((value < 0.0f) ? -1.0f : 0.0f);
-  return sign * std::floor(std::abs(value) + 0.5f);
+  return std::round(value);
 }
 
 /// Builds the compute module. Binding 0 is the destination storage texture, one texel per input;

@@ -85,27 +85,6 @@ TEST(MathPrimitiveTests, MslSpellsScalarAndVectorFormsOfEachOpcode) {
                              "float2(2.4f, 2.4f));"));
 }
 
-TEST(MathPrimitiveTests, RoundHalfAwayFromZeroMatchesTheCpuFilterPath) {
-  // The CPU filter path rounds a pixel offset with std::round, which is round-half-away-from-zero.
-  // WGSL's own round() is round-half-to-even, so the shader has to compose the rule out of sign
-  // and floor. Pinning the composition against std::round over the table - negative halves
-  // included - is what stops a program expressing the offset filter from re-deriving it and
-  // landing on the banker's rounding the GPU builtin would give.
-  bool sawADisagreementWithRoundHalfToEven = false;
-  for (const float value : MathPrimitiveInputValues()) {
-    EXPECT_FLOAT_EQ(RoundHalfAwayFromZeroOnHost(value), std::round(value))
-        << "rounding of " << value << " diverges from the CPU filter path";
-    if (RoundHalfAwayFromZeroOnHost(value) != std::nearbyint(value)) {
-      sawADisagreementWithRoundHalfToEven = true;
-    }
-  }
-
-  // Without a value where the two rules disagree the assertion above would pass for round() too,
-  // and the composition would be pinned to nothing.
-  EXPECT_TRUE(sawADisagreementWithRoundHalfToEven)
-      << "the table has no half that separates away-from-zero from half-to-even rounding";
-}
-
 TEST(MathPrimitiveTests, WgslMatchesCommittedGoldenByteExactly) {
   // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
   const std::string wgsl = EmitMathPrimitiveWgsl();

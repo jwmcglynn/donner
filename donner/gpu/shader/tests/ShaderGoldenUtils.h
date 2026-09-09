@@ -75,6 +75,8 @@ inline bool MaybeUpdateShaderGolden(const char* environmentVariable, const std::
   std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
   EXPECT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
   out << contents;
+  out.close();
+  EXPECT_TRUE(out.good()) << "Failed to complete golden export: " << outPath;
   return true;
 }
 
