@@ -1,3 +1,5 @@
+#include "donner/gpu/Device.h"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -10,7 +12,6 @@
 
 #include "donner/gpu/CheckedArithmetic.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/Device.h"
 #include "donner/gpu/GpuLimits.h"
 
 namespace donner::gpu {
@@ -165,6 +166,56 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
   return OkStatus();
 }
 
+/// Validates one color target's blend state.
+/// @param blend Blend state to check.
+Status ValidateBlendState(const BlendState& blend) {
+  for (const BlendComponent& component : {blend.color, blend.alpha}) {
+    if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+  }
+  return OkStatus();
+}
+
+/// Validates the color targets of a \ref RenderPipelineDescriptor's fragment state.
+/// @param targets Color targets to check.
+Status ValidateColorTargets(const std::vector<ColorTargetState>& targets) {
+  if (targets.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.fragment.targets is empty");
+  }
+  if (targets.size() > kMaxColorAttachments) {
+    return Err(GpuErrorType::LimitExceeded,
+               std::format("RenderPipelineDescriptor has {} color targets, exceeding "
+                           "kMaxColorAttachments {}",
+                           targets.size(), kMaxColorAttachments));
+  }
+  for (const ColorTargetState& target : targets) {
+    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (target.blend) {
+      if (Status status = ValidateBlendState(*target.blend); status.hasError()) {
+        return std::move(status).error();
+      }
+    }
+  }
+  return OkStatus();
+}
+
 /// Validates the vertex buffer layouts of a \ref RenderPipelineDescriptor.
 Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffers) {
   if (buffers.size() > kMaxVertexBuffers) {
@@ -234,6 +285,41 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
         }
       }
     }
+  }
+  return OkStatus();
+}
+
+/// Validates the parts of a \ref RenderPipelineDescriptor that depend only on the descriptor
+/// itself, not on any resolved layout or module record.
+/// @param descriptor Descriptor to check.
+Status ValidateRenderPipelineDescriptor(const RenderPipelineDescriptor& descriptor) {
+  if (descriptor.vertex.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.vertex.entryPoint is empty");
+  }
+  if (descriptor.fragment.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.fragment.entryPoint is empty");
+  }
+  if (Status status = ValidateVertexBufferLayouts(descriptor.vertex.buffers); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = ValidateColorTargets(descriptor.fragment.targets); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (descriptor.multisampleCount != 1) {
+    return Err(GpuErrorType::Unsupported,
+               std::format("RenderPipelineDescriptor.multisampleCount {} is not supported; only "
+                           "1 sample per pixel is available",
+                           descriptor.multisampleCount));
   }
   return OkStatus();
 }
@@ -1094,65 +1180,8 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
   if (fragmentModule.hasError()) {
     return std::move(fragmentModule).error();
   }
-  if (descriptor.vertex.entryPoint.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.vertex.entryPoint is empty");
-  }
-  if (descriptor.fragment.entryPoint.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.fragment.entryPoint is empty");
-  }
-  if (Status status = ValidateVertexBufferLayouts(descriptor.vertex.buffers); status.hasError()) {
+  if (Status status = ValidateRenderPipelineDescriptor(descriptor); status.hasError()) {
     return std::move(status).error();
-  }
-  if (descriptor.fragment.targets.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.fragment.targets is empty");
-  }
-  if (descriptor.fragment.targets.size() > kMaxColorAttachments) {
-    return Err(GpuErrorType::LimitExceeded,
-               std::format("RenderPipelineDescriptor has {} color targets, exceeding "
-                           "kMaxColorAttachments {}",
-                           descriptor.fragment.targets.size(), kMaxColorAttachments));
-  }
-  for (const ColorTargetState& target : descriptor.fragment.targets) {
-    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
-      return std::move(status).error();
-    }
-    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
-        status.hasError()) {
-      return std::move(status).error();
-    }
-    if (target.blend) {
-      for (const BlendComponent& component : {target.blend->color, target.blend->alpha}) {
-        if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-        if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-        if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-      }
-    }
-  }
-  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
-      status.hasError()) {
-    return std::move(status).error();
-  }
-  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
-      status.hasError()) {
-    return std::move(status).error();
-  }
-  if (descriptor.multisampleCount != 1) {
-    return Err(GpuErrorType::Unsupported,
-               std::format("RenderPipelineDescriptor.multisampleCount {} is not supported; only "
-                           "1 sample per pixel is available",
-                           descriptor.multisampleCount));
   }
 
   RenderPipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
