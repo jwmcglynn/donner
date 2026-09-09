@@ -1537,6 +1537,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameGpuEncoder == nullptr) {
       return true;
     }
+    // A sibling renderer may have replaced the shared adapter's host encoder.
+    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
     gpu::Result<gpu::CommandBuffer> commandBuffer = frameGpuEncoder->finish();
     if (!commandBuffer.hasError()) {
       gpu::Result<uint64_t> submitted =
