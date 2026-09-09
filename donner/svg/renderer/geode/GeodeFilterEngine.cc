@@ -2443,80 +2443,115 @@ struct FilterNodeExecution {
   bool finalResolve = false;
 };
 
-FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
-                                                uint32_t width, uint32_t height,
-                                                const Transform2d& deviceFromFilter) const {
-  FilterTilePlan plan{width, height, width, height, width, height, 1};
-  if (graph.empty() || !width || !height || width > 4096 || height > 4096 ||
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6)) {
-    return plan;
+namespace {
+
+bool CanTileFilter(const svg::components::FilterGraph& graph, uint32_t width, uint32_t height,
+                   const Transform2d& transform) {
+  return !graph.empty() && width && height && width <= 4096 && height <= 4096 &&
+         NearZero(transform.data[1], 1e-6) && NearZero(transform.data[2], 1e-6);
+}
+
+/// Conservative sampling support of one graph in device pixels.
+struct FilterSamplingHalo {
+  Vector2d scale;
+  Vector2d halo = Vector2d::Zero();
+
+  static double blur(double sigma, double scale) {
+    return sigma > 0 ? std::ceil(4 * boundedPositiveFilterPixels(sigma * scale)) + 4 : 0.0;
   }
+
+  bool add(const fp::GaussianBlur& value) {
+    if (value.edgeMode == fp::GaussianBlur::EdgeMode::Wrap) {
+      return false;
+    }
+    halo += Vector2d(blur(value.stdDeviationX, scale.x), blur(value.stdDeviationY, scale.y));
+    return true;
+  }
+
+  bool add(const fp::Morphology& value) {
+    halo += Vector2d(std::ceil(boundedPositiveFilterPixels(value.radiusX * scale.x)),
+                     std::ceil(boundedPositiveFilterPixels(value.radiusY * scale.y)));
+    return true;
+  }
+
+  bool add(const fp::Offset& value) {
+    halo += Vector2d(std::ceil(std::abs(boundedSignedFilterPixels(value.dx * scale.x))),
+                     std::ceil(std::abs(boundedSignedFilterPixels(value.dy * scale.y))));
+    return true;
+  }
+
+  bool add(const fp::DropShadow& value) {
+    add(fp::Offset{value.dx, value.dy});
+    halo += Vector2d(blur(value.stdDeviationX, scale.x), blur(value.stdDeviationY, scale.y));
+    return true;
+  }
+
+  bool add(const fp::ConvolveMatrix& value) {
+    if (value.edgeMode == fp::ConvolveMatrix::EdgeMode::Wrap || value.orderX <= 0 ||
+        value.orderY <= 0 || value.orderX > 25 || value.orderY > 25) {
+      return false;
+    }
+    halo += Vector2d(value.orderX, value.orderY);
+    return true;
+  }
+
+  template <typename T>
+  bool add(const T&) {
+    return std::is_same_v<T, fp::Flood> || std::is_same_v<T, fp::ColorMatrix> ||
+           std::is_same_v<T, fp::ComponentTransfer> || std::is_same_v<T, fp::Blend> ||
+           std::is_same_v<T, fp::Composite> || std::is_same_v<T, fp::Merge>;
+  }
+};
+
+std::optional<Vector2d> ComputeFilterSamplingHalo(const svg::components::FilterGraph& graph,
+                                                  const Transform2d& transform) {
   const bool objectBounds = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
   const double scaleX =
-      std::abs(deviceFromFilter.data[0]) *
+      std::abs(transform.data[0]) *
       (objectBounds && graph.elementBoundingBox ? graph.elementBoundingBox->width() : 1.0);
   const double scaleY =
-      std::abs(deviceFromFilter.data[3]) *
+      std::abs(transform.data[3]) *
       (objectBounds && graph.elementBoundingBox ? graph.elementBoundingBox->height() : 1.0);
-  double haloX = 0;
-  double haloY = 0;
-  const auto blurHalo = [](double sigma, double scale) {
-    return sigma > 0 ? std::ceil(4 * boundedPositiveFilterPixels(sigma * scale)) + 4 : 0.0;
-  };
+  FilterSamplingHalo support{Vector2d(scaleX, scaleY)};
   for (const auto& node : graph.nodes) {
-    const bool local = std::visit(
-        [&](const auto& primitive) {
-          using T = std::decay_t<decltype(primitive)>;
-          if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
-            if (primitive.edgeMode == fp::GaussianBlur::EdgeMode::Wrap) {
-              return false;
-            }
-            haloX += blurHalo(primitive.stdDeviationX, scaleX);
-            haloY += blurHalo(primitive.stdDeviationY, scaleY);
-          } else if constexpr (std::is_same_v<T, fp::Morphology>) {
-            haloX += std::ceil(boundedPositiveFilterPixels(primitive.radiusX * scaleX));
-            haloY += std::ceil(boundedPositiveFilterPixels(primitive.radiusY * scaleY));
-          } else if constexpr (std::is_same_v<T, fp::Offset> || std::is_same_v<T, fp::DropShadow>) {
-            haloX += std::ceil(std::abs(boundedSignedFilterPixels(primitive.dx * scaleX)));
-            haloY += std::ceil(std::abs(boundedSignedFilterPixels(primitive.dy * scaleY)));
-            if constexpr (std::is_same_v<T, fp::DropShadow>) {
-              haloX += blurHalo(primitive.stdDeviationX, scaleX);
-              haloY += blurHalo(primitive.stdDeviationY, scaleY);
-            }
-          } else if constexpr (std::is_same_v<T, fp::ConvolveMatrix>) {
-            if (primitive.edgeMode == fp::ConvolveMatrix::EdgeMode::Wrap || primitive.orderX <= 0 ||
-                primitive.orderY <= 0 || primitive.orderX > 25 || primitive.orderY > 25) {
-              return false;
-            }
-            haloX += primitive.orderX;
-            haloY += primitive.orderY;
-          } else if constexpr (!(std::is_same_v<T, fp::Flood> ||
-                                 std::is_same_v<T, fp::ColorMatrix> ||
-                                 std::is_same_v<T, fp::ComponentTransfer> ||
-                                 std::is_same_v<T, fp::Blend> || std::is_same_v<T, fp::Composite> ||
-                                 std::is_same_v<T, fp::Merge>)) {
-            return false;
-          }
-          return true;
-        },
-        node.primitive);
-    if (!local || !std::isfinite(haloX) || !std::isfinite(haloY)) {
-      return plan;
+    if (!std::visit([&](const auto& primitive) { return support.add(primitive); },
+                    node.primitive) ||
+        !std::isfinite(support.halo.x) || !std::isfinite(support.halo.y)) {
+      return std::nullopt;
     }
   }
-  const uint32_t tileWidth = std::min(width, maximumTileExtent_);
-  const uint32_t tileHeight = std::min(height, maximumTileExtent_);
-  if ((tileWidth < width && haloX * 2 >= tileWidth) ||
-      (tileHeight < height && haloY * 2 >= tileHeight)) {
+  return support.halo;
+}
+
+FilterTilePlan FitFilterTiles(FilterTilePlan plan, Vector2d halo, uint32_t maximumExtent) {
+  const uint32_t tileWidth = std::min(plan.width, maximumExtent);
+  const uint32_t tileHeight = std::min(plan.height, maximumExtent);
+  if ((tileWidth < plan.width && halo.x * 2 >= tileWidth) ||
+      (tileHeight < plan.height && halo.y * 2 >= tileHeight)) {
     return plan;
   }
   plan.tileWidth = tileWidth;
   plan.tileHeight = tileHeight;
-  plan.coreWidth = tileWidth == width ? width : tileWidth - 2 * static_cast<uint32_t>(haloX);
-  plan.coreHeight = tileHeight == height ? height : tileHeight - 2 * static_cast<uint32_t>(haloY);
-  plan.tiles = uint64_t{(width + plan.coreWidth - 1) / plan.coreWidth} *
-               ((height + plan.coreHeight - 1) / plan.coreHeight);
+  plan.coreWidth =
+      tileWidth == plan.width ? plan.width : tileWidth - 2 * static_cast<uint32_t>(halo.x);
+  plan.coreHeight =
+      tileHeight == plan.height ? plan.height : tileHeight - 2 * static_cast<uint32_t>(halo.y);
+  plan.tiles = uint64_t{(plan.width + plan.coreWidth - 1) / plan.coreWidth} *
+               ((plan.height + plan.coreHeight - 1) / plan.coreHeight);
   return plan;
+}
+
+}  // namespace
+
+FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
+                                                uint32_t width, uint32_t height,
+                                                const Transform2d& deviceFromFilter) const {
+  const FilterTilePlan plan{width, height, width, height, width, height, 1};
+  if (!CanTileFilter(graph, width, height, deviceFromFilter)) {
+    return plan;
+  }
+  const auto halo = ComputeFilterSamplingHalo(graph, deviceFromFilter);
+  return halo ? FitFilterTiles(plan, *halo, maximumTileExtent_) : plan;
 }
 
 void GeodeFilterEngine::setMaximumTileExtentForTesting(uint32_t extent) {
@@ -4245,61 +4280,30 @@ wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& are
   return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyImage(
-    FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
-    uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
-    const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
-    const Box2d& placementRegionUser) {
-  const wgpu::Device& dev = device_.device();
+namespace {
 
-  const bool hasSafeTextureExtent =
-      HasSafeFilterImageSource(primitive, device_.maxTextureDimension2D());
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
-  if (!output) {
-    return {};
+Vector2d FilterImageAlignment(svg::PreserveAspectRatio::Align align) {
+  using Align = svg::PreserveAspectRatio::Align;
+  switch (align) {
+    case Align::None:
+    case Align::XMinYMin: return {0.0, 0.0};
+    case Align::XMidYMin: return {0.5, 0.0};
+    case Align::XMaxYMin: return {1.0, 0.0};
+    case Align::XMinYMid: return {0.0, 0.5};
+    case Align::XMidYMid: return {0.5, 0.5};
+    case Align::XMaxYMid: return {1.0, 0.5};
+    case Align::XMinYMax: return {0.0, 1.0};
+    case Align::XMidYMax: return {0.5, 1.0};
+    case Align::XMaxYMax: return {1.0, 1.0};
   }
+  return {0.0, 0.0};
+}
 
-  // Empty, malformed, degenerate, or device-oversized sources remain transparent.
-  if (!hasSafeTextureExtent) {
-    return renderTransparentImage(arena, output);
-  }
-
-  // Upload the image's straight-alpha RGBA pixels as a premultiplied
-  // texture - Geode operates in premultiplied throughout the filter graph
-  // (consistent with feFlood / feMerge).
+ImageParams CreateRasterFilterImageParams(const svg::components::filter_primitive::Image& primitive,
+                                          const svg::components::FilterGraph& graph,
+                                          const Box2d& placementRegionUser) {
   const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
   const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
-  const std::vector<uint8_t> premul = svg::PremultiplyRgba(*primitive.imageData);
-
-  wgpu::Texture imgTex = arena.createTexture(gpu::TextureDescriptor{
-      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!imgTex) {
-    return {};
-  }
-
-  wgpu::TexelCopyTextureInfo dstInfo{};
-  dstInfo.texture = imgTex;
-  wgpu::TexelCopyBufferLayout layout{};
-  layout.bytesPerRow = imgW * 4u;
-  layout.rowsPerImage = imgH;
-  wgpu::Extent3D extent = {imgW, imgH, 1};
-  device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
-  device_.countTextureWrite(premul.size());
-
-  if (std::optional<ImageParams> fragmentParams =
-          CreateFragmentImageParams(primitive, graph, deviceFromFilter)) {
-    auto uniformBuffer =
-        writeUniformSlot(*resourceCache_, device_, &*fragmentParams, sizeof(*fragmentParams));
-    if (!uniformBuffer.buffer) {
-      return {};
-    }
-    dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                               imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
-                               sizeof(ImageParams), "FilterImageFragRefPass");
-    return output;
-  }
-
   // Work out the placement rectangle in output-pixel coordinates. Prefer
   // the node's primitive subregion when given; fall back to the filter
   // region so the image covers the full primitive area.
@@ -4353,51 +4357,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     const double drawnW = static_cast<double>(imgW) * s;
     const double drawnH = static_cast<double>(imgH) * s;
 
-    // Alignment within the subregion.
-    using Align = PAR::Align;
-    double alignX = 0.0;
-    double alignY = 0.0;
-    switch (primitive.preserveAspectRatio.align) {
-      case Align::None:
-      case Align::XMinYMin:
-        alignX = 0.0;
-        alignY = 0.0;
-        break;
-      case Align::XMidYMin:
-        alignX = 0.5;
-        alignY = 0.0;
-        break;
-      case Align::XMaxYMin:
-        alignX = 1.0;
-        alignY = 0.0;
-        break;
-      case Align::XMinYMid:
-        alignX = 0.0;
-        alignY = 0.5;
-        break;
-      case Align::XMidYMid:
-        alignX = 0.5;
-        alignY = 0.5;
-        break;
-      case Align::XMaxYMid:
-        alignX = 1.0;
-        alignY = 0.5;
-        break;
-      case Align::XMinYMax:
-        alignX = 0.0;
-        alignY = 1.0;
-        break;
-      case Align::XMidYMax:
-        alignX = 0.5;
-        alignY = 1.0;
-        break;
-      case Align::XMaxYMax:
-        alignX = 1.0;
-        alignY = 1.0;
-        break;
-    }
-    const double drawX = regionX + (regionW - drawnW) * alignX;
-    const double drawY = regionY + (regionH - drawnH) * alignY;
+    const Vector2d alignment = FilterImageAlignment(primitive.preserveAspectRatio.align);
+    const double drawX = regionX + (regionW - drawnW) * alignment.x;
+    const double drawY = regionY + (regionH - drawnH) * alignment.y;
 
     scaleImgX = 1.0 / s;
     scaleImgY = 1.0 / s;
@@ -4416,7 +4378,58 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   params.pixelatedScaleX = static_cast<float>(1.0 / std::abs(scaleImgX));
   params.pixelatedScaleY = static_cast<float>(1.0 / std::abs(scaleImgY));
   params.pad1 = 0;
+  return params;
+}
 
+}  // namespace
+
+wgpu::Texture GeodeFilterEngine::applyImage(
+    FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
+    uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
+    const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
+    const Box2d& placementRegionUser) {
+  const wgpu::Device& dev = device_.device();
+
+  const bool hasSafeTextureExtent =
+      HasSafeFilterImageSource(primitive, device_.maxTextureDimension2D());
+  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
+  if (!output) {
+    return {};
+  }
+
+  // Empty, malformed, degenerate, or device-oversized sources remain transparent.
+  if (!hasSafeTextureExtent) {
+    return renderTransparentImage(arena, output);
+  }
+
+  // Upload the image's straight-alpha RGBA pixels as a premultiplied
+  // texture - Geode operates in premultiplied throughout the filter graph
+  // (consistent with feFlood / feMerge).
+  const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
+  const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
+  const std::vector<uint8_t> premul = svg::PremultiplyRgba(*primitive.imageData);
+
+  wgpu::Texture imgTex = arena.createTexture(gpu::TextureDescriptor{
+      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (!imgTex) {
+    return {};
+  }
+
+  wgpu::TexelCopyTextureInfo dstInfo{};
+  dstInfo.texture = imgTex;
+  wgpu::TexelCopyBufferLayout layout{};
+  layout.bytesPerRow = imgW * 4u;
+  layout.rowsPerImage = imgH;
+  wgpu::Extent3D extent = {imgW, imgH, 1};
+  device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
+  device_.countTextureWrite(premul.size());
+
+  const std::optional<ImageParams> fragmentParams =
+      CreateFragmentImageParams(primitive, graph, deviceFromFilter);
+  const ImageParams params =
+      fragmentParams ? *fragmentParams
+                     : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
   if (!uniformBuffer.buffer) {
     return {};
@@ -4424,7 +4437,8 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
   dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
                              imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
-                             sizeof(ImageParams), "FilterImagePass");
+                             sizeof(ImageParams),
+                             fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass");
   return output;
 }
 
