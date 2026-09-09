@@ -4452,13 +4452,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameResourceScopeDepth == 0) {
       resetOwnedFrameBudgets();
     }
-    if (device) {
+    closeFrameGeneration();
+    // A sibling renderer may still have unsubmitted reads of the shared filter scratch.
+    if (device && device->oldestOpenFrameGeneration() == std::numeric_limits<uint64_t>::max()) {
       device->filterEngine().beginFrame();
     }
     if (texturePool) {
       texturePool->beginFrame();
     }
-    closeFrameGeneration();
     if (device) {
       currentFrameIndex = device->beginFrameGeneration();
       frameGenerationOpen = true;

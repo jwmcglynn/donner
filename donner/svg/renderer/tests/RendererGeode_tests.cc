@@ -315,6 +315,33 @@ protected:
 
 // ----------------------------------------------------------------------------
 
+TEST_F(RendererGeodeTest, SettledFilterFramesReuseParameterScratch) {
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  components::FilterGraph graph;
+  graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+  for (size_t index = 0; index < components::kMaximumFilterGraphNodes; ++index) {
+    components::FilterNode node;
+    node.primitive =
+        components::filter_primitive::Flood{.floodColor = css::Color(css::RGBA(255, 0, 0, 255))};
+    graph.nodes.push_back(node);
+  }
+  for (int frame = 0; frame < 16; ++frame) {
+    SCOPED_TRACE(frame);
+    beginFrame(renderer);
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+    renderer.popFilterLayer();
+    renderer.endFrame();
+    const RendererBitmap pixels = renderer.takeSnapshot();
+    ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
+    EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(255, 0, 0, 255));
+    if (frame >= 2) {
+      EXPECT_EQ(renderer.lastFrameTimings().counters.bufferCreates, 0u);
+    }
+  }
+}
+
 TEST_F(RendererGeodeTest, OverlappingFiltersPreserveEachFramesParameters) {
   for (const bool parentFirst : {false, true}) {
     SCOPED_TRACE(parentFirst);
