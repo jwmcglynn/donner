@@ -563,7 +563,6 @@ struct BlurParams {
   uint32_t pad1;
 };
 
-/// Uniform buffer layout matching the WGSL `OffsetParams` struct.
 /// Uniform buffer layout mirroring the shader program's `OffsetParams` struct: the shift in
 /// pixels, rounded on the device so the rule that rounds it is the one the shader states.
 struct OffsetParams {
