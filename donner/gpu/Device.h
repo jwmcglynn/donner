@@ -988,9 +988,11 @@ private:
   Status validateBufferBindingEntry(const BindGroupLayoutEntry& layoutEntry,
                                     const BindGroupEntry& entry) const;
 
-  /// Validates a sampled-texture bind group entry: resource kind, live view and texture, usage.
+  /// Validates a sampled-texture entry: resource kind, live view and texture, usage, and format.
+  /// @param layoutEntry Layout entry declaring the sample type.
   /// @param entry Bind group entry being validated.
-  Status validateSampledTextureBindingEntry(const BindGroupEntry& entry) const;
+  Status validateSampledTextureBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                            const BindGroupEntry& entry) const;
 
   /// Validates a storage-texture bind group entry: resource kind, live view and texture, the
   /// StorageBinding usage, and that the texture's format matches the one the layout declares.
@@ -1008,14 +1010,6 @@ private:
     uint32_t binding = 0;              //!< Shader binding index.
     ResourceIdentity textureIdentity;  //!< Identity of the texture behind the bound view.
   };
-
-  /// Collects every binding of \p type that resolves to a live texture view.
-  /// @param descriptor Bind group descriptor being validated.
-  /// @param layoutEntries Entries of the layout it was created against.
-  /// @param type Binding type to collect.
-  std::vector<BoundTextureBinding> collectBoundTextures(
-      const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
-      BindingType type) const;
 
   /// Collects sampled and storage-write texture bindings in one walk of \p layoutEntries,
   /// appending to caller-owned storage. The draw and dispatch path calls this once per bound

@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -191,6 +192,16 @@ IrModule BuildEmitterCoverageModule() {
     return std::move(emptyBuilder.build()).result();
   }
   return std::move(module).result();
+}
+
+TEST(WgslEmitterTests, FloatStorageTexturePreservesItsDeclaredFormat) {
+  const auto module = BuildFloatStorageModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  EXPECT_THAT(wgsl.result(),
+              testing::HasSubstr(
+                  "@group(0) @binding(1) var output: texture_storage_2d<rgba32float, write>;"));
 }
 
 TEST(WgslEmitterTests, EmitsDeterministically) {

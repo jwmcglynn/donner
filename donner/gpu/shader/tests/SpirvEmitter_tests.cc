@@ -21,6 +21,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -1018,6 +1019,25 @@ TEST(SpirvEmitterTests, WriteOnlyStorageTextureBindingUsesAFormattedStorageImage
   EXPECT_THAT(WithOpcode(instructions, kOpImageQuerySize), SizeIs(1u));
   EXPECT_THAT(WithOpcode(instructions, kOpImageQuerySizeLod), SizeIs(0u));
   EXPECT_THAT(WithOpcode(instructions, kOpImageWrite), SizeIs(1u));
+}
+
+TEST(SpirvEmitterTests, FloatStorageImageUsesRgba32fWithoutAnExtendedFormatCapability) {
+  const auto module = BuildFloatStorageModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto instructions = Scan(EmitOrFail(module.result()));
+  const auto images = WithOpcode(instructions, kOpTypeImage);
+  ASSERT_THAT(images, SizeIs(2));
+  const auto output = FindBindingVariable(instructions, 0, 1);
+  ASSERT_THAT(output, testing::Optional(testing::_));
+  const auto storage = std::find_if(images.begin(), images.end(), [&](const SpvInstruction& image) {
+    return image.operands[0] == output->pointeeId;
+  });
+  ASSERT_THAT(storage, testing::Ne(images.end()));
+  EXPECT_THAT(std::vector<uint32_t>(storage->operands.begin() + 2, storage->operands.end()),
+              ElementsAre(1u, 0u, 0u, 0u, 2u, 1u));
+  const auto capabilities = WithOpcode(instructions, kOpCapability);
+  ASSERT_THAT(capabilities, SizeIs(1));
+  EXPECT_THAT(capabilities[0].operands, ElementsAre(1u));
 }
 
 TEST(SpirvEmitterTests, ColorMatrixComputeProgramDeclaresItsFourBindings) {

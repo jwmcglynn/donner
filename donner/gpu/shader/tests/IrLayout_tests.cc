@@ -90,6 +90,10 @@ TEST(IrLayoutTests, NonHostShareableTypesHaveNoLayout) {
   EXPECT_THAT(ComputeTypeLayout(IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba8Unorm),
                                 AddressSpace::Storage),
               IsShaderError(HasSubstr("resource type")));
+  EXPECT_THAT(
+      ComputeTypeLayout(IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba32Float),
+                        AddressSpace::Storage),
+      IsShaderError(HasSubstr("resource type")));
 }
 
 TEST(IrLayoutTests, Vec3PaddingInsideStruct) {

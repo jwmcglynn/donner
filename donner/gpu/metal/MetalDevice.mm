@@ -75,6 +75,7 @@ MTLPixelFormat ToMtlPixelFormat(TextureFormat format) {
     case TextureFormat::RGBA8Unorm: return MTLPixelFormatRGBA8Unorm;
     case TextureFormat::BGRA8Unorm: return MTLPixelFormatBGRA8Unorm;
     case TextureFormat::R8Unorm: return MTLPixelFormatR8Unorm;
+    case TextureFormat::RGBA32Float: return MTLPixelFormatRGBA32Float;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
   return MTLPixelFormatRGBA8Unorm;
@@ -1037,7 +1038,9 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
   const uint64_t lastUse =
       std::max(textureLastUseSerial(slotIndex), GetSlot(impl_->textureUploadSerials, slotIndex));
   if (lastUse > completedSerial() || impl_->hasPendingWrite(nil, texture)) {
-    const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatR8Unorm ? 1 : 4;
+    const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatRGBA32Float ? 16
+                                : texture.pixelFormat == MTLPixelFormatR8Unorm   ? 1
+                                                                                 : 4;
     const uint32_t rowBytes = writeSize.width * texelBytes;
     const uint32_t rowPitch = static_cast<uint32_t>(Impl::StagingSize(rowBytes));
     auto queued =

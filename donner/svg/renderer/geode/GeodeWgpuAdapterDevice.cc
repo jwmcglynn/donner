@@ -52,6 +52,7 @@ wgpu::TextureFormat ToWgpuTextureFormat(gpu::TextureFormat format) {
     case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
     case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
     case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
+    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
   return wgpu::TextureFormat::RGBA8Unorm;
@@ -245,6 +246,11 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
       entry.texture.viewDimension = wgpu::TextureViewDimension::_2D;
       entry.texture.multisampled = false;
       return;
+    case gpu::BindingType::SampledTexture2dUnfilterableFloat:
+      entry.texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
+      entry.texture.viewDimension = wgpu::TextureViewDimension::_2D;
+      entry.texture.multisampled = false;
+      return;
     case gpu::BindingType::FilteringSampler:
       entry.sampler.type = wgpu::SamplerBindingType::Filtering;
       return;
@@ -359,11 +365,12 @@ gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
     case WGPUTextureFormat_RGBA8Unorm: return gpu::TextureFormat::RGBA8Unorm;
     case WGPUTextureFormat_BGRA8Unorm: return gpu::TextureFormat::BGRA8Unorm;
     case WGPUTextureFormat_R8Unorm: return gpu::TextureFormat::R8Unorm;
+    case WGPUTextureFormat_RGBA32Float: return gpu::TextureFormat::RGBA32Float;
     default: break;
   }
   UTILS_RELEASE_ASSERT_MSG(false,
                            "wgpu texture format is outside the donner::gpu supported set "
-                           "(RGBA8Unorm / BGRA8Unorm / R8Unorm)");
+                           "(RGBA8Unorm / BGRA8Unorm / R8Unorm / RGBA32Float)");
   return gpu::TextureFormat::RGBA8Unorm;
 }
 

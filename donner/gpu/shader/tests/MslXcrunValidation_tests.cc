@@ -27,6 +27,7 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -217,6 +218,11 @@ TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildOffsetModule(), "offset");
+}
+
+TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(BuildFloatStorageModule(), "float_storage");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {

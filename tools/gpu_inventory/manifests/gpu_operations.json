@@ -821,6 +821,7 @@
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_R8Unorm",
+        "WGPUTextureFormat_RGBA32Float",
         "WGPUTextureFormat_RGBA8Unorm",
         "WGPUTextureUsage",
         "WGPUTextureUsage_CopyDst",

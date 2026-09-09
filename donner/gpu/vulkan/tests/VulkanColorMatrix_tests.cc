@@ -20,7 +20,9 @@
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
+#include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 
@@ -118,6 +120,25 @@ protected:
 
   std::unique_ptr<VulkanDevice> device_;
 };
+
+TEST_F(VulkanColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
+  const auto module = shader::BuildFloatStorageModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             {},
+                             ShaderSourceKind::Spirv,
+                             emitted.result(),
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
 
 /// A compute pass must transition every texture it binds into the layout that pass's descriptors
 /// declare, exactly as a render pass does. The destination texture here is created and then

@@ -860,6 +860,22 @@ IrParam GlobalIdParam() {
                  BuiltinInput::GlobalInvocationId};
 }
 
+TEST(ComputeEntryPointTests, FloatStorageFormatKeepsItsIdentityAndWgslSpelling) {
+  const IrType floatTexture = IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba32Float);
+  EXPECT_THAT(floatTexture.storageTextureFormat(), testing::Eq(StorageTextureFormat::Rgba32Float));
+  EXPECT_THAT(floatTexture.toString(), testing::Eq("texture_storage_2d<rgba32float, write>"));
+  EXPECT_THAT(floatTexture,
+              testing::Ne(IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba8Unorm)));
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.addWriteOnlyStorageTexture2d(0, 0, "output", StorageTextureFormat::Rgba32Float),
+      IsShaderOk());
+  const auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  ASSERT_THAT(module.result().bindings(), testing::SizeIs(1));
+  EXPECT_THAT(module.result().bindings()[0].type, testing::Eq(floatTexture));
+}
+
 TEST(ComputeEntryPointTests, AcceptsGlobalInvocationIdAndAWriteOnlyStorageTexture) {
   ModuleBuilder builder;
   AddStorageTextureBinding(builder);
