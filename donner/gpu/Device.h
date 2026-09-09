@@ -773,15 +773,24 @@ private:
   struct ShaderModuleRecord {
     ShaderModuleDescriptor descriptor;  //!< Creation descriptor.
   };
+  /// Buffer range required by the selected stages, independent of shader-module lifetime.
+  struct PipelineBufferRequirement {
+    uint32_t group = 0;         //!< Required bind group.
+    uint32_t binding = 0;       //!< Buffer binding within the group.
+    uint64_t minSizeBytes = 0;  //!< Largest requirement across the selected stages.
+  };
+
   /// Validated per-pipeline state used for draw-time compatibility checks.
   struct RenderPipelineRecord {
     RenderPipelineDescriptor descriptor;               //!< Creation descriptor.
     std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
+    std::vector<PipelineBufferRequirement> bufferRequirements;  //!< Validated buffer ranges.
   };
   /// Validated per-pipeline state used for dispatch-time compatibility checks.
   struct ComputePipelineRecord {
     ComputePipelineDescriptor descriptor;              //!< Creation descriptor.
     std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
+    std::vector<PipelineBufferRequirement> bufferRequirements;  //!< Validated buffer ranges.
   };
   /// A finished, not-yet-submitted command buffer.
   struct CommandBufferRecord {
@@ -940,6 +949,20 @@ private:
   /// @param uses Accumulator of resources referenced by the submission.
   Status checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
                                   std::vector<SubmissionUse>& uses) const;
+
+  /// Validates one generated shader requirement against the pipeline's declared group layout.
+  /// @param layout Pipeline layout being used. @param info Generated shader binding facts.
+  Status validatePipelineBufferBinding(const PipelineLayoutRecord& layout,
+                                       const ShaderBufferBindingInfo& info) const;
+
+  /// Merges one selected entry point's buffer requirements into the pipeline's retained facts.
+  /// @param layout Pipeline layout. @param module Shader descriptor carrying generated facts.
+  /// @param entryPoint Selected entry point. @param stage Selected shader stage.
+  /// @param requirements Destination list, merging shared bindings by their largest minimum.
+  Status appendPipelineBufferRequirements(
+      const PipelineLayoutRecord& layout, const ShaderModuleDescriptor& module,
+      std::string_view entryPoint, ShaderStage stage,
+      std::vector<PipelineBufferRequirement>& requirements) const;
 
   /// Finds the bind group entry matching \p layoutEntry's binding number, failing closed on a
   /// duplicate or missing entry.

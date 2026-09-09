@@ -166,6 +166,56 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
   return OkStatus();
 }
 
+/// Validates one color target's blend state.
+/// @param blend Blend state to check.
+Status ValidateBlendState(const BlendState& blend) {
+  for (const BlendComponent& component : {blend.color, blend.alpha}) {
+    if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+  }
+  return OkStatus();
+}
+
+/// Validates the color targets of a \ref RenderPipelineDescriptor's fragment state.
+/// @param targets Color targets to check.
+Status ValidateColorTargets(const std::vector<ColorTargetState>& targets) {
+  if (targets.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.fragment.targets is empty");
+  }
+  if (targets.size() > kMaxColorAttachments) {
+    return Err(GpuErrorType::LimitExceeded,
+               std::format("RenderPipelineDescriptor has {} color targets, exceeding "
+                           "kMaxColorAttachments {}",
+                           targets.size(), kMaxColorAttachments));
+  }
+  for (const ColorTargetState& target : targets) {
+    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (target.blend) {
+      if (Status status = ValidateBlendState(*target.blend); status.hasError()) {
+        return std::move(status).error();
+      }
+    }
+  }
+  return OkStatus();
+}
+
 /// Validates the vertex buffer layouts of a \ref RenderPipelineDescriptor.
 Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffers) {
   if (buffers.size() > kMaxVertexBuffers) {
@@ -234,6 +284,88 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
           }
         }
       }
+    }
+  }
+  return OkStatus();
+}
+
+/// Validates the parts of a \ref RenderPipelineDescriptor that depend only on the descriptor
+/// itself, not on any resolved layout or module record.
+/// @param descriptor Descriptor to check.
+Status ValidateRenderPipelineDescriptor(const RenderPipelineDescriptor& descriptor) {
+  if (descriptor.vertex.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.vertex.entryPoint is empty");
+  }
+  if (descriptor.fragment.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.fragment.entryPoint is empty");
+  }
+  if (Status status = ValidateVertexBufferLayouts(descriptor.vertex.buffers); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = ValidateColorTargets(descriptor.fragment.targets); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (descriptor.multisampleCount != 1) {
+    return Err(GpuErrorType::Unsupported,
+               std::format("RenderPipelineDescriptor.multisampleCount {} is not supported; only "
+                           "1 sample per pixel is available",
+                           descriptor.multisampleCount));
+  }
+  return OkStatus();
+}
+
+Status ValidateShaderBufferLocation(const ShaderBufferBindingInfo& info) {
+  if (info.entryPoint.empty() || info.group >= kMaxBindGroups || info.binding >= kMaxBindings) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has an invalid entry point or binding location");
+  }
+  switch (info.stage) {
+    case ShaderStage::Vertex:
+    case ShaderStage::Fragment:
+    case ShaderStage::Compute: return OkStatus();
+    default:
+      return Err(GpuErrorType::InvalidDescriptor,
+                 "Shader buffer metadata requires one shader stage");
+  }
+}
+
+Status ValidateShaderBufferRange(const ShaderBufferBindingInfo& info) {
+  if (info.type != BindingType::UniformBuffer && info.type != BindingType::ReadOnlyStorageBuffer) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has a non-buffer binding type");
+  }
+  if (info.minSizeBytes == 0 || info.minSizeBytes > kMaxBufferByteSize) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has an invalid minimum size");
+  }
+  if (info.runtimeArrayStrideBytes != 0 && (info.type != BindingType::ReadOnlyStorageBuffer ||
+                                            info.minSizeBytes != info.runtimeArrayStrideBytes)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader runtime-array metadata requires one storage element as its minimum");
+  }
+  return OkStatus();
+}
+
+Status ValidateShaderBufferMetadata(const ShaderModuleDescriptor& descriptor) {
+  if (!descriptor.bufferBindings) {
+    return OkStatus();
+  }
+  for (const ShaderBufferBindingInfo& info : *descriptor.bufferBindings) {
+    if (Status status = ValidateShaderBufferLocation(info); status.hasError()) {
+      return status;
+    }
+    if (Status status = ValidateShaderBufferRange(info); status.hasError()) {
+      return status;
     }
   }
   return OkStatus();
@@ -972,6 +1104,10 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
     }
   }
 
+  if (Status status = ValidateShaderBufferMetadata(descriptor); status.hasError()) {
+    return std::move(status).error();
+  }
+
   ShaderModule handle =
       allocateHandle<ShaderModuleTag>(shaderModules_, ShaderModuleRecord{descriptor});
   if (Status status = onCreateShaderModule(handle.slotIndex(), descriptor); status.hasError()) {
@@ -979,6 +1115,56 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
     return std::move(status).error();
   }
   return handle;
+}
+
+Status Device::validatePipelineBufferBinding(const PipelineLayoutRecord& layout,
+                                             const ShaderBufferBindingInfo& info) const {
+  if (info.group >= layout.bindGroupLayoutIds.size()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata requires a missing pipeline bind group");
+  }
+  const ResourceIdentity identity = layout.bindGroupLayoutIds[info.group];
+  const auto* group = bindGroupLayouts_.find(identity.slotIndex, identity.generation);
+  if (group == nullptr) {
+    return Err(GpuErrorType::InvalidHandle,
+               "Shader buffer metadata references a destroyed bind group layout");
+  }
+  const auto entry =
+      std::ranges::find(group->descriptor.entries, info.binding, &BindGroupLayoutEntry::binding);
+  if (entry == group->descriptor.entries.end() || entry->type != info.type ||
+      !HasAllFlags(entry->visibility, info.stage)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("Shader buffer group {} binding {} does not match the pipeline layout's "
+                           "type and stage visibility",
+                           info.group, info.binding));
+  }
+  return OkStatus();
+}
+
+Status Device::appendPipelineBufferRequirements(
+    const PipelineLayoutRecord& layout, const ShaderModuleDescriptor& module,
+    std::string_view entryPoint, ShaderStage stage,
+    std::vector<PipelineBufferRequirement>& requirements) const {
+  if (!module.bufferBindings) {
+    return OkStatus();
+  }
+  for (const ShaderBufferBindingInfo& info : *module.bufferBindings) {
+    if (info.entryPoint != entryPoint || info.stage != stage) {
+      continue;
+    }
+    if (Status status = validatePipelineBufferBinding(layout, info); status.hasError()) {
+      return status;
+    }
+    const auto previous = std::ranges::find_if(requirements, [&](const auto& requirement) {
+      return requirement.group == info.group && requirement.binding == info.binding;
+    });
+    if (previous == requirements.end()) {
+      requirements.push_back({info.group, info.binding, info.minSizeBytes});
+    } else {
+      previous->minSizeBytes = std::max(previous->minSizeBytes, info.minSizeBytes);
+    }
+  }
+  return OkStatus();
 }
 
 Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescriptor& descriptor) {
@@ -994,68 +1180,23 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
   if (fragmentModule.hasError()) {
     return std::move(fragmentModule).error();
   }
-  if (descriptor.vertex.entryPoint.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.vertex.entryPoint is empty");
-  }
-  if (descriptor.fragment.entryPoint.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.fragment.entryPoint is empty");
-  }
-  if (Status status = ValidateVertexBufferLayouts(descriptor.vertex.buffers); status.hasError()) {
+  if (Status status = ValidateRenderPipelineDescriptor(descriptor); status.hasError()) {
     return std::move(status).error();
-  }
-  if (descriptor.fragment.targets.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.fragment.targets is empty");
-  }
-  if (descriptor.fragment.targets.size() > kMaxColorAttachments) {
-    return Err(GpuErrorType::LimitExceeded,
-               std::format("RenderPipelineDescriptor has {} color targets, exceeding "
-                           "kMaxColorAttachments {}",
-                           descriptor.fragment.targets.size(), kMaxColorAttachments));
-  }
-  for (const ColorTargetState& target : descriptor.fragment.targets) {
-    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
-      return std::move(status).error();
-    }
-    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
-        status.hasError()) {
-      return std::move(status).error();
-    }
-    if (target.blend) {
-      for (const BlendComponent& component : {target.blend->color, target.blend->alpha}) {
-        if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-        if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-        if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-      }
-    }
-  }
-  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
-      status.hasError()) {
-    return std::move(status).error();
-  }
-  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
-      status.hasError()) {
-    return std::move(status).error();
-  }
-  if (descriptor.multisampleCount != 1) {
-    return Err(GpuErrorType::Unsupported,
-               std::format("RenderPipelineDescriptor.multisampleCount {} is not supported; only "
-                           "1 sample per pixel is available",
-                           descriptor.multisampleCount));
   }
 
   RenderPipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), vertexModule.result()->descriptor, descriptor.vertex.entryPoint,
+          ShaderStage::Vertex, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), fragmentModule.result()->descriptor,
+          descriptor.fragment.entryPoint, ShaderStage::Fragment, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
   RenderPipeline handle = allocateHandle<RenderPipelineTag>(renderPipelines_, std::move(record));
   if (Status status = onCreateRenderPipeline(handle.slotIndex(), descriptor); status.hasError()) {
     renderPipelines_.release(handle.slotIndex());
@@ -1087,6 +1228,12 @@ Result<ComputePipeline> Device::createComputePipeline(const ComputePipelineDescr
   }
 
   ComputePipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), computeModule.result()->descriptor, descriptor.compute.entryPoint,
+          ShaderStage::Compute, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
   ComputePipeline handle = allocateHandle<ComputePipelineTag>(computePipelines_, std::move(record));
   if (Status status = onCreateComputePipeline(handle.slotIndex(), descriptor); status.hasError()) {
     computePipelines_.release(handle.slotIndex());

@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/SmallVector.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/GpuLimits.h"
@@ -267,6 +268,11 @@ private:
   struct BoundPipeline {
     std::vector<VertexBufferLayout> vertexBuffers;     //!< Declared vertex layouts.
     std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Required group layouts.
+    /// Inline range requirements retained when a pipeline is selected. Sized for one group's
+    /// worth of bindings, which covers every pipeline this runtime accepts today; a pipeline
+    /// that declared bindings across more groups spills to the heap once at setPipeline rather
+    /// than carrying kMaxBindGroups * kMaxBindings inline in every encoder.
+    SmallVector<Device::PipelineBufferRequirement, kMaxBindings> bufferRequirements;
   };
   /// Draw-time validation state for one bound vertex buffer slot.
   struct BoundVertexBuffer {
@@ -294,6 +300,9 @@ private:
   /// here rather than during backend encoding, and rejects one texture reached as both a sampled
   /// and a storage-write binding across the groups the active pipeline uses.
   ///
+  /// Then validates that every buffer range the active pipeline declared a minimum size for is
+  /// at least that large at the moment it is used.
+  ///
   /// This runs per draw rather than only at setBindGroup because a resource can be destroyed
   /// between binding and use without changing any group's identity, which is the case the
   /// generation check exists to catch. It therefore cannot be cached across draws.
@@ -312,6 +321,10 @@ private:
   /// the rest of the validation under the device's thread affinity.
   /// @param index Required group index. @param operation Operation name for diagnostics.
   Result<ResolvedBindGroup> validateBoundBindGroup(uint32_t index, std::string_view operation);
+
+  /// Checks active declared buffer ranges after group and resource lifetime validation.
+  /// @param operation Draw or dispatch name for the diagnostic.
+  Status validateBoundBufferRanges(std::string_view operation);
 
   /// Resets the per-pass binding state a begin or end transitions through.
   void resetPassBindings();
