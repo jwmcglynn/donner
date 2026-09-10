@@ -93,3 +93,11 @@ The #582 postmortem in [0025-composited_rendering.md](0025-composited_rendering.
 ## Resvg Test Integration
 
 When writing design docs for renderer features, reference relevant resvg tests that validate the feature, include a test plan listing which should pass after implementation, update test status as work progresses, and document skip removals with references to the fixing implementation.
+
+## Shader Validation Patterns
+
+Shader designs use focused interface/structure assertions, deterministic generation, platform
+compiler validation, native execution, and renderer pixel regressions. Generated WGSL/MSL/SPIR-V
+stays in build outputs; do not plan committed or large inline emitted-shader goldens. Name the
+compiler and execution targets that verify each shader family. Renderer image goldens and IR
+serialization checks retain their own validation roles.

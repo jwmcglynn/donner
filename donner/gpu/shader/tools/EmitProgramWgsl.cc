@@ -11,10 +11,9 @@
 /// Program-name driven rather than one tool per program: every filter family migrating onto the
 /// IR needs the same treatment, and nineteen copies of this file is not a mechanism.
 ///
-/// The committed byte-exact goldens under `tests/testdata` stay as they are. They pin the same
-/// `EmitWgsl` output this tool writes, so a golden and a generated artifact that disagreed would
-/// fail the program's golden test; keeping the golden a reviewed, committed file is what makes an
-/// emitter change visible in a diff.
+/// Generated source stays a build artifact. Compiler validation and execution tests check its
+/// interface and behavior; deterministic-emission tests detect unstable generation without
+/// committing full shader snapshots.
 
 #include <cstdio>
 #include <cstring>

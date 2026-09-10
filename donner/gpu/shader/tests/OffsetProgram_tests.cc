@@ -1,6 +1,6 @@
 /// @file
 /// Offset compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// deterministic output, and expose the expected program interfaces.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/Offset.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -38,14 +37,13 @@ std::string EmitOffsetMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitOffsetSpirvBytes() {
+std::vector<uint32_t> EmitOffsetSpirv() {
   ShaderResult<IrModule> module = programs::BuildOffsetModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(OffsetProgramTests, ModuleBuildsCleanly) {
@@ -55,7 +53,7 @@ TEST(OffsetProgramTests, ModuleBuildsCleanly) {
 TEST(OffsetProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitOffsetWgsl(), testing::Eq(EmitOffsetWgsl()));
   EXPECT_THAT(EmitOffsetMsl(), testing::Eq(EmitOffsetMsl()));
-  EXPECT_THAT(EmitOffsetSpirvBytes(), testing::Eq(EmitOffsetSpirvBytes()));
+  EXPECT_THAT(EmitOffsetSpirv(), testing::Eq(EmitOffsetSpirv()));
 }
 
 TEST(OffsetProgramTests, WgslDeclaresTheComputeSurface) {
@@ -81,7 +79,7 @@ TEST(OffsetProgramTests, WgslGuardsTheDestinationExtent) {
   // A dispatch is rounded up to whole workgroups, so lanes run past both edges of a destination
   // whose extent is not a multiple of the workgroup size. WGSL discards an out-of-bounds
   // textureStore, so no device comparison can see this guard go missing; it is named here
-  // instead, where its removal is a failure rather than a golden diff nobody reads.
+  // instead, where removing the guard fails a targeted assertion.
   EXPECT_THAT(wgsl, HasSubstr("  let extent = textureDimensions(outputTexture);\n"
                               "  if (((gid.x >= extent.x) || (gid.y >= extent.y))) {\n"
                               "    return;\n"
@@ -124,33 +122,6 @@ TEST(OffsetProgramTests, MslDeclaresTheKernelSurface) {
               HasSubstr("outputTexture.write(float4(0.0f, 0.0f, 0.0f, 0.0f), uint2(coords));"));
   // A kernel takes its builtins directly, so no stage-in struct may appear.
   EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
-}
-
-TEST(OffsetProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitOffsetWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "offset.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("offset.wgsl")));
-}
-
-TEST(OffsetProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitOffsetMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "offset.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("offset.msl")));
-}
-
-TEST(OffsetProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitOffsetSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "offset.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("offset.spv")));
 }
 
 }  // namespace
