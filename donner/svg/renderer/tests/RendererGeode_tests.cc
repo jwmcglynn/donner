@@ -4725,6 +4725,7 @@ TEST_F(RendererGeodeTest, BorrowedRuntimeSnapshotCanBeDrawnWithoutReleasingThePr
 TEST_F(RendererGeodeTest, RuntimeSnapshotBackingSurvivesUntilConsumerSubmission) {
   RendererGeode consumer = createRenderer();
   beginFrame(consumer);
+  gpu::Texture sourceIdentity;
   {
     RendererGeode producer = createRenderer();
     beginFrame(producer);
@@ -4733,13 +4734,59 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotBackingSurvivesUntilConsumerSubmission)
     producer.endFrame();
     const auto snapshot = producer.takeTextureSnapshot();
     ASSERT_THAT(snapshot, testing::NotNull());
+    const auto* runtime =
+        static_cast<const RendererGeodeTextureSnapshot&>(*snapshot).runtimeTexture();
+    ASSERT_THAT(runtime, testing::NotNull());
+    sourceIdentity = gpu::Texture::CreateForBackend(runtime->slotIndex(), runtime->generation(),
+                                                    runtime->deviceId());
     EXPECT_THAT(consumer.drawTextureSnapshot(
                     *snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
                 testing::IsTrue());
   }
+  EXPECT_THAT(sharedDevice()->adapterDevice().ownsTextureBacking(sourceIdentity),
+              testing::IsTrue());
   consumer.endFrame();
+  EXPECT_THAT(sharedDevice()->adapterDevice().ownsTextureBacking(sourceIdentity),
+              testing::IsFalse());
   ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
                              "runtime_snapshot_pending_submission");
+}
+
+TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission) {
+  RendererGeode consumer = createRenderer();
+  beginFrame(consumer);
+  {
+    wgpu::TextureDescriptor descriptor{};
+    descriptor.size = {4, 4, 1};
+    descriptor.format = wgpu::TextureFormat::RGBA8Unorm;
+    descriptor.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
+    wgpu::Texture texture = sharedDevice()->device().createTexture(descriptor);
+    ASSERT_THAT(static_cast<bool>(texture), testing::IsTrue());
+    std::array<uint8_t, 64> pixels;
+    for (size_t i = 0; i < pixels.size(); i += 4) {
+      pixels[i] = 255;
+      pixels[i + 1] = 0;
+      pixels[i + 2] = 0;
+      pixels[i + 3] = 255;
+    }
+    wgpu::TexelCopyTextureInfo destination{};
+    destination.texture = texture;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = 16;
+    layout.rowsPerImage = 4;
+    const wgpu::Extent3D size{4, 4, 1};
+    sharedDevice()->queue().writeTexture(destination, pixels.data(), pixels.size(), layout, size);
+    RendererGeodeTextureSnapshot snapshot(sharedDevice(), texture, {4, 4},
+                                          wgpu::TextureFormat::RGBA8Unorm);
+    for (int draw = 0; draw < 100; ++draw) {
+      EXPECT_THAT(consumer.drawTextureSnapshot(
+                      snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
+                  testing::IsTrue());
+    }
+  }
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "uploaded_snapshot_pending_submission");
 }
 
 }  // namespace
