@@ -1,5 +1,5 @@
 /// @file
-/// MSL emitter tests: determinism, the committed solid-fill golden, and fail-closed rejection of
+/// MSL emitter tests: determinism, binding structure, and fail-closed rejection of
 /// layout divergence and reserved words.
 
 #include "donner/gpu/shader/MslEmitter.h"
@@ -9,13 +9,10 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <sstream>
 #include <string>
 
-#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -91,29 +88,6 @@ TEST(MslEmitterTests, ContainsSolidFillSurface) {
   EXPECT_THAT(msl, HasSubstr("float4 color [[color(0)]];"));
   EXPECT_THAT(msl, HasSubstr("discard_fragment();"));
   EXPECT_THAT(msl, HasSubstr("constant uint kNoBand = 4294967295u;"));
-}
-
-TEST(MslEmitterTests, MatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitSolidFillMsl();
-
-  if (const char* updateRoot = std::getenv("UPDATE_MSL_GOLDEN")) {
-    const std::string outPath =
-        std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/solid_fill.msl";
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
-    out << msl;
-    GTEST_SKIP() << "Golden updated at " << outPath;
-  }
-
-  const std::string path =
-      donner::Runfiles::instance().Rlocation("donner/gpu/shader/tests/testdata/solid_fill.msl");
-  std::ifstream stream(path, std::ios::binary);
-  ASSERT_TRUE(stream.good()) << "Failed to open golden file: " << path;
-  std::ostringstream golden;
-  golden << stream.rdbuf();
-
-  EXPECT_THAT(msl, testing::Eq(golden.str()));
 }
 
 TEST(MslEmitterTests, RejectsUniformArrayStrideDivergence) {

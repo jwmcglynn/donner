@@ -1,6 +1,6 @@
 /// @file
 /// Tile compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// deterministic output, and expose the expected program interfaces.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/Tile.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -38,14 +37,13 @@ std::string EmitTileMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitTileSpirvBytes() {
+std::vector<uint32_t> EmitTileSpirv() {
   ShaderResult<IrModule> module = programs::BuildTileModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(TileProgramTests, ModuleBuildsCleanly) {
@@ -55,34 +53,7 @@ TEST(TileProgramTests, ModuleBuildsCleanly) {
 TEST(TileProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitTileWgsl(), testing::Eq(EmitTileWgsl()));
   EXPECT_THAT(EmitTileMsl(), testing::Eq(EmitTileMsl()));
-  EXPECT_THAT(EmitTileSpirvBytes(), testing::Eq(EmitTileSpirvBytes()));
-}
-
-TEST(TileProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitTileWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "tile.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("tile.wgsl")));
-}
-
-TEST(TileProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitTileMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "tile.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("tile.msl")));
-}
-
-TEST(TileProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitTileSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "tile.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("tile.spv")));
+  EXPECT_THAT(EmitTileSpirv(), testing::Eq(EmitTileSpirv()));
 }
 
 }  // namespace

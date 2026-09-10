@@ -5,35 +5,29 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/Composite.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-TEST(CompositeProgramTests, GeneratedArtifactsMatchReviewedGoldens) {
+TEST(CompositeProgramTests, BuildsAndEmitsDeterministically) {
   const auto module = programs::BuildCompositeModule();
   ASSERT_THAT(module, HasShaderResult());
   const auto wgsl = EmitWgsl(module.result());
-  const auto msl = EmitMsl(module.result());
-  const auto spirv = EmitSpirv(module.result());
+  const auto repeatedWgsl = EmitWgsl(module.result());
   ASSERT_THAT(wgsl, HasShaderResult());
+  ASSERT_THAT(repeatedWgsl, HasShaderResult());
+  EXPECT_THAT(repeatedWgsl.result(), testing::Eq(wgsl.result()));
+  const auto msl = EmitMsl(module.result());
+  const auto repeatedMsl = EmitMsl(module.result());
   ASSERT_THAT(msl, HasShaderResult());
+  ASSERT_THAT(repeatedMsl, HasShaderResult());
+  EXPECT_THAT(repeatedMsl.result(), testing::Eq(msl.result()));
+  const auto spirv = EmitSpirv(module.result());
+  const auto repeatedSpirv = EmitSpirv(module.result());
   ASSERT_THAT(spirv, HasShaderResult());
-  const std::string spirvBytes = SpirvWordsToBytes(spirv.result());
-  if (!MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "composite.wgsl", wgsl.result())) {
-    EXPECT_THAT(wgsl.result(), testing::Eq(ReadShaderGolden("composite.wgsl")));
-  }
-  if (!MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "composite.msl", msl.result())) {
-    EXPECT_THAT(msl.result(), testing::Eq(ReadShaderGolden("composite.msl")));
-  }
-  if (!MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "composite.spv", spirvBytes)) {
-    EXPECT_THAT(spirvBytes, testing::Eq(ReadShaderGolden("composite.spv")));
-  }
-  EXPECT_THAT(EmitWgsl(module.result()), HasShaderResult());
-  EXPECT_THAT(EmitWgsl(module.result()).result(), testing::Eq(wgsl.result()));
-  EXPECT_THAT(EmitMsl(module.result()).result(), testing::Eq(msl.result()));
-  EXPECT_THAT(EmitSpirv(module.result()).result(), testing::ElementsAreArray(spirv.result()));
+  ASSERT_THAT(repeatedSpirv, HasShaderResult());
+  EXPECT_THAT(repeatedSpirv.result(), testing::Eq(spirv.result()));
 }
 
 TEST(CompositeProgramTests, GuardsRoundedDispatchAndClampsPremultipliedResult) {

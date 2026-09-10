@@ -291,6 +291,19 @@ No third-party shader compiler is linked or vendored. Platform compilers and val
 as out-of-process verification tools; they are recorded in build provenance and are not part of
 Donner's implementation source.
 
+### Shader verification
+
+Generated WGSL, MSL, and SPIR-V are build artifacts rather than committed golden fixtures. Do not
+add full emitted-shader snapshots, whether in files or inline test strings. Review readable IR and
+use focused binding, layout, and control-flow assertions instead.
+
+`//donner/gpu/shader:shader_tests` checks deterministic emission and structural/error contracts.
+`//donner/gpu/shader:msl_xcrun_validation_tests`,
+`//donner/gpu/shader:spirv_val_validation_tests`, and
+`//donner/gpu/shader:wgsl_emitter_geode_validation_tests` validate real compiler/runtime interfaces.
+Native Metal and Vulkan tests execute the programs, and renderer/editor image regressions retain
+pixel-level coverage. IR serialization tests remain independent of emitted shader snapshots.
+
 ### Shader migration
 
 Migration is vertical, one pipeline family at a time. Each packet introduces the IR program, checks

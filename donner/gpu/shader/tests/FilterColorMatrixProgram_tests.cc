@@ -1,6 +1,6 @@
 /// @file
 /// Color-matrix filter program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// deterministic output, and expose the expected program interfaces.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -38,14 +37,13 @@ std::string EmitFilterColorMatrixMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitFilterColorMatrixSpirvBytes() {
+std::vector<uint32_t> EmitFilterColorMatrixSpirv() {
   ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(FilterColorMatrixProgramTests, ModuleBuildsCleanly) {
@@ -55,7 +53,7 @@ TEST(FilterColorMatrixProgramTests, ModuleBuildsCleanly) {
 TEST(FilterColorMatrixProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitFilterColorMatrixWgsl(), testing::Eq(EmitFilterColorMatrixWgsl()));
   EXPECT_THAT(EmitFilterColorMatrixMsl(), testing::Eq(EmitFilterColorMatrixMsl()));
-  EXPECT_THAT(EmitFilterColorMatrixSpirvBytes(), testing::Eq(EmitFilterColorMatrixSpirvBytes()));
+  EXPECT_THAT(EmitFilterColorMatrixSpirv(), testing::Eq(EmitFilterColorMatrixSpirv()));
 }
 
 TEST(FilterColorMatrixProgramTests, WgslDeclaresTheComputeSurface) {
@@ -99,33 +97,6 @@ TEST(FilterColorMatrixProgramTests, MslDeclaresTheKernelSurface) {
   EXPECT_THAT(msl, HasSubstr("texture2d<float, access::write> outputTexture [[texture(1)]]"));
   // A kernel takes its builtins directly, so no stage-in struct may appear.
   EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
-}
-
-TEST(FilterColorMatrixProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitFilterColorMatrixWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "filter_color_matrix.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("filter_color_matrix.wgsl")));
-}
-
-TEST(FilterColorMatrixProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitFilterColorMatrixMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "filter_color_matrix.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("filter_color_matrix.msl")));
-}
-
-TEST(FilterColorMatrixProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitFilterColorMatrixSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "filter_color_matrix.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("filter_color_matrix.spv")));
 }
 
 }  // namespace

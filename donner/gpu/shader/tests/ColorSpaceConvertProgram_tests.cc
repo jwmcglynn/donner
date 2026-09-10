@@ -1,6 +1,6 @@
 /// @file
 /// Color space conversion program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// deterministic output, and expose the expected program interfaces.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -38,14 +37,13 @@ std::string EmitColorSpaceConvertMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitColorSpaceConvertSpirvBytes() {
+std::vector<uint32_t> EmitColorSpaceConvertSpirv() {
   ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(ColorSpaceConvertProgramTests, ModuleBuildsCleanly) {
@@ -55,7 +53,7 @@ TEST(ColorSpaceConvertProgramTests, ModuleBuildsCleanly) {
 TEST(ColorSpaceConvertProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitColorSpaceConvertWgsl(), testing::Eq(EmitColorSpaceConvertWgsl()));
   EXPECT_THAT(EmitColorSpaceConvertMsl(), testing::Eq(EmitColorSpaceConvertMsl()));
-  EXPECT_THAT(EmitColorSpaceConvertSpirvBytes(), testing::Eq(EmitColorSpaceConvertSpirvBytes()));
+  EXPECT_THAT(EmitColorSpaceConvertSpirv(), testing::Eq(EmitColorSpaceConvertSpirv()));
 }
 
 TEST(ColorSpaceConvertProgramTests, WgslDeclaresTheComputeSurface) {
@@ -97,33 +95,6 @@ TEST(ColorSpaceConvertProgramTests, MslDeclaresTheKernelSurface) {
   EXPECT_THAT(msl, HasSubstr("texture2d<float, access::write> outputTexture [[texture(1)]]"));
   // A kernel takes its builtins directly, so no stage-in struct may appear.
   EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
-}
-
-TEST(ColorSpaceConvertProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitColorSpaceConvertWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "color_space_convert.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("color_space_convert.wgsl")));
-}
-
-TEST(ColorSpaceConvertProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitColorSpaceConvertMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "color_space_convert.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("color_space_convert.msl")));
-}
-
-TEST(ColorSpaceConvertProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitColorSpaceConvertSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "color_space_convert.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("color_space_convert.spv")));
 }
 
 }  // namespace

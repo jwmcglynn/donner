@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 /// A compute module exercising `sign`, `floor`, and `pow` in both their scalar and vector forms,
-/// shared by the emitter goldens and by the platform validators.
+/// shared by emitter tests and platform validators.
 ///
 /// The three opcodes reach no shipping program yet, so without this module their spellings and
 /// their SPIR-V lowerings would be checked only against the emitters' own idea of them. It also

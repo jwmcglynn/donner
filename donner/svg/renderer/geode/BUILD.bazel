@@ -401,9 +401,7 @@ donner_multi_transitioned_test(
 # identical on every build. The tool is program-name driven, so a filter family migrating onto
 # the IR adds a row to its table and a genrule like this one.
 #
-# The emitted bytes are the same bytes the program's committed golden pins - the golden test
-# compares that same EmitWgsl output - so the artifact embedded here and the artifact reviewed in
-# the diff cannot disagree without a test failing.
+# Compiler and renderer tests validate generated shader interfaces and behavior.
 genrule(
     name = "snapshot_unpremultiply_generated",
     outs = ["generated/snapshot_unpremultiply.wgsl"],
@@ -1073,30 +1071,6 @@ donner_multi_transitioned_test(
     dep = ":geode_shared_device_frame_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
-)
-
-# The embedded artifact and the committed golden must be the same bytes; see the test's own note
-# for why "by construction" is not enough.
-donner_cc_test(
-    name = "generated_shader_artifacts_tests",
-    srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
-    data = ["//donner/gpu/shader:program_goldens"],
-    deps = [
-        ":color_space_convert_wgsl",
-        ":filter_color_matrix_wgsl",
-        ":filter_composite_wgsl",
-        ":filter_merge_wgsl",
-        ":filter_morphology_wgsl",
-        ":filter_resolve_wgsl",
-        ":filter_tile_wgsl",
-        ":flood_wgsl",
-        ":offset_wgsl",
-        ":snapshot_unpremultiply_wgsl",
-        ":subregion_clip_wgsl",
-        "//donner/base",
-        "//donner/base:base_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
 )
 
 donner_cc_test(

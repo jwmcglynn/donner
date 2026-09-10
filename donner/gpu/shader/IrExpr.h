@@ -298,8 +298,8 @@ ShaderResult<IrExpr> Ne(const IrExpr& lhs, const IrExpr& rhs, const RcString& la
 ///
 /// Unsigned only: an arithmetic shift of a signed value is a different instruction on every
 /// backend, and nothing in the shader set shifts a signed value. There is no left-shift sibling
-/// for the same reason - no shader uses one, and an operator with no caller has no golden that
-/// would catch it being emitted wrong.
+/// for the same reason - no shader uses one, and an operator with no caller has no execution test
+/// that would catch it being emitted wrong.
 ///
 /// @param lhs Value to shift. @param rhs Shift amount, u32 of the same shape as \p lhs.
 /// @param label Diagnostic label.
