@@ -7,6 +7,7 @@
 /// **headless** (creating its own device) or **embedded** inside a host
 /// application that provides an existing WebGPU device and render target.
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -145,6 +146,24 @@ private:
   [[nodiscard]] bool canSampleWith(const geode::GeodeDevice& device) const;
 
   struct Backing;
+  struct ReadbackControl;
+  static RendererBitmap readTexture(std::shared_ptr<geode::GeodeDevice> device,
+                                    wgpu::Texture texture, Vector2i dimensions,
+                                    wgpu::TextureFormat format, AlphaType alphaType,
+                                    const std::function<bool()>& shouldCancel,
+                                    std::shared_ptr<Backing> backing = {});
+  static RendererBitmap readTextureWithContext(geode::GeodeDevice& context, wgpu::Texture texture,
+                                               Vector2i dimensions, wgpu::TextureFormat format,
+                                               AlphaType alphaType, ReadbackControl& control);
+  static RendererBitmap readTextureGpu(geode::GeodeDevice& context, const gpu::Texture& texture,
+                                       uint32_t width, uint32_t height, ReadbackControl& control);
+  static RendererBitmap readTextureCpu(geode::GeodeDevice& context, const gpu::Texture& texture,
+                                       uint32_t width, uint32_t height, wgpu::TextureFormat format,
+                                       AlphaType alphaType, ReadbackControl& control);
+  static RendererBitmap readMappedTexture(geode::GeodeDevice& context, gpu::BufferMapping& mapping,
+                                          uint32_t width, uint32_t height,
+                                          wgpu::TextureFormat format, AlphaType alphaType,
+                                          ReadbackControl& control);
   std::shared_ptr<geode::GeodeDevice> device_;
   /// Origin-side stamps avoid reading producer context state during shared-backend presentation.
   uint64_t runtimeDeviceId_ = 0;

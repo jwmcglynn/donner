@@ -344,16 +344,12 @@ struct GeodeDevice::Impl {
     SnapshotReadbackResources resources;
     uint64_t lastUsedTick = 0;
   };
-  std::mutex snapshotReadbackPoolMutex;
   std::map<std::pair<uint32_t, uint32_t>, SnapshotReadbackPoolEntry> snapshotReadbackPool;
   uint64_t snapshotReadbackPoolTick = 0;
 
-  /// Guards the lazy snapshotReadbackPipeline construction: the device is
-  /// documented as shareable between the main thread and the async-render
-  /// worker, and both can take a first snapshot concurrently. A plain
-  /// null-check would let both construct, and the second assignment would
-  /// destroy the pipeline the first thread already holds a reference to.
-  std::once_flag snapshotReadbackPipelineOnce;
+  std::timed_mutex snapshotCaptureMutex;
+  std::unique_ptr<GeodeDevice> snapshotCaptureContext;
+  std::function<void(SnapshotReadbackPhase)> snapshotCaptureHook;
 };
 
 /// Distinct snapshot sizes retained by the readback pool: covers the main
@@ -379,6 +375,12 @@ GeodeDevice::GeodeDevice()
     : impl_(std::make_unique<Impl>()),
       deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1),
       lostState_(std::make_shared<GeodeDeviceLostState>()) {}
+
+GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
+  if (lock.owns_lock() && owner && context) {
+    owner->finishSnapshotCapture(*context);
+  }
+}
 
 GeodeDevice::~GeodeDevice() {
   // Release all resources that were created from the device before releasing the
@@ -525,7 +527,131 @@ GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
       // guarantees the elapsed time written before it is visible too.
       .timedOutWaitSite = lostState_->timedOutSite.load(std::memory_order_acquire),
       .timedOutWaitMs = lostState_->timedOutElapsedMs.load(std::memory_order_relaxed),
+      .captureCancellations = readbackCaptureCancellations_.exchange(0, std::memory_order_relaxed),
+      .captureTimeouts = readbackCaptureTimeouts_.exchange(0, std::memory_order_relaxed),
+      .contextCreates = readbackContextCreates_.exchange(0, std::memory_order_relaxed),
+      .bufferCreates = readbackBufferCreates_.exchange(0, std::memory_order_relaxed),
+      .textureCreates = readbackTextureCreates_.exchange(0, std::memory_order_relaxed),
+      .bindgroupCreates = readbackBindgroupCreates_.exchange(0, std::memory_order_relaxed),
+      .submits = readbackSubmits_.exchange(0, std::memory_order_relaxed),
+      .poolEntries = readbackPoolEntries_.load(std::memory_order_relaxed),
+      .poolBytes = readbackPoolBytes_.load(std::memory_order_relaxed),
   };
+}
+
+void GeodeDevice::setSnapshotReadbackHookForTesting(
+    std::function<void(SnapshotReadbackPhase)> hook) {
+  std::lock_guard lock(impl_->snapshotCaptureMutex);
+  impl_->snapshotCaptureHook = std::move(hook);
+}
+
+void GeodeDevice::notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase phase) const {
+  if (impl_->snapshotCaptureHook) {
+    impl_->snapshotCaptureHook(phase);
+  }
+}
+
+void GeodeDevice::recordSnapshotCaptureTimeout() {
+  readbackCaptureTimeouts_.fetch_add(1, std::memory_order_relaxed);
+  std::fprintf(stderr, "[Geode] snapshot capture deadline expired\n");
+}
+
+GeodeDevice::SnapshotCaptureStatus GeodeDevice::waitForSnapshotCapture(
+    std::unique_lock<std::timed_mutex>& lock, const std::function<bool()>& shouldCancel,
+    std::chrono::steady_clock::time_point deadline) {
+  while (true) {
+    if (shouldCancel && shouldCancel()) {
+      readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
+      return SnapshotCaptureStatus::Cancelled;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      recordSnapshotCaptureTimeout();
+      return SnapshotCaptureStatus::TimedOut;
+    }
+    if (lock.try_lock_until(std::min(deadline, now + kGpuWaitPollInterval))) {
+      return SnapshotCaptureStatus::Ready;
+    }
+    notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase::WaitingForContext);
+  }
+}
+
+GeodeDevice::SnapshotCaptureLease GeodeDevice::acquireSnapshotCapture(
+    const std::function<bool()>& shouldCancel, std::chrono::steady_clock::time_point deadline) {
+  UTILS_RELEASE_ASSERT(!readbackOnly_);
+  SnapshotCaptureLease lease;
+  lease.owner = this;
+  lease.lock = std::unique_lock<std::timed_mutex>(impl_->snapshotCaptureMutex, std::defer_lock);
+  lease.status = waitForSnapshotCapture(lease.lock, shouldCancel, deadline);
+  if (lease.status != SnapshotCaptureStatus::Ready) {
+    return lease;
+  }
+  lease.status = SnapshotCaptureStatus::TimedOut;
+  if (shouldCancel && shouldCancel()) {
+    readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
+    lease.status = SnapshotCaptureStatus::Cancelled;
+    return lease;
+  }
+  if (std::chrono::steady_clock::now() >= deadline) {
+    recordSnapshotCaptureTimeout();
+    return lease;
+  }
+  if (!impl_->snapshotCaptureContext) {
+    auto context = std::unique_ptr<GeodeDevice>(new GeodeDevice());
+    context->external_ = true;
+    context->readbackOnly_ = true;
+    context->device_ = device_;
+    context->queue_ = queue_;
+    context->adapter_ = adapter_;
+    context->textureFormat_ = textureFormat_;
+    context->maxTextureDimension2D_ = maxTextureDimension2D_;
+    context->isVulkan_ = isVulkan_;
+    context->lostState_ = lostState_;
+    context->impl_->instance = instance();
+    context->impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*context);
+    context->impl_->runtimeDeviceId = context->impl_->adapterDevice->deviceId();
+    context->counters_ = &context->isolatedReadbackCounters_;
+    impl_->snapshotCaptureContext = std::move(context);
+    readbackContextCreates_.fetch_add(1, std::memory_order_relaxed);
+  }
+  lease.context = impl_->snapshotCaptureContext.get();
+  lease.context->isolatedReadbackCounters_.reset();
+  notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase::ContextAcquired);
+  if (shouldCancel && shouldCancel()) {
+    readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
+    lease.status = SnapshotCaptureStatus::Cancelled;
+  } else if (std::chrono::steady_clock::now() >= deadline) {
+    recordSnapshotCaptureTimeout();
+  } else {
+    lease.status = SnapshotCaptureStatus::Ready;
+  }
+  return lease;
+}
+
+void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
+  const ReadbackStats stats = context.consumeReadbackStats();
+  readbackCount_.fetch_add(stats.count, std::memory_order_relaxed);
+  readbackPollIterations_.fetch_add(stats.pollIterations, std::memory_order_relaxed);
+  if (stats.usedTimedWaitAny) {
+    readbackUsedTimedWaitAny_.store(true, std::memory_order_relaxed);
+  }
+  const GeodeCounters& counters = context.isolatedReadbackCounters_;
+  readbackBufferCreates_.fetch_add(counters.bufferCreates, std::memory_order_relaxed);
+  readbackTextureCreates_.fetch_add(counters.textureCreates, std::memory_order_relaxed);
+  readbackBindgroupCreates_.fetch_add(counters.bindgroupCreates, std::memory_order_relaxed);
+  readbackSubmits_.fetch_add(counters.submits, std::memory_order_relaxed);
+  readbackLifetimeBufferCreates_.fetch_add(counters.bufferCreates, std::memory_order_relaxed);
+  readbackLifetimeTextureCreates_.fetch_add(counters.textureCreates, std::memory_order_relaxed);
+  uint64_t poolBytes = 0;
+  for (const auto& [unusedSize, entry] : context.impl_->snapshotReadbackPool) {
+    (void)unusedSize;
+    const auto& resources = entry.resources;
+    poolBytes +=
+        static_cast<uint64_t>(resources.height) * (static_cast<uint64_t>(resources.width) * 4u +
+                                                   AlignReadbackBytesPerRow(resources.width * 4u));
+  }
+  readbackPoolEntries_.store(context.impl_->snapshotReadbackPool.size(), std::memory_order_relaxed);
+  readbackPoolBytes_.store(poolBytes, std::memory_order_relaxed);
 }
 
 namespace {
@@ -812,21 +938,19 @@ GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
 }
 GeodeSnapshotReadbackPipeline& GeodeDevice::snapshotReadbackPipeline() const {
-  // Lazy: only snapshot readback consumes this pipeline, so renderers that
-  // never call takeSnapshot() avoid the compile cost. call_once, not a plain
-  // null-check: see Impl::snapshotReadbackPipelineOnce.
-  std::call_once(impl_->snapshotReadbackPipelineOnce, [this] {
+  UTILS_RELEASE_ASSERT(readbackOnly_);
+  if (!impl_->snapshotReadbackPipeline) {
     impl_->snapshotReadbackPipeline =
         std::make_unique<GeodeSnapshotReadbackPipeline>(adapterDevice());
-  });
+  }
   return *impl_->snapshotReadbackPipeline;
 }
 
 SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t width,
                                                                         uint32_t height) {
+  UTILS_RELEASE_ASSERT(readbackOnly_);
   const std::pair<uint32_t, uint32_t> key(width, height);
   {
-    std::lock_guard<std::mutex> lock(impl_->snapshotReadbackPoolMutex);
     auto it = impl_->snapshotReadbackPool.find(key);
     if (it != impl_->snapshotReadbackPool.end()) {
       SnapshotReadbackResources result = std::move(it->second.resources);
@@ -875,11 +999,11 @@ SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t
 }
 
 void GeodeDevice::releaseSnapshotReadbackResources(SnapshotReadbackResources resources) {
+  UTILS_RELEASE_ASSERT(readbackOnly_);
   if (resources.empty()) {
     return;
   }
   const std::pair<uint32_t, uint32_t> key(resources.width, resources.height);
-  std::lock_guard<std::mutex> lock(impl_->snapshotReadbackPoolMutex);
   Impl::SnapshotReadbackPoolEntry entry;
   entry.resources = std::move(resources);
   entry.lastUsedTick = ++impl_->snapshotReadbackPoolTick;

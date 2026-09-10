@@ -7285,10 +7285,8 @@ enum class ReadbackMapStatus {
   Success,
   /// A cancellation request fired; the buffer was unmapped and destroyed.
   Cancelled,
-  /// The readback deadline expired with no map completion; the buffer was
-  /// unmapped and destroyed and the device was declared lost. Distinct from
-  /// Cancelled so a caller can avoid starting a second full-deadline wait
-  /// against a device that just proved unresponsive.
+  /// The total capture deadline expired; any pending map was cancelled and its buffer retired.
+  /// Contention may consume that budget, so this alone does not declare device loss.
   TimedOut,
   /// The device was already declared lost before the map was requested; no
   /// GPU wait was performed.
@@ -7327,17 +7325,22 @@ struct ReadbackMapResult {
 /// @param buffer Buffer to map; destroyed and left invalid on cancellation or timeout.
 /// @param mapSize Bytes to map, from offset zero.
 /// @param shouldCancel Optional cancellation predicate, polled once per slice.
-ReadbackMapResult MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& device,
-                                     gpu::Buffer& buffer, uint64_t mapSize,
-                                     const std::function<bool()>& shouldCancel) {
-  if (device->isDeviceLost()) {
+ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& buffer,
+                                     uint64_t mapSize, const std::function<bool()>& shouldCancel,
+                                     std::chrono::steady_clock::time_point deadline,
+                                     const std::function<void()>& mapRequested) {
+  if (device.isDeviceLost()) {
     // A lost device will never deliver the map. Fail fast so a caller does
     // not spend another full readback deadline against a hung driver; the
     // caller drops the buffer without pooling it.
     return ReadbackMapResult{ReadbackMapStatus::DeviceLost, {}};
   }
 
-  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  if (std::chrono::steady_clock::now() >= deadline) {
+    return ReadbackMapResult{ReadbackMapStatus::TimedOut, {}};
+  }
+
+  geode::GeodeWgpuAdapterDevice& runtime = device.adapterDevice();
   gpu::Result<gpu::BufferMapping> mapping =
       runtime.mapBufferAsync(buffer, gpu::MapMode::Read, 0, mapSize);
   if (mapping.hasError()) {
@@ -7345,33 +7348,40 @@ ReadbackMapResult MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     // device lost between the check above and here is reported as such rather than as a plain
     // failure, because the caller retries a failure and must not retry a lost device.
     return ReadbackMapResult{
-        device->isDeviceLost() ? ReadbackMapStatus::DeviceLost : ReadbackMapStatus::Failed, {}};
+        device.isDeviceLost() ? ReadbackMapStatus::DeviceLost : ReadbackMapStatus::Failed, {}};
   }
   gpu::BufferMapping liveMapping = std::move(mapping).result();
+  if (mapRequested) mapRequested();
 
   int pollIter = 0;
   bool cancelled = false;
   bool timedOut = false;
   gpu::MapWaitOutcome outcome = gpu::MapWaitOutcome::TimedOut;
   const auto readbackWaitStart = std::chrono::steady_clock::now();
-  const auto readbackDeadline = readbackWaitStart + geode::kReadbackMapTimeout;
   while (true) {
     if (shouldCancel && shouldCancel()) {
       cancelled = true;
       break;
     }
-    if (std::chrono::steady_clock::now() >= readbackDeadline) {
+    if (std::chrono::steady_clock::now() >= deadline) {
       timedOut = true;
       break;
     }
+    const double remainingSeconds =
+        std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
+    if (remainingSeconds <= 0.0) {
+      timedOut = true;
+      break;
+    }
+    const double sliceSeconds = std::min(kReadbackWaitSliceSeconds, remainingSeconds);
     // Counted after the two checks above, so a wait that was cancelled or already past its
     // deadline reports zero slices - the signal a caller uses to tell "gave up immediately"
     // from "waited and then gave up".
     ++pollIter;
 
-    const gpu::Result<gpu::MapWaitOutcome> slice = runtime.waitForMapping(
-        liveMapping, gpu::MapWaitParams{kReadbackWaitSliceSeconds, kReadbackWaitSliceSeconds},
-        /*shouldCancel=*/{});
+    const gpu::Result<gpu::MapWaitOutcome> slice =
+        runtime.waitForMapping(liveMapping, gpu::MapWaitParams{sliceSeconds, sliceSeconds},
+                               /*shouldCancel=*/{});
     if (slice.hasError()) {
       outcome = gpu::MapWaitOutcome::Failed;
       break;
@@ -7384,15 +7394,14 @@ ReadbackMapResult MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     }
   }
 
-  device->recordReadback(runtime.mappingUsedTimedWaitAny(liveMapping), pollIter);
+  device.recordReadback(runtime.mappingUsedTimedWaitAny(liveMapping), pollIter);
 
   if (cancelled || timedOut) {
     if (timedOut) {
-      device->markDeviceLostAfterWaitTimeout(
-          geode::GpuWaitSite::ReadbackMap,
-          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                readbackWaitStart),
-          "snapshot readback map did not complete within the readback deadline");
+      std::fprintf(
+          stderr, "[Geode] snapshot map reached the capture deadline after %.3f seconds waiting\n",
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - readbackWaitStart)
+              .count());
     }
     // Abandoning a pending map leaves the buffer unusable for anything else, so it is destroyed
     // here rather than returned to a pool that would hand it out again.
@@ -7415,167 +7424,94 @@ ReadbackMapResult MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
                            {}};
 }
 
-/// GPU-side snapshot readback for premultiplied RGBA8Unorm render targets: a
-/// compute pass unpremultiplies the target into a straight-alpha RGBA8
-/// staging texture, which is then copied into a map-readable buffer. The
-/// output bytes are identical to the CPU reference loop in
-/// ReadGeodeTextureSnapshot. Returns an empty bitmap on any failure so the
-/// caller can fall back to the CPU copy path.
-///
-/// wgpu-native forbids combining MAP_READ with STORAGE on a single buffer, so
-/// the compute output cannot be mapped directly; the staging-texture copy is
-/// the standard readback shape.
-RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDevice>& device,
-                                           const gpu::Texture& texture, uint32_t width,
-                                           uint32_t height,
-                                           const std::function<bool()>& shouldCancel,
-                                           bool& outTimedOut) {
-  RendererBitmap bitmap;
-  outTimedOut = false;
-  const geode::GeodeSnapshotReadbackPipeline& readbackPipeline = device->snapshotReadbackPipeline();
-  if (!readbackPipeline.valid()) {
-    return bitmap;
+/// Convert one mapped row to tightly packed straight-alpha RGBA.
+void CopyReadbackRow(uint8_t* destination, const uint8_t* source, uint32_t width, bool sourceIsBgra,
+                     AlphaType alphaType) {
+  if (!sourceIsBgra && alphaType == AlphaType::Unpremultiplied) {
+    std::memcpy(destination, source, static_cast<size_t>(width) * 4u);
+    return;
   }
-
-  // Pooled staging texture + readback buffer, keyed by size. Repeat snapshots
-  // at the same dimensions reuse the entry, so steady-state readback
-  // allocates nothing.
-  geode::SnapshotReadbackResources resources =
-      device->acquireSnapshotReadbackResources(width, height);
-  if (resources.empty()) {
-    return bitmap;
+  for (uint32_t x = 0; x < width; ++x) {
+    const uint8_t red = source[x * 4 + (sourceIsBgra ? 2 : 0)];
+    const uint8_t green = source[x * 4 + 1];
+    const uint8_t blue = source[x * 4 + (sourceIsBgra ? 0 : 2)];
+    const uint8_t alpha = source[x * 4 + 3];
+    uint8_t* pixel = destination + x * 4;
+    if (alphaType == AlphaType::Unpremultiplied) {
+      pixel[0] = red;
+      pixel[1] = green;
+      pixel[2] = blue;
+    } else if (alpha == 0) {
+      pixel[0] = pixel[1] = pixel[2] = 0;
+    } else if (alpha == 255) {
+      pixel[0] = red;
+      pixel[1] = green;
+      pixel[2] = blue;
+    } else {
+      const unsigned half = static_cast<unsigned>(alpha) >> 1u;
+      pixel[0] = static_cast<uint8_t>(std::min(255u, (red * 255u + half) / alpha));
+      pixel[1] = static_cast<uint8_t>(std::min(255u, (green * 255u + half) / alpha));
+      pixel[2] = static_cast<uint8_t>(std::min(255u, (blue * 255u + half) / alpha));
+    }
+    pixel[3] = alpha;
   }
-  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
-  const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+}
 
-  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-
-  gpu::Result<gpu::TextureView> importedView = runtime.createTextureView(
+/// Submit unpremultiplication and staging-copy work through the isolated runtime.
+bool RecordGpuReadback(geode::GeodeDevice& context,
+                       const geode::GeodeSnapshotReadbackPipeline& pipeline,
+                       const gpu::Texture& texture,
+                       const geode::SnapshotReadbackResources& resources, uint32_t width,
+                       uint32_t height) {
+  geode::GeodeWgpuAdapterDevice& runtime = context.adapterDevice();
+  auto createdView = runtime.createTextureView(
       texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
-  if (importedView.hasError()) {
-    return bitmap;
-  }
-  const gpu::TextureView inputView = std::move(importedView).result();
-
-  using ReadbackBinding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
-  gpu::Result<gpu::BindGroup> bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
+  if (createdView.hasError()) return false;
+  const gpu::TextureView inputView = std::move(createdView).result();
+  using Binding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
+  auto bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
       "RendererGeodeReadbackBG",
-      readbackPipeline.bindGroupLayout(),
-      {gpu::BindGroupEntry{static_cast<uint32_t>(ReadbackBinding::InputTexture),
+      pipeline.bindGroupLayout(),
+      {gpu::BindGroupEntry{static_cast<uint32_t>(Binding::InputTexture),
                            gpu::TextureViewBinding{inputView}},
-       gpu::BindGroupEntry{static_cast<uint32_t>(ReadbackBinding::OutputTexture),
+       gpu::BindGroupEntry{static_cast<uint32_t>(Binding::OutputTexture),
                            gpu::TextureViewBinding{resources.stagingView}}}});
-  if (bindGroup.hasError()) {
-    return bitmap;
-  }
-
-  // Record the unpremultiply compute pass and the staging-texture copy into one command buffer.
-  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoderResult = runtime.createCommandEncoder();
-  if (encoderResult.hasError()) {
-    return bitmap;
-  }
-  const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(encoderResult).result();
-
-  gpu::Result<gpu::ComputePassEncoder*> passResult =
+  if (bindGroup.hasError()) return false;
+  auto createdEncoder = runtime.createCommandEncoder();
+  if (createdEncoder.hasError()) return false;
+  const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(createdEncoder).result();
+  auto createdPass =
       encoder->beginComputePass(gpu::ComputePassDescriptor{"RendererGeodeReadbackPass"});
-  if (passResult.hasError()) {
-    return bitmap;
-  }
-  gpu::ComputePassEncoder* pass = passResult.result();
-  // The dispatch is sized from the same generated constants the pipeline declares, so the grid
-  // cannot disagree with the size compiled into the shader. A stale larger copy here would
-  // under-dispatch and leave the tail of the destination unwritten.
+  if (createdPass.hasError()) return false;
+  gpu::ComputePassEncoder* pass = createdPass.result();
   constexpr uint32_t kWorkgroupX = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
   constexpr uint32_t kWorkgroupY = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
-  if (pass->setPipeline(readbackPipeline.pipeline()).hasError() ||
+  if (pass->setPipeline(pipeline.pipeline()).hasError() ||
       pass->setBindGroup(0, bindGroup.result()).hasError() ||
       pass->dispatchWorkgroups((width + kWorkgroupX - 1) / kWorkgroupX,
                                (height + kWorkgroupY - 1) / kWorkgroupY, 1)
           .hasError() ||
-      pass->end().hasError()) {
-    return bitmap;
-  }
-
+      pass->end().hasError())
+    return false;
   if (encoder
           ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{resources.staging}, resources.readback,
-                                gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
+                                gpu::TexelCopyBufferLayout{0, alignBytesPerRow(width * 4u), height},
                                 gpu::Extent2d{width, height})
-          .hasError()) {
-    return bitmap;
-  }
-
-  gpu::Result<gpu::CommandBuffer> commands = encoder->finish();
-  if (commands.hasError()) {
-    return bitmap;
-  }
-  // Standalone, not the frame's encoder: this readback has its own map to wait on, and a
-  // snapshot is routinely asked for while another renderer's frame is open. Its sources were
-  // submitted before it was asked for and its only writes are its own staging texture and
-  // readback buffer, so it shares nothing with the spans that frame is still recording.
-  //
-  // The runtime counts its own submit, so there is no explicit tick here; a second one would
-  // double-count every snapshot against the per-frame submission ceilings.
-  if (runtime.submitStandalone(std::move(commands).result()).hasError()) {
-    return bitmap;
-  }
-
-  ReadbackMapResult mapResult =
-      MapAndWaitReadback(device, resources.readback, mapSize, shouldCancel);
-  const ReadbackMapStatus mapStatus = mapResult.status;
-  if (mapStatus != ReadbackMapStatus::Success) {
-    // Cancelled, timed out, lost, or failed: on cancellation and timeout the
-    // helper already unmapped and destroyed the readback buffer, and on a
-    // lost device the map was never requested; either way the entry cannot
-    // be pooled. The caller uses outTimedOut to avoid a second full-deadline
-    // wait against an unresponsive device.
-    outTimedOut =
-        mapStatus == ReadbackMapStatus::TimedOut || mapStatus == ReadbackMapStatus::DeviceLost;
-    return bitmap;
-  }
-
-  const gpu::Result<std::span<const uint8_t>> mappedBytes =
-      device->adapterDevice().mappedBytes(mapResult.mapping);
-  if (mappedBytes.hasError()) {
-    // A mapped-range/buffer-size mismatch is reported here rather than raising a validation
-    // error. Unmap and drop the entry (do not pool a buffer whose sizing math disagreed with
-    // ours) and let the CPU path take over.
-    (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
-    return bitmap;
-  }
-  const uint8_t* mapped = mappedBytes.result().data();
-
-  // The staging texture already holds straight-alpha RGBA, so the CPU only
-  // strips row padding.
-  bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
-  bitmap.rowBytes = static_cast<size_t>(width) * 4u;
-  bitmap.alphaType = AlphaType::Unpremultiplied;
-  bitmap.pixels.resize(bitmap.rowBytes * height);
-  for (uint32_t y = 0; y < height; ++y) {
-    if (shouldCancel && shouldCancel()) {
-      (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
-      return {};
-    }
-    std::memcpy(bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes,
-                mapped + static_cast<size_t>(y) * bytesPerRow, bitmap.rowBytes);
-  }
-  (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
-  device->releaseSnapshotReadbackResources(std::move(resources));
-  return bitmap;
+          .hasError())
+    return false;
+  auto commands = encoder->finish();
+  if (commands.hasError()) return false;
+  return !runtime.submitStandalone(std::move(commands).result()).hasError();
 }
 
-}  // namespace
-
-namespace {
 bool CanReadSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
                      const wgpu::Texture& texture, Vector2i dimensions,
-                     const gpu::Texture* runtimeTexture) {
-  if (!device || !texture || !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(texture))) {
-    return false;
-  }
-  return runtimeTexture == nullptr ||
-         (runtimeTexture->deviceId() == device->adapterDevice().deviceId() &&
-          static_cast<WGPUTexture>(device->adapterDevice().wgpuTextureOf(*runtimeTexture)) ==
-              static_cast<WGPUTexture>(texture));
+                     wgpu::TextureFormat format) {
+  return device && texture && SnapshotRuntimeFormat(format).has_value() &&
+         texture.getFormat() == format && texture.getSampleCount() == 1 &&
+         texture.getDepthOrArrayLayers() == 1 &&
+         texture.getDimension() == wgpu::TextureDimension::_2D &&
+         SnapshotExtentFits(dimensions, SnapshotAllocationExtent(texture));
 }
 
 bool CanUnpremultiplySnapshotOnGpu(const wgpu::Texture& texture, wgpu::TextureFormat format,
@@ -7585,185 +7521,190 @@ bool CanUnpremultiplySnapshotOnGpu(const wgpu::Texture& texture, wgpu::TextureFo
          (static_cast<WGPUTextureUsage>(texture.getUsage()) &
           static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) != 0u;
 }
+
+bool SnapshotHasReadbackRoute(const wgpu::Texture& texture, wgpu::TextureFormat format,
+                              AlphaType alphaType) {
+  const bool canCopy = (static_cast<WGPUTextureUsage>(texture.getUsage()) &
+                        static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc)) != 0u;
+  return canCopy || CanUnpremultiplySnapshotOnGpu(texture, format, alphaType);
+}
 }  // namespace
 
-static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
-                                               const wgpu::Texture& texture, Vector2i dimensions,
-                                               wgpu::TextureFormat format,
-                                               AlphaType sourceAlphaType,
-                                               const std::function<bool()>& shouldCancel,
-                                               const gpu::Texture* runtimeTexture = nullptr) {
-  RendererBitmap bitmap;
-  // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
-  // work. A main-document request may arrive immediately after the thumbnail finishes drawing.
-  if (shouldCancel && shouldCancel()) {
-    return bitmap;
-  }
-  if (!CanReadSnapshot(device, texture, dimensions, runtimeTexture)) {
-    return bitmap;
-  }
+struct RendererGeodeTextureSnapshot::ReadbackControl {
+  const std::function<bool()>& shouldCancel;
+  std::chrono::steady_clock::time_point deadline;
+  const std::function<void()>& mapRequested;
+  ReadbackMapStatus status = ReadbackMapStatus::Success;
 
-  const uint32_t width = static_cast<uint32_t>(dimensions.x);
-  const uint32_t height = static_cast<uint32_t>(dimensions.y);
-
-  const bool canCopySource = (static_cast<WGPUTextureUsage>(texture.getUsage()) &
-                              static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc)) != 0u;
-  const bool gpuConversion = CanUnpremultiplySnapshotOnGpu(texture, format, sourceAlphaType);
-  if (!gpuConversion && !canCopySource) {
-    return bitmap;
-  }
-  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  gpu::Texture importedSource;
-  const gpu::Texture* sourceTexture = runtimeTexture;
-  if (sourceTexture == nullptr) {
-    const gpu::TextureUsage usage =
-        (canCopySource ? gpu::TextureUsage::CopySrc : gpu::TextureUsage::None) |
-        (gpuConversion ? gpu::TextureUsage::Sampled : gpu::TextureUsage::None);
-    auto imported = runtime.importExternalTexture(
-        texture, gpu::Extent2d{texture.getWidth(), texture.getHeight()},
-        geode::GpuTextureFormatFromWgpu(format), usage);
-    if (imported.hasError()) {
-      return bitmap;
+  bool stopped() {
+    if (status == ReadbackMapStatus::Cancelled || status == ReadbackMapStatus::TimedOut ||
+        status == ReadbackMapStatus::DeviceLost)
+      return true;
+    if (shouldCancel && shouldCancel()) {
+      status = ReadbackMapStatus::Cancelled;
+      return true;
     }
-    importedSource = std::move(imported).result();
-    sourceTexture = &importedSource;
-  }
-
-  // GPU unpremultiply path: premultiplied RGBA8Unorm render targets only. The
-  // compute shader produces straight RGBA regardless of the texture's memory
-  // layout, but BGRA targets keep the proven CPU path for now.
-  // Gate on the texture's REAL format as well as the caller-declared one:
-  // the compute pass binds a view that inherits the texture's actual format,
-  // so an sRGB surface declared as RGBA8Unorm would be silently linearized
-  // by textureLoad and re-quantized into wrong bytes with no validation
-  // error, where the CPU copy path degrades only to a channel-order bug.
-  if (gpuConversion) {
-    bool gpuTimedOut = false;
-    RendererBitmap gpuBitmap = ReadGeodeTextureSnapshotGpu(device, *sourceTexture, width, height,
-                                                           shouldCancel, gpuTimedOut);
-    if (!gpuBitmap.empty()) {
-      return gpuBitmap;
+    if (std::chrono::steady_clock::now() >= deadline) {
+      status = ReadbackMapStatus::TimedOut;
+      return true;
     }
-    // The GPU path returned empty: cancelled, timed out, or failed. A
-    // cancellation must return here so a superseding request is not delayed
-    // by a second GPU round-trip. A timeout must also return: the device
-    // just spent the full deadline not delivering a map, and the CPU copy
-    // path would begin another full-deadline wait against the same
-    // unresponsive device, turning a 10 s stall into 20 s. Only a genuine
-    // map failure falls back to the CPU copy path below.
-    if ((shouldCancel && shouldCancel()) || gpuTimedOut) {
-      return bitmap;
-    }
+    return false;
   }
+};
 
-  if (!canCopySource) {
-    return bitmap;
-  }
-
-  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
-
-  // Allocate readback buffer. Created through the runtime, which counts the allocation itself,
-  // so there is no explicit tick here.
-  const uint64_t readbackSize = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
-  gpu::Result<gpu::Buffer> createdReadback = device->adapterDevice().createBuffer(
-      gpu::BufferDescriptor{"RendererGeodeReadback", readbackSize,
-                            gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
-  if (createdReadback.hasError()) {
-    return bitmap;
-  }
-  gpu::Buffer readback = std::move(createdReadback).result();
-
-  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoderResult = runtime.createCommandEncoder();
-  if (encoderResult.hasError()) {
-    return bitmap;
-  }
-  const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(encoderResult).result();
-  if (encoder
-          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{*sourceTexture}, readback,
-                                gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
-                                gpu::Extent2d{width, height})
-          .hasError()) {
-    return bitmap;
-  }
-  gpu::Result<gpu::CommandBuffer> commands = encoder->finish();
-  if (commands.hasError()) {
-    return bitmap;
-  }
-  // Standalone for the same reason as the GPU path above, and the runtime counts its own submit.
-  if (runtime.submitStandalone(std::move(commands).result()).hasError()) {
-    return bitmap;
-  }
-
-  ReadbackMapResult mapResult = MapAndWaitReadback(device, readback, readbackSize, shouldCancel);
-  if (mapResult.status != ReadbackMapStatus::Success) {
-    return bitmap;
-  }
-
-  const gpu::Result<std::span<const uint8_t>> mappedBytes =
-      device->adapterDevice().mappedBytes(mapResult.mapping);
+RendererBitmap RendererGeodeTextureSnapshot::readMappedTexture(
+    geode::GeodeDevice& context, gpu::BufferMapping& mapping, uint32_t width, uint32_t height,
+    wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
+  auto mappedBytes = context.adapterDevice().mappedBytes(mapping);
   if (mappedBytes.hasError()) {
-    // A size mismatch between the map request and the buffer is reported here rather than
-    // raising a validation error; never memcpy from it.
-    (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
-    return bitmap;
+    (void)context.adapterDevice().unmapBuffer(std::move(mapping));
+    return {};
   }
-  const uint8_t* mapped = mappedBytes.result().data();
-
-  // Strip row padding and unpremultiply alpha so the consumer gets a tightly
-  // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
-  // paint RGB by alpha before upload to match the blend pipeline's
-  // premultiplied storage, but `RendererBitmap` - like Skia's and
-  // tiny-skia's `takeSnapshot()` outputs - is defined as straight RGBA.
-  // Returning raw texture bytes would darken semi-transparent content and
-  // break cross-backend parity.
+  RendererBitmap bitmap;
   bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
   bitmap.rowBytes = static_cast<size_t>(width) * 4u;
   bitmap.alphaType = AlphaType::Unpremultiplied;
   bitmap.pixels.resize(bitmap.rowBytes * height);
-  const bool sourceIsBgra = IsBgraTextureFormat(format);
+  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
   for (uint32_t y = 0; y < height; ++y) {
-    if (shouldCancel && shouldCancel()) {
-      (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
+    if (control.stopped()) {
+      (void)context.adapterDevice().unmapBuffer(std::move(mapping));
       return {};
     }
-    const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
-    uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (uint32_t x = 0; x < width; ++x) {
-      const uint8_t srcR = sourceIsBgra ? srcRow[x * 4 + 2] : srcRow[x * 4 + 0];
-      const uint8_t srcG = srcRow[x * 4 + 1];
-      const uint8_t srcB = sourceIsBgra ? srcRow[x * 4 + 0] : srcRow[x * 4 + 2];
-      const uint8_t srcA = srcRow[x * 4 + 3];
-      if (sourceAlphaType == AlphaType::Unpremultiplied) {
-        dstRow[x * 4 + 0] = srcR;
-        dstRow[x * 4 + 1] = srcG;
-        dstRow[x * 4 + 2] = srcB;
-        dstRow[x * 4 + 3] = srcA;
-        continue;
-      }
-      if (srcA == 0u) {
-        dstRow[x * 4 + 0] = 0u;
-        dstRow[x * 4 + 1] = 0u;
-        dstRow[x * 4 + 2] = 0u;
-        dstRow[x * 4 + 3] = 0u;
-        continue;
-      }
-      if (srcA == 255u) {
-        dstRow[x * 4 + 0] = srcR;
-        dstRow[x * 4 + 1] = srcG;
-        dstRow[x * 4 + 2] = srcB;
-        dstRow[x * 4 + 3] = 255u;
-        continue;
-      }
-      // Round-nearest unpremultiply: straight = (premul * 255 + alpha/2) / alpha.
-      const unsigned a = srcA;
-      const unsigned half = a >> 1u;
-      dstRow[x * 4 + 0] = static_cast<uint8_t>(std::min(255u, (srcR * 255u + half) / a));
-      dstRow[x * 4 + 1] = static_cast<uint8_t>(std::min(255u, (srcG * 255u + half) / a));
-      dstRow[x * 4 + 2] = static_cast<uint8_t>(std::min(255u, (srcB * 255u + half) / a));
-      dstRow[x * 4 + 3] = srcA;
-    }
+    CopyReadbackRow(bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes,
+                    mappedBytes.result().data() + static_cast<size_t>(y) * bytesPerRow, width,
+                    IsBgraTextureFormat(format), alphaType);
   }
-  (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
+  (void)context.adapterDevice().unmapBuffer(std::move(mapping));
+  return bitmap;
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& context,
+                                                            const gpu::Texture& texture,
+                                                            uint32_t width, uint32_t height,
+                                                            ReadbackControl& control) {
+  if (control.stopped()) return {};
+  const geode::GeodeSnapshotReadbackPipeline& pipeline = context.snapshotReadbackPipeline();
+  if (!pipeline.valid()) return {};
+  if (control.stopped()) return {};
+  geode::SnapshotReadbackResources resources =
+      context.acquireSnapshotReadbackResources(width, height);
+  if (resources.empty()) return {};
+  if (control.stopped()) return {};
+  if (!RecordGpuReadback(context, pipeline, texture, resources, width, height)) return {};
+  const uint64_t mapSize = static_cast<uint64_t>(alignBytesPerRow(width * 4u)) * height;
+  ReadbackMapResult mapped =
+      MapAndWaitReadback(context, resources.readback, mapSize, control.shouldCancel,
+                         control.deadline, control.mapRequested);
+  control.status = mapped.status;
+  if (mapped.status != ReadbackMapStatus::Success) return {};
+  RendererBitmap bitmap =
+      readMappedTexture(context, mapped.mapping, width, height, wgpu::TextureFormat::RGBA8Unorm,
+                        AlphaType::Unpremultiplied, control);
+  if (bitmap.empty()) return {};
+  context.releaseSnapshotReadbackResources(std::move(resources));
+  return bitmap;
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
+    geode::GeodeDevice& context, const gpu::Texture& texture, uint32_t width, uint32_t height,
+    wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
+  if (control.stopped()) return {};
+  geode::GeodeWgpuAdapterDevice& runtime = context.adapterDevice();
+  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
+  const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * height;
+  auto createdBuffer = runtime.createBuffer(gpu::BufferDescriptor{
+      "RendererGeodeReadback", mapSize, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
+  if (createdBuffer.hasError()) return {};
+  gpu::Buffer buffer = std::move(createdBuffer).result();
+  if (control.stopped()) return {};
+  auto createdEncoder = runtime.createCommandEncoder();
+  if (createdEncoder.hasError()) return {};
+  const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(createdEncoder).result();
+  if (encoder
+          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{texture}, buffer,
+                                gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
+                                gpu::Extent2d{width, height})
+          .hasError())
+    return {};
+  auto commands = encoder->finish();
+  if (commands.hasError()) return {};
+  if (control.stopped()) return {};
+  if (runtime.submitStandalone(std::move(commands).result()).hasError()) return {};
+  ReadbackMapResult mapped = MapAndWaitReadback(context, buffer, mapSize, control.shouldCancel,
+                                                control.deadline, control.mapRequested);
+  control.status = mapped.status;
+  if (mapped.status != ReadbackMapStatus::Success) return {};
+  return readMappedTexture(context, mapped.mapping, width, height, format, alphaType, control);
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
+    geode::GeodeDevice& context, wgpu::Texture texture, Vector2i dimensions,
+    wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
+  if (control.stopped()) return {};
+  if (context.isDeviceLost()) {
+    control.status = ReadbackMapStatus::DeviceLost;
+    return {};
+  }
+  auto imported = context.adapterDevice().importExternalTexture(
+      texture, {texture.getWidth(), texture.getHeight()}, geode::GpuTextureFormatFromWgpu(format),
+      geode::GpuTextureUsageFromWgpu(texture.getUsage()));
+  if (imported.hasError()) return {};
+  const gpu::Texture source = std::move(imported).result();
+  const uint32_t width = static_cast<uint32_t>(dimensions.x);
+  const uint32_t height = static_cast<uint32_t>(dimensions.y);
+  if (CanUnpremultiplySnapshotOnGpu(texture, format, alphaType)) {
+    RendererBitmap bitmap = readTextureGpu(context, source, width, height, control);
+    if (!bitmap.empty()) return bitmap;
+  }
+  if (control.stopped()) return {};
+  if (context.isDeviceLost()) {
+    control.status = ReadbackMapStatus::DeviceLost;
+    return {};
+  }
+  const bool canCopy = (static_cast<WGPUTextureUsage>(texture.getUsage()) &
+                        static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc)) != 0u;
+  if (!canCopy) return {};
+  return readTextureCpu(context, source, width, height, format, alphaType, control);
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::GeodeDevice> device,
+                                                         wgpu::Texture texture, Vector2i dimensions,
+                                                         wgpu::TextureFormat format,
+                                                         AlphaType alphaType,
+                                                         const std::function<bool()>& shouldCancel,
+                                                         std::shared_ptr<Backing> backing) {
+  (void)backing;  // Keep the source allocation leased through context-local resource teardown.
+  const auto captureStart = std::chrono::steady_clock::now();
+  if (!device) return {};
+  const auto deadline =
+      captureStart +
+      std::chrono::milliseconds(device->snapshotReadbackBudgetMs_.load(std::memory_order_relaxed));
+  const std::function<void()> mapRequested = [&device] {
+    device->notifySnapshotReadbackPhaseForTesting(
+        geode::GeodeDevice::SnapshotReadbackPhase::MapRequested);
+  };
+  ReadbackControl control{shouldCancel, deadline, mapRequested};
+  if (control.stopped()) {
+    if (control.status == ReadbackMapStatus::Cancelled) {
+      device->readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      device->recordSnapshotCaptureTimeout();
+    }
+    return {};
+  }
+  if (!CanReadSnapshot(device, texture, dimensions, format)) return {};
+  if (!SnapshotHasReadbackRoute(texture, format, alphaType)) return {};
+  if (device->isDeviceLost()) return {};
+  auto capture = device->acquireSnapshotCapture(shouldCancel, deadline);
+  if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) return {};
+  RendererBitmap bitmap =
+      readTextureWithContext(*capture.context, texture, dimensions, format, alphaType, control);
+  if (control.status == ReadbackMapStatus::Cancelled) {
+    device->readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
+  } else if (control.status == ReadbackMapStatus::TimedOut) {
+    device->recordSnapshotCaptureTimeout();
+  }
   return bitmap;
 }
 
@@ -7771,8 +7712,8 @@ RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
   if (!isValid()) {
     return {};
   }
-  return ReadGeodeTextureSnapshot(device_, texture_, dimensions_, format_, alphaType_,
-                                  /*shouldCancel=*/{}, runtimeTexture());
+  return readTexture(device_, texture_, dimensions_, format_, alphaType_,
+                     /*shouldCancel=*/{}, backing_);
 }
 
 RendererBitmap RendererGeode::takeSnapshotInterruptibly(
@@ -7780,11 +7721,9 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return RendererBitmap{};
   }
-  return ReadGeodeTextureSnapshot(
+  return RendererGeodeTextureSnapshot::readTexture(
       impl_->device, impl_->target, Vector2i(impl_->pixelWidth, impl_->pixelHeight),
-      impl_->textureFormat, AlphaType::Premultiplied, shouldCancel,
-      impl_->targetHandleTexture == static_cast<WGPUTexture>(impl_->target) ? impl_->targetHandle
-                                                                            : nullptr);
+      impl_->textureFormat, AlphaType::Premultiplied, shouldCancel);
 }
 
 bool RendererGeode::deviceLost() const {
@@ -7825,6 +7764,15 @@ RendererReadbackStats RendererGeode::consumeReadbackStats() {
       .deviceLost = stats.deviceLost,
       .timedOutWaitSite = NeutralWaitSite(stats.timedOutWaitSite),
       .timedOutWaitMs = stats.timedOutWaitMs,
+      .captureCancellations = stats.captureCancellations,
+      .captureTimeouts = stats.captureTimeouts,
+      .contextCreates = stats.contextCreates,
+      .bufferCreates = stats.bufferCreates,
+      .textureCreates = stats.textureCreates,
+      .bindgroupCreates = stats.bindgroupCreates,
+      .submits = stats.submits,
+      .poolEntries = stats.poolEntries,
+      .poolBytes = stats.poolBytes,
   };
 }
 

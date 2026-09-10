@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <latch>
 #include <limits>
 #include <optional>
 #include <thread>
@@ -767,26 +768,20 @@ TEST_F(RendererGeodeTest, DeviceLostWhileTheMapIsPendingIsReportedWithinASlice) 
   renderer.endFrame();
   (void)renderer.consumeReadbackStats();
 
-  // The cancellation predicate is polled once before the readback is set up at all, and then
-  // once per wait slice, before the slice itself. The second call is therefore the one place a
-  // test can stand between the map request and the first slice: the readback's own fast-fail on
-  // an already-lost device is behind us, no poll has run since the map was requested, so the
-  // slice cannot find the map already complete and must reach its lost-device check.
-  //
-  // If that call sequence ever changes, this lands on the fast-fail route instead, where no
-  // statistics are recorded - which the assertions below fail on rather than pass silently.
-  int predicateCalls = 0;
-  const auto start = std::chrono::steady_clock::now();
-  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly([&] {
-    if (++predicateCalls == 2) {
+  bool mapRequested = false;
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+      mapRequested = true;
       device->markDeviceLost("test-injected loss while the map was pending");
     }
-    return false;  // Never cancel: the loss, not the caller, must end this wait.
   });
+  const auto start = std::chrono::steady_clock::now();
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  device->setSnapshotReadbackHookForTesting({});
   const auto elapsed = std::chrono::steady_clock::now() - start;
 
   EXPECT_TRUE(snapshot.empty());
-  EXPECT_GE(predicateCalls, 2) << "the wait must have reached at least one slice";
+  EXPECT_THAT(mapRequested, testing::IsTrue());
   // Well under the ten-second readback deadline: the slice reports the loss rather than the
   // deadline discovering it.
   EXPECT_LT(elapsed, std::chrono::seconds(2));
@@ -811,10 +806,17 @@ TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
   renderer.endFrame();
   (void)renderer.consumeReadbackStats();
 
-  std::atomic<int> cancellationChecks{0};
+  std::atomic<bool> cancel{false};
+  sharedDevice()->setSnapshotReadbackHookForTesting(
+      [&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+        if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+          cancel.store(true, std::memory_order_relaxed);
+        }
+      });
   const auto start = std::chrono::steady_clock::now();
-  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly(
-      [&] { return cancellationChecks.fetch_add(1, std::memory_order_relaxed) >= 1; });
+  const RendererBitmap snapshot =
+      renderer.takeSnapshotInterruptibly([&] { return cancel.load(std::memory_order_relaxed); });
+  sharedDevice()->setSnapshotReadbackHookForTesting({});
   const auto elapsed = std::chrono::steady_clock::now() - start;
 
   EXPECT_TRUE(snapshot.empty());
@@ -4973,6 +4975,142 @@ TEST_F(RendererGeodeTest, DetachedSnapshotReadbackDoesNotMutateProducerFrameCoun
   EXPECT_THAT(after.bindgroupCreates, testing::Eq(before.bindgroupCreates));
   EXPECT_THAT(after.submits, testing::Eq(before.submits));
   producer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackReusesOneContextAndAccountsForItsPool) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode producer(device);
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  producer.endFrame();
+  const auto snapshot = producer.takeTextureSnapshot();
+  ASSERT_THAT(snapshot, testing::NotNull());
+  const uint64_t buffersBefore = device->lifetimeBufferCreates();
+  const uint64_t texturesBefore = device->lifetimeTextureCreates();
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_cold");
+  const auto cold = device->consumeReadbackStats();
+  EXPECT_THAT(cold.contextCreates, testing::Eq(1u));
+  EXPECT_THAT(cold.bufferCreates, testing::Eq(1u));
+  EXPECT_THAT(cold.textureCreates, testing::Eq(1u));
+  EXPECT_THAT(cold.count, testing::Eq(1));
+  EXPECT_THAT(cold.submits, testing::Eq(1u));
+  EXPECT_THAT(cold.poolEntries, testing::Eq(1u));
+  EXPECT_THAT(cold.poolBytes, testing::Eq(32768u));
+  EXPECT_THAT(device->lifetimeBufferCreates(), testing::Eq(buffersBefore + 1));
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(texturesBefore + 1));
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_warm");
+  const auto warm = device->consumeReadbackStats();
+  EXPECT_THAT(warm.contextCreates, testing::Eq(0u));
+  EXPECT_THAT(warm.bufferCreates, testing::Eq(0u));
+  EXPECT_THAT(warm.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(warm.count, testing::Eq(1));
+  EXPECT_THAT(warm.poolBytes, testing::Eq(cold.poolBytes));
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackDeadlineBeforeAcquisitionAllocatesNothing) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.endFrame();
+  const uint64_t buffersBefore = device->lifetimeBufferCreates();
+  const uint64_t texturesBefore = device->lifetimeTextureCreates();
+  device->setSnapshotReadbackBudgetForTesting(std::chrono::milliseconds(0));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  const auto stats = renderer.consumeReadbackStats();
+  EXPECT_THAT(stats.captureTimeouts, testing::Eq(1u));
+  EXPECT_THAT(stats.contextCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.bufferCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.count, testing::Eq(0));
+  EXPECT_THAT(stats.deviceLost, testing::IsFalse());
+  EXPECT_THAT(device->lifetimeBufferCreates(), testing::Eq(buffersBefore));
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(texturesBefore));
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWithoutDeviceLoss) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  renderer.endFrame();
+  const auto snapshot = renderer.takeTextureSnapshot();
+  ASSERT_THAT(snapshot, testing::NotNull());
+  beginFrame(renderer);
+  renderer.endFrame();
+  std::latch acquired(1);
+  std::latch release(1);
+  std::atomic<bool> first{true};
+  std::atomic<bool> cancelWaiter{false};
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::ContextAcquired &&
+        first.exchange(false)) {
+      acquired.count_down();
+      release.wait();
+    } else if (phase == geode::GeodeDevice::SnapshotReadbackPhase::WaitingForContext) {
+      cancelWaiter.store(true, std::memory_order_relaxed);
+    }
+  });
+  RendererBitmap captured;
+  std::thread worker([&] { captured = snapshot->takeSnapshot(); });
+  acquired.wait();
+  device->setSnapshotReadbackBudgetForTesting(std::chrono::milliseconds(1));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  device->setSnapshotReadbackBudgetForTesting(geode::kReadbackMapTimeout);
+  cancelWaiter.store(false, std::memory_order_relaxed);
+  EXPECT_THAT(
+      renderer
+          .takeSnapshotInterruptibly([&] { return cancelWaiter.load(std::memory_order_relaxed); })
+          .empty(),
+      testing::IsTrue());
+  const auto blocked = renderer.consumeReadbackStats();
+  EXPECT_THAT(blocked.captureTimeouts, testing::Eq(1u));
+  EXPECT_THAT(blocked.captureCancellations, testing::Eq(1u));
+  EXPECT_THAT(blocked.contextCreates, testing::Eq(1u));
+  EXPECT_THAT(blocked.bufferCreates, testing::Eq(0u));
+  EXPECT_THAT(blocked.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(blocked.deviceLost, testing::IsFalse());
+  release.count_down();
+  for (int frame = 0; frame < 4; ++frame) {
+    beginFrame(renderer);
+    renderer.endFrame();
+    EXPECT_THAT(renderer.lastFrameTimings().counters.submits, testing::Eq(1u));
+  }
+  worker.join();
+  device->setSnapshotReadbackHookForTesting({});
+  ExpectSolidRuntimeSnapshot(captured, {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_with_active_producer");
+  EXPECT_THAT(device->consumeReadbackStats().count, testing::Eq(1));
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_after_contention_timeout");
+  EXPECT_THAT(device->isDeviceLost(), testing::IsFalse());
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackPoolRemainsBoundedAcrossSizes) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int size : {8, 16, 24, 32, 40}) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(size, size);
+    viewport.devicePixelRatio = 1;
+    renderer.beginFrame(viewport);
+    renderer.endFrame();
+    ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {size, size}, {0, 0, 0, 0},
+                               "isolated_readback_pool_sizes");
+    const auto stats = device->consumeReadbackStats();
+    EXPECT_THAT(stats.poolEntries, testing::Le(4u));
+    EXPECT_THAT(stats.poolBytes, testing::Gt(0u));
+  }
+  const auto retained = device->consumeReadbackStats();
+  EXPECT_THAT(retained.poolEntries, testing::Eq(4u));
+  EXPECT_THAT(retained.poolBytes, testing::Eq(42496u));
 }
 
 }  // namespace
