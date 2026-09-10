@@ -38,6 +38,7 @@
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
 using testing::HasSubstr;
@@ -157,6 +158,14 @@ protected:
 
   std::unique_ptr<MetalDevice> device_;
 };
+
+TEST_F(MetalSolidFillTest, CheckerboardPipelineUsesSelectedNativeDevice) {
+  for (const auto blendMode : {geode::GeodeCheckerboardPipeline::BlendMode::Replace,
+                               geode::GeodeCheckerboardPipeline::BlendMode::DestinationOver}) {
+    geode::GeodeCheckerboardPipeline pipeline(*device_, TextureFormat::RGBA8Unorm, blendMode);
+    EXPECT_TRUE(pipeline.valid()) << "Checkerboard must compile on the selected Metal device";
+  }
+}
 
 TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   // This case must run on any adapter, including one the corpus has no baseline for: it compares

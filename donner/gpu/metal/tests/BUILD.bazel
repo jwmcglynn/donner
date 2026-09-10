@@ -71,6 +71,7 @@ donner_cc_test(
         "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:stage_io_test_modules",
+        "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "@com_google_gtest//:gtest_main",
     ],

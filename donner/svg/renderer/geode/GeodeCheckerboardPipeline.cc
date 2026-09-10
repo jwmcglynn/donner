@@ -170,7 +170,7 @@ bool RecordAndSubmitCheckerboardPass(GeodeDevice& device,
 
 }  // namespace
 
-GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(GeodeWgpuAdapterDevice& adapterDevice,
+GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& adapterDevice,
                                                      gpu::TextureFormat colorFormat,
                                                      BlendMode blendMode) {
   gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
