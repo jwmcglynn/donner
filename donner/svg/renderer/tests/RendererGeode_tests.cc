@@ -4789,5 +4789,31 @@ TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission
                              "uploaded_snapshot_pending_submission");
 }
 
+TEST_F(RendererGeodeTest, RuntimeSnapshotBackingIsReleasedWhenConsumerFrameIsDiscarded) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  RendererGeode consumer = createRenderer();
+  beginFrame(consumer);
+  gpu::Texture sourceIdentity;
+  {
+    auto created = runtime.createTexture(
+        {"snapshot", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture source = std::move(created).result();
+    sourceIdentity =
+        gpu::Texture::CreateForBackend(source.slotIndex(), source.generation(), source.deviceId());
+    const auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(source), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(consumer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {4, 4}), 1, true),
+                testing::IsTrue());
+  }
+  EXPECT_THAT(runtime.ownsTextureBacking(sourceIdentity), testing::IsTrue());
+  beginFrame(consumer);
+  EXPECT_THAT(runtime.ownsTextureBacking(sourceIdentity), testing::IsFalse());
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {0, 0, 0, 0},
+                             "runtime_snapshot_discarded_frame");
+}
+
 }  // namespace
 }  // namespace donner::svg
