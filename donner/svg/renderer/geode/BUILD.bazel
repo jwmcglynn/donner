@@ -318,6 +318,7 @@ donner_cc_library(
         ":filter_color_matrix_wgsl",
         ":filter_composite_wgsl",
         ":filter_merge_wgsl",
+        ":filter_morphology_wgsl",
         ":filter_resolve_wgsl",
         ":filter_tile_wgsl",
         ":flood_wgsl",
@@ -605,11 +606,19 @@ embed_resources(
 )
 
 # Phase 7: feMorphology compute shader (erode / dilate).
+genrule(
+    name = "filter_morphology_generated",
+    outs = ["generated/filter_morphology.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) morphology " +
+          "$(location generated/filter_morphology.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_morphology_wgsl",
     header_output = "embed_resources/FilterMorphologyWgsl.h",
     resources = {
-        "kFilterMorphologyWgsl": "shaders/filter_morphology.wgsl",
+        "kFilterMorphologyWgsl": "generated/filter_morphology.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -729,7 +738,6 @@ donner_cc_library(
         ":filter_displacement_map_wgsl",
         ":filter_drop_shadow_wgsl",
         ":filter_image_wgsl",
-        ":filter_morphology_wgsl",
         ":filter_specular_lighting_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",

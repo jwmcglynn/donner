@@ -24,6 +24,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/MergeBindings.h"
+#include "donner/gpu/shader/programs/MorphologyBindings.h"
 #include "donner/gpu/shader/programs/OffsetBindings.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/gpu/shader/programs/TileBindings.h"
@@ -38,6 +39,7 @@
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
+#include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterResolveWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FloodWgsl.h"
@@ -1810,12 +1812,17 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     blendPipeline_ = std::move(pipeline);
   }
 
-  // --- feMorphology pipeline (input + output + uniform) ---
+  // Morphology shares the GPU command stream with the surrounding filter passes.
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterMorphology", createFilterMorphologyShader(dev), sizeof(MorphologyParams));
-    morphologyBindGroupLayout_ = std::move(bgl);
-    morphologyPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::MorphologyBinding;
+    morphologyProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterMorphology",
+        EmbeddedWgsl(donner::embedded::kFilterMorphologyWgsl),
+        gpu::shader::programs::kMorphologyEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(MorphologyBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(MorphologyBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(MorphologyBinding::Params))},
+        gpu::shader::programs::kMorphologyWorkgroupSize);
   }
 
   // --- feComponentTransfer pipeline (input + output + stored function parameters) ---
@@ -3523,17 +3530,21 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
   constexpr int kMaximumRadiusPerPass = 31;
   const std::array<int, 2> radii{std::max(pixelRadiusX, 0), std::max(pixelRadiusY, 0)};
   constexpr const char* kLabels[] = {"FilterMorphologyPassX", "FilterMorphologyPassY"};
-  std::array<wgpu::Texture, 2> scratch{};
+  std::array<const gpu::Texture*, 2> scratch{};
   size_t scratchIndex = 0;
   wgpu::Texture current = input;
   for (uint32_t axis = 0; axis < radii.size(); ++axis) {
     int remaining = radii[axis];
     while (remaining > 0) {
       const int radius = std::min(remaining, kMaximumRadiusPerPass);
-      wgpu::Texture& output = scratch[scratchIndex];
+      const gpu::Texture*& output = scratch[scratchIndex];
       if (!output) {
-        output = createIntermediateTexture(arena, device_.device(), width, height,
-                                           "FilterMorphologyOutput");
+        output = arena.createRuntimeTexture(
+            gpu::TextureDescriptor{"FilterMorphologyOutput",
+                                   {width, height},
+                                   gpu::TextureFormat::RGBA32Float,
+                                   gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled |
+                                       gpu::TextureUsage::CopySrc});
       }
       if (!output) {
         return {};
@@ -3543,14 +3554,12 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
       params.radiusX = axis == 0 ? radius : 0;
       params.radiusY = axis == 1 ? radius : 0;
       params.op = primitive.op == Op::Dilate ? 1u : 0u;
-      const auto uniform = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-      if (!uniform.buffer) {
+      if (!dispatchRuntimeInputOutputUniform(arena, morphologyProgram_, current, *output,
+                                             UniformBytes(params), kLabels[axis],
+                                             gpu::shader::programs::kMorphologyWorkgroupSize)) {
         return {};
       }
-      dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
-                                 morphologyPipeline_.get(), current, output, uniform.buffer,
-                                 uniform.offset, sizeof(params), kLabels[axis]);
-      current = output;
+      current = device_.adapterDevice().wgpuTextureOf(*output);
       scratchIndex = (scratchIndex + 1) % scratch.size();
       remaining -= radius;
     }

@@ -25,6 +25,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
@@ -243,6 +244,13 @@ TEST(MslXcrunValidation, EmittedTileComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildTileModule(), "tile");
+}
+
+TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildMorphologyModule(), "morphology");
 }
 
 TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {

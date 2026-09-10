@@ -1195,58 +1195,6 @@
         "ImageParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_morphology.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "input_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba32float, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 2,
-          "group": 0,
-          "name": "params",
-          "type": "MorphologyParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "for",
-        "if",
-        "let",
-        "max",
-        "min",
-        "return",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "MorphologyParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_specular_lighting.wgsl": {
       "bindings": [
         {

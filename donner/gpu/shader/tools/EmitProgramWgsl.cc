@@ -30,6 +30,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -50,6 +51,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"filter_color_matrix", &programs::BuildFilterColorMatrixModule},
     {"flood", &programs::BuildFloodModule},
     {"merge", &programs::BuildMergeModule},
+    {"morphology", &programs::BuildMorphologyModule},
     {"composite", &programs::BuildCompositeModule},
     {"offset", &programs::BuildOffsetModule},
     {"tile", &programs::BuildTileModule},

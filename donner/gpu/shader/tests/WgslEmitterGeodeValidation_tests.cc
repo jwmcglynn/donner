@@ -31,6 +31,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -1095,6 +1096,55 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "offset_case_" + std::to_string(caseIndex++),
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTransparentEdges) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildMorphologyModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto source = OffsetSourceTexels();
+  const int32_t radii[][2] = {{0, 0}, {1, 0}, {0, 2}, {2, 3}, {31, 0}, {0, 31}};
+  size_t index = 0;
+  for (const auto& radius : radii) {
+    for (int32_t op = 0; op < 2; ++op) {
+      SCOPED_TRACE(testing::Message()
+                   << "radius " << radius[0] << "," << radius[1] << " op=" << op);
+      const int32_t params[] = {radius[0], radius[1], op, 0};
+      auto actual = RunInputOutputUniformProgram(
+          device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
+          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+          programs::kMorphologyWorkgroupSize);
+      ASSERT_THAT(actual, testing::SizeIs(source.size()));
+      std::vector<uint8_t> expected(source.size(), op == 0 ? 255 : 0);
+      for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+        for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+          const size_t destination = (y * kOffsetExtent + x) * 4;
+          for (int32_t dy = -radius[1]; dy <= radius[1]; ++dy) {
+            for (int32_t dx = -radius[0]; dx <= radius[0]; ++dx) {
+              const int32_t sx = x + dx, sy = y + dy;
+              for (size_t c = 0; c < 4; ++c) {
+                const uint8_t value =
+                    sx >= 0 && sy >= 0 && sx < int32_t(kOffsetExtent) && sy < int32_t(kOffsetExtent)
+                        ? source[(sy * kOffsetExtent + sx) * 4 + c]
+                        : 0;
+                expected[destination + c] = op == 0 ? std::min(expected[destination + c], value)
+                                                    : std::max(expected[destination + c], value);
+              }
+            }
+          }
+        }
+      }
+      editor::tests::CompareBitmapToBitmap(
+          svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), actual, kOffsetExtent * 4},
+          svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), expected, kOffsetExtent * 4},
+          "morphology_case_" + std::to_string(index++), editor::tests::PixelmatchIdentityParams());
+    }
   }
 }
 
