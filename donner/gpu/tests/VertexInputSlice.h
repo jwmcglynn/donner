@@ -182,7 +182,7 @@ void CheckVertexInputScene(DeviceType& device, const ShaderModuleDescriptor& sha
   actual.pixels = bytes.result();
   svg::RendererBitmap expected;
   expected.dimensions = actual.dimensions;
-  expected.rowBytes = 16 * 4;
+  expected.rowBytes = actual.rowBytes;
   expected.pixels.resize(expected.rowBytes * 12);
   for (uint32_t y = 0; y < 12; ++y) {
     for (uint32_t x = 0; x < 16; ++x) {
