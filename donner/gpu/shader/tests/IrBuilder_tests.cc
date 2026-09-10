@@ -1383,5 +1383,42 @@ TEST(FunctionBuilderControlFlow, ContinuingRejectsEscapedTargetsAndValues) {
   }
 }
 
+TEST_F(FunctionBuilderTests, IfConditionCannotReferenceAClosedBranchLocal) {
+  FunctionBuilder function = startFunction();
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr expired =
+      GetShaderResultOrFail(function.addLet("expired", LiteralBool(true)), LiteralBool(false));
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  // Keep the typed expression after its declaration has left scope. It must not
+  // become an undeclared name in the next generated conditional.
+  EXPECT_THAT(function.beginIf(expired), IsShaderError(HasSubstr("out of scope")));
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, ForConditionCannotReferenceAClosedBranchLocal) {
+  FunctionBuilder function = startFunction();
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr expired =
+      GetShaderResultOrFail(function.addLet("expired", LiteralBool(true)), LiteralBool(false));
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  EXPECT_THAT(function.forCondition(expired), IsShaderError(HasSubstr("out of scope")));
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, ConditionalHeadersAcceptEnclosingScopeExpressions) {
+  FunctionBuilder function = startFunction();
+  const IrExpr condition =
+      GetShaderResultOrFail(function.addLet("condition", LiteralBool(true)), LiteralBool(false));
+  ASSERT_THAT(function.beginIf(condition), IsShaderOk());
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  ASSERT_THAT(function.forCondition(condition), IsShaderOk());
+  ASSERT_THAT(function.breakStmt(), IsShaderOk());
+  ASSERT_THAT(function.endFor(), IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+  EXPECT_THAT(builder_.build(), HasShaderResult());
+}
+
 }  // namespace
 }  // namespace donner::gpu::shader
