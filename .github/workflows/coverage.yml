@@ -82,7 +82,7 @@ jobs:
     env:
       BAZEL_DIFF_TAG: "v18.1.0"
       BAZEL_DIFF_SHA256: "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6f58e0"
-      FULL_COVERAGE_TARGETS: "//donner/base/... //donner/css/... //donner/svg/... //donner/editor/..."
+      FULL_COVERAGE_TARGETS: "//donner/..."
       SMOKE_COVERAGE_TARGETS: "//donner/base/..."
     outputs:
       fallback: ${{ steps.determine.outputs.fallback }}

@@ -78,6 +78,14 @@ class CoverageLaneRoutingTest(unittest.TestCase):
     def setUpClass(cls):
         cls.text = _workflow_text()
 
+    def test_full_baseline_covers_the_complete_product_tree(self):
+        # GPU implementation files enter reports as SVG/editor dependencies.
+        # Their owning tests must run too; an enumerated package list silently
+        # omitted the entire GPU suite when that subtree was introduced.
+        match = re.search(r'FULL_COVERAGE_TARGETS: "([^"]+)"', self.text)
+        self.assertIsNotNone(match)
+        self.assertEqual(["//donner/..."], match.group(1).split())
+
     def test_every_emitted_reason_is_classified(self):
         """No reason may exist that the routing table has never heard of.
 
