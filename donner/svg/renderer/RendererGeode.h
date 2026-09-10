@@ -143,14 +143,13 @@ private:
 
   void destroyOwnedBacking() noexcept;
 
+  struct Backing;
   std::shared_ptr<geode::GeodeDevice> device_;
-  /// Runtime handle when this snapshot took over a target the runtime allocated. Its slot is
-  /// released when the snapshot dies, which is what frees the texture in that case.
-  gpu::Texture ownedGpuTexture_;
+  /// Shared with consuming frames until their recorded draws have been submitted.
+  std::shared_ptr<Backing> backing_;
   gpu::Texture borrowedGpuTexture_;  //!< Identity-only handle; never owns the renderer target.
   Vector2i allocationDimensions_ = Vector2i::Zero();
   std::optional<gpu::TextureFormat> runtimeFormat_;
-  geode::ScopedWgpuHandle<wgpu::Texture> ownedTexture_;
   wgpu::Texture texture_;
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();

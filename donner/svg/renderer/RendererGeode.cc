@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -94,14 +95,31 @@ Vector2i SnapshotAllocationExtent(const wgpu::Texture& texture) {
 }
 }  // namespace
 
+struct RendererGeodeTextureSnapshot::Backing {
+  std::shared_ptr<geode::GeodeDevice> device;
+  gpu::Texture runtimeTexture;
+  geode::ScopedWgpuHandle<wgpu::Texture> hostTexture;
+
+  ~Backing() {
+    if (hostTexture) {
+      hostTexture.destroyBackingAndReset();
+    }
+    if (runtimeTexture.isValid() && device) {
+      (void)device->adapterDevice().destroyTextureBacking(std::move(runtimeTexture));
+    }
+  }
+};
+
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture, Vector2i dimensions,
     wgpu::TextureFormat format, AlphaType alphaType)
-    : device_(std::move(device)),
-      ownedTexture_(std::move(texture)),
-      format_(format),
-      alphaType_(alphaType) {
-  texture_ = ownedTexture_.get();
+    : device_(std::move(device)), format_(format), alphaType_(alphaType) {
+  if (texture) {
+    backing_ = std::make_shared<Backing>();
+    backing_->device = device_;
+    backing_->hostTexture.reset(texture);
+  }
+  texture_ = texture;
   allocationDimensions_ = SnapshotAllocationExtent(texture_);
   runtimeFormat_ = texture_ ? SnapshotRuntimeFormat(texture_.getFormat()) : std::nullopt;
   (void)setDimensions(dimensions);
@@ -129,7 +147,9 @@ RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
     return result;
   }
   result.device_ = std::move(device);
-  result.ownedGpuTexture_ = std::move(texture);
+  result.backing_ = std::make_shared<Backing>();
+  result.backing_->device = result.device_;
+  result.backing_->runtimeTexture = std::move(texture);
   result.texture_ = backend;
   result.allocationDimensions_ = allocation;
   result.runtimeFormat_ = runtimeFormat;
@@ -150,8 +170,8 @@ bool RendererGeodeTextureSnapshot::isValid() const {
 }
 
 const gpu::Texture* RendererGeodeTextureSnapshot::runtimeTexture() const {
-  if (ownedGpuTexture_.isValid()) {
-    return &ownedGpuTexture_;
+  if (backing_ && backing_->runtimeTexture.isValid()) {
+    return &backing_->runtimeTexture;
   }
   return borrowedGpuTexture_.isValid() ? &borrowedGpuTexture_ : nullptr;
 }
@@ -181,11 +201,10 @@ RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
 
   destroyOwnedBacking();
   device_ = std::move(other.device_);
-  ownedGpuTexture_ = std::move(other.ownedGpuTexture_);
+  backing_ = std::move(other.backing_);
   borrowedGpuTexture_ = std::move(other.borrowedGpuTexture_);
   allocationDimensions_ = std::exchange(other.allocationDimensions_, Vector2i::Zero());
   runtimeFormat_ = std::exchange(other.runtimeFormat_, std::nullopt);
-  ownedTexture_ = std::move(other.ownedTexture_);
   texture_ = std::exchange(other.texture_, wgpu::Texture());
   textureView_ = std::move(other.textureView_);
   dimensions_ = std::exchange(other.dimensions_, Vector2i::Zero());
@@ -196,15 +215,7 @@ RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
 
 void RendererGeodeTextureSnapshot::destroyOwnedBacking() noexcept {
   textureView_.reset();
-  if (ownedTexture_) {
-    ownedTexture_.destroyBackingAndReset();
-  }
-  if (ownedGpuTexture_.isValid() && device_) {
-    // Destroy the backend object explicitly rather than only releasing the handle: a succession
-    // of presentation snapshots otherwise stays resident until the host runtime collects it.
-    (void)device_->adapterDevice().destroyTextureBacking(std::move(ownedGpuTexture_));
-  }
-  ownedGpuTexture_ = gpu::Texture();
+  backing_.reset();
   borrowedGpuTexture_ = {};
   allocationDimensions_ = Vector2i::Zero();
   runtimeFormat_.reset();
@@ -1580,6 +1591,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // handle.
   std::deque<gpu::Texture> frameImportedTextures;
   std::deque<gpu::TextureView> frameImportedTextureViews;
+  std::unordered_set<std::shared_ptr<RendererGeodeTextureSnapshot::Backing>> frameSnapshotBackings;
 
   /// Names a backend-owned texture as a runtime texture handle valid for the rest of the frame.
   /// The extent comes from the texture itself, so a caller can never describe it wrongly.
@@ -1721,6 +1733,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandEncoder.reset();
+    frameSnapshotBackings.clear();
   }
 
   std::unique_ptr<geode::GeoEncoder> encoder;
@@ -5233,6 +5246,7 @@ void RendererGeode::endFrame() {
     // about to be recycled, so drop them before any of them can be handed out again.
     impl_->frameImportedTextureViews.clear();
     impl_->frameImportedTextures.clear();
+    impl_->frameSnapshotBackings.clear();
   }
 
   // The frame's work is submitted, so nothing it recorded can still be waiting
@@ -6483,6 +6497,9 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
 
   impl_->flushPendingBatch();
   impl_->syncTransform();
+  if (geodeTexture->backing_) {
+    impl_->frameSnapshotBackings.insert(geodeTexture->backing_);
+  }
   const gpu::Texture* source = geodeTexture->runtimeTexture();
   if (source == nullptr) {
     source = &impl_->importTexture(geodeTexture->texture(), geodeTexture->format(),
