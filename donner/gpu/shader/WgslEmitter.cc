@@ -107,6 +107,8 @@ constexpr std::string_view kReservedWords[] = {
     "clamp",
     "dot",
     "floor",
+    "ceil",
+    "exp",
     "fract",
     "fwidth",
     "length",
