@@ -1,6 +1,6 @@
+load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
-load("//build_defs:package.bzl", "donner_package")
 
 # The typed shader IR and each emitter have independent compilation dependencies.
 #
@@ -124,6 +124,7 @@ donner_cc_library(
 donner_cc_library(
     name = "programs",
     srcs = [
+        "programs/Checkerboard.cc",
         "programs/ColorMatrix.cc",
         "programs/ColorSpaceConvert.cc",
         "programs/Composite.cc",
@@ -139,6 +140,7 @@ donner_cc_library(
         "programs/Tile.cc",
     ],
     hdrs = [
+        "programs/Checkerboard.h",
         "programs/ColorMatrix.h",
         "programs/ColorSpaceConvert.h",
         "programs/Composite.h",
@@ -176,6 +178,7 @@ donner_cc_library(
 donner_cc_test(
     name = "shader_tests",
     srcs = [
+        "tests/CheckerboardProgram_tests.cc",
         "tests/ColorMatrixProgram_tests.cc",
         "tests/ColorSpaceConvertProgram_tests.cc",
         "tests/CompositeProgram_tests.cc",
@@ -201,6 +204,7 @@ donner_cc_test(
         "tests/WgslEmitter_tests.cc",
     ],
     deps = [
+        ":checkerboard_artifact",
         ":float_storage_test_module",
         ":module_interface",
         ":msl_emitter",
@@ -336,6 +340,21 @@ donner_multi_transitioned_test(
     dep = ":wgsl_emitter_geode_validation_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+)
+
+genrule(
+    name = "checkerboard_generated",
+    outs = ["generated/CheckerboardShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) checkerboard " +
+          "$(location generated/CheckerboardShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "checkerboard_artifact",
+    hdrs = ["generated/CheckerboardShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
 )
 
 donner_package()

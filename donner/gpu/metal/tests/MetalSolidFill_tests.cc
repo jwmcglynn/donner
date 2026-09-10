@@ -37,6 +37,7 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/tests/CheckerboardPixelTests.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
@@ -158,6 +159,12 @@ protected:
 
   std::unique_ptr<MetalDevice> device_;
 };
+
+TEST_F(MetalSolidFillTest, CheckerboardMatchesAnchoredAndCompositedPixels) {
+  const Device& runtime = *device_;
+  EXPECT_EQ(runtime.shaderSourceKind(), ShaderSourceKind::Msl);
+  gpu::tests::ExpectCheckerboardPixels(*device_);
+}
 
 TEST_F(MetalSolidFillTest, CheckerboardPipelineUsesSelectedNativeDevice) {
   for (const auto blendMode : {geode::GeodeCheckerboardPipeline::BlendMode::Replace,

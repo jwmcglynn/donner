@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # Tests for the Metal vertical slices: the solid-fill pixel comparison against
@@ -62,6 +62,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
+        "//donner/gpu:checkerboard_pixel_tests",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:vertex_input_slice",
         "//donner/gpu/baseline:frozen_baseline_policy",
@@ -71,7 +72,7 @@ donner_cc_test(
         "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:stage_io_test_modules",
-        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:checkerboard_pipeline",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "@com_google_gtest//:gtest_main",
     ],

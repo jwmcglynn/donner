@@ -1,6 +1,6 @@
+load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
-load("//build_defs:package.bzl", "donner_package")
 
 # donner::gpu - the Donner-owned GPU runtime.
 #
@@ -193,6 +193,20 @@ donner_cc_test(
         ":gpu_test_utils",
         ":recording_device",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_pixel_tests",
+    testonly = 1,
+    hdrs = ["tests/CheckerboardPixelTests.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer/geode:checkerboard_pipeline",
+        "@com_google_gtest//:gtest",
     ],
 )
 

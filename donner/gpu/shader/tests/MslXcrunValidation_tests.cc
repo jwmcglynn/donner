@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/Composite.h"
@@ -160,6 +161,11 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
       "xcrun -sdk macosx metal -std=metal3.0 -c \"" + sourcePath + "\" -o \"" + outputPath + "\"",
       &output);
   return output;
+}
+
+TEST(MslXcrunValidation, EmittedCheckerboardCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildCheckerboardModule(), "checkerboard");
 }
 
 TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {

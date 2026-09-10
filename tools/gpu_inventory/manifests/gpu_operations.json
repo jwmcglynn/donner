@@ -526,16 +526,12 @@
         "QueueWorkDoneCallbackInfo"
       ]
     },
-    "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc": {
+    "donner/svg/renderer/geode/GeodeCheckerboardPass.cc": {
       "operations": [
         "beginRenderPass",
         "createBindGroup",
-        "createBindGroupLayout",
         "createBuffer",
         "createCommandEncoder",
-        "createPipelineLayout",
-        "createRenderPipeline",
-        "createShaderModule",
         "draw",
         "finish",
         "setBindGroup",

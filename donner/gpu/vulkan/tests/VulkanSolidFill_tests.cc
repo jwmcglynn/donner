@@ -39,6 +39,7 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/tests/CheckerboardPixelTests.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -246,6 +247,12 @@ protected:
 
   std::unique_ptr<VulkanDevice> device_;
 };
+
+TEST_F(VulkanSolidFillTest, CheckerboardMatchesAnchoredAndCompositedPixels) {
+  const Device& runtime = *device_;
+  EXPECT_EQ(runtime.shaderSourceKind(), ShaderSourceKind::Spirv);
+  gpu::tests::ExpectCheckerboardPixels(*device_);
+}
 
 TEST_F(VulkanSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   // The readback helper must validate the handle's generation: after destroy + recreate the

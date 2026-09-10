@@ -40,6 +40,7 @@
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -226,6 +227,18 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
     // observes failure through the uncaptured-error marker instead.
     EXPECT_TRUE(static_cast<bool>(pipeline)) << "Render pipeline creation returned null";
   }
+}
+
+TEST(WgslEmitterGeodeValidation, CheckerboardPipelinesPassRendererValidation) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr) << "Checkerboard validation requires the selected WebGPU device";
+  testing::internal::CaptureStderr();
+  const bool replaceValid = device->checkerboardPipeline().valid();
+  const bool underlayValid = device->checkerboardUnderlayPipeline().valid();
+  const std::string errors = testing::internal::GetCapturedStderr();
+  EXPECT_TRUE(replaceValid) << "Replace pipeline must compile through the WebGPU device";
+  EXPECT_TRUE(underlayValid) << "Destination-over pipeline must compile through the WebGPU device";
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)));
 }
 
 TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValidation) {
