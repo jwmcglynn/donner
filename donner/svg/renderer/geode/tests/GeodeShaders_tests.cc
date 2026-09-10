@@ -10,7 +10,7 @@ namespace donner::geode {
 /// Smoke test: the Slug fill shader compiles without errors.
 /// If the WGSL has a syntax error or undefined symbol, shader module creation
 /// fails and the test fails. The family creators go through the donner::gpu
-/// runtime (design 0053 packet 8), so compilation runs on the wgpu adapter.
+/// runtime, so compilation runs on the wgpu adapter.
 TEST(GeodeShaders, SlugFillCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
@@ -65,14 +65,6 @@ TEST(GeodeShaders, FilterImageCompiles) {
 
   wgpu::ShaderModule module = createFilterImageShader(geodeDevice->device());
   ASSERT_TRUE(static_cast<bool>(module)) << "feImage shader failed to compile";
-}
-
-TEST(GeodeShaders, FilterTileCompiles) {
-  auto geodeDevice = GeodeDevice::CreateHeadless();
-  ASSERT_NE(geodeDevice, nullptr);
-
-  wgpu::ShaderModule module = createFilterTileShader(geodeDevice->device());
-  ASSERT_TRUE(static_cast<bool>(module)) << "feTile shader failed to compile";
 }
 
 }  // namespace donner::geode

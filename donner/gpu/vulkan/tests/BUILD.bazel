@@ -137,6 +137,7 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu:color_matrix_slice",
         "//donner/gpu:float_texture_slice",
+        "//donner/gpu:tile_slice",
         "//donner/gpu/shader",
         "//donner/gpu/shader:float_storage_test_module",
         "//donner/gpu/shader:module_interface",

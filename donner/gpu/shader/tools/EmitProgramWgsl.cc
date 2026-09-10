@@ -33,6 +33,7 @@
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
 
 namespace donner::gpu::shader {
 namespace {
@@ -51,6 +52,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"merge", &programs::BuildMergeModule},
     {"composite", &programs::BuildCompositeModule},
     {"offset", &programs::BuildOffsetModule},
+    {"tile", &programs::BuildTileModule},
     {"snapshot_unpremultiply", &programs::BuildSnapshotUnpremultiplyModule},
     {"subregion_clip", &programs::BuildSubregionClipModule},
     {"filter_resolve", &programs::BuildFilterResolveModule},

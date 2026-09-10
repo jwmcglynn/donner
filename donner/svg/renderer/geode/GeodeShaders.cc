@@ -13,7 +13,6 @@
 #include "embed_resources/FilterImageWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
-#include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
@@ -147,11 +146,6 @@ wgpu::ShaderModule createFilterDropShadowShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterImage", donner::embedded::kFilterImageWgsl.data(),
                               donner::embedded::kFilterImageWgsl.size());
-}
-
-wgpu::ShaderModule createFilterTileShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterTile", donner::embedded::kFilterTileWgsl.data(),
-                              donner::embedded::kFilterTileWgsl.size());
 }
 
 }  // namespace donner::geode

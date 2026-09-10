@@ -1003,16 +1003,10 @@ jobs:
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
-      # Editor tests whose WebGPU/Geode arm is compiled out of the default
-      # tiny_skia build and which carry no `variants = ["geode"]` wrapper, so
-      # the plain `bazel test //...` sweep above never executes them. Without
-      # this step they run on no lane at all. Measured on Apple Silicon with a
-      # warm build: 74 s wall, ~62 s of it test execution (`test:geode` pins
-      # `--local_test_jobs=1`, so the suite is serial). The whole
-      # `//donner/editor/...` tree under `--config=geode` is 260 tests / 193 s
-      # if this ever needs widening.
+      # Exercise the Geode editor configuration explicitly. The window test uses its
+      # transitioned wrapper to locate declared shared libraries on clean workers.
       GEODE_EDITOR_TARGETS: >-
-        //donner/editor/tests:editor_window_tests
+        //donner/editor/tests:editor_window_tests_geode
         //donner/editor/tests:layer_thumbnail_golden_tests
         //donner/editor/tests:async_renderer_tests
         //donner/editor/tests:rnr_replay_tests
@@ -1124,9 +1118,9 @@ jobs:
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
-      # targets need an explicit invocation and for the measured runtime.
+      # targets need an explicit invocation.
       GEODE_EDITOR_TARGETS: >-
-        //donner/editor/tests:editor_window_tests
+        //donner/editor/tests:editor_window_tests_geode
         //donner/editor/tests:layer_thumbnail_golden_tests
         //donner/editor/tests:async_renderer_tests
         //donner/editor/tests:rnr_replay_tests

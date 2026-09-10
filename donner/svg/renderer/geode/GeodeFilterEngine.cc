@@ -26,6 +26,7 @@
 #include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/OffsetBindings.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
+#include "donner/gpu/shader/programs/TileBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -38,6 +39,7 @@
 #include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterResolveWgsl.h"
+#include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SubregionClipWgsl.h"
@@ -2057,12 +2059,16 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     imagePipeline_ = std::move(pipeline);
   }
 
-  // --- feTile wraparound pipeline (input + output + uniform) ---
+  // The tile program records through the shared GPU command stream.
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterTile", createFilterTileShader(dev), sizeof(TileParams));
-    tileBindGroupLayout_ = std::move(bgl);
-    tilePipeline_ = std::move(pipeline);
+    using gpu::shader::programs::TileBinding;
+    tileProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterTile", EmbeddedWgsl(donner::embedded::kFilterTileWgsl),
+        gpu::shader::programs::kTileEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(TileBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(TileBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(TileBinding::Params))},
+        gpu::shader::programs::kTileWorkgroupSize);
   }
 
   // --- Per-primitive subregion clipping pipeline, through the GPU runtime ---
@@ -4596,30 +4602,20 @@ wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgp
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
-
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterTileOutput");
-  if (!output) {
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterTileOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
-
-  TileParams params{};
-  params.srcX = srcX;
-  params.srcY = srcY;
-  params.srcW = srcW;
-  params.srcH = srcH;
-
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  const TileParams params{srcX, srcY, srcW, srcH};
+  if (!dispatchRuntimeInputOutputUniform(arena, tileProgram_, input, *output, UniformBytes(params),
+                                         "FilterTilePass",
+                                         gpu::shader::programs::kTileWorkgroupSize)) {
     return {};
   }
-
-  dispatchInputOutputUniform(arena, device_, tileBindGroupLayout_.get(), tilePipeline_.get(), input,
-                             output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(TileParams),
-                             "FilterTilePass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
