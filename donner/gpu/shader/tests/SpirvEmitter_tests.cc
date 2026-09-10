@@ -294,8 +294,6 @@ IrModule BuildSolidFill() {
   return std::move(module).result();
 }
 
-/// Serializes SPIR-V words to the standard little-endian byte stream.
-
 // ----- Module header and determinism -----
 
 TEST(SpirvEmitterTests, ModuleHeaderIsSpirv13ForVulkan) {
