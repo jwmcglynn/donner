@@ -37,6 +37,7 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
 using testing::HasSubstr;
@@ -453,6 +454,30 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   // mismatched pixels, anti-aliased pixels included).
   editor::tests::CompareBitmapToGolden(bitmap, goldenPath, "metal_solid_fill",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(MetalSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckVertexInputScene(
+      *device_,
+      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, false);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckVertexInputScene(
+      *device_,
+      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 }  // namespace

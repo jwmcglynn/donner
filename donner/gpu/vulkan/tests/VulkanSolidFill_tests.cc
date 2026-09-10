@@ -39,6 +39,7 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
@@ -577,6 +578,28 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   expected.alphaType = svg::AlphaType::Premultiplied;
 
   ExpectRendersMatchWithinQuantization(actual, expected);
+}
+
+TEST_F(VulkanSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckVertexInputScene(
+      *device_, ShaderModuleDescriptor{"attributes", {}, ShaderSourceKind::Spirv, emitted.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, false);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckVertexInputScene(
+      *device_, ShaderModuleDescriptor{"attributes", {}, ShaderSourceKind::Spirv, emitted.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 }  // namespace

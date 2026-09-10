@@ -75,6 +75,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
+        "//donner/gpu:vertex_input_slice",
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
