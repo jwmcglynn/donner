@@ -25,6 +25,7 @@
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -250,6 +251,13 @@ TEST(MslXcrunValidation, EmittedTileComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildTileModule(), "tile");
+}
+
+TEST(MslXcrunValidation, EmittedGaussianBlurComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildGaussianBlurModule(), "gaussian_blur");
 }
 
 TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {

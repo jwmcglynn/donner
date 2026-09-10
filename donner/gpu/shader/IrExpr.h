@@ -82,6 +82,8 @@ enum class BuiltinFn : uint8_t {
   TextureSample,      //!< `textureSample(texture, sampler, coords)`
   TextureLoad,        //!< `textureLoad(texture, coords, level)`
   TextureDimensions,  //!< `textureDimensions(texture)`
+  Ceil,               //!< `ceil(x)` for f32 scalars or vectors.
+  Exp,                //!< `exp(x)` for f32 scalars or vectors.
 };
 
 /**

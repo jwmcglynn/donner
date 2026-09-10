@@ -338,6 +338,7 @@ donner_cc_library(
         ":filter_resolve_wgsl",
         ":filter_tile_wgsl",
         ":flood_wgsl",
+        ":gaussian_blur_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
         ":geode_shaders",
@@ -566,11 +567,19 @@ embed_resources(
 )
 
 # Phase 7: Gaussian blur compute shader (two-pass separable).
+genrule(
+    name = "gaussian_blur_generated",
+    outs = ["generated/gaussian_blur.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) gaussian_blur " +
+          "$(location generated/gaussian_blur.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "gaussian_blur_wgsl",
     header_output = "embed_resources/GaussianBlurWgsl.h",
     resources = {
-        "kGaussianBlurWgsl": "shaders/gaussian_blur.wgsl",
+        "kGaussianBlurWgsl": "generated/gaussian_blur.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -754,7 +763,6 @@ donner_cc_library(
         ":filter_image_wgsl",
         ":filter_specular_lighting_wgsl",
         ":filter_turbulence_wgsl",
-        ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",

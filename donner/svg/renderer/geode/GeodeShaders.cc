@@ -13,7 +13,6 @@
 #include "embed_resources/FilterImageWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
-#include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
@@ -82,11 +81,6 @@ gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
   return createGpuShaderFromWgsl(device, "ImageBlit", donner::embedded::kImageBlitWgsl.data(),
                                  donner::embedded::kImageBlitWgsl.size());
-}
-
-wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "GaussianBlur", donner::embedded::kGaussianBlurWgsl.data(),
-                              donner::embedded::kGaussianBlurWgsl.size());
 }
 
 wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {

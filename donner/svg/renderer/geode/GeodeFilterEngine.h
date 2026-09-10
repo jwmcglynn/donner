@@ -489,8 +489,7 @@ private:
   GeodeDevice& device_;
 
   // Gaussian blur pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> gaussianBlurPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> blurBindGroupLayout_;
+  RuntimeComputeProgram blurProgram_;
 
   // feOffset pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram offsetProgram_;
