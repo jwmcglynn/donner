@@ -1138,6 +1138,68 @@ TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
   }
 }
 
+TEST(WgslEmitterGeodeValidation, TilePreservesFloatStorageWithoutQuantization) {
+  auto geode = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geode) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildTileModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto& device = geode->device();
+  const auto& queue = geode->queue();
+  constexpr uint32_t kWidth = 16, kHeight = 2, kRowBytes = kWidth * 4 * sizeof(float);
+  std::vector<float> values(kWidth * kHeight * 4);
+  for (size_t i = 0; i < values.size(); i += 4) {
+    values[i] = float(i) / 1024 + 0.000123f;
+    values[i + 1] = -0.5f;
+    values[i + 2] = 1.5f;
+    values[i + 3] = 0.7f;
+  }
+  wgpu::TextureDescriptor desc = {};
+  desc.size = {kWidth, kHeight, 1};
+  desc.format = wgpu::TextureFormat::RGBA32Float;
+  desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+  desc.mipLevelCount = 1;
+  desc.sampleCount = 1;
+  desc.dimension = wgpu::TextureDimension::_2D;
+  const auto source = device.createTexture(desc);
+  desc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  const auto destination = device.createTexture(desc);
+  wgpu::TexelCopyTextureInfo copy = {};
+  copy.texture = source;
+  wgpu::TexelCopyBufferLayout layout = {};
+  layout.bytesPerRow = kRowBytes;
+  layout.rowsPerImage = kHeight;
+  const wgpu::Extent3D extent = {kWidth, kHeight, 1};
+  queue.writeTexture(copy, values.data(), values.size() * sizeof(float), layout, extent);
+  wgpu::BufferDescriptor bufferDesc = {};
+  bufferDesc.size = values.size() * sizeof(float);
+  bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  const auto readback = device.createBuffer(bufferDesc);
+  auto encoder = device.createCommandEncoder();
+  const int32_t params[] = {0, 0, kWidth, kHeight};
+  ASSERT_THAT(
+      RecordInputOutputUniformProgram(
+          device, queue, encoder, wgsl.result(), source, destination,
+          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+          programs::kTileWorkgroupSize),
+      testing::IsTrue());
+  copy.texture = destination;
+  wgpu::TexelCopyBufferInfo bufferCopy = {};
+  bufferCopy.buffer = readback;
+  bufferCopy.layout = layout;
+  encoder.copyTextureToBuffer(copy, bufferCopy, extent);
+  auto commands = encoder.finish();
+  queue.submit(1, &commands);
+  const auto bytes = MapAndReadBack(device, readback, bufferDesc.size);
+  ASSERT_THAT(bytes, testing::SizeIs(bufferDesc.size));
+  std::vector<float> actual(values.size());
+  std::memcpy(actual.data(), bytes.data(), bytes.size());
+  EXPECT_THAT(actual, testing::ElementsAreArray(values));
+}
+
 /// Builds the color space conversion compute pipeline from \p module, mirroring the bind group
 /// layout the program declares: sampled input texture, write-only rgba8unorm storage output, and
 /// uniform params, all compute-visible.

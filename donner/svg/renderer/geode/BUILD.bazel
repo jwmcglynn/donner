@@ -1079,6 +1079,7 @@ donner_cc_test(
         ":filter_composite_wgsl",
         ":filter_merge_wgsl",
         ":filter_resolve_wgsl",
+        ":filter_tile_wgsl",
         ":flood_wgsl",
         ":offset_wgsl",
         ":snapshot_unpremultiply_wgsl",

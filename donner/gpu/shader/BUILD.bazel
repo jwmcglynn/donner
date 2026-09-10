@@ -231,6 +231,9 @@ donner_cc_test(
         "tests/testdata/subregion_clip.msl",
         "tests/testdata/subregion_clip.spv",
         "tests/testdata/subregion_clip.wgsl",
+        "tests/testdata/tile.msl",
+        "tests/testdata/tile.spv",
+        "tests/testdata/tile.wgsl",
     ],
     deps = [
         ":float_storage_test_module",
@@ -383,6 +386,7 @@ filegroup(
         "tests/testdata/offset.wgsl",
         "tests/testdata/snapshot_unpremultiply.wgsl",
         "tests/testdata/subregion_clip.wgsl",
+        "tests/testdata/tile.wgsl",
     ],
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )

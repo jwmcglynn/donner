@@ -705,6 +705,56 @@
         "SubregionClipParams"
       ]
     },
+    "donner/gpu/shader/tests/testdata/tile.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "TileParams"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "clamp",
+        "if",
+        "let",
+        "return",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "TileParams"
+      ]
+    },
     "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc#kCheckerboardWgsl": {
       "bindings": [
         {
