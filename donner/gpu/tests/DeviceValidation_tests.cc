@@ -799,6 +799,12 @@ public:
   SurfaceStatus presentStatus = SurfaceStatus::Success;
   /// Number of times the runtime abandoned an acquired texture.
   int abandonCalls = 0;
+  /// Inject failures after entering the backend, without granting ownership of a frame.
+  bool failAcquire = false;
+  /// Present consumes backend ownership even when it reports an error.
+  bool failPresent = false;
+  /// Slots proposed by acquisition attempts, to verify failed attempts are recycled.
+  std::vector<uint32_t> acquireSlots;
 
 protected:
   // The operations this fake does not model are accepted and ignored: the tests below are about
@@ -844,7 +850,11 @@ protected:
 
   Status onConfigureSurface(uint32_t, const SurfaceConfiguration&) override { return OkStatus(); }
 
-  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t textureSlot) override {
+    acquireSlots.push_back(textureSlot);
+    if (failAcquire) {
+      return GpuError{GpuErrorType::InvalidState, "scripted acquire failure"};
+    }
     // The platform holds its own frame, and it holds exactly one: a backend tracks the frame it
     // handed out and refuses another until that one is presented or handed back. The wgpu
     // backend does this with its own per-surface flag, so a runtime that only cleaned up its own
@@ -861,6 +871,9 @@ protected:
 
   Result<SurfaceStatus> onPresentSurface(uint32_t) override {
     backendHasFrame = false;
+    if (failPresent) {
+      return GpuError{GpuErrorType::InvalidState, "scripted present failure"};
+    }
     return presentStatus;
   }
 
@@ -1297,6 +1310,105 @@ TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {
   descriptor.native.kind = NativeSurfaceKind::MetalLayer;
   descriptor.native.display = &layer_;
   EXPECT_THAT(plainDevice.createSurface(descriptor), IsGpuError(GpuErrorType::Unsupported));
+}
+
+TEST_F(RenderPipelineValidationTests, VertexLayoutsRequireStrideAndAttributesTogether) {
+  for (bool emptyAttributes : {false, true}) {
+    auto descriptor = validDescriptor();
+    if (emptyAttributes)
+      descriptor.vertex.buffers[0].attributes.clear();
+    else
+      descriptor.vertex.buffers[0].strideBytes = 0;
+    const auto before = device_.serialize();
+    EXPECT_THAT(
+        device_.createRenderPipeline(descriptor),
+        IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                              HasSubstr(emptyAttributes ? "no attributes" : "strideBytes 0")));
+    EXPECT_EQ(device_.serialize(), before)
+        << "Invalid layouts must never allocate a native pipeline";
+  }
+  auto generatedVertices = validDescriptor();
+  generatedVertices.vertex.buffers.clear();
+  EXPECT_THAT(device_.createRenderPipeline(generatedVertices), HasResult())
+      << "A shader-generated vertex stream needs no vertex buffer layout";
+}
+
+TEST_F(RenderPipelineValidationTests, ResourceCountsAcceptTheCapAndRejectCapPlusOne) {
+  auto descriptor = validDescriptor();
+  descriptor.fragment.targets.resize(kMaxColorAttachments, descriptor.fragment.targets.front());
+  ASSERT_THAT(device_.createRenderPipeline(descriptor), HasResult());
+  descriptor.fragment.targets.push_back(descriptor.fragment.targets.front());
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::LimitExceeded));
+
+  descriptor = validDescriptor();
+  descriptor.vertex.buffers.clear();
+  for (uint32_t i = 0; i < kMaxVertexBuffers; ++i) {
+    descriptor.vertex.buffers.push_back(
+        {4, VertexStepMode::Vertex, {{VertexFormat::Uint32, 0, i}}});
+  }
+  ASSERT_THAT(device_.createRenderPipeline(descriptor), HasResult());
+  descriptor.vertex.buffers.push_back(
+      {4, VertexStepMode::Instance, {{VertexFormat::Uint32, 0, kMaxVertexBuffers}}});
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::LimitExceeded));
+}
+
+TEST_F(RenderPipelineValidationTests, FragmentEntryAndShaderLifetimeAreCheckedBeforeAllocation) {
+  auto descriptor = validDescriptor();
+  descriptor.fragment.entryPoint = "";
+  EXPECT_THAT(
+      device_.createRenderPipeline(descriptor),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("fragment.entryPoint")));
+  descriptor = validDescriptor();
+  ASSERT_THAT(device_.destroyShaderModule(std::move(shader_)), IsOk());
+  const auto before = device_.serialize();
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_EQ(device_.serialize(), before);
+}
+
+TEST_F(SurfaceTests, FailedAcquireDoesNotLeakAFrameOrPreventRetry) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  device_.failAcquire = true;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    EXPECT_THAT(
+        device_.acquireCurrentTexture(surface),
+        IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("scripted acquire failure")));
+    EXPECT_FALSE(device_.backendHasFrame);
+    EXPECT_THAT(device_.abandonCurrentTexture(surface), IsGpuError(GpuErrorType::InvalidState));
+  }
+  device_.failAcquire = false;
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  ASSERT_TRUE(frame.texture.isValid());
+  ASSERT_EQ(device_.acquireSlots.size(), 4u);
+  for (uint32_t slot : device_.acquireSlots) EXPECT_EQ(slot, frame.texture.slotIndex());
+  EXPECT_THAT(device_.abandonCurrentTexture(surface), IsOk());
+  EXPECT_FALSE(device_.backendHasFrame);
+}
+
+TEST_F(SurfaceTests, PresentFailureInvalidatesTheFrameAndAllowsTheNextAcquire) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  device_.failPresent = true;
+  EXPECT_THAT(
+      device_.presentSurface(surface),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("scripted present failure")));
+  EXPECT_THAT(device_.createTextureView(frame.texture, {}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_FALSE(device_.backendHasFrame);
+  device_.failPresent = false;
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), HasResult());
+}
+
+TEST_F(SurfaceTests, ExplicitSurfaceDestructionInvalidatesOutstandingTexture) {
+  Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  EXPECT_THAT(device_.destroySurface(std::move(surface)), IsOk());
+  EXPECT_FALSE(surface.isValid());
+  EXPECT_THAT(device_.createTextureView(frame.texture, {}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.surfaceCapabilities(surface), IsGpuError(GpuErrorType::InvalidHandle));
 }
 
 }  // namespace
