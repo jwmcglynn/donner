@@ -197,4 +197,15 @@ donner_cc_test(
     ],
 )
 
+# The allocator calls a supplied entry-point table; these tests inject that
+# table to verify failure unwinding without opening a Vulkan loader or device.
+donner_cc_test(
+    name = "vulkan_buffer_allocator_tests",
+    srcs = ["VulkanBufferAllocator_tests.cc"],
+    deps = [
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()
