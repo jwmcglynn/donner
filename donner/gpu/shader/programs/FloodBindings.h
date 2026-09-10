@@ -24,7 +24,7 @@ inline constexpr uint32_t kFloodWorkgroupSize = 8;
 /// Bind group indices of the flood compute program, shared by the IR builder and every host that
 /// creates its bind group layout.
 enum class FloodBinding : uint32_t {
-  OutputTexture = 0,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
+  OutputTexture = 0,  //!< `texture_storage_2d<rgba32float, write>` destination.
   Params = 1,         //!< Uniform buffer holding the single color the destination is filled with.
 };
 

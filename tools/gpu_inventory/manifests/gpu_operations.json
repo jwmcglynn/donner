@@ -676,6 +676,7 @@
         "createView",
         "dispatchWorkgroups",
         "finish",
+        "release",
         "setBindGroup",
         "setPipeline",
         "submit",
@@ -725,6 +726,7 @@
         "Texture",
         "TextureFormat",
         "TextureSampleType",
+        "TextureUsage",
         "TextureView",
         "TextureViewDimension"
       ]

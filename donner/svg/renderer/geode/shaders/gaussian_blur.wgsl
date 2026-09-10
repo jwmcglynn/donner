@@ -42,11 +42,11 @@ fn apply_clip(coord: vec2i, value: vec4f) -> vec4f {
       return vec4f(0.0);
     }
   }
-  return value;
+  return clamp(value, vec4f(0.0), vec4f(1.0));
 }
 
 @group(0) @binding(0) var input_tex: texture_2d<f32>;
-@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var output_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> params: BlurParams;
 
 // Sample the input texture with edge-mode handling.

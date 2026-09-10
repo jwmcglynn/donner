@@ -64,7 +64,7 @@ TEST(FilterColorMatrixProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, HasSubstr("@compute @workgroup_size(8, 8, 1)\nfn cs_main("));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
   EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba8unorm, "
+              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
                         "write>;"));
   EXPECT_THAT(wgsl,
               HasSubstr("@group(0) @binding(2) var<uniform> params: FilterColorMatrixParams;"));

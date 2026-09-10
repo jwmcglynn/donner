@@ -1036,8 +1036,8 @@ private:
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
-    // Every current pool caller uses a single-sampled, one-mip 32-bit RGBA or BGRA texture.
-    return static_cast<uint64_t>(key.width) * static_cast<uint64_t>(key.height) * 4u;
+    return static_cast<uint64_t>(key.width) * key.height * key.sampleCount *
+           gpu::TextureFormatBytesPerTexel(key.format);
   }
 
   /// Destroys the backend object behind \p texture, not just this pool's name for it.
@@ -1264,7 +1264,9 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                                                      const std::optional<Box2d>& filterRegion,
                                                      const Transform2d& deviceFromFilter,
                                                      int viewportWidth, int viewportHeight,
-                                                     components::FilterExecutionBudget& budget) {
+                                                     components::FilterExecutionBudget& budget,
+                                                     const RendererSurfaceBudget& surfaceBudget,
+                                                     const geode::GeodeFilterEngine& engine) {
   const std::optional<GeodeFilterBuffer> buffer = ComputeGeodeFilterBuffer(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
   if (!buffer.has_value()) {
@@ -1273,16 +1275,53 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
   }
   const std::uint64_t bufferPixels =
       static_cast<std::uint64_t>(buffer->width) * static_cast<std::uint64_t>(buffer->height);
-  const bool fullExecutionFits = components::FilterGraphFitsExecutionBudget(
-      filterGraph, bufferPixels, components::FilterMemoryModel::GpuAllNodes);
+  const geode::FilterTilePlan plan =
+      engine.executionPlan(filterGraph, buffer->width, buffer->height, deviceFromFilter);
+  uint64_t plannedWork = 0;
+  uint64_t plannedBytes = 0;
+  const bool fullExecutionFits = components::FilterGraphExecutionCost(
+      filterGraph, plan.workPixels(), components::FilterMemoryModel::GpuAllNodes, plannedWork,
+      plannedBytes, plan.pixels(), plan.tiles);
   const std::optional<std::uint64_t> localPixels = ComputeGeodeLocalFilterPixels(
       filterGraph, filterRegion, deviceFromFilter, *buffer, fullExecutionFits);
   const std::uint64_t executionPixels = localPixels.has_value() && fullExecutionFits
                                             ? std::max(bufferPixels, *localPixels)
                                             : localPixels.value_or(bufferPixels);
-  const std::uint64_t captureBytes = bufferPixels * 4u + localPixels.value_or(0) * 4u;
-  auto reservation = budget.reserve(filterGraph, executionPixels,
-                                    components::FilterMemoryModel::GpuAllNodes, captureBytes);
+  const bool tiled = plan.tiles > 1 && !localPixels;
+  const std::uint64_t viewportCopyBytes =
+      buffer->offsetX || buffer->offsetY
+          ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4
+          : 0;
+  const std::uint64_t captureBytes = bufferPixels * 4u + localPixels.value_or(0) * 4u +
+                                     (tiled ? plan.additionalTextureBytes() : 0) +
+                                     viewportCopyBytes;
+  const uint64_t workPixels = tiled ? plan.workPixels() : executionPixels;
+  const uint64_t memoryPixels = tiled ? plan.pixels() : executionPixels;
+  const uint64_t executions = tiled ? plan.tiles : 1;
+  std::size_t surfaces = 0;
+  uint64_t graphBytes = 0;
+  uint64_t graphWork = 0;
+  if (components::FilterGraphExecutionCost(filterGraph, workPixels,
+                                           components::FilterMemoryModel::GpuAllNodes, graphWork,
+                                           graphBytes, memoryPixels, executions)) {
+    components::GpuFilterWorkingSet layout;
+    (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
+    surfaces = layout.floatTextures + 2 + (localPixels ? 1 : 0) + (tiled ? 2 : 0) +
+               (viewportCopyBytes ? 1 : 0);
+    surfaces +=
+        std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
+          return std::holds_alternative<components::filter_primitive::Image>(node.primitive);
+        });
+    if (budget.reservedGpuSurfaces() > RendererSurfaceBudget::kMaximumSurfaces ||
+        !surfaceBudget.canReserveBytes(captureBytes + graphBytes + budget.retainedGpuBytes(),
+                                       surfaces + budget.reservedGpuSurfaces())) {
+      budget.requireMemoryChunk();
+      return std::nullopt;
+    }
+  }
+  auto reservation = budget.reserve(
+      filterGraph, workPixels, components::FilterMemoryModel::GpuAllNodes, captureBytes,
+      engine.retainedBufferBytes(), memoryPixels, executions, surfaces);
   if (!reservation.has_value()) {
     return std::nullopt;
   }
@@ -1755,10 +1794,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Charges one surface of \p size against the frame's surface budget.
   /// @param size Extent of the surface about to be allocated, in texels.
-  [[nodiscard]] bool reserveTextureSurface(const gpu::Extent2d& size) {
+  [[nodiscard]] bool reserveTextureSurface(
+      const gpu::Extent2d& size, gpu::TextureFormat format = gpu::TextureFormat::RGBA8Unorm) {
     if (!device || size.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
         size.height > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        !surfaceBudget->reserve(static_cast<int>(size.width), static_cast<int>(size.height))) {
+        !surfaceBudget->reserve(static_cast<int>(size.width), static_cast<int>(size.height), 1,
+                                gpu::TextureFormatBytesPerTexel(format))) {
       return false;
     }
     return true;
@@ -1768,7 +1809,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
-    if (!texturePool || !reserveTextureSurface(desc.size)) {
+    if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
     return texturePool->acquire(desc);
@@ -1795,7 +1836,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         desc.size.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
         desc.size.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
         surfaceBudget->release(static_cast<int>(desc.size.width),
-                               static_cast<int>(desc.size.height));
+                               static_cast<int>(desc.size.height), 1,
+                               gpu::TextureFormatBytesPerTexel(desc.format));
     UTILS_RELEASE_ASSERT(releasedSurface);
     if (texturePool) {
       texturePool->release(std::move(texture), desc);
@@ -2194,12 +2236,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     compositeEncoder->setLoadPreserve();
     encoder = std::move(compositeEncoder);
     updateEncoderScissor();
-    encoder->setTransform(deviceFromLocal);
-    encoder->drawTexture(importFilterResult(localFiltered),
-                         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
-                                         static_cast<double>(geometry->height)),
-                         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
-    encoder->setTransform(Transform2d());
+    if (localFiltered) {
+      encoder->setTransform(deviceFromLocal);
+      encoder->drawTexture(importFilterResult(localFiltered),
+                           Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
+                                           static_cast<double>(geometry->height)),
+                           kWholeTextureUv, 1.0, /*pixelated=*/false,
+                           /*sourceIsPremultiplied=*/true);
+      encoder->setTransform(Transform2d());
+    }
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
     frame.localRasterRequiredForBudget = false;
     return true;
@@ -5485,12 +5530,14 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   }
   std::optional<GeodeFilterAdmission> admission =
       AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
+                       *impl_->surfaceBudget, *impl_->filterEngine);
   if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
       impl_->submitFilterBudgetChunk()) {
     admission =
         AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
+                         *impl_->surfaceBudget, *impl_->filterEngine);
   }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();
@@ -5555,9 +5602,9 @@ void RendererGeode::popFilterLayer() {
   // another backend texture its own arena owns.
   const wgpu::Texture layerBackendTexture = impl_->backendTextureOf(frame.layerTexture);
   wgpu::Texture filteredTexture = layerBackendTexture;
-  const bool discardCapturedLayer = frame.localRasterRequiredForBudget;
   if (frame.localRasterRequiredForBudget) {
     impl_->filterExecutionBudget->reject();
+    filteredTexture = wgpu::Texture{};
   } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
              static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
                  components::kMaximumFilterSurfacePixels) {
@@ -5579,7 +5626,7 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  if (discardCapturedLayer) {
+  if (!filteredTexture) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;

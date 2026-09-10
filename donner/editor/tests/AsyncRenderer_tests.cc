@@ -1508,6 +1508,9 @@ TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel
   const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
+  const auto resources = renderer.resourceStats();
+  EXPECT_FALSE(resources.filterBudgetRejected);
+  EXPECT_FALSE(resources.surfaceBudgetRejected);
 
   const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
   const std::string targetTileId = "layer:" + std::to_string(static_cast<unsigned>(targetEntity));

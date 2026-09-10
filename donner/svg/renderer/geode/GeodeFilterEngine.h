@@ -10,9 +10,7 @@
 /// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
 /// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
 /// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`,
-/// `feDropShadow`, `feImage`, `feTile`. Other primitives are passed
-/// through (the input texture is forwarded unchanged) with a one-shot
-/// warning.
+/// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <memory>
 #include <webgpu/webgpu.hpp>
@@ -91,6 +89,34 @@ public:
   ///   that descriptor misses its bucket.
   virtual void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                               const gpu::TextureDescriptor& desc) = 0;
+};
+
+/// Exact-resolution tile layout with overlapping sampling halos.
+struct FilterTilePlan {
+  uint32_t width = 0;       //!< Full source/output width.
+  uint32_t height = 0;      //!< Full source/output height.
+  uint32_t tileWidth = 0;   //!< Fixed working width, including halos.
+  uint32_t tileHeight = 0;  //!< Fixed working height, including halos.
+  uint32_t coreWidth = 0;   //!< Non-overlapping output step.
+  uint32_t coreHeight = 0;  //!< Non-overlapping output step.
+  uint64_t tiles = 1;       //!< Number of complete graph executions.
+  uint64_t pixels() const { return uint64_t{tileWidth} * tileHeight; }
+  uint64_t workPixels() const { return pixels() * tiles; }
+  uint64_t additionalTextureBytes() const {
+    return tiles > 1 ? (uint64_t{width} * height + pixels()) * 4 : 0;
+  }
+};
+
+/// GPU allocation bytes retained by an execution, excluding the caller's source/capture.
+struct FilterExecutionMemory {
+  uint64_t textures = 0;           //!< Texture descriptors, including dead reusable scratch.
+  uint64_t standaloneBuffers = 0;  //!< Per-execution buffers retained until submission.
+  uint64_t persistentBuffers = 0;  //!< Parameter arenas and immutable transfer tables.
+
+  uint64_t tileExecutions = 0;  //!< Complete graph evaluations, including sampling halos.
+
+  /// Total retained allocation bytes.
+  uint64_t total() const { return textures + standaloneBuffers + persistentBuffers; }
 };
 
 /**
@@ -186,8 +212,25 @@ public:
    */
   void beginFrame();
 
+  /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
+  uint64_t retainedBufferBytes() const;
+
+  /// Plans bounded working textures without changing sample coordinates or resolution.
+  /// @param graph Graph to execute. @param width Source width. @param height Source height.
+  /// @param deviceFromFilter Original filter-to-device transform.
+  FilterTilePlan executionPlan(const svg::components::FilterGraph& graph, uint32_t width,
+                               uint32_t height, const Transform2d& deviceFromFilter) const;
+
+  /// Lower the working extent for deterministic tile-boundary tests.
+  /// @param extent Maximum dimension, between 16 and 512 pixels.
+  void setMaximumTileExtentForTesting(uint32_t extent);
+
+  /// Observed allocation footprint of the most recent execution; does not own resources.
+  FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
+
 private:
   friend struct FilterGraphExecution;
+  friend struct FilterNodeExecution;
   /// Two-pass separable Gaussian blur via compute shader.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
@@ -401,6 +444,10 @@ private:
                            const svg::components::FilterNode& node,
                            const Transform2d& deviceFromFilter, const Box2d& placementRegionUser);
 
+  /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
+  /// @param arena Frame resources. @param output Existing image destination.
+  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const wgpu::Texture& output);
+
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.
   /// @param srcX Source rectangle X origin in pixels.
@@ -419,10 +466,11 @@ private:
   /// @param usrY0 User-space subregion top edge.
   /// @param usrX1 User-space subregion right edge.
   /// @param usrY1 User-space subregion bottom edge.
+  /// @param resolve True for the final RGBA8 clip and half-up quantization.
   /// @return A new texture with out-of-subregion pixels cleared.
   wgpu::Texture applySubregionClip(FilterResourceArena& arena, const wgpu::Texture& input,
                                    const Transform2d& filterFromDevice, double usrX0, double usrY0,
-                                   double usrX1, double usrY1);
+                                   double usrX1, double usrY1, bool resolve = false);
 
   /// Convert a texture between sRGB and linearRGB color spaces.
   /// Used to implement `color-interpolation-filters: linearRGB` (the SVG default).
@@ -499,12 +547,13 @@ private:
 
   // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram subregionClipProgram_;
+  RuntimeComputeProgram filterResolveProgram_;
 
   // sRGB to linear color space conversion pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram colorSpaceConvertProgram_;
+  gpu::Buffer colorTransferTable_;
 
   bool verbose_ = false;
-  bool warnedUnsupported_ = false;
 
   /// Frame-scoped count of filter passes recorded into the shared frame
   /// command encoder, across every execute() call in the frame. Reset by
@@ -517,6 +566,9 @@ private:
   /// the pooled textures a pass binds rotate across frames, so their
   /// identities are not stable cache keys.
   std::unique_ptr<FilterResourceCache> resourceCache_;
+  FilterExecutionMemory lastExecutionMemory_;
+  uint32_t preferredTileExtent_ = 512;
+  bool adaptiveTiles_ = true;
 };
 
 }  // namespace donner::geode

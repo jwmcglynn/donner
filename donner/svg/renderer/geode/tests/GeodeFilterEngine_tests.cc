@@ -33,6 +33,11 @@ public:
       return {};
     }
     ++allocations;
+    retainedTextureBytes += uint64_t{descriptor.size.width} * descriptor.size.height *
+                            gpu::TextureFormatBytesPerTexel(descriptor.format);
+    if (descriptor.label == "FilterColorSpaceConvertOutput") {
+      ++colorConversions;
+    }
     return gpu::GetResultOrFail(device_.createTexture(descriptor));
   }
 
@@ -44,6 +49,8 @@ public:
   size_t refusals = 0;
   size_t requestsAfterRefusal = 0;
   size_t allocations = 0;
+  size_t colorConversions = 0;
+  uint64_t retainedTextureBytes = 0;
   std::vector<gpu::Texture> retired;
 
 private:
@@ -69,6 +76,16 @@ svg::components::FilterGraph MakeGraph(bool composite) {
   }
   operation.inputs = {FilterInput::Named{RcString("prior")}, FilterInput::Named{RcString("prior")}};
   graph.nodes.push_back(operation);
+  return graph;
+}
+
+svg::components::FilterGraph MakeDirectGraph(bool composite, bool distinctInputs = false) {
+  auto graph = MakeGraph(composite);
+  graph.nodes.erase(graph.nodes.begin());
+  graph.nodes.front().inputs = {svg::components::FilterStandardInput::SourceGraphic,
+                                distinctInputs
+                                    ? svg::components::FilterStandardInput::SourceAlpha
+                                    : svg::components::FilterStandardInput::SourceGraphic};
   return graph;
 }
 
@@ -105,14 +122,15 @@ protected:
   }
 
   void runGraph(const svg::components::FilterGraph& graph, std::string_view refusedLabel,
-                size_t refusedOccurrence = 1) {
+                size_t refusedOccurrence = 1, bool expectRefusal = true) {
     allocator_ = std::make_unique<RefusingTextureAllocator>(device_->adapterDevice(), refusedLabel,
                                                             refusedOccurrence);
     const wgpu::Texture output =
         engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
                          Box2d({0, 0}, {4, 4}), Transform2d(), *allocator_, encoder_);
-    EXPECT_THAT(static_cast<bool>(output), testing::Eq(refusedLabel.empty()));
-    EXPECT_THAT(allocator_->refusals, testing::Eq(refusedLabel.empty() ? 0u : 1u));
+    const bool refused = expectRefusal && !refusedLabel.empty();
+    EXPECT_THAT(static_cast<bool>(output), testing::Eq(!refused));
+    EXPECT_THAT(allocator_->refusals, testing::Eq(refused ? 1u : 0u));
     EXPECT_THAT(allocator_->requestsAfterRefusal, testing::Eq(0u));
     EXPECT_THAT(allocator_->retired, testing::SizeIs(allocator_->allocations));
   }
@@ -129,11 +147,11 @@ TEST_F(GeodeFilterEngineTest, AcceptedGraphReturnsACompleteOutput) {
 }
 
 TEST_F(GeodeFilterEngineTest, RefusedMergeOutputStopsBeforeClipping) {
-  runGraph(MakeGraph(false), "FilterMergeOutput");
+  runGraph(MakeDirectGraph(false), "FilterMergeOutput");
 }
 
 TEST_F(GeodeFilterEngineTest, RefusedCompositeOutputStopsBeforeClipping) {
-  runGraph(MakeGraph(true), "FilterCompositeOutput");
+  runGraph(MakeDirectGraph(true), "FilterCompositeOutput");
 }
 
 TEST_F(GeodeFilterEngineTest, RefusedNodeClipStopsBeforeTheNextNode) {
@@ -152,19 +170,348 @@ class LinearCompositingRefusalTest : public GeodeFilterEngineTest,
 
 TEST_P(LinearCompositingRefusalTest, RefusedConversionStopsBeforeFurtherAllocation) {
   const auto [composite, occurrence] = GetParam();
-  auto graph = MakeGraph(composite);
+  auto graph = MakeDirectGraph(composite, true);
   graph.colorInterpolationFilters = svg::ColorInterpolationFilters::LinearRGB;
   runGraph(graph, "FilterColorSpaceConvertOutput", occurrence);
 }
 
 INSTANTIATE_TEST_SUITE_P(MergeAndComposite, LinearCompositingRefusalTest,
-                         testing::Combine(testing::Bool(), testing::Values(1u, 2u, 3u)));
+                         testing::Combine(testing::Bool(), testing::Values(1u, 2u)));
+
+TEST_F(GeodeFilterEngineTest, FinalCompositingConversionReusesFinishedStorage) {
+  for (const bool composite : {false, true}) {
+    SCOPED_TRACE(composite);
+    auto graph = MakeDirectGraph(composite, true);
+    graph.colorInterpolationFilters = svg::ColorInterpolationFilters::LinearRGB;
+    const uint64_t before = device_->adapterDevice().lastSubmittedSerial();
+    runGraph(graph, "FilterColorSpaceConvertOutput", 3, false);
+    // SourceAlpha, two input conversions, composition, clip, output conversion and resolve.
+    EXPECT_EQ(device_->adapterDevice().lastSubmittedSerial() - before, 7u);
+  }
+}
 
 TEST_F(GeodeFilterEngineTest, AcceptedLinearCompositeReturnsACompleteOutput) {
   auto graph = MakeGraph(true);
   graph.colorInterpolationFilters = svg::ColorInterpolationFilters::LinearRGB;
   runGraph(graph, "");
 }
+
+TEST_F(GeodeFilterEngineTest, SequentialOffsetsReuseThreeFloatIntermediates) {
+  svg::components::FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  for (int index = 0; index < 8; ++index) {
+    svg::components::FilterNode node;
+    node.primitive = svg::components::filter_primitive::Offset{.dx = 1.0};
+    graph.nodes.push_back(node);
+  }
+  runGraph(graph, "");
+  EXPECT_THAT(allocator_->allocations, testing::Le(4u));
+  EXPECT_THAT(allocator_->retainedTextureBytes, testing::Le(16u * (3u * 16u + 4u)));
+}
+
+TEST_F(GeodeFilterEngineTest, UnusedNamedResultsDoNotRetainTheirIntermediates) {
+  svg::components::FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  for (int index = 0; index < 8; ++index) {
+    svg::components::FilterNode node;
+    node.primitive = svg::components::filter_primitive::Offset{.dx = 1.0};
+    node.result = RcString("step" + std::to_string(index));
+    graph.nodes.push_back(node);
+  }
+  runGraph(graph, "");
+  EXPECT_THAT(allocator_->allocations, testing::Le(4u));
+  EXPECT_THAT(allocator_->retainedTextureBytes, testing::Le(16u * (3u * 16u + 4u)));
+}
+
+TEST_F(GeodeFilterEngineTest, LargeMorphologyUsesTwoScratchTextures) {
+  svg::components::FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  svg::components::FilterNode node;
+  node.primitive = svg::components::filter_primitive::Morphology{
+      .op = svg::components::filter_primitive::Morphology::Operator::Dilate,
+      .radiusX = 255,
+      .radiusY = 255};
+  graph.nodes.push_back(node);
+  runGraph(graph, "");
+  EXPECT_THAT(allocator_->allocations, testing::Le(4u));
+  EXPECT_THAT(allocator_->retainedTextureBytes, testing::Le(16u * (3u * 16u + 4u)));
+}
+
+TEST_F(GeodeFilterEngineTest, GpuPreflightCoversTheTexturesActuallyRetained) {
+  const auto graph = MakeGraph(false);
+  runGraph(graph, "");
+  uint64_t workUnits = 0;
+  uint64_t estimatedBytes = 0;
+  ASSERT_THAT(
+      svg::components::FilterGraphExecutionCost(
+          graph, 16, svg::components::FilterMemoryModel::GpuAllNodes, workUnits, estimatedBytes),
+      testing::IsTrue());
+  EXPECT_THAT(estimatedBytes, testing::Ge(allocator_->retainedTextureBytes));
+}
+
+TEST_F(GeodeFilterEngineTest, RepeatedMergeInputReusesItsColorConversion) {
+  using namespace svg::components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::Merge{};
+  node.inputs = {FilterStandardInput::SourceGraphic, FilterStandardInput::SourceGraphic};
+  graph.nodes.push_back(node);
+  const uint64_t before = device_->adapterDevice().lastSubmittedSerial();
+  runGraph(graph, "");
+  // Two conversions, composition, node clip and final resolve; allocation reuse is independent.
+  EXPECT_EQ(device_->adapterDevice().lastSubmittedSerial() - before, 5u);
+}
+
+TEST_F(GeodeFilterEngineTest, RepeatedCompositeInputReusesItsColorConversion) {
+  using namespace svg::components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::Composite{};
+  node.inputs = {FilterStandardInput::SourceGraphic, FilterStandardInput::SourceGraphic};
+  graph.nodes.push_back(node);
+  const uint64_t before = device_->adapterDevice().lastSubmittedSerial();
+  runGraph(graph, "");
+  // Two conversions, composition, node clip and final resolve; allocation reuse is independent.
+  EXPECT_EQ(device_->adapterDevice().lastSubmittedSerial() - before, 5u);
+}
+
+struct AllocationRefusalCase {
+  const char* name;
+  svg::components::FilterPrimitive primitive;
+  const char* label;
+  bool linear = false;
+  bool sourceAlpha = false;
+  size_t occurrence = 1;
+  bool expectsAllocation = true;
+};
+
+void PrintTo(const AllocationRefusalCase& value, std::ostream* output) {
+  *output << value.name << " refuses " << value.label << " occurrence " << value.occurrence;
+}
+
+std::vector<AllocationRefusalCase> AllocationRefusalCases() {
+  using namespace svg::components::filter_primitive;
+  const GaussianBlur gaussian{.stdDeviationX = 1, .stdDeviationY = 1};
+  const GaussianBlur boxBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  const ColorMatrix matrix{.type = ColorMatrix::Type::Saturate, .values = {0.5}};
+  const Morphology morphology{.radiusX = 1, .radiusY = 1};
+  const ConvolveMatrix convolve{.orderX = 1, .orderY = 1, .kernelMatrix = {0.5}, .divisor = 1};
+  const DisplacementMap displacement{.scale = 1};
+  const DiffuseLighting diffuse{.light = LightSource{.elevation = 45}};
+  const SpecularLighting specular{.light = LightSource{.elevation = 45}};
+  Image image;
+  image.imageData =
+      std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>{255, 0, 0, 255});
+  image.imageWidth = 1;
+  image.imageHeight = 1;
+  return {
+      {"SourceAlpha", gaussian, "FilterSourceAlphaOutput", false, true},
+      {"GaussianFirstScratch", gaussian, "GaussianBlurScratch"},
+      {"GaussianSecondScratch", gaussian, "GaussianBlurScratch", false, false, 2},
+      {"BoxFirstScratch", boxBlur, "GaussianBlurScratch"},
+      {"BoxSecondScratch", boxBlur, "GaussianBlurScratch", false, false, 2},
+      {"Flood", Flood{}, "FilterFloodOutput"},
+      {"Offset", Offset{.dx = 1}, "FilterOffsetOutput"},
+      {"ColorMatrix", matrix, "FilterColorMatrixOutput"},
+      {"Merge", Merge{}, "FilterMergeOutput"},
+      {"Composite", Composite{}, "FilterCompositeOutput"},
+      {"Blend", Blend{}, "FilterBlendOutput"},
+      {"MorphologyFirstScratch", morphology, "FilterMorphologyOutput"},
+      {"MorphologySecondScratch", morphology, "FilterMorphologyOutput", false, false, 2},
+      {"ComponentTransfer", ComponentTransfer{}, "FilterComponentTransferOutput"},
+      {"Convolve", convolve, "FilterConvolveMatrixOutput"},
+      {"InvalidConvolve",
+       ConvolveMatrix{.orderX = 1, .orderY = 1, .kernelMatrix = {1}, .divisor = 0},
+       "FilterConvolveMatrixTransparent"},
+      {"Turbulence", Turbulence{}, "FilterTurbulenceOutput"},
+      {"InvalidTurbulence", Turbulence{.baseFrequencyX = -1}, "FilterTurbulenceTransparent"},
+      {"Displacement", displacement, "FilterDisplacementMapOutput"},
+      {"DiffuseLighting", diffuse, "FilterDiffuseLightingOutput"},
+      {"MissingDiffuseLight", DiffuseLighting{}, "FilterDiffuseLightingTransparent"},
+      {"SpecularLighting", specular, "FilterSpecularLightingOutput"},
+      {"InvalidSpecular", SpecularLighting{.specularExponent = 0},
+       "FilterSpecularLightingTransparent"},
+      {"DropShadow", DropShadow{}, "FilterDropShadowOutput"},
+      {"DropShadowScratch", DropShadow{}, "GaussianBlurScratch", false, false, 2},
+      {"ImageOutput", image, "FilterImageOutput"},
+      {"ImageUpload", image, "FilterImageSource"},
+      {"MissingImage", Image{}, "FilterImageEmptySource"},
+      {"Tile", Tile{}, "FilterTileOutput"},
+      {"FinalClip", Flood{}, "FilterSubregionClipOutput", false, false, 2},
+      {"LinearBlurInput", gaussian, "FilterColorSpaceConvertOutput", true},
+      {"LinearBlurOutput", GaussianBlur{.stdDeviationX = 1, .stdDeviationY = 0},
+       "FilterColorSpaceConvertOutput", true, false, 2},
+      {"LinearMatrixInput", matrix, "FilterColorSpaceConvertOutput", true},
+      {"LinearMatrixOutput", matrix, "FilterColorSpaceConvertOutput", true, false, 2, false},
+      {"LinearCompositeFirstInput", Composite{}, "FilterColorSpaceConvertOutput", true},
+      {"LinearCompositeSecondInput", Composite{}, "FilterColorSpaceConvertOutput", true, false, 2},
+      {"LinearCompositeOutput", Composite{}, "FilterColorSpaceConvertOutput", true, false, 3,
+       false},
+      {"LinearBlendFirstInput", Blend{}, "FilterColorSpaceConvertOutput", true},
+      {"LinearBlendSecondInput", Blend{}, "FilterColorSpaceConvertOutput", true, false, 2},
+      {"LinearBlendOutput", Blend{}, "FilterColorSpaceConvertOutput", true, false, 3, false},
+      {"LinearMorphologyInput", morphology, "FilterColorSpaceConvertOutput", true},
+      {"LinearTransferInput", ComponentTransfer{}, "FilterColorSpaceConvertOutput", true},
+      {"LinearConvolveInput", convolve, "FilterColorSpaceConvertOutput", true},
+      {"LinearDisplacementFirstInput", displacement, "FilterColorSpaceConvertOutput", true},
+      {"LinearDisplacementSecondInput", displacement, "FilterColorSpaceConvertOutput", true, false,
+       2},
+      {"LinearDiffuseOutput", diffuse, "FilterColorSpaceConvertOutput", true, false, 1, false},
+      {"LinearSpecularOutput", specular, "FilterColorSpaceConvertOutput", true, false, 1, false},
+      {"LinearMergeFirstInput", Merge{}, "FilterColorSpaceConvertOutput", true},
+      {"LinearMergeSecondInput", Merge{}, "FilterColorSpaceConvertOutput", true, false, 2},
+      {"LinearMergeOutput", Merge{}, "FilterColorSpaceConvertOutput", true, false, 3, false},
+  };
+}
+
+bool IsMultipleInputPrimitive(const svg::components::FilterPrimitive& primitive) {
+  using namespace svg::components::filter_primitive;
+  return std::holds_alternative<Merge>(primitive) || std::holds_alternative<Composite>(primitive) ||
+         std::holds_alternative<Blend>(primitive) ||
+         std::holds_alternative<DisplacementMap>(primitive);
+}
+
+class FilterAllocationRefusal : public GeodeFilterEngineTest,
+                                public testing::WithParamInterface<AllocationRefusalCase> {};
+
+TEST_P(FilterAllocationRefusal, RefusalOrReusePreservesTheExecutionBoundary) {
+  const AllocationRefusalCase& test = GetParam();
+  svg::components::FilterGraph graph;
+  graph.colorInterpolationFilters = test.linear ? svg::ColorInterpolationFilters::LinearRGB
+                                                : svg::ColorInterpolationFilters::SRGB;
+  svg::components::FilterNode node;
+  node.primitive = test.primitive;
+  node.inputs = {test.sourceAlpha ? svg::components::FilterStandardInput::SourceAlpha
+                                  : svg::components::FilterStandardInput::SourceGraphic,
+                 svg::components::FilterStandardInput::SourceGraphic};
+  if (test.linear && IsMultipleInputPrimitive(node.primitive)) {
+    node.inputs[1] = svg::components::FilterStandardInput::SourceAlpha;
+  }
+  graph.nodes.push_back(node);
+  runGraph(graph, test.label, test.occurrence, test.expectsAllocation);
+}
+
+TEST_P(FilterAllocationRefusal, PreflightCoversObservedTexturesAndBuffers) {
+  using namespace svg::components;
+  const AllocationRefusalCase& test = GetParam();
+  FilterGraph graph;
+  graph.colorInterpolationFilters = test.linear ? svg::ColorInterpolationFilters::LinearRGB
+                                                : svg::ColorInterpolationFilters::SRGB;
+  FilterNode node;
+  node.primitive = test.primitive;
+  node.inputs = {FilterStandardInput::SourceGraphic, FilterStandardInput::SourceAlpha};
+  graph.nodes.push_back(node);
+  const uint64_t retainedBefore = engine_->retainedBufferBytes();
+  runGraph(graph, "");
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+  EXPECT_EQ(engine_->lastExecutionMemory().textures, allocator_->retainedTextureBytes);
+}
+
+TEST_F(GeodeFilterEngineTest, MaximumTablesAndNamedRedefinitionsStayWithinPreflight) {
+  using namespace svg::components;
+  FilterGraph graph;
+  filter_primitive::ComponentTransfer transfer;
+  for (auto* function : {&transfer.funcR, &transfer.funcG, &transfer.funcB, &transfer.funcA}) {
+    function->type = filter_primitive::ComponentTransfer::FuncType::Table;
+    function->tableValues.resize(kMaximumFilterTableValues, 0.5);
+  }
+  for (size_t index = 0; index < kMaximumFilterGraphNodes - 1; ++index) {
+    FilterNode node;
+    node.primitive = transfer;
+    node.result = RcString(index % 2 ? "a" : "b");
+    node.inputs = {index ? FilterInput(FilterInput::Named{RcString(index % 2 ? "b" : "a")})
+                         : FilterInput(FilterStandardInput::SourceAlpha)};
+    graph.nodes.push_back(node);
+  }
+  FilterNode merge;
+  merge.primitive = filter_primitive::Merge{};
+  merge.inputs.resize(kMaximumFilterMergeInputs, FilterInput::Named{RcString("a")});
+  graph.nodes.push_back(merge);
+  const uint64_t retainedBefore = engine_->retainedBufferBytes();
+  runGraph(graph, "");
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+}
+
+TEST_F(GeodeFilterEngineTest, ParameterGrowthIsBoundedAfterEarlierExecutions) {
+  using namespace svg::components;
+  FilterGraph graph;
+  filter_primitive::ComponentTransfer transfer;
+  for (auto* function : {&transfer.funcR, &transfer.funcG, &transfer.funcB, &transfer.funcA}) {
+    function->type = filter_primitive::ComponentTransfer::FuncType::Table;
+    function->tableValues.resize(kMaximumFilterTableValues, 0.5);
+  }
+  FilterNode node;
+  node.primitive = transfer;
+  graph.nodes.resize(kMaximumFilterGraphNodes, node);
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  std::vector<std::unique_ptr<RefusingTextureAllocator>> retained;
+  for (size_t index = 0; index < 16; ++index) {
+    SCOPED_TRACE(index);
+    const uint64_t before = engine_->retainedBufferBytes();
+    runGraph(graph, "");
+    EXPECT_LE(engine_->lastExecutionMemory().total(), before + estimated);
+    retained.push_back(std::move(allocator_));
+  }
+}
+
+TEST_F(GeodeFilterEngineTest, Dpr2PlanChargesAllTileWorkUnderTheWasmMemoryCap) {
+  using namespace svg::components;
+  auto graph = MakeGraph(true);
+  const auto plan = engine_->executionPlan(graph, 2000, 1600, Transform2d::Scale(2));
+  ASSERT_GT(plan.tiles, 1u);
+  EXPECT_LE(plan.tileWidth, 512u);
+  EXPECT_LE(plan.tileHeight, 512u);
+  EXPECT_GE(plan.workPixels(), 2000u * 1600u);
+  uint64_t work = 0;
+  uint64_t bytes = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
+                                       work, bytes, plan.pixels(), plan.tiles));
+  EXPECT_LT(bytes + plan.additionalTextureBytes() + 2000u * 1600u * 4, 128u * 1024u * 1024u);
+  graph.nodes[0].primitive = filter_primitive::Tile{};
+  EXPECT_EQ(engine_->executionPlan(graph, 2000, 1600, Transform2d()).tiles, 1u);
+}
+
+TEST_F(GeodeFilterEngineTest, RefusedTileSurfacesStopBeforeFurtherAllocation) {
+  source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"tiled source",
+                             {32, 32},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  engine_->setMaximumTileExtentForTesting(16);
+  runGraph(MakeGraph(true), "FilterTiledOutput");
+  runGraph(MakeGraph(true), "FilterTileInput");
+}
+
+TEST_F(GeodeFilterEngineTest, LargeBlurHalosUseBoundedStripsAtHighDprZoom) {
+  using namespace svg::components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 6, .stdDeviationY = 6};
+  graph.nodes.push_back(node);
+  const auto plan = engine_->executionPlan(graph, 2296, 1536, Transform2d::Scale(16));
+  ASSERT_GT(plan.tiles, 1u);
+  EXPECT_TRUE(plan.tileWidth == plan.width || plan.tileHeight == plan.height);
+  uint64_t work = 0;
+  uint64_t bytes = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
+                                       work, bytes, plan.pixels(), plan.tiles));
+  EXPECT_LT(bytes + plan.additionalTextureBytes() + uint64_t{2296} * 1536 * 4,
+            128u * 1024u * 1024u);
+}
+
+INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
+                         testing::ValuesIn(AllocationRefusalCases()),
+                         [](const testing::TestParamInfo<AllocationRefusalCase>& info) {
+                           return info.param.name;
+                         });
 
 }  // namespace
 }  // namespace donner::geode

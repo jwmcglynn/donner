@@ -16,7 +16,7 @@ ShaderResult<IrModule> BuildCompositeModule() {
                             "destinationTexture"));
   e.ok(builder.addWriteOnlyStorageTexture2d(0,
                                             static_cast<uint32_t>(CompositeBinding::OutputTexture),
-                                            "outputTexture", StorageTextureFormat::Rgba8Unorm));
+                                            "outputTexture", StorageTextureFormat::Rgba32Float));
   const IrType u32 = IrType::U32();
   const IrType f32 = IrType::F32();
   const IrType paramsType =

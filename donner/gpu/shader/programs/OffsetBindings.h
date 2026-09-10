@@ -25,7 +25,7 @@ inline constexpr uint32_t kOffsetWorkgroupSize = 8;
 /// creates its bind group layout.
 enum class OffsetBinding : uint32_t {
   InputTexture = 0,   //!< Sampled `texture_2d<f32>` source.
-  OutputTexture = 1,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
+  OutputTexture = 1,  //!< `texture_storage_2d<rgba32float, write>` destination.
   Params = 2,         //!< Uniform buffer holding the shift in pixels.
 };
 

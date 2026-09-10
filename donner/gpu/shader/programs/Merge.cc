@@ -15,7 +15,7 @@ ShaderResult<IrModule> BuildMergeModule() {
   e.ok(builder.addTexture2d(0, static_cast<uint32_t>(MergeBinding::DestinationTexture),
                             "destinationTexture"));
   e.ok(builder.addWriteOnlyStorageTexture2d(0, static_cast<uint32_t>(MergeBinding::OutputTexture),
-                                            "outputTexture", StorageTextureFormat::Rgba8Unorm));
+                                            "outputTexture", StorageTextureFormat::Rgba32Float));
 
   auto entry =
       builder.createComputeEntryPoint(RcString(kMergeEntryPoint),

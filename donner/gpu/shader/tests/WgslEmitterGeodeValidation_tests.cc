@@ -14,9 +14,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <memory>
 #include <span>
@@ -39,6 +41,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "tiny_skia/filter/ColorSpace.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -408,7 +411,7 @@ void CreateFloodComputePipeline(
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Compute;
   entries[0].storageTexture.access = outputAccess;
-  entries[0].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[0].storageTexture.format = wgpu::TextureFormat::RGBA32Float;
   entries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[1].binding = 1;
@@ -448,7 +451,7 @@ void CreateFloodComputePipeline(
 ///   Uint to provoke a mismatch with the shader's texture_2d<f32> declaration.
 void CreateSubregionClipComputePipeline(
     const wgpu::Device& device, const wgpu::ShaderModule& module,
-    wgpu::TextureSampleType inputSampleType = wgpu::TextureSampleType::Float) {
+    wgpu::TextureSampleType inputSampleType = wgpu::TextureSampleType::UnfilterableFloat) {
   wgpu::BindGroupLayoutEntry entries[3] = {};
 
   entries[0].binding = 0;
@@ -459,7 +462,7 @@ void CreateSubregionClipComputePipeline(
   entries[1].binding = 1;
   entries[1].visibility = wgpu::ShaderStage::Compute;
   entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA32Float;
   entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[2].binding = 2;
@@ -483,7 +486,7 @@ void CreateSubregionClipComputePipeline(
   cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
 
   wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
-  if (inputSampleType == wgpu::TextureSampleType::Float) {
+  if (inputSampleType == wgpu::TextureSampleType::UnfilterableFloat) {
     // Only the correct layout asserts on the handle; the sabotaged negative-control layout
     // observes failure through the uncaptured-error marker instead.
     EXPECT_TRUE(static_cast<bool>(pipeline)) << "Compute pipeline creation returned null";
@@ -595,13 +598,13 @@ void CreateFilterColorMatrixComputePipeline(
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[1].binding = 1;
   entries[1].visibility = wgpu::ShaderStage::Compute;
   entries[1].storageTexture.access = outputAccess;
-  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA32Float;
   entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[2].binding = 2;
@@ -692,13 +695,13 @@ void CreateOffsetComputePipeline(
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[1].binding = 1;
   entries[1].visibility = wgpu::ShaderStage::Compute;
   entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA32Float;
   entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[2].binding = 2;
@@ -832,38 +835,33 @@ std::vector<uint8_t> OffsetExpectedTexels(float dx, float dy) {
   return expected;
 }
 
-/// Runs a compute program whose bind group is a sampled source, a write-only rgba8unorm
-/// destination, and a uniform block, over \p sourceTexels on the renderer's own device. Returns
-/// the destination texels tightly packed, or an empty vector on any GPU-side failure.
-///
-/// @param device WebGPU device to run on. @param queue Queue to submit on.
-/// @param wgsl Emitted WGSL for the program.
-/// @param sourceTexels Source image, tightly packed rgba8unorm.
-/// @param width Image width in texels. @param height Image height in texels.
-/// @param uniforms Parameter block the program declares at binding 2.
-/// @param workgroupSize Size the entry point declares, along x and y.
-std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
-                                                  const wgpu::Queue& queue, const std::string& wgsl,
-                                                  const std::vector<uint8_t>& sourceTexels,
-                                                  uint32_t width, uint32_t height,
-                                                  std::span<const uint8_t> uniforms,
-                                                  uint32_t workgroupSize) {
-  wgpu::BindGroupLayoutEntry layoutEntries[3] = {};
+/// Records a texture-to-texture program using the destination's actual storage format.
+bool RecordInputOutputUniformProgram(const wgpu::Device& device, const wgpu::Queue& queue,
+                                     wgpu::CommandEncoder& encoder, const std::string& wgsl,
+                                     const wgpu::Texture& source, const wgpu::Texture& destination,
+                                     std::span<const uint8_t> uniforms, uint32_t workgroupSize,
+                                     std::span<const float> transferSamples = {}) {
+  const uint32_t width = destination.getWidth();
+  const uint32_t height = destination.getHeight();
+  wgpu::BindGroupLayoutEntry layoutEntries[4] = {};
   layoutEntries[0].binding = 0;
   layoutEntries[0].visibility = wgpu::ShaderStage::Compute;
-  layoutEntries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  layoutEntries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   layoutEntries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   layoutEntries[1].binding = 1;
   layoutEntries[1].visibility = wgpu::ShaderStage::Compute;
   layoutEntries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-  layoutEntries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  layoutEntries[1].storageTexture.format = destination.getFormat();
   layoutEntries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
   layoutEntries[2].binding = 2;
   layoutEntries[2].visibility = wgpu::ShaderStage::Compute;
   layoutEntries[2].buffer.type = wgpu::BufferBindingType::Uniform;
 
+  layoutEntries[3].binding = 3;
+  layoutEntries[3].visibility = wgpu::ShaderStage::Compute;
+  layoutEntries[3].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.entryCount = 3;
+  bglDesc.entryCount = transferSamples.empty() ? 3 : 4;
   bglDesc.entries = layoutEntries;
   wgpu::BindGroupLayout bindGroupLayout = device.createBindGroupLayout(bglDesc);
 
@@ -879,9 +877,75 @@ std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
   cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
   wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
   if (!pipeline) {
-    return {};
+    return false;
   }
 
+  wgpu::BufferDescriptor paramsDesc = {};
+  paramsDesc.size = uniforms.size();
+  paramsDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer paramsBuffer = device.createBuffer(paramsDesc);
+  queue.writeBuffer(paramsBuffer, 0, uniforms.data(), uniforms.size());
+
+  wgpu::TextureView sourceView = source.createView();
+  wgpu::TextureView destinationView = destination.createView();
+
+  wgpu::BindGroupEntry bgEntries[4] = {};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = sourceView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = destinationView;
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = paramsBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = uniforms.size();
+
+  wgpu::Buffer transferTable;
+  if (!transferSamples.empty()) {
+    wgpu::BufferDescriptor tableDesc = {};
+    tableDesc.size = transferSamples.size_bytes();
+    tableDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    transferTable = device.createBuffer(tableDesc);
+    queue.writeBuffer(transferTable, 0, transferSamples.data(), transferSamples.size_bytes());
+    bgEntries[3].binding = 3;
+    bgEntries[3].buffer = transferTable;
+    bgEntries[3].size = transferSamples.size_bytes();
+  }
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.layout = bindGroupLayout;
+  bgDesc.entryCount = transferSamples.empty() ? 3 : 4;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = device.createBindGroup(bgDesc);
+
+  {
+    wgpu::ComputePassDescriptor passDesc = {};
+    wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup, 0, nullptr);
+    pass.dispatchWorkgroups((width + workgroupSize - 1) / workgroupSize,
+                            (height + workgroupSize - 1) / workgroupSize, 1);
+    pass.end();
+  }
+
+  return true;
+}
+
+/// Runs a float-output program followed by the production RGBA8 final resolve over \p sourceTexels.
+/// The bind group is a sampled source, storage destination and uniform block. Returns
+/// the destination texels tightly packed, or an empty vector on any GPU-side failure.
+///
+/// @param device WebGPU device to run on. @param queue Queue to submit on.
+/// @param wgsl Emitted WGSL for the program.
+/// @param sourceTexels Source image, tightly packed rgba8unorm.
+/// @param width Image width in texels. @param height Image height in texels.
+/// @param uniforms Parameter block the program declares at binding 2.
+/// @param workgroupSize Size the entry point declares, along x and y.
+std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
+                                                  const wgpu::Queue& queue, const std::string& wgsl,
+                                                  const std::vector<uint8_t>& sourceTexels,
+                                                  uint32_t width, uint32_t height,
+                                                  std::span<const uint8_t> uniforms,
+                                                  uint32_t workgroupSize,
+                                                  std::span<const float> transferSamples = {}) {
   wgpu::TextureDescriptor sourceDesc = {};
   sourceDesc.size = {width, height, 1};
   sourceDesc.format = wgpu::TextureFormat::RGBA8Unorm;
@@ -905,31 +969,10 @@ std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
   wgpu::TextureDescriptor destinationDesc = sourceDesc;
   destinationDesc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
   wgpu::Texture destination = device.createTexture(destinationDesc);
-
-  wgpu::BufferDescriptor paramsDesc = {};
-  paramsDesc.size = uniforms.size();
-  paramsDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer paramsBuffer = device.createBuffer(paramsDesc);
-  queue.writeBuffer(paramsBuffer, 0, uniforms.data(), uniforms.size());
-
-  wgpu::TextureView sourceView = source.createView();
-  wgpu::TextureView destinationView = destination.createView();
-
-  wgpu::BindGroupEntry bgEntries[3] = {};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = sourceView;
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = destinationView;
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = paramsBuffer;
-  bgEntries[2].offset = 0;
-  bgEntries[2].size = uniforms.size();
-
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.layout = bindGroupLayout;
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  wgpu::BindGroup bindGroup = device.createBindGroup(bgDesc);
+  wgpu::TextureDescriptor intermediateDesc = destinationDesc;
+  intermediateDesc.format = wgpu::TextureFormat::RGBA32Float;
+  intermediateDesc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::TextureBinding;
+  wgpu::Texture intermediate = device.createTexture(intermediateDesc);
 
   const uint64_t readbackSize = uint64_t{kReadbackBytesPerRow} * height;
   wgpu::BufferDescriptor readbackDesc = {};
@@ -938,14 +981,25 @@ std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
   wgpu::Buffer readback = device.createBuffer(readbackDesc);
 
   wgpu::CommandEncoder encoder = device.createCommandEncoder();
-  {
-    wgpu::ComputePassDescriptor passDesc = {};
-    wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup, 0, nullptr);
-    pass.dispatchWorkgroups((width + workgroupSize - 1) / workgroupSize,
-                            (height + workgroupSize - 1) / workgroupSize, 1);
-    pass.end();
+  const auto resolveModule = programs::BuildFilterResolveModule();
+  if (resolveModule.hasError()) {
+    ADD_FAILURE() << resolveModule.error();
+    return {};
+  }
+  const auto resolveWgsl = EmitWgsl(resolveModule.result());
+  if (resolveWgsl.hasError()) {
+    ADD_FAILURE() << resolveWgsl.error();
+    return {};
+  }
+  const float clip[12] = {
+      1, 0, 0, 1, 0, 0, 0, 0, static_cast<float>(width), static_cast<float>(height), 0, 0};
+  const std::span<const uint8_t> clipBytes(reinterpret_cast<const uint8_t*>(clip), sizeof(clip));
+  if (!RecordInputOutputUniformProgram(device, queue, encoder, wgsl, source, intermediate, uniforms,
+                                       workgroupSize, transferSamples) ||
+      !RecordInputOutputUniformProgram(
+          device, queue, encoder, resolveWgsl.result(), intermediate, destination, clipBytes,
+          programs::kSubregionClipWorkgroupSize, programs::ColorTransferSamples())) {
+    return {};
   }
 
   wgpu::TexelCopyTextureInfo src = {};
@@ -1052,12 +1106,12 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
 ///   RGBA16Float to provoke a mismatch with the shader's rgba8unorm declaration.
 void CreateColorSpaceConvertComputePipeline(
     const wgpu::Device& device, const wgpu::ShaderModule& module,
-    wgpu::TextureFormat outputFormat = wgpu::TextureFormat::RGBA8Unorm) {
-  wgpu::BindGroupLayoutEntry entries[3] = {};
+    wgpu::TextureFormat outputFormat = wgpu::TextureFormat::RGBA32Float) {
+  wgpu::BindGroupLayoutEntry entries[4] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
   entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
 
   entries[1].binding = 1;
@@ -1070,8 +1124,11 @@ void CreateColorSpaceConvertComputePipeline(
   entries[2].visibility = wgpu::ShaderStage::Compute;
   entries[2].buffer.type = wgpu::BufferBindingType::Uniform;
 
+  entries[3].binding = 3;
+  entries[3].visibility = wgpu::ShaderStage::Compute;
+  entries[3].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.entryCount = 3;
+  bglDesc.entryCount = 4;
   bglDesc.entries = entries;
   wgpu::BindGroupLayout bindGroupLayout = device.createBindGroupLayout(bglDesc);
 
@@ -1087,7 +1144,7 @@ void CreateColorSpaceConvertComputePipeline(
   cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
 
   wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
-  if (outputFormat == wgpu::TextureFormat::RGBA8Unorm) {
+  if (outputFormat == wgpu::TextureFormat::RGBA32Float) {
     // Only the correct layout asserts on the handle; the sabotaged negative-control layout
     // observes failure through the uncaptured-error marker instead.
     EXPECT_TRUE(static_cast<bool>(pipeline)) << "Compute pipeline creation returned null";
@@ -1210,7 +1267,7 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
         geodeDevice->device(), geodeDevice->queue(), wgsl.result(), TransferSourceTexels(),
         kTransferExtent, 1,
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-        programs::kColorSpaceConvertWorkgroupSize);
+        programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples());
     ASSERT_THAT(texels, testing::SizeIs(size_t{kTransferExtent} * 4u))
         << "dispatch failed for " << direction.name;
 
@@ -1228,6 +1285,121 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
           << "alpha is not a color channel and must cross " << direction.name << " unchanged";
     }
   }
+}
+
+void ExpectColorTransferBoundaries(bool resolve) {
+  constexpr uint32_t kWidth = programs::kColorTransferSampleCount;
+  constexpr float alphas[] = {1.0f,        0.7f,        0.1f,        1.0e-20f,    7.0f / 128,
+                              11.0f / 128, 12.0f / 128, 13.0f / 128, 14.0f / 128, 21.0f / 128};
+  constexpr uint32_t kHeight = std::size(alphas) * 4;
+  auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kWidth, kHeight);
+  ASSERT_THAT(pixels.has_value(), testing::IsTrue());
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    const float alpha = alphas[y / 4];
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      float channel = (static_cast<float>(x) + (y % 4 == 0 ? 0.0f : 0.5f)) / (kWidth - 1);
+      if (y % 4 == 2) channel = std::nextafter(channel, 0.0f);
+      if (y % 4 == 3) channel = std::nextafter(channel, 2.0f);
+      const size_t offset = (size_t{y} * kWidth + x) * 4;
+      pixels->data()[offset] = std::min(channel, 1.0f) * alpha;
+      pixels->data()[offset + 1] = 0.0f;
+      pixels->data()[offset + 2] = alpha;
+      pixels->data()[offset + 3] = alpha;
+    }
+  }
+  auto geode = donner::geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(geode, testing::NotNull());
+  const auto module =
+      resolve ? programs::BuildFilterResolveModule() : programs::BuildColorSpaceConvertModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto& device = geode->device();
+  const auto& queue = geode->queue();
+  constexpr uint32_t kRowBytes = kWidth * 4 * sizeof(float);
+  const size_t sizeBytes = size_t{kRowBytes} * kHeight;
+  wgpu::TextureDescriptor desc = {};
+  desc.size = {kWidth, kHeight, 1};
+  desc.format = wgpu::TextureFormat::RGBA32Float;
+  desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+  desc.mipLevelCount = 1;
+  desc.sampleCount = 1;
+  desc.dimension = wgpu::TextureDimension::_2D;
+  const wgpu::Texture source = device.createTexture(desc);
+  desc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  desc.format = resolve ? wgpu::TextureFormat::RGBA8Unorm : wgpu::TextureFormat::RGBA32Float;
+  const wgpu::Texture destination = device.createTexture(desc);
+  wgpu::TexelCopyTextureInfo sourceCopy = {};
+  sourceCopy.texture = source;
+  wgpu::TexelCopyBufferLayout sourceLayout = {};
+  sourceLayout.bytesPerRow = kRowBytes;
+  sourceLayout.rowsPerImage = kHeight;
+  const wgpu::Extent3D extent = {kWidth, kHeight, 1};
+  queue.writeTexture(sourceCopy, pixels->data().data(), sizeBytes, sourceLayout, extent);
+  for (uint32_t direction :
+       {programs::kColorSpaceConvertSrgbToLinear, programs::kColorSpaceConvertLinearToSrgb}) {
+    if (resolve && direction != programs::kColorSpaceConvertLinearToSrgb) {
+      continue;
+    }
+    auto expected = *pixels;
+    if (direction == programs::kColorSpaceConvertSrgbToLinear) {
+      tiny_skia::filter::srgbToLinear(expected);
+    } else {
+      tiny_skia::filter::linearToSrgb(expected);
+    }
+    wgpu::BufferDescriptor readbackDesc = {};
+    const uint32_t readbackRowBytes = resolve ? kWidth * 4 : kRowBytes;
+    const size_t readbackSize = size_t{readbackRowBytes} * kHeight;
+    readbackDesc.size = readbackSize;
+    readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    const wgpu::Buffer readback = device.createBuffer(readbackDesc);
+    wgpu::CommandEncoder encoder = device.createCommandEncoder();
+    const uint32_t params[] = {direction, 0, 0, 0};
+    const float clip[] = {
+        1, 0, 0, 1, 0, 0, 0, 0, float(kWidth), float(kHeight), std::bit_cast<float>(uint32_t{1}),
+        0};
+    const std::span<const uint8_t> uniforms =
+        resolve
+            ? std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(clip), sizeof(clip))
+            : std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params));
+    ASSERT_THAT(RecordInputOutputUniformProgram(
+                    device, queue, encoder, wgsl.result(), source, destination, uniforms,
+                    programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples()),
+                testing::IsTrue());
+    wgpu::TexelCopyTextureInfo outputCopy = {};
+    outputCopy.texture = destination;
+    wgpu::TexelCopyBufferInfo bufferCopy = {};
+    bufferCopy.buffer = readback;
+    bufferCopy.layout.bytesPerRow = readbackRowBytes;
+    bufferCopy.layout.rowsPerImage = kHeight;
+    encoder.copyTextureToBuffer(outputCopy, bufferCopy, extent);
+    wgpu::CommandBuffer commands = encoder.finish();
+    queue.submit(1, &commands);
+    const auto bytes = MapAndReadBack(device, readback, readbackSize);
+    ASSERT_THAT(bytes.size(), testing::Eq(readbackSize));
+    if (resolve) {
+      const auto expectedPixmap = expected.toPixmap();
+      const svg::RendererBitmap actualBitmap{Vector2i(kWidth, kHeight), bytes, readbackRowBytes};
+      const svg::RendererBitmap expectedBitmap{
+          Vector2i(kWidth, kHeight),
+          std::vector<uint8_t>(expectedPixmap.data().begin(), expectedPixmap.data().end()),
+          readbackRowBytes};
+      editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "fused_resolve_boundaries",
+                                           editor::tests::PixelmatchIdentityParams());
+      continue;
+    }
+    std::vector<float> actual(expected.data().size());
+    std::memcpy(actual.data(), bytes.data(), sizeBytes);
+    EXPECT_THAT(actual, testing::ElementsAreArray(expected.data())) << "direction=" << direction;
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundaries) {
+  ExpectColorTransferBoundaries(false);
+}
+
+TEST(WgslEmitterGeodeValidation, FusedResolveMatchesFloatPixmapAtSampleBoundaries) {
+  ExpectColorTransferBoundaries(true);
 }
 
 TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTransparent) {
@@ -1249,7 +1421,7 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTranspa
   const std::vector<uint8_t> texels = RunInputOutputUniformProgram(
       geodeDevice->device(), geodeDevice->queue(), wgsl.result(), source, kTransferExtent, 1,
       std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-      programs::kColorSpaceConvertWorkgroupSize);
+      programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples());
   ASSERT_THAT(texels, testing::SizeIs(size_t{kTransferExtent} * 4u));
   EXPECT_THAT(texels, testing::Each(testing::Eq(0u)));
 }

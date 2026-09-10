@@ -671,6 +671,10 @@ void Renderer::setOffscreenCreationHookForTesting(std::function<void()> hook) {
   impl_->setOffscreenCreationHookForTesting(std::move(hook));
 }
 
+RendererResourceStats Renderer::resourceStats() const {
+  return impl_->resourceStats();
+}
+
 std::uint64_t Renderer::filterBudgetChunksForTesting() const {
   return impl_->filterBudgetChunksForTesting();
 }

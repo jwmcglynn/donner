@@ -160,6 +160,10 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
   return output;
 }
 
+TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildFilterResolveModule(), "filter_resolve");
+}
 TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");

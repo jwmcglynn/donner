@@ -64,7 +64,7 @@ TEST(FloodProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, HasSubstr("@compute @workgroup_size(8, 8, 1)\nfn cs_main("));
   EXPECT_THAT(wgsl, HasSubstr("@builtin(global_invocation_id) gid: vec3<u32>"));
   EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(0) var outputTexture: texture_storage_2d<rgba8unorm, "
+              HasSubstr("@group(0) @binding(0) var outputTexture: texture_storage_2d<rgba32float, "
                         "write>;"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(1) var<uniform> params: FloodParams;"));
   EXPECT_THAT(wgsl, HasSubstr("textureStore(outputTexture, coords, params.color);"));

@@ -93,6 +93,11 @@ When creating a pull request:
    - Unit tests across the default config AND the `tiny` / `text_full` / `geode` variant lanes (auto-emitted as `*_tiny` / `*_text_full` / `*_geode` wrappers by `donner_cc_test(variants=…)`).
      On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
      Also run, separately:
+   - **Geode editor integration:** for renderer changes, also run `bazel test --config=geode`
+     with `//donner/editor/tests:editor_window_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`,
+     `//donner/editor/tests:async_renderer_tests`, `//donner/editor/tests:rnr_replay_tests`, and
+     `//donner/editor/tests:gl_rnr_replay_tests`. This matches the separate CI editor lane;
+     default `//...` reachability does not select these tests' Geode configuration.
    - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.

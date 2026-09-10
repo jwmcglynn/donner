@@ -353,6 +353,7 @@ donner_cc_test(
         "//donner/svg/renderer/geode:geode_gpu_wait",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 
@@ -385,11 +386,8 @@ filegroup(
 donner_package()
 
 donner_cc_test(
-    name = "filter_compositing_legacy_tests_impl",
-    srcs = [
-        "tests/CompositingLegacyPixels.h",
-        "tests/FilterCompositingLegacy_tests.cc",
-    ],
+    name = "filter_compositing_parity_tests_impl",
+    srcs = ["tests/FilterCompositingParity_tests.cc"],
     target_compatible_with = select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -400,15 +398,16 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer/geode:geode_device",
     ],
 )
 
 donner_multi_transitioned_test(
-    name = "filter_compositing_legacy_tests",
+    name = "filter_compositing_parity_tests",
     timeout = "moderate",
     testonly = 1,
-    dep = ":filter_compositing_legacy_tests_impl",
+    dep = ":filter_compositing_parity_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
 )

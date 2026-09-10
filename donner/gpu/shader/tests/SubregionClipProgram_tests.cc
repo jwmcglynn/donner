@@ -52,6 +52,19 @@ TEST(SubregionClipProgramTests, ModuleBuildsCleanly) {
   EXPECT_THAT(programs::BuildSubregionClipModule(), HasShaderResult());
 }
 
+TEST(SubregionClipProgramTests, FinalResolveBuildsAndRoundsClampedChannelsHalfUp) {
+  const auto module = programs::BuildFilterResolveModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  EXPECT_THAT(wgsl.result(), HasSubstr("texture_storage_2d<rgba8unorm, write>"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("floor("));
+  EXPECT_THAT(wgsl.result(), HasSubstr("vec4<f32>(0.5f)"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("if (outside)"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("linear_channel_to_srgb"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("transferTable"));
+}
+
 TEST(SubregionClipProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitSubregionClipWgsl(), testing::Eq(EmitSubregionClipWgsl()));
   EXPECT_THAT(EmitSubregionClipMsl(), testing::Eq(EmitSubregionClipMsl()));
@@ -65,7 +78,7 @@ TEST(SubregionClipProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, HasSubstr("@builtin(global_invocation_id) gid: vec3<u32>"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
   EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba8unorm, "
+              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
                         "write>;"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(2) var<uniform> params: SubregionClipParams;"));
   // The two trailing words are load-bearing: without them the ten f32 members size the block at

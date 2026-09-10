@@ -17,7 +17,7 @@ inline constexpr uint32_t kCompositeWorkgroupSize = 8;
 enum class CompositeBinding : uint32_t {
   SourceTexture = 0,       //!< Premultiplied source color.
   DestinationTexture = 1,  //!< Premultiplied backdrop color.
-  OutputTexture = 2,       //!< Write-only rgba8unorm result.
+  OutputTexture = 2,       //!< Write-only rgba32float result.
   Params = 3,              //!< Operator and arithmetic coefficients.
 };
 

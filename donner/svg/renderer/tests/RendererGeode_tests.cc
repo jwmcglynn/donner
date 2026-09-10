@@ -21,6 +21,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -31,6 +32,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
@@ -314,6 +316,226 @@ protected:
 };
 
 // ----------------------------------------------------------------------------
+
+TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 255, 255)));
+  const Box2d region({0, 0}, {kViewportSize, kViewportSize});
+  renderer.drawRect(region, StrokeParams{});
+  components::FilterGraph graph;
+  components::FilterNode flood;
+  flood.primitive =
+      components::filter_primitive::Flood{.floodColor = css::Color(css::RGBA(0, 0, 255, 255))};
+  graph.nodes.push_back(flood);
+  renderer.pushFilterLayer(graph, region);
+  ASSERT_EQ(renderer.resourceStats().filterExecutions, 1u);
+  // Lowering the limit after admission forces the actual allocation-refusal path.
+  renderer.setSurfaceBudgetForTesting(2, RendererSurfaceBudget::kMaximumBytes);
+  renderer.popFilterLayer();
+  renderer.endFrame();
+  EXPECT_TRUE(renderer.resourceStats().surfaceBudgetRejected);
+  const size_t width = static_cast<size_t>(kViewportSize);
+  RendererBitmap expected{Vector2i(kViewportSize, kViewportSize),
+                          std::vector<uint8_t>(width * width * 4), width * 4};
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset] = expected.pixels[offset + 2] = expected.pixels[offset + 3] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "late_filter_refusal_parent",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
+  using namespace components;
+  for (bool nearAxisShear : {false, true}) {
+    SCOPED_TRACE(nearAxisShear);
+    FilterGraph graph;
+    graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+    graph.elementBoundingBox = Box2d({0, 0}, nearAxisShear ? Vector2d(1e7, 1) : Vector2d(1.1, 1.1));
+    FilterNode fill;
+    fill.primitive =
+        filter_primitive::Flood{.floodColor = css::Color(css::RGBA(255, 255, 255, 255))};
+    graph.nodes.push_back(fill);
+    FilterNode blur;
+    blur.primitive =
+        filter_primitive::GaussianBlur{.stdDeviationX = nearAxisShear ? 0.5 : 1.9782261838087567,
+                                       .stdDeviationY = nearAxisShear ? 0.0 : 1.9782261838087567};
+    graph.nodes.push_back(blur);
+    std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
+    std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+    ASSERT_TRUE(referenceDevice);
+    ASSERT_TRUE(tiledDevice);
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(16);
+    const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device) {
+      RendererGeode renderer(device);
+      beginFrame(renderer);
+      Transform2d transform = Transform2d::Scale(1.1);
+      if (nearAxisShear) {
+        transform.data[0] = 1e-9;
+        transform.data[1] = 5e-7;
+        transform.data[3] = 1;
+      }
+      if (device == tiledDevice) {
+        const auto plan =
+            device->filterEngine().executionPlan(graph, kViewportSize, kViewportSize, transform);
+        // Three radius-two box passes require six source pixels on either side.
+        EXPECT_GE((plan.tileWidth - plan.coreWidth) / 2, 6u);
+      }
+      renderer.setTransform(transform);
+      renderer.pushFilterLayer(
+          graph,
+          Box2d({0, 0}, {nearAxisShear ? kViewportSize / 1e-9 : kViewportSize, kViewportSize}));
+      renderer.setTransform(Transform2d());
+      renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+      renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+      renderer.popFilterLayer();
+      renderer.endFrame();
+      return renderer.takeSnapshot();
+    };
+    const auto expected = render(referenceDevice);
+    const auto actual = render(tiledDevice);
+    ASSERT_THAT(pixelAt(expected, 32, 32), Rgba(255, 255, 255, 255));
+    ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    editor::tests::CompareBitmapToBitmap(actual, expected, "object_bounds_halo_rounding",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
+  using namespace components;
+  constexpr uint32_t kWidth = 1024;
+  constexpr uint32_t kHeight = 768;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(device);
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kWidth, kHeight);
+  renderer.beginFrame(viewport);
+  FilterGraph outer;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{
+      .stdDeviationX = 96,
+      .stdDeviationY = 96,
+      .edgeMode = filter_primitive::GaussianBlur::EdgeMode::Duplicate};
+  outer.nodes.push_back(blur);
+  FilterGraph inner;
+  filter_primitive::ComponentTransfer transfer;
+  transfer.funcR.type = transfer.funcG.type = transfer.funcB.type =
+      filter_primitive::ComponentTransfer::FuncType::Table;
+  transfer.funcR.tableValues.resize(kMaximumFilterTableValues, 1.0);
+  transfer.funcG.tableValues.resize(kMaximumFilterTableValues, 0.0);
+  transfer.funcB.tableValues.resize(kMaximumFilterTableValues, 0.0);
+  FilterNode color;
+  color.primitive = transfer;
+  inner.nodes.resize(kMaximumFilterGraphNodes, color);
+  const Box2d region({0, 0}, {kWidth, kHeight});
+  const auto admitted = device->filterEngine().executionPlan(outer, kWidth, kHeight, Transform2d());
+  ASSERT_GT(admitted.tiles, 1u);
+  renderer.pushFilterLayer(outer, region);
+  const uint64_t before = device->filterEngine().retainedBufferBytes();
+  renderer.pushFilterLayer(inner, region);
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(region, StrokeParams{});
+  renderer.popFilterLayer();
+  ASSERT_GT(device->filterEngine().retainedBufferBytes(), before);
+  const auto replanned =
+      device->filterEngine().executionPlan(outer, kWidth, kHeight, Transform2d());
+  EXPECT_EQ(replanned.tileWidth, admitted.tileWidth);
+  EXPECT_EQ(replanned.tileHeight, admitted.tileHeight);
+  EXPECT_EQ(replanned.tiles, admitted.tiles);
+  renderer.popFilterLayer();
+  EXPECT_EQ(device->filterEngine().lastExecutionMemory().tileExecutions, admitted.tiles);
+  renderer.endFrame();
+  EXPECT_FALSE(renderer.resourceStats().filterBudgetRejected);
+  EXPECT_FALSE(renderer.resourceStats().surfaceBudgetRejected);
+  RendererBitmap expected{Vector2i(kWidth, kHeight), std::vector<uint8_t>(kWidth * kHeight * 4),
+                          kWidth * 4};
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset] = expected.pixels[offset + 3] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected, "nested_parameter_growth",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, LargeBlurStripTilesMatchUntiledPixels) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="768" height="640">
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="768" height="640">
+      <feGaussianBlur stdDeviation="96"/>
+    </filter></defs><g filter="url(#f)">
+      <rect width="317" height="640" fill="#3973ad" opacity="0.7"/>
+      <rect x="280" y="132" width="450" height="265" fill="#b75d23" opacity="0.4"/>
+    </g></svg>)svg";
+  std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
+  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(referenceDevice);
+  ASSERT_TRUE(tiledDevice);
+  referenceDevice->filterEngine().setMaximumTileExtentForTesting(16);
+  ParseWarningSink warnings;
+  auto referenceDocument = parser::SVGParser::ParseSVG(source, warnings);
+  auto tiledDocument = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_TRUE(referenceDocument.hasResult());
+  ASSERT_TRUE(tiledDocument.hasResult());
+  ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+  RendererGeode reference(referenceDevice);
+  RendererGeode tiled(tiledDevice);
+  reference.draw(referenceDocument.result());
+  tiled.draw(tiledDocument.result());
+  EXPECT_FALSE(reference.resourceStats().filterBudgetRejected);
+  EXPECT_FALSE(tiled.resourceStats().filterBudgetRejected);
+  ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+  ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+  editor::tests::CompareBitmapToBitmap(tiled.takeSnapshot(), reference.takeSnapshot(),
+                                       "large_blur_strip_tiles",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundaries) {
+  const std::array<const char*, 7> graphs = {
+      R"(<feGaussianBlur stdDeviation="0.7 1.2"/>)",
+      R"(<feGaussianBlur stdDeviation="3.4 2.3"/>)",
+      R"(<feMorphology operator="dilate" radius="4 3"/><feOffset dx="-1.3" dy="2.7"/>)",
+      R"(<feGaussianBlur stdDeviation="1.1" result="blurred"/>
+          <feComposite in="SourceGraphic" in2="blurred" operator="arithmetic" k2="0.4" k3="0.6"/>)",
+      R"(<feColorMatrix type="saturate" values="0.7" result="color"/>
+          <feOffset dx="3.3" dy="-2.2" x="5.2" y="4.1" width="52.4" height="45.3"/>
+          <feMerge color-interpolation-filters="sRGB"><feMergeNode/><feMergeNode in="color"/></feMerge>)",
+      R"(<feDropShadow dx="2" dy="-1" stdDeviation="1.2" flood-opacity="0.7"/>)",
+      R"(<feConvolveMatrix order="3" kernelMatrix="0 1 0 1 4 1 0 1 0" divisor="8" edgeMode="duplicate"/>)",
+  };
+  std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
+  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(referenceDevice);
+  ASSERT_TRUE(tiledDevice);
+  tiledDevice->filterEngine().setMaximumTileExtentForTesting(64);
+  for (size_t index = 0; index < graphs.size(); ++index) {
+    SCOPED_TRACE(index);
+    const std::string source =
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+        width="141" height="117" viewBox="0 0 100 70" preserveAspectRatio="none"><defs><filter id="f"
+        filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="83">)svg") +
+        graphs[index] +
+        R"svg(</filter></defs><g filter="url(#f)"><rect x="0" y="0" width="30.3" height="83"
+        fill="#3973ad" opacity="0.7"/><rect x="28" y="14" width="65" height="31"
+        fill="#b75d23" opacity="0.4"/><circle cx="70" cy="68" r="14" fill="#31ba55"/></g></svg>)svg";
+    ParseWarningSink warnings;
+    auto referenceDocument = parser::SVGParser::ParseSVG(source, warnings);
+    auto tiledDocument = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_TRUE(referenceDocument.hasResult());
+    ASSERT_TRUE(tiledDocument.hasResult());
+    ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+    RendererGeode reference(referenceDevice);
+    RendererGeode tiled(tiledDevice);
+    reference.draw(referenceDocument.result());
+    tiled.draw(tiledDocument.result());
+    ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    editor::tests::CompareBitmapToBitmap(tiled.takeSnapshot(), reference.takeSnapshot(),
+                                         "filter_tile_boundaries_" + std::to_string(index),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST_F(RendererGeodeTest, SettledFilterFramesReuseParameterScratch) {
   for (const bool replaceOpenFrame : {false, true}) {
