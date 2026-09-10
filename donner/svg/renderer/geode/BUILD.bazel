@@ -319,6 +319,7 @@ donner_cc_library(
         ":filter_composite_wgsl",
         ":filter_merge_wgsl",
         ":filter_resolve_wgsl",
+        ":filter_tile_wgsl",
         ":flood_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
@@ -694,11 +695,19 @@ embed_resources(
 )
 
 # Phase 7: feTile compute shader (wraparound tiling).
+genrule(
+    name = "filter_tile_generated",
+    outs = ["generated/filter_tile.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) tile " +
+          "$(location generated/filter_tile.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_tile_wgsl",
     header_output = "embed_resources/FilterTileWgsl.h",
     resources = {
-        "kFilterTileWgsl": "shaders/filter_tile.wgsl",
+        "kFilterTileWgsl": "generated/filter_tile.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -722,7 +731,6 @@ donner_cc_library(
         ":filter_image_wgsl",
         ":filter_morphology_wgsl",
         ":filter_specular_lighting_wgsl",
-        ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",

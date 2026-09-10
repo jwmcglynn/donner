@@ -30,6 +30,7 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -226,6 +227,13 @@ TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
+}
+
+TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildTileModule(), "tile.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {

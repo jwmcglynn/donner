@@ -34,6 +34,7 @@
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -1094,6 +1095,46 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "offset_case_" + std::to_string(caseIndex++),
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildTileModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto source = OffsetSourceTexels();
+  const int32_t rectangles[][4] = {{0, 0, 13, 13},  {2, 3, 4, 5}, {-2, -3, 4, 5}, {11, 12, 4, 5},
+                                   {-15, 17, 3, 2}, {0, 0, 0, 3}, {0, 0, 3, -1}};
+  size_t index = 0;
+  for (const auto& rect : rectangles) {
+    SCOPED_TRACE(testing::Message() << "rectangle " << index);
+    auto actual = RunInputOutputUniformProgram(
+        device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rect), sizeof(rect)),
+        programs::kTileWorkgroupSize);
+    ASSERT_THAT(actual, testing::SizeIs(source.size()));
+    std::vector<uint8_t> expected(source.size(), 0);
+    if (rect[2] > 0 && rect[3] > 0) {
+      for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+        for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+          const int32_t sx = std::clamp(((x - rect[0]) % rect[2] + rect[2]) % rect[2] + rect[0], 0,
+                                        int32_t(kOffsetExtent) - 1);
+          const int32_t sy = std::clamp(((y - rect[1]) % rect[3] + rect[3]) % rect[3] + rect[1], 0,
+                                        int32_t(kOffsetExtent) - 1);
+          std::copy_n(source.begin() + (sy * kOffsetExtent + sx) * 4, 4,
+                      expected.begin() + (y * kOffsetExtent + x) * 4);
+        }
+      }
+    }
+    editor::tests::CompareBitmapToBitmap(
+        svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), actual, kOffsetExtent * 4},
+        svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), expected, kOffsetExtent * 4},
+        "tile_rectangle_" + std::to_string(index++), editor::tests::PixelmatchIdentityParams());
   }
 }
 

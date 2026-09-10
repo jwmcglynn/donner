@@ -542,8 +542,7 @@ private:
   ScopedWgpuHandle<wgpu::BindGroupLayout> imageBindGroupLayout_;
 
   // feTile wraparound pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> tilePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> tileBindGroupLayout_;
+  RuntimeComputeProgram tileProgram_;
 
   // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram subregionClipProgram_;
