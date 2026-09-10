@@ -97,7 +97,7 @@ When creating a pull request:
      with `//donner/editor/tests:editor_window_tests_geode`, `//donner/editor/tests:layer_thumbnail_golden_tests_geode`,
      `//donner/editor/tests:async_renderer_tests_geode`, `//donner/editor/tests:rnr_replay_tests_geode`, and
      `//donner/editor/tests:gl_rnr_replay_tests_geode`. This matches the separate CI editor lane;
-     default `//...` reachability does not select these tests' Geode configuration.
+     run it explicitly in addition to the Geode variants covered by the default `//...` gate.
    - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.
