@@ -1652,7 +1652,8 @@ void ExpectColorTransferBoundaries(bool resolve) {
     }
     std::vector<float> actual(expected.data().size());
     std::memcpy(actual.data(), bytes.data(), sizeBytes);
-    EXPECT_THAT(actual, testing::ElementsAreArray(expected.data())) << "direction=" << direction;
+    EXPECT_THAT(actual, testing::Pointwise(testing::Eq(), expected.data()))
+        << "direction=" << direction;
   }
 }
 
