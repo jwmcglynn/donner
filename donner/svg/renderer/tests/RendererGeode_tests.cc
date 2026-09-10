@@ -4722,5 +4722,25 @@ TEST_F(RendererGeodeTest, BorrowedRuntimeSnapshotCanBeDrawnWithoutReleasingThePr
                              "borrowed_runtime_snapshot_next_frame");
 }
 
+TEST_F(RendererGeodeTest, RuntimeSnapshotBackingSurvivesUntilConsumerSubmission) {
+  RendererGeode consumer = createRenderer();
+  beginFrame(consumer);
+  {
+    RendererGeode producer = createRenderer();
+    beginFrame(producer);
+    producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    producer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    producer.endFrame();
+    const auto snapshot = producer.takeTextureSnapshot();
+    ASSERT_THAT(snapshot, testing::NotNull());
+    EXPECT_THAT(consumer.drawTextureSnapshot(
+                    *snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
+                testing::IsTrue());
+  }
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "runtime_snapshot_pending_submission");
+}
+
 }  // namespace
 }  // namespace donner::svg
