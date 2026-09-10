@@ -4757,7 +4757,10 @@ TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission
   beginFrame(consumer);
   {
     wgpu::TextureDescriptor descriptor{};
+    descriptor.dimension = wgpu::TextureDimension::_2D;
     descriptor.size = {4, 4, 1};
+    descriptor.mipLevelCount = 1;
+    descriptor.sampleCount = 1;
     descriptor.format = wgpu::TextureFormat::RGBA8Unorm;
     descriptor.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
     wgpu::Texture texture = sharedDevice()->device().createTexture(descriptor);
