@@ -16,6 +16,8 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utils.h"
+#include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -68,26 +70,41 @@ public:
    * Takes over a target the runtime allocated, so the snapshot keeps it alive after the renderer
    * has let go of it.
    *
+   * Failure returns an empty snapshot (`isValid() == false`) and leaves the caller's handle
+   * unchanged. Validation uses the owning device and the texture's actual backing descriptor.
+   * External registrations are rejected because they do not own their backing allocation.
+   *
    * @param device Device the texture belongs to.
-   * @param texture Runtime texture handle to take ownership of.
+   * @param texture Runtime texture handle, consumed only after validation succeeds.
    * @param dimensions Texture dimensions in pixels.
    * @param format Texel format.
    * @param alphaType Alpha interpretation of the stored pixels.
    */
   static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
-      std::shared_ptr<geode::GeodeDevice> device, gpu::Texture texture, Vector2i dimensions,
+      std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
       wgpu::TextureFormat format, AlphaType alphaType);
 
   ~RendererGeodeTextureSnapshot() override;
 
   RendererGeodeTextureSnapshot(const RendererGeodeTextureSnapshot&) = delete;
   RendererGeodeTextureSnapshot& operator=(const RendererGeodeTextureSnapshot&) = delete;
-  RendererGeodeTextureSnapshot(RendererGeodeTextureSnapshot&&) noexcept = default;
+  RendererGeodeTextureSnapshot(RendererGeodeTextureSnapshot&& other) noexcept;
   RendererGeodeTextureSnapshot& operator=(RendererGeodeTextureSnapshot&& other) noexcept;
 
   [[nodiscard]] RendererTextureSnapshotBackend backend() const override {
     return RendererTextureSnapshotBackend::Geode;
   }
+  /// Whether the snapshot names valid content in a backing allocation.
+  [[nodiscard]] bool isValid() const;
+  /// Runtime identity when owned or borrowed from the renderer, otherwise null for legacy uploads.
+  /// The returned handle borrows this snapshot's lifetime and must never be consumed.
+  [[nodiscard]] const gpu::Texture* runtimeTexture() const UTILS_LIFETIME_BOUND;
+  /// Device identity used to reject cross-device presentation before recording.
+  [[nodiscard]] uint64_t deviceId() const;
+  /// Actual allocation extent; content may use a smaller prefix.
+  [[nodiscard]] Vector2i allocationDimensions() const { return allocationDimensions_; }
+  /// Runtime format, if the backend format has a supported runtime representation.
+  [[nodiscard]] std::optional<gpu::TextureFormat> runtimeFormat() const { return runtimeFormat_; }
   /// Valid content extent in device pixels, anchored at the texture origin. Sampling and
   /// readback are confined to this region even when the backing texture is larger.
   [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
@@ -102,8 +119,9 @@ public:
    * backing texture.
    *
    * @param dimensions Valid content dimensions in device pixels.
+   * @return True if accepted; an invalid extent leaves the previous content unchanged.
    */
-  void setDimensions(Vector2i dimensions) { dimensions_ = dimensions; }
+  bool setDimensions(Vector2i dimensions);
 
   /// Resolved single-sample WebGPU texture.
   [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
@@ -117,8 +135,10 @@ public:
 private:
   friend class RendererGeode;
 
-  /// Construct a frame-local view that does not retain or release the texture.
-  static RendererGeodeTextureSnapshot BorrowCurrentFrame(wgpu::Texture texture, Vector2i dimensions,
+  /// Construct a frame-local view that does not retain or release the texture backing.
+  /// The renderer destroys this view before replacing, detaching, or releasing its target.
+  static RendererGeodeTextureSnapshot BorrowCurrentFrame(const gpu::Texture& runtimeTexture,
+                                                         wgpu::Texture texture, Vector2i dimensions,
                                                          wgpu::TextureFormat format);
 
   void destroyOwnedBacking() noexcept;
@@ -127,6 +147,9 @@ private:
   /// Runtime handle when this snapshot took over a target the runtime allocated. Its slot is
   /// released when the snapshot dies, which is what frees the texture in that case.
   gpu::Texture ownedGpuTexture_;
+  gpu::Texture borrowedGpuTexture_;  //!< Identity-only handle; never owns the renderer target.
+  Vector2i allocationDimensions_ = Vector2i::Zero();
+  std::optional<gpu::TextureFormat> runtimeFormat_;
   geode::ScopedWgpuHandle<wgpu::Texture> ownedTexture_;
   wgpu::Texture texture_;
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;

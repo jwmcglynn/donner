@@ -70,30 +70,103 @@ namespace donner::svg {
 // GeodeWgpuUtil.h for the helper rationale.
 using ::donner::geode::wgpuLabel;
 
+namespace {
+std::optional<gpu::TextureFormat> SnapshotRuntimeFormat(wgpu::TextureFormat format) {
+  if (format == wgpu::TextureFormat::RGBA8Unorm) {
+    return gpu::TextureFormat::RGBA8Unorm;
+  }
+  if (format == wgpu::TextureFormat::BGRA8Unorm) {
+    return gpu::TextureFormat::BGRA8Unorm;
+  }
+  return std::nullopt;
+}
+
+bool SnapshotExtentFits(Vector2i content, Vector2i allocation) {
+  return content.x > 0 && content.y > 0 && content.x <= allocation.x && content.y <= allocation.y;
+}
+
+Vector2i SnapshotAllocationExtent(const wgpu::Texture& texture) {
+  if (!texture || texture.getWidth() > uint32_t(std::numeric_limits<int>::max()) ||
+      texture.getHeight() > uint32_t(std::numeric_limits<int>::max())) {
+    return Vector2i::Zero();
+  }
+  return {static_cast<int>(texture.getWidth()), static_cast<int>(texture.getHeight())};
+}
+}  // namespace
+
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture, Vector2i dimensions,
     wgpu::TextureFormat format, AlphaType alphaType)
     : device_(std::move(device)),
       ownedTexture_(std::move(texture)),
-      dimensions_(dimensions),
       format_(format),
       alphaType_(alphaType) {
   texture_ = ownedTexture_.get();
+  allocationDimensions_ = SnapshotAllocationExtent(texture_);
+  runtimeFormat_ = texture_ ? SnapshotRuntimeFormat(texture_.getFormat()) : std::nullopt;
+  (void)setDimensions(dimensions);
 }
 
 RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-    std::shared_ptr<geode::GeodeDevice> device, gpu::Texture texture, Vector2i dimensions,
+    std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
     wgpu::TextureFormat format, AlphaType alphaType) {
-  // The runtime handle is what owns the texture here. The backend alias beside it is only what
-  // the readback path still names it by; it borrows, and holding it does not extend the
-  // texture's life beyond the handle's.
-  wgpu::Texture backendAlias =
-      device ? device->adapterDevice().wgpuTextureOf(texture) : wgpu::Texture();
-  RendererGeodeTextureSnapshot result(std::move(device), wgpu::Texture(), dimensions, format,
-                                      alphaType);
+  RendererGeodeTextureSnapshot result(nullptr, {}, Vector2i::Zero(),
+                                      wgpu::TextureFormat::Undefined);
+  if (!device || !device->adapterDevice().ownsTextureBacking(texture)) {
+    return result;
+  }
+  const wgpu::Texture backend = device->adapterDevice().wgpuTextureOf(texture);
+  const auto runtimeFormat = SnapshotRuntimeFormat(format);
+  const Vector2i allocation = SnapshotAllocationExtent(backend);
+  const auto usableCapabilities =
+      static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding) |
+      static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc);
+  if (!backend || !runtimeFormat || backend.getFormat() != format ||
+      backend.getSampleCount() != 1 || backend.getDepthOrArrayLayers() != 1 ||
+      backend.getDimension() != wgpu::TextureDimension::_2D ||
+      (static_cast<WGPUTextureUsage>(backend.getUsage()) & usableCapabilities) == 0u ||
+      !SnapshotExtentFits(dimensions, allocation)) {
+    return result;
+  }
+  result.device_ = std::move(device);
   result.ownedGpuTexture_ = std::move(texture);
-  result.texture_ = std::move(backendAlias);
+  result.texture_ = backend;
+  result.allocationDimensions_ = allocation;
+  result.runtimeFormat_ = runtimeFormat;
+  result.dimensions_ = dimensions;
+  result.format_ = format;
+  result.alphaType_ = alphaType;
   return result;
+}
+
+RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
+    RendererGeodeTextureSnapshot&& other) noexcept
+    : RendererGeodeTextureSnapshot(nullptr, {}, Vector2i::Zero(), wgpu::TextureFormat::Undefined) {
+  *this = std::move(other);
+}
+
+bool RendererGeodeTextureSnapshot::isValid() const {
+  return texture_ && SnapshotExtentFits(dimensions_, allocationDimensions_);
+}
+
+const gpu::Texture* RendererGeodeTextureSnapshot::runtimeTexture() const {
+  if (ownedGpuTexture_.isValid()) {
+    return &ownedGpuTexture_;
+  }
+  return borrowedGpuTexture_.isValid() ? &borrowedGpuTexture_ : nullptr;
+}
+
+uint64_t RendererGeodeTextureSnapshot::deviceId() const {
+  const gpu::Texture* runtime = runtimeTexture();
+  return runtime ? runtime->deviceId() : (device_ ? device_->adapterDevice().deviceId() : 0);
+}
+
+bool RendererGeodeTextureSnapshot::setDimensions(Vector2i dimensions) {
+  if (!SnapshotExtentFits(dimensions, allocationDimensions_)) {
+    return false;
+  }
+  dimensions_ = dimensions;
+  return true;
 }
 
 RendererGeodeTextureSnapshot::~RendererGeodeTextureSnapshot() {
@@ -109,6 +182,9 @@ RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
   destroyOwnedBacking();
   device_ = std::move(other.device_);
   ownedGpuTexture_ = std::move(other.ownedGpuTexture_);
+  borrowedGpuTexture_ = std::move(other.borrowedGpuTexture_);
+  allocationDimensions_ = std::exchange(other.allocationDimensions_, Vector2i::Zero());
+  runtimeFormat_ = std::exchange(other.runtimeFormat_, std::nullopt);
   ownedTexture_ = std::move(other.ownedTexture_);
   texture_ = std::exchange(other.texture_, wgpu::Texture());
   textureView_ = std::move(other.textureView_);
@@ -129,13 +205,22 @@ void RendererGeodeTextureSnapshot::destroyOwnedBacking() noexcept {
     (void)device_->adapterDevice().destroyTextureBacking(std::move(ownedGpuTexture_));
   }
   ownedGpuTexture_ = gpu::Texture();
+  borrowedGpuTexture_ = {};
+  allocationDimensions_ = Vector2i::Zero();
+  runtimeFormat_.reset();
   texture_ = wgpu::Texture();
 }
 
 RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::BorrowCurrentFrame(
-    wgpu::Texture texture, Vector2i dimensions, wgpu::TextureFormat format) {
-  RendererGeodeTextureSnapshot result(nullptr, wgpu::Texture(), dimensions, format);
+    const gpu::Texture& runtimeTexture, wgpu::Texture texture, Vector2i dimensions,
+    wgpu::TextureFormat format) {
+  RendererGeodeTextureSnapshot result(nullptr, {}, Vector2i::Zero(), format);
   result.texture_ = texture;
+  result.borrowedGpuTexture_ = gpu::Texture::CreateForBackend(
+      runtimeTexture.slotIndex(), runtimeTexture.generation(), runtimeTexture.deviceId());
+  result.allocationDimensions_ = SnapshotAllocationExtent(texture);
+  result.runtimeFormat_ = SnapshotRuntimeFormat(format);
+  (void)result.setDimensions(dimensions);
   return result;
 }
 
@@ -6355,10 +6440,23 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
   impl_->encoder->drawImage(image, params.targetRect, combinedOpacity, imageRendering);
 }
 
+namespace {
+bool CanSampleSnapshot(const RendererGeodeTextureSnapshot& snapshot, geode::GeodeDevice& device) {
+  if (!snapshot.isValid() || snapshot.deviceId() != device.adapterDevice().deviceId() ||
+      (static_cast<WGPUTextureUsage>(snapshot.texture().getUsage()) &
+       static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) == 0u) {
+    return false;
+  }
+  const gpu::Texture* runtimeTexture = snapshot.runtimeTexture();
+  return runtimeTexture == nullptr ||
+         static_cast<WGPUTexture>(device.adapterDevice().wgpuTextureOf(*runtimeTexture)) ==
+             static_cast<WGPUTexture>(snapshot.texture());
+}
+}  // namespace
+
 bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
                                         const Box2d& targetRect, double opacity, bool pixelated) {
-  impl_->flushPendingBatch();
-  if (!impl_->encoder || opacity <= 0.0) {
+  if (!impl_->encoder || !impl_->device || opacity <= 0.0) {
     return false;
   }
 
@@ -6366,7 +6464,7 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
     return false;
   }
   const auto* geodeTexture = static_cast<const RendererGeodeTextureSnapshot*>(&texture);
-  if (geodeTexture == nullptr || !geodeTexture->texture()) {
+  if (!CanSampleSnapshot(*geodeTexture, *impl_->device)) {
     return false;
   }
 
@@ -6375,24 +6473,23 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
   // that region, otherwise the unused remainder is squeezed into `targetRect` and every
   // tile edge lands in the wrong place.
   const Vector2i contentDimensions = geodeTexture->dimensions();
-  const uint32_t textureWidth = geodeTexture->texture().getWidth();
-  const uint32_t textureHeight = geodeTexture->texture().getHeight();
-  if (contentDimensions.x <= 0 || contentDimensions.y <= 0 || textureWidth == 0 ||
-      textureHeight == 0) {
-    return false;
-  }
+  const uint32_t textureWidth = static_cast<uint32_t>(geodeTexture->allocationDimensions().x);
+  const uint32_t textureHeight = static_cast<uint32_t>(geodeTexture->allocationDimensions().y);
   const Box2d sourceUv(Vector2d::Zero(),
                        Vector2d(std::min(1.0, static_cast<double>(contentDimensions.x) /
                                                   static_cast<double>(textureWidth)),
                                 std::min(1.0, static_cast<double>(contentDimensions.y) /
                                                   static_cast<double>(textureHeight))));
 
+  impl_->flushPendingBatch();
   impl_->syncTransform();
-  impl_->encoder->drawTexture(
-      impl_->importTexture(geodeTexture->texture(), geodeTexture->format(),
-                           wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst),
-      targetRect, sourceUv, opacity, pixelated,
-      geodeTexture->alphaType() == AlphaType::Premultiplied);
+  const gpu::Texture* source = geodeTexture->runtimeTexture();
+  if (source == nullptr) {
+    source = &impl_->importTexture(geodeTexture->texture(), geodeTexture->format(),
+                                   wgpu::TextureUsage::TextureBinding);
+  }
+  impl_->encoder->drawTexture(*source, targetRect, sourceUv, opacity, pixelated,
+                              geodeTexture->alphaType() == AlphaType::Premultiplied);
   return true;
 }
 
@@ -7067,19 +7164,19 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
     return nullptr;
   }
 
-  gpu::Texture texture = std::move(impl_->ownedTarget);
-  impl_->ownedTarget = gpu::Texture();
   const Vector2i dimensions(impl_->pixelWidth, impl_->pixelHeight);
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      impl_->device, std::move(impl_->ownedTarget), dimensions, impl_->textureFormat,
+      AlphaType::Premultiplied);
+  if (!snapshot.isValid()) {
+    return nullptr;
+  }
   impl_->target = wgpu::Texture();
   impl_->targetHandle = nullptr;
   impl_->targetHandleTexture = nullptr;
   impl_->targetWidth = 0;
   impl_->targetHeight = 0;
-
-  return std::make_shared<RendererGeodeTextureSnapshot>(
-      RendererGeodeTextureSnapshot::AdoptRuntimeTexture(impl_->device, std::move(texture),
-                                                        dimensions, impl_->textureFormat,
-                                                        AlphaType::Premultiplied));
+  return std::make_shared<RendererGeodeTextureSnapshot>(std::move(snapshot));
 }
 
 const RendererTextureSnapshot* RendererGeode::borrowTextureSnapshot() {
@@ -7090,8 +7187,12 @@ const RendererTextureSnapshot* RendererGeode::borrowTextureSnapshot() {
   }
 
   impl_->borrowedTargetSnapshot.emplace(RendererGeodeTextureSnapshot::BorrowCurrentFrame(
-      impl_->device->adapterDevice().wgpuTextureOf(impl_->ownedTarget),
+      impl_->ownedTarget, impl_->device->adapterDevice().wgpuTextureOf(impl_->ownedTarget),
       Vector2i(impl_->pixelWidth, impl_->pixelHeight), impl_->textureFormat));
+  if (!impl_->borrowedTargetSnapshot->isValid()) {
+    impl_->borrowedTargetSnapshot.reset();
+    return nullptr;
+  }
   return &*impl_->borrowedTargetSnapshot;
 }
 
@@ -7259,7 +7360,7 @@ ReadbackMapResult MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
 /// the compute output cannot be mapped directly; the staging-texture copy is
 /// the standard readback shape.
 RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDevice>& device,
-                                           const wgpu::Texture& texture, uint32_t width,
+                                           const gpu::Texture& texture, uint32_t width,
                                            uint32_t height,
                                            const std::function<bool()>& shouldCancel,
                                            bool& outTimedOut) {
@@ -7283,17 +7384,8 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
 
   geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
 
-  // The source is the caller's own render target, which the runtime has not named; it is
-  // borrowed for this one submission and the caller keeps ownership.
-  gpu::Result<gpu::Texture> importedInput =
-      runtime.importExternalTexture(texture, gpu::Extent2d{width, height},
-                                    gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled);
-  if (importedInput.hasError()) {
-    return bitmap;
-  }
-  const gpu::Texture inputTexture = std::move(importedInput).result();
   gpu::Result<gpu::TextureView> importedView = runtime.createTextureView(
-      inputTexture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
+      texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
   if (importedView.hasError()) {
     return bitmap;
   }
@@ -7407,23 +7499,69 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
 
 }  // namespace
 
+namespace {
+bool CanReadSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
+                     const wgpu::Texture& texture, Vector2i dimensions,
+                     const gpu::Texture* runtimeTexture) {
+  if (!device || !texture || !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(texture))) {
+    return false;
+  }
+  return runtimeTexture == nullptr ||
+         (runtimeTexture->deviceId() == device->adapterDevice().deviceId() &&
+          static_cast<WGPUTexture>(device->adapterDevice().wgpuTextureOf(*runtimeTexture)) ==
+              static_cast<WGPUTexture>(texture));
+}
+
+bool CanUnpremultiplySnapshotOnGpu(const wgpu::Texture& texture, wgpu::TextureFormat format,
+                                   AlphaType alphaType) {
+  return alphaType == AlphaType::Premultiplied && format == wgpu::TextureFormat::RGBA8Unorm &&
+         texture.getFormat() == format &&
+         (static_cast<WGPUTextureUsage>(texture.getUsage()) &
+          static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) != 0u;
+}
+}  // namespace
+
 static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
                                                const wgpu::Texture& texture, Vector2i dimensions,
                                                wgpu::TextureFormat format,
                                                AlphaType sourceAlphaType,
-                                               const std::function<bool()>& shouldCancel) {
+                                               const std::function<bool()>& shouldCancel,
+                                               const gpu::Texture* runtimeTexture = nullptr) {
   RendererBitmap bitmap;
   // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
   // work. A main-document request may arrive immediately after the thumbnail finishes drawing.
   if (shouldCancel && shouldCancel()) {
     return bitmap;
   }
-  if (!device || !texture || dimensions.x <= 0 || dimensions.y <= 0) {
+  if (!CanReadSnapshot(device, texture, dimensions, runtimeTexture)) {
     return bitmap;
   }
 
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
+
+  const bool canCopySource = (static_cast<WGPUTextureUsage>(texture.getUsage()) &
+                              static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc)) != 0u;
+  const bool gpuConversion = CanUnpremultiplySnapshotOnGpu(texture, format, sourceAlphaType);
+  if (!gpuConversion && !canCopySource) {
+    return bitmap;
+  }
+  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  gpu::Texture importedSource;
+  const gpu::Texture* sourceTexture = runtimeTexture;
+  if (sourceTexture == nullptr) {
+    const gpu::TextureUsage usage =
+        (canCopySource ? gpu::TextureUsage::CopySrc : gpu::TextureUsage::None) |
+        (gpuConversion ? gpu::TextureUsage::Sampled : gpu::TextureUsage::None);
+    auto imported = runtime.importExternalTexture(
+        texture, gpu::Extent2d{texture.getWidth(), texture.getHeight()},
+        geode::GpuTextureFormatFromWgpu(format), usage);
+    if (imported.hasError()) {
+      return bitmap;
+    }
+    importedSource = std::move(imported).result();
+    sourceTexture = &importedSource;
+  }
 
   // GPU unpremultiply path: premultiplied RGBA8Unorm render targets only. The
   // compute shader produces straight RGBA regardless of the texture's memory
@@ -7433,13 +7571,10 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   // so an sRGB surface declared as RGBA8Unorm would be silently linearized
   // by textureLoad and re-quantized into wrong bytes with no validation
   // error, where the CPU copy path degrades only to a channel-order bug.
-  if (sourceAlphaType == AlphaType::Premultiplied && format == wgpu::TextureFormat::RGBA8Unorm &&
-      texture.getFormat() == format &&
-      (static_cast<WGPUTextureUsage>(texture.getUsage()) &
-       static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) != 0u) {
+  if (gpuConversion) {
     bool gpuTimedOut = false;
-    RendererBitmap gpuBitmap =
-        ReadGeodeTextureSnapshotGpu(device, texture, width, height, shouldCancel, gpuTimedOut);
+    RendererBitmap gpuBitmap = ReadGeodeTextureSnapshotGpu(device, *sourceTexture, width, height,
+                                                           shouldCancel, gpuTimedOut);
     if (!gpuBitmap.empty()) {
       return gpuBitmap;
     }
@@ -7455,6 +7590,10 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
     }
   }
 
+  if (!canCopySource) {
+    return bitmap;
+  }
+
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
 
   // Allocate readback buffer. Created through the runtime, which counts the allocation itself,
@@ -7468,24 +7607,13 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   }
   gpu::Buffer readback = std::move(createdReadback).result();
 
-  // Copy texture -> readback buffer. The source is the caller's own render target, borrowed for
-  // this one submission; the caller keeps ownership.
-  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  gpu::Result<gpu::Texture> importedSource = runtime.importExternalTexture(
-      texture, gpu::Extent2d{width, height}, geode::GpuTextureFormatFromWgpu(format),
-      gpu::TextureUsage::CopySrc);
-  if (importedSource.hasError()) {
-    return bitmap;
-  }
-  const gpu::Texture sourceTexture = std::move(importedSource).result();
-
   gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoderResult = runtime.createCommandEncoder();
   if (encoderResult.hasError()) {
     return bitmap;
   }
   const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(encoderResult).result();
   if (encoder
-          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{sourceTexture}, readback,
+          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{*sourceTexture}, readback,
                                 gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
                                 gpu::Extent2d{width, height})
           .hasError()) {
@@ -7574,8 +7702,11 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
+  if (!isValid()) {
+    return {};
+  }
   return ReadGeodeTextureSnapshot(device_, texture_, dimensions_, format_, alphaType_,
-                                  /*shouldCancel=*/{});
+                                  /*shouldCancel=*/{}, runtimeTexture());
 }
 
 RendererBitmap RendererGeode::takeSnapshotInterruptibly(
@@ -7583,9 +7714,11 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return RendererBitmap{};
   }
-  return ReadGeodeTextureSnapshot(impl_->device, impl_->target,
-                                  Vector2i(impl_->pixelWidth, impl_->pixelHeight),
-                                  impl_->textureFormat, AlphaType::Premultiplied, shouldCancel);
+  return ReadGeodeTextureSnapshot(
+      impl_->device, impl_->target, Vector2i(impl_->pixelWidth, impl_->pixelHeight),
+      impl_->textureFormat, AlphaType::Premultiplied, shouldCancel,
+      impl_->targetHandleTexture == static_cast<WGPUTexture>(impl_->target) ? impl_->targetHandle
+                                                                            : nullptr);
 }
 
 bool RendererGeode::deviceLost() const {

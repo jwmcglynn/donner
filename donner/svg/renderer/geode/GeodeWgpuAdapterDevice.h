@@ -103,6 +103,10 @@ public:
    */
   gpu::Status destroyTextureBacking(gpu::Texture&& texture);
 
+  /// Whether a live handle owns adapter-allocated backing, rather than an external registration.
+  /// @param texture Handle whose device and generation are validated before inspecting ownership.
+  [[nodiscard]] bool ownsTextureBacking(const gpu::Texture& texture) const;
+
   /**
    * Destroys the backend object behind \p buffer explicitly, then releases its slot.
    *
