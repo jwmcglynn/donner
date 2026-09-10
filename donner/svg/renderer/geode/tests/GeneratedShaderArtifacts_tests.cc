@@ -21,6 +21,7 @@
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
+#include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
@@ -50,6 +51,11 @@ std::string EmbeddedBytes(std::span<const unsigned char> resource) {
 TEST(GeneratedShaderArtifacts, TileMatchesCommittedGolden) {
   EXPECT_THAT(EmbeddedBytes(donner::embedded::kFilterTileWgsl),
               testing::Eq(ReadRunfile("donner/gpu/shader/tests/testdata/tile.wgsl")));
+}
+
+TEST(GeneratedShaderArtifacts, MorphologyMatchesCommittedGolden) {
+  EXPECT_THAT(EmbeddedBytes(donner::embedded::kFilterMorphologyWgsl),
+              testing::Eq(ReadRunfile("donner/gpu/shader/tests/testdata/morphology.wgsl")));
 }
 
 TEST(GeneratedShaderArtifacts, EmbeddedCompositeMatchesTheCommittedGolden) {
