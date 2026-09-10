@@ -193,6 +193,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    opens_gpu_device = True,
+    variants = ["geode"],
     deps = [
         "//donner/editor/gui:editor_window",
         "@com_google_gtest//:gtest_main",

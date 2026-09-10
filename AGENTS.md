@@ -94,7 +94,7 @@ When creating a pull request:
      On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
      Also run, separately:
    - **Geode editor integration:** for renderer changes, also run `bazel test --config=geode`
-     with `//donner/editor/tests:editor_window_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`,
+     with `//donner/editor/tests:editor_window_tests_geode`, `//donner/editor/tests:layer_thumbnail_golden_tests`,
      `//donner/editor/tests:async_renderer_tests`, `//donner/editor/tests:rnr_replay_tests`, and
      `//donner/editor/tests:gl_rnr_replay_tests`. This matches the separate CI editor lane;
      default `//...` reachability does not select these tests' Geode configuration.
