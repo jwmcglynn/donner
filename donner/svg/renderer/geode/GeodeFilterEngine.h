@@ -512,8 +512,7 @@ private:
   ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> morphologyPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> morphologyBindGroupLayout_;
+  RuntimeComputeProgram morphologyProgram_;
 
   // feComponentTransfer LUT pipeline (input + output + storage buffer).
   ScopedWgpuHandle<wgpu::ComputePipeline> componentTransferPipeline_;

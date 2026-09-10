@@ -11,7 +11,6 @@
 #include "embed_resources/FilterDisplacementMapWgsl.h"
 #include "embed_resources/FilterDropShadowWgsl.h"
 #include "embed_resources/FilterImageWgsl.h"
-#include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
@@ -93,12 +92,6 @@ wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterBlend", donner::embedded::kFilterBlendWgsl.data(),
                               donner::embedded::kFilterBlendWgsl.size());
-}
-
-wgpu::ShaderModule createFilterMorphologyShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterMorphology",
-                              donner::embedded::kFilterMorphologyWgsl.data(),
-                              donner::embedded::kFilterMorphologyWgsl.size());
 }
 
 wgpu::ShaderModule createFilterComponentTransferShader(const wgpu::Device& device) {
