@@ -185,7 +185,7 @@ TEST_F(VulkanColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
-TEST_F(VulkanColorMatrixTest, GaussianAndBoxBlurPreserveFloatValuesAndFoldedClip) {
+TEST_F(VulkanColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
   const auto module = shader::programs::BuildGaussianBlurModule();
   ASSERT_FALSE(module.hasError()) << module.error();
   const auto emitted = shader::EmitSpirv(module.result());

@@ -8,9 +8,13 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstring>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
@@ -105,18 +109,33 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   const auto bytes = readbackBuffer(readback.result());
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(1024u)));
+  std::vector<uint8_t> actualPixels(4 * 4 * 4);
+  std::vector<uint8_t> expectedPixels(4 * 4 * 4);
   for (int32_t y = 0; y < 4; ++y) {
     for (int32_t x = 0; x < 4; ++x) {
-      std::array<float, 4> expected{};
-      if (x >= 1 && x < 3 && y >= 1 && y < 3) {
-        expected = {0.125f, 0.25f, 0.5f, 1.0f};
-      }
       std::array<float, 4> actual{};
       std::memcpy(actual.data(), bytes.result().data() + y * 256 + x * sizeof(actual),
                   sizeof(actual));
-      EXPECT_THAT(actual, testing::ElementsAreArray(expected)) << "pixel=" << x << "," << y;
+      ASSERT_THAT(actual,
+                  testing::Each(testing::Truly([](float value) { return std::isfinite(value); })))
+          << "pixel=" << x << "," << y;
+      const size_t pixelOffset = (y * 4 + x) * 4;
+      std::transform(actual.begin(), actual.end(), actualPixels.begin() + pixelOffset,
+                     [](float value) {
+                       return static_cast<uint8_t>(std::round(std::clamp(value, 0.0f, 1.0f) * 255));
+                     });
+      if (x >= 1 && x < 3 && y >= 1 && y < 3) {
+        const std::array<uint8_t, 4> expected{32, 64, 128, 255};
+        std::copy(expected.begin(), expected.end(), expectedPixels.begin() + pixelOffset);
+      }
     }
   }
+  editor::tests::CompareBitmapToBitmap(
+      svg::RendererBitmap{Vector2i(4, 4), std::move(actualPixels), 16},
+      svg::RendererBitmap{Vector2i(4, 4), std::move(expectedPixels), 16},
+      "blur_axis_" + std::to_string(axis) + "_kernel_" + std::to_string(kernelType) + "_sigma_" +
+          std::to_string(sigma),
+      editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace donner::gpu::tests
