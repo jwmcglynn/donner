@@ -1003,14 +1003,14 @@ jobs:
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
-      # Exercise the Geode editor configuration explicitly. The window test uses its
-      # transitioned wrapper to locate declared shared libraries on clean workers.
+      # Exercise the Geode editor configuration through transitioned wrappers, which
+      # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
         //donner/editor/tests:editor_window_tests_geode
-        //donner/editor/tests:layer_thumbnail_golden_tests
-        //donner/editor/tests:async_renderer_tests
-        //donner/editor/tests:rnr_replay_tests
-        //donner/editor/tests:gl_rnr_replay_tests
+        //donner/editor/tests:layer_thumbnail_golden_tests_geode
+        //donner/editor/tests:async_renderer_tests_geode
+        //donner/editor/tests:rnr_replay_tests_geode
+        //donner/editor/tests:gl_rnr_replay_tests_geode
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1121,10 +1121,10 @@ jobs:
       # targets need an explicit invocation.
       GEODE_EDITOR_TARGETS: >-
         //donner/editor/tests:editor_window_tests_geode
-        //donner/editor/tests:layer_thumbnail_golden_tests
-        //donner/editor/tests:async_renderer_tests
-        //donner/editor/tests:rnr_replay_tests
-        //donner/editor/tests:gl_rnr_replay_tests
+        //donner/editor/tests:layer_thumbnail_golden_tests_geode
+        //donner/editor/tests:async_renderer_tests_geode
+        //donner/editor/tests:rnr_replay_tests_geode
+        //donner/editor/tests:gl_rnr_replay_tests_geode
     steps:
       - name: Checkout
         uses: actions/checkout@v7
