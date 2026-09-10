@@ -4955,5 +4955,25 @@ TEST_F(RendererGeodeTest, SharedBackendPresentationRequiresAnOwningSnapshotLease
                              "shared_backend_owned_snapshot_accepted");
 }
 
+TEST_F(RendererGeodeTest, DetachedSnapshotReadbackDoesNotMutateProducerFrameCounters) {
+  RendererGeode producer = createRenderer();
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  producer.endFrame();
+  const auto snapshot = producer.takeTextureSnapshot();
+  ASSERT_THAT(snapshot, testing::NotNull());
+  beginFrame(producer);
+  const geode::GeodeCounters before = producer.lastFrameTimings().counters;
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_snapshot_readback");
+  const geode::GeodeCounters after = producer.lastFrameTimings().counters;
+  EXPECT_THAT(after.bufferCreates, testing::Eq(before.bufferCreates));
+  EXPECT_THAT(after.textureCreates, testing::Eq(before.textureCreates));
+  EXPECT_THAT(after.bindgroupCreates, testing::Eq(before.bindgroupCreates));
+  EXPECT_THAT(after.submits, testing::Eq(before.submits));
+  producer.endFrame();
+}
+
 }  // namespace
 }  // namespace donner::svg
