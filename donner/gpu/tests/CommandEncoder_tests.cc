@@ -11,6 +11,7 @@
 #include <memory>
 #include <utility>
 
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
@@ -633,6 +634,99 @@ TEST_F(CopyTextureToTextureTests, RejectsSelfCopy) {
       encoder_->copyTextureToTexture(target_, target_, Extent2d{4, 4}),
       IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
                             HasSubstr("source and destination are the same texture \"target\"")));
+}
+
+TEST_F(CommandEncoderTests, InvalidAttachmentListsCannotProduceACommandBuffer) {
+  for (size_t count : {size_t{0}, size_t{kMaxColorAttachments + 1}}) {
+    SCOPED_TRACE(count);
+    auto encoder = GetResultOrFail(device_.createCommandEncoder());
+    auto descriptor = passDescriptor();
+    descriptor.colorAttachments.resize(count, descriptor.colorAttachments.front());
+    const auto error = encoder->beginRenderPass(descriptor);
+    ASSERT_TRUE(error.hasError());
+    EXPECT_EQ(error.error().type,
+              count == 0 ? GpuErrorType::InvalidDescriptor : GpuErrorType::LimitExceeded);
+    EXPECT_THAT(encoder->finish(),
+                IsGpuErrorWithMessage(error.error().type, Eq(error.error().message)));
+  }
+  EXPECT_EQ(device_.lastSubmittedSerial(), 0u);
+}
+
+TEST_F(CommandEncoderTests, MalformedAttachmentOperationsPoisonBeforeRecording) {
+  for (bool badLoad : {false, true}) {
+    auto encoder = GetResultOrFail(device_.createCommandEncoder());
+    auto descriptor = passDescriptor();
+    if (badLoad)
+      descriptor.colorAttachments[0].loadOp = static_cast<LoadOp>(255);
+    else
+      descriptor.colorAttachments[0].storeOp = static_cast<StoreOp>(255);
+    const auto result = encoder->beginRenderPass(descriptor);
+    ASSERT_THAT(result, IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                              HasSubstr(badLoad ? "loadOp" : "storeOp")));
+    EXPECT_THAT(encoder->beginRenderPass(passDescriptor()),
+                IsGpuErrorWithMessage(result.error().type, Eq(result.error().message)));
+    EXPECT_THAT(encoder->finish(), IsGpuError(GpuErrorType::InvalidDescriptor));
+  }
+}
+
+TEST_F(CommandEncoderTests, NonFiniteClearChannelsCannotReachTheBackend) {
+  for (double value :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()}) {
+    for (size_t channel = 0; channel < 4; ++channel) {
+      SCOPED_TRACE(channel);
+      auto encoder = GetResultOrFail(device_.createCommandEncoder());
+      auto descriptor = passDescriptor();
+      descriptor.colorAttachments[0].clearColor[channel] = value;
+      EXPECT_THAT(encoder->beginRenderPass(descriptor),
+                  IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("not finite")));
+      EXPECT_THAT(encoder->finish(), IsGpuError(GpuErrorType::InvalidDescriptor));
+    }
+  }
+}
+
+TEST_F(CommandEncoderTests, MultipleAttachmentsMustHaveTheSameExtent) {
+  const Texture other = GetResultOrFail(device_.createTexture(
+      {"other", {4, 3}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView view = GetResultOrFail(device_.createTextureView(other, {}));
+  auto descriptor = passDescriptor();
+  descriptor.colorAttachments.push_back({view, LoadOp::Clear, StoreOp::Store, {}});
+  EXPECT_THAT(encoder_->beginRenderPass(descriptor),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("extent")));
+  EXPECT_THAT(encoder_->finish(), IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(CommandEncoderTests, VertexBindingPastEndPoisonsButExactEndCanBind) {
+  auto* pass = beginPass();
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_, 48), IsOk());
+  EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_, 49),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("offsetBytes 49")));
+  EXPECT_THAT(encoder_->finish(), IsGpuError(GpuErrorType::OutOfBounds));
+}
+
+TEST_F(CommandEncoderTests, TextureReadbackNeedsDestinationUsage) {
+  const Buffer wrongUsage =
+      GetResultOrFail(device_.createBuffer({"not-copyable", 1024, BufferUsage::Uniform}));
+  EXPECT_THAT(encoder_->copyTextureToBuffer({target_}, wrongUsage, {0, 256, 4}, {4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("CopyDst")));
+  EXPECT_THAT(encoder_->finish(), IsGpuError(GpuErrorType::UsageMismatch));
+}
+
+TEST_F(CommandEncoderTests, ReadbackExtentAndOffsetCannotOverflowOrEscapeTheSource) {
+  for (const Extent2d extent : {Extent2d{0, 4}, Extent2d{4, 0}, Extent2d{5, 4}, Extent2d{4, 5}}) {
+    auto encoder = GetResultOrFail(device_.createCommandEncoder());
+    const auto result =
+        encoder->copyTextureToBuffer({target_}, readbackBuffer_, {0, 256, 5}, extent);
+    const auto expected = extent.width == 0 || extent.height == 0 ? GpuErrorType::InvalidDescriptor
+                                                                  : GpuErrorType::OutOfBounds;
+    ASSERT_THAT(result, IsGpuError(expected));
+    EXPECT_THAT(encoder->finish(), IsGpuErrorWithMessage(expected, Eq(result.error().message)));
+  }
+  const uint64_t alignedNearMaximum = std::numeric_limits<uint64_t>::max() - 3;
+  EXPECT_THAT(encoder_->copyTextureToBuffer({target_}, readbackBuffer_,
+                                            {alignedNearMaximum, 256, 4}, {4, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("overflows")));
 }
 
 }  // namespace
