@@ -354,6 +354,20 @@ public:
   void deferDestroy(gpu::Texture texture);
 
   /**
+   * Transfer owned texture backing to this context's thread-safe retirement mailbox.
+   *
+   * Enqueuing checks only immutable device identity and never touches the resource table.
+   * The owning rendering context or exclusive teardown must drain the mailbox.
+   *
+   * @param texture Handle consumed on success; unchanged for a null or foreign handle.
+   * @return Whether the handle was accepted.
+   */
+  [[nodiscard]] bool deferDestroyTextureBacking(gpu::Texture&& texture);
+
+  /// Destroy queued texture backing on the owning rendering context or during exclusive teardown.
+  void drainDeferredTextureBackings();
+
+  /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
    *
    * Called at the top of each frame (before new allocations) so resources
@@ -366,9 +380,7 @@ public:
 
   /// Number of textures waiting for the next frame-boundary destroy pass.
   /// Exposed to pin resource-retirement behavior in renderer regression tests.
-  [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const {
-    return pendingTextures_.size() + pendingGpuTextures_.size();
-  }
+  [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const;
 
   /**
    * Key identifying a scene-batch bind group by its exact buffer bindings:

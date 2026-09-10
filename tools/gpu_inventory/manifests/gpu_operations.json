@@ -484,6 +484,8 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue",
         "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
@@ -502,6 +504,10 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
+      "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue"
+      ],
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",

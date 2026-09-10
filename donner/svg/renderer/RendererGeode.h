@@ -142,9 +142,15 @@ private:
                                                          wgpu::TextureFormat format);
 
   void destroyOwnedBacking() noexcept;
+  [[nodiscard]] bool canSampleWith(const geode::GeodeDevice& device) const;
 
   struct Backing;
   std::shared_ptr<geode::GeodeDevice> device_;
+  /// Origin-side stamps avoid reading producer context state during shared-backend presentation.
+  uint64_t runtimeDeviceId_ = 0;
+  WGPUDevice nativeDevice_ = nullptr;
+  WGPUQueue nativeQueue_ = nullptr;
+  wgpu::TextureUsage textureUsage_ = wgpu::TextureUsage::None;
   /// Shared with consuming frames until their recorded draws have been submitted.
   std::shared_ptr<Backing> backing_;
   gpu::Texture borrowedGpuTexture_;  //!< Identity-only handle; never owns the renderer target.

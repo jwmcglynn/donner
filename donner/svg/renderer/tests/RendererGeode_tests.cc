@@ -1150,7 +1150,7 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
 }
 
-TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingOnRelease) {
+TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingWhenOwnerDrains) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
@@ -1163,8 +1163,12 @@ TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingOnRelease
   snapshot.reset();
 
   EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+            destroysBefore);
+  EXPECT_THAT(sharedDevice()->deferredTextureDestroyCountForTesting(), testing::Eq(1u));
+  sharedDevice()->drainDeferredTextureBackings();
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
             destroysBefore + 1u)
-      << "Dropping an owned presentation snapshot must explicitly destroy its GPU backing";
+      << "The owner-context drain must explicitly destroy released snapshot backing";
 }
 
 TEST_F(RendererGeodeTest, BorrowedTextureSnapshotNeverDestroysBacking) {
@@ -4688,6 +4692,8 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotMoveAssignmentReleasesThePreviousBackin
       AlphaType::Premultiplied);
   destination = std::move(source);
   EXPECT_THAT(source.isValid(), testing::IsFalse());
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(oldIdentity)), testing::IsTrue());
+  sharedDevice()->drainDeferredTextureBackings();
   EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(oldIdentity)), testing::IsFalse());
   ASSERT_THAT(destination.runtimeTexture(), testing::NotNull());
   EXPECT_THAT(runtime.ownsTextureBacking(*destination.runtimeTexture()), testing::IsTrue());
@@ -4920,6 +4926,33 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotReleaseOnAnotherThreadDefersOwnerSlotRe
   owner->drainDeferredDestroys();
   EXPECT_THAT(owner->adapterDevice().ownsTextureBacking(identity), testing::IsFalse());
   EXPECT_THAT(owner->deferredTextureDestroyCountForTesting(), testing::Eq(pendingBefore));
+}
+
+TEST_F(RendererGeodeTest, SharedBackendPresentationRequiresAnOwningSnapshotLease) {
+  RendererGeode producer = createRenderer();
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  producer.endFrame();
+  const auto* borrowed = producer.borrowTextureSnapshot();
+  ASSERT_THAT(borrowed, testing::NotNull());
+  auto consumerDevice = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(consumerDevice, testing::NotNull());
+  RendererGeode consumer(consumerDevice);
+  beginFrame(consumer);
+  EXPECT_THAT(consumer.drawTextureSnapshot(*borrowed, Box2d({0, 0}, {64, 64}), 1, true),
+              testing::IsFalse());
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {0, 0, 0, 0},
+                             "shared_backend_borrowed_snapshot_refused");
+  const auto owned = producer.takeTextureSnapshot();
+  ASSERT_THAT(owned, testing::NotNull());
+  beginFrame(consumer);
+  EXPECT_THAT(consumer.drawTextureSnapshot(*owned, Box2d({0, 0}, {64, 64}), 1, true),
+              testing::IsTrue());
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "shared_backend_owned_snapshot_accepted");
 }
 
 }  // namespace

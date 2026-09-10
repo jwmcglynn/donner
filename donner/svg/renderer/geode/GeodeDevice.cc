@@ -293,6 +293,9 @@ struct GeodeDevice::Impl {
   // whose destructors release through the adapter, so the adapter must destruct after them
   // (reverse-declaration order).
   std::unique_ptr<GeodeWgpuAdapterDevice> adapterDevice;
+  uint64_t runtimeDeviceId = 0;
+  std::mutex textureBackingRetirementMutex;
+  std::vector<gpu::Texture> textureBackingsAwaitingRetirement;
 
   // Shared bind-slot resources used by every encoder's bind groups: 1x1 identity fills for the
   // pattern and clip-mask slots of draws that do not use them, one identity instance record,
@@ -1155,6 +1158,7 @@ void GeodeDevice::initSharedPipelines() {
   const gpu::TextureFormat fmt = GpuTextureFormatFromWgpu(textureFormat_);
 
   impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*this);
+  impl_->runtimeDeviceId = impl_->adapterDevice->deviceId();
   initSharedBindSlotResources();
   impl_->pipeline = std::make_unique<GeodePipeline>(*impl_->adapterDevice, fmt);
   impl_->gradientPipeline = std::make_unique<GeodeGradientPipeline>(*impl_->adapterDevice, fmt);
@@ -1231,7 +1235,37 @@ void GeodeDevice::deferDestroy(gpu::Texture texture) {
   }
 }
 
+bool GeodeDevice::deferDestroyTextureBacking(gpu::Texture&& texture) {
+  if (!texture.isValid() || !impl_ || texture.deviceId() != impl_->runtimeDeviceId) {
+    return false;
+  }
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  impl_->textureBackingsAwaitingRetirement.push_back(std::move(texture));
+  return true;
+}
+
+void GeodeDevice::drainDeferredTextureBackings() {
+  if (!impl_) {
+    return;
+  }
+  std::vector<gpu::Texture> retired;
+  {
+    std::lock_guard lock(impl_->textureBackingRetirementMutex);
+    retired.swap(impl_->textureBackingsAwaitingRetirement);
+  }
+  for (gpu::Texture& texture : retired) {
+    (void)impl_->adapterDevice->destroyTextureBacking(std::move(texture));
+  }
+}
+
+std::size_t GeodeDevice::deferredTextureDestroyCountForTesting() const {
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  return pendingTextures_.size() + pendingGpuTextures_.size() +
+         impl_->textureBackingsAwaitingRetirement.size();
+}
+
 void GeodeDevice::drainDeferredDestroys() {
+  drainDeferredTextureBackings();
   pendingBuffers_.clear();
   pendingTextures_.clear();
   pendingBindGroups_.clear();
