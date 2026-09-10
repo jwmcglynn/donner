@@ -2375,11 +2375,13 @@ struct FilterGraphExecution {
                        const Transform2d& deviceFromFilter,
                        FilterTextureAllocator& textureAllocator,
                        ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                       svg::components::FilterExecutionBudget* executionBudget)
+                       svg::components::FilterExecutionBudget* executionBudget,
+                       std::optional<FilterTilePlan> admittedPlan)
       : engine(engine),
         graph(graph),
         sourceGraphic(sourceGraphic),
         executionBudget(executionBudget),
+        admittedPlan(admittedPlan),
         arena(engine.device_, textureAllocator, *engine.resourceCache_, commandEncoder,
               engine.framePassesInCommandBuffer_),
         coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter),
@@ -2403,6 +2405,7 @@ struct FilterGraphExecution {
   wgpu::Texture sourceGraphic;
   Vector2d tileOrigin = Vector2d::Zero();
   svg::components::FilterExecutionBudget* executionBudget;
+  std::optional<FilterTilePlan> admittedPlan;
   FilterResourceArena arena;
   FilterExecutionCoordinates coordinates;
   wgpu::Texture currentBuffer;
@@ -2411,6 +2414,7 @@ struct FilterGraphExecution {
   std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
   uint64_t executedTiles = 0;
+  uint64_t admittedWorkUnits = 0;
 };
 
 /// The primitive visitor owns node-local conversion and clip decisions.
@@ -2675,6 +2679,43 @@ FilterTilePlan ChooseFilterTiles(const svg::components::FilterGraph& graph, Filt
   return best;
 }
 
+bool ValidFilterPlanAxis(uint32_t size, uint32_t tile, uint32_t core) {
+  return size > 0 && tile > 0 && core > 0 && tile <= size && core <= tile;
+}
+
+bool WellFormedFilterPlan(const FilterTilePlan& plan, uint32_t width, uint32_t height) {
+  if (plan.width != width || plan.height != height ||
+      !ValidFilterPlanAxis(width, plan.tileWidth, plan.coreWidth) ||
+      !ValidFilterPlanAxis(height, plan.tileHeight, plan.coreHeight) ||
+      uint64_t{width} * height > svg::components::kMaximumFilterSurfacePixels) {
+    return false;
+  }
+  const uint64_t columns = (uint64_t{width} + plan.coreWidth - 1) / plan.coreWidth;
+  const uint64_t rows = (uint64_t{height} + plan.coreHeight - 1) / plan.coreHeight;
+  return plan.tiles == columns * rows;
+}
+
+bool FilterPlanAxisSupportsHalo(uint32_t size, uint32_t tile, uint32_t core, double halo) {
+  return tile == size || uint64_t{core} + 2 * static_cast<uint64_t>(std::ceil(halo)) <= tile;
+}
+
+bool AdmittedFilterPlanFitsSource(const svg::components::FilterGraph& graph,
+                                  const FilterTilePlan& plan, uint32_t width, uint32_t height,
+                                  const Transform2d& transform) {
+  if (!WellFormedFilterPlan(plan, width, height)) {
+    return false;
+  }
+  if (plan.tiles == 1) {
+    return true;
+  }
+  if (!CanTileFilter(graph, width, height, transform)) {
+    return false;
+  }
+  const auto halo = ComputeFilterSamplingHalo(graph, transform);
+  return halo && FilterPlanAxisSupportsHalo(width, plan.tileWidth, plan.coreWidth, halo->x) &&
+         FilterPlanAxisSupportsHalo(height, plan.tileHeight, plan.coreHeight, halo->y);
+}
+
 }  // namespace
 
 FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
@@ -2708,13 +2749,15 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                          const Transform2d& deviceFromFilter,
                                          FilterTextureAllocator& textureAllocator,
                                          ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                                         svg::components::FilterExecutionBudget* executionBudget) {
+                                         svg::components::FilterExecutionBudget* executionBudget,
+                                         std::optional<FilterTilePlan> admittedPlan) {
   FilterGraphExecution execution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
-                                 textureAllocator, commandEncoder, executionBudget);
+                                 textureAllocator, commandEncoder, executionBudget, admittedPlan);
   const wgpu::Texture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
   lastExecutionMemory_.tileExecutions = execution.executedTiles;
+  lastExecutionMemory_.workUnits = execution.admittedWorkUnits;
   return output;
 }
 
@@ -2779,19 +2822,31 @@ void FilterGraphExecution::record(const svg::components::FilterNode& node, const
 
 wgpu::Texture FilterGraphExecution::run() {
   using namespace svg::components;
-  FilterTilePlan plan = engine.executionPlan(
-      graph, sourceGraphic.getWidth(), sourceGraphic.getHeight(), coordinates.deviceFromFilter);
+  FilterTilePlan plan =
+      admittedPlan ? *admittedPlan
+                   : engine.executionPlan(graph, sourceGraphic.getWidth(),
+                                          sourceGraphic.getHeight(), coordinates.deviceFromFilter);
+  if (admittedPlan &&
+      !AdmittedFilterPlanFitsSource(graph, plan, sourceGraphic.getWidth(),
+                                    sourceGraphic.getHeight(), coordinates.deviceFromFilter)) {
+    return {};
+  }
   if (plan.tiles > 1 && !(sourceGraphic.getUsage() & wgpu::TextureUsage::CopySrc)) {
+    if (admittedPlan) {
+      return {};
+    }
     plan = {plan.width, plan.height, plan.width, plan.height, plan.width, plan.height, 1};
   }
   FilterExecutionBudget localBudget;
   FilterExecutionBudget& budget = executionBudget ? *executionBudget : localBudget;
+  const uint64_t workBefore = budget.workUnits();
   auto reservation = budget.reserve(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
                                     plan.additionalTextureBytes(), engine.retainedBufferBytes(),
                                     plan.pixels(), plan.tiles);
   if (!reservation) {
-    return sourceGraphic;
+    return admittedPlan ? wgpu::Texture{} : sourceGraphic;
   }
+  admittedWorkUnits = budget.workUnits() - workBefore;
   const wgpu::Texture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
   budget.release(*reservation);
   return result;

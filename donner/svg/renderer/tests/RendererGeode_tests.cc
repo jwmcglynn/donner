@@ -317,6 +317,50 @@ protected:
 
 // ----------------------------------------------------------------------------
 
+TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
+  using namespace components;
+  constexpr uint32_t kWidth = 1024;
+  constexpr uint32_t kHeight = 768;
+  for (bool changePreference : {false, true}) {
+    SCOPED_TRACE(changePreference);
+    std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_TRUE(device);
+    RendererGeode renderer(device);
+    RenderViewport viewport;
+    viewport.size = Vector2d(kWidth, kHeight);
+    renderer.beginFrame(viewport);
+    FilterGraph graph;
+    FilterNode blur;
+    blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+    graph.nodes.push_back(blur);
+    renderer.setTransform(Transform2d::SkewX(0.2));
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {960, 640}));
+    const auto admitted = renderer.resourceStats();
+    ASSERT_FALSE(admitted.filterBudgetRejected);
+    if (changePreference) {
+      device->filterEngine().setMaximumTileExtentForTesting(16);
+    }
+    renderer.setTransform(Transform2d());
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kWidth, kHeight}), StrokeParams{});
+    renderer.popFilterLayer();
+    const auto observed = device->filterEngine().lastExecutionMemory();
+    ASSERT_GT(observed.tileExecutions, 1u);
+    uint64_t untiledWork = 0;
+    uint64_t untiledBytes = 0;
+    ASSERT_TRUE(FilterGraphExecutionCost(graph, uint64_t{kWidth} * kHeight,
+                                         FilterMemoryModel::GpuAllNodes, untiledWork,
+                                         untiledBytes));
+    EXPECT_GT(observed.workUnits, untiledWork);
+    EXPECT_GE(admitted.filterWorkUnits, observed.workUnits);
+    EXPECT_GE(admitted.filterRetainedBytes, observed.total());
+    renderer.endFrame();
+    EXPECT_FALSE(renderer.resourceStats().filterBudgetRejected);
+    EXPECT_FALSE(renderer.resourceStats().surfaceBudgetRejected);
+    EXPECT_FALSE(renderer.takeSnapshot().empty());
+  }
+}
+
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);

@@ -1151,6 +1151,8 @@ struct GeodeFilterAdmission {
   bool transformedCaptureReserved = false;
   bool localRasterRequired = false;
   components::FilterExecutionBudget::Reservation reservation;
+  geode::FilterTilePlan fullPlan;
+  std::optional<geode::FilterTilePlan> localPlan;
 };
 
 struct GeodeFilterBuffer {
@@ -1243,22 +1245,40 @@ std::optional<GeodeLocalRasterGeometry> ComputeGeodeLocalRasterGeometry(
   return GeodeLocalRasterGeometry{scaleX, scaleY, blurPadding, paddedRegion, *width, *height};
 }
 
-std::optional<std::uint64_t> ComputeGeodeLocalFilterPixels(
+std::optional<geode::FilterTilePlan> ComputeGeodeLocalFilterPlan(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
-    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer, bool fullExecutionFits) {
-  const std::optional<GeodeLocalRasterGeometry> geometry = ComputeGeodeLocalRasterGeometry(
-      filterGraph, filterRegion, deviceFromFilter, buffer, fullExecutionFits);
-  if (!geometry.has_value()) {
+    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer, bool fullExecutionFits,
+    const geode::GeodeFilterEngine& engine) {
+  const auto geometry = ComputeGeodeLocalRasterGeometry(filterGraph, filterRegion, deviceFromFilter,
+                                                        buffer, fullExecutionFits);
+  if (!geometry) {
     return std::nullopt;
   }
-  const std::uint64_t pixels =
-      static_cast<std::uint64_t>(geometry->width) * static_cast<std::uint64_t>(geometry->height);
-  if (!components::FilterGraphFitsExecutionBudget(filterGraph, pixels,
-                                                  components::FilterMemoryModel::GpuAllNodes)) {
+  const auto plan = engine.executionPlan(filterGraph, geometry->width, geometry->height,
+                                         Transform2d::Scale(geometry->scaleX, geometry->scaleY));
+  uint64_t work = 0;
+  uint64_t bytes = 0;
+  if (!components::FilterGraphExecutionCost(filterGraph, plan.workPixels(),
+                                            components::FilterMemoryModel::GpuAllNodes, work, bytes,
+                                            plan.pixels(), plan.tiles)) {
     return std::nullopt;
   }
-  return pixels;
+  return plan;
 }
+
+struct GeodeFilterWorkBounds {
+  uint64_t workPixels = 0;
+  uint64_t memoryPixels = 0;
+  uint64_t executions = 0;
+  uint64_t additionalTextureBytes = 0;
+
+  void include(const geode::FilterTilePlan& plan) {
+    workPixels = std::max(workPixels, plan.workPixels());
+    memoryPixels = std::max(memoryPixels, plan.pixels());
+    executions = std::max(executions, plan.tiles);
+    additionalTextureBytes = std::max(additionalTextureBytes, plan.additionalTextureBytes());
+  }
+};
 
 std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGraph& filterGraph,
                                                      const std::optional<Box2d>& filterRegion,
@@ -1282,31 +1302,32 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
   const bool fullExecutionFits = components::FilterGraphExecutionCost(
       filterGraph, plan.workPixels(), components::FilterMemoryModel::GpuAllNodes, plannedWork,
       plannedBytes, plan.pixels(), plan.tiles);
-  const std::optional<std::uint64_t> localPixels = ComputeGeodeLocalFilterPixels(
-      filterGraph, filterRegion, deviceFromFilter, *buffer, fullExecutionFits);
-  const std::uint64_t executionPixels = localPixels.has_value() && fullExecutionFits
-                                            ? std::max(bufferPixels, *localPixels)
-                                            : localPixels.value_or(bufferPixels);
-  const bool tiled = plan.tiles > 1 && !localPixels;
-  const std::uint64_t viewportCopyBytes =
+  const auto localPlan = ComputeGeodeLocalFilterPlan(filterGraph, filterRegion, deviceFromFilter,
+                                                     *buffer, fullExecutionFits, engine);
+  GeodeFilterWorkBounds bounds;
+  if (fullExecutionFits || !localPlan) {
+    bounds.include(plan);
+  }
+  if (localPlan) {
+    bounds.include(*localPlan);
+  }
+  const uint64_t localPixels = localPlan ? uint64_t{localPlan->width} * localPlan->height : 0;
+  const bool tiled = bounds.executions > 1;
+  const uint64_t viewportCopyBytes =
       buffer->offsetX || buffer->offsetY
           ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4
           : 0;
-  const std::uint64_t captureBytes = bufferPixels * 4u + localPixels.value_or(0) * 4u +
-                                     (tiled ? plan.additionalTextureBytes() : 0) +
-                                     viewportCopyBytes;
-  const uint64_t workPixels = tiled ? plan.workPixels() : executionPixels;
-  const uint64_t memoryPixels = tiled ? plan.pixels() : executionPixels;
-  const uint64_t executions = tiled ? plan.tiles : 1;
+  const uint64_t captureBytes =
+      bufferPixels * 4 + localPixels * 4 + bounds.additionalTextureBytes + viewportCopyBytes;
   std::size_t surfaces = 0;
   uint64_t graphBytes = 0;
   uint64_t graphWork = 0;
-  if (components::FilterGraphExecutionCost(filterGraph, workPixels,
+  if (components::FilterGraphExecutionCost(filterGraph, bounds.workPixels,
                                            components::FilterMemoryModel::GpuAllNodes, graphWork,
-                                           graphBytes, memoryPixels, executions)) {
+                                           graphBytes, bounds.memoryPixels, bounds.executions)) {
     components::GpuFilterWorkingSet layout;
     (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
-    surfaces = layout.floatTextures + 2 + (localPixels ? 1 : 0) + (tiled ? 2 : 0) +
+    surfaces = layout.floatTextures + 2 + (localPlan ? 1 : 0) + (tiled ? 2 : 0) +
                (viewportCopyBytes ? 1 : 0);
     surfaces +=
         std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
@@ -1320,14 +1341,15 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
     }
   }
   auto reservation = budget.reserve(
-      filterGraph, workPixels, components::FilterMemoryModel::GpuAllNodes, captureBytes,
-      engine.retainedBufferBytes(), memoryPixels, executions, surfaces);
+      filterGraph, bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, captureBytes,
+      engine.retainedBufferBytes(), bounds.memoryPixels, bounds.executions, surfaces);
   if (!reservation.has_value()) {
     return std::nullopt;
   }
   return GeodeFilterAdmission{buffer->region,     buffer->width,   buffer->height,
-                              buffer->offsetX,    buffer->offsetY, localPixels.has_value(),
-                              !fullExecutionFits, *reservation};
+                              buffer->offsetX,    buffer->offsetY, localPlan.has_value(),
+                              !fullExecutionFits, *reservation,    plan,
+                              localPlan};
 }
 
 }  // namespace
@@ -2055,6 +2077,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// Descriptors captured at push for texture-pool release.
     gpu::TextureDescriptor layerDesc = {};
     components::FilterGraph filterGraph;
+    geode::FilterTilePlan fullFilterPlan;
+    std::optional<geode::FilterTilePlan> localFilterPlan;
     components::FilterExecutionBudget::Reservation filterReservation;
     Box2d filterRegion;
     Transform2d deviceFromFilter;  // Full CTM at push time.
@@ -2137,6 +2161,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frame.savedTarget = target;
     frame.layerDesc = textureDesc;
     frame.filterGraph = filterGraph;
+    frame.fullFilterPlan = admission.fullPlan;
+    frame.localFilterPlan = admission.localPlan;
     frame.filterReservation = admission.reservation;
     frame.filterRegion = admission.region;
     frame.deviceFromFilter = deviceFromFilter;
@@ -2171,7 +2197,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   bool tryCompositeTransformedFilter(FilterStackFrame& frame) {
-    if (!frame.transformedCaptureReserved || !filterEngine || frame.filterGraph.empty()) {
+    if (!frame.transformedCaptureReserved || !frame.localFilterPlan || !filterEngine ||
+        frame.filterGraph.empty()) {
       return false;
     }
     const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
@@ -2218,11 +2245,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                   Vector2d(geometry->blurPadding + frame.filterRegion.width(),
                                            geometry->blurPadding + frame.filterRegion.height()));
     if (!flushFrameGpuEncoder()) {
+      releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
       return false;
     }
-    wgpu::Texture localFiltered =
-        filterEngine->execute(frame.filterGraph, localBackendTexture, localFilterRegion,
-                              localDeviceFromFilter, *this, frameCommandEncoder);
+    wgpu::Texture localFiltered = filterEngine->execute(
+        frame.filterGraph, localBackendTexture, localFilterRegion, localDeviceFromFilter, *this,
+        frameCommandEncoder, nullptr, frame.localFilterPlan);
 
     const Transform2d deviceFromLocal =
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
@@ -5610,9 +5638,9 @@ void RendererGeode::popFilterLayer() {
                  components::kMaximumFilterSurfacePixels) {
     UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
                              "Failed to replay recorded draws before the filter passes");
-    filteredTexture =
-        impl_->filterEngine->execute(frame.filterGraph, layerBackendTexture, frame.filterRegion,
-                                     bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
+    filteredTexture = impl_->filterEngine->execute(
+        frame.filterGraph, layerBackendTexture, frame.filterRegion, bufferDeviceFromFilter, *impl_,
+        impl_->frameCommandEncoder, nullptr, frame.fullFilterPlan);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
