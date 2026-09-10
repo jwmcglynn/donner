@@ -194,16 +194,20 @@ TEST_F(VulkanColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
   ASSERT_FALSE(bindings.hasError()) << bindings.error();
   for (uint32_t axis : {0u, 1u}) {
     for (uint32_t kind : {0u, 1u, 2u}) {
-      gpu::tests::CheckBlurStorage(
-          *device_,
-          ShaderModuleDescriptor{"float",
-                                 {},
-                                 ShaderSourceKind::Spirv,
-                                 emitted.result(),
-                                 shader::ComputeEntryPointsOf(module.result()),
-                                 bindings.result()},
-          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-          kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis);
+      for (uint32_t edgeMode : {0u, 1u, 2u}) {
+        SCOPED_TRACE(testing::Message()
+                     << "axis=" << axis << " kind=" << kind << " edge=" << edgeMode);
+        gpu::tests::CheckBlurStorage(
+            *device_,
+            ShaderModuleDescriptor{"float",
+                                   {},
+                                   ShaderSourceKind::Spirv,
+                                   emitted.result(),
+                                   shader::ComputeEntryPointsOf(module.result()),
+                                   bindings.result()},
+            [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+            kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode);
+      }
     }
   }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());

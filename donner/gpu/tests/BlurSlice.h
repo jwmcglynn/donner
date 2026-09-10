@@ -17,16 +17,22 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "tiny_skia/filter/GaussianBlur.h"
 
 namespace donner::gpu::tests {
 
-/// Runs Gaussian and asymmetric box passes with folded clipping on a constant float image.
+/// Runs Gaussian and asymmetric box passes with folded clipping on a varied float image.
 /// @param device Native device with bounded wait/readback support.
 /// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
+/// @param sigma Gaussian standard deviation in pixels, zero for the copy path.
+/// @param kernelType Zero for Gaussian, one for an asymmetric box.
+/// @param axis Zero for horizontal, one for vertical.
+/// @param edgeMode Zero for transparent, one for duplicate, two for wrap.
 template <typename DeviceType, typename Readback>
 void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                      Readback readbackBuffer, float sigma, uint32_t kernelType, uint32_t axis) {
+                      Readback readbackBuffer, float sigma, uint32_t kernelType, uint32_t axis,
+                      uint32_t edgeMode) {
   auto shader = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shader, HasResult());
   auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
@@ -60,11 +66,15 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   ASSERT_THAT(outputView, HasResult());
   std::array<float, 64> values{};
   std::array<uint8_t, 1024> upload{};
-  for (size_t i = 0; i < values.size(); i += 4) {
-    values[i] = 0.125f;
-    values[i + 1] = 0.25f;
-    values[i + 2] = 0.5f;
-    values[i + 3] = 1.0f;
+  for (size_t y = 0; y < 4; ++y) {
+    for (size_t x = 0; x < 4; ++x) {
+      const size_t offset = (y * 4 + x) * 4;
+      const float alpha = float((x + 2 * y) % 4 + 1) / 4;
+      values[offset] = float(x + 1) / 8 * alpha;
+      values[offset + 1] = float(y + 1) / 8 * alpha;
+      values[offset + 2] = 0.25f * alpha;
+      values[offset + 3] = alpha;
+    }
   }
   for (size_t y = 0; y < 4; ++y) {
     std::memcpy(upload.data() + y * 256, values.data() + y * 16, 16 * sizeof(float));
@@ -74,7 +84,7 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
       BufferDescriptor{"blur parameters", 48, BufferUsage::Uniform | BufferUsage::CopyDst});
   ASSERT_THAT(uniform, HasResult());
   const std::array<uint32_t, 12> params{
-      std::bit_cast<uint32_t>(sigma), axis, 1, kernelType, 1, 2, 1, 1, 3, 3, 1, 0};
+      std::bit_cast<uint32_t>(sigma), axis, edgeMode, kernelType, 1, 2, 0, 0, 3, 3, 1, 0};
   ASSERT_THAT(
       device.writeBuffer(uniform.result(), 0,
                          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),
@@ -109,32 +119,61 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   const auto bytes = readbackBuffer(readback.result());
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(1024u)));
-  std::vector<uint8_t> actualPixels(4 * 4 * 4);
-  std::vector<uint8_t> expectedPixels(4 * 4 * 4);
+  auto actual = tiny_skia::filter::FloatPixmap::fromSize(4, 4);
+  auto expected = tiny_skia::filter::FloatPixmap::fromSize(4, 4);
+  ASSERT_THAT(actual.has_value(), testing::IsTrue());
+  ASSERT_THAT(expected.has_value(), testing::IsTrue());
+  std::copy(values.begin(), values.end(), expected->data().begin());
+  if (kernelType == 1) {
+    for (int32_t y = 0; y < 4; ++y) {
+      for (int32_t x = 0; x < 4; ++x) {
+        for (size_t channel = 0; channel < 4; ++channel) {
+          float sum = 0;
+          for (int32_t tap = -1; tap <= 2; ++tap) {
+            int32_t sx = x + (axis == 0 ? tap : 0);
+            int32_t sy = y + (axis == 1 ? tap : 0);
+            if (edgeMode == 0 && (sx < 0 || sy < 0 || sx >= 4 || sy >= 4)) {
+              continue;
+            }
+            if (edgeMode == 2) {
+              sx = (sx % 4 + 4) % 4;
+              sy = (sy % 4 + 4) % 4;
+            } else {
+              sx = std::clamp(sx, 0, 3);
+              sy = std::clamp(sy, 0, 3);
+            }
+            sum += values[(sy * 4 + sx) * 4 + channel];
+          }
+          expected->data()[(y * 4 + x) * 4 + channel] = sum / 4;
+        }
+      }
+    }
+  } else {
+    tiny_skia::filter::gaussianBlur(*expected, axis == 0 ? sigma : 0, axis == 1 ? sigma : 0,
+                                    static_cast<tiny_skia::filter::BlurEdgeMode>(edgeMode));
+  }
   for (int32_t y = 0; y < 4; ++y) {
+    std::memcpy(actual->data().data() + y * 16, bytes.result().data() + y * 256,
+                16 * sizeof(float));
     for (int32_t x = 0; x < 4; ++x) {
-      std::array<float, 4> actual{};
-      std::memcpy(actual.data(), bytes.result().data() + y * 256 + x * sizeof(actual),
-                  sizeof(actual));
-      ASSERT_THAT(actual,
-                  testing::Each(testing::Truly([](float value) { return std::isfinite(value); })))
-          << "pixel=" << x << "," << y;
-      const size_t pixelOffset = (y * 4 + x) * 4;
-      std::transform(actual.begin(), actual.end(), actualPixels.begin() + pixelOffset,
-                     [](float value) {
-                       return static_cast<uint8_t>(std::round(std::clamp(value, 0.0f, 1.0f) * 255));
-                     });
-      if (x >= 1 && x < 3 && y >= 1 && y < 3) {
-        const std::array<uint8_t, 4> expected{32, 64, 128, 255};
-        std::copy(expected.begin(), expected.end(), expectedPixels.begin() + pixelOffset);
+      if (x >= 3 || y >= 3) {
+        std::fill_n(expected->data().begin() + (y * 4 + x) * 4, 4, 0.0f);
       }
     }
   }
+  ASSERT_THAT(actual->data(),
+              testing::Each(testing::Truly([](float value) { return std::isfinite(value); })));
+  const auto actualPixels = actual->toPixmap();
+  const auto expectedPixels = expected->toPixmap();
   editor::tests::CompareBitmapToBitmap(
-      svg::RendererBitmap{Vector2i(4, 4), std::move(actualPixels), 16},
-      svg::RendererBitmap{Vector2i(4, 4), std::move(expectedPixels), 16},
+      svg::RendererBitmap{
+          Vector2i(4, 4),
+          std::vector<uint8_t>(actualPixels.data().begin(), actualPixels.data().end()), 16},
+      svg::RendererBitmap{
+          Vector2i(4, 4),
+          std::vector<uint8_t>(expectedPixels.data().begin(), expectedPixels.data().end()), 16},
       "blur_axis_" + std::to_string(axis) + "_kernel_" + std::to_string(kernelType) + "_sigma_" +
-          std::to_string(sigma),
+          std::to_string(sigma) + "_edge_" + std::to_string(edgeMode),
       editor::tests::PixelmatchIdentityParams());
 }
 

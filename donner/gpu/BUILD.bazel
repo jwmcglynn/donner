@@ -138,6 +138,7 @@ donner_cc_library(
         ":gpu_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 

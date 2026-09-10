@@ -566,7 +566,7 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: Gaussian blur compute shader (two-pass separable).
+# Gaussian blur compute shader (two-pass separable).
 genrule(
     name = "gaussian_blur_generated",
     outs = ["generated/gaussian_blur.wgsl"],
