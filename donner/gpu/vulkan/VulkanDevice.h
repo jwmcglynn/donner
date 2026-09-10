@@ -75,6 +75,9 @@ struct VulkanApi;
  */
 class VulkanDevice final : public Device {
 public:
+  /// Native shader representation accepted by this device.
+  ShaderSourceKind shaderSourceKind() const override { return ShaderSourceKind::Spirv; }
+
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device

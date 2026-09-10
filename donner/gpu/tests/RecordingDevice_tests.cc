@@ -153,6 +153,12 @@ void RecordRepresentativeStream(RecordingDevice& device) {
   EXPECT_THAT(device.submit(std::move(commandBuffer).result()), HasResult());
 }
 
+TEST(RecordingDeviceTests, DefaultShaderRepresentationIsWgsl) {
+  RecordingDevice device;
+  const Device& runtime = device;
+  EXPECT_EQ(runtime.shaderSourceKind(), ShaderSourceKind::Wgsl);
+}
+
 TEST(RecordingDeviceTests, SubmissionSerialsStrictlyIncreaseAndComplete) {
   RecordingDevice device;
   EXPECT_THAT(device.lastSubmittedSerial(), Eq(0u));

@@ -235,6 +235,10 @@ public:
   /// for cross-device validation.
   uint64_t deviceId() const { return deviceId_; }
 
+  /// Shader representation accepted by this device. Recording and WebGPU devices use WGSL;
+  /// native backends override this so callers select the matching build-time artifact.
+  virtual ShaderSourceKind shaderSourceKind() const { return ShaderSourceKind::Wgsl; }
+
   /**
    * Creates a buffer. Fails closed on zero or oversized `byteSize` or empty usage.
    *
