@@ -11,6 +11,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/ModuleInterface.h"
@@ -334,6 +335,207 @@ TEST_P(MetalVertexBindingTransitions, PipelineSwitchesUnusedSlotsAndComputeKeepR
   compare(firstReadback, 16, 4, 0);
   compare(computeReadback, 2, 1, 1);
   compare(finalReadback, 16, 4, 2);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalVertexBindingsTest, ActiveVertexOffsetAndIdentityChangesAloneUpdateTheDraw) {
+  auto groupLayout = device_->createBindGroupLayout(
+      {"resources",
+       {{0, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
+         TextureFormat::RGBA8Unorm},
+        {27, ShaderStage::Vertex | ShaderStage::Compute, BindingType::ReadOnlyStorageBuffer},
+        {28, ShaderStage::Vertex, BindingType::UniformBuffer}}});
+  ASSERT_THAT(groupLayout, HasResult());
+  auto layout = device_->createPipelineLayout({"resources", {groupLayout.result()}});
+  ASSERT_THAT(layout, HasResult());
+  const auto shaderModule = compile(false, false);
+  ASSERT_THAT(shaderModule.isValid(), testing::IsTrue());
+  auto pipeline =
+      device_->createRenderPipeline(pipelineDescriptor(layout.result(), shaderModule, false));
+  ASSERT_THAT(pipeline, HasResult());
+  const auto quad = [](float left, float right) {
+    return std::array<float, 12>{left, -1, right, -1, right, 1, left, -1, right, 1, left, 1};
+  };
+  const std::array<std::array<float, 12>, 2> firstGeometry{quad(-1, -1.0f / 3),
+                                                           quad(-1.0f / 3, 1.0f / 3)};
+  const std::array<std::array<float, 12>, 2> secondGeometry{quad(-1, -1.0f / 3), quad(1.0f / 3, 1)};
+  const auto firstBuffer = upload(firstGeometry, BufferUsage::Vertex);
+  const auto secondBuffer = upload(secondGeometry, BufferUsage::Vertex);
+  const auto weights = upload(std::array<float, 2>{1, 0.5f}, BufferUsage::Storage);
+  const auto tint = upload(std::array<float, 4>{0.25f, 0, 0, 1}, BufferUsage::Uniform);
+  auto computeTexture = device_->createTexture(
+      {"unused compute", {1, 1}, TextureFormat::RGBA8Unorm, TextureUsage::StorageBinding});
+  ASSERT_THAT(computeTexture, HasResult());
+  auto computeView = device_->createTextureView(computeTexture.result(), {"unused compute"});
+  ASSERT_THAT(computeView, HasResult());
+  auto group = device_->createBindGroup({"resources",
+                                         groupLayout.result(),
+                                         {{0, TextureViewBinding{computeView.result()}},
+                                          {27, BufferBinding{weights, 0, sizeof(float)}},
+                                          {28, BufferBinding{tint, 0, 4 * sizeof(float)}}}});
+  ASSERT_THAT(group, HasResult());
+  auto target = device_->createTexture({"dirty tracking",
+                                        {12, 4},
+                                        TextureFormat::RGBA8Unorm,
+                                        TextureUsage::RenderAttachment | TextureUsage::CopySrc});
+  ASSERT_THAT(target, HasResult());
+  auto view = device_->createTextureView(target.result(), {"dirty tracking"});
+  ASSERT_THAT(view, HasResult());
+  const auto pixels = readback(4);
+  auto encoder = device_->createCommandEncoder();
+  ASSERT_THAT(encoder, HasResult());
+  auto pass = encoder.result()->beginRenderPass(
+      {"dirty tracking", {{view.result(), LoadOp::Clear, StoreOp::Store, {0, 0, 1, 1}}}});
+  ASSERT_THAT(pass, HasResult());
+  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
+  ASSERT_THAT(pass.result()->setVertexBuffer(0, firstBuffer, 0), IsOk());
+  ASSERT_THAT(pass.result()->draw(6), IsOk());
+  ASSERT_THAT(pass.result()->setVertexBuffer(0, firstBuffer, sizeof(firstGeometry[0])), IsOk());
+  ASSERT_THAT(pass.result()->draw(6), IsOk());
+  ASSERT_THAT(pass.result()->setVertexBuffer(0, secondBuffer, sizeof(secondGeometry[0])), IsOk());
+  ASSERT_THAT(pass.result()->draw(6), IsOk());
+  ASSERT_THAT(pass.result()->end(), IsOk());
+  ASSERT_THAT(
+      encoder.result()->copyTextureToBuffer({target.result()}, pixels, {0, 256, 4}, {12, 4}),
+      IsOk());
+  auto commands = encoder.result()->finish();
+  ASSERT_THAT(commands, HasResult());
+  auto serial = device_->submit(std::move(commands).result());
+  ASSERT_THAT(serial, HasResult());
+  ASSERT_THAT(device_->waitForSerial(serial.result(), 5.0), testing::IsTrue());
+  const auto data = device_->readBackBuffer(pixels);
+  ASSERT_THAT(data, HasResult());
+  svg::RendererBitmap actual;
+  actual.dimensions = {12, 4};
+  actual.rowBytes = 256;
+  actual.pixels = data.result();
+  svg::RendererBitmap expected;
+  expected.dimensions = actual.dimensions;
+  expected.rowBytes = actual.rowBytes;
+  expected.pixels.resize(expected.rowBytes * 4);
+  for (size_t y = 0; y < 4; ++y) {
+    for (size_t x = 0; x < 12; ++x) {
+      const std::array<uint8_t, 4> red{64, 0, 0, 255};
+      std::copy(red.begin(), red.end(), expected.pixels.begin() + y * expected.rowBytes + x * 4);
+    }
+  }
+  editor::tests::CompareBitmapToBitmap(actual, expected, "metal_active_vertex_dirty_tracking",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+shader::ShaderResult<shader::IrModule> MaximumVertexModule() {
+  using namespace shader;
+  programs::ErrorLatch e;
+  ModuleBuilder builder;
+  std::vector<IrParam> inputs;
+  for (uint32_t slot = 0; slot < kMaxVertexBuffers; ++slot) {
+    inputs.push_back({RcString("input" + std::to_string(slot)), IrType::Vec2f(), slot});
+  }
+  auto vertex = builder.createVertexEntryPoint(
+      "vs_maximum", inputs, {{"position", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  if (vertex.hasError()) {
+    return std::move(vertex).error();
+  }
+  auto v = std::move(vertex).result();
+  IrExpr position = e(v.ref("input0"));
+  for (uint32_t slot = 1; slot < kMaxVertexBuffers; ++slot) {
+    position = e(Add(position, e(v.ref(RcString("input" + std::to_string(slot))))));
+  }
+  e.ok(v.returnOutputs(
+      {e(ConstructVector(IrType::Vec4f(), {position, LiteralF32(0), LiteralF32(1)}))}));
+  e.ok(v.finish());
+  auto fragment =
+      builder.createFragmentEntryPoint("fs_maximum", {}, {{"color", IrType::Vec4f(), 0}});
+  if (fragment.hasError()) {
+    return std::move(fragment).error();
+  }
+  auto f = std::move(fragment).result();
+  e.ok(f.returnOutputs({e(ConstructVector(
+      IrType::Vec4f(), {LiteralF32(1), LiteralF32(0), LiteralF32(0), LiteralF32(1)}))}));
+  e.ok(f.finish());
+  if (e.error) {
+    return *e.error;
+  }
+  return builder.build();
+}
+
+TEST_F(MetalVertexBindingsTest, EverySupportedVertexSlotContributesToThePixels) {
+  const auto module = MaximumVertexModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto msl = shader::EmitMsl(module.result());
+  ASSERT_FALSE(msl.hasError()) << msl.error();
+  auto shaderModule =
+      device_->createShaderModule({"maximum", RcString(msl.result()), ShaderSourceKind::Msl});
+  ASSERT_THAT(shaderModule, HasResult());
+  auto layout = device_->createPipelineLayout({"maximum", {}});
+  ASSERT_THAT(layout, HasResult());
+  std::vector<VertexBufferLayout> buffers;
+  for (uint32_t slot = 0; slot < kMaxVertexBuffers; ++slot) {
+    buffers.push_back({8, VertexStepMode::Vertex, {{VertexFormat::Float32x2, 0, slot}}});
+  }
+  auto pipeline = device_->createRenderPipeline(
+      {"maximum",
+       layout.result(),
+       {shaderModule.result(), "vs_maximum", buffers},
+       {shaderModule.result(), "fs_maximum", {{TextureFormat::RGBA8Unorm}}}});
+  ASSERT_THAT(pipeline, HasResult());
+  const float shift = float(kMaxVertexBuffers - 1) * 0.25f;
+  const float left = -1 - shift, right = -shift;
+  const auto positions =
+      upload(std::array<float, 12>{left, -1, right, -1, right, 1, left, -1, right, 1, left, 1},
+             BufferUsage::Vertex);
+  const auto offsets =
+      upload(std::array<float, 12>{0.25f, 0, 0.25f, 0, 0.25f, 0, 0.25f, 0, 0.25f, 0, 0.25f, 0},
+             BufferUsage::Vertex);
+  auto target = device_->createTexture({"maximum",
+                                        {8, 4},
+                                        TextureFormat::RGBA8Unorm,
+                                        TextureUsage::RenderAttachment | TextureUsage::CopySrc});
+  ASSERT_THAT(target, HasResult());
+  auto view = device_->createTextureView(target.result(), {"maximum"});
+  ASSERT_THAT(view, HasResult());
+  const auto pixels = readback(4);
+  auto encoder = device_->createCommandEncoder();
+  ASSERT_THAT(encoder, HasResult());
+  auto pass = encoder.result()->beginRenderPass(
+      {"maximum", {{view.result(), LoadOp::Clear, StoreOp::Store, {0, 0, 1, 1}}}});
+  ASSERT_THAT(pass, HasResult());
+  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setVertexBuffer(0, positions), IsOk());
+  for (uint32_t slot = 1; slot < kMaxVertexBuffers; ++slot) {
+    ASSERT_THAT(pass.result()->setVertexBuffer(slot, offsets), IsOk());
+  }
+  ASSERT_THAT(pass.result()->draw(6), IsOk());
+  ASSERT_THAT(pass.result()->end(), IsOk());
+  ASSERT_THAT(encoder.result()->copyTextureToBuffer({target.result()}, pixels, {0, 256, 4}, {8, 4}),
+              IsOk());
+  auto commands = encoder.result()->finish();
+  ASSERT_THAT(commands, HasResult());
+  auto serial = device_->submit(std::move(commands).result());
+  ASSERT_THAT(serial, HasResult());
+  ASSERT_THAT(device_->waitForSerial(serial.result(), 5.0), testing::IsTrue());
+  const auto data = device_->readBackBuffer(pixels);
+  ASSERT_THAT(data, HasResult());
+  svg::RendererBitmap actual;
+  actual.dimensions = {8, 4};
+  actual.rowBytes = 256;
+  actual.pixels = data.result();
+  svg::RendererBitmap expected;
+  expected.dimensions = actual.dimensions;
+  expected.rowBytes = actual.rowBytes;
+  expected.pixels.resize(expected.rowBytes * 4);
+  for (size_t y = 0; y < 4; ++y) {
+    for (size_t x = 0; x < 8; ++x) {
+      const std::array<uint8_t, 4> color =
+          x < 4 ? std::array<uint8_t, 4>{255, 0, 0, 255} : std::array<uint8_t, 4>{0, 0, 255, 255};
+      std::copy(color.begin(), color.end(),
+                expected.pixels.begin() + y * expected.rowBytes + x * 4);
+    }
+  }
+  editor::tests::CompareBitmapToBitmap(actual, expected, "metal_maximum_vertex_slots",
+                                       editor::tests::PixelmatchIdentityParams());
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
