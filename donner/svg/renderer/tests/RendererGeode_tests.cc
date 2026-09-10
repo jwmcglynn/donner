@@ -4455,5 +4455,23 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
   (void)runtime.destroyTextureBacking(std::move(owner));
 }
 
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsUnusableCapabilitiesWithoutConsumption) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  auto created = runtime.createTexture(
+      {"upload only", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopyDst});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(texture.isValid(), testing::IsTrue());
+  }
+  if (texture.isValid()) {
+    (void)runtime.destroyTextureBacking(std::move(texture));
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
