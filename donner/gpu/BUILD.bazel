@@ -129,6 +129,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "blur_slice",
+    testonly = 1,
+    hdrs = ["tests/BlurSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "morphology_slice",
     testonly = 1,
     hdrs = ["tests/MorphologySlice.h"],

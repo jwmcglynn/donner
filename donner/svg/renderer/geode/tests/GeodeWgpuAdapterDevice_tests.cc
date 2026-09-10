@@ -653,6 +653,42 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FloatTextureDispatchPreservesSubBytePrecisio
       });
 }
 
+TEST_F(GeodeWgpuAdapterDeviceTests, VectorCeilAndExpRunThroughWebGpu) {
+  const auto module = gpu::shader::BuildVectorCeilExpModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"float",
+                                  RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl,
+                                  {},
+                                  gpu::shader::ComputeEntryPointsOf(module.result())},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      },
+      {-0.5f, 0.5f, 0.0f, 1.0f}, {0.0f, 1.0f, 16.0f, 43.0f});
+}
+
 TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitEncodesAComputePassThatWritesItsStorageTexture) {
   ComputeScene scene = MakeComputeScene(*adapter_, "computeTarget");
 

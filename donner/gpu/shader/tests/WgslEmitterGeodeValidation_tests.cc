@@ -31,6 +31,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
@@ -45,6 +46,7 @@
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "tiny_skia/filter/ColorSpace.h"
+#include "tiny_skia/filter/GaussianBlur.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -1109,6 +1111,100 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "offset_case_" + std::to_string(caseIndex++),
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildGaussianBlurModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto source = OffsetSourceTexels();
+  size_t index = 0;
+  for (uint32_t axis : {0u, 1u}) {
+    for (uint32_t edge : {0u, 1u, 2u}) {
+      for (uint32_t kind : {0u, 1u, 2u}) {
+        for (uint32_t clip : {0u, 1u}) {
+          SCOPED_TRACE(testing::Message() << "axis=" << axis << " edge=" << edge << " kind=" << kind
+                                          << " clip=" << clip);
+          const float sigma = kind == 0 ? 0.5f : 0.0f;
+          const uint32_t params[] = {std::bit_cast<uint32_t>(sigma),
+                                     axis,
+                                     edge,
+                                     kind == 1 ? 1u : 0u,
+                                     1,
+                                     2,
+                                     2,
+                                     3,
+                                     11,
+                                     10,
+                                     clip,
+                                     0};
+          auto actual = RunInputOutputUniformProgram(
+              device->device(), device->queue(), wgsl.result(), source, kOffsetExtent,
+              kOffsetExtent,
+              std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+              programs::kGaussianBlurWorkgroupSize);
+          ASSERT_THAT(actual, testing::SizeIs(source.size()));
+          auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kOffsetExtent, kOffsetExtent);
+          ASSERT_THAT(pixels.has_value(), testing::IsTrue());
+          for (size_t i = 0; i < source.size(); ++i) {
+            pixels->data()[i] = float(source[i]) / 255.0f;
+          }
+          if (kind == 1) {
+            const auto input = *pixels;
+            for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+              for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+                for (size_t c = 0; c < 4; ++c) {
+                  float sum = 0;
+                  for (int32_t tap = -1; tap <= 2; ++tap) {
+                    int32_t sx = x + (axis == 0 ? tap : 0), sy = y + (axis == 1 ? tap : 0);
+                    if (edge == 0 && (sx < 0 || sy < 0 || sx >= int32_t(kOffsetExtent) ||
+                                      sy >= int32_t(kOffsetExtent))) {
+                      continue;
+                    }
+                    if (edge == 2) {
+                      sx = (sx % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
+                      sy = (sy % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
+                    } else {
+                      sx = std::clamp(sx, 0, int32_t(kOffsetExtent) - 1);
+                      sy = std::clamp(sy, 0, int32_t(kOffsetExtent) - 1);
+                    }
+                    sum += input.data()[(sy * kOffsetExtent + sx) * 4 + c];
+                  }
+                  pixels->data()[(y * kOffsetExtent + x) * 4 + c] = sum / 4;
+                }
+              }
+            }
+          } else {
+            tiny_skia::filter::gaussianBlur(*pixels, axis == 0 ? sigma : 0, axis == 1 ? sigma : 0,
+                                            static_cast<tiny_skia::filter::BlurEdgeMode>(edge));
+          }
+          if (clip) {
+            for (uint32_t y = 0; y < kOffsetExtent; ++y) {
+              for (uint32_t x = 0; x < kOffsetExtent; ++x) {
+                if (x < 2 || x >= 11 || y < 3 || y >= 10) {
+                  std::fill_n(pixels->data().begin() + (y * kOffsetExtent + x) * 4, 4, 0.0f);
+                }
+              }
+            }
+          }
+          const auto expected = pixels->toPixmap();
+          editor::tests::CompareBitmapToBitmap(
+              svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), actual,
+                                  kOffsetExtent * 4},
+              svg::RendererBitmap{
+                  Vector2i(kOffsetExtent, kOffsetExtent),
+                  std::vector<uint8_t>(expected.data().begin(), expected.data().end()),
+                  kOffsetExtent * 4},
+              "blur_case_" + std::to_string(index++), editor::tests::PixelmatchIdentityParams());
+        }
+      }
+    }
   }
 }
 

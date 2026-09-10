@@ -1,11 +1,13 @@
 #pragma once
 /// @file
-/// Native float-texture upload, sampled compute dispatch, and readback acceptance.
+/// Native Gaussian/box blur and folded clipping acceptance.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <utility>
 
@@ -14,42 +16,37 @@
 
 namespace donner::gpu::tests {
 
-/// Runs a one-texel sampled compute program and checks all four returned float values exactly.
+/// Runs Gaussian and asymmetric box passes with folded clipping on a constant float image.
 /// @param device Native device with bounded wait/readback support.
 /// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
-/// @param values Input texel values.
-/// @param expected Expected output values, compared exactly.
 template <typename DeviceType, typename Readback>
-void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                              Readback readbackBuffer,
-                              const std::array<float, 4>& values = {0.125f, 0.25f, 0.5f, 0.75f},
-                              const std::array<float, 4>& expected = {
-                                  0.125f + 1.0f / 4096, 0.25f + 1.0f / 4096, 0.5f + 1.0f / 4096,
-                                  0.75f + 1.0f / 4096}) {
+void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+                      Readback readbackBuffer, float sigma, uint32_t kernelType, uint32_t axis) {
   auto shader = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shader, HasResult());
   auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
       "float",
       {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
        {1, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
-        TextureFormat::RGBA32Float}}});
+        TextureFormat::RGBA32Float},
+       {2, ShaderStage::Compute, BindingType::UniformBuffer}}});
   ASSERT_THAT(layout, HasResult());
   auto pipelineLayout =
       device.createPipelineLayout(PipelineLayoutDescriptor{"float", {layout.result()}});
   ASSERT_THAT(pipelineLayout, HasResult());
   auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "float", pipelineLayout.result(), ComputeState{shader.result(), "cs_main"}, {1, 1, 1}});
+      "float", pipelineLayout.result(), ComputeState{shader.result(), "cs_main"}, {8, 8, 1}});
   ASSERT_THAT(pipeline, HasResult());
   auto input =
-      device.createTexture(TextureDescriptor{"float input",
-                                             {1, 1},
+      device.createTexture(TextureDescriptor{"blur input",
+                                             {4, 4},
                                              TextureFormat::RGBA32Float,
                                              TextureUsage::Sampled | TextureUsage::CopyDst});
   ASSERT_THAT(input, HasResult());
   auto output =
-      device.createTexture(TextureDescriptor{"float output",
-                                             {1, 1},
+      device.createTexture(TextureDescriptor{"blur output",
+                                             {4, 4},
                                              TextureFormat::RGBA32Float,
                                              TextureUsage::StorageBinding | TextureUsage::CopySrc});
   ASSERT_THAT(output, HasResult());
@@ -57,16 +54,37 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   auto outputView = device.createTextureView(output.result(), TextureViewDescriptor{"output"});
   ASSERT_THAT(inputView, HasResult());
   ASSERT_THAT(outputView, HasResult());
-  std::array<uint8_t, 256> upload{};
-  std::memcpy(upload.data(), values.data(), sizeof(values));
-  ASSERT_THAT(device.writeTexture(input.result(), upload, {0, 256, 1}, {1, 1}), IsOk());
-  auto group = device.createBindGroup(BindGroupDescriptor{
-      "float",
-      layout.result(),
-      {{0, TextureViewBinding{inputView.result()}}, {1, TextureViewBinding{outputView.result()}}}});
+  std::array<float, 64> values{};
+  std::array<uint8_t, 1024> upload{};
+  for (size_t i = 0; i < values.size(); i += 4) {
+    values[i] = 0.125f;
+    values[i + 1] = 0.25f;
+    values[i + 2] = 0.5f;
+    values[i + 3] = 1.0f;
+  }
+  for (size_t y = 0; y < 4; ++y) {
+    std::memcpy(upload.data() + y * 256, values.data() + y * 16, 16 * sizeof(float));
+  }
+  ASSERT_THAT(device.writeTexture(input.result(), upload, {0, 256, 4}, {4, 4}), IsOk());
+  auto uniform = device.createBuffer(
+      BufferDescriptor{"blur parameters", 48, BufferUsage::Uniform | BufferUsage::CopyDst});
+  ASSERT_THAT(uniform, HasResult());
+  const std::array<uint32_t, 12> params{
+      std::bit_cast<uint32_t>(sigma), axis, 1, kernelType, 1, 2, 1, 1, 3, 3, 1, 0};
+  ASSERT_THAT(
+      device.writeBuffer(uniform.result(), 0,
+                         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),
+                                                  sizeof(params))),
+      IsOk());
+  auto group =
+      device.createBindGroup(BindGroupDescriptor{"float",
+                                                 layout.result(),
+                                                 {{0, TextureViewBinding{inputView.result()}},
+                                                  {1, TextureViewBinding{outputView.result()}},
+                                                  {2, BufferBinding{uniform.result(), 0, 48}}}});
   ASSERT_THAT(group, HasResult());
   auto readback = device.createBuffer(
-      BufferDescriptor{"float readback", 256, BufferUsage::CopyDst | BufferUsage::MapRead});
+      BufferDescriptor{"blur readback", 1024, BufferUsage::CopyDst | BufferUsage::MapRead});
   ASSERT_THAT(readback, HasResult());
   auto encoder = device.createCommandEncoder();
   ASSERT_THAT(encoder, HasResult());
@@ -77,7 +95,7 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
-                                                    readback.result(), {0, 256, 1}, {1, 1}),
+                                                    readback.result(), {0, 256, 4}, {4, 4}),
               IsOk());
   auto commands = encoder.result()->finish();
   ASSERT_THAT(commands, HasResult());
@@ -86,10 +104,19 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   ASSERT_THAT(device.waitForSerial(serial.result(), 5.0), testing::IsTrue());
   const auto bytes = readbackBuffer(readback.result());
   ASSERT_THAT(bytes, HasResult());
-  ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(sizeof(values))));
-  std::array<float, 4> actual{};
-  std::memcpy(actual.data(), bytes.result().data(), sizeof(actual));
-  EXPECT_THAT(actual, testing::ElementsAreArray(expected));
+  ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(1024u)));
+  for (int32_t y = 0; y < 4; ++y) {
+    for (int32_t x = 0; x < 4; ++x) {
+      std::array<float, 4> expected{};
+      if (x >= 1 && x < 3 && y >= 1 && y < 3) {
+        expected = {0.125f, 0.25f, 0.5f, 1.0f};
+      }
+      std::array<float, 4> actual{};
+      std::memcpy(actual.data(), bytes.result().data() + y * 256 + x * sizeof(actual),
+                  sizeof(actual));
+      EXPECT_THAT(actual, testing::ElementsAreArray(expected)) << "pixel=" << x << "," << y;
+    }
+  }
 }
 
 }  // namespace donner::gpu::tests
