@@ -668,8 +668,8 @@ struct BlurParams {
   uint32_t pad1;
 };
 
-/// Uniform buffer layout mirroring the shader program's `OffsetParams` struct: the shift in
-/// pixels, rounded on the device so the rule that rounds it is the one the shader states.
+/// Uniform buffer layout mirroring the shader program's `OffsetParams` struct. Host offsets
+/// are rounded in double precision before narrowing to these exactly representable float pixels.
 struct OffsetParams {
   float dx;       //!< Shift along x, in pixels.
   float dy;       //!< Shift along y, in pixels.
@@ -3331,8 +3331,9 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
   }
 
   OffsetParams params{};
-  params.dx = static_cast<float>(primitive.dx);
-  params.dy = static_cast<float>(primitive.dy);
+  // Round before narrowing: doubles on either side of a half can become the same float.
+  params.dx = static_cast<float>(std::round(primitive.dx));
+  params.dy = static_cast<float>(std::round(primitive.dy));
   params.pad0 = 0;
   params.pad1 = 0;
 
@@ -4358,8 +4359,9 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
     }
   }
   params.color[3] = floodA;
-  params.dx = static_cast<float>(pixelDx);
-  params.dy = static_cast<float>(pixelDy);
+  // Keep the software path's rounding boundary before converting the uniform to float.
+  params.dx = static_cast<float>(std::round(pixelDx));
+  params.dy = static_cast<float>(std::round(pixelDy));
   params.pad0 = 0;
   params.pad1 = 0;
 
