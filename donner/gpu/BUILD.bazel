@@ -116,6 +116,18 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "tile_slice",
+    testonly = 1,
+    hdrs = ["tests/TileSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_test(
     name = "gpu_tests",
     srcs = [
