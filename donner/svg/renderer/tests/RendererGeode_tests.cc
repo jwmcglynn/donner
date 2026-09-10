@@ -4299,5 +4299,161 @@ TEST_F(RendererGeodeTest, ClippedVerticalOnlyFillWithEmptyVerticalBandsRenders) 
       << "A clipped fill with no vertical bands must not invalidate the frame it is drawn in.";
 }
 
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTexture) {
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::BGRA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(texture.isValid(), testing::IsTrue());
+  }
+  if (texture.isValid()) {
+    (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsInvalidContentBeforeTakingOwnership) {
+  for (const Vector2i dimensions :
+       {Vector2i(0, 4), Vector2i(-1, 4), Vector2i(5, 4), Vector2i(4, 5)}) {
+    SCOPED_TRACE(dimensions);
+    auto created = sharedDevice()->adapterDevice().createTexture(
+        {"snapshot",
+         {4, 4},
+         gpu::TextureFormat::RGBA8Unorm,
+         gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    {
+      auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          sharedDevice(), std::move(texture), dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          AlphaType::Premultiplied);
+      EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+      EXPECT_THAT(texture.isValid(), testing::IsTrue());
+    }
+    if (texture.isValid()) {
+      (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+    }
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsForeignOwnerWithoutConsumingTheTexture) {
+  auto other = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  ASSERT_THAT(other, testing::NotNull());
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        other, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(texture.isValid(), testing::IsTrue());
+  }
+  if (texture.isValid()) {
+    (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+  }
+}
+
+TEST_F(RendererGeodeTest, SnapshotContentCannotGrowBeyondItsBacking) {
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      sharedDevice(), std::move(texture), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  snapshot.setDimensions({5, 3});
+  EXPECT_THAT(snapshot.dimensions(), testing::Eq(Vector2i(2, 3)));
+  snapshot.setDimensions({2, -1});
+  EXPECT_THAT(snapshot.dimensions(), testing::Eq(Vector2i(2, 3)));
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsNullOwnerAndUnsupportedFormatWithoutConsumption) {
+  for (const bool missingOwner : {false, true}) {
+    SCOPED_TRACE(missingOwner);
+    const auto format = missingOwner ? gpu::TextureFormat::RGBA8Unorm : gpu::TextureFormat::R8Unorm;
+    auto created = sharedDevice()->adapterDevice().createTexture(
+        {"snapshot", {4, 4}, format, gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    {
+      auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          missingOwner ? nullptr : sharedDevice(), std::move(texture), {4, 4},
+          missingOwner ? wgpu::TextureFormat::RGBA8Unorm : wgpu::TextureFormat::R8Unorm,
+          AlphaType::Premultiplied);
+      EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+      EXPECT_THAT(texture.isValid(), testing::IsTrue());
+    }
+    if (texture.isValid()) {
+      (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+    }
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsReplacement) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  const gpu::TextureDescriptor descriptor{"snapshot",
+                                          {4, 4},
+                                          gpu::TextureFormat::RGBA8Unorm,
+                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
+  auto first = runtime.createTexture(descriptor);
+  ASSERT_FALSE(first.hasError()) << first.error();
+  gpu::Texture texture = std::move(first).result();
+  gpu::Texture stale =
+      gpu::Texture::CreateForBackend(texture.slotIndex(), texture.generation(), texture.deviceId());
+  ASSERT_FALSE(runtime.destroyTextureBacking(std::move(texture)).hasError());
+  auto replacement = runtime.createTexture(descriptor);
+  ASSERT_FALSE(replacement.hasError()) << replacement.error();
+  gpu::Texture live = std::move(replacement).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(stale), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(stale.isValid(), testing::IsTrue());
+  }
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(live)), testing::IsTrue());
+  (void)runtime.destroyTextureBacking(std::move(live));
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  auto created = runtime.createTexture({"host owner",
+                                        {4, 4},
+                                        gpu::TextureFormat::RGBA8Unorm,
+                                        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture owner = std::move(created).result();
+  auto imported = runtime.importExternalTexture(
+      runtime.wgpuTextureOf(owner), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc);
+  ASSERT_FALSE(imported.hasError()) << imported.error();
+  gpu::Texture registration = std::move(imported).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(registration), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(registration.isValid(), testing::IsTrue());
+  }
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(owner)), testing::IsTrue());
+  registration = {};
+  (void)runtime.destroyTextureBacking(std::move(owner));
+}
+
 }  // namespace
 }  // namespace donner::svg
