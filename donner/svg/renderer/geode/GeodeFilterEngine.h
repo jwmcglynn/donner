@@ -514,8 +514,7 @@ private:
   RuntimeComputeProgram morphologyProgram_;
 
   // feComponentTransfer LUT pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> componentTransferPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> componentTransferBindGroupLayout_;
+  RuntimeComputeProgram componentTransferProgram_;
 
   // feConvolveMatrix kernel pipeline (input + output + uniform).
   ScopedWgpuHandle<wgpu::ComputePipeline> convolveMatrixPipeline_;

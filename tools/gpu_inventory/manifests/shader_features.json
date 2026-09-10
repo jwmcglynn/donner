@@ -63,62 +63,6 @@
         "BlendParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_component_transfer.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "input_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba32float, write>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 2,
-          "group": 0,
-          "name": "params",
-          "type": "ComponentTransferParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "array",
-        "clamp",
-        "if",
-        "let",
-        "min",
-        "pow",
-        "return",
-        "select",
-        "switch",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "ChannelFunction",
-        "ComponentTransferParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_convolve_matrix.wgsl": {
       "bindings": [
         {

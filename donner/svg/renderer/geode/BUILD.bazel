@@ -332,6 +332,7 @@ donner_cc_library(
         ":checkerboard_pipeline",
         ":color_space_convert_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
         ":filter_drop_shadow_wgsl",
         ":filter_merge_wgsl",
@@ -648,11 +649,19 @@ embed_resources(
 )
 
 # Phase 7: feComponentTransfer compute shader (per-channel LUT).
+genrule(
+    name = "filter_component_transfer_generated",
+    outs = ["generated/filter_component_transfer.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) component_transfer " +
+          "$(location generated/filter_component_transfer.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_component_transfer_wgsl",
     header_output = "embed_resources/FilterComponentTransferWgsl.h",
     resources = {
-        "kFilterComponentTransferWgsl": "shaders/filter_component_transfer.wgsl",
+        "kFilterComponentTransferWgsl": "generated/filter_component_transfer.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -763,7 +772,6 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
-        ":filter_component_transfer_wgsl",
         ":filter_convolve_matrix_wgsl",
         ":filter_diffuse_lighting_wgsl",
         ":filter_displacement_map_wgsl",

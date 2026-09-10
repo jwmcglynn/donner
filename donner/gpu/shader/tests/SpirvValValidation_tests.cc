@@ -23,6 +23,7 @@
 #include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
@@ -242,6 +243,14 @@ TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildTileModule(), "tile.spv");
+}
+
+TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildComponentTransferModule(),
+                             "component_transfer.spv");
 }
 
 TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {

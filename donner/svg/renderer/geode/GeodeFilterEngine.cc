@@ -20,6 +20,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
+#include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
@@ -39,6 +40,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/ColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
+#include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterDropShadowWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
@@ -62,7 +64,7 @@ struct FilterResourceCache {
     uint64_t offset = 0;
   };
 
-  struct RuntimeUniformSlot {
+  struct RuntimeParameterSlot {
     const gpu::Buffer* buffer = nullptr;
     uint64_t offset = 0;
   };
@@ -103,7 +105,7 @@ struct FilterResourceCache {
     return result;
   }
 
-  RuntimeUniformSlot acquireRuntimeUniformSlot(GeodeDevice& device, size_t size) {
+  RuntimeParameterSlot acquireRuntimeParameterSlot(GeodeDevice& device, size_t size) {
     std::lock_guard<std::mutex> lock(mutex);
     const uint64_t aligned = align(size);
     if (runtimeIndex < runtime.size() && aligned > runtime[runtimeIndex].size - runtimeCursor) {
@@ -112,16 +114,16 @@ struct FilterResourceCache {
     }
     if (runtimeIndex == runtime.size()) {
       const uint64_t bytes = std::max(aligned, svg::components::kGpuFilterParameterBlockBytes);
-      gpu::Result<gpu::Buffer> buffer = device.adapterDevice().createBuffer(
-          gpu::BufferDescriptor{"FilterRuntimeUniformScratch", bytes,
-                                gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+      gpu::Result<gpu::Buffer> buffer = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+          "FilterRuntimeParameterScratch", bytes,
+          gpu::BufferUsage::Uniform | gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
       if (!buffer.hasResult()) {
         return {};
       }
       runtime.push_back({std::move(buffer).result(), bytes});
       retainedBytes += bytes;
     }
-    RuntimeUniformSlot result{&runtime[runtimeIndex].buffer, runtimeCursor};
+    RuntimeParameterSlot result{&runtime[runtimeIndex].buffer, runtimeCursor};
     runtimeCursor += aligned;
     return result;
   }
@@ -327,16 +329,17 @@ struct FilterResourceArena {
     return result;
   }
 
-  /// A uniform slot holding \p data, taken from the frame's runtime-side scratch. Null buffer when
+  /// A parameter slot holding \p data for uniform or read-only storage binding. Null buffer when
   /// the scratch cannot be grown or the upload fails.
   ///
   /// A pass cannot share the scratch the unmigrated passes bump-allocate from, because the runtime
   /// cannot bind a backend buffer. It shares the runtime one instead: a buffer per pass would put
   /// an allocation on every filter primitive of every frame.
   /// @param data Bytes to upload.
-  FilterResourceCache::RuntimeUniformSlot writeRuntimeUniformSlot(std::span<const uint8_t> data) {
-    const FilterResourceCache::RuntimeUniformSlot slot =
-        resourceCache_.acquireRuntimeUniformSlot(device_, data.size());
+  FilterResourceCache::RuntimeParameterSlot writeRuntimeParameterSlot(
+      std::span<const uint8_t> data) {
+    const FilterResourceCache::RuntimeParameterSlot slot =
+        resourceCache_.acquireRuntimeParameterSlot(device_, data.size());
     if (slot.buffer == nullptr ||
         device_.adapterDevice().writeBuffer(*slot.buffer, slot.offset, data).hasError()) {
       return {};
@@ -1366,7 +1369,7 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param input Source texture, borrowed. @param output Destination texture, borrowed.
 /// @param uniforms Parameter block to upload. @param label Debug label stem for the pass.
 /// @param workgroupSize Size the entry point declares, along x and y.
-[[nodiscard]] bool dispatchRuntimeInputOutputUniform(
+[[nodiscard]] bool dispatchRuntimeInputOutputParameters(
     FilterResourceArena& arena, const RuntimeComputeProgram& program, const wgpu::Texture& input,
     const gpu::Texture& output, std::span<const uint8_t> uniforms, const char* label,
     uint32_t workgroupSize, const gpu::Buffer* transferTable = nullptr) {
@@ -1380,8 +1383,8 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   }
   const gpu::TextureView* sourceView = arena.createRuntimeTextureView(*source, RcString(label));
   const gpu::TextureView* destinationView = arena.createRuntimeTextureView(output, RcString(label));
-  const FilterResourceCache::RuntimeUniformSlot uniformSlot =
-      arena.writeRuntimeUniformSlot(uniforms);
+  const FilterResourceCache::RuntimeParameterSlot uniformSlot =
+      arena.writeRuntimeParameterSlot(uniforms);
   if (sourceView == nullptr || destinationView == nullptr || uniformSlot.buffer == nullptr) {
     return false;
   }
@@ -1436,7 +1439,8 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
                                            {1, gpu::TextureViewBinding{*destinationView}},
                                            {2, gpu::TextureViewBinding{*outputView}}};
   if (!uniforms.empty()) {
-    const FilterResourceCache::RuntimeUniformSlot slot = arena.writeRuntimeUniformSlot(uniforms);
+    const FilterResourceCache::RuntimeParameterSlot slot =
+        arena.writeRuntimeParameterSlot(uniforms);
     if (slot.buffer == nullptr) {
       return false;
     }
@@ -1833,47 +1837,18 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kMorphologyWorkgroupSize);
   }
 
-  // --- feComponentTransfer pipeline (input + output + stored function parameters) ---
+  // Packed channel functions and tables use the same bounded runtime parameter pool.
   {
-    wgpu::BindGroupLayoutEntry entries[3]{};
-
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
-    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-    entries[0].texture.multisampled = false;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[1].storageTexture.format = kFormat;
-    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[2].binding = 2;
-    entries[2].visibility = wgpu::ShaderStage::Compute;
-    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[2].buffer.minBindingSize = (kComponentTransferHeaderWords + 1) * sizeof(uint32_t);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterComponentTransferBGL");
-    bglDesc.entryCount = 3;
-    bglDesc.entries = entries;
-    componentTransferBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterComponentTransferPipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {componentTransferBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterComponentTransferShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterComponentTransferPipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    componentTransferPipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::ComponentTransferBinding;
+    componentTransferProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterComponentTransfer",
+        EmbeddedWgsl(donner::embedded::kFilterComponentTransferWgsl),
+        gpu::shader::programs::kComponentTransferEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(ComponentTransferBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(ComponentTransferBinding::OutputTexture)),
+         {static_cast<uint32_t>(ComponentTransferBinding::Params), gpu::ShaderStage::Compute,
+          gpu::BindingType::ReadOnlyStorageBuffer}},
+        gpu::shader::programs::kComponentTransferWorkgroupSize);
   }
 
   // --- feConvolveMatrix pipeline (input + output + storage buffer for params) ---
@@ -3266,9 +3241,9 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
 
   const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
   if (runtimeOutput == nullptr ||
-      !dispatchRuntimeInputOutputUniform(arena, blurProgram_, input, *runtimeOutput,
-                                         UniformBytes(params), "GaussianBlurPass",
-                                         gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
+      !dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, *runtimeOutput,
+                                            UniformBytes(params), "GaussianBlurPass",
+                                            gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
     return {};
   }
   return output;
@@ -3302,9 +3277,9 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
 
   const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
   if (runtimeOutput == nullptr ||
-      !dispatchRuntimeInputOutputUniform(arena, blurProgram_, input, *runtimeOutput,
-                                         UniformBytes(params), "BoxBlurPass",
-                                         gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
+      !dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, *runtimeOutput,
+                                            UniformBytes(params), "BoxBlurPass",
+                                            gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
     return {};
   }
   return output;
@@ -3337,9 +3312,9 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
   params.pad0 = 0;
   params.pad1 = 0;
 
-  if (!dispatchRuntimeInputOutputUniform(arena, offsetProgram_, input, *output,
-                                         UniformBytes(params), "FilterOffsetPass",
-                                         gpu::shader::programs::kOffsetWorkgroupSize)) {
+  if (!dispatchRuntimeInputOutputParameters(arena, offsetProgram_, input, *output,
+                                            UniformBytes(params), "FilterOffsetPass",
+                                            gpu::shader::programs::kOffsetWorkgroupSize)) {
     return {};
   }
 
@@ -3370,9 +3345,9 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     return {};
   }
 
-  if (!dispatchRuntimeInputOutputUniform(arena, colorMatrixProgram_, input, *output,
-                                         UniformBytes(params), "FilterColorMatrixPass",
-                                         gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, colorMatrixProgram_, input, *output, UniformBytes(params), "FilterColorMatrixPass",
+          gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
     return {};
   }
 
@@ -3398,9 +3373,9 @@ wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
   FilterColorMatrixParams params{};
   params.col3[3] = 1.0f;
 
-  if (!dispatchRuntimeInputOutputUniform(arena, colorMatrixProgram_, input, *output,
-                                         UniformBytes(params), "FilterSourceAlphaPass",
-                                         gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, colorMatrixProgram_, input, *output, UniformBytes(params), "FilterSourceAlphaPass",
+          gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
     return {};
   }
 
@@ -3432,8 +3407,8 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
 
   const gpu::TextureView* outputView =
       arena.createRuntimeTextureView(*output, "FilterFloodOutputView");
-  const FilterResourceCache::RuntimeUniformSlot uniforms =
-      arena.writeRuntimeUniformSlot(UniformBytes(params));
+  const FilterResourceCache::RuntimeParameterSlot uniforms =
+      arena.writeRuntimeParameterSlot(UniformBytes(params));
   if (outputView == nullptr || uniforms.buffer == nullptr) {
     return {};
   }
@@ -3622,9 +3597,9 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
       params.radiusX = axis == 0 ? radius : 0;
       params.radiusY = axis == 1 ? radius : 0;
       params.op = primitive.op == Op::Dilate ? 1u : 0u;
-      if (!dispatchRuntimeInputOutputUniform(arena, morphologyProgram_, current, *output,
-                                             UniformBytes(params), kLabels[axis],
-                                             gpu::shader::programs::kMorphologyWorkgroupSize)) {
+      if (!dispatchRuntimeInputOutputParameters(arena, morphologyProgram_, current, *output,
+                                                UniformBytes(params), kLabels[axis],
+                                                gpu::shader::programs::kMorphologyWorkgroupSize)) {
         return {};
       }
       current = device_.adapterDevice().wgpuTextureOf(*output);
@@ -3642,63 +3617,26 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
-
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterComponentTransferOutput");
-  if (!output) {
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterComponentTransferOutput",
+      {input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
-
   const auto data = BuildComponentTransferData(primitive);
   if (!data) {
     return {};
   }
-  const size_t dataSize = data->size() * sizeof(uint32_t);
-  const auto parameters = writeUniformSlot(*resourceCache_, device_, data->data(), dataSize);
-  if (!parameters.buffer) {
+  const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data->data()),
+                                       data->size() * sizeof(uint32_t));
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, componentTransferProgram_, input, *output, bytes, "FilterComponentTransferPass",
+          gpu::shader::programs::kComponentTransferWorkgroupSize)) {
     return {};
   }
-
-  // Build bind group.
-  ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = outputView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = parameters.buffer;
-  bgEntries[2].offset = parameters.offset;
-  bgEntries[2].size = dataSize;
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterComponentTransferBindGroup");
-  bgDesc.layout = componentTransferBindGroupLayout_.get();
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterComponentTransferPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(componentTransferPipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 namespace {
@@ -4632,9 +4570,9 @@ wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgp
     return {};
   }
   const TileParams params{srcX, srcY, srcW, srcH};
-  if (!dispatchRuntimeInputOutputUniform(arena, tileProgram_, input, *output, UniformBytes(params),
-                                         "FilterTilePass",
-                                         gpu::shader::programs::kTileWorkgroupSize)) {
+  if (!dispatchRuntimeInputOutputParameters(arena, tileProgram_, input, *output,
+                                            UniformBytes(params), "FilterTilePass",
+                                            gpu::shader::programs::kTileWorkgroupSize)) {
     return {};
   }
   return device_.adapterDevice().wgpuTextureOf(*output);
@@ -4671,7 +4609,7 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   params.pad0 = resolve && arena.isLinearRgb(input) ? 1u : 0u;
   params.pad1 = 0;
 
-  if (!dispatchRuntimeInputOutputUniform(
+  if (!dispatchRuntimeInputOutputParameters(
           arena, resolve ? filterResolveProgram_ : subregionClipProgram_, input, *output,
           UniformBytes(params), "FilterSubregionClipPass",
           gpu::shader::programs::kSubregionClipWorkgroupSize,
@@ -4709,10 +4647,10 @@ wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& 
   params.pad2 = 0;
 
   if (!colorTransferTable_.isValid() ||
-      !dispatchRuntimeInputOutputUniform(arena, colorSpaceConvertProgram_, input, *output,
-                                         UniformBytes(params), "FilterColorSpaceConvertPass",
-                                         gpu::shader::programs::kColorSpaceConvertWorkgroupSize,
-                                         &colorTransferTable_)) {
+      !dispatchRuntimeInputOutputParameters(arena, colorSpaceConvertProgram_, input, *output,
+                                            UniformBytes(params), "FilterColorSpaceConvertPass",
+                                            gpu::shader::programs::kColorSpaceConvertWorkgroupSize,
+                                            &colorTransferTable_)) {
     return {};
   }
 
