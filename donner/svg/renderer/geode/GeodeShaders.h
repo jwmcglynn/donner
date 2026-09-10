@@ -210,27 +210,6 @@ wgpu::ShaderModule createFilterDiffuseLightingShader(const wgpu::Device& device)
 wgpu::ShaderModule createFilterSpecularLightingShader(const wgpu::Device& device);
 
 /**
- * Compile the feDropShadow compose compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_drop_shadow.wgsl` via the `embed_resources()` Bazel rule.
- * The shader takes the original source and its pre-blurred counterpart and
- * produces `source over flood-tinted-offset-blur`, implementing the
- * compose-step of feDropShadow. The blur itself is run through the existing
- * Gaussian blur pipeline before this shader executes.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var in1_tex: texture_2d<f32>;`   // Source
- * - `@group(0) @binding(1) var in2_tex: texture_2d<f32>;`   // Blurred source
- * - `@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(3) var<uniform> params: DropShadowParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterDropShadowShader(const wgpu::Device& device);
-
-/**
  * Compile the feImage compute shader for the given device.
  *
  * The WGSL source is embedded at build time from
