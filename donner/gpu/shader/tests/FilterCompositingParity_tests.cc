@@ -207,6 +207,37 @@ TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) 
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(FilterChainPrecision, ComponentTransferGammaGuardsAndEmptyTablesMatchCpu) {
+  ExpectFilterChainMatches(R"svg(
+    <feComponentTransfer color-interpolation-filters="sRGB">
+      <feFuncR type="gamma" amplitude="0" exponent="-2" offset="0.3"/>
+      <feFuncG type="gamma" amplitude="0.4" exponent="0" offset="0.1"/>
+      <feFuncB type="table" tableValues=""/>
+      <feFuncA type="discrete" tableValues=""/>
+    </feComponentTransfer>
+    <feComponentTransfer color-interpolation-filters="sRGB">
+      <feFuncR type="gamma" amplitude="0.7" exponent="2" offset="0.03"/>
+      <feFuncG type="table" tableValues="0.4"/>
+      <feFuncB type="discrete" tableValues="0.6"/>
+    </feComponentTransfer>)svg",
+                           "component_gamma_empty_tables");
+}
+
+TEST(FilterChainPrecision, ComponentTransferMaximumPackedTablesKeepChannelsDistinct) {
+  std::string operation = "<feComponentTransfer color-interpolation-filters=\"sRGB\">";
+  const char* names[] = {"R", "G", "B", "A"};
+  const char* values[] = {"0.2", "0.4", "0.6", "0.8"};
+  for (size_t channel = 0; channel < 4; ++channel) {
+    operation += std::string("<feFunc") + names[channel] + " type=\"table\" tableValues=\"";
+    for (size_t index = 0; index < 1024; ++index) {
+      operation += std::string(values[channel]) + " ";
+    }
+    operation += "\"/>";
+  }
+  operation += "</feComponentTransfer>";
+  ExpectFilterChainMatches(operation + operation, "component_maximum_packed_tables");
+}
+
 TEST(FilterChainPrecision, LinearFunctionsKeepFractionalValuesAcrossSeveralNodes) {
   const std::string operation = R"svg(<feComponentTransfer color-interpolation-filters="sRGB">
     <feFuncR type="linear" slope="0.8" intercept="0.03"/>

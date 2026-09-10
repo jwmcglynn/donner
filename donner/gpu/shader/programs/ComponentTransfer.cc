@@ -6,13 +6,17 @@
 #include "donner/gpu/shader/programs/ErrorLatch.h"
 namespace donner::gpu::shader::programs {
 namespace {
+struct ChannelFunction {
+  IrExpr kind, tableOffset, tableCount, slope, intercept, amplitude, exponent, offset;
+};
+
 IrExpr TableValue(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& index) {
-  return e(Index(e(Member(e(fn.ref("params")), "values")), index));
+  return e(Index(e(fn.ref("params")), e(Add(LiteralU32(32), index))));
 }
-void AddTable(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& f, const IrExpr& c,
+void AddTable(ErrorLatch& e, FunctionBuilder& fn, const ChannelFunction& f, const IrExpr& c,
               const IrExpr& result) {
-  const auto count = e(Member(f, "tableCount")), offset = e(Member(f, "tableOffset"));
-  e.ok(fn.beginIf(e(Eq(e(Member(f, "kind")), LiteralU32(1)))));
+  const auto count = f.tableCount, offset = f.tableOffset;
+  e.ok(fn.beginIf(e(Eq(f.kind, LiteralU32(1)))));
   e.ok(fn.beginIf(e(Eq(count, LiteralU32(1)))));
   e.ok(fn.assign(result, TableValue(e, fn, offset)));
   e.ok(fn.elseBranch());
@@ -32,23 +36,23 @@ void AddTable(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& f, const IrExpr&
   e.ok(fn.endIf());
   e.ok(fn.endIf());
 }
-void AddDiscrete(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& f, const IrExpr& c,
+void AddDiscrete(ErrorLatch& e, FunctionBuilder& fn, const ChannelFunction& f, const IrExpr& c,
                  const IrExpr& result) {
-  const auto count = e(Member(f, "tableCount"));
-  e.ok(fn.beginIf(e(And(e(Eq(e(Member(f, "kind")), LiteralU32(2))), e(Gt(count, LiteralU32(0)))))));
+  const auto count = f.tableCount;
+  e.ok(fn.beginIf(e(And(e(Eq(f.kind, LiteralU32(2))), e(Gt(count, LiteralU32(0)))))));
   const auto index = e(fn.addLet(
       "discreteIndex",
       e(CallBuiltin(BuiltinFn::Min,
                     {e(Convert(IrType::U32(), e(Mul(c, e(Convert(IrType::F32(), count)))))),
                      e(Sub(count, LiteralU32(1)))}))));
-  e.ok(fn.assign(result, TableValue(e, fn, e(Add(e(Member(f, "tableOffset")), index)))));
+  e.ok(fn.assign(result, TableValue(e, fn, e(Add(f.tableOffset, index)))));
   e.ok(fn.endIf());
 }
-void AddGamma(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& f, const IrExpr& c,
+void AddGamma(ErrorLatch& e, FunctionBuilder& fn, const ChannelFunction& f, const IrExpr& c,
               const IrExpr& result) {
-  const auto amplitude = e(Member(f, "amplitude")), exponent = e(Member(f, "exponent"));
-  const auto offset = e(Member(f, "offset"));
-  e.ok(fn.beginIf(e(Eq(e(Member(f, "kind")), LiteralU32(4)))));
+  const auto amplitude = f.amplitude, exponent = f.exponent;
+  const auto offset = f.offset;
+  e.ok(fn.beginIf(e(Eq(f.kind, LiteralU32(4)))));
   e.ok(fn.beginIf(e(Eq(amplitude, LiteralF32(0)))));
   e.ok(fn.assign(result, offset));
   e.ok(fn.elseBranch());
@@ -77,13 +81,23 @@ ShaderStatus AddTransfer(ModuleBuilder& builder) {
   auto fn = std::move(result).result();
   const auto c = e(fn.addLet(
       "c", e(CallBuiltin(BuiltinFn::Clamp, {e(fn.ref("value")), LiteralF32(0), LiteralF32(1)}))));
-  const auto f = e(
-      fn.addLet("f", e(Index(e(Member(e(fn.ref("params")), "functions")), e(fn.ref("channel"))))));
+  const auto base = e(fn.addLet("base", e(Mul(e(fn.ref("channel")), LiteralU32(8)))));
+  const auto word = [&](uint32_t index) {
+    return e(Index(e(fn.ref("params")), e(Add(base, LiteralU32(index)))));
+  };
+  const ChannelFunction f{e(Convert(IrType::U32(), word(0))),
+                          e(Convert(IrType::U32(), word(1))),
+                          e(Convert(IrType::U32(), word(2))),
+                          word(3),
+                          word(4),
+                          word(5),
+                          word(6),
+                          word(7)};
   const auto output = e(fn.addVar("result", IrType::F32(), c));
   AddTable(e, fn, f, c, output);
   AddDiscrete(e, fn, f, c, output);
-  e.ok(fn.beginIf(e(Eq(e(Member(f, "kind")), LiteralU32(3)))));
-  e.ok(fn.assign(output, e(Add(e(Mul(e(Member(f, "slope")), c)), e(Member(f, "intercept"))))));
+  e.ok(fn.beginIf(e(Eq(f.kind, LiteralU32(3)))));
+  e.ok(fn.assign(output, e(Add(e(Mul(f.slope, c)), f.intercept))));
   e.ok(fn.endIf());
   AddGamma(e, fn, f, c, output);
   e.ok(fn.returnValue(e(CallBuiltin(BuiltinFn::Clamp, {output, LiteralF32(0), LiteralF32(1)}))));
@@ -94,16 +108,7 @@ ShaderStatus AddTransfer(ModuleBuilder& builder) {
 ShaderResult<IrModule> BuildComponentTransferModule() {
   ErrorLatch e;
   ModuleBuilder builder;
-  const auto functionType = e(IrType::Struct(
-      "ChannelFunction",
-      {IrType::Member{"kind", IrType::U32()}, IrType::Member{"tableOffset", IrType::U32()},
-       IrType::Member{"tableCount", IrType::U32()}, IrType::Member{"slope", IrType::F32()},
-       IrType::Member{"intercept", IrType::F32()}, IrType::Member{"amplitude", IrType::F32()},
-       IrType::Member{"exponent", IrType::F32()}, IrType::Member{"offset", IrType::F32()}}));
-  const auto paramsType =
-      e(IrType::Struct("ComponentTransferParams",
-                       {IrType::Member{"functions", e(IrType::SizedArray(functionType, 4))},
-                        IrType::Member{"values", e(IrType::RuntimeArray(IrType::F32()))}}));
+  const auto paramsType = e(IrType::RuntimeArray(IrType::F32()));
   e.ok(builder.addTexture2d(0, 0, "inputTexture"));
   e.ok(builder.addWriteOnlyStorageTexture2d(0, 1, "outputTexture",
                                             StorageTextureFormat::Rgba32Float));

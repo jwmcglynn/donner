@@ -1695,9 +1695,10 @@ uint32_t toConvolveEdgeMode(svg::components::filter_primitive::ConvolveMatrix::E
 }
 
 constexpr size_t kComponentTransferHeaderWords = 4 * 8;
-using ComponentTransferData = SmallVector<uint32_t, kComponentTransferHeaderWords + 1>;
+using ComponentTransferData = SmallVector<float, kComponentTransferHeaderWords + 1>;
 
 /// Encodes four 32-byte function records followed by their unquantized table values.
+/// Integer fields are exact f32 values: uint8_t kinds, counts <= 1024, and offsets <= 4096.
 std::optional<ComponentTransferData> BuildComponentTransferData(
     const svg::components::filter_primitive::ComponentTransfer& primitive) {
   using Func = svg::components::filter_primitive::ComponentTransfer::Func;
@@ -1713,21 +1714,21 @@ std::optional<ComponentTransferData> BuildComponentTransferData(
   ComponentTransferData result;
   // The runtime storage array requires one element even when no channel uses a table.
   result.resize(kComponentTransferHeaderWords + std::max<size_t>(tableCount, 1));
-  uint32_t* word = result.data();
+  float* word = result.data();
   uint32_t offset = 0;
   for (const Func* function : functions) {
-    *word++ = static_cast<uint32_t>(function->type);
-    *word++ = offset;
-    *word++ = static_cast<uint32_t>(function->tableValues.size());
+    *word++ = static_cast<float>(function->type);
+    *word++ = static_cast<float>(offset);
+    *word++ = static_cast<float>(function->tableValues.size());
     for (double coefficient : {function->slope, function->intercept, function->amplitude,
                                function->exponent, function->offset}) {
-      *word++ = std::bit_cast<uint32_t>(static_cast<float>(coefficient));
+      *word++ = static_cast<float>(coefficient);
     }
     offset += static_cast<uint32_t>(function->tableValues.size());
   }
   for (const Func* function : functions) {
     for (double value : function->tableValues) {
-      *word++ = std::bit_cast<uint32_t>(static_cast<float>(value));
+      *word++ = static_cast<float>(value);
     }
   }
   return result;
@@ -3617,6 +3618,10 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
     return {};
   }
 
+  const auto data = BuildComponentTransferData(primitive);
+  if (!data) {
+    return {};
+  }
   const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterComponentTransferOutput",
       {input.getWidth(), input.getHeight()},
@@ -3625,12 +3630,8 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   if (output == nullptr) {
     return {};
   }
-  const auto data = BuildComponentTransferData(primitive);
-  if (!data) {
-    return {};
-  }
   const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data->data()),
-                                       data->size() * sizeof(uint32_t));
+                                       data->size() * sizeof(float));
   if (!dispatchRuntimeInputOutputParameters(
           arena, componentTransferProgram_, input, *output, bytes, "FilterComponentTransferPass",
           gpu::shader::programs::kComponentTransferWorkgroupSize)) {

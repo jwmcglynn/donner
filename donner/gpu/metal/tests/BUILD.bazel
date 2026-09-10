@@ -102,6 +102,7 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu:blur_slice",
         "//donner/gpu:color_matrix_slice",
+        "//donner/gpu:component_transfer_slice",
         "//donner/gpu:drop_shadow_slice",
         "//donner/gpu:float_texture_slice",
         "//donner/gpu:morphology_slice",
