@@ -126,13 +126,15 @@ int Run(std::string_view program, const std::string& wgslPath, bool descriptorHe
            << "descriptor.sourceKind = kind;\nswitch (kind) {\n"
            << "case ShaderSourceKind::Wgsl: descriptor.sourceText = R\"shader(" << wgsl.result()
            << ")shader\"; break;\n"
+           << "#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)\n"
            << "case ShaderSourceKind::Msl: descriptor.sourceText = R\"shader(" << msl.result()
-           << ")shader\"; break;\n"
+           << ")shader\"; break;\n#endif\n"
+           << "#if defined(__linux__) && !defined(__EMSCRIPTEN__)\n"
            << "case ShaderSourceKind::Spirv: descriptor.spirvWords = {";
     for (uint32_t word : spirv.result()) {
       header << word << "u,";
     }
-    header << "}; break;\n}\n"
+    header << "}; break;\n#endif\ndefault: return descriptor;\n}\n"
            << "descriptor.bufferBindings = std::vector<ShaderBufferBindingInfo>{\n";
     for (const ShaderBufferBindingInfo& binding : bindings.result()) {
       header << "{\"" << binding.entryPoint << "\", ShaderStage::" << binding.stage << ", "

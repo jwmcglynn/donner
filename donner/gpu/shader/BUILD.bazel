@@ -214,6 +214,8 @@ donner_cc_test(
         ":stage_io_test_modules",
         ":wgsl_emitter",
         "//donner/base:base_test_utils",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
     ],
