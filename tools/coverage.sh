@@ -368,6 +368,7 @@ fi
   # early exits cannot accidentally process stale data.
   rm -f "$COVERAGE_REPORT"
 
+  coverage_status=0
   if [ "$QUIET" = true ]; then
     # Keep progress ON even in --quiet mode. Console noise is already handled by
     # redirecting to $BAZEL_COVERAGE_LOG, and `--noshow_progress` left that log
@@ -380,14 +381,14 @@ fi
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
       "${DIAG_FLAGS[@]}" \
-      "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
+      "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || coverage_status=$?
   else
     "${BAZEL_CMD[@]}" coverage --config=latest_llvm \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
       "${DIAG_FLAGS[@]}" \
-      "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
+      "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || coverage_status=$?
   fi
   phase_mark bazel_coverage_done
 
@@ -406,7 +407,10 @@ fi
       BEP_STATUS="$(python3 tools/coverage_bep_status.py "$COVERAGE_BEP" |
         python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])')"
     fi
-    if [ "$BEP_STATUS" = "all_skipped" ]; then
+    # Bazel may return NO_TESTS_FOUND (4) for an entirely incompatible set.
+    # A skip event alongside a build failure must not turn that failure green.
+    if [[ "$BEP_STATUS" = "all_skipped" &&
+          ( "$coverage_status" -eq 0 || "$coverage_status" -eq 4 ) ]]; then
       echo "No coverage report: every selected target was skipped as incompatible with this platform."
       echo "Nothing to measure here; treating the lane as satisfied."
       # Record the outcome instead of pretending a report exists. This path
@@ -423,6 +427,15 @@ fi
     fi
     echo "ERROR: Coverage report was not generated"
     exit 1
+  fi
+
+  # --keep_going may produce a valid LCOV file even after a build/test failure.
+  # That file describes only the successful subset and must never replace the
+  # complete baseline. The all-incompatible/no-report exception above remains
+  # separate; every invocation that actually produced a report must succeed.
+  if [[ "$coverage_status" -ne 0 ]]; then
+    echo "ERROR: Bazel coverage failed with status $coverage_status; refusing to publish a partial report."
+    exit "$coverage_status"
   fi
 
   FILTER_ARGS=(--input "$COVERAGE_REPORT" --output "$COVERAGE_HTML_DIR/filtered_report.dat")

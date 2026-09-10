@@ -79,6 +79,17 @@ py_test(
 )
 
 py_test(
+    name = "coverage_script_tests",
+    size = "small",
+    srcs = ["coverage_script_tests.py"],
+    data = [
+        "coverage.sh",
+        "coverage_bep_status.py",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "coverage_bep_status_tests",
     size = "small",
     srcs = [
