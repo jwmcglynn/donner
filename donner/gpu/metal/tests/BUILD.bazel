@@ -109,6 +109,7 @@ donner_cc_test(
         "//donner/gpu:tile_slice",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
+        "//donner/gpu/shader:component_transfer_artifact",
         "//donner/gpu/shader:drop_shadow_artifact",
         "//donner/gpu/shader:float_storage_test_module",
         "//donner/gpu/shader:module_interface",

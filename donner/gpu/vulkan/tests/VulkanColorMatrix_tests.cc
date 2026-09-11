@@ -19,9 +19,9 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
-#include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Tile.h"
@@ -245,24 +245,10 @@ TEST_F(VulkanColorMatrixTest, MorphologyPreservesErosionDilationAndFloatStorage)
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
-TEST_F(VulkanColorMatrixTest, ComponentTransferPreservesMaximumTablesAndGammaGuards) {
-  const auto module = shader::programs::BuildComponentTransferModule();
-  ASSERT_FALSE(module.hasError()) << module.error();
-  const auto emitted = shader::EmitSpirv(module.result());
-  ASSERT_FALSE(emitted.hasError()) << emitted.error();
-  const auto bindings = shader::BufferBindingsOf(module.result());
-  ASSERT_FALSE(bindings.hasError()) << bindings.error();
-  for (uint32_t mode : {0u, 1u, 2u}) {
-    gpu::tests::CheckComponentTransferStorage(
-        *device_,
-        ShaderModuleDescriptor{"float",
-                               {},
-                               ShaderSourceKind::Spirv,
-                               emitted.result(),
-                               shader::ComputeEntryPointsOf(module.result()),
-                               bindings.result()},
-        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, mode);
-  }
+TEST_F(VulkanColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBoundaries) {
+  gpu::tests::CheckComponentTransferStorage(
+      *device_, gpu::generated::component_transfer::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
