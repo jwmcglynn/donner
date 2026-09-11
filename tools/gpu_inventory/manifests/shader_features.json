@@ -285,61 +285,6 @@
         "LightingParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_turbulence.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba32float, write>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 1,
-          "group": 0,
-          "name": "params",
-          "type": "TurbulenceParams"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 2,
-          "group": 0,
-          "name": "tables",
-          "type": "TurbulenceTables"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "abs",
-        "any",
-        "array",
-        "clamp",
-        "const",
-        "for",
-        "if",
-        "let",
-        "return",
-        "textureDimensions",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "TurbulenceParams",
-        "TurbulenceTables"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/image_blit.wgsl": {
       "bindings": [
         {

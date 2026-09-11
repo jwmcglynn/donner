@@ -250,6 +250,33 @@ TEST(FilterChainPrecision, ComponentTransferMaximumPackedTablesKeepChannelsDisti
   ExpectFilterChainMatches(operation + operation, "component_maximum_packed_tables");
 }
 
+TEST(FilterChainPrecision, TurbulenceParametersAndStitchedSubregionsMatchCpu) {
+  ExpectFilterChainMatches(
+      R"svg(<feTurbulence type="turbulence" baseFrequency="0.125 0.2" numOctaves="1"
+        seed="1" color-interpolation-filters="sRGB"/>)svg",
+      "turbulence_seed_1_octave_1");
+  ExpectFilterChainMatches(
+      R"svg(<feTurbulence type="fractalNoise" baseFrequency="0.07 0.11" numOctaves="3"
+        seed="13" color-interpolation-filters="sRGB"/>)svg",
+      "fractal_seed_13_octaves_3");
+  ExpectFilterChainMatches(
+      R"svg(<feTurbulence type="turbulence" baseFrequency="0.13 0.09" numOctaves="4"
+        seed="-7.5" stitchTiles="stitch" color-interpolation-filters="sRGB"/>)svg",
+      "turbulence_negative_seed_stitched");
+  ExpectFilterChainMatches(
+      R"svg(<feTurbulence type="fractalNoise" baseFrequency="0.03125 0.1875" numOctaves="2"
+        seed="42" stitchTiles="stitch" x="2" y="1" width="9" height="7"
+        color-interpolation-filters="sRGB"/>)svg",
+      "fractal_stitched_explicit_subregion");
+}
+
+TEST(FilterChainPrecision, NegativeTurbulenceFrequencyStaysTransparent) {
+  ExpectFilterChainMatches(
+      R"svg(<feTurbulence baseFrequency="-0.1 0.2" numOctaves="3" seed="5"
+        color-interpolation-filters="sRGB"/>)svg",
+      "turbulence_negative_frequency");
+}
+
 TEST(FilterChainPrecision, LinearFunctionsKeepFractionalValuesAcrossSeveralNodes) {
   const std::string operation = R"svg(<feComponentTransfer color-interpolation-filters="sRGB">
     <feFuncR type="linear" slope="0.8" intercept="0.03"/>
