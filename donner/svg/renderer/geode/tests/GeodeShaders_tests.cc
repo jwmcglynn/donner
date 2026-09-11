@@ -51,14 +51,6 @@ TEST(GeodeShaders, ImageBlitCompiles) {
   ASSERT_FALSE(module.hasError()) << "Image blit shader failed to compile: " << module.error();
 }
 
-TEST(GeodeShaders, FilterDropShadowCompiles) {
-  auto geodeDevice = GeodeDevice::CreateHeadless();
-  ASSERT_NE(geodeDevice, nullptr);
-
-  wgpu::ShaderModule module = createFilterDropShadowShader(geodeDevice->device());
-  ASSERT_TRUE(static_cast<bool>(module)) << "feDropShadow compose shader failed to compile";
-}
-
 TEST(GeodeShaders, FilterImageCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);

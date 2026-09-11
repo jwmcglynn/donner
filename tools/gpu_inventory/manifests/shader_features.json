@@ -289,64 +289,6 @@
         "DisplacementParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_drop_shadow.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "in1_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "in2_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 2,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba32float, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 3,
-          "group": 0,
-          "name": "params",
-          "type": "DropShadowParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "all",
-        "any",
-        "clamp",
-        "if",
-        "let",
-        "return",
-        "round",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "DropShadowParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_image.wgsl": {
       "bindings": [
         {

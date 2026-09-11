@@ -17,6 +17,72 @@
 namespace donner::gpu::shader {
 namespace {
 
+TEST(FilterPrecisionParity, DropShadowHalfOffsetsMatchSoftwareRenderer) {
+  const char* offsets[][2] = {
+      {"0.5", "0"}, {"-0.5", "0"}, {"0", "0.5"}, {"0", "-0.5"}, {"2.5", "-2.5"}};
+  static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  size_t index = 0;
+  for (const auto& offset : offsets) {
+    SCOPED_TRACE(testing::Message() << "dx=" << offset[0] << " dy=" << offset[1]);
+    const std::string source =
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11">
+      <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="13" height="11"
+      color-interpolation-filters="sRGB"><feDropShadow stdDeviation="0" flood-color="blue" dx=")svg") +
+        offset[0] + R"svg(" dy=")svg" + offset[1] + R"svg("/></filter></defs>
+      <rect x="4" y="4" width="2" height="2" fill="red" filter="url(#f)"/></svg>)svg";
+    ParseWarningSink warnings;
+    auto gpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+    auto cpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_THAT(gpuDocument.hasResult(), testing::IsTrue());
+    ASSERT_THAT(cpuDocument.hasResult(), testing::IsTrue());
+    ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+    svg::RendererGeode gpuRenderer(device);
+    svg::RendererTinySkia cpuRenderer;
+    gpuRenderer.draw(gpuDocument.result());
+    cpuRenderer.draw(cpuDocument.result());
+    editor::tests::CompareBitmapToBitmap(gpuRenderer.takeSnapshot(), cpuRenderer.takeSnapshot(),
+                                         "drop_shadow_half_" + std::to_string(index++),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(FilterPrecisionParity, PixelOffsetsKeepDoublePrecisionUntilRounding) {
+  static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  size_t index = 0;
+  for (bool shadow : {false, true}) {
+    for (const char* offset : {"0.499999999", "-0.499999999", "2.499999999", "-2.499999999"}) {
+      for (bool vertical : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << "shadow=" << shadow << " offset=" << offset << " vertical=" << vertical);
+        const std::string primitive =
+            shadow ? "<feDropShadow stdDeviation=\"0\" flood-color=\"blue\"" : "<feOffset";
+        const std::string source =
+            std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11">
+          <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="13" height="11"
+          color-interpolation-filters="sRGB">)svg") +
+            primitive + " dx=\"" + (vertical ? "0" : offset) + "\" dy=\"" +
+            (vertical ? offset : "0") + R"svg("/></filter></defs>
+          <rect x="4" y="4" width="2" height="2" fill="red" filter="url(#f)"/></svg>)svg";
+        ParseWarningSink warnings;
+        auto gpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+        auto cpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+        ASSERT_THAT(gpuDocument.hasResult(), testing::IsTrue());
+        ASSERT_THAT(cpuDocument.hasResult(), testing::IsTrue());
+        ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+        svg::RendererGeode gpuRenderer(device);
+        svg::RendererTinySkia cpuRenderer;
+        gpuRenderer.draw(gpuDocument.result());
+        cpuRenderer.draw(cpuDocument.result());
+        editor::tests::CompareBitmapToBitmap(gpuRenderer.takeSnapshot(), cpuRenderer.takeSnapshot(),
+                                             "offset_double_precision_" + std::to_string(index++),
+                                             editor::tests::PixelmatchIdentityParams());
+      }
+    }
+  }
+}
+
 using CompositingCase = std::tuple<const char*, const char*, const char*, const char*>;
 
 class FilterCompositingParity : public testing::TestWithParam<CompositingCase> {};

@@ -21,6 +21,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
+#include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/GaussianBlurBindings.h"
@@ -39,6 +40,7 @@
 #include "embed_resources/ColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
+#include "embed_resources/FilterDropShadowWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterResolveWgsl.h"
@@ -666,8 +668,8 @@ struct BlurParams {
   uint32_t pad1;
 };
 
-/// Uniform buffer layout mirroring the shader program's `OffsetParams` struct: the shift in
-/// pixels, rounded on the device so the rule that rounds it is the one the shader states.
+/// Uniform buffer layout mirroring the shader program's `OffsetParams` struct. Host offsets
+/// are rounded in double precision before narrowing to these exactly representable float pixels.
 struct OffsetParams {
   float dx;       //!< Shift along x, in pixels.
   float dy;       //!< Shift along y, in pixels.
@@ -2056,12 +2058,18 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     specularLightingPipeline_.reset(dev.createComputePipeline(cpDesc));
   }
 
-  // --- feDropShadow compose pipeline (two inputs + output + uniform) ---
+  // Shadow composition shares the runtime command stream with its blur passes.
   {
-    auto [bgl, pipeline] = createTwoInputUniformPipeline(
-        dev, "FilterDropShadow", createFilterDropShadowShader(dev), sizeof(DropShadowParams));
-    dropShadowBindGroupLayout_ = std::move(bgl);
-    dropShadowPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::DropShadowBinding;
+    dropShadowProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterDropShadow",
+        EmbeddedWgsl(donner::embedded::kFilterDropShadowWgsl),
+        gpu::shader::programs::kDropShadowEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(DropShadowBinding::SourceTexture)),
+         SampledInputEntry(static_cast<uint32_t>(DropShadowBinding::BlurredTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(DropShadowBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(DropShadowBinding::Params))},
+        gpu::shader::programs::kDropShadowWorkgroupSize);
   }
 
   // --- feImage placement pipeline (input + output + uniform) ---
@@ -3323,8 +3331,9 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
   }
 
   OffsetParams params{};
-  params.dx = static_cast<float>(primitive.dx);
-  params.dy = static_cast<float>(primitive.dy);
+  // Round before narrowing: doubles on either side of a half can become the same float.
+  params.dx = static_cast<float>(std::round(primitive.dx));
+  params.dy = static_cast<float>(std::round(primitive.dy));
   params.pad0 = 0;
   params.pad1 = 0;
 
@@ -4313,7 +4322,6 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
@@ -4326,8 +4334,11 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
     return {};
   }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterDropShadowOutput");
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterDropShadowOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   if (!output) {
     return {};
   }
@@ -4348,20 +4359,18 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
     }
   }
   params.color[3] = floodA;
-  params.dx = static_cast<float>(pixelDx);
-  params.dy = static_cast<float>(pixelDy);
+  // Keep the software path's rounding boundary before converting the uniform to float.
+  params.dx = static_cast<float>(std::round(pixelDx));
+  params.dy = static_cast<float>(std::round(pixelDy));
   params.pad0 = 0;
   params.pad1 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  if (!dispatchRuntimeTwoInput(arena, dropShadowProgram_, input, blurred, *output, {width, height},
+                               UniformBytes(params), "FilterDropShadowPass",
+                               gpu::shader::programs::kDropShadowWorkgroupSize)) {
     return {};
   }
-
-  dispatchTwoInputUniform(arena, device_, dropShadowBindGroupLayout_.get(),
-                          dropShadowPipeline_.get(), input, blurred, output, uniformBuffer.buffer,
-                          uniformBuffer.offset, sizeof(DropShadowParams), "FilterDropShadowPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 bool HasSafeFilterImageSource(const svg::components::filter_primitive::Image& primitive,

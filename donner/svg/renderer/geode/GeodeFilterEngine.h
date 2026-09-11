@@ -538,8 +538,7 @@ private:
   ScopedWgpuHandle<wgpu::BindGroupLayout> specularLightingBindGroupLayout_;
 
   // feDropShadow compose pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> dropShadowPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> dropShadowBindGroupLayout_;
+  RuntimeComputeProgram dropShadowProgram_;
 
   // feImage placement pipeline (input texture + output + uniform).
   ScopedWgpuHandle<wgpu::ComputePipeline> imagePipeline_;

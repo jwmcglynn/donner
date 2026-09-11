@@ -19,6 +19,7 @@
 #include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -26,6 +27,7 @@
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
+#include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
 #include "donner/gpu/tests/TileSlice.h"
@@ -286,6 +288,13 @@ TEST_F(MetalColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
                              {},
                              shader::ComputeEntryPointsOf(module.result()),
                              bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
+  gpu::tests::CheckDropShadowStorage(
+      *device_, gpu::generated::drop_shadow::BuildDescriptor(ShaderSourceKind::Msl),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }

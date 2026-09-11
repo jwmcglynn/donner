@@ -30,6 +30,7 @@
 #include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
@@ -60,6 +61,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"merge", 1, &programs::BuildMergeModule},
     {"morphology", 1, &programs::BuildMorphologyModule},
     {"composite", 1, &programs::BuildCompositeModule},
+    {"drop_shadow", 1, &programs::BuildDropShadowModule},
     {"offset", 1, &programs::BuildOffsetModule},
     {"tile", 1, &programs::BuildTileModule},
     {"snapshot_unpremultiply", 1, &programs::BuildSnapshotUnpremultiplyModule},

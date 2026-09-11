@@ -129,6 +129,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "drop_shadow_slice",
+    testonly = 1,
+    hdrs = ["tests/DropShadowSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
     name = "blur_slice",
     testonly = 1,
     hdrs = ["tests/BlurSlice.h"],
