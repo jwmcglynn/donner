@@ -166,7 +166,18 @@ bool WriteDescriptorHeader(std::string_view program, const IrModule& module, std
   ShaderResult<std::vector<uint32_t>> spirv = EmitSpirv(module);
   ShaderResult<std::vector<ShaderBufferBindingInfo>> bindings = BufferBindingsOf(module);
   if (msl.hasError() || spirv.hasError() || bindings.hasError()) {
-    std::fprintf(stderr, "emit_program_wgsl: native artifact generation failed\n");
+    std::ostringstream diagnostic;
+    diagnostic << "emit_program_wgsl: native artifact generation failed";
+    if (msl.hasError()) {
+      diagnostic << "\n  MSL: " << msl.error();
+    }
+    if (spirv.hasError()) {
+      diagnostic << "\n  SPIR-V: " << spirv.error();
+    }
+    if (bindings.hasError()) {
+      diagnostic << "\n  bindings: " << bindings.error();
+    }
+    std::fprintf(stderr, "%s\n", diagnostic.str().c_str());
     return false;
   }
 
