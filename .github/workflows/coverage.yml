@@ -19,8 +19,11 @@ name: Coverage
 # the reason resolves to a FULL //... target set: running that on a PR is exactly
 # the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
 # the main-push baseline already covers those lines. Only the affected subset
-# (fallback_reason == bazel_diff), the cheap smoke subset (coverage_smoke), and
-# the explicit ci:full-test opt-in still produce PR coverage.
+# (fallback_reason == bazel_diff), the cheap smoke subset for coverage/reporting
+# tooling changes (coverage_smoke), and the explicit ci:full-test opt-in still
+# produce PR coverage. A documentation-only PR uses the established
+# no-instrumentable route because no changed file can contribute executable
+# lines to an LCOV report.
 #
 # Two more skips, both about a genuine incremental subset that has nothing a
 # coverage run could measure. Running anyway builds an empty or absent LCOV
@@ -37,16 +40,19 @@ name: Coverage
 #     target_compatible_with a platform this lane does not run, which
 #     `coverage --skip_incompatible_explicit_targets` silently drops.
 #
-# Both are decided from Bazel's own answers (target KINDS from a query, host
-# compatibility from a cquery), never from file extensions, and both fail
+# Documentation-only changes are identified before graph analysis from the
+# repository's docs tree and Markdown files. Mixed documentation/tooling
+# changes retain smoke coverage, and any source change proceeds to bazel-diff.
+# Every other no-test/no-instrumentable decision comes from Bazel's own answers
+# (target KINDS from a query, host compatibility from a cquery) and fails
 # closed: any query, filtering, or classifier error runs coverage with the
-# guard intact. The instrumentability decision is taken exactly once, on the
-# FINAL target list after every narrowing step, because three separate
-# production failures came from guards that each judged a different,
+# guard intact. The graph-based instrumentability decision is taken exactly
+# once, on the FINAL target list after every narrowing step, because three
+# separate production failures came from guards that each judged a different,
 # wider set than the one coverage actually ran; see the block in
 # determine-targets for that history. Future readers: do not silently re-add a
-# full instrumented PR coverage run, and do not add a fourth guard at a fourth
-# pipeline stage -- extend the single decision instead.
+# full instrumented PR coverage run, and do not add a fourth graph guard at a
+# fourth pipeline stage -- extend the single decision instead.
 on:
   push:
     branches: [main]
@@ -359,6 +365,7 @@ jobs:
 
           should_fallback=false
           fallback_reason=""
+          docs_only=true
           smoke_only=true
           while IFS= read -r path; do
             [[ -z "$path" ]] && continue
@@ -393,6 +400,14 @@ jobs:
             esac
 
             case "$path" in
+              docs/*|*.md)
+                ;;
+              *)
+                docs_only=false
+                ;;
+            esac
+
+            case "$path" in
               .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py|tools/coverage_variant_trim.py|tools/coverage_variant_trim_tests.py|tools/coverage_selection_decision_tests.py)
                 ;;
               *)
@@ -403,6 +418,12 @@ jobs:
 
           if [[ "$should_fallback" == "true" ]]; then
             emit_targets true "$fallback_reason" "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if [[ "$docs_only" == "true" ]]; then
+            echo "Documentation-only change; skipping coverage because no changed file is instrumentable."
+            emit_targets true no_instrumentable_targets ""
             exit 0
           fi
 
