@@ -890,8 +890,7 @@ void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
 }
 
 TurbulenceParams makeTurbulenceParams(
-    uint32_t width, uint32_t height,
-    const svg::components::filter_primitive::Turbulence& primitive,
+    uint32_t width, uint32_t height, const svg::components::filter_primitive::Turbulence& primitive,
     const Transform2d& deviceFromFilter, double baseFrequencyX, double baseFrequencyY,
     double seed) {
   TurbulenceParams params{};
@@ -3670,8 +3669,8 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
     return {};
   }
 
-  const TurbulenceParams params = makeTurbulenceParams(
-      width, height, primitive, deviceFromFilter, baseFrequencyX, baseFrequencyY, seed);
+  const TurbulenceParams params = makeTurbulenceParams(width, height, primitive, deviceFromFilter,
+                                                       baseFrequencyX, baseFrequencyY, seed);
 
   // Generate permutation + gradient tables from the seed.
   TurbulenceTables tables{};
