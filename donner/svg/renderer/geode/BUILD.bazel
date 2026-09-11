@@ -707,7 +707,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feDropShadow compose compute shader (offset + flood + source-over).
 genrule(
     name = "filter_drop_shadow_generated",
     outs = ["generated/filter_drop_shadow.wgsl"],

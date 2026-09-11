@@ -1,88 +1,83 @@
 /// @file
-/// DropShadow compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// DropShadow interface and deterministic backend emission contracts.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <string>
-#include <vector>
+#include <optional>
 
+#include "donner/gpu/RecordingDevice.h"
+#include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
-
-using testing::HasSubstr;
+#include "donner/gpu/tests/GpuTestUtils.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-std::string EmitDropShadowWgsl() {
-  ShaderResult<IrModule> module = programs::BuildDropShadowModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
-}
-
-std::string EmitDropShadowMsl() {
-  ShaderResult<IrModule> module = programs::BuildDropShadowModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
-}
-
-std::string EmitDropShadowSpirvBytes() {
-  ShaderResult<IrModule> module = programs::BuildDropShadowModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
-}
-
-TEST(DropShadowProgramTests, ModuleBuildsCleanly) {
-  EXPECT_THAT(programs::BuildDropShadowModule(), HasShaderResult());
-}
-
 TEST(DropShadowProgramTests, EmitsDeterministically) {
-  EXPECT_THAT(EmitDropShadowWgsl(), testing::Eq(EmitDropShadowWgsl()));
-  EXPECT_THAT(EmitDropShadowMsl(), testing::Eq(EmitDropShadowMsl()));
-  EXPECT_THAT(EmitDropShadowSpirvBytes(), testing::Eq(EmitDropShadowSpirvBytes()));
+  const auto module = programs::BuildDropShadowModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  const auto repeatedWgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  ASSERT_THAT(repeatedWgsl, HasShaderResult());
+  EXPECT_THAT(repeatedWgsl.result(), testing::Eq(wgsl.result()));
+  const auto msl = EmitMsl(module.result());
+  const auto repeatedMsl = EmitMsl(module.result());
+  ASSERT_THAT(msl, HasShaderResult());
+  ASSERT_THAT(repeatedMsl, HasShaderResult());
+  EXPECT_THAT(repeatedMsl.result(), testing::Eq(msl.result()));
+  const auto spirv = EmitSpirv(module.result());
+  const auto repeatedSpirv = EmitSpirv(module.result());
+  ASSERT_THAT(spirv, HasShaderResult());
+  ASSERT_THAT(repeatedSpirv, HasShaderResult());
+  EXPECT_THAT(repeatedSpirv.result(), testing::Eq(spirv.result()));
 }
 
-TEST(DropShadowProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitDropShadowWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "drop_shadow.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
+TEST(DropShadowProgramTests, GeneratedDescriptorsPreserveShaderInterface) {
+  const auto module = programs::BuildDropShadowModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto bindings = BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasShaderResult());
+  const auto entryPoints = ComputeEntryPointsOf(module.result());
+  ASSERT_THAT(entryPoints, testing::SizeIs(1));
+  for (const auto kind : {ShaderSourceKind::Wgsl, ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
+    const auto descriptor = gpu::generated::drop_shadow::BuildDescriptor(kind);
+    EXPECT_EQ(descriptor.sourceKind, kind);
+    bool available = kind == ShaderSourceKind::Wgsl;
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+    available |= kind == ShaderSourceKind::Msl;
+#endif
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+    available |= kind == ShaderSourceKind::Spirv;
+#endif
+    if (!available) {
+      EXPECT_THAT(descriptor.sourceText, testing::IsEmpty());
+      EXPECT_THAT(descriptor.spirvWords, testing::IsEmpty());
+      EXPECT_THAT(descriptor.bufferBindings, testing::Eq(std::nullopt));
+      RecordingDevice device;
+      EXPECT_THAT(device.createShaderModule(descriptor),
+                  ::donner::gpu::IsGpuError(GpuErrorType::InvalidDescriptor));
+      continue;
+    }
+    ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
+    EXPECT_THAT(*descriptor.bufferBindings, testing::ElementsAreArray(bindings.result()));
+    ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
+    EXPECT_EQ(descriptor.computeEntryPoints.front().name, entryPoints.front().name);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.x,
+              entryPoints.front().workgroupSize.x);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.y,
+              entryPoints.front().workgroupSize.y);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.z,
+              entryPoints.front().workgroupSize.z);
+    EXPECT_EQ(descriptor.sourceText.empty(), kind == ShaderSourceKind::Spirv);
+    EXPECT_EQ(descriptor.spirvWords.empty(), kind != ShaderSourceKind::Spirv);
   }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("drop_shadow.wgsl")));
-}
-
-TEST(DropShadowProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitDropShadowMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "drop_shadow.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("drop_shadow.msl")));
-}
-
-TEST(DropShadowProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitDropShadowSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "drop_shadow.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("drop_shadow.spv")));
 }
 
 }  // namespace

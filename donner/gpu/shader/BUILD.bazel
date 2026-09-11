@@ -213,6 +213,7 @@ donner_cc_test(
     ],
     deps = [
         ":checkerboard_artifact",
+        ":drop_shadow_artifact",
         ":float_storage_test_module",
         ":module_interface",
         ":msl_emitter",
@@ -363,6 +364,21 @@ genrule(
 donner_cc_library(
     name = "checkerboard_artifact",
     hdrs = ["generated/CheckerboardShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "drop_shadow_generated",
+    outs = ["generated/DropShadowShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) drop_shadow " +
+          "$(location generated/DropShadowShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "drop_shadow_artifact",
+    hdrs = ["generated/DropShadowShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )

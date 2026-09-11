@@ -19,6 +19,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -26,6 +27,7 @@
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
+#include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
 #include "donner/gpu/tests/TileSlice.h"
@@ -181,6 +183,13 @@ TEST_F(VulkanColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
                              emitted.result(),
                              shader::ComputeEntryPointsOf(module.result()),
                              bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
+  gpu::tests::CheckDropShadowStorage(
+      *device_, gpu::generated::drop_shadow::BuildDescriptor(ShaderSourceKind::Spirv),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
