@@ -100,6 +100,22 @@ void CheckBlendStorage(DeviceType& device, const ShaderModuleDescriptor& shaderD
     sourcePixels->data()[pixel * 4 + 3] = sourceAlpha;
     backdropPixels->data()[pixel * 4 + 3] = backdropAlpha;
   }
+  const auto setSample = [&](size_t pixel, std::array<float, 3> source, float sourceAlpha,
+                             std::array<float, 3> backdrop, float backdropAlpha) {
+    for (size_t channel = 0; channel < 3; ++channel) {
+      sourcePixels->data()[pixel * 4 + channel] = source[channel] * sourceAlpha;
+      backdropPixels->data()[pixel * 4 + channel] = backdrop[channel] * backdropAlpha;
+    }
+    sourcePixels->data()[pixel * 4 + 3] = sourceAlpha;
+    backdropPixels->data()[pixel * 4 + 3] = backdropAlpha;
+  };
+  constexpr float kByte = 1.0f / 255.0f;
+  setSample(13, {191 * kByte, 64 * kByte, 128 * kByte}, 1.0f,
+            {57 * kByte, 115 * kByte, 173 * kByte}, 0.7f);
+  setSample(14, {64 * kByte, 191 * kByte, 64 * kByte}, 0.5f, {191 * kByte, 64 * kByte, 191 * kByte},
+            0.7f);
+  setSample(15, {128 * kByte, 128 * kByte, 128 * kByte}, 0.5f,
+            {64 * kByte, 64 * kByte, 191 * kByte}, 0.7f);
   tiny_skia::filter::blend(*backdropPixels, *sourcePixels, *expectedPixels,
                            static_cast<tiny_skia::filter::BlendMode>(mode));
   auto backdrop =
