@@ -115,6 +115,7 @@ donner_cc_library(
         "programs/FilterColorMatrixBindings.h",
         "programs/FloodBindings.h",
         "programs/GaussianBlurBindings.h",
+        "programs/LightingBindings.h",
         "programs/MergeBindings.h",
         "programs/MorphologyBindings.h",
         "programs/OffsetBindings.h",
@@ -139,6 +140,7 @@ donner_cc_library(
         "programs/FilterColorMatrix.cc",
         "programs/Flood.cc",
         "programs/GaussianBlur.cc",
+        "programs/Lighting.cc",
         "programs/Merge.cc",
         "programs/Morphology.cc",
         "programs/Offset.cc",
@@ -161,6 +163,7 @@ donner_cc_library(
         "programs/FilterColorMatrix.h",
         "programs/Flood.h",
         "programs/GaussianBlur.h",
+        "programs/Lighting.h",
         "programs/Merge.h",
         "programs/Morphology.h",
         "programs/Offset.h",
@@ -206,6 +209,7 @@ donner_cc_test(
         "tests/IrBuilder_tests.cc",
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
+        "tests/LightingProgram_tests.cc",
         "tests/MathPrimitiveCoverageModule.h",
         "tests/MathPrimitives_tests.cc",
         "tests/MergeProgram_tests.cc",
@@ -229,6 +233,7 @@ donner_cc_test(
         ":displacement_map_artifact",
         ":drop_shadow_artifact",
         ":float_storage_test_module",
+        ":lighting_artifacts",
         ":module_interface",
         ":msl_emitter",
         ":programs",
@@ -374,6 +379,32 @@ genrule(
     cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) checkerboard " +
           "$(location generated/CheckerboardShader.h) --descriptor-header",
     tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+genrule(
+    name = "diffuse_lighting_generated",
+    outs = ["generated/DiffuseLightingShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) diffuse_lighting " +
+          "$(location generated/DiffuseLightingShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+genrule(
+    name = "specular_lighting_generated",
+    outs = ["generated/SpecularLightingShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) specular_lighting " +
+          "$(location generated/SpecularLightingShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "lighting_artifacts",
+    hdrs = [
+        "generated/DiffuseLightingShader.h",
+        "generated/SpecularLightingShader.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
 )
 
 donner_cc_library(

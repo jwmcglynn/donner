@@ -68,6 +68,8 @@ enum class BuiltinFn : uint8_t {
   Saturate,           //!< `saturate(x)`
   Fract,              //!< `fract(x)`
   Sqrt,               //!< `sqrt(x)`
+  Sin,                //!< `sin(x)`
+  Cos,                //!< `cos(x)`
   Length,             //!< `length(v)`
   Dot,                //!< `dot(a, b)`
   Normalize,          //!< `normalize(v)`

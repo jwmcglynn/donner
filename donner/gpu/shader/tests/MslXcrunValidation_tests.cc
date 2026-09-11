@@ -29,6 +29,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -293,6 +294,12 @@ TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildMorphologyModule(), "morphology");
+}
+
+TEST(MslXcrunValidation, EmittedLightingComputesCompileWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildDiffuseLightingModule(), "diffuse_lighting");
+  ExpectCompilesWithMetalCompiler(programs::BuildSpecularLightingModule(), "specular_lighting");
 }
 
 TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {

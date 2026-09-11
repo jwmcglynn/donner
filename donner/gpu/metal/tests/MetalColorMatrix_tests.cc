@@ -20,8 +20,10 @@
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
+#include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
@@ -34,6 +36,7 @@
 #include "donner/gpu/tests/DisplacementMapSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
+#include "donner/gpu/tests/LightingSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
 #include "donner/gpu/tests/TileSlice.h"
 #include "donner/gpu/tests/TurbulenceSlice.h"
@@ -372,6 +375,22 @@ TEST_F(MetalColorMatrixTest, TurbulencePreservesSeedsOctavesTransformsAndStitchi
   gpu::tests::CheckTurbulenceStorage(
       *device_, gpu::generated::turbulence::BuildDescriptor(ShaderSourceKind::Msl),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatStorage) {
+  for (bool specular : {false, true}) {
+    const ShaderModuleDescriptor descriptor =
+        specular ? generated::specular_lighting::BuildDescriptor(device_->shaderSourceKind())
+                 : generated::diffuse_lighting::BuildDescriptor(device_->shaderSourceKind());
+    for (uint32_t lightType : {0u, 1u, 2u}) {
+      SCOPED_TRACE(testing::Message() << "specular=" << specular << " light=" << lightType);
+      gpu::tests::CheckLightingStorage(
+          *device_, descriptor,
+          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, specular,
+          lightType);
+    }
+  }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
