@@ -1114,6 +1114,50 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
   }
 }
 
+/// Applies the four-tap box reference with left radius 1 and right radius 2.
+/// @param pixels Input and output float pixels.
+/// @param axis Blur axis, 0 for horizontal and 1 for vertical.
+/// @param edge Edge mode, matching the shader uniform values.
+void ApplyAsymmetricBoxBlurReference(tiny_skia::filter::FloatPixmap& pixels, uint32_t axis,
+                                     uint32_t edge) {
+  const auto input = pixels;
+  for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+    for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+      for (size_t c = 0; c < 4; ++c) {
+        float sum = 0;
+        for (int32_t tap = -1; tap <= 2; ++tap) {
+          int32_t sx = x + (axis == 0 ? tap : 0), sy = y + (axis == 1 ? tap : 0);
+          if (edge == 0 &&
+              (sx < 0 || sy < 0 || sx >= int32_t(kOffsetExtent) || sy >= int32_t(kOffsetExtent))) {
+            continue;
+          }
+          if (edge == 2) {
+            sx = (sx % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
+            sy = (sy % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
+          } else {
+            sx = std::clamp(sx, 0, int32_t(kOffsetExtent) - 1);
+            sy = std::clamp(sy, 0, int32_t(kOffsetExtent) - 1);
+          }
+          sum += input.data()[(sy * kOffsetExtent + sx) * 4 + c];
+        }
+        pixels.data()[(y * kOffsetExtent + x) * 4 + c] = sum / 4;
+      }
+    }
+  }
+}
+
+/// Clears reference pixels outside the test subregion [2, 11) x [3, 10).
+/// @param pixels Float pixels to clip in place.
+void ClipBlurReference(tiny_skia::filter::FloatPixmap& pixels) {
+  for (uint32_t y = 0; y < kOffsetExtent; ++y) {
+    for (uint32_t x = 0; x < kOffsetExtent; ++x) {
+      if (x < 2 || x >= 11 || y < 3 || y >= 10) {
+        std::fill_n(pixels.data().begin() + (y * kOffsetExtent + x) * 4, 4, 0.0f);
+      }
+    }
+  }
+}
+
 TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference) {
   auto device = donner::geode::GeodeDevice::CreateHeadless();
   if (!device) {
@@ -1156,42 +1200,13 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
             pixels->data()[i] = float(source[i]) / 255.0f;
           }
           if (kind == 1) {
-            const auto input = *pixels;
-            for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
-              for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
-                for (size_t c = 0; c < 4; ++c) {
-                  float sum = 0;
-                  for (int32_t tap = -1; tap <= 2; ++tap) {
-                    int32_t sx = x + (axis == 0 ? tap : 0), sy = y + (axis == 1 ? tap : 0);
-                    if (edge == 0 && (sx < 0 || sy < 0 || sx >= int32_t(kOffsetExtent) ||
-                                      sy >= int32_t(kOffsetExtent))) {
-                      continue;
-                    }
-                    if (edge == 2) {
-                      sx = (sx % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
-                      sy = (sy % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
-                    } else {
-                      sx = std::clamp(sx, 0, int32_t(kOffsetExtent) - 1);
-                      sy = std::clamp(sy, 0, int32_t(kOffsetExtent) - 1);
-                    }
-                    sum += input.data()[(sy * kOffsetExtent + sx) * 4 + c];
-                  }
-                  pixels->data()[(y * kOffsetExtent + x) * 4 + c] = sum / 4;
-                }
-              }
-            }
+            ApplyAsymmetricBoxBlurReference(*pixels, axis, edge);
           } else {
             tiny_skia::filter::gaussianBlur(*pixels, axis == 0 ? sigma : 0, axis == 1 ? sigma : 0,
                                             static_cast<tiny_skia::filter::BlurEdgeMode>(edge));
           }
           if (clip) {
-            for (uint32_t y = 0; y < kOffsetExtent; ++y) {
-              for (uint32_t x = 0; x < kOffsetExtent; ++x) {
-                if (x < 2 || x >= 11 || y < 3 || y >= 10) {
-                  std::fill_n(pixels->data().begin() + (y * kOffsetExtent + x) * 4, 4, 0.0f);
-                }
-              }
-            }
+            ClipBlurReference(*pixels);
           }
           const auto expected = pixels->toPixmap();
           editor::tests::CompareBitmapToBitmap(
