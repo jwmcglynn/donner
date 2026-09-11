@@ -51,10 +51,11 @@ bool IsArtifactAvailable(ShaderSourceKind kind) {
 }
 
 auto EntryPointIs(std::string_view name) {
-  return testing::AllOf(testing::Field("name", &ComputeEntryPointInfo::name, RcString(name)),
-                        testing::Field("workgroupSize", &ComputeEntryPointInfo::workgroupSize,
-                                       WorkgroupSize{programs::kLightingWorkgroupSize,
-                                                     programs::kLightingWorkgroupSize, 1}));
+  return testing::AllOf(
+      testing::Field("name", &ComputeEntryPointInfo::name, RcString(name)),
+      testing::Field("workgroupSize", &ComputeEntryPointInfo::workgroupSize,
+                     ::donner::gpu::WorkgroupSize{programs::kLightingWorkgroupSize,
+                                                  programs::kLightingWorkgroupSize, 1}));
 }
 
 TEST(LightingProgramTests, ModulesBuildAndEmitDeterministically) {
