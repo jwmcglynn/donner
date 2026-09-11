@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -75,13 +76,98 @@ bool WriteFile(const std::string& path, const std::string& contents) {
   return out.good();
 }
 
-int Run(std::string_view program, const std::string& wgslPath, bool descriptorHeader) {
+/// Finds a matching catalog entry, whose storage lasts for the process lifetime.
+/// @param program Catalog program name.
+const ProgramEntry* FindProgram(std::string_view program) {
   const ProgramEntry* found = nullptr;
   for (const ProgramEntry& entry : kPrograms) {
     if (entry.name == program) {
       found = &entry;
     }
   }
+  return found;
+}
+
+/// Writes source cases with their platform guards and unavailable-kind refusal.
+/// @param header Destination header stream.
+/// @param wgsl Generated WGSL source.
+/// @param msl Generated MSL source.
+/// @param spirv Generated SPIR-V words.
+void WriteDescriptorSources(std::ostream& header, std::string_view wgsl, std::string_view msl,
+                            std::span<const uint32_t> spirv) {
+  header << "switch (kind) {\n"
+         << "case ShaderSourceKind::Wgsl: descriptor.sourceText = R\"shader(" << wgsl
+         << ")shader\"; break;\n"
+         << "#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)\n"
+         << "case ShaderSourceKind::Msl: descriptor.sourceText = R\"shader(" << msl
+         << ")shader\"; break;\n#endif\n"
+         << "#if defined(__linux__) && !defined(__EMSCRIPTEN__)\n"
+         << "case ShaderSourceKind::Spirv: descriptor.spirvWords = {";
+  for (uint32_t word : spirv) {
+    header << word << "u,";
+  }
+  header << "}; break;\n#endif\ndefault: return descriptor;\n}\n";
+}
+
+/// Writes the descriptor's buffer requirements derived from the shader IR.
+/// @param header Destination header stream.
+/// @param bindings Buffer requirements for every entry point.
+void WriteDescriptorBufferBindings(std::ostream& header,
+                                   std::span<const ShaderBufferBindingInfo> bindings) {
+  header << "descriptor.bufferBindings = std::vector<ShaderBufferBindingInfo>{\n";
+  for (const ShaderBufferBindingInfo& binding : bindings) {
+    header << "{\"" << binding.entryPoint << "\", ShaderStage::" << binding.stage << ", "
+           << binding.group << "u," << binding.binding << "u, BindingType::" << binding.type << ","
+           << binding.minSizeBytes << "u," << binding.runtimeArrayStrideBytes << "u},\n";
+  }
+  header << "};\n";
+}
+
+/// Writes compute entry-point names and workgroup dimensions.
+/// @param header Destination header stream.
+/// @param entryPoints Entry points derived from the shader IR.
+void WriteDescriptorEntryPoints(std::ostream& header,
+                                std::span<const ComputeEntryPointInfo> entryPoints) {
+  header << "descriptor.computeEntryPoints = {\n";
+  for (const ComputeEntryPointInfo& entry : entryPoints) {
+    header << "{\"" << entry.name << "\", {" << entry.workgroupSize.x << "u,"
+           << entry.workgroupSize.y << "u," << entry.workgroupSize.z << "u}},\n";
+  }
+  header << "};\n";
+}
+
+/// Generates native sources and writes a complete runtime descriptor header.
+/// @param program Catalog program name used as the generated namespace and label.
+/// @param module Validated shader IR module.
+/// @param wgsl Previously emitted WGSL source.
+/// @param entryPoints Validated compute entry-point interface.
+/// @param outputPath Destination header path.
+bool WriteDescriptorHeader(std::string_view program, const IrModule& module, std::string_view wgsl,
+                           std::span<const ComputeEntryPointInfo> entryPoints,
+                           const std::string& outputPath) {
+  ShaderResult<std::string> msl = EmitMsl(module);
+  ShaderResult<std::vector<uint32_t>> spirv = EmitSpirv(module);
+  ShaderResult<std::vector<ShaderBufferBindingInfo>> bindings = BufferBindingsOf(module);
+  if (msl.hasError() || spirv.hasError() || bindings.hasError()) {
+    std::fprintf(stderr, "emit_program_wgsl: native artifact generation failed\n");
+    return false;
+  }
+
+  std::ostringstream header;
+  header << "#pragma once\n#include \"donner/gpu/Descriptors.h\"\n"
+         << "namespace donner::gpu::generated::" << program << " {\n"
+         << "inline ShaderModuleDescriptor BuildDescriptor(ShaderSourceKind kind) {\n"
+         << "ShaderModuleDescriptor descriptor;\ndescriptor.label = \"" << program << "\";\n"
+         << "descriptor.sourceKind = kind;\n";
+  WriteDescriptorSources(header, wgsl, msl.result(), spirv.result());
+  WriteDescriptorBufferBindings(header, bindings.result());
+  WriteDescriptorEntryPoints(header, entryPoints);
+  header << "return descriptor;\n}\n}\n";
+  return WriteFile(outputPath, header.str());
+}
+
+int Run(std::string_view program, const std::string& wgslPath, bool descriptorHeader) {
+  const ProgramEntry* found = FindProgram(program);
   if (found == nullptr) {
     std::fprintf(stderr, "emit_program_wgsl: unknown program \"%.*s\"\n",
                  static_cast<int>(program.size()), program.data());
@@ -110,47 +196,11 @@ int Run(std::string_view program, const std::string& wgslPath, bool descriptorHe
     return 1;
   }
 
-  if (descriptorHeader) {
-    ShaderResult<std::string> msl = EmitMsl(module.result());
-    ShaderResult<std::vector<uint32_t>> spirv = EmitSpirv(module.result());
-    ShaderResult<std::vector<ShaderBufferBindingInfo>> bindings = BufferBindingsOf(module.result());
-    if (msl.hasError() || spirv.hasError() || bindings.hasError()) {
-      std::fprintf(stderr, "emit_program_wgsl: native artifact generation failed\n");
-      return 1;
-    }
-    std::ostringstream header;
-    header << "#pragma once\n#include \"donner/gpu/Descriptors.h\"\n"
-           << "namespace donner::gpu::generated::" << program << " {\n"
-           << "inline ShaderModuleDescriptor BuildDescriptor(ShaderSourceKind kind) {\n"
-           << "ShaderModuleDescriptor descriptor;\ndescriptor.label = \"" << program << "\";\n"
-           << "descriptor.sourceKind = kind;\nswitch (kind) {\n"
-           << "case ShaderSourceKind::Wgsl: descriptor.sourceText = R\"shader(" << wgsl.result()
-           << ")shader\"; break;\n"
-           << "#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)\n"
-           << "case ShaderSourceKind::Msl: descriptor.sourceText = R\"shader(" << msl.result()
-           << ")shader\"; break;\n#endif\n"
-           << "#if defined(__linux__) && !defined(__EMSCRIPTEN__)\n"
-           << "case ShaderSourceKind::Spirv: descriptor.spirvWords = {";
-    for (uint32_t word : spirv.result()) {
-      header << word << "u,";
-    }
-    header << "}; break;\n#endif\ndefault: return descriptor;\n}\n"
-           << "descriptor.bufferBindings = std::vector<ShaderBufferBindingInfo>{\n";
-    for (const ShaderBufferBindingInfo& binding : bindings.result()) {
-      header << "{\"" << binding.entryPoint << "\", ShaderStage::" << binding.stage << ", "
-             << binding.group << "u," << binding.binding << "u, BindingType::" << binding.type
-             << "," << binding.minSizeBytes << "u," << binding.runtimeArrayStrideBytes << "u},\n";
-    }
-    header << "};\ndescriptor.computeEntryPoints = {\n";
-    for (const ComputeEntryPointInfo& entry : entryPoints) {
-      header << "{\"" << entry.name << "\", {" << entry.workgroupSize.x << "u,"
-             << entry.workgroupSize.y << "u," << entry.workgroupSize.z << "u}},\n";
-    }
-    header << "};\nreturn descriptor;\n}\n}\n";
-    return WriteFile(wgslPath, header.str()) ? 0 : 1;
-  }
-
-  return WriteFile(wgslPath, wgsl.result()) ? 0 : 1;
+  const bool written =
+      descriptorHeader
+          ? WriteDescriptorHeader(program, module.result(), wgsl.result(), entryPoints, wgslPath)
+          : WriteFile(wgslPath, wgsl.result());
+  return written ? 0 : 1;
 }
 
 }  // namespace
