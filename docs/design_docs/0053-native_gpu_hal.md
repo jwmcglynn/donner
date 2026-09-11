@@ -47,33 +47,37 @@ WebGPU C ABI implementation or a general shader compiler.
 
 ## Next Steps
 
-1. Finish native vertex-layout support and define the indexed-draw contract needed by the UI renderer.
-2. Integrate the remaining typed filter/checkerboard programs and runtime snapshot identity changes,
-   then replace concrete adapter resource and encoder access in their production callers.
+1. Add the indexed-draw contract and backend support needed by the UI renderer.
+2. Complete the remaining typed filter programs, then replace concrete adapter resource and encoder
+   access in production callers. Preserve the qualified checkerboard and snapshot ownership paths.
 3. Develop mapping, native surfaces, and the browser bridge against the existing runtime contracts
    while resource and UI migration proceeds. Switch platform ownership after those paths qualify.
 
 ## Implementation Plan
 
-Every item below is outstanding integration, implementation, or qualification work. A source patch or
-backend-only test does not close a production migration item. Keep regression commits and their
-corresponding fixes together in a focused reviewable change.
+Checked items identify integrated capabilities; unchecked items still require implementation or
+qualification. A backend-only test does not close a production migration item. Keep regression
+commits and their fixes together in a focused reviewable change.
 
 ### Native drawing
 
-- [ ] Integrate and qualify Metal's multiple vertex-buffer layouts, including collisions with
-      vertex-visible shader resources, all supported slots, instancing, and buffer/offset updates.
+- [x] Metal supports all eight vertex-buffer slots, instancing and buffer/offset updates while
+      retaining 29 shader-buffer bindings and refusing binding collisions.
+      [PR #1139](https://github.com/jwmcglynn/donner/pull/1139) is merged; the native vertex-layout
+      targets below cover these contracts.
 - [ ] Add `setIndexBuffer` and `drawIndexed` to the shared command contract and platform backends.
       Define index formats, index-buffer byte bounds, first-index/base-vertex semantics, and resource
       retirement. Verify indexed geometry and invalid inputs on all three backends.
 
 ### Typed shaders and production selection
 
-- [ ] Complete blur, drop-shadow, component-transfer, displacement, blend, image, convolve-matrix,
-      diffuse/specular lighting, and turbulence migrations; use the production inventory to find
-      any additional live raw shader family.
-- [ ] Migrate checkerboard to a typed program and a runtime-device constructor, preserving device
-      pixel origin, DPR, clipping, and its compositing modes.
+- [ ] Complete blur qualification in [PR #1142](https://github.com/jwmcglynn/donner/pull/1142), then
+      integrate drop-shadow, component-transfer, displacement, blend, image, convolve-matrix,
+      diffuse/specular lighting and turbulence. Use the production inventory to find additional
+      live raw shader families.
+- [x] Checkerboard uses a typed program and runtime-device constructor, preserving device-pixel
+      origin, DPR, clipping and both compositing modes.
+      [PR #1140](https://github.com/jwmcglynn/donner/pull/1140) is merged with native pixel validation.
 - [ ] Make production pipeline creation select generated MSL, SPIR-V, or WGSL for the chosen backend.
       Replace the WGSL-only assumption in `GeodeFilterEngine` and shared Geode pipeline construction.
 - [ ] Qualify the remaining emitter instruction contracts, real compiler outputs, native execution,
@@ -81,11 +85,15 @@ corresponding fixes together in a focused reviewable change.
 
 ### Snapshot and target identity
 
-- [ ] Keep the existing runtime texture identity through snapshot drawing and both readback routes.
-      Validate device identity, backing ownership, actual format, and content/allocation bounds
-      before consuming an owned texture. Refused adoption must leave the caller's handle intact.
-- [ ] Preserve detached snapshot ownership and frame-borrowed lifetimes, including move assignment,
-      producer destruction, overlapping frames, and explicit backing retirement.
+- [x] Owning snapshots retain their runtime texture identity for same-context drawing; adoption
+      checks device identity, backing ownership, format and bounds before consuming the handle.
+      Detached and frame-borrowed lifetime, producer teardown and retirement contracts are covered
+      by the renderer snapshot tests.
+      [PR #1141](https://github.com/jwmcglynn/donner/pull/1141) is merged.
+- [ ] Remove transitional cross-context registrations from presentation and readback as device
+      ownership migrates. The current bridge requires matching physical device and queue identities;
+      capture uses an isolated readback context and retains source backing. This intermediate path
+      does not complete the native mapping or no-reimport cutover.
 - [ ] Replace raw target binding in `RendererGeode` and `EditorShellPresentation` with validated
       runtime textures or acquired surface textures, retaining embedder ownership where applicable.
 
@@ -298,10 +306,10 @@ operation and shader manifests must use the complete repository input set, with
 Run the full `bazel test //...` gate and, separately, these targets with `--config=geode`:
 
 - `//donner/editor/tests:editor_window_tests_geode`
-- `//donner/editor/tests:layer_thumbnail_golden_tests`
-- `//donner/editor/tests:async_renderer_tests`
-- `//donner/editor/tests:rnr_replay_tests`
-- `//donner/editor/tests:gl_rnr_replay_tests`
+- `//donner/editor/tests:layer_thumbnail_golden_tests_geode`
+- `//donner/editor/tests:async_renderer_tests_geode`
+- `//donner/editor/tests:rnr_replay_tests_geode`
+- `//donner/editor/tests:gl_rnr_replay_tests_geode`
 
 Use strict pixelmatch for image acceptance. Include existing resvg filter cases for the migrated
 families, chained filters, fractional alpha, nonzero subregions, clips/masks, and DPR2 workloads.
