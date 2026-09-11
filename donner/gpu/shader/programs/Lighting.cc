@@ -109,10 +109,9 @@ ShaderStatus AddHorizontalDifference(ModuleBuilder& builder) {
   e.ok(fn.returnValue(e(Sub(height(e(Add(x, LiteralI32(1)))), height(x)))));
   e.ok(fn.endIf());
   e.ok(fn.beginIf(e(Eq(x, ParamsMember(e, fn, "sampleMaxX")))));
-  e.ok(fn.returnValue(e(Sub(height(x), height(e(Sub(x, LiteralI32(1)))))));
+  e.ok(fn.returnValue(e(Sub(height(x), height(e(Sub(x, LiteralI32(1))))))));
   e.ok(fn.endIf());
-  e.ok(fn.returnValue(
-      e(Sub(height(e(Add(x, LiteralI32(1)))), height(e(Sub(x, LiteralI32(1))))))));
+  e.ok(fn.returnValue(e(Sub(height(e(Add(x, LiteralI32(1)))), height(e(Sub(x, LiteralI32(1))))))));
   e.ok(fn.finish());
   return e.error ? ShaderStatus(*e.error) : OkShaderStatus();
 }
@@ -135,10 +134,9 @@ ShaderStatus AddVerticalDifference(ModuleBuilder& builder) {
   e.ok(fn.returnValue(e(Sub(height(e(Add(y, LiteralI32(1)))), height(y)))));
   e.ok(fn.endIf());
   e.ok(fn.beginIf(e(Eq(y, ParamsMember(e, fn, "sampleMaxY")))));
-  e.ok(fn.returnValue(e(Sub(height(y), height(e(Sub(y, LiteralI32(1)))))));
+  e.ok(fn.returnValue(e(Sub(height(y), height(e(Sub(y, LiteralI32(1))))))));
   e.ok(fn.endIf());
-  e.ok(fn.returnValue(
-      e(Sub(height(e(Add(y, LiteralI32(1)))), height(e(Sub(y, LiteralI32(1))))))));
+  e.ok(fn.returnValue(e(Sub(height(e(Add(y, LiteralI32(1)))), height(e(Sub(y, LiteralI32(1))))))));
   e.ok(fn.finish());
   return e.error ? ShaderStatus(*e.error) : OkShaderStatus();
 }
