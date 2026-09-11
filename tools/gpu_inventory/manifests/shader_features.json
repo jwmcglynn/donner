@@ -115,62 +115,6 @@
         "ConvolveParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_image.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "image_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba32float, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 2,
-          "group": 0,
-          "name": "params",
-          "type": "ImageParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "abs",
-        "any",
-        "array",
-        "clamp",
-        "floor",
-        "for",
-        "if",
-        "let",
-        "min",
-        "mix",
-        "return",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "ImageParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/image_blit.wgsl": {
       "bindings": [
         {
