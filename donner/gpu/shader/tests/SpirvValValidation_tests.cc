@@ -20,6 +20,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/Composite.h"
@@ -183,6 +184,10 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
     return std::move(status).error();
   }
   return builder.build();
+}
+
+TEST(SpirvValValidation, EmittedCheckerboardPassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCheckerboardModule(), "checkerboard.spv");
 }
 
 TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {

@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
 
 # The Vulkan solid-fill vertical slice renders the shared baseline scene
 # through donner::gpu + the emitted SPIR-V and compares it against an
@@ -75,6 +75,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
+        "//donner/gpu:checkerboard_pixel_tests",
         "//donner/gpu:vertex_input_slice",
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
