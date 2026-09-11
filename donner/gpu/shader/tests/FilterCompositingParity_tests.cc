@@ -243,18 +243,24 @@ TEST(FilterChainPrecision, ComponentTransferMaximumPackedTablesKeepChannelsDisti
 class FilterBlendParity : public testing::TestWithParam<const char*> {};
 
 TEST_P(FilterBlendParity, StraightChannelsAndAlphaBoundariesMatchCpu) {
+  // Keep both producers in the blend node's space so this fixture measures blend arithmetic
+  // without also measuring a color-space round trip in one renderer's flood scheduler.
   for (const char* opacity : {"0", "0.5", "1"}) {
     SCOPED_TRACE(opacity);
     const std::string primitives = std::string(R"svg(
+      <feFlood flood-color="#3973ad" flood-opacity="0.7"
+        color-interpolation-filters="sRGB" result="backdrop"/>
       <feFlood flood-color="#bf4080" flood-opacity=")svg") +
-                                   opacity + R"svg(" result="source"/>
-      <feBlend in="source" in2="seed" color-interpolation-filters="sRGB" mode=")svg" +
+                                   opacity + R"svg(" color-interpolation-filters="sRGB"
+        result="source"/>
+      <feBlend in="source" in2="backdrop" color-interpolation-filters="sRGB" mode=")svg" +
                                    GetParam() + R"svg("/>)svg";
     ExpectFilterChainMatches(primitives, "blend_channels_alpha");
   }
 }
 
 TEST_P(FilterBlendParity, TiedChannelsAndGrayMatchCpu) {
+  // As above, explicit producer spaces keep tied-channel coverage specific to blend behavior.
   const std::array<std::pair<const char*, const char*>, 4> colors{{{"#4040bf", "#bfbf40"},
                                                                    {"#40bf40", "#bf40bf"},
                                                                    {"#bf4040", "#40bfbf"},
@@ -263,9 +269,11 @@ TEST_P(FilterBlendParity, TiedChannelsAndGrayMatchCpu) {
     SCOPED_TRACE(testing::Message() << "source=" << source << " backdrop=" << backdrop);
     const std::string primitives =
         std::string(R"svg(<feFlood flood-color=")svg") + backdrop +
-        R"svg(" flood-opacity="0.7" result="backdrop"/><feFlood flood-color=")svg" + source +
-        R"svg(" flood-opacity="0.5" result="source"/><feBlend in="source" in2="backdrop"
-          color-interpolation-filters="sRGB" mode=")svg" +
+        R"svg(" flood-opacity="0.7" color-interpolation-filters="sRGB" result="backdrop"/>
+        <feFlood flood-color=")svg" +
+        source +
+        R"svg(" flood-opacity="0.5" color-interpolation-filters="sRGB" result="source"/>
+        <feBlend in="source" in2="backdrop" color-interpolation-filters="sRGB" mode=")svg" +
         GetParam() + R"svg("/>)svg";
     ExpectFilterChainMatches(primitives, "blend_tied_channels");
   }
