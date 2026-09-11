@@ -44,9 +44,9 @@ ShaderStatus AddLuminosity(ModuleBuilder& builder) {
       builder, "luminosity", {{"c", IrType::Vec3f()}}, IrType::F32(),
       [](ErrorLatch& e, FunctionBuilder& fn) {
         const auto c = e(fn.ref("c"));
-        e.ok(fn.returnValue(e(Add(e(Add(e(Mul(LiteralF32(0.3f), e(Swizzle(c, "x")))),
-                                        e(Mul(LiteralF32(0.59f), e(Swizzle(c, "y")))))),
-                                  e(Mul(LiteralF32(0.11f), e(Swizzle(c, "z"))))))));
+        e.ok(fn.returnValue(e(Add(e(Add(e(Mul(LiteralF32(0.299f), e(Swizzle(c, "x")))),
+                                        e(Mul(LiteralF32(0.587f), e(Swizzle(c, "y")))))),
+                                  e(Mul(LiteralF32(0.114f), e(Swizzle(c, "z"))))))));
       });
 }
 
