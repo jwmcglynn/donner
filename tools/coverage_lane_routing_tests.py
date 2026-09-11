@@ -15,7 +15,10 @@ These tests hold the routing to one shape:
     justified list.
 """
 
+import os
 import re
+import subprocess
+import textwrap
 import unittest
 
 from python.runfiles import runfiles
@@ -153,6 +156,52 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         rest = self.text.split(marker, 1)[1]
         end = re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
+
+    def _classify_changed_files(self, *paths):
+        """Execute the workflow's early changed-file routing verbatim."""
+        start = self.text.index("          should_fallback=false\n")
+        end = self.text.index('          work_dir="$(mktemp -d)"', start)
+        fragment = textwrap.dedent(self.text[start:end])
+        harness = textwrap.dedent(
+            """
+            set -euo pipefail
+            SMOKE_COVERAGE_TARGETS="//donner/base/..."
+            changed_files="$CHANGED_FILES"
+            emit_targets() {
+              printf '%s|%s|%s\n' "$1" "$2" "$3"
+            }
+            """
+        )
+        result = subprocess.run(
+            ["bash", "-c", harness + fragment + '\nprintf "affected\\n"\n'],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CHANGED_FILES": "\n".join(paths)},
+        )
+        return result.stdout.strip().splitlines()[-1]
+
+    def test_docs_only_changes_skip_smoke_coverage_admission(self):
+        self.assertEqual(
+            "true|no_instrumentable_targets|",
+            self._classify_changed_files("docs/design_docs/0053-native_gpu_hal.md"),
+        )
+
+    def test_docs_plus_coverage_tooling_retains_smoke_coverage(self):
+        self.assertEqual(
+            "true|coverage_smoke|//donner/base/...",
+            self._classify_changed_files(
+                "docs/design_docs/0053-native_gpu_hal.md", "tools/coverage.sh"
+            ),
+        )
+
+    def test_markdown_plus_source_reaches_affected_target_analysis(self):
+        self.assertEqual(
+            "affected",
+            self._classify_changed_files(
+                "docs/design_docs/0053-native_gpu_hal.md", "donner/base/MathUtils.cc"
+            ),
+        )
 
     def test_every_coverage_job_gates_on_runs_coverage(self):
         """All three lanes, including the hosted one.
