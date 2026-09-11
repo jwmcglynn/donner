@@ -788,6 +788,7 @@ donner_variant_cc_test(
         },
     ],
     opens_gpu_device = True,
+    remote_parallel_ci = True,
     # Hundreds of independent image comparisons per variant. Unsharded, the
     # geode variant alone ran ~267 s on the self-hosted RE lane
     # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards
