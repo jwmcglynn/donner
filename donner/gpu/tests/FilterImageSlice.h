@@ -39,8 +39,8 @@ static_assert(sizeof(FilterImageTestParams) == 40);
 
 inline constexpr uint32_t kFilterImageWidth = 3;
 inline constexpr uint32_t kFilterImageHeight = 2;
-inline constexpr uint32_t kFilterImageOutputWidth = 7;
-inline constexpr uint32_t kFilterImageOutputHeight = 5;
+inline constexpr uint32_t kFilterImageOutputWidth = 13;
+inline constexpr uint32_t kFilterImageOutputHeight = 11;
 inline constexpr uint32_t kFilterImageBytesPerRow = 256;
 
 /// A nonuniform premultiplied source with fractional alpha and one transparent border texel.
@@ -247,7 +247,13 @@ void CheckFilterImageStorage(DeviceType& device, const ShaderModuleDescriptor& s
   ASSERT_THAT(pass, HasResult());
   ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, bindGroup.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+  ASSERT_THAT(pass.result()->dispatchWorkgroups(
+                  (kFilterImageOutputWidth + shader::programs::kFilterImageWorkgroupSize - 1) /
+                      shader::programs::kFilterImageWorkgroupSize,
+                  (kFilterImageOutputHeight + shader::programs::kFilterImageWorkgroupSize - 1) /
+                      shader::programs::kFilterImageWorkgroupSize,
+                  1),
+              IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(
                   TexelCopyTextureInfo{output.result()}, readback.result(),

@@ -452,7 +452,9 @@ private:
 
   /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
   /// @param arena Frame resources. @param output Existing image destination.
-  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const gpu::Texture& output);
+  /// @param destinationExtent Dimensions to fill.
+  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const gpu::Texture& output,
+                                       gpu::Extent2d destinationExtent);
 
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.

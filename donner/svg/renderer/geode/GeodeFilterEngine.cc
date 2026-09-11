@@ -1335,10 +1335,13 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param input Source texture, borrowed. @param output Destination texture, borrowed.
 /// @param uniforms Parameter block to upload. @param label Debug label stem for the pass.
 /// @param workgroupSize Size the entry point declares, along x and y.
+/// @param transferTable Optional read-only storage table bound at index three.
+/// @param destinationExtent Optional dispatch extent; defaults to the source dimensions.
 [[nodiscard]] bool dispatchRuntimeInputOutputParameters(
     FilterResourceArena& arena, const RuntimeComputeProgram& program, const wgpu::Texture& input,
     const gpu::Texture& output, std::span<const uint8_t> uniforms, const char* label,
-    uint32_t workgroupSize, const gpu::Buffer* transferTable = nullptr) {
+    uint32_t workgroupSize, const gpu::Buffer* transferTable = nullptr,
+    std::optional<gpu::Extent2d> destinationExtent = std::nullopt) {
   if (!program.pipeline.isValid()) {
     return false;
   }
@@ -1369,11 +1372,11 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const gpu::Extent2d extent = destinationExtent.value_or(
+      gpu::Extent2d{.width = input.getWidth(), .height = input.getHeight()});
   return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
-                                   (width + workgroupSize - 1) / workgroupSize,
-                                   (height + workgroupSize - 1) / workgroupSize);
+                                   (extent.width + workgroupSize - 1) / workgroupSize,
+                                   (extent.height + workgroupSize - 1) / workgroupSize);
 }
 
 /// Records a two-input pass, with an optional uniform block, through the runtime.
@@ -1936,12 +1939,10 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     const gpu::ShaderModuleDescriptor descriptor =
         gpu::generated::filter_image::BuildDescriptor(gpu::ShaderSourceKind::Wgsl);
     imageProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterImage", descriptor.sourceText,
-        gpu::shader::programs::kFilterImageEntryPoint,
+        device_.adapterDevice(), descriptor.label.str(), descriptor,
         {SampledInputEntry(static_cast<uint32_t>(FilterImageBinding::ImageTexture)),
          StorageOutputEntry(static_cast<uint32_t>(FilterImageBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(FilterImageBinding::Params))},
-        gpu::shader::programs::kFilterImageWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(FilterImageBinding::Params))});
   }
 
   // The tile program records through the shared GPU command stream.
@@ -4137,7 +4138,8 @@ std::optional<ImageParams> CreateFragmentImageParams(
 }
 
 wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
-                                                        const gpu::Texture& output) {
+                                                        const gpu::Texture& output,
+                                                        gpu::Extent2d destinationExtent) {
   const gpu::Texture* empty = arena.createRuntimeTexture(
       gpu::TextureDescriptor{"FilterImageEmptySource",
                              {1, 1},
@@ -4152,10 +4154,10 @@ wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& are
   ImageParams params{};
   params.m02 = -1000.0f;
   params.m12 = -1000.0f;
-  if (!dispatchRuntimeInputOutputUniform(arena, imageProgram_,
-                                         device_.adapterDevice().wgpuTextureOf(*empty), output,
-                                         UniformBytes(params), "FilterImageEmptyPass",
-                                         gpu::shader::programs::kFilterImageWorkgroupSize)) {
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*empty), output,
+          UniformBytes(params), "FilterImageEmptyPass",
+          gpu::shader::programs::kFilterImageWorkgroupSize, nullptr, destinationExtent)) {
     return {};
   }
   return device_.adapterDevice().wgpuTextureOf(output);
@@ -4282,7 +4284,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
   // Empty, malformed, degenerate, or device-oversized sources remain transparent.
   if (!uploadRowPitch) {
-    return renderTransparentImage(arena, *output);
+    return renderTransparentImage(arena, *output, {width, height});
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
@@ -4319,10 +4321,11 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   const ImageParams params =
       fragmentParams ? *fragmentParams
                      : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
-  if (!dispatchRuntimeInputOutputUniform(
+  if (!dispatchRuntimeInputOutputParameters(
           arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*image), *output,
           UniformBytes(params), fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass",
-          gpu::shader::programs::kFilterImageWorkgroupSize)) {
+          gpu::shader::programs::kFilterImageWorkgroupSize, nullptr,
+          gpu::Extent2d{width, height})) {
     return {};
   }
   return device_.adapterDevice().wgpuTextureOf(*output);

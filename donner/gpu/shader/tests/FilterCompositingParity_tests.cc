@@ -420,19 +420,19 @@ TEST(FilterChainPrecision, ImageUploadsRemainDistinctBeforeSubmission) {
   }
 }
 
-TEST(FilterChainPrecision, NarrowMultirowImageUploadFillsThenClearsTheOutput) {
+TEST(FilterChainPrecision, NarrowMultirowImageUsesDestinationExtentAcrossWorkgroups) {
   constexpr const char* kImage =
       "data:image/"
       "png;base64,"
       "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAFklEQVR4nGP4z8DwHwyBNBCAGBD6PwCxaQ7youvxUQAA"
       "AABJRU5ErkJggg==";
   const auto document = [&](bool empty) {
-    return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="24">
-      <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="16" height="24"
-        color-interpolation-filters="sRGB"><feImage x="0" y="0" width="16" height="24"
+    return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11">
+      <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="13" height="11"
+        color-interpolation-filters="sRGB"><feImage x="0" y="0" width="13" height="11"
         preserveAspectRatio="none" image-rendering="crisp-edges")svg") +
            (empty ? "" : std::string(" href=\"") + kImage + "\"") +
-           R"svg(/></filter></defs><rect width="16" height="24" fill="red"
+           R"svg(/></filter></defs><rect width="13" height="11" fill="red"
              filter="url(#f)"/></svg>)svg";
   };
   const std::array<std::array<uint8_t, 4>, 6> colors{{{255, 0, 0, 255},
@@ -450,16 +450,18 @@ TEST(FilterChainPrecision, NarrowMultirowImageUploadFillsThenClearsTheOutput) {
     ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
     renderer.draw(parsed.result());
     const svg::RendererBitmap actual = renderer.takeSnapshot();
-    ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(16, 24)));
+    ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(13, 11)));
     svg::RendererBitmap expected;
     expected.dimensions = actual.dimensions;
     expected.rowBytes = actual.rowBytes;
     expected.alphaType = actual.alphaType;
-    expected.pixels.resize(expected.rowBytes * 24);
-    for (size_t y = 0; y < 24; ++y) {
-      for (size_t x = 0; x < 16; ++x) {
+    expected.pixels.resize(expected.rowBytes * 11);
+    for (size_t y = 0; y < 11; ++y) {
+      for (size_t x = 0; x < 13; ++x) {
+        const size_t sourceX = (x * 2 + 1) / 13;
+        const size_t sourceY = (y * 3 + 1) / 11;
         const std::array<uint8_t, 4> color =
-            empty ? std::array<uint8_t, 4>{} : colors[(y / 8) * 2 + x / 8];
+            empty ? std::array<uint8_t, 4>{} : colors[sourceY * 2 + sourceX];
         std::copy(color.begin(), color.end(),
                   expected.pixels.begin() + y * expected.rowBytes + x * 4);
       }
