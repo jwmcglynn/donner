@@ -1379,7 +1379,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   // Optional, so a device without it still creates; the runtime then refuses Uint32 index
   // buffers instead of letting 32-bit index values above the driver's cap read undefined data.
   const bool fullDrawIndexUint32 = supportedFeatures.fullDrawIndexUint32 == VK_TRUE;
-  enabledFeatures.fullDrawIndexUint32 = fullDrawIndexUint32 ? VK_TRUE : VK_FALSE;
+  enabledFeatures.fullDrawIndexUint32 = static_cast<VkBool32>(fullDrawIndexUint32);
 
   const float queuePriority = 1.0f;
   VkDeviceQueueCreateInfo queueInfo = {};

@@ -18,6 +18,27 @@ GpuError Err(GpuErrorType type, std::string message) {
   return GpuError{type, std::move(message)};
 }
 
+/// Validates one vertex or instance element range against its bound buffer.
+/// @param operation Recording operation named in an error. @param rangeKind Element kind.
+/// @param first First element. @param count Number of elements. @param strideBytes Element stride.
+/// @param slot Vertex-buffer slot. @param bytesAvailable Bytes available from its bound offset.
+std::optional<GpuError> ValidateVertexBufferRange(std::string_view operation,
+                                                  std::string_view rangeKind, uint64_t first,
+                                                  uint64_t count, uint64_t strideBytes, size_t slot,
+                                                  uint64_t bytesAvailable) {
+  const std::optional<uint64_t> lastElement = CheckedAdd(first, count);
+  const std::optional<uint64_t> bytesNeeded =
+      lastElement ? CheckedMul(*lastElement, strideBytes) : std::nullopt;
+  if (bytesNeeded && *bytesNeeded <= bytesAvailable) {
+    return std::nullopt;
+  }
+  return Err(GpuErrorType::OutOfBounds,
+             std::format("{}: {} range [{}, {}) with strideBytes {} overflows the "
+                         "vertex buffer bound at slot {} ({} bytes available)",
+                         operation, rangeKind, first, lastElement ? *lastElement : 0, strideBytes,
+                         slot, bytesAvailable));
+}
+
 }  // namespace
 
 Status RenderPassEncoder::setPipeline(const RenderPipeline& pipeline) {
@@ -640,16 +661,10 @@ Status CommandEncoder::validateVertexSlots(std::string_view operation, uint64_t 
     }
     const uint64_t first = perVertex ? firstVertex : firstInstance;
     const uint64_t count = perVertex ? vertexCount : instanceCount;
-    const std::optional<uint64_t> lastElement = CheckedAdd(first, count);
-    const std::optional<uint64_t> bytesNeeded =
-        lastElement ? CheckedMul(*lastElement, layout.strideBytes) : std::nullopt;
-    if (!bytesNeeded || *bytesNeeded > boundVertexBuffers_[slot]->bytesAvailable) {
-      return fail(Err(GpuErrorType::OutOfBounds,
-                      std::format("{}: {} range [{}, {}) with strideBytes {} overflows the "
-                                  "vertex buffer bound at slot {} ({} bytes available)",
-                                  operation, perVertex ? "vertex" : "instance", first,
-                                  lastElement ? *lastElement : 0, layout.strideBytes, slot,
-                                  boundVertexBuffers_[slot]->bytesAvailable)));
+    if (std::optional<GpuError> error = ValidateVertexBufferRange(
+            operation, perVertex ? "vertex" : "instance", first, count, layout.strideBytes, slot,
+            boundVertexBuffers_[slot]->bytesAvailable)) {
+      return fail(std::move(*error));
     }
   }
   return OkStatus();
