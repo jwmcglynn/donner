@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <limits>
@@ -20,6 +21,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
+#include "donner/gpu/shader/generated/FilterImageShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
@@ -28,6 +30,7 @@
 #include "donner/gpu/shader/programs/DisplacementMapBindings.h"
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
+#include "donner/gpu/shader/programs/FilterImageBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/GaussianBlurBindings.h"
 #include "donner/gpu/shader/programs/LightingBindings.h"
@@ -950,6 +953,8 @@ struct ImageParams {
   float pixelatedScaleY;
   uint32_t pad1;
 };
+
+static_assert(sizeof(ImageParams) == 40);
 
 uint32_t ImageSamplingMode(svg::ImageRendering imageRendering) {
   switch (imageRendering) {
@@ -1927,10 +1932,16 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
   // --- feImage placement pipeline (input + output + uniform) ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterImage", createFilterImageShader(dev), sizeof(ImageParams));
-    imageBindGroupLayout_ = std::move(bgl);
-    imagePipeline_ = std::move(pipeline);
+    using gpu::shader::programs::FilterImageBinding;
+    const gpu::ShaderModuleDescriptor descriptor =
+        gpu::generated::filter_image::BuildDescriptor(gpu::ShaderSourceKind::Wgsl);
+    imageProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterImage", descriptor.sourceText,
+        gpu::shader::programs::kFilterImageEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(FilterImageBinding::ImageTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(FilterImageBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(FilterImageBinding::Params))},
+        gpu::shader::programs::kFilterImageWorkgroupSize);
   }
 
   // The tile program records through the shared GPU command stream.
@@ -4055,14 +4066,32 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
-bool HasSafeFilterImageSource(const svg::components::filter_primitive::Image& primitive,
-                              uint32_t maximumTextureDimension) {
-  return primitive.imageData &&
-         svg::HasExactRgbaPayload(*primitive.imageData, primitive.imageWidth,
-                                  primitive.imageHeight) &&
-         static_cast<uint32_t>(primitive.imageWidth) <= maximumTextureDimension &&
-         static_cast<uint32_t>(primitive.imageHeight) <= maximumTextureDimension &&
-         static_cast<uint32_t>(primitive.imageWidth) <= std::numeric_limits<uint32_t>::max() / 4u;
+constexpr std::optional<uint32_t> FilterImageRowPitch(uint32_t width, uint32_t height) {
+  if (width == 0 || height == 0) {
+    return std::nullopt;
+  }
+  const uint64_t rowBytes = uint64_t{width} * 4u;
+  const uint64_t rowPitch = (rowBytes + 255u) & ~uint64_t{255u};
+  if (rowPitch > std::numeric_limits<uint32_t>::max() ||
+      rowPitch > std::numeric_limits<size_t>::max() / height) {
+    return std::nullopt;
+  }
+  return static_cast<uint32_t>(rowPitch);
+}
+
+static_assert(!FilterImageRowPitch(std::numeric_limits<int>::max(), 1).has_value());
+
+std::optional<uint32_t> FilterImageUploadRowPitch(
+    const svg::components::filter_primitive::Image& primitive, uint32_t maximumTextureDimension) {
+  if (!primitive.imageData ||
+      !svg::HasExactRgbaPayload(*primitive.imageData, primitive.imageWidth,
+                                primitive.imageHeight) ||
+      static_cast<uint32_t>(primitive.imageWidth) > maximumTextureDimension ||
+      static_cast<uint32_t>(primitive.imageHeight) > maximumTextureDimension) {
+    return std::nullopt;
+  }
+  return FilterImageRowPitch(static_cast<uint32_t>(primitive.imageWidth),
+                             static_cast<uint32_t>(primitive.imageHeight));
 }
 
 std::optional<ImageParams> CreateFragmentImageParams(
@@ -4108,34 +4137,28 @@ std::optional<ImageParams> CreateFragmentImageParams(
 }
 
 wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
-                                                        const wgpu::Texture& output) {
-  wgpu::Texture emptyTex = arena.createTexture(gpu::TextureDescriptor{
-      "FilterImageEmptySource", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!emptyTex) {
+                                                        const gpu::Texture& output) {
+  const gpu::Texture* empty = arena.createRuntimeTexture(
+      gpu::TextureDescriptor{"FilterImageEmptySource",
+                             {1, 1},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  const std::array<uint8_t, 4> zero{};
+  if (empty == nullptr ||
+      device_.adapterDevice().writeTexture(*empty, zero, {0, 256, 1}, {1, 1}).hasError()) {
     return {};
   }
-  const uint8_t zero[4] = {0, 0, 0, 0};
-  wgpu::TexelCopyTextureInfo dstInfo{};
-  dstInfo.texture = emptyTex;
-  wgpu::TexelCopyBufferLayout layout{};
-  layout.bytesPerRow = 4;
-  layout.rowsPerImage = 1;
-  wgpu::Extent3D extent = {1, 1, 1};
-  device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
-  device_.countTextureWrite(4);
 
   ImageParams params{};
   params.m02 = -1000.0f;
   params.m12 = -1000.0f;
-  auto ub = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!ub.buffer) {
+  if (!dispatchRuntimeInputOutputUniform(arena, imageProgram_,
+                                         device_.adapterDevice().wgpuTextureOf(*empty), output,
+                                         UniformBytes(params), "FilterImageEmptyPass",
+                                         gpu::shader::programs::kFilterImageWorkgroupSize)) {
     return {};
   }
-  dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                             emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams),
-                             "FilterImageEmptyPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(output);
 }
 
 namespace {
@@ -4246,18 +4269,20 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
     const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
     const Box2d& placementRegionUser) {
-  const wgpu::Device& dev = device_.device();
-
-  const bool hasSafeTextureExtent =
-      HasSafeFilterImageSource(primitive, device_.maxTextureDimension2D());
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
-  if (!output) {
+  const std::optional<uint32_t> uploadRowPitch =
+      FilterImageUploadRowPitch(primitive, device_.maxTextureDimension2D());
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterImageOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
   // Empty, malformed, degenerate, or device-oversized sources remain transparent.
-  if (!hasSafeTextureExtent) {
-    return renderTransparentImage(arena, output);
+  if (!uploadRowPitch) {
+    return renderTransparentImage(arena, *output);
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
@@ -4265,39 +4290,42 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   // (consistent with feFlood / feMerge).
   const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
   const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
-  const std::vector<uint8_t> premul = svg::PremultiplyRgba(*primitive.imageData);
-
-  wgpu::Texture imgTex = arena.createTexture(gpu::TextureDescriptor{
-      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!imgTex) {
-    return {};
+  std::vector<uint8_t> premultiplied = svg::PremultiplyRgba(*primitive.imageData);
+  const uint32_t rowBytes = imgW * 4u;
+  if (*uploadRowPitch != rowBytes) {
+    premultiplied.resize(size_t{*uploadRowPitch} * imgH);
+    for (uint32_t row = imgH; row > 0; --row) {
+      std::memmove(premultiplied.data() + size_t{row - 1} * *uploadRowPitch,
+                   premultiplied.data() + size_t{row - 1} * rowBytes, rowBytes);
+      std::fill_n(premultiplied.data() + size_t{row - 1} * *uploadRowPitch + rowBytes,
+                  *uploadRowPitch - rowBytes, 0);
+    }
   }
 
-  wgpu::TexelCopyTextureInfo dstInfo{};
-  dstInfo.texture = imgTex;
-  wgpu::TexelCopyBufferLayout layout{};
-  layout.bytesPerRow = imgW * 4u;
-  layout.rowsPerImage = imgH;
-  wgpu::Extent3D extent = {imgW, imgH, 1};
-  device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
-  device_.countTextureWrite(premul.size());
+  const gpu::Texture* image = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (image == nullptr) {
+    return {};
+  }
+  if (device_.adapterDevice()
+          .writeTexture(*image, premultiplied, {0, *uploadRowPitch, imgH}, {imgW, imgH})
+          .hasError()) {
+    return {};
+  }
 
   const std::optional<ImageParams> fragmentParams =
       CreateFragmentImageParams(primitive, graph, deviceFromFilter);
   const ImageParams params =
       fragmentParams ? *fragmentParams
                      : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  if (!dispatchRuntimeInputOutputUniform(
+          arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*image), *output,
+          UniformBytes(params), fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass",
+          gpu::shader::programs::kFilterImageWorkgroupSize)) {
     return {};
   }
-
-  dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                             imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
-                             sizeof(ImageParams),
-                             fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgpu::Texture& input,

@@ -113,6 +113,7 @@ donner_cc_library(
         "programs/DisplacementMapBindings.h",
         "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
+        "programs/FilterImageBindings.h",
         "programs/FloodBindings.h",
         "programs/GaussianBlurBindings.h",
         "programs/LightingBindings.h",
@@ -138,6 +139,7 @@ donner_cc_library(
         "programs/DisplacementMap.cc",
         "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
+        "programs/FilterImage.cc",
         "programs/Flood.cc",
         "programs/GaussianBlur.cc",
         "programs/Lighting.cc",
@@ -161,6 +163,7 @@ donner_cc_library(
         "programs/DropShadow.h",
         "programs/ErrorLatch.h",
         "programs/FilterColorMatrix.h",
+        "programs/FilterImage.h",
         "programs/Flood.h",
         "programs/GaussianBlur.h",
         "programs/Lighting.h",
@@ -204,6 +207,7 @@ donner_cc_test(
         "tests/DisplacementMapProgram_tests.cc",
         "tests/DropShadowProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
+        "tests/FilterImageProgram_tests.cc",
         "tests/FloodProgram_tests.cc",
         "tests/GaussianBlurProgram_tests.cc",
         "tests/IrBuilder_tests.cc",
@@ -232,6 +236,7 @@ donner_cc_test(
         ":component_transfer_artifact",
         ":displacement_map_artifact",
         ":drop_shadow_artifact",
+        ":filter_image_artifact",
         ":float_storage_test_module",
         ":lighting_artifacts",
         ":module_interface",
@@ -470,6 +475,21 @@ genrule(
 donner_cc_library(
     name = "turbulence_artifact",
     hdrs = ["generated/TurbulenceShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "filter_image_generated",
+    outs = ["generated/FilterImageShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_image " +
+          "$(location generated/FilterImageShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "filter_image_artifact",
+    hdrs = ["generated/FilterImageShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )

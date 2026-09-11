@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <tuple>
@@ -24,6 +25,7 @@ public:
       : device_(device), refusedLabel_(refusedLabel), refusedOccurrence_(refusedOccurrence) {}
 
   gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& descriptor) override {
+    requestedLabels.push_back(descriptor.label);
     if (refusals != 0) {
       ++requestsAfterRefusal;
     }
@@ -38,6 +40,12 @@ public:
     if (descriptor.label == "FilterColorSpaceConvertOutput") {
       ++colorConversions;
     }
+    if (denyImageUploads &&
+        (descriptor.label == "FilterImageSource" || descriptor.label == "FilterImageEmptySource")) {
+      gpu::TextureDescriptor missingUploadUsage = descriptor;
+      missingUploadUsage.usage = gpu::TextureUsage::Sampled;
+      return gpu::GetResultOrFail(device_.createTexture(missingUploadUsage));
+    }
     return gpu::GetResultOrFail(device_.createTexture(descriptor));
   }
 
@@ -46,11 +54,13 @@ public:
     retired.push_back(std::move(texture));
   }
 
+  bool denyImageUploads = false;
   size_t refusals = 0;
   size_t requestsAfterRefusal = 0;
   size_t allocations = 0;
   size_t colorConversions = 0;
   uint64_t retainedTextureBytes = 0;
+  std::vector<RcString> requestedLabels;
   std::vector<gpu::Texture> retired;
 
 private:
@@ -141,6 +151,100 @@ protected:
   std::unique_ptr<GeodeFilterEngine> engine_;
   std::unique_ptr<RefusingTextureAllocator> allocator_;
 };
+
+TEST_F(GeodeFilterEngineTest, NarrowMultirowImageAllocationRefusalStopsTheGraph) {
+  using namespace svg::components;
+  filter_primitive::Image image;
+  image.imageWidth = 1;
+  image.imageHeight = 2;
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(
+      std::vector<uint8_t>{255, 0, 0, 255, 0, 255, 0, 128});
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  FilterNode node;
+  node.primitive = image;
+  graph.nodes.push_back(node);
+  runGraph(graph, "FilterImageSource");
+}
+
+class ImageUploadRefusalTest : public GeodeFilterEngineTest,
+                               public testing::WithParamInterface<bool> {};
+
+TEST_P(ImageUploadRefusalTest, RefusedUploadReturnsNoOutputAndRetiresResources) {
+  using namespace svg::components;
+  filter_primitive::Image image;
+  if (GetParam()) {
+    image.imageWidth = 1;
+    image.imageHeight = 2;
+    image.imageData = std::make_shared<const std::vector<uint8_t>>(
+        std::vector<uint8_t>{255, 0, 0, 255, 0, 255, 0, 128});
+  }
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  FilterNode imageNode;
+  imageNode.primitive = image;
+  graph.nodes.push_back(imageNode);
+  FilterNode nextNode;
+  nextNode.primitive = filter_primitive::Flood{};
+  graph.nodes.push_back(nextNode);
+
+  allocator_ = std::make_unique<RefusingTextureAllocator>(device_->adapterDevice(), "");
+  allocator_->denyImageUploads = true;
+  const wgpu::Texture output =
+      engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
+                       Box2d({0, 0}, {4, 4}), Transform2d(), *allocator_, encoder_);
+  EXPECT_THAT(static_cast<bool>(output), testing::IsFalse());
+  EXPECT_THAT(
+      allocator_->requestedLabels,
+      testing::Contains(RcString(GetParam() ? "FilterImageSource" : "FilterImageEmptySource")));
+  EXPECT_THAT(allocator_->requestedLabels,
+              testing::Not(testing::Contains(RcString("FilterFloodOutput"))));
+  EXPECT_THAT(allocator_->retired, testing::SizeIs(allocator_->allocations));
+}
+
+INSTANTIATE_TEST_SUITE_P(RasterAndTransparent, ImageUploadRefusalTest, testing::Bool());
+
+struct InvalidImageCase {
+  const char* name;
+  int width;
+  int height;
+  std::vector<uint8_t> pixels;
+};
+
+void PrintTo(const InvalidImageCase& value, std::ostream* output) {
+  *output << value.name << " " << value.width << "x" << value.height << " with "
+          << value.pixels.size() << " bytes";
+}
+
+class InvalidImageExtentTest : public GeodeFilterEngineTest,
+                               public testing::WithParamInterface<InvalidImageCase> {};
+
+TEST_P(InvalidImageExtentTest, InvalidPayloadUsesTheBoundedTransparentPath) {
+  using namespace svg::components;
+  const InvalidImageCase& test = GetParam();
+  filter_primitive::Image image;
+  image.imageWidth = test.width;
+  image.imageHeight = test.height;
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(test.pixels);
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  FilterNode node;
+  node.primitive = image;
+  graph.nodes.push_back(node);
+  runGraph(graph, "FilterImageEmptySource");
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DegenerateMalformedAndOverflow, InvalidImageExtentTest,
+    testing::Values(InvalidImageCase{"ZeroWidth", 0, 1, {255, 0, 0, 255}},
+                    InvalidImageCase{"NegativeHeight", 1, -1, {255, 0, 0, 255}},
+                    InvalidImageCase{"ShortPayload", 1, 2, {255, 0, 0, 255}},
+                    InvalidImageCase{"TrailingPayload", 1, 1, {255, 0, 0, 255, 17}},
+                    InvalidImageCase{"OverflowDimensions",
+                                     std::numeric_limits<int>::max(),
+                                     std::numeric_limits<int>::max(),
+                                     {}}),
+    [](const testing::TestParamInfo<InvalidImageCase>& info) { return info.param.name; });
 
 TEST_F(GeodeFilterEngineTest, AcceptedGraphReturnsACompleteOutput) {
   runGraph(MakeGraph(false), "");

@@ -23,6 +23,7 @@
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/generated/FilterImageShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
@@ -35,6 +36,7 @@
 #include "donner/gpu/tests/ComponentTransferSlice.h"
 #include "donner/gpu/tests/DisplacementMapSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
+#include "donner/gpu/tests/FilterImageSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/LightingSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
@@ -156,6 +158,26 @@ TEST_F(VulkanColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
+
+class VulkanFilterImageTest : public VulkanColorMatrixTest,
+                              public testing::WithParamInterface<uint32_t> {};
+
+TEST_P(VulkanFilterImageTest, GeneratedDescriptorMatchesIndependentReference) {
+  const ShaderModuleDescriptor descriptor =
+      gpu::generated::filter_image::BuildDescriptor(ShaderSourceKind::Spirv);
+  ASSERT_THAT(descriptor.spirvWords, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1u));
+  for (size_t sceneIndex = 0; sceneIndex < 3; ++sceneIndex) {
+    SCOPED_TRACE(testing::Message() << "sceneIndex=" << sceneIndex);
+    gpu::tests::CheckFilterImageStorage(
+        *device_, descriptor,
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, GetParam(),
+        sceneIndex);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(SmoothNearestAndPixelated, VulkanFilterImageTest,
+                         testing::Values(0u, 1u, 2u));
 
 TEST_F(VulkanColorMatrixTest, VectorCeilAndExpRunThroughNativeCompiler) {
   const auto module = shader::BuildVectorCeilExpModule();

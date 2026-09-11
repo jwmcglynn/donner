@@ -452,7 +452,7 @@ private:
 
   /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
   /// @param arena Frame resources. @param output Existing image destination.
-  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const wgpu::Texture& output);
+  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const gpu::Texture& output);
 
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.
@@ -536,8 +536,7 @@ private:
   RuntimeComputeProgram dropShadowProgram_;
 
   // feImage placement pipeline (input texture + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> imagePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> imageBindGroupLayout_;
+  RuntimeComputeProgram imageProgram_;
 
   // feTile wraparound pipeline (input + output + uniform).
   RuntimeComputeProgram tileProgram_;
