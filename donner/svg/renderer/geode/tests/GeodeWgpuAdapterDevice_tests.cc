@@ -235,6 +235,22 @@ protected:
   std::unique_ptr<GeodeWgpuAdapterDevice> adapter_;
 };
 
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadDoesNotReadBeyondCallerSpan) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"minimalUpload", gpu::Extent2d{1, 1},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  const std::array<uint8_t, 4> pixel{17, 34, 51, 68};
+  ASSERT_THAT(adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, 256, 1},
+                                     gpu::Extent2d{1, 1}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(17, 34, 51, 68));
+}
+
 TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
   // ----- Every resource kind the pipeline family uses, created through the adapter -----
   const gpu::Texture target = gpu::GetResultOrFail(adapter_->createTexture(
