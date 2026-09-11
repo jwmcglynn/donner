@@ -2867,20 +2867,26 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   api->vkCmdCopyImageToBuffer(state.commandBuffer, texture->image,
                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer->buffer, 1, &copyRegion);
 
-  // Make the transfer write visible to host reads (readback maps the buffer after the
-  // fence): TRANSFER write -> HOST read.
+  // A CopyDst buffer may next be consumed through any other declared BufferUsage in this stream.
+  // Preserve host readback while making the write visible to draw, shader, and transfer commands.
   VkBufferMemoryBarrier bufferBarrier = {};
   bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
   bufferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  bufferBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  bufferBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
+                                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                                VK_ACCESS_TRANSFER_WRITE_BIT;
   bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   bufferBarrier.buffer = buffer->buffer;
   bufferBarrier.offset = 0;
   bufferBarrier.size = VK_WHOLE_SIZE;
+  constexpr VkPipelineStageFlags kBufferConsumerStages =
+      VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
   api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0,
-                            nullptr);
+                            kBufferConsumerStages, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
   return OkStatus();
 }
 
