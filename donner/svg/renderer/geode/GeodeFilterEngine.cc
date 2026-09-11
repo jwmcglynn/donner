@@ -1723,6 +1723,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
           gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
+  // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
     using gpu::shader::programs::TurbulenceBinding;
     turbulenceProgram_ = CreateRuntimeComputeProgram(
