@@ -82,6 +82,20 @@ ShaderStatus AddSetLuminosity(ModuleBuilder& builder) {
       });
 }
 
+ShaderStatus AddSaturationChannel(ModuleBuilder& builder) {
+  return AddFunction(
+      builder, "setSaturationChannel",
+      {{"c", IrType::F32()}, {"low", IrType::F32()}, {"high", IrType::F32()}, {"s", IrType::F32()}},
+      IrType::F32(), [](ErrorLatch& e, FunctionBuilder& fn) {
+        const auto c = e(fn.ref("c"));
+        const auto low = e(fn.ref("low"));
+        const auto high = e(fn.ref("high"));
+        ReturnIf(e, fn, e(Eq(c, low)), LiteralF32(0));
+        ReturnIf(e, fn, e(Eq(c, high)), e(fn.ref("s")));
+        e.ok(fn.returnValue(e(Div(e(Mul(e(Sub(c, low)), e(fn.ref("s")))), e(Sub(high, low))))));
+      });
+}
+
 ShaderStatus AddSetSaturation(ModuleBuilder& builder) {
   return AddFunction(
       builder, "setSaturation", {{"c", IrType::Vec3f()}, {"s", IrType::F32()}}, IrType::Vec3f(),
@@ -90,12 +104,12 @@ ShaderStatus AddSetSaturation(ModuleBuilder& builder) {
         const auto low = e(fn.addLet("low", Extremum(e, BuiltinFn::Min, c)));
         const auto high = e(fn.addLet("high", Extremum(e, BuiltinFn::Max, c)));
         ReturnIf(e, fn, e(Le(high, low)), Vector(e, LiteralF32(0)));
-        const auto scaled =
-            e(Div(e(Mul(e(Sub(c, Vector(e, low))), e(fn.ref("s")))), e(Sub(high, low))));
-        const auto upper = e(CallBuiltin(
-            BuiltinFn::Select, {scaled, Vector(e, e(fn.ref("s"))), e(Eq(c, Vector(e, high)))}));
-        e.ok(fn.returnValue(e(CallBuiltin(
-            BuiltinFn::Select, {upper, Vector(e, LiteralF32(0)), e(Eq(c, Vector(e, low)))}))));
+        std::vector<IrExpr> channels;
+        for (const char* channel : {"x", "y", "z"}) {
+          channels.push_back(e(fn.callFunction(
+              "setSaturationChannel", {e(Swizzle(c, channel)), low, high, e(fn.ref("s"))})));
+        }
+        e.ok(fn.returnValue(e(ConstructVector(IrType::Vec3f(), channels))));
       });
 }
 
@@ -263,6 +277,7 @@ ShaderResult<IrModule> BuildBlendModule() {
   e.ok(AddLuminosity(builder));
   e.ok(AddClipColor(builder));
   e.ok(AddSetLuminosity(builder));
+  e.ok(AddSaturationChannel(builder));
   e.ok(AddSetSaturation(builder));
   e.ok(AddDodge(builder));
   e.ok(AddBurn(builder));
