@@ -32,6 +32,7 @@
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
@@ -72,6 +73,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"component_transfer", 1, &programs::BuildComponentTransferModule},
     {"displacement_map", 1, &programs::BuildDisplacementMapModule},
     {"drop_shadow", 1, &programs::BuildDropShadowModule},
+    {"convolve_matrix", 1, &programs::BuildConvolveMatrixModule},
     {"offset", 1, &programs::BuildOffsetModule},
     {"tile", 1, &programs::BuildTileModule},
     {"turbulence", 1, &programs::BuildTurbulenceModule},

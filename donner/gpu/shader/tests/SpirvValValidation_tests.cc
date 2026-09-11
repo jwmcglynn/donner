@@ -26,6 +26,7 @@
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
@@ -203,6 +204,11 @@ TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
 }
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
   ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
+}
+
+TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildConvolveMatrixModule(),
+                             "convolve_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {

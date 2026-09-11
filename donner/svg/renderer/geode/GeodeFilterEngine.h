@@ -518,9 +518,8 @@ private:
   // feComponentTransfer LUT pipeline (input + output + storage buffer).
   RuntimeComputeProgram componentTransferProgram_;
 
-  // feConvolveMatrix kernel pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> convolveMatrixPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> convolveMatrixBindGroupLayout_;
+  /// Matrix-convolution pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram convolveMatrixProgram_;
 
   // feTurbulence noise pipeline (output + parameter and table storage buffers).
   RuntimeComputeProgram turbulenceProgram_;

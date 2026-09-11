@@ -25,6 +25,7 @@
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
@@ -182,6 +183,11 @@ TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");
+}
+
+TEST(MslXcrunValidation, EmittedConvolveMatrixCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildConvolveMatrixModule(), "convolve_matrix");
 }
 
 TEST(MslXcrunValidation, EmittedMergeCompilesWithMetalCompiler) {

@@ -22,6 +22,7 @@
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
+#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
@@ -35,6 +36,7 @@
 #include "donner/gpu/tests/ColorMatrixSlice.h"
 #include "donner/gpu/tests/ComponentTransferSlice.h"
 #include "donner/gpu/tests/DisplacementMapSlice.h"
+#include "donner/gpu/tests/ConvolveMatrixSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FilterImageSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
@@ -306,6 +308,22 @@ TEST_F(VulkanColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatSt
           *device_, descriptor,
           [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, specular,
           lightType);
+    }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantics) {
+  const ShaderModuleDescriptor descriptor =
+      gpu::generated::convolve_matrix::BuildDescriptor(ShaderSourceKind::Spirv);
+  for (uint32_t edgeMode : {0u, 1u, 2u}) {
+    for (bool preserveAlpha : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "edgeMode=" << edgeMode << " preserveAlpha=" << preserveAlpha);
+      gpu::tests::CheckConvolveMatrixStorage(
+          *device_, descriptor,
+          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, edgeMode,
+          preserveAlpha);
     }
   }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());

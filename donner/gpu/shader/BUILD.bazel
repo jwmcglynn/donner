@@ -111,6 +111,7 @@ donner_cc_library(
         "programs/ComponentTransferBindings.h",
         "programs/CompositeBindings.h",
         "programs/DisplacementMapBindings.h",
+        "programs/ConvolveMatrixBindings.h",
         "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
         "programs/FilterImageBindings.h",
@@ -137,6 +138,7 @@ donner_cc_library(
         "programs/ComponentTransfer.cc",
         "programs/Composite.cc",
         "programs/DisplacementMap.cc",
+        "programs/ConvolveMatrix.cc",
         "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
         "programs/FilterImage.cc",
@@ -160,6 +162,7 @@ donner_cc_library(
         "programs/ComponentTransfer.h",
         "programs/Composite.h",
         "programs/DisplacementMap.h",
+        "programs/ConvolveMatrix.h",
         "programs/DropShadow.h",
         "programs/ErrorLatch.h",
         "programs/FilterColorMatrix.h",
@@ -205,6 +208,7 @@ donner_cc_test(
         "tests/ComponentTransferProgram_tests.cc",
         "tests/CompositeProgram_tests.cc",
         "tests/DisplacementMapProgram_tests.cc",
+        "tests/ConvolveMatrixProgram_tests.cc",
         "tests/DropShadowProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
         "tests/FilterImageProgram_tests.cc",
@@ -235,6 +239,7 @@ donner_cc_test(
         ":checkerboard_artifact",
         ":component_transfer_artifact",
         ":displacement_map_artifact",
+        ":convolve_matrix_artifact",
         ":drop_shadow_artifact",
         ":filter_image_artifact",
         ":float_storage_test_module",
@@ -402,12 +407,27 @@ genrule(
     tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
 )
 
+genrule(
+    name = "convolve_matrix_generated",
+    outs = ["generated/ConvolveMatrixShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) convolve_matrix " +
+          "$(location generated/ConvolveMatrixShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 donner_cc_library(
     name = "lighting_artifacts",
     hdrs = [
         "generated/DiffuseLightingShader.h",
         "generated/SpecularLightingShader.h",
     ],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_artifact",
+    hdrs = ["generated/ConvolveMatrixShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )
