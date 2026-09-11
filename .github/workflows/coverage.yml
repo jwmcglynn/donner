@@ -1006,7 +1006,15 @@ jobs:
           export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
           read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
-          mapfile -t TARGETS < <(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}" --one-per-line)
+          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}")"; then
+            echo "::error::Failed to select remote GPU coverage targets."
+            exit 1
+          fi
+          if [[ -z "${mapped_targets// /}" ]]; then
+            echo "::error::Remote GPU coverage target selection is empty."
+            exit 1
+          fi
+          read -r -a TARGETS <<< "$mapped_targets"
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 

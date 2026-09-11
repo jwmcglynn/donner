@@ -460,8 +460,7 @@ build:ci --skip_incompatible_explicit_targets
 # that overrides this). Opt-in tests use `manual`, while wall-clock targets also
 # use `perf`. Filtering both tags protects affected-target lists and full `//...`
 # fallbacks even when a runner bazelrc changes wildcard expansion or config
-# precedence. See CLAUDE.md ("wall-clock budgets move to nightly perf targets")
-# and 0030.
+# precedence. See CLAUDE.md ("wall-clock budgets move to nightly perf targets").
 test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).

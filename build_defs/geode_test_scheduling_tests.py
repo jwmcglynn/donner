@@ -72,6 +72,18 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn("--strategy=TestRunner=remote", self.coverage_workflow)
         self.assertIn("--remote_local_fallback=false", self.coverage_workflow)
         self.assertIn("-local-gpu-isolated", self.coverage_workflow)
+        self.assertNotIn("mapfile -t TARGETS", remote_job)
+        self.assertNotIn("mapfile -t TARGETS", self.coverage_workflow)
+        self.assertIn(
+            'if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py',
+            remote_job,
+        )
+        self.assertIn(
+            'if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py',
+            self.coverage_workflow,
+        )
+        self.assertEqual(2, remote_job.count('if [[ -z "${'))
+        self.assertIn('if [[ -z "${mapped_targets// /}" ]]; then', self.coverage_workflow)
 
     def test_variant_specs_cannot_pin_a_remote_execution_platform_property(self):
         """Variant specs must not carry `exec_properties`.

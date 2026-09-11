@@ -29,8 +29,11 @@ def main():
     parser.add_argument("labels", nargs="*")
     parser.add_argument("--one-per-line", action="store_true")
     args = parser.parse_args()
+    selected = select_remote_targets(args.labels)
+    if not selected:
+        return
     separator = "\n" if args.one_per_line else " "
-    print(separator.join(select_remote_targets(args.labels)))
+    print(separator.join(selected))
 
 
 if __name__ == "__main__":

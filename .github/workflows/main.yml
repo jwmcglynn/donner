@@ -957,7 +957,15 @@ jobs:
           # execution is unavailable.
           # Intentional word splitting: each Bazel label is one argument.
           # shellcheck disable=SC2086
-          TARGETS="$(python3 tools/ci_remote_gpu_targets.py $TARGETS)"
+          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py $TARGETS)"; then
+            echo "::error::Failed to select remote GPU test targets."
+            exit 1
+          fi
+          if [[ -z "${mapped_targets// /}" ]]; then
+            echo "::error::Remote GPU target selection became empty."
+            exit 1
+          fi
+          TARGETS="$mapped_targets"
           tools/ci_bazel_test.sh "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test/console.log" \
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \

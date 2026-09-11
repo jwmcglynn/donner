@@ -1,5 +1,8 @@
 """Tests for exact remote GPU wrapper selection."""
 
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 from tools.ci_remote_gpu_targets import REMOTE_TARGETS, select_remote_targets
@@ -20,8 +23,53 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
     def test_empty_selection_stays_empty(self):
         self.assertEqual([], select_remote_targets([]))
 
+    def test_empty_cli_selection_emits_no_array_element(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                Path(__file__).with_name("ci_remote_gpu_targets.py"),
+                "--one-per-line",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", result.stdout)
+
     def test_full_fallback_pattern_is_left_for_bazel_tag_selection(self):
         self.assertEqual(["//..."], select_remote_targets(["//..."]))
+
+    def test_invalid_cli_option_fails(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                Path(__file__).with_name("ci_remote_gpu_targets.py"),
+                "--invalid",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(0, result.returncode)
+
+    def test_nonempty_cli_selection_is_exact(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                Path(__file__).with_name("ci_remote_gpu_targets.py"),
+                "//donner/editor/tests:rnr_replay_tests_geode",
+                "//other:test",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "//donner/editor/tests:rnr_replay_tests_geode_ci_remote //other:test\n",
+            result.stdout,
+        )
 
     def test_only_exact_opted_in_variants_are_replaced(self):
         self.assertEqual(
