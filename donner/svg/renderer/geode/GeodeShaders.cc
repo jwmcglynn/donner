@@ -7,7 +7,6 @@
 #include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterConvolveMatrixWgsl.h"
 #include "embed_resources/FilterImageWgsl.h"
-#include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
@@ -87,12 +86,6 @@ wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device) 
   return createShaderFromWgsl(device, "FilterConvolveMatrix",
                               donner::embedded::kFilterConvolveMatrixWgsl.data(),
                               donner::embedded::kFilterConvolveMatrixWgsl.size());
-}
-
-wgpu::ShaderModule createFilterTurbulenceShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterTurbulence",
-                              donner::embedded::kFilterTurbulenceWgsl.data(),
-                              donner::embedded::kFilterTurbulenceWgsl.size());
 }
 
 wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device) {

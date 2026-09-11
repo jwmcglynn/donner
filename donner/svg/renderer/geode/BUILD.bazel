@@ -753,7 +753,6 @@ donner_cc_library(
         ":filter_blend_wgsl",
         ":filter_convolve_matrix_wgsl",
         ":filter_image_wgsl",
-        ":filter_turbulence_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",

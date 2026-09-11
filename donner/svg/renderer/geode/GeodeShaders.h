@@ -121,23 +121,6 @@ wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device);
 wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device);
 
 /**
- * Compile the feTurbulence compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_turbulence.wgsl` via the `embed_resources()` Bazel rule.
- * The shader generates Perlin noise / fractal noise patterns per the SVG
- * feTurbulence specification.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(1) var<storage, read> params: TurbulenceParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterTurbulenceShader(const wgpu::Device& device);
-
-/**
  * Compile the feImage compute shader for the given device.
  *
  * The WGSL source is embedded at build time from
