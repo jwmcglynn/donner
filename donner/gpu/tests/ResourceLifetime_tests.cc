@@ -218,18 +218,20 @@ protected:
         GetResultOrFail(device_.createTextureView(target_, TextureViewDescriptor{"targetView"}));
     vertexBuffer_ = GetResultOrFail(
         device_.createBuffer(BufferDescriptor{"vertices", 48, BufferUsage::Vertex}));
-    const PipelineLayout layout =
+    // The layout and shader stay alive for the whole test: dropping them here would release them
+    // to the backend at once and pollute the deferred-release expectations below.
+    pipelineLayout_ =
         GetResultOrFail(device_.createPipelineLayout(PipelineLayoutDescriptor{"empty", {}}));
-    const ShaderModule shader = GetResultOrFail(device_.createShaderModule(ShaderModuleDescriptor{
+    shader_ = GetResultOrFail(device_.createShaderModule(ShaderModuleDescriptor{
         "solidFill", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
     pipeline_ = GetResultOrFail(device_.createRenderPipeline(RenderPipelineDescriptor{
-        "solid", layout,
+        "solid", pipelineLayout_,
         VertexState{
-            shader,
+            shader_,
             "vsMain",
             {VertexBufferLayout{
                 8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
-        FragmentState{shader, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+        FragmentState{shader_, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
   }
 
   Buffer createIndexBuffer() {
@@ -255,6 +257,8 @@ protected:
   Texture target_;
   TextureView targetView_;
   Buffer vertexBuffer_;
+  PipelineLayout pipelineLayout_;
+  ShaderModule shader_;
   RenderPipeline pipeline_;
 };
 
