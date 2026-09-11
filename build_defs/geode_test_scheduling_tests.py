@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+import subprocess
+import textwrap
 import unittest
 
 
@@ -84,6 +86,61 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         )
         self.assertEqual(2, remote_job.count('if [[ -z "${'))
         self.assertIn('if [[ -z "${mapped_targets// /}" ]]; then', self.coverage_workflow)
+
+    def test_remote_target_mapping_blocks_propagate_failure_and_empty_output(self):
+        remote_job = self.main_workflow.split("  linux-self-hosted:\n", 1)[1]
+        remote_job = remote_job.split("\n  macos:\n", 1)[0]
+        cases = [
+            (
+                "test",
+                remote_job,
+                'TARGETS="$mapped_targets"',
+                'TARGETS="//donner/editor/tests:rnr_replay_tests_geode"',
+                'printf "%s\\n" "$TARGETS"',
+            ),
+            (
+                "coverage",
+                self.coverage_workflow,
+                'read -r -a TARGETS <<< "$mapped_targets"',
+                'TARGETS=("//donner/editor/tests:rnr_replay_tests_geode")',
+                'printf "%s\\n" "${TARGETS[@]}"',
+            ),
+        ]
+        fake_mapper = r"""
+        python3() {
+          case "$MAPPER_MODE" in
+            fail) return 23 ;;
+            empty) return 0 ;;
+            ok) printf '%s\n' "$MAPPED_TARGETS" ;;
+          esac
+        }
+        """
+        expected = "//donner/editor/tests:rnr_replay_tests_geode_ci_remote"
+        for name, workflow, final_line, setup, print_line in cases:
+            start = workflow.index('          if ! mapped_targets="$(python3')
+            end = workflow.index(final_line, start) + len(final_line)
+            block = textwrap.dedent(workflow[start:end])
+            script = "set -euo pipefail\n" + textwrap.dedent(fake_mapper) + setup + "\n" + block
+            for mode in ("fail", "empty"):
+                with self.subTest(route=name, mode=mode):
+                    result = subprocess.run(
+                        ["bash", "-c", script],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env={**os.environ, "MAPPER_MODE": mode, "MAPPED_TARGETS": expected},
+                    )
+                    self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            with self.subTest(route=name, mode="ok"):
+                result = subprocess.run(
+                    ["bash", "-c", script + "\n" + print_line],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "MAPPER_MODE": "ok", "MAPPED_TARGETS": expected},
+                )
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(expected, result.stdout.strip())
 
     def test_variant_specs_cannot_pin_a_remote_execution_platform_property(self):
         """Variant specs must not carry `exec_properties`.
