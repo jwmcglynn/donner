@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "donner/base/ParseWarningSink.h"
@@ -150,6 +151,61 @@ void ExpectFilterChainMatches(const std::string& primitives, const char* caseNam
   ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(13, 11)));
   ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(13, 11)));
   editor::tests::CompareBitmapToBitmap(actual, expected, caseName,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(FilterLightingParity, OffsetSubregionUsesItsOwnNeighborsAtEveryBorder) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="9" height="8">
+      <defs>
+        <filter id="lighting" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
+                x="2" y="1" width="5" height="5" color-interpolation-filters="sRGB">
+          <feDiffuseLighting x="3" y="2" width="3" height="3" surfaceScale="2.75"
+                             diffuseConstant="0.81" lighting-color="#d1874a">
+            <feDistantLight azimuth="37" elevation="51"/>
+          </feDiffuseLighting>
+        </filter>
+      </defs>
+      <g filter="url(#lighting)">
+        <rect x="2" y="1" width="1" height="1" fill="#173b65" fill-opacity="0.125"/>
+        <rect x="3" y="1" width="1" height="1" fill="#a24d19" fill-opacity="0.75"/>
+        <rect x="4" y="1" width="1" height="1" fill="#256e91" fill-opacity="0.375"/>
+        <rect x="5" y="1" width="1" height="1" fill="#7932b0" fill-opacity="1"/>
+        <rect x="6" y="1" width="1" height="1" fill="#d3a127" fill-opacity="0.5"/>
+        <rect x="2" y="2" width="1" height="1" fill="#6c2448" fill-opacity="0.875"/>
+        <rect x="3" y="2" width="1" height="1" fill="#2f9a70" fill-opacity="0.25"/>
+        <rect x="4" y="2" width="1" height="1" fill="#c55231" fill-opacity="0.625"/>
+        <rect x="5" y="2" width="1" height="1" fill="#4384be" fill-opacity="0.125"/>
+        <rect x="6" y="2" width="1" height="1" fill="#8f6325" fill-opacity="0.75"/>
+        <rect x="2" y="3" width="1" height="1" fill="#3158a4" fill-opacity="0.5"/>
+        <rect x="3" y="3" width="1" height="1" fill="#b2376d" fill-opacity="1"/>
+        <rect x="4" y="3" width="1" height="1" fill="#58a32d" fill-opacity="0.375"/>
+        <rect x="5" y="3" width="1" height="1" fill="#c17b42" fill-opacity="0.875"/>
+        <rect x="6" y="3" width="1" height="1" fill="#274f83" fill-opacity="0.25"/>
+        <rect x="2" y="4" width="1" height="1" fill="#9c3f28" fill-opacity="0.625"/>
+        <rect x="3" y="4" width="1" height="1" fill="#347da6" fill-opacity="0.125"/>
+        <rect x="4" y="4" width="1" height="1" fill="#af8d22" fill-opacity="0.75"/>
+        <rect x="5" y="4" width="1" height="1" fill="#58349b" fill-opacity="0.5"/>
+        <rect x="6" y="4" width="1" height="1" fill="#42a561" fill-opacity="1"/>
+        <rect x="2" y="5" width="1" height="1" fill="#bf623c" fill-opacity="0.25"/>
+        <rect x="3" y="5" width="1" height="1" fill="#286f98" fill-opacity="0.875"/>
+        <rect x="4" y="5" width="1" height="1" fill="#92305f" fill-opacity="0.5"/>
+        <rect x="5" y="5" width="1" height="1" fill="#65a82c" fill-opacity="0.125"/>
+        <rect x="6" y="5" width="1" height="1" fill="#d09837" fill-opacity="0.625"/>
+      </g>
+    </svg>)svg";
+  ParseWarningSink warnings;
+  auto gpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+  auto cpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(gpuDocument.hasResult(), testing::IsTrue());
+  ASSERT_THAT(cpuDocument.hasResult(), testing::IsTrue());
+  ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+  svg::RendererGeode gpuRenderer;
+  svg::RendererTinySkia cpuRenderer;
+  gpuRenderer.draw(gpuDocument.result());
+  cpuRenderer.draw(cpuDocument.result());
+  editor::tests::CompareBitmapToBitmap(gpuRenderer.takeSnapshot(), cpuRenderer.takeSnapshot(),
+                                       "lighting_offset_subregion_neighbors",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
