@@ -4,7 +4,7 @@
 indexed UI rendering, native mapping and surfaces, and the browser bridge. The implementation plan
 below contains the work required to complete that cutover.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-10\
+**Updated:** 2026-09-11\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -47,9 +47,11 @@ WebGPU C ABI implementation or a general shader compiler.
 
 ## Next Steps
 
-1. Add the indexed-draw contract and backend support needed by the UI renderer.
-2. Complete the remaining typed filter programs, then replace concrete adapter resource and encoder
-   access in production callers. Preserve the qualified checkerboard and snapshot ownership paths.
+1. Reconcile the open lighting and image changes with the integrated filter programs and complete
+   their CI gates. Finish the indexed-draw, blend, and convolve-matrix candidates with native
+   validation and renderer acceptance.
+2. Replace concrete adapter resource and encoder access in production callers, preserving the
+   qualified typed shaders, checkerboard, and snapshot ownership paths.
 3. Develop mapping, native surfaces, and the browser bridge against the existing runtime contracts
    while resource and UI migration proceeds. Switch platform ownership after those paths qualify.
 
@@ -67,14 +69,26 @@ commits and their fixes together in a focused reviewable change.
       targets below cover these contracts.
 - [ ] Add `setIndexBuffer` and `drawIndexed` to the shared command contract and platform backends.
       Define index formats, index-buffer byte bounds, first-index/base-vertex semantics, and resource
-      retirement. Verify indexed geometry and invalid inputs on all three backends.
+      retirement. Implementation and native conformance tests are prepared; reconciliation and
+      integrated qualification remain open, including texture-copy visibility to index consumers.
+      Verify indexed geometry and invalid inputs on all three backends.
 
 ### Typed shaders and production selection
 
-- [ ] Complete blur qualification in [PR #1142](https://github.com/jwmcglynn/donner/pull/1142), then
-      integrate drop-shadow, component-transfer, displacement, blend, image, convolve-matrix,
-      diffuse/specular lighting and turbulence. Use the production inventory to find additional
-      live raw shader families.
+- [x] Gaussian/box blur, drop-shadow, component transfer, displacement, and turbulence use typed
+      runtime shader programs. The merged changes include native/compiler validation and renderer
+      coverage: [blur #1142](https://github.com/jwmcglynn/donner/pull/1142),
+      [shadow #1146](https://github.com/jwmcglynn/donner/pull/1146),
+      [component transfer #1148](https://github.com/jwmcglynn/donner/pull/1148),
+      [displacement #1149](https://github.com/jwmcglynn/donner/pull/1149), and
+      [turbulence #1151](https://github.com/jwmcglynn/donner/pull/1151).
+- [ ] Complete [lighting #1150](https://github.com/jwmcglynn/donner/pull/1150) and
+      [image #1152](https://github.com/jwmcglynn/donner/pull/1152). Reconcile their shared engine,
+      shader catalog, and build files against the merged programs; qualify the image upload repair
+      under the sanitizer configuration that exposed it.
+- [ ] Integrate and qualify the prepared blend and convolve-matrix programs. Preserve causal
+      regression evidence, native execution, and strict pixel acceptance. Use the production
+      inventory to find additional live raw shader families.
 - [x] Checkerboard uses a typed program and runtime-device constructor, preserving device-pixel
       origin, DPR, clipping and both compositing modes.
       [PR #1140](https://github.com/jwmcglynn/donner/pull/1140) is merged with native pixel validation.
