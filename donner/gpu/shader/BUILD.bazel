@@ -121,6 +121,7 @@ donner_cc_library(
         "programs/SnapshotUnpremultiplyBindings.h",
         "programs/SubregionClipBindings.h",
         "programs/TileBindings.h",
+        "programs/TurbulenceBindings.h",
     ],
     visibility = ["//visibility:public"],
 )
@@ -146,6 +147,7 @@ donner_cc_library(
         "programs/SolidFill.cc",
         "programs/SubregionClip.cc",
         "programs/Tile.cc",
+        "programs/Turbulence.cc",
     ],
     hdrs = [
         "programs/Checkerboard.h",
@@ -167,6 +169,7 @@ donner_cc_library(
         "programs/SolidFill.h",
         "programs/SubregionClip.h",
         "programs/Tile.h",
+        "programs/Turbulence.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -217,6 +220,7 @@ donner_cc_test(
         "tests/SpirvEmitter_tests.cc",
         "tests/SubregionClipProgram_tests.cc",
         "tests/TileProgram_tests.cc",
+        "tests/TurbulenceProgram_tests.cc",
         "tests/WgslEmitter_tests.cc",
     ],
     deps = [
@@ -231,6 +235,7 @@ donner_cc_test(
         ":shader",
         ":spirv_emitter",
         ":stage_io_test_modules",
+        ":turbulence_artifact",
         ":wgsl_emitter",
         "//donner/base:base_test_utils",
         "//donner/gpu:gpu_test_utils",
@@ -419,6 +424,21 @@ genrule(
 donner_cc_library(
     name = "displacement_map_artifact",
     hdrs = ["generated/DisplacementMapShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "turbulence_generated",
+    outs = ["generated/TurbulenceShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) turbulence " +
+          "$(location generated/TurbulenceShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "turbulence_artifact",
+    hdrs = ["generated/TurbulenceShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )

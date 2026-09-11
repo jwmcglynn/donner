@@ -36,6 +36,7 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -261,6 +262,11 @@ TEST(MslXcrunValidation, EmittedComponentTransferComputeCompilesWithMetalCompile
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildComponentTransferModule(), "component_transfer");
+}
+
+TEST(MslXcrunValidation, EmittedTurbulenceComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildTurbulenceModule(), "turbulence");
 }
 
 TEST(MslXcrunValidation, EmittedDropShadowComputeCompilesWithMetalCompiler) {

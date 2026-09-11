@@ -108,6 +108,7 @@ donner_cc_test(
         "//donner/gpu:float_texture_slice",
         "//donner/gpu:morphology_slice",
         "//donner/gpu:tile_slice",
+        "//donner/gpu:turbulence_slice",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
         "//donner/gpu/shader:component_transfer_artifact",
@@ -117,6 +118,7 @@ donner_cc_test(
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:turbulence_artifact",
         "@com_google_gtest//:gtest_main",
     ],
 )

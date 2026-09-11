@@ -340,6 +340,7 @@ donner_cc_library(
         ":filter_morphology_wgsl",
         ":filter_resolve_wgsl",
         ":filter_tile_wgsl",
+        ":filter_turbulence_wgsl",
         ":flood_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_counters",
@@ -676,12 +677,19 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feTurbulence compute shader (Perlin noise generator).
+genrule(
+    name = "filter_turbulence_generated",
+    outs = ["generated/filter_turbulence.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) turbulence " +
+          "$(location generated/filter_turbulence.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_turbulence_wgsl",
     header_output = "embed_resources/FilterTurbulenceWgsl.h",
     resources = {
-        "kFilterTurbulenceWgsl": "shaders/filter_turbulence.wgsl",
+        "kFilterTurbulenceWgsl": "generated/filter_turbulence.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -783,7 +791,6 @@ donner_cc_library(
         ":filter_diffuse_lighting_wgsl",
         ":filter_image_wgsl",
         ":filter_specular_lighting_wgsl",
-        ":filter_turbulence_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",

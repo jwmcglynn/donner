@@ -520,9 +520,8 @@ private:
   ScopedWgpuHandle<wgpu::ComputePipeline> convolveMatrixPipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> convolveMatrixBindGroupLayout_;
 
-  // feTurbulence noise pipeline (output + storage buffer, no input texture).
-  ScopedWgpuHandle<wgpu::ComputePipeline> turbulencePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> turbulenceBindGroupLayout_;
+  // feTurbulence noise pipeline (output + parameter and table storage buffers).
+  RuntimeComputeProgram turbulenceProgram_;
 
   // feDisplacementMap pipeline (two inputs + output + uniform).
   RuntimeComputeProgram displacementMapProgram_;

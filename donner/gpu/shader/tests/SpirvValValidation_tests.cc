@@ -37,6 +37,7 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -252,6 +253,11 @@ TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildComponentTransferModule(),
                              "component_transfer.spv");
+}
+
+TEST(SpirvValValidation, EmittedTurbulenceComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildTurbulenceModule(), "turbulence.spv");
 }
 
 TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {

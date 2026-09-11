@@ -22,6 +22,7 @@
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -35,6 +36,7 @@
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
 #include "donner/gpu/tests/TileSlice.h"
+#include "donner/gpu/tests/TurbulenceSlice.h"
 
 namespace donner::gpu::metal::tests {
 namespace {
@@ -362,6 +364,13 @@ TEST_F(MetalColorMatrixTest, MorphologyPreservesErosionDilationAndFloatStorage) 
 TEST_F(MetalColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBoundaries) {
   gpu::tests::CheckComponentTransferStorage(
       *device_, gpu::generated::component_transfer::BuildDescriptor(ShaderSourceKind::Msl),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, TurbulencePreservesSeedsOctavesTransformsAndStitching) {
+  gpu::tests::CheckTurbulenceStorage(
+      *device_, gpu::generated::turbulence::BuildDescriptor(ShaderSourceKind::Msl),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }

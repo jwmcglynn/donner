@@ -32,6 +32,7 @@
 #include "donner/gpu/shader/programs/OffsetBindings.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/gpu/shader/programs/TileBindings.h"
+#include "donner/gpu/shader/programs/TurbulenceBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -49,6 +50,7 @@
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterResolveWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
+#include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
@@ -790,6 +792,9 @@ struct TurbulenceTables {
   float gradY[4 * kTurbTableSize];  // Gradient Y: [channel * 514 + index].
 };
 
+static_assert(sizeof(TurbulenceParams) == 48);
+static_assert(sizeof(TurbulenceTables) == 18504);
+
 // Park-Miller LCG constants matching tiny-skia/resvg.
 constexpr long kRandM = 2147483647;  // 2^31 - 1  // NOLINT
 constexpr long kRandA = 16807;       // NOLINT
@@ -879,6 +884,37 @@ void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
       tables.gradY[ch * kTurbTableSize + idx] = static_cast<float>(gradient[ch][idx][1]);
     }
   }
+}
+
+TurbulenceParams makeTurbulenceParams(
+    uint32_t width, uint32_t height,
+    const svg::components::filter_primitive::Turbulence& primitive,
+    const Transform2d& deviceFromFilter, double baseFrequencyX, double baseFrequencyY,
+    double seed) {
+  TurbulenceParams params{};
+  params.baseFreqX = static_cast<float>(baseFrequencyX);
+  params.baseFreqY = static_cast<float>(baseFrequencyY);
+  params.numOctaves = primitive.numOctaves;
+  params.seed = boundedRoundedInt32(seed, std::numeric_limits<int32_t>::min(),
+                                    std::numeric_limits<int32_t>::max());
+  params.stitchTiles = primitive.stitchTiles ? 1u : 0u;
+  params.typeFlag =
+      primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
+  params.tileWidth = static_cast<float>(width);
+  params.tileHeight = static_cast<float>(height);
+
+  const double determinant = deviceFromFilter.determinant();
+  if (NearZero(determinant, 1e-12)) {
+    params.filterFromDeviceA = 1.0f;
+    params.filterFromDeviceD = 1.0f;
+  } else {
+    const Transform2d filterFromDevice = deviceFromFilter.inverse();
+    params.filterFromDeviceA = static_cast<float>(filterFromDevice.data[0]);
+    params.filterFromDeviceB = static_cast<float>(filterFromDevice.data[2]);
+    params.filterFromDeviceC = static_cast<float>(filterFromDevice.data[1]);
+    params.filterFromDeviceD = static_cast<float>(filterFromDevice.data[3]);
+  }
+  return params;
 }
 
 /// Uniform buffer layout matching the WGSL `DisplacementParams` struct.
@@ -1899,46 +1935,18 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     convolveMatrixPipeline_.reset(dev.createComputePipeline(cpDesc));
   }
 
-  // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
-    wgpu::BindGroupLayoutEntry entries[3]{};
-
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[0].storageTexture.format = kFormat;
-    entries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[1].buffer.minBindingSize = sizeof(TurbulenceParams);
-
-    entries[2].binding = 2;
-    entries[2].visibility = wgpu::ShaderStage::Compute;
-    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[2].buffer.minBindingSize = sizeof(TurbulenceTables);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterTurbulenceBGL");
-    bglDesc.entryCount = 3;
-    bglDesc.entries = entries;
-    turbulenceBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterTurbulencePipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {turbulenceBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterTurbulenceShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterTurbulencePipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    turbulencePipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::TurbulenceBinding;
+    turbulenceProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterTurbulence",
+        EmbeddedWgsl(donner::embedded::kFilterTurbulenceWgsl),
+        gpu::shader::programs::kTurbulenceEntryPoint,
+        {StorageOutputEntry(static_cast<uint32_t>(TurbulenceBinding::OutputTexture)),
+         {static_cast<uint32_t>(TurbulenceBinding::Params), gpu::ShaderStage::Compute,
+          gpu::BindingType::ReadOnlyStorageBuffer},
+         {static_cast<uint32_t>(TurbulenceBinding::Tables), gpu::ShaderStage::Compute,
+          gpu::BindingType::ReadOnlyStorageBuffer}},
+        gpu::shader::programs::kTurbulenceWorkgroupSize);
   }
 
   {
@@ -3778,7 +3786,6 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
     FilterResourceArena& arena, uint32_t width, uint32_t height,
     const svg::components::filter_primitive::Turbulence& primitive,
     const Transform2d& deviceFromFilter) {
-  const wgpu::Device& dev = device_.device();
   const double baseFrequencyX = boundedTurbulenceFrequency(primitive.baseFrequencyX);
   const double baseFrequencyY = boundedTurbulenceFrequency(primitive.baseFrequencyY);
   const double seed = boundedTurbulenceSeed(primitive.seed);
@@ -3790,100 +3797,54 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
                                                 "FilterTurbulenceTransparent");
   }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterTurbulenceOutput");
-  if (!output) {
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterTurbulenceOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
-  TurbulenceParams params{};
-  params.baseFreqX = static_cast<float>(baseFrequencyX);
-  params.baseFreqY = static_cast<float>(baseFrequencyY);
-  params.numOctaves = primitive.numOctaves;
-  params.seed = boundedRoundedInt32(seed, std::numeric_limits<int32_t>::min(),
-                                    std::numeric_limits<int32_t>::max());
-  params.stitchTiles = primitive.stitchTiles ? 1u : 0u;
-  params.typeFlag =
-      primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
-  // Tile dimensions in user space (for stitchTiles).
-  params.tileWidth = static_cast<float>(width);
-  params.tileHeight = static_cast<float>(height);
-
-  const double determinant = deviceFromFilter.determinant();
-  if (NearZero(determinant, 1e-12)) {
-    params.filterFromDeviceA = 1.0f;
-    params.filterFromDeviceB = 0.0f;
-    params.filterFromDeviceC = 0.0f;
-    params.filterFromDeviceD = 1.0f;
-  } else {
-    const Transform2d filterFromDevice = deviceFromFilter.inverse();
-    params.filterFromDeviceA = static_cast<float>(filterFromDevice.data[0]);
-    params.filterFromDeviceB = static_cast<float>(filterFromDevice.data[2]);
-    params.filterFromDeviceC = static_cast<float>(filterFromDevice.data[1]);
-    params.filterFromDeviceD = static_cast<float>(filterFromDevice.data[3]);
-  }
+  const TurbulenceParams params = makeTurbulenceParams(
+      width, height, primitive, deviceFromFilter, baseFrequencyX, baseFrequencyY, seed);
 
   // Generate permutation + gradient tables from the seed.
   TurbulenceTables tables{};
   generateTurbulenceTables(seed, tables);
 
-  // Upload params as storage buffer.
-  wgpu::BufferDescriptor bufDesc{};
-  bufDesc.label = wgpuLabel("TurbulenceParamsStorage");
-  bufDesc.size = sizeof(TurbulenceParams);
-  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  bufDesc.mappedAtCreation = false;
-  wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
-  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
-  device_.countBufferWrite(sizeof(params));
-
-  // Upload tables as storage buffer.
-  wgpu::BufferDescriptor tablesBufDesc{};
-  tablesBufDesc.label = wgpuLabel("TurbulenceTablesStorage");
-  tablesBufDesc.size = sizeof(TurbulenceTables);
-  tablesBufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  tablesBufDesc.mappedAtCreation = false;
-  wgpu::Buffer tablesBuffer = arena.createBuffer(dev, tablesBufDesc);
-  device_.queue().writeBuffer(tablesBuffer, 0, &tables, sizeof(tables));
-  device_.countBufferWrite(sizeof(tables));
-
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = outputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].buffer = paramsBuffer;
-  bgEntries[1].offset = 0;
-  bgEntries[1].size = sizeof(TurbulenceParams);
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = tablesBuffer;
-  bgEntries[2].offset = 0;
-  bgEntries[2].size = sizeof(TurbulenceTables);
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterTurbulenceBindGroup");
-  bgDesc.layout = turbulenceBindGroupLayout_.get();
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterTurbulencePass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(turbulencePipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  const auto bytesOf = [](const auto& value) {
+    return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+  };
+  const gpu::TextureView* outputView =
+      arena.createRuntimeTextureView(*output, "FilterTurbulenceOutputView");
+  const FilterResourceCache::RuntimeParameterSlot paramsSlot =
+      arena.writeRuntimeParameterSlot(bytesOf(params));
+  const FilterResourceCache::RuntimeParameterSlot tablesSlot =
+      arena.writeRuntimeParameterSlot(bytesOf(tables));
+  if (outputView == nullptr || paramsSlot.buffer == nullptr || tablesSlot.buffer == nullptr) {
+    return {};
+  }
+  using gpu::shader::programs::TurbulenceBinding;
+  const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
+      turbulenceProgram_.bindGroupLayout,
+      {{static_cast<uint32_t>(TurbulenceBinding::OutputTexture),
+        gpu::TextureViewBinding{*outputView}},
+       {static_cast<uint32_t>(TurbulenceBinding::Params),
+        gpu::BufferBinding{*paramsSlot.buffer, paramsSlot.offset, sizeof(params)}},
+       {static_cast<uint32_t>(TurbulenceBinding::Tables),
+        gpu::BufferBinding{*tablesSlot.buffer, tablesSlot.offset, sizeof(tables)}}},
+      "FilterTurbulenceBindGroup");
+  if (bindGroup == nullptr) {
+    return {};
+  }
+  constexpr uint32_t kWorkgroup = gpu::shader::programs::kTurbulenceWorkgroupSize;
+  if (!arena.dispatchComputePass("FilterTurbulencePass", turbulenceProgram_.pipeline, *bindGroup,
+                                 (width + kWorkgroup - 1) / kWorkgroup,
+                                 (height + kWorkgroup - 1) / kWorkgroup)) {
+    return {};
+  }
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
