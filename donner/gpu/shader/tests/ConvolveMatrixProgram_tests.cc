@@ -59,6 +59,13 @@ TEST(ConvolveMatrixProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitConvolveMatrixSpirv(), testing::Eq(EmitConvolveMatrixSpirv()));
 }
 
+TEST(ConvolveMatrixProgramTests, NativeEmittersAcceptPortableParameterMemberNames) {
+  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
+  EXPECT_THAT(EmitSpirv(module.result()), HasShaderResult());
+}
+
 TEST(ConvolveMatrixProgramTests, GeneratedDescriptorsPreserveTheTypedInterface) {
   ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
   ASSERT_THAT(module, HasShaderResult());

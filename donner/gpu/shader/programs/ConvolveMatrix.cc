@@ -81,7 +81,7 @@ ShaderResult<IrModule> BuildConvolveMatrixModule() {
        IrType::Member{"targetX", IrType::I32()}, IrType::Member{"targetY", IrType::I32()},
        IrType::Member{"divisor", IrType::F32()}, IrType::Member{"bias", IrType::F32()},
        IrType::Member{"edgeMode", IrType::U32()}, IrType::Member{"preserveAlpha", IrType::U32()},
-       IrType::Member{"kernel", kernelType}}));
+       IrType::Member{"coefficients", kernelType}}));
   e.ok(builder.addTexture2d(0, BindingIndex(ConvolveMatrixBinding::InputTexture), "inputTexture"));
   e.ok(builder.addWriteOnlyStorageTexture2d(0, BindingIndex(ConvolveMatrixBinding::OutputTexture),
                                             "outputTexture", StorageTextureFormat::Rgba32Float));
@@ -132,7 +132,7 @@ ShaderResult<IrModule> BuildConvolveMatrixModule() {
                                  e(Member(params, "orderX")))),
                            e(Sub(e(Sub(e(Member(params, "orderX")), LiteralI32(1))), i))))));
   const IrExpr coefficient =
-      e(fn.addLet("coefficient", e(Index(e(Member(params, "kernel")), kernelIndex))));
+      e(fn.addLet("coefficient", e(Index(e(Member(params, "coefficients")), kernelIndex))));
   const IrExpr preserveAlpha = e(Eq(e(Member(params, "preserveAlpha")), LiteralU32(1)));
   e.ok(fn.beginIf(e(And(preserveAlpha, e(Gt(e(Swizzle(source, "w")), LiteralF32(0.0f)))))));
   e.ok(fn.assign(sumRgb,
