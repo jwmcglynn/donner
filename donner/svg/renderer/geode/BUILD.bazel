@@ -340,7 +340,6 @@ donner_cc_library(
         ":filter_morphology_wgsl",
         ":filter_resolve_wgsl",
         ":filter_tile_wgsl",
-        ":filter_turbulence_wgsl",
         ":flood_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_counters",
@@ -354,6 +353,7 @@ donner_cc_library(
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
         "//donner/gpu/shader:program_bindings",
+        "//donner/gpu/shader:turbulence_artifact",
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -673,23 +673,6 @@ embed_resources(
     header_output = "embed_resources/FilterConvolveMatrixWgsl.h",
     resources = {
         "kFilterConvolveMatrixWgsl": "shaders/filter_convolve_matrix.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-genrule(
-    name = "filter_turbulence_generated",
-    outs = ["generated/filter_turbulence.wgsl"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) turbulence " +
-          "$(location generated/filter_turbulence.wgsl)",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-embed_resources(
-    name = "filter_turbulence_wgsl",
-    header_output = "embed_resources/FilterTurbulenceWgsl.h",
-    resources = {
-        "kFilterTurbulenceWgsl": "generated/filter_turbulence.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )

@@ -19,6 +19,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
@@ -50,7 +51,6 @@
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterResolveWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
-#include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
@@ -1312,28 +1312,24 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
   pass.reset();
 }
 
-/// Builds a compute pipeline from build-time emitted \p wgsl and \p layoutEntries. Returns a
-/// program whose handles are all null when any step fails, so a caller checks the pipeline once
-/// instead of each step.
+/// Builds a compute pipeline from a complete generated \p descriptor and \p layoutEntries.
+/// Returns a program whose handles are all null when the descriptor does not contain exactly one
+/// compute entry point or any build step fails, so a caller checks the pipeline once instead of
+/// each step.
 ///
 /// @param runtime Device to create through.
-/// @param name Debug label stem for the objects created.
-/// @param wgsl Emitted source of the program.
-/// @param entryPoint Name of the compute entry point the source declares.
+/// @param descriptor Build-generated source and interface metadata.
 /// @param layoutEntries Bind group 0 entries, matching what the program declares.
-/// @param workgroupSize Size the entry point declares, along x and y.
 RuntimeComputeProgram CreateRuntimeComputeProgram(
-    gpu::Device& runtime, std::string_view name, std::string_view wgsl, std::string_view entryPoint,
-    std::vector<gpu::BindGroupLayoutEntry> layoutEntries, uint32_t workgroupSize) {
-  const RcString entryPointName{entryPoint};
-  const gpu::WorkgroupSize workgroup{workgroupSize, workgroupSize, 1};
+    gpu::Device& runtime, const gpu::ShaderModuleDescriptor& descriptor,
+    std::vector<gpu::BindGroupLayoutEntry> layoutEntries) {
+  if (descriptor.computeEntryPoints.size() != 1) {
+    return {};
+  }
+  const RcString& name = descriptor.label;
+  const gpu::ComputeEntryPointInfo& entryPoint = descriptor.computeEntryPoints.front();
 
-  gpu::Result<gpu::ShaderModule> shaderModule = runtime.createShaderModule(
-      gpu::ShaderModuleDescriptor{RcString(name),
-                                  RcString(wgsl),
-                                  gpu::ShaderSourceKind::Wgsl,
-                                  {},
-                                  {gpu::ComputeEntryPointInfo{entryPointName, workgroup}}});
+  gpu::Result<gpu::ShaderModule> shaderModule = runtime.createShaderModule(descriptor);
   if (!shaderModule.hasResult()) {
     return {};
   }
@@ -1350,7 +1346,7 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   gpu::Result<gpu::ComputePipeline> pipeline =
       runtime.createComputePipeline(gpu::ComputePipelineDescriptor{
           RcString(name), pipelineLayout.result(),
-          gpu::ComputeState{shaderModule.result(), entryPointName}, workgroup});
+          gpu::ComputeState{shaderModule.result(), entryPoint.name}, entryPoint.workgroupSize});
   if (!pipeline.hasResult()) {
     return {};
   }
@@ -1361,6 +1357,24 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   program.pipelineLayout = std::move(pipelineLayout).result();
   program.pipeline = std::move(pipeline).result();
   return program;
+}
+
+/// Builds a compute pipeline from build-time emitted \p wgsl and its transcribed interface.
+/// @param runtime Device to create through. @param name Debug label stem.
+/// @param wgsl Emitted WGSL source. @param entryPoint Compute entry point name.
+/// @param layoutEntries Bind group 0 entries. @param workgroupSize Entry point size on x and y.
+RuntimeComputeProgram CreateRuntimeComputeProgram(
+    gpu::Device& runtime, std::string_view name, std::string_view wgsl, std::string_view entryPoint,
+    std::vector<gpu::BindGroupLayoutEntry> layoutEntries, uint32_t workgroupSize) {
+  const gpu::WorkgroupSize workgroup{workgroupSize, workgroupSize, 1};
+  return CreateRuntimeComputeProgram(
+      runtime,
+      gpu::ShaderModuleDescriptor{RcString(name),
+                                  RcString(wgsl),
+                                  gpu::ShaderSourceKind::Wgsl,
+                                  {},
+                                  {gpu::ComputeEntryPointInfo{RcString(entryPoint), workgroup}}},
+      std::move(layoutEntries));
 }
 
 /// The write-only storage-texture entry a filter program declares for its
@@ -1938,15 +1952,13 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::TurbulenceBinding;
     turbulenceProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterTurbulence",
-        EmbeddedWgsl(donner::embedded::kFilterTurbulenceWgsl),
-        gpu::shader::programs::kTurbulenceEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::turbulence::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {StorageOutputEntry(static_cast<uint32_t>(TurbulenceBinding::OutputTexture)),
          {static_cast<uint32_t>(TurbulenceBinding::Params), gpu::ShaderStage::Compute,
           gpu::BindingType::ReadOnlyStorageBuffer},
          {static_cast<uint32_t>(TurbulenceBinding::Tables), gpu::ShaderStage::Compute,
-          gpu::BindingType::ReadOnlyStorageBuffer}},
-        gpu::shader::programs::kTurbulenceWorkgroupSize);
+          gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
   {
