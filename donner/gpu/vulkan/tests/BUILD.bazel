@@ -208,6 +208,31 @@ donner_cc_test(
     ],
 )
 
+# Indexed draws on a real device: the shared indexed scene (both index formats,
+# nonzero binding offsets and first indices, a negative base vertex, instancing
+# and a mid-pass scissor) compared byte-for-byte against the expected image, plus
+# an index range the encoder refuses before any command buffer exists. Like the
+# compute slice this compares against a host-computed image whose edges are all
+# pixel-aligned, so no driver is pinned.
+donner_cc_test(
+    name = "vulkan_indexed_draw_tests",
+    srcs = ["VulkanIndexedDraw_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:vertex_input_slice",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:spirv_emitter",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # The allocator calls a supplied entry-point table; these tests inject that
 # table to verify failure unwinding without opening a Vulkan loader or device.
 donner_cc_test(

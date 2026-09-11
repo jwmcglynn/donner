@@ -484,6 +484,18 @@ TEST_F(MetalSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(MetalSolidFillTest, IndexedQuadsWithOffsetsInstancingAndScissorMatchTheExpectedImage) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckIndexedDrawScene(
+      *device_,
+      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
 TEST_F(MetalSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
   const auto module = gpu::tests::BuildVertexInputModule();
   ASSERT_FALSE(module.hasError()) << module.error();

@@ -22,6 +22,7 @@
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SubRectangleCopyScene.h"
+#include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -632,6 +633,40 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FloatTextureDispatchPreservesSubBytePrecisio
                                   gpu::shader::ComputeEntryPointsOf(module.result())},
       [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
         auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      });
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests,
+       IndexedQuadsWithOffsetsInstancingAndScissorMatchTheExpectedImage) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckIndexedDrawScene(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"attributes", RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        constexpr uint64_t kReadbackBytes = 256 * 12;
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, kReadbackBytes);
         if (mapping.hasError()) {
           return std::move(mapping).error();
         }

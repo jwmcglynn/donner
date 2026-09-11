@@ -33,6 +33,11 @@ Status RenderPassEncoder::setVertexBuffer(uint32_t slot, const Buffer& buffer,
   return encoder_->passSetVertexBuffer(slot, buffer, offsetBytes);
 }
 
+Status RenderPassEncoder::setIndexBuffer(const Buffer& buffer, IndexFormat format,
+                                         uint64_t offsetBytes) {
+  return encoder_->passSetIndexBuffer(buffer, format, offsetBytes);
+}
+
 Status RenderPassEncoder::setScissorRect(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
   return encoder_->passSetScissorRect(x, y, width, height);
 }
@@ -45,6 +50,13 @@ Status RenderPassEncoder::setViewport(float x, float y, float width, float heigh
 Status RenderPassEncoder::draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex,
                                uint32_t firstInstance) {
   return encoder_->passDraw(vertexCount, instanceCount, firstVertex, firstInstance);
+}
+
+Status RenderPassEncoder::drawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                                      uint32_t firstIndex, int32_t baseVertex,
+                                      uint32_t firstInstance) {
+  return encoder_->passDrawIndexed(indexCount, instanceCount, firstIndex, baseVertex,
+                                   firstInstance);
 }
 
 Status RenderPassEncoder::end() {
@@ -93,6 +105,7 @@ std::optional<GpuError> CommandEncoder::checkRecordable(PassKind requiredPass) {
 void CommandEncoder::resetPassBindings() {
   currentPipeline_.reset();
   boundVertexBuffers_.fill(std::nullopt);
+  boundIndexBuffer_.reset();
   boundBindGroups_.fill(std::nullopt);
   passAttachmentTextures_.clear();
 }
@@ -327,8 +340,9 @@ Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
     }
   }
 
-  currentPipeline_ = BoundPipeline{record.result()->descriptor.vertex.buffers,
-                                   record.result()->bindGroupLayoutIds};
+  currentPipeline_ =
+      BoundPipeline{record.result()->descriptor.vertex.buffers, record.result()->bindGroupLayoutIds,
+                    record.result()->descriptor.topology};
   currentPipeline_->bufferRequirements.assign(record.result()->bufferRequirements.begin(),
                                               record.result()->bufferRequirements.end());
   commands_.push_back(
@@ -455,6 +469,52 @@ Status CommandEncoder::passSetVertexBuffer(uint32_t slot, const Buffer& buffer,
   return OkStatus();
 }
 
+Status CommandEncoder::passSetIndexBuffer(const Buffer& buffer, IndexFormat format,
+                                          uint64_t offsetBytes) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
+    return fail(std::move(*error));
+  }
+  auto record = device_->resolve(device_->buffers_, buffer, BufferTag::kName);
+  if (record.hasError()) {
+    return fail(std::move(record).error());
+  }
+  if (!HasAllFlags(record.result()->descriptor.usage, BufferUsage::Index)) {
+    return fail(Err(GpuErrorType::UsageMismatch,
+                    std::format("setIndexBuffer: buffer \"{}\" lacks the Index usage",
+                                record.result()->descriptor.label.str())));
+  }
+  if (!IsKnownEnumValue(format)) {
+    return fail(
+        Err(GpuErrorType::InvalidDescriptor,
+            std::format("setIndexBuffer: unknown index format {}", static_cast<uint32_t>(format))));
+  }
+  if (!device_->supportsFullIndexRange(format)) {
+    std::ostringstream formatName;
+    formatName << format;
+    return fail(Err(GpuErrorType::Unsupported,
+                    std::format("setIndexBuffer: this device cannot honor the full {} index range",
+                                formatName.str())));
+  }
+  const uint32_t indexBytes = IndexFormatByteSize(format);
+  if (offsetBytes % indexBytes != 0) {
+    return fail(Err(GpuErrorType::InvalidDescriptor,
+                    std::format("setIndexBuffer: offsetBytes {} is not a multiple of the {}-byte "
+                                "index width",
+                                offsetBytes, indexBytes)));
+  }
+  if (offsetBytes > record.result()->descriptor.byteSize) {
+    return fail(Err(GpuErrorType::OutOfBounds,
+                    std::format("setIndexBuffer: offsetBytes {} exceeds buffer \"{}\" size {}",
+                                offsetBytes, record.result()->descriptor.label.str(),
+                                record.result()->descriptor.byteSize)));
+  }
+
+  boundIndexBuffer_ = BoundIndexBuffer{format, record.result()->descriptor.byteSize - offsetBytes};
+  commands_.push_back(SetIndexBufferCommand{
+      ResourceIdentity{buffer.slotIndex(), buffer.generation()}, format, offsetBytes});
+  return OkStatus();
+}
+
 Status CommandEncoder::passSetScissorRect(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
   if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
@@ -500,36 +560,98 @@ Status CommandEncoder::passDraw(uint32_t vertexCount, uint32_t instanceCount, ui
   if (!currentPipeline_) {
     return fail(Err(GpuErrorType::InvalidState, "draw: no pipeline is set"));
   }
+  if (Status slots = validateVertexSlots("draw", firstVertex, vertexCount, firstInstance,
+                                         instanceCount, /*checkVertexSlots=*/true);
+      slots.hasError()) {
+    return slots;
+  }
+  if (Status bindGroupStatus = validateBoundBindGroups("draw"); bindGroupStatus.hasError()) {
+    return bindGroupStatus;
+  }
 
+  commands_.push_back(DrawCommand{vertexCount, instanceCount, firstVertex, firstInstance});
+  return OkStatus();
+}
+
+Status CommandEncoder::passDrawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                                       uint32_t firstIndex, int32_t baseVertex,
+                                       uint32_t firstInstance) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
+    return fail(std::move(*error));
+  }
+  if (!currentPipeline_) {
+    return fail(Err(GpuErrorType::InvalidState, "drawIndexed: no pipeline is set"));
+  }
+  // Metal always restarts an indexed strip on the all-ones index, the Vulkan pipelines disable
+  // restart, and the WebGPU adapter never declares a strip index format, so an indexed strip
+  // would render differently per backend; refuse it rather than pick one behavior silently.
+  if (currentPipeline_->topology != PrimitiveTopology::TriangleList) {
+    std::ostringstream topology;
+    topology << currentPipeline_->topology;
+    return fail(Err(GpuErrorType::Unsupported,
+                    std::format("drawIndexed: only TriangleList pipelines support indexed draws "
+                                "(pipeline topology is {})",
+                                topology.str())));
+  }
+  if (!boundIndexBuffer_) {
+    return fail(Err(GpuErrorType::InvalidState, "drawIndexed: no index buffer is bound"));
+  }
+  const std::optional<uint64_t> lastIndex = CheckedAdd(firstIndex, indexCount);
+  const std::optional<uint64_t> indexBytesNeeded =
+      lastIndex ? CheckedMul(*lastIndex, IndexFormatByteSize(boundIndexBuffer_->format))
+                : std::nullopt;
+  if (!indexBytesNeeded || *indexBytesNeeded > boundIndexBuffer_->bytesAvailable) {
+    std::ostringstream format;
+    format << boundIndexBuffer_->format;
+    return fail(Err(GpuErrorType::OutOfBounds,
+                    std::format("drawIndexed: {} index range [{}, {}) overflows the bound index "
+                                "buffer range ({} bytes available)",
+                                format.str(), firstIndex, lastIndex ? *lastIndex : 0,
+                                boundIndexBuffer_->bytesAvailable)));
+  }
+  if (Status slots = validateVertexSlots("drawIndexed", 0, 0, firstInstance, instanceCount,
+                                         /*checkVertexSlots=*/false);
+      slots.hasError()) {
+    return slots;
+  }
+  if (Status bindGroupStatus = validateBoundBindGroups("drawIndexed"); bindGroupStatus.hasError()) {
+    return bindGroupStatus;
+  }
+
+  commands_.push_back(
+      DrawIndexedCommand{indexCount, instanceCount, firstIndex, baseVertex, firstInstance});
+  return OkStatus();
+}
+
+Status CommandEncoder::validateVertexSlots(std::string_view operation, uint64_t firstVertex,
+                                           uint64_t vertexCount, uint64_t firstInstance,
+                                           uint64_t instanceCount, bool checkVertexSlots) {
   for (size_t slot = 0; slot < currentPipeline_->vertexBuffers.size(); ++slot) {
     const VertexBufferLayout& layout = currentPipeline_->vertexBuffers[slot];
     if (!boundVertexBuffers_[slot]) {
       return fail(Err(GpuErrorType::InvalidState,
-                      std::format("draw: the pipeline requires a vertex buffer at slot {} but "
+                      std::format("{}: the pipeline requires a vertex buffer at slot {} but "
                                   "none is bound",
-                                  slot)));
+                                  operation, slot)));
     }
     const bool perVertex = layout.stepMode == VertexStepMode::Vertex;
+    if (perVertex && !checkVertexSlots) {
+      continue;
+    }
     const uint64_t first = perVertex ? firstVertex : firstInstance;
     const uint64_t count = perVertex ? vertexCount : instanceCount;
     const std::optional<uint64_t> lastElement = CheckedAdd(first, count);
     const std::optional<uint64_t> bytesNeeded =
         lastElement ? CheckedMul(*lastElement, layout.strideBytes) : std::nullopt;
     if (!bytesNeeded || *bytesNeeded > boundVertexBuffers_[slot]->bytesAvailable) {
-      return fail(
-          Err(GpuErrorType::OutOfBounds,
-              std::format("draw: {} range [{}, {}) with strideBytes {} overflows the "
-                          "vertex buffer bound at slot {} ({} bytes available)",
-                          perVertex ? "vertex" : "instance", first, lastElement ? *lastElement : 0,
-                          layout.strideBytes, slot, boundVertexBuffers_[slot]->bytesAvailable)));
+      return fail(Err(GpuErrorType::OutOfBounds,
+                      std::format("{}: {} range [{}, {}) with strideBytes {} overflows the "
+                                  "vertex buffer bound at slot {} ({} bytes available)",
+                                  operation, perVertex ? "vertex" : "instance", first,
+                                  lastElement ? *lastElement : 0, layout.strideBytes, slot,
+                                  boundVertexBuffers_[slot]->bytesAvailable)));
     }
   }
-
-  if (Status bindGroupStatus = validateBoundBindGroups("draw"); bindGroupStatus.hasError()) {
-    return bindGroupStatus;
-  }
-
-  commands_.push_back(DrawCommand{vertexCount, instanceCount, firstVertex, firstInstance});
   return OkStatus();
 }
 

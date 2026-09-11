@@ -78,6 +78,11 @@ public:
   /// Native shader representation accepted by this device.
   ShaderSourceKind shaderSourceKind() const override { return ShaderSourceKind::Spirv; }
 
+  /// True for Uint16 always; for Uint32 only when the physical device offered
+  /// `fullDrawIndexUint32` and \ref Create enabled it, since without that feature index values
+  /// above `maxDrawIndexedIndexValue` are undefined.
+  bool supportsFullIndexRange(IndexFormat format) const override;
+
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device

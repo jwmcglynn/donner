@@ -703,6 +703,7 @@ struct VulkanDevice::Impl {
   VkQueue queue = VK_NULL_HANDLE;              //!< The single graphics queue.
   uint32_t queueFamilyIndex = 0;               //!< Family index of \ref queue.
   VkCommandPool commandPool = VK_NULL_HANDLE;  //!< Pool for all command buffers.
+  bool fullDrawIndexUint32 = false;            //!< Whether the full Uint32 index range is enabled.
 
   /// A buffer plus the memory it was bound into, persistently mapped (host-visible + coherent;
   /// see the class comment for why every buffer is host-visible in this slice). Where that
@@ -1149,6 +1150,11 @@ struct VulkanDevice::Impl {
   /// @param setVertexBuffer Recorded command.
   Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
 
+  /// Binds a recorded index buffer.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  Status encodeSetIndexBuffer(EncodingState& state, const SetIndexBufferCommand& setIndexBuffer);
+
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -1163,6 +1169,16 @@ struct VulkanDevice::Impl {
   /// @param state Encoding state.
   /// @param draw Recorded command.
   Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Binds every descriptor set the pipeline layout declares and issues the indexed draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw);
+
+  /// Binds every descriptor set the active pipeline layout declares, shared by both draws.
+  /// @param state Encoding state.
+  /// @param operation Operation name for diagnostics.
+  Status bindDrawDescriptorSets(EncodingState& state, std::string_view operation);
 
   /// Ends the active render pass and resets the per-pass binding state.
   /// @param state Encoding state.
@@ -1351,6 +1367,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   }
   VkPhysicalDeviceFeatures enabledFeatures = {};
   enabledFeatures.robustBufferAccess = VK_TRUE;
+  // Optional, so a device without it still creates; the runtime then refuses Uint32 index
+  // buffers instead of letting 32-bit index values above the driver's cap read undefined data.
+  const bool fullDrawIndexUint32 = supportedFeatures.fullDrawIndexUint32 == VK_TRUE;
+  enabledFeatures.fullDrawIndexUint32 = fullDrawIndexUint32 ? VK_TRUE : VK_FALSE;
 
   const float queuePriority = 1.0f;
   VkDeviceQueueCreateInfo queueInfo = {};
@@ -1420,6 +1440,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   impl.device = device;
   impl.queueFamilyIndex = selectedQueueFamily;
   impl.commandPool = commandPool;
+  impl.fullDrawIndexUint32 = fullDrawIndexUint32;
   api.vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
   api.vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
   impl.bufferAllocator = std::make_unique<DedicatedBufferAllocator>(impl.memoryProperties);
@@ -1558,6 +1579,10 @@ size_t VulkanDevice::pendingTextureUploadCountForTest() const {
 
 void VulkanDevice::deferTextureUploadPollingForTest(bool defer) {
   impl_->deferUploadPolling = defer;
+}
+
+bool VulkanDevice::supportsFullIndexRange(IndexFormat format) const {
+  return format != IndexFormat::Uint32 || impl_->fullDrawIndexUint32;
 }
 
 std::string VulkanDevice::lastErrorForTest() const {
@@ -2681,6 +2706,20 @@ Status VulkanDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
   return OkStatus();
 }
 
+Status VulkanDevice::Impl::encodeSetIndexBuffer(EncodingState& state,
+                                                const SetIndexBufferCommand& setIndexBuffer) {
+  const BufferRecord* buffer = FindRecord(buffers, setIndexBuffer.bufferId.slotIndex);
+  if (!state.inRenderPass || buffer == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  api->vkCmdBindIndexBuffer(
+      state.commandBuffer, buffer->buffer, setIndexBuffer.offsetBytes,
+      setIndexBuffer.format == IndexFormat::Uint16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+  return OkStatus();
+}
+
 Status VulkanDevice::Impl::encodeSetScissorRect(EncodingState& state,
                                                 const SetScissorRectCommand& setScissor) {
   if (!state.inRenderPass) {
@@ -2710,9 +2749,11 @@ Status VulkanDevice::Impl::encodeSetViewport(EncodingState& state,
   return OkStatus();
 }
 
-Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& draw) {
+Status VulkanDevice::Impl::bindDrawDescriptorSets(EncodingState& state,
+                                                  std::string_view operation) {
   if (!state.inRenderPass || state.currentPipeline == nullptr) {
-    return GpuError{GpuErrorType::InvalidState, "draw without an active pass and pipeline"};
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("{} without an active pass and pipeline", operation)};
   }
   // Bind every set the pipeline layout declares. The encoder's draw-time validation
   // guarantees each declared group index is bound; this re-check fails closed anyway.
@@ -2720,16 +2761,36 @@ Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& d
        ++setIndex) {
     const BindGroupRecord* group = state.boundGroups[setIndex];
     if (group == nullptr) {
-      return GpuError{
-          GpuErrorType::InvalidState,
-          std::format("draw: pipeline layout requires bind group {} but none is bound", setIndex)};
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("{}: pipeline layout requires bind group {} but none is bound",
+                                  operation, setIndex)};
     }
     api->vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  state.currentPipeline->layout->layout, setIndex, 1, &group->set, 0,
                                  nullptr);
   }
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& draw) {
+  if (Status status = bindDrawDescriptorSets(state, "draw"); status.hasError()) {
+    return status;
+  }
   api->vkCmdDraw(state.commandBuffer, draw.vertexCount, draw.instanceCount, draw.firstVertex,
                  draw.firstInstance);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw) {
+  if (Status status = bindDrawDescriptorSets(state, "drawIndexed"); status.hasError()) {
+    return status;
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  api->vkCmdDrawIndexed(state.commandBuffer, draw.indexCount, draw.instanceCount, draw.firstIndex,
+                        draw.baseVertex, draw.firstInstance);
   return OkStatus();
 }
 
@@ -2811,12 +2872,16 @@ std::optional<Status> VulkanDevice::Impl::encodeRenderCommand(EncodingState& sta
     return encodeSetBindGroup(state, *setBindGroup);
   } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
     return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setIndexBuffer = std::get_if<SetIndexBufferCommand>(&command)) {
+    return encodeSetIndexBuffer(state, *setIndexBuffer);
   } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
     return encodeSetScissorRect(state, *setScissor);
   } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
     return encodeSetViewport(state, *setViewport);
   } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
     return encodeDraw(state, *draw);
+  } else if (const auto* drawIndexed = std::get_if<DrawIndexedCommand>(&command)) {
+    return encodeDrawIndexed(state, *drawIndexed);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
   }

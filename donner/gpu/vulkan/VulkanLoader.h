@@ -109,9 +109,11 @@ struct VulkanApi {
   PFN_vkCmdBindPipeline vkCmdBindPipeline = nullptr;
   PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets = nullptr;
   PFN_vkCmdBindVertexBuffers vkCmdBindVertexBuffers = nullptr;
+  PFN_vkCmdBindIndexBuffer vkCmdBindIndexBuffer = nullptr;
   PFN_vkCmdSetViewport vkCmdSetViewport = nullptr;
   PFN_vkCmdSetScissor vkCmdSetScissor = nullptr;
   PFN_vkCmdDraw vkCmdDraw = nullptr;
+  PFN_vkCmdDrawIndexed vkCmdDrawIndexed = nullptr;
   PFN_vkCmdDispatch vkCmdDispatch = nullptr;
   PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier = nullptr;
   PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
