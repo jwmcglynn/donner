@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -289,6 +290,39 @@ TEST_F(VulkanIndexedDrawTest, ANonemptyRebindAfterAnEmptyBindingDrawsFromTheRebi
   ASSERT_NO_FATAL_FAILURE(submitAndWait(*encoder));
   EXPECT_THAT(device_->lastErrorForTest(), IsEmpty());
   expectTargetIsSolid({255, 0, 0, 255}, "indexed_rebind_after_empty_binding");
+}
+
+TEST_F(VulkanIndexedDrawTest, TextureCopyFeedsIndexedDrawInTheSameSubmission) {
+  ASSERT_NO_FATAL_FAILURE(createQuadResources());
+  const std::array<uint16_t, 8> indices{0, 1, 2, 0, 2, 3, 0, 0};
+  std::array<uint8_t, kReadbackRowBytes> indexTexels{};
+  const std::span<const uint8_t> indexBytes = gpu::tests::VertexInputBytes(indices);
+  std::copy(indexBytes.begin(), indexBytes.end(), indexTexels.begin());
+  const Texture indexTexture = GetResultOrFail(
+      device_->createTexture(TextureDescriptor{"index texels",
+                                               {4, 1},
+                                               TextureFormat::RGBA8Unorm,
+                                               TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  ASSERT_THAT(device_->writeTexture(indexTexture, indexTexels, {0, kReadbackRowBytes, 1}, {4, 1}),
+              IsOk());
+  const Buffer copiedIndices = GetResultOrFail(device_->createBuffer(BufferDescriptor{
+      "copied indices", kReadbackRowBytes, BufferUsage::Index | BufferUsage::CopyDst}));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_->createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{indexTexture}, copiedIndices,
+                                           {0, kReadbackRowBytes, 1}, {4, 1}),
+              IsOk());
+  RenderPassEncoder* pass = beginQuadPass(*encoder);
+  ASSERT_THAT(pass, NotNull());
+  ASSERT_THAT(pass->setIndexBuffer(copiedIndices, IndexFormat::Uint16), IsOk());
+  ASSERT_THAT(pass->drawIndexed(6, 1, 0, 0, 1), IsOk());
+  ASSERT_THAT(pass->end(), IsOk());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target_}, readback_,
+                                           {0, kReadbackRowBytes, 4}, {4, 4}),
+              IsOk());
+  ASSERT_NO_FATAL_FAILURE(submitAndWait(*encoder));
+  EXPECT_THAT(device_->lastErrorForTest(), IsEmpty());
+  expectTargetIsSolid({255, 0, 0, 255}, "copy_to_index_in_one_submission");
 }
 
 }  // namespace
