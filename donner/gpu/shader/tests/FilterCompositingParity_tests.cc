@@ -162,6 +162,18 @@ TEST(FilterChainPrecision, FinalDropShadowResolvePreservesLinearColorAndExplicit
                            "drop_shadow_explicit_final_clip");
 }
 
+TEST(FilterChainPrecision, DisplacementMapPreservesSignedScaleAndTransparentBorders) {
+  for (const char* scale : {"-2", "0", "2"}) {
+    SCOPED_TRACE(scale);
+    const std::string primitive = std::string(R"svg(
+      <feFlood flood-color="#ff0000" result="map"/>
+      <feDisplacementMap in="seed" in2="map" xChannelSelector="R" yChannelSelector="G"
+        color-interpolation-filters="sRGB" scale=")svg") +
+                                  scale + R"svg("/>)svg";
+    ExpectFilterChainMatches(primitive, "displacement_signed_scale");
+  }
+}
+
 TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) {
   const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg"
       width="2000" height="1600" viewBox="0 0 1000 800">

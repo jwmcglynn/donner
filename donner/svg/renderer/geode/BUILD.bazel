@@ -334,6 +334,7 @@ donner_cc_library(
         ":filter_color_matrix_wgsl",
         ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
+        ":filter_displacement_map_wgsl",
         ":filter_drop_shadow_wgsl",
         ":filter_merge_wgsl",
         ":filter_morphology_wgsl",
@@ -685,12 +686,19 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feDisplacementMap compute shader (per-pixel displacement).
+genrule(
+    name = "filter_displacement_map_generated",
+    outs = ["generated/filter_displacement_map.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) displacement_map " +
+          "$(location generated/filter_displacement_map.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_displacement_map_wgsl",
     header_output = "embed_resources/FilterDisplacementMapWgsl.h",
     resources = {
-        "kFilterDisplacementMapWgsl": "shaders/filter_displacement_map.wgsl",
+        "kFilterDisplacementMapWgsl": "generated/filter_displacement_map.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -773,7 +781,6 @@ donner_cc_library(
         ":filter_blend_wgsl",
         ":filter_convolve_matrix_wgsl",
         ":filter_diffuse_lighting_wgsl",
-        ":filter_displacement_map_wgsl",
         ":filter_image_wgsl",
         ":filter_specular_lighting_wgsl",
         ":filter_turbulence_wgsl",

@@ -172,67 +172,6 @@
         "LightingParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_displacement_map.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "in1_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "in2_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 2,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba32float, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 3,
-          "group": 0,
-          "name": "params",
-          "type": "DisplacementParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "clamp",
-        "floor",
-        "if",
-        "let",
-        "min",
-        "mix",
-        "return",
-        "select",
-        "switch",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "DisplacementParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_image.wgsl": {
       "bindings": [
         {

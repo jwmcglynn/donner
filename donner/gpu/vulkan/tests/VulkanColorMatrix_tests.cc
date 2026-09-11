@@ -20,6 +20,7 @@
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
+#include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
@@ -29,6 +30,7 @@
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
 #include "donner/gpu/tests/ComponentTransferSlice.h"
+#include "donner/gpu/tests/DisplacementMapSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
@@ -192,6 +194,13 @@ TEST_F(VulkanColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
 TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
   gpu::tests::CheckDropShadowStorage(
       *device_, gpu::generated::drop_shadow::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, DisplacementUsesGeneratedArtifactAndIndependentPixelOracle) {
+  gpu::tests::CheckDisplacementMapStorage(
+      *device_, gpu::generated::displacement_map::BuildDescriptor(ShaderSourceKind::Spirv),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }

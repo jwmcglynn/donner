@@ -24,6 +24,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
@@ -267,6 +268,11 @@ TEST(MslXcrunValidation, EmittedDropShadowComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildDropShadowModule(), "drop_shadow");
+}
+
+TEST(MslXcrunValidation, EmittedDisplacementMapComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildDisplacementMapModule(), "displacement_map");
 }
 
 TEST(MslXcrunValidation, EmittedGaussianBlurComputeCompilesWithMetalCompiler) {

@@ -525,8 +525,7 @@ private:
   ScopedWgpuHandle<wgpu::BindGroupLayout> turbulenceBindGroupLayout_;
 
   // feDisplacementMap pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> displacementMapPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> displacementMapBindGroupLayout_;
+  RuntimeComputeProgram displacementMapProgram_;
 
   // feDiffuseLighting pipeline (input + output + storage buffer).
   ScopedWgpuHandle<wgpu::ComputePipeline> diffuseLightingPipeline_;
