@@ -223,6 +223,7 @@ donner_cc_test(
     },
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:vertex_input_slice",
