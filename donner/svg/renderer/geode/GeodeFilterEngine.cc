@@ -1889,7 +1889,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     using gpu::shader::programs::LightingBinding;
     const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
     diffuseLightingProgram_ =
-        CreateRuntimeComputeProgram(device_.adapterDevice(), "FilterDiffuseLighting",
+        CreateRuntimeComputeProgram(device_.adapterDevice(),
                                     gpu::generated::diffuse_lighting::BuildDescriptor(
                                         device_.adapterDevice().shaderSourceKind()),
                                     {SampledInputEntry(binding(LightingBinding::InputTexture)),
@@ -1903,7 +1903,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     using gpu::shader::programs::LightingBinding;
     const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
     specularLightingProgram_ =
-        CreateRuntimeComputeProgram(device_.adapterDevice(), "FilterSpecularLighting",
+        CreateRuntimeComputeProgram(device_.adapterDevice(),
                                     gpu::generated::specular_lighting::BuildDescriptor(
                                         device_.adapterDevice().shaderSourceKind()),
                                     {SampledInputEntry(binding(LightingBinding::InputTexture)),
