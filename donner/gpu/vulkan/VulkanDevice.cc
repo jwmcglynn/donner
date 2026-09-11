@@ -1094,6 +1094,15 @@ struct VulkanDevice::Impl {
     const ComputePipelineRecord* currentComputePipeline = nullptr;
     /// Groups bound by index; their records remain live throughout command encoding.
     std::array<const BindGroupRecord*, kMaxBindGroups> boundGroups = {};
+    /// Recorded index binding whose native bind waits for the first nonzero indexed draw.
+    struct PendingIndexBinding {
+      VkBuffer buffer = VK_NULL_HANDLE;              //!< Buffer to bind.
+      VkDeviceSize offsetBytes = 0;                  //!< Byte offset of the first index.
+      VkIndexType indexType = VK_INDEX_TYPE_UINT16;  //!< Width of each index.
+    };
+    /// vkCmdBindIndexBuffer requires offset < buffer size, but the encoder accepts a binding
+    /// exactly at the end as an empty range; only a nonzero draw proves the range nonempty.
+    std::optional<PendingIndexBinding> pendingIndexBinding;
   };
 
   /// Records the barrier that puts \p textureSlot into \p usage, if one is needed, and stages
@@ -1150,7 +1159,7 @@ struct VulkanDevice::Impl {
   /// @param setVertexBuffer Recorded command.
   Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
 
-  /// Binds a recorded index buffer.
+  /// Records an index binding; the native bind is issued by the first nonzero indexed draw.
   /// @param state Encoding state.
   /// @param setIndexBuffer Recorded command.
   Status encodeSetIndexBuffer(EncodingState& state, const SetIndexBufferCommand& setIndexBuffer);
@@ -1380,10 +1389,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   queueInfo.pQueuePriorities = &queuePriority;
 
   // Vulkan 1.1 core for every production path: no device extensions, and no optional features
-  // beyond the mandatory robustBufferAccess (read-only storage buffer access in the fragment
-  // stage and negative-height viewports are core). Tests that need to hold a submission open ask
-  // for VK_KHR_timeline_semaphore through CreateWithTimelineSemaphoreForTest; that is the only
-  // extension this backend ever enables, and it is never enabled for a device the product uses.
+  // beyond the mandatory robustBufferAccess and, when the device offers it, fullDrawIndexUint32
+  // (otherwise supportsFullIndexRange refuses each Uint32 binding; read-only storage buffer
+  // access in the fragment stage and negative-height viewports are core). Tests that need to
+  // hold a submission open ask for VK_KHR_timeline_semaphore through
+  // CreateWithTimelineSemaphoreForTest; that is the only extension this backend ever enables, and
+  // it is never enabled for a device the product uses.
   VkDeviceCreateInfo deviceInfo = {};
   deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceInfo.queueCreateInfoCount = 1;
@@ -2714,9 +2725,11 @@ Status VulkanDevice::Impl::encodeSetIndexBuffer(EncodingState& state,
                     std::format("setIndexBuffer: buffer slot {} is not encodable",
                                 setIndexBuffer.bufferId.slotIndex)};
   }
-  api->vkCmdBindIndexBuffer(
-      state.commandBuffer, buffer->buffer, setIndexBuffer.offsetBytes,
-      setIndexBuffer.format == IndexFormat::Uint16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+  // Deferred rather than bound here: an empty binding at the buffer end is valid for the encoder
+  // but an invalid vkCmdBindIndexBuffer offset, and a zero-count draw never needs it.
+  state.pendingIndexBinding = EncodingState::PendingIndexBinding{
+      buffer->buffer, setIndexBuffer.offsetBytes,
+      setIndexBuffer.format == IndexFormat::Uint16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32};
   return OkStatus();
 }
 
@@ -2789,6 +2802,13 @@ Status VulkanDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawInd
   if (draw.indexCount == 0 || draw.instanceCount == 0) {
     return OkStatus();
   }
+  // The encoder bounded this draw's index range inside the binding, so the offset is in range.
+  if (state.pendingIndexBinding) {
+    api->vkCmdBindIndexBuffer(state.commandBuffer, state.pendingIndexBinding->buffer,
+                              state.pendingIndexBinding->offsetBytes,
+                              state.pendingIndexBinding->indexType);
+    state.pendingIndexBinding.reset();
+  }
   api->vkCmdDrawIndexed(state.commandBuffer, draw.indexCount, draw.instanceCount, draw.firstIndex,
                         draw.baseVertex, draw.firstInstance);
   return OkStatus();
@@ -2802,6 +2822,7 @@ Status VulkanDevice::Impl::encodeEndRenderPass(EncodingState& state) {
   state.inRenderPass = false;
   state.currentPipeline = nullptr;
   state.boundGroups.fill(nullptr);
+  state.pendingIndexBinding.reset();
   return OkStatus();
 }
 
