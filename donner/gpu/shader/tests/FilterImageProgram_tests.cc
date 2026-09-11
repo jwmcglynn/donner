@@ -95,8 +95,8 @@ TEST(FilterImageProgramTests, GeneratedDescriptorsPreserveTheComputedInterface) 
     EXPECT_THAT(descriptor.computeEntryPoints.front().name,
                 testing::Eq(programs::kFilterImageEntryPoint));
     EXPECT_THAT(descriptor.computeEntryPoints.front().workgroupSize,
-                testing::Eq(WorkgroupSize{programs::kFilterImageWorkgroupSize,
-                                          programs::kFilterImageWorkgroupSize, 1}));
+                testing::Eq(gpu::WorkgroupSize{programs::kFilterImageWorkgroupSize,
+                                               programs::kFilterImageWorkgroupSize, 1}));
     EXPECT_THAT(descriptor.sourceText.empty(), testing::Eq(kind == ShaderSourceKind::Spirv));
     EXPECT_THAT(descriptor.spirvWords.empty(), testing::Eq(kind != ShaderSourceKind::Spirv));
   }

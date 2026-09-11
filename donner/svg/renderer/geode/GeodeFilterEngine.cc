@@ -1056,63 +1056,6 @@ wgpu::Texture createTransparentIntermediateTexture(FilterResourceArena& arena, u
   return texture;
 }
 
-/// Helper to create a pipeline with a standard (input, output, uniform) bind group layout.
-/// Used by blur, offset, and color-matrix pipelines.
-struct InputOutputUniformPipeline {
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout;
-  ScopedWgpuHandle<wgpu::ComputePipeline> pipeline;
-};
-
-InputOutputUniformPipeline createInputOutputUniformPipeline(const wgpu::Device& dev,
-                                                            const char* label,
-                                                            wgpu::ShaderModule shaderModule,
-                                                            size_t uniformSize) {
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(shaderModule);
-  wgpu::BindGroupLayoutEntry entries[3]{};
-
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
-  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[0].texture.multisampled = false;
-
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Compute;
-  entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-  entries[1].storageTexture.format = kFormat;
-  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-  entries[2].binding = 2;
-  entries[2].visibility = wgpu::ShaderStage::Compute;
-  entries[2].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[2].buffer.minBindingSize = uniformSize;
-
-  std::string bglLabel = std::string(label) + "BGL";
-  wgpu::BindGroupLayoutDescriptor bglDesc{};
-  bglDesc.label = wgpuLabel(bglLabel.c_str());
-  bglDesc.entryCount = 3;
-  bglDesc.entries = entries;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bgl(dev.createBindGroupLayout(bglDesc));
-
-  std::string plLabel = std::string(label) + "PipelineLayout";
-  wgpu::PipelineLayoutDescriptor plDesc{};
-  plDesc.label = wgpuLabel(plLabel.c_str());
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bgl.get()};
-  plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-
-  std::string cpLabel = std::string(label) + "Pipeline";
-  wgpu::ComputePipelineDescriptor cpDesc{};
-  cpDesc.label = wgpuLabel(cpLabel.c_str());
-  cpDesc.layout = pipelineLayout.get();
-  cpDesc.compute.module = shader.get();
-  cpDesc.compute.entryPoint = wgpuLabel("main");
-  ScopedWgpuHandle<wgpu::ComputePipeline> pipeline(dev.createComputePipeline(cpDesc));
-
-  return {std::move(bgl), std::move(pipeline)};
-}
-
 /// Helper to create a pipeline with a two-input (in1, in2, output, uniform) bind group layout.
 /// Used by the remaining direct two-input filter pipelines.
 struct TwoInputUniformPipeline {
@@ -1421,50 +1364,6 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
          arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
                                    (extent.width + workgroupSize - 1) / workgroupSize,
                                    (extent.height + workgroupSize - 1) / workgroupSize);
-}
-
-/// Dispatch a compute shader with a standard (input, output, uniform) bind group.
-void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
-                                const wgpu::BindGroupLayout& bgl,
-                                const wgpu::ComputePipeline& pipeline, const wgpu::Texture& input,
-                                const wgpu::Texture& output, const wgpu::Buffer& uniformBuffer,
-                                uint64_t uniformOffset, size_t uniformSize, const char* label) {
-  const uint32_t width = output.getWidth();
-  const uint32_t height = output.getHeight();
-
-  ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = outputView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = uniformBuffer;
-  bgEntries[2].offset = uniformOffset;
-  bgEntries[2].size = uniformSize;
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel(label);
-  bgDesc.layout = bgl;
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(device.device().createBindGroup(bgDesc));
-  device.countBindGroup();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel(label);
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(
-      arena.commandEncoder().beginComputePass(passDesc));
-  pass.get().setPipeline(pipeline);
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
 }
 
 /// Bump-allocate a uniform slot from the engine's persistent per-frame
