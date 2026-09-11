@@ -169,6 +169,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "component_transfer_slice",
+    testonly = 1,
+    hdrs = ["tests/ComponentTransferSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
     name = "vertex_input_slice",
     testonly = 1,
     hdrs = ["tests/VertexInputSlice.h"],

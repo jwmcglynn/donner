@@ -103,24 +103,6 @@ gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device);
 wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device);
 
 /**
- * Compile the feComponentTransfer compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_component_transfer.wgsl` via the `embed_resources()` Bazel rule.
- * The shader un-premultiplies, applies per-channel 256-entry LUTs, then
- * re-premultiplies.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
- * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(2) var<storage, read> params: ComponentTransferParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterComponentTransferShader(const wgpu::Device& device);
-
-/**
  * Compile the feConvolveMatrix compute shader for the given device.
  *
  * The WGSL source is embedded at build time from

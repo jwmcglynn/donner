@@ -19,6 +19,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
@@ -27,6 +28,7 @@
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
+#include "donner/gpu/tests/ComponentTransferSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
@@ -240,6 +242,13 @@ TEST_F(VulkanColorMatrixTest, MorphologyPreservesErosionDilationAndFloatStorage)
                                bindings.result()},
         [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, erode);
   }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBoundaries) {
+  gpu::tests::CheckComponentTransferStorage(
+      *device_, gpu::generated::component_transfer::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

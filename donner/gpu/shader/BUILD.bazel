@@ -108,6 +108,7 @@ donner_cc_library(
     name = "program_bindings",
     hdrs = [
         "programs/ColorSpaceConvertBindings.h",
+        "programs/ComponentTransferBindings.h",
         "programs/CompositeBindings.h",
         "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
@@ -129,6 +130,7 @@ donner_cc_library(
         "programs/Checkerboard.cc",
         "programs/ColorMatrix.cc",
         "programs/ColorSpaceConvert.cc",
+        "programs/ComponentTransfer.cc",
         "programs/Composite.cc",
         "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
@@ -147,6 +149,7 @@ donner_cc_library(
         "programs/Checkerboard.h",
         "programs/ColorMatrix.h",
         "programs/ColorSpaceConvert.h",
+        "programs/ComponentTransfer.h",
         "programs/Composite.h",
         "programs/DropShadow.h",
         "programs/ErrorLatch.h",
@@ -187,6 +190,7 @@ donner_cc_test(
         "tests/CheckerboardProgram_tests.cc",
         "tests/ColorMatrixProgram_tests.cc",
         "tests/ColorSpaceConvertProgram_tests.cc",
+        "tests/ComponentTransferProgram_tests.cc",
         "tests/CompositeProgram_tests.cc",
         "tests/DropShadowProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
@@ -213,6 +217,7 @@ donner_cc_test(
     ],
     deps = [
         ":checkerboard_artifact",
+        ":component_transfer_artifact",
         ":drop_shadow_artifact",
         ":float_storage_test_module",
         ":module_interface",
@@ -379,6 +384,21 @@ genrule(
 donner_cc_library(
     name = "drop_shadow_artifact",
     hdrs = ["generated/DropShadowShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "component_transfer_generated",
+    outs = ["generated/ComponentTransferShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) component_transfer " +
+          "$(location generated/ComponentTransferShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "component_transfer_artifact",
+    hdrs = ["generated/ComponentTransferShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )
