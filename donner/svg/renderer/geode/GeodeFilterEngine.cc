@@ -1836,9 +1836,9 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::FilterImageBinding;
     const gpu::ShaderModuleDescriptor descriptor =
-        gpu::generated::filter_image::BuildDescriptor(gpu::ShaderSourceKind::Wgsl);
+        gpu::generated::filter_image::BuildDescriptor(device_.adapterDevice().shaderSourceKind());
     imageProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), descriptor.label.str(), descriptor,
+        device_.adapterDevice(), descriptor,
         {SampledInputEntry(static_cast<uint32_t>(FilterImageBinding::ImageTexture)),
          StorageOutputEntry(static_cast<uint32_t>(FilterImageBinding::OutputTexture)),
          UniformParamsEntry(static_cast<uint32_t>(FilterImageBinding::Params))});
