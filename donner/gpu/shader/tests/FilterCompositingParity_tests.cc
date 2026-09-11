@@ -2,9 +2,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <tuple>
+#include <utility>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -237,6 +239,43 @@ TEST(FilterChainPrecision, ComponentTransferMaximumPackedTablesKeepChannelsDisti
   operation += "</feComponentTransfer>";
   ExpectFilterChainMatches(operation + operation, "component_maximum_packed_tables");
 }
+
+class FilterBlendParity : public testing::TestWithParam<const char*> {};
+
+TEST_P(FilterBlendParity, StraightChannelsAndAlphaBoundariesMatchCpu) {
+  for (const char* opacity : {"0", "0.5", "1"}) {
+    SCOPED_TRACE(opacity);
+    const std::string primitives = std::string(R"svg(
+      <feFlood flood-color="#bf4080" flood-opacity=")svg") +
+                                   opacity + R"svg(" result="source"/>
+      <feBlend in="source" in2="seed" color-interpolation-filters="sRGB" mode=")svg" +
+                                   GetParam() + R"svg("/>)svg";
+    ExpectFilterChainMatches(primitives, "blend_channels_alpha");
+  }
+}
+
+TEST_P(FilterBlendParity, TiedChannelsAndGrayMatchCpu) {
+  const std::array<std::pair<const char*, const char*>, 4> colors{{{"#4040bf", "#bfbf40"},
+                                                                   {"#40bf40", "#bf40bf"},
+                                                                   {"#bf4040", "#40bfbf"},
+                                                                   {"#808080", "#4040bf"}}};
+  for (const auto& [source, backdrop] : colors) {
+    SCOPED_TRACE(testing::Message() << "source=" << source << " backdrop=" << backdrop);
+    const std::string primitives =
+        std::string(R"svg(<feFlood flood-color=")svg") + backdrop +
+        R"svg(" flood-opacity="0.7" result="backdrop"/><feFlood flood-color=")svg" + source +
+        R"svg(" flood-opacity="0.5" result="source"/><feBlend in="source" in2="backdrop"
+          color-interpolation-filters="sRGB" mode=")svg" +
+        GetParam() + R"svg("/>)svg";
+    ExpectFilterChainMatches(primitives, "blend_tied_channels");
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(StandardModes, FilterBlendParity,
+                         testing::Values("normal", "multiply", "screen", "darken", "lighten",
+                                         "overlay", "color-dodge", "color-burn", "hard-light",
+                                         "soft-light", "difference", "exclusion", "hue",
+                                         "saturation", "color", "luminosity"));
 
 TEST(FilterChainPrecision, LinearFunctionsKeepFractionalValuesAcrossSeveralNodes) {
   const std::string operation = R"svg(<feComponentTransfer color-interpolation-filters="sRGB">
