@@ -26,6 +26,7 @@
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -240,6 +241,13 @@ TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildTileModule(), "tile.spv");
+}
+
+TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildGaussianBlurModule(), "gaussian_blur.spv");
 }
 
 TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {

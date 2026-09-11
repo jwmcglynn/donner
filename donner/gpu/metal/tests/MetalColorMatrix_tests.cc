@@ -20,9 +20,11 @@
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
@@ -249,6 +251,26 @@ TEST_F(MetalColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(MetalColorMatrixTest, VectorCeilAndExpRunThroughNativeCompiler) {
+  const auto module = shader::BuildVectorCeilExpModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      {-0.5f, 0.5f, 0.0f, 1.0f}, {0.0f, 1.0f, 16.0f, 43.0f});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
 TEST_F(MetalColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
   const auto module = shader::programs::BuildTileModule();
   ASSERT_FALSE(module.hasError()) << module.error();
@@ -265,6 +287,34 @@ TEST_F(MetalColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
                              shader::ComputeEntryPointsOf(module.result()),
                              bindings.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
+  const auto module = shader::programs::BuildGaussianBlurModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (uint32_t axis : {0u, 1u}) {
+    for (uint32_t kind : {0u, 1u, 2u}) {
+      for (uint32_t edgeMode : {0u, 1u, 2u}) {
+        SCOPED_TRACE(testing::Message()
+                     << "axis=" << axis << " kind=" << kind << " edge=" << edgeMode);
+        gpu::tests::CheckBlurStorage(
+            *device_,
+            ShaderModuleDescriptor{"float",
+                                   RcString(emitted.result()),
+                                   ShaderSourceKind::Msl,
+                                   {},
+                                   shader::ComputeEntryPointsOf(module.result()),
+                                   bindings.result()},
+            [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+            kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode);
+      }
+    }
+  }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

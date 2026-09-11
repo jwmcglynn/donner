@@ -32,6 +32,7 @@
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -55,6 +56,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"color_space_convert", 1, &programs::BuildColorSpaceConvertModule},
     {"filter_color_matrix", 1, &programs::BuildFilterColorMatrixModule},
     {"flood", 1, &programs::BuildFloodModule},
+    {"gaussian_blur", 1, &programs::BuildGaussianBlurModule},
     {"merge", 1, &programs::BuildMergeModule},
     {"morphology", 1, &programs::BuildMorphologyModule},
     {"composite", 1, &programs::BuildCompositeModule},

@@ -161,6 +161,8 @@ std::string_view BuiltinFnName(BuiltinFn fn) {
     case BuiltinFn::Round: return "round";
     case BuiltinFn::Sign: return "sign";
     case BuiltinFn::Floor: return "floor";
+    case BuiltinFn::Ceil: return "ceil";
+    case BuiltinFn::Exp: return "exp";
     case BuiltinFn::Pow: return "pow";
     case BuiltinFn::Select: return "select";
     case BuiltinFn::Any: return "any";
@@ -709,6 +711,8 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
     case BuiltinFn::Round:
     case BuiltinFn::Sign:
     case BuiltinFn::Floor:
+    case BuiltinFn::Ceil:
+    case BuiltinFn::Exp:
       if (args.size() != 1) return argCountError(1);
       if (!args[0].type().isFloatScalarOrVector()) {
         return ShaderError{

@@ -136,8 +136,10 @@ constexpr uint32_t kGlslFAbs = 4;
 constexpr uint32_t kGlslSAbs = 5;
 constexpr uint32_t kGlslFSign = 6;
 constexpr uint32_t kGlslFloor = 8;
+constexpr uint32_t kGlslCeil = 9;
 constexpr uint32_t kGlslFract = 10;
 constexpr uint32_t kGlslPow = 26;
+constexpr uint32_t kGlslExp = 27;
 constexpr uint32_t kGlslSqrt = 31;
 constexpr uint32_t kGlslFMin = 37;
 constexpr uint32_t kGlslUMin = 38;
@@ -1999,6 +2001,8 @@ std::optional<uint32_t> SingleArgumentGlslInstruction(BuiltinFn fn) {
     // instructions rather than one polymorphic one.
     case BuiltinFn::Sign: return kGlslFSign;
     case BuiltinFn::Floor: return kGlslFloor;
+    case BuiltinFn::Ceil: return kGlslCeil;
+    case BuiltinFn::Exp: return kGlslExp;
     case BuiltinFn::Sqrt: return kGlslSqrt;
     case BuiltinFn::Length: return kGlslLength;
     case BuiltinFn::Normalize: return kGlslNormalize;

@@ -49,6 +49,17 @@ IrExpr U32Val() {
 
 // == Types ====================================================================================
 
+TEST(IrBuilderTests, CeilAndExpRequireOneFloatScalarOrVector) {
+  for (BuiltinFn fn : {BuiltinFn::Ceil, BuiltinFn::Exp}) {
+    EXPECT_THAT(CallBuiltin(fn, {F32Val()}), HasShaderResult());
+    EXPECT_THAT(CallBuiltin(fn, {Vec2fVal()}), HasShaderResult());
+    EXPECT_THAT(CallBuiltin(fn, {LiteralI32(1)}), IsShaderError(HasSubstr("requires f32")));
+    EXPECT_THAT(CallBuiltin(fn, {}), IsShaderError(HasSubstr("expects 1 arguments")));
+    EXPECT_THAT(CallBuiltin(fn, {F32Val(), F32Val()}),
+                IsShaderError(HasSubstr("expects 1 arguments")));
+  }
+}
+
 TEST(IrTypeTests, IdenticalTypesCompareEqual) {
   EXPECT_EQ(IrType::Vec2f(), IrType::Vec2(ScalarKind::F32));
   EXPECT_NE(IrType::Vec2f(), IrType::Vec2i());

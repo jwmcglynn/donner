@@ -23,6 +23,7 @@
 #include "donner/gpu/shader/programs/CompositeBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
+#include "donner/gpu/shader/programs/GaussianBlurBindings.h"
 #include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/MorphologyBindings.h"
 #include "donner/gpu/shader/programs/OffsetBindings.h"
@@ -43,6 +44,7 @@
 #include "embed_resources/FilterResolveWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FloodWgsl.h"
+#include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SubregionClipWgsl.h"
 
@@ -1731,12 +1733,16 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     : device_(device), verbose_(verbose), resourceCache_(std::make_unique<FilterResourceCache>()) {
   const wgpu::Device& dev = device_.device();
 
-  // --- Gaussian blur pipeline (existing) ---
+  // Gaussian and box passes record into the shared GPU command stream.
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "GaussianBlur", createGaussianBlurShader(dev), sizeof(BlurParams));
-    blurBindGroupLayout_ = std::move(bgl);
-    gaussianBlurPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::GaussianBlurBinding;
+    blurProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "GaussianBlur", EmbeddedWgsl(donner::embedded::kGaussianBlurWgsl),
+        gpu::shader::programs::kGaussianBlurEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(GaussianBlurBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(GaussianBlurBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(GaussianBlurBinding::Params))},
+        gpu::shader::programs::kGaussianBlurWorkgroupSize);
   }
 
   // --- feOffset pipeline, through the GPU runtime ---
@@ -3250,14 +3256,13 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   }
   params.pad1 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
+  if (runtimeOutput == nullptr ||
+      !dispatchRuntimeInputOutputUniform(arena, blurProgram_, input, *runtimeOutput,
+                                         UniformBytes(params), "GaussianBlurPass",
+                                         gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
     return {};
   }
-
-  dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
-                             gaussianBlurPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(BlurParams), "GaussianBlurPass");
   return output;
 }
 
@@ -3287,14 +3292,13 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   }
   params.pad1 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
+  if (runtimeOutput == nullptr ||
+      !dispatchRuntimeInputOutputUniform(arena, blurProgram_, input, *runtimeOutput,
+                                         UniformBytes(params), "BoxBlurPass",
+                                         gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
     return {};
   }
-
-  dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
-                             gaussianBlurPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(BlurParams), "BoxBlurPass");
   return output;
 }
 
