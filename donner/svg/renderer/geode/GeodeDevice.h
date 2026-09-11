@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <tuple>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -18,6 +21,10 @@
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+
+namespace donner::svg {
+class RendererGeodeTextureSnapshot;
+}
 
 namespace donner::geode {
 
@@ -309,7 +316,36 @@ public:
     GpuWaitSite timedOutWaitSite = GpuWaitSite::None;
     /// Wall time that wait spent before giving up, in milliseconds.
     int timedOutWaitMs = 0;
+    /// Captures cancelled while acquiring the context, mapping, or copying pixels.
+    uint64_t captureCancellations = 0;
+    /// Captures whose total deadline expired.
+    uint64_t captureTimeouts = 0;
+    /// Lazily created readback-only contexts; independent of rendering pipelines.
+    uint64_t contextCreates = 0;
+    /// GPU allocation and submission work performed by isolated captures.
+    uint64_t bufferCreates = 0;
+    uint64_t textureCreates = 0;
+    uint64_t bindgroupCreates = 0;
+    uint64_t submits = 0;
+    /// Idle pooled resource sets and their logical backing bytes after the latest capture.
+    uint64_t poolEntries = 0;
+    uint64_t poolBytes = 0;
   };
+
+  /// Override the total capture budget for deterministic cancellation/deadline tests.
+  /// @param budget Includes context acquisition and GPU mapping.
+  void setSnapshotReadbackBudgetForTesting(std::chrono::milliseconds budget) {
+    snapshotReadbackBudgetMs_.store(
+        std::clamp<int64_t>(budget.count(), 0, kReadbackMapTimeout.count()),
+        std::memory_order_relaxed);
+  }
+
+  /// Explicit capture phases exposed only for deterministic protocol tests.
+  enum class SnapshotReadbackPhase { WaitingForContext, ContextAcquired, MapRequested };
+
+  /// Install a capture-phase test hook; it may be called concurrently by capture waiters.
+  /// @param hook Hook to install; empty removes it. Set only while captures are quiescent.
+  void setSnapshotReadbackHookForTesting(std::function<void(SnapshotReadbackPhase)> hook);
 
   /// Record one completed CPU readback from a renderer sharing this device.
   void recordReadback(bool usedTimedWaitAny, int pollIterations);
@@ -354,6 +390,20 @@ public:
   void deferDestroy(gpu::Texture texture);
 
   /**
+   * Transfer owned texture backing to this context's thread-safe retirement mailbox.
+   *
+   * Enqueuing checks only immutable device identity and never touches the resource table.
+   * The owning rendering context or exclusive teardown must drain the mailbox.
+   *
+   * @param texture Handle consumed on success; unchanged for a null or foreign handle.
+   * @return Whether the handle was accepted.
+   */
+  [[nodiscard]] bool deferDestroyTextureBacking(gpu::Texture&& texture);
+
+  /// Destroy queued texture backing on the owning rendering context or during exclusive teardown.
+  void drainDeferredTextureBackings();
+
+  /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
    *
    * Called at the top of each frame (before new allocations) so resources
@@ -366,9 +416,7 @@ public:
 
   /// Number of textures waiting for the next frame-boundary destroy pass.
   /// Exposed to pin resource-retirement behavior in renderer regression tests.
-  [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const {
-    return pendingTextures_.size() + pendingGpuTextures_.size();
-  }
+  [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const;
 
   /**
    * Key identifying a scene-batch bind group by its exact buffer bindings:
@@ -505,10 +553,15 @@ public:
   /// Cumulative number of `countTexture()` calls since this `GeodeDevice`
   /// was created. Does not account for textures released back into a
   /// pool - it is an allocation-site counter, not a live-count.
-  uint64_t lifetimeTextureCreates() const { return lifetimeTextureCreates_; }
+  uint64_t lifetimeTextureCreates() const {
+    return lifetimeTextureCreates_ +
+           readbackLifetimeTextureCreates_.load(std::memory_order_relaxed);
+  }
   /// Cumulative number of `countBuffer()` calls since this `GeodeDevice`
   /// was created. Same caveat as `lifetimeTextureCreates()`.
-  uint64_t lifetimeBufferCreates() const { return lifetimeBufferCreates_; }
+  uint64_t lifetimeBufferCreates() const {
+    return lifetimeBufferCreates_ + readbackLifetimeBufferCreates_.load(std::memory_order_relaxed);
+  }
   void countSubmit() const {
     if (counters_) ++counters_->submits;
   }
@@ -691,35 +744,6 @@ public:
   /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
   /// filter primitives.
   GeodeFilterEngine& filterEngine() const;
-  /// Snapshot-unpremultiply compute pipeline. Built lazily (thread-safe,
-  /// once-only) on first access so consumers that never read back a snapshot
-  /// avoid the compile cost.
-  GeodeSnapshotReadbackPipeline& snapshotReadbackPipeline() const;
-
-  /**
-   * Acquire the pooled readback resource set for a GPU snapshot readback at
-   * the given size, allocating it on first use. Repeated snapshots at the
-   * same dimensions reuse the pooled entry, so steady-state snapshot readback
-   * allocates nothing.
-   *
-   * The caller owns the returned set until `releaseSnapshotReadbackResources`
-   * returns it to the pool, or until the set is destroyed unpooled. An empty
-   * set means allocation failed.
-   */
-  SnapshotReadbackResources acquireSnapshotReadbackResources(uint32_t width, uint32_t height);
-
-  /**
-   * Return a readback resource set acquired from
-   * `acquireSnapshotReadbackResources` to the device pool for reuse. The
-   * returned set must be unmapped. Do not call this after the readback map
-   * was cancelled and the buffer destroyed; drop the set instead.
-   *
-   * The pool holds at most a small fixed number of size buckets; when a
-   * release would exceed that, the least-recently-used entry's backing
-   * resources are destroyed (pooled entries are idle, so eager destroy is
-   * safe).
-   */
-  void releaseSnapshotReadbackResources(SnapshotReadbackResources resources);
   /// Framebuffer checkerboard underlay pipeline used by the editor's direct
   /// presentation path. Built lazily on first access - only the editor draws
   /// it, so headless/WASM consumers never pay the compile cost.
@@ -742,6 +766,32 @@ public:
   const GeodeGpuContext& gpuContext() const UTILS_LIFETIME_BOUND;
 
 private:
+  friend class svg::RendererGeodeTextureSnapshot;
+
+  enum class SnapshotCaptureStatus { Ready, Cancelled, TimedOut };
+  struct SnapshotCaptureLease {
+    SnapshotCaptureLease() = default;
+    SnapshotCaptureLease(SnapshotCaptureLease&&) = default;
+    SnapshotCaptureLease& operator=(SnapshotCaptureLease&&) = delete;
+    ~SnapshotCaptureLease();
+    GeodeDevice* owner = nullptr;
+    GeodeDevice* context = nullptr;
+    std::unique_lock<std::timed_mutex> lock;
+    SnapshotCaptureStatus status = SnapshotCaptureStatus::TimedOut;
+  };
+
+  SnapshotCaptureLease acquireSnapshotCapture(const std::function<bool()>& shouldCancel,
+                                              std::chrono::steady_clock::time_point deadline);
+  SnapshotCaptureStatus waitForSnapshotCapture(std::unique_lock<std::timed_mutex>& lock,
+                                               const std::function<bool()>& shouldCancel,
+                                               std::chrono::steady_clock::time_point deadline);
+  void finishSnapshotCapture(GeodeDevice& context);
+  void recordSnapshotCaptureTimeout();
+  void notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase phase) const;
+  GeodeSnapshotReadbackPipeline& snapshotReadbackPipeline() const;
+  SnapshotReadbackResources acquireSnapshotReadbackResources(uint32_t width, uint32_t height);
+  void releaseSnapshotReadbackResources(SnapshotReadbackResources resources);
+
   GeodeDevice();
 
   /// Allocate the shared pipelines and filter engine after `device_`,
@@ -777,6 +827,8 @@ private:
   /// True when this device was created via CreateFromExternal(). The destructor
   /// skips releasing the instance/adapter since the host owns them.
   bool external_ = false;
+  bool readbackOnly_ = false;
+  GeodeCounters isolatedReadbackCounters_;
 
   /// Process-unique identity assigned at construction. See `deviceId()`.
   const uint64_t deviceId_ = 0;
@@ -810,6 +862,18 @@ private:
   std::atomic<int> readbackCount_{0};
   std::atomic<int> readbackPollIterations_{0};
   std::atomic<bool> readbackUsedTimedWaitAny_{false};
+  std::atomic<int64_t> snapshotReadbackBudgetMs_{kReadbackMapTimeout.count()};
+  std::atomic<uint64_t> readbackCaptureCancellations_{0};
+  std::atomic<uint64_t> readbackCaptureTimeouts_{0};
+  std::atomic<uint64_t> readbackContextCreates_{0};
+  std::atomic<uint64_t> readbackBufferCreates_{0};
+  std::atomic<uint64_t> readbackTextureCreates_{0};
+  std::atomic<uint64_t> readbackBindgroupCreates_{0};
+  std::atomic<uint64_t> readbackSubmits_{0};
+  std::atomic<uint64_t> readbackPoolEntries_{0};
+  std::atomic<uint64_t> readbackPoolBytes_{0};
+  std::atomic<uint64_t> readbackLifetimeBufferCreates_{0};
+  std::atomic<uint64_t> readbackLifetimeTextureCreates_{0};
 
   // Shared live-resident-bytes gauge. Mutable +
   // lazily created so `residentBytesGauge()` stays const like the other

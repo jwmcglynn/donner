@@ -300,6 +300,12 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
   return completedSerial() >= serial;
 }
 
+bool GeodeWgpuAdapterDevice::ownsTextureBacking(const gpu::Texture& texture) const {
+  return !validateTextureHandleForBackend(texture).hasError() &&
+         texture.slotIndex() < slotTextures_.size() &&
+         static_cast<bool>(slotTextures_[texture.slotIndex()].ownedTexture);
+}
+
 gpu::Status GeodeWgpuAdapterDevice::destroyTextureBacking(gpu::Texture&& texture) {
   // Validate before touching the slot so a stale or foreign handle cannot destroy whatever
   // occupies that slot now.

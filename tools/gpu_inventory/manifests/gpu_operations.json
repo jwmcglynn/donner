@@ -484,6 +484,8 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue",
         "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
@@ -502,6 +504,10 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
+      "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue"
+      ],
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -1178,11 +1184,22 @@
     },
     "donner/svg/renderer/tests/RendererGeode_tests.cc": {
       "operations": [
-        "draw"
+        "createTexture",
+        "draw",
+        "writeTexture"
+      ],
+      "wgpuCFunctions": [
+        "wgpuTextureOf"
       ],
       "wgpuCppTokens": [
+        "Extent3D",
+        "TexelCopyBufferLayout",
+        "TexelCopyTextureInfo",
         "Texture",
-        "TextureFormat"
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/tests/RendererTestBackendGeode.cc": {
