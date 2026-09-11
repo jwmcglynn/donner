@@ -557,7 +557,7 @@ jobs:
           # workspace), which `bazel test` reports as exit 4. The wrapper
           # maps only that status to success; every other failure still fails.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
             $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -698,7 +698,7 @@ jobs:
       # 2026-07-11, twice in a row on organic load; same signature as the
       # 2026-07-02 coverage-lane incident that motivated coverage.yml's 60s).
       # 60s still fast-fails a genuinely dead endpoint.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
       # logs so slow runs can be attributed to targets/actions without live
       # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
@@ -952,11 +952,25 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
+          # The paired targets share the same transitioned implementation and
+          # shard count. Their no-local requirement fails closed if remote
+          # execution is unavailable.
+          # Intentional word splitting: each Bazel label is one argument.
+          # shellcheck disable=SC2086
+          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py $TARGETS)"; then
+            echo "::error::Failed to select remote GPU test targets."
+            exit 1
+          fi
+          if [[ -z "${mapped_targets// /}" ]]; then
+            echo "::error::Remote GPU target selection became empty."
+            exit 1
+          fi
+          TARGETS="$mapped_targets"
           tools/ci_bazel_test.sh "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test/console.log" \
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-local-gpu-isolated \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1069,7 +1083,7 @@ jobs:
           # toolchain runs it.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
@@ -1167,7 +1181,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.

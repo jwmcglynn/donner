@@ -374,7 +374,13 @@ _donner_multi_transitioned_test = rule(
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
-def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device = False, **kwargs):
+def donner_multi_transitioned_test(
+        name,
+        dep,
+        renderer_backend,
+        opens_gpu_device = False,
+        remote_parallel_ci = False,
+        **kwargs):
     """Create a transitioned test with an honest short-runtime default.
 
     Args:
@@ -390,14 +396,21 @@ def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device
         parsing/ECS/CSS/text-shaping), and tagging those serialized every
         geode-configured target in the repo into a single-file queue at the
         end of the test phase.
+      remote_parallel_ci: Emit a second `no-local` wrapper for remote CI. The
+        ordinary wrapper keeps local device-loss isolation; the remote wrapper
+        shares its transitioned executable and test attributes but does not
+        enter Bazel's pre-spawn exclusive queue.
       **kwargs: Additional arguments for the underlying test rule.
     """
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
     if renderer_backend == "geode" and opens_gpu_device:
         tags = kwargs.get("tags", [])
+        if remote_parallel_ci and "local-gpu-isolated" not in tags:
+            tags = tags + ["local-gpu-isolated"]
         if "exclusive-if-local" not in tags:
-            kwargs["tags"] = tags + ["exclusive-if-local"]
+            tags = tags + ["exclusive-if-local"]
+        kwargs["tags"] = tags
 
     _donner_multi_transitioned_test(
         name = name,
@@ -405,6 +418,21 @@ def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device
         renderer_backend = renderer_backend,
         **kwargs
     )
+
+    if renderer_backend == "geode" and opens_gpu_device and remote_parallel_ci:
+        remote_kwargs = dict(kwargs)
+        remote_tags = [
+            tag
+            for tag in remote_kwargs.get("tags", [])
+            if tag not in ["exclusive-if-local", "local-gpu-isolated"]
+        ]
+        remote_kwargs["tags"] = remote_tags + ["ci-remote-gpu", "no-local"]
+        _donner_multi_transitioned_test(
+            name = name + "_ci_remote",
+            dep = dep,
+            renderer_backend = renderer_backend,
+            **remote_kwargs
+        )
 
 donner_multi_transitioned_binary = rule(
     implementation = _donner_transitioned_executable_impl,
@@ -430,7 +458,14 @@ donner_multi_transitioned_binary = rule(
     },
 )
 
-def donner_variant_cc_test(name, dep, variants = None, named_variants = None, opens_gpu_device = False, **kwargs):
+def donner_variant_cc_test(
+        name,
+        dep,
+        variants = None,
+        named_variants = None,
+        opens_gpu_device = False,
+        remote_parallel_ci = False,
+        **kwargs):
     """
     Generate test targets for variant configurations, plus a default alias
     that inherits the active command-line config.
@@ -447,6 +482,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, op
       variants: (legacy) List of variant axis lists.
       named_variants: List of dicts describing each variant explicitly.
       opens_gpu_device: Forwarded to donner_multi_transitioned_test; see there.
+      remote_parallel_ci: Forwarded to donner_multi_transitioned_test; see there.
       **kwargs: Additional arguments passed to the generated test rules.
 
     Generated targets:
@@ -474,6 +510,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, op
                 text = v.get("text", "false"),
                 text_full = v.get("text_full", "false"),
                 opens_gpu_device = opens_gpu_device,
+                remote_parallel_ci = remote_parallel_ci,
                 testonly = 1,
                 **variant_kwargs
             )
@@ -495,6 +532,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, op
                     text = text_val,
                     text_full = text_full_val,
                     opens_gpu_device = opens_gpu_device,
+                    remote_parallel_ci = remote_parallel_ci,
                     testonly = 1,
                     **kwargs
                 )
@@ -582,6 +620,7 @@ def donner_cc_test(
         tags = [],
         variants = None,
         opens_gpu_device = False,
+        remote_parallel_ci = False,
         **kwargs):
     """
     Create a cc_test with donner-specific defaults.
@@ -602,6 +641,8 @@ def donner_cc_test(
         device/adapter, so its geode-backed variants must be drained serially.
         Forwarded to donner_multi_transitioned_test; see there for why it is
         opt-in rather than implied by the geode backend.
+      remote_parallel_ci: Forwarded to donner_multi_transitioned_test for
+        opted-in Geode variants.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     if "size" not in kwargs and "timeout" not in kwargs:
@@ -642,6 +683,7 @@ def donner_cc_test(
                 dep = ":" + name,
                 renderer_backend = spec["backend"],
                 opens_gpu_device = opens_gpu_device,
+                remote_parallel_ci = remote_parallel_ci,
                 text = spec["text"],
                 text_full = spec["text_full"],
                 tags = tags + ["variant_" + variant_name],

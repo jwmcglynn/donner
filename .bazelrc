@@ -308,7 +308,7 @@ build --test_env=DONNER_RENDERER_TEST_VERBOSE
 coverage --config=coverage
 coverage --combined_report=lcov
 coverage --instrumentation_filter="-test_utils$,//donner[:/]"
-coverage --test_tag_filters=-fuzz_target,-lint,-manual,-perf
+coverage --test_tag_filters=-fuzz_target,-lint,-manual,-perf,-ci-remote-gpu
 # Continue past build/analysis failures so coverage is collected from all tests
 # that can run.
 coverage --keep_going
@@ -416,6 +416,10 @@ build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
 
 # Outputs test failures from failing tests instead just linking to test.log.
 test --test_output=errors
+# CI-only remote wrappers have a `no-local` execution requirement and mirror
+# an ordinary locally isolated target. Exclude them unless a remote lane
+# explicitly selects them in place of that target.
+test --test_tag_filters=-ci-remote-gpu
 
 # CI-specific optimizations — use `--config=ci` in GitHub Actions workflows.
 # NOTE: do NOT set --jobs / --local_test_jobs here. Trusted self-hosted Linux
@@ -456,9 +460,8 @@ build:ci --skip_incompatible_explicit_targets
 # that overrides this). Opt-in tests use `manual`, while wall-clock targets also
 # use `perf`. Filtering both tags protects affected-target lists and full `//...`
 # fallbacks even when a runner bazelrc changes wildcard expansion or config
-# precedence. See CLAUDE.md ("wall-clock budgets move to nightly perf targets")
-# and 0030.
-test:ci --test_tag_filters=-manual,-perf
+# precedence. See CLAUDE.md ("wall-clock budgets move to nightly perf targets").
+test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled

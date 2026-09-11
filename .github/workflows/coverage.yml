@@ -585,7 +585,8 @@ jobs:
           # tests, so test_suite expansion and rule kinds this workflow does not
           # enumerate are handled by definition rather than by a name heuristic,
           # and subtract the tags the coverage command filters out
-          # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf in .bazelrc),
+          # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf,-ci-remote-gpu
+          # in .bazelrc),
           # because a subset whose only tests carry those tags leaves the
           # coverage run with the very empty test set this narrowing exists to
           # keep it out of. `attr` matches its pattern against the string form
@@ -595,7 +596,7 @@ jobs:
           # and the coverage run.
           if [[ "$kind_query_ok" == "true" ]]; then
             test_query_file="$work_dir/affected-tests-query.txt"
-            printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf)[,\]]", tests(%s))\n' \
+            printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf|ci-remote-gpu)[,\]]", tests(%s))\n' \
               "$resolved_expr" "$resolved_expr" > "$test_query_file"
             affected_tests_file="$work_dir/affected-tests.txt"
             if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
@@ -933,13 +934,13 @@ jobs:
       # >5s to accept large coverage uploads under a multi-job burst (observed
       # 2026-07-02 as DEADLINE_EXCEEDED upload failures); 60s fails fast enough
       # on a dead endpoint while tolerating a loaded one.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # The runner-owned Bazel rc already maps the `coverage` command to
       # `--config=ci`. Do not repeat that config here: a repeated expansion
       # duplicates its remote execution properties and Bazel rejects the
       # command before analysis. The `fetch` command below still needs its
       # explicit config because it does not inherit `coverage` options.
-      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      DONNER_COVERAGE_BAZEL_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters=-fuzz_target,-lint,-manual,-perf,-local-gpu-isolated"
 
     steps:
       - uses: actions/checkout@v7
@@ -1005,6 +1006,15 @@ jobs:
           export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
           read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
+          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}")"; then
+            echo "::error::Failed to select remote GPU coverage targets."
+            exit 1
+          fi
+          if [[ -z "${mapped_targets// /}" ]]; then
+            echo "::error::Remote GPU coverage target selection is empty."
+            exit 1
+          fi
+          read -r -a TARGETS <<< "$mapped_targets"
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 
