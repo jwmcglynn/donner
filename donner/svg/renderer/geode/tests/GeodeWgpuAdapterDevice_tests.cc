@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -237,8 +238,7 @@ protected:
 
 TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadDoesNotReadBeyondCallerSpan) {
   const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
-      gpu::TextureDescriptor{"minimalUpload", gpu::Extent2d{1, 1},
-                             gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureDescriptor{"minimalUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
                              gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
   const std::array<uint8_t, 4> pixel{17, 34, 51, 68};
   ASSERT_THAT(adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, 256, 1},
@@ -249,6 +249,58 @@ TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadDoesNotReadBeyondCallerS
       ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
   ASSERT_THAT(readback, Not(testing::IsEmpty()));
   EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(17, 34, 51, 68));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadPreservesOffsetAndMultipleRows) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"offsetUpload", gpu::Extent2d{2, 2}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  std::vector<uint8_t> pixels(4 + 256 + 8, 0);
+  pixels[4] = 1;
+  pixels[5] = 2;
+  pixels[6] = 3;
+  pixels[7] = 4;
+  pixels[8] = 5;
+  pixels[9] = 6;
+  pixels[10] = 7;
+  pixels[11] = 8;
+  pixels[260] = 9;
+  pixels[261] = 10;
+  pixels[262] = 11;
+  pixels[263] = 12;
+  pixels[264] = 13;
+  pixels[265] = 14;
+  pixels[266] = 15;
+  pixels[267] = 16;
+  ASSERT_THAT(adapter_->writeTexture(texture, pixels, gpu::TexelCopyBufferLayout{4, 256, 2},
+                                     gpu::Extent2d{2, 2}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 2);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(1, 2, 3, 4));
+  EXPECT_THAT(PixelAt(readback, 1, 0), ElementsAre(5, 6, 7, 8));
+  EXPECT_THAT(PixelAt(readback, 0, 1), ElementsAre(9, 10, 11, 12));
+  EXPECT_THAT(PixelAt(readback, 1, 1), ElementsAre(13, 14, 15, 16));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadIgnoresUnusedGiganticStride) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(gpu::TextureDescriptor{
+      "hugeStrideUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  const std::array<uint8_t, 4> pixel{21, 42, 63, 84};
+  constexpr uint32_t kHugeAlignedStride =
+      std::numeric_limits<uint32_t>::max() & ~(gpu::kTexelRowPitchAlignment - 1);
+  ASSERT_THAT(
+      adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, kHugeAlignedStride, 1},
+                             gpu::Extent2d{1, 1}),
+      gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(21, 42, 63, 84));
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
