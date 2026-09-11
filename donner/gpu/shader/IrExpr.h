@@ -45,7 +45,7 @@ enum class BinaryOp : uint8_t {
 std::ostream& operator<<(std::ostream& os, BinaryOp value);
 
 /**
- * Builtin functions callable from IR (the solid-fill subset; everything else is rejected).
+ * Builtin functions callable from IR (the program-supported subset; everything else is rejected).
  *
  * \ref Sign, \ref Floor, and \ref Pow take f32 scalars and f32 vectors and return the shape
  * they were given. Their semantics are stated here because callers depend on them:
@@ -392,8 +392,7 @@ ShaderResult<IrExpr> CallBuiltin(BuiltinFn fn, std::vector<IrExpr> args,
                                  const RcString& label = "call");
 
 /**
- * Builtin function call by name; unknown names fail closed (only the solid-fill builtin subset
- * exists).
+ * Builtin function call by name; unknown names fail closed.
  *
  * @param name Builtin name, e.g. `"clamp"`.
  * @param args Call arguments.

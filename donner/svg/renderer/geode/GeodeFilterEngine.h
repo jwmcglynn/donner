@@ -527,12 +527,10 @@ private:
   RuntimeComputeProgram displacementMapProgram_;
 
   // feDiffuseLighting pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> diffuseLightingPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> diffuseLightingBindGroupLayout_;
+  RuntimeComputeProgram diffuseLightingProgram_;
 
   // feSpecularLighting pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> specularLightingPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> specularLightingBindGroupLayout_;
+  RuntimeComputeProgram specularLightingProgram_;
 
   // feDropShadow compose pipeline (two inputs + output + uniform).
   RuntimeComputeProgram dropShadowProgram_;
@@ -560,7 +558,7 @@ private:
   /// bound command-buffer size (see FilterResourceArena).
   size_t framePassesInCommandBuffer_ = 0;
 
-  /// Per-frame uniform scratch buffer and bump-allocated slot cursor (see
+  /// Per-frame parameter scratch buffer and bump-allocated slot cursor (see
   /// FilterResourceCache). Pass bind groups are still created per pass:
   /// the pooled textures a pass binds rotate across frames, so their
   /// identities are not stable cache keys.

@@ -352,6 +352,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
+        "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:program_bindings",
         "//donner/gpu/shader:turbulence_artifact",
         "//donner/svg/components/filter:components",
@@ -694,26 +695,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feDiffuseLighting compute shader (Lambertian shading).
-embed_resources(
-    name = "filter_diffuse_lighting_wgsl",
-    header_output = "embed_resources/FilterDiffuseLightingWgsl.h",
-    resources = {
-        "kFilterDiffuseLightingWgsl": "shaders/filter_diffuse_lighting.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feSpecularLighting compute shader (Phong shading).
-embed_resources(
-    name = "filter_specular_lighting_wgsl",
-    header_output = "embed_resources/FilterSpecularLightingWgsl.h",
-    resources = {
-        "kFilterSpecularLightingWgsl": "shaders/filter_specular_lighting.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 genrule(
     name = "filter_drop_shadow_generated",
     outs = ["generated/filter_drop_shadow.wgsl"],
@@ -771,9 +752,8 @@ donner_cc_library(
     deps = [
         ":filter_blend_wgsl",
         ":filter_convolve_matrix_wgsl",
-        ":filter_diffuse_lighting_wgsl",
         ":filter_image_wgsl",
-        ":filter_specular_lighting_wgsl",
+        ":filter_turbulence_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
