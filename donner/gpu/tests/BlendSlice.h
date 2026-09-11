@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 
+#include "donner/base/RcString.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/BlendBindings.h"
@@ -46,7 +47,7 @@ void CheckBlendStorage(DeviceType& device, const ShaderModuleDescriptor& shaderD
   auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
       "blend",
       pipelineLayout.result(),
-      ComputeState{shader.result(), shader::programs::kBlendEntryPoint},
+      ComputeState{shader.result(), RcString(shader::programs::kBlendEntryPoint)},
       {shader::programs::kBlendWorkgroupSize, shader::programs::kBlendWorkgroupSize, 1}});
   ASSERT_THAT(pipeline, HasResult());
   auto source =

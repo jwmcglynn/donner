@@ -190,6 +190,7 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        "//donner/base",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
