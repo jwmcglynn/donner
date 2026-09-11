@@ -162,7 +162,7 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         start = self.text.index("          should_fallback=false\n")
         end = self.text.index('          work_dir="$(mktemp -d)"', start)
         fragment = textwrap.dedent(self.text[start:end])
-        harness = textwrap.dedent(
+        shell_prefix = textwrap.dedent(
             """
             set -euo pipefail
             SMOKE_COVERAGE_TARGETS="//donner/base/..."
@@ -173,7 +173,7 @@ class CoverageLaneRoutingTest(unittest.TestCase):
             """
         )
         result = subprocess.run(
-            ["bash", "-c", harness + fragment + '\nprintf "affected\\n"\n'],
+            ["bash", "-c", shell_prefix + fragment + '\nprintf "affected\\n"\n'],
             check=True,
             capture_output=True,
             text=True,
@@ -182,25 +182,23 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         return result.stdout.strip().splitlines()[-1]
 
     def test_docs_only_changes_skip_smoke_coverage_admission(self):
-        self.assertEqual(
-            "true|no_instrumentable_targets|",
-            self._classify_changed_files("docs/design_docs/0053-native_gpu_hal.md"),
-        )
+        for path in ("docs/guide.md", "README.md", "AGENTS.md"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    "true|no_instrumentable_targets|",
+                    self._classify_changed_files(path),
+                )
 
     def test_docs_plus_coverage_tooling_retains_smoke_coverage(self):
         self.assertEqual(
             "true|coverage_smoke|//donner/base/...",
-            self._classify_changed_files(
-                "docs/design_docs/0053-native_gpu_hal.md", "tools/coverage.sh"
-            ),
+            self._classify_changed_files("docs/guide.md", "tools/coverage.sh"),
         )
 
     def test_markdown_plus_source_reaches_affected_target_analysis(self):
         self.assertEqual(
             "affected",
-            self._classify_changed_files(
-                "docs/design_docs/0053-native_gpu_hal.md", "donner/base/MathUtils.cc"
-            ),
+            self._classify_changed_files("README.md", "donner/base/MathUtils.cc"),
         )
 
     def test_every_coverage_job_gates_on_runs_coverage(self):
