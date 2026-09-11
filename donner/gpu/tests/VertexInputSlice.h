@@ -219,31 +219,40 @@ void CheckVertexInputScene(DeviceType& device, const ShaderModuleDescriptor& sha
 }
 
 /// Index upload for CheckIndexedDrawScene: one index outside every binding, a Uint16 region whose
-/// first two entries are skipped through firstIndex, alignment padding, then a Uint32 region whose
-/// values only reach the second quad through a negative baseVertex.
+/// first two entries are skipped through firstIndex, alignment padding, a Uint32 region whose
+/// values only reach the second quad through a negative baseVertex, and those same second-quad
+/// values as Uint16 for a device that refuses the full 32-bit range.
 struct IndexedDrawIndices {
   uint16_t unbound;
   std::array<uint16_t, 8> uint16;
   uint16_t padding;
   std::array<uint32_t, 8> uint32;
+  std::array<uint16_t, 8> uint16SecondQuad;
 };
 static_assert(offsetof(IndexedDrawIndices, uint16) == 2);
 static_assert(offsetof(IndexedDrawIndices, uint32) == 20);
-static_assert(sizeof(IndexedDrawIndices) == 52);
+static_assert(offsetof(IndexedDrawIndices, uint16SecondQuad) == 52);
+static_assert(sizeof(IndexedDrawIndices) == 68);
+
+/// Index formats CheckIndexedDrawScene binds. A device whose `supportsFullIndexRange` refuses
+/// Uint32 renders the same image from the Uint16 copy of the second quad's indices.
+enum class IndexedSceneFormats : uint8_t { Uint16AndUint32, Uint16Only };
 
 /// Renders two instanced quads through indexed draws that together exercise a nonzero index
-/// binding offset, a nonzero firstIndex, both index formats bound in one pass, a negative
-/// baseVertex, firstInstance, and a scissor set between the two draws.
+/// binding offset, a nonzero firstIndex, both index formats bound in one pass (or Uint16 twice,
+/// see \p formats), a negative baseVertex, firstInstance, and a scissor set between the two draws.
 ///
-/// Draw 1 (Uint16, baseVertex 0) fills the top half; draw 2 (Uint32 indices 8..11 with
-/// baseVertex -4) fills the bottom half clipped to the scissor. Instances 1 and 2 paint the left
-/// half red and the right half green. Every edge is pixel-aligned so the expected image is exact.
+/// Draw 1 (Uint16, baseVertex 0) fills the top half; draw 2 (indices 8..11 with baseVertex -4)
+/// fills the bottom half clipped to the scissor. Instances 1 and 2 paint the left half red and the
+/// right half green. Every edge is pixel-aligned so the expected image is exact.
 /// @param device Native RHI device.
 /// @param shaderDescriptor Emitted module from BuildVertexInputModule.
 /// @param readbackBuffer Backend's host readback operation.
+/// @param formats Index formats to bind for the two draws.
 template <typename DeviceType, typename Readback>
 void CheckIndexedDrawScene(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                           Readback readbackBuffer) {
+                           Readback readbackBuffer,
+                           IndexedSceneFormats formats = IndexedSceneFormats::Uint16AndUint32) {
   auto shaderModule = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shaderModule, HasResult());
   auto layout = device.createPipelineLayout(PipelineLayoutDescriptor{"attributes", {}});
@@ -267,8 +276,11 @@ void CheckIndexedDrawScene(DeviceType& device, const ShaderModuleDescriptor& sha
   // The two leading Uint16 entries name bottom-quad vertices: a draw that ignored firstIndex
   // would paint the wrong half. The Uint32 entries exceed the vertex count unless baseVertex is
   // applied.
-  const IndexedDrawIndices indices{
-      0xFFFF, {4, 5, 0, 1, 2, 0, 2, 3}, 0xFFFF, {0, 0, 8, 9, 10, 8, 10, 11}};
+  const IndexedDrawIndices indices{0xFFFF,
+                                   {4, 5, 0, 1, 2, 0, 2, 3},
+                                   0xFFFF,
+                                   {0, 0, 8, 9, 10, 8, 10, 11},
+                                   {0, 0, 8, 9, 10, 8, 10, 11}};
   auto vertexBuffer = device.createBuffer(
       BufferDescriptor{"positions", sizeof(vertices), BufferUsage::Vertex | BufferUsage::CopyDst});
   auto instanceBuffer = device.createBuffer(
@@ -308,9 +320,15 @@ void CheckIndexedDrawScene(DeviceType& device, const ShaderModuleDescriptor& sha
               IsOk());
   ASSERT_THAT(pass.result()->drawIndexed(6, 2, 2, 0, 1), IsOk());
   ASSERT_THAT(pass.result()->setScissorRect(2, 6, 10, 4), IsOk());
-  ASSERT_THAT(pass.result()->setIndexBuffer(indexBuffer.result(), IndexFormat::Uint32,
-                                            offsetof(IndexedDrawIndices, uint32)),
-              IsOk());
+  if (formats == IndexedSceneFormats::Uint16AndUint32) {
+    ASSERT_THAT(pass.result()->setIndexBuffer(indexBuffer.result(), IndexFormat::Uint32,
+                                              offsetof(IndexedDrawIndices, uint32)),
+                IsOk());
+  } else {
+    ASSERT_THAT(pass.result()->setIndexBuffer(indexBuffer.result(), IndexFormat::Uint16,
+                                              offsetof(IndexedDrawIndices, uint16SecondQuad)),
+                IsOk());
+  }
   ASSERT_THAT(pass.result()->drawIndexed(6, 2, 2, -4, 1), IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{target.result()},
@@ -344,7 +362,10 @@ void CheckIndexedDrawScene(DeviceType& device, const ShaderModuleDescriptor& sha
                 expected.pixels.begin() + y * expected.rowBytes + x * 4);
     }
   }
-  editor::tests::CompareBitmapToBitmap(actual, expected, "indexed_draw_offsets_instancing_scissor",
+  editor::tests::CompareBitmapToBitmap(actual, expected,
+                                       formats == IndexedSceneFormats::Uint16AndUint32
+                                           ? "indexed_draw_offsets_instancing_scissor"
+                                           : "indexed_draw_uint16_only",
                                        editor::tests::PixelmatchIdentityParams());
 }
 }  // namespace donner::gpu::tests

@@ -1596,6 +1596,10 @@ bool VulkanDevice::supportsFullIndexRange(IndexFormat format) const {
   return format != IndexFormat::Uint32 || impl_->fullDrawIndexUint32;
 }
 
+void VulkanDevice::disableFullUint32IndexRangeForTest() {
+  impl_->fullDrawIndexUint32 = false;
+}
+
 std::string VulkanDevice::lastErrorForTest() const {
   return impl_->errorState->firstMessage();
 }

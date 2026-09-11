@@ -83,6 +83,10 @@ public:
   /// above `maxDrawIndexedIndexValue` are undefined.
   bool supportsFullIndexRange(IndexFormat format) const override;
 
+  /// Reports Uint32 as lacking its full range from now on, whatever the device enabled, so the
+  /// refusal path runs on a device that has the feature. Only ever narrows the capability.
+  void disableFullUint32IndexRangeForTest();
+
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device

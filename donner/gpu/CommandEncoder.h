@@ -132,10 +132,9 @@ public:
    * declares holds a group created against that layout.
    *
    * Vertex-stepped ranges are NOT validated here: the element reached is `baseVertex + index
-   * value`, and index values live in GPU memory. Callers that generate indices must keep every
-   * `baseVertex + value` inside the bound vertex buffers; a violation reads whatever the backend
-   * returns for an out-of-range vertex fetch (Vulkan robust buffer access yields defined values,
-   * Metal and WebGPU behave per their own rules) and is never a host memory fault.
+   * value`, and index values live in GPU memory. Keeping every `baseVertex + value` inside the
+   * bound vertex buffers is the caller's responsibility; what an out-of-range vertex fetch
+   * returns, and whether the backend reports it, is backend-dependent and outside this contract.
    *
    * A zero \p indexCount or \p instanceCount is recorded like `draw` records zero counts; the
    * range checks still apply and backends issue no native draw for it.

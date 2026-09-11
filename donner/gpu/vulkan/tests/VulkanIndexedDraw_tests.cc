@@ -1,7 +1,8 @@
 /// @file
-/// Indexed draws through the Vulkan backend: the shared indexed scene renders exactly, an empty
-/// index binding at the buffer end submits without a native bind, and an index range the encoder
-/// rejects never reaches the device.
+/// Indexed draws through the Vulkan backend: the shared indexed scene renders exactly on every
+/// device the backend accepts (both index formats, or Uint16 plus a refused Uint32 without the
+/// full 32-bit range), an empty index binding at the buffer end submits without a native bind,
+/// and an index range the encoder rejects never reaches the device.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -28,6 +29,7 @@ namespace {
 using testing::Ge;
 using testing::HasSubstr;
 using testing::IsEmpty;
+using testing::IsFalse;
 using testing::IsTrue;
 using testing::NotNull;
 using testing::SizeIs;
@@ -53,19 +55,52 @@ protected:
     }
   }
 
-  /// Emits BuildVertexInputModule as SPIR-V.
-  ShaderModuleDescriptor vertexInputShader() {
-    const auto module = gpu::tests::BuildVertexInputModule();
-    EXPECT_FALSE(module.hasError()) << module.error();
-    const auto emitted = shader::EmitSpirv(module.result());
-    EXPECT_FALSE(emitted.hasError()) << emitted.error();
-    return ShaderModuleDescriptor{"attributes", {}, ShaderSourceKind::Spirv, emitted.result()};
+  /// Emits BuildVertexInputModule as SPIR-V; callers unwrap with `ASSERT_THAT(_, HasResult())`.
+  static shader::ShaderResult<ShaderModuleDescriptor> VertexInputShader() {
+    auto module = gpu::tests::BuildVertexInputModule();
+    if (module.hasError()) {
+      return std::move(module).error();
+    }
+    auto emitted = shader::EmitSpirv(module.result());
+    if (emitted.hasError()) {
+      return std::move(emitted).error();
+    }
+    return ShaderModuleDescriptor{
+        "attributes", {}, ShaderSourceKind::Spirv, std::move(emitted).result()};
+  }
+
+  /// Runs the shared indexed scene the way the device's index-range capability dictates: both
+  /// formats when Uint32 carries its full range, otherwise Uint16 pixels plus a refused Uint32.
+  void checkAcceptanceScene() {
+    const auto shader = VertexInputShader();
+    ASSERT_THAT(shader, HasResult());
+    const auto readback = [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); };
+    if (device_->supportsFullIndexRange(IndexFormat::Uint32)) {
+      SCOPED_TRACE("device honors the full Uint32 range: both index formats bound");
+      gpu::tests::CheckIndexedDrawScene(*device_, shader.result(), readback,
+                                        gpu::tests::IndexedSceneFormats::Uint16AndUint32);
+    } else {
+      SCOPED_TRACE("device lacks the full Uint32 range: Uint16 pixels, Uint32 refused");
+      gpu::tests::CheckIndexedDrawScene(*device_, shader.result(), readback,
+                                        gpu::tests::IndexedSceneFormats::Uint16Only);
+      ASSERT_NO_FATAL_FAILURE(createQuadResources());
+      std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_->createCommandEncoder());
+      RenderPassEncoder* pass = beginQuadPass(*encoder);
+      ASSERT_THAT(pass, NotNull());
+      EXPECT_THAT(pass->setIndexBuffer(indexBuffer_, IndexFormat::Uint32),
+                  IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("Uint32")));
+      // The refusal poisons the encoder, so nothing reaches the device.
+      EXPECT_THAT(encoder->finish(), IsGpuError(GpuErrorType::Unsupported));
+    }
+    EXPECT_THAT(device_->lastErrorForTest(), IsEmpty());
   }
 
   /// Creates the pipeline, a full-clip quad at slot 0, the shared instance upload at slot 1, one
   /// quad of 16-bit indices, and a 4x4 target with its readback buffer, all held by the fixture.
   void createQuadResources() {
-    shaderModule_ = GetResultOrFail(device_->createShaderModule(vertexInputShader()));
+    const auto shader = VertexInputShader();
+    ASSERT_THAT(shader, HasResult());
+    shaderModule_ = GetResultOrFail(device_->createShaderModule(shader.result()));
     layout_ =
         GetResultOrFail(device_->createPipelineLayout(PipelineLayoutDescriptor{"attributes", {}}));
     pipeline_ = GetResultOrFail(device_->createRenderPipeline(
@@ -158,10 +193,13 @@ protected:
 };
 
 TEST_F(VulkanIndexedDrawTest, IndexedQuadsWithOffsetsInstancingAndScissorMatchTheExpectedImage) {
-  gpu::tests::CheckIndexedDrawScene(*device_, vertexInputShader(), [this](const Buffer& buffer) {
-    return device_->readBackBuffer(buffer);
-  });
-  EXPECT_THAT(device_->lastErrorForTest(), IsEmpty());
+  checkAcceptanceScene();
+}
+
+TEST_F(VulkanIndexedDrawTest, WithoutTheFullUint32RangeTheSceneRendersFromUint16AndRefusesUint32) {
+  device_->disableFullUint32IndexRangeForTest();
+  ASSERT_THAT(device_->supportsFullIndexRange(IndexFormat::Uint32), IsFalse());
+  checkAcceptanceScene();
 }
 
 TEST_F(VulkanIndexedDrawTest, SixteenBitIndicesAlwaysCarryTheirFullRange) {
@@ -169,8 +207,9 @@ TEST_F(VulkanIndexedDrawTest, SixteenBitIndicesAlwaysCarryTheirFullRange) {
 }
 
 TEST_F(VulkanIndexedDrawTest, AnIndexRangePastTheBoundBufferNeverReachesTheDevice) {
-  const ShaderModule shaderModule =
-      GetResultOrFail(device_->createShaderModule(vertexInputShader()));
+  const auto shader = VertexInputShader();
+  ASSERT_THAT(shader, HasResult());
+  const ShaderModule shaderModule = GetResultOrFail(device_->createShaderModule(shader.result()));
   const PipelineLayout layout =
       GetResultOrFail(device_->createPipelineLayout(PipelineLayoutDescriptor{"attributes", {}}));
   const RenderPipeline pipeline = GetResultOrFail(device_->createRenderPipeline(
