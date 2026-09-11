@@ -7,7 +7,6 @@
 #include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterConvolveMatrixWgsl.h"
 #include "embed_resources/FilterDiffuseLightingWgsl.h"
-#include "embed_resources/FilterDisplacementMapWgsl.h"
 #include "embed_resources/FilterImageWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
@@ -96,12 +95,6 @@ wgpu::ShaderModule createFilterTurbulenceShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterTurbulence",
                               donner::embedded::kFilterTurbulenceWgsl.data(),
                               donner::embedded::kFilterTurbulenceWgsl.size());
-}
-
-wgpu::ShaderModule createFilterDisplacementMapShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterDisplacementMap",
-                              donner::embedded::kFilterDisplacementMapWgsl.data(),
-                              donner::embedded::kFilterDisplacementMapWgsl.size());
 }
 
 wgpu::ShaderModule createFilterDiffuseLightingShader(const wgpu::Device& device) {

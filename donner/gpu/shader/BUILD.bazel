@@ -110,6 +110,7 @@ donner_cc_library(
         "programs/ColorSpaceConvertBindings.h",
         "programs/ComponentTransferBindings.h",
         "programs/CompositeBindings.h",
+        "programs/DisplacementMapBindings.h",
         "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
         "programs/FloodBindings.h",
@@ -132,6 +133,7 @@ donner_cc_library(
         "programs/ColorSpaceConvert.cc",
         "programs/ComponentTransfer.cc",
         "programs/Composite.cc",
+        "programs/DisplacementMap.cc",
         "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
         "programs/Flood.cc",
@@ -151,6 +153,7 @@ donner_cc_library(
         "programs/ColorSpaceConvert.h",
         "programs/ComponentTransfer.h",
         "programs/Composite.h",
+        "programs/DisplacementMap.h",
         "programs/DropShadow.h",
         "programs/ErrorLatch.h",
         "programs/FilterColorMatrix.h",
@@ -192,6 +195,7 @@ donner_cc_test(
         "tests/ColorSpaceConvertProgram_tests.cc",
         "tests/ComponentTransferProgram_tests.cc",
         "tests/CompositeProgram_tests.cc",
+        "tests/DisplacementMapProgram_tests.cc",
         "tests/DropShadowProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
         "tests/FloodProgram_tests.cc",
@@ -218,6 +222,7 @@ donner_cc_test(
     deps = [
         ":checkerboard_artifact",
         ":component_transfer_artifact",
+        ":displacement_map_artifact",
         ":drop_shadow_artifact",
         ":float_storage_test_module",
         ":module_interface",
@@ -399,6 +404,21 @@ genrule(
 donner_cc_library(
     name = "component_transfer_artifact",
     hdrs = ["generated/ComponentTransferShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "displacement_map_generated",
+    outs = ["generated/DisplacementMapShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) displacement_map " +
+          "$(location generated/DisplacementMapShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "displacement_map_artifact",
+    hdrs = ["generated/DisplacementMapShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )

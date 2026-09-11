@@ -25,6 +25,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
@@ -258,6 +259,12 @@ TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildDropShadowModule(), "drop_shadow.spv");
+}
+
+TEST(SpirvValValidation, EmittedDisplacementMapComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDisplacementMapModule(),
+                             "displacement_map.spv");
 }
 
 TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {

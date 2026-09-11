@@ -31,6 +31,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
@@ -63,6 +64,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"morphology", 1, &programs::BuildMorphologyModule},
     {"composite", 1, &programs::BuildCompositeModule},
     {"component_transfer", 1, &programs::BuildComponentTransferModule},
+    {"displacement_map", 1, &programs::BuildDisplacementMapModule},
     {"drop_shadow", 1, &programs::BuildDropShadowModule},
     {"offset", 1, &programs::BuildOffsetModule},
     {"tile", 1, &programs::BuildTileModule},

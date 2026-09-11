@@ -22,6 +22,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
+#include "donner/gpu/shader/programs/DisplacementMapBindings.h"
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
@@ -42,6 +43,7 @@
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
+#include "embed_resources/FilterDisplacementMapWgsl.h"
 #include "embed_resources/FilterDropShadowWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
@@ -1939,13 +1941,17 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     turbulencePipeline_.reset(dev.createComputePipeline(cpDesc));
   }
 
-  // --- feDisplacementMap pipeline (two inputs + output + uniform) ---
   {
-    auto [bgl, pipeline] = createTwoInputUniformPipeline(dev, "FilterDisplacementMap",
-                                                         createFilterDisplacementMapShader(dev),
-                                                         sizeof(DisplacementParams));
-    displacementMapBindGroupLayout_ = std::move(bgl);
-    displacementMapPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::DisplacementMapBinding;
+    displacementMapProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterDisplacementMap",
+        EmbeddedWgsl(donner::embedded::kFilterDisplacementMapWgsl),
+        gpu::shader::programs::kDisplacementMapEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(DisplacementMapBinding::SourceTexture)),
+         SampledInputEntry(static_cast<uint32_t>(DisplacementMapBinding::MapTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(DisplacementMapBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(DisplacementMapBinding::Params))},
+        gpu::shader::programs::kDisplacementMapWorkgroupSize);
   }
 
   // --- feDiffuseLighting pipeline (input + output + storage buffer) ---
@@ -3068,15 +3074,15 @@ wgpu::Texture FilterNodeExecution::apply(const fp::Turbulence& primitive) {
 }
 
 wgpu::Texture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
-  double scale = std::abs(primitive.scale);
+  double scale = primitive.scale;
   if (coordinates.isObjectBoundingBox) {
     scale *= std::sqrt(coordinates.boundingBoxWidth * coordinates.boundingBoxHeight);
   }
   scale *= std::sqrt(coordinates.scaleX * coordinates.scaleY);
   wgpu::Texture second;
-  return convertBinaryInputs(second)
-             ? engine.applyDisplacementMap(arena, input, second, primitive, scale)
-             : wgpu::Texture();
+  return convertBinaryInputs(second) ? engine.applyDisplacementMap(arena, input, second, primitive,
+                                                                   boundedSignedFilterPixels(scale))
+                                     : wgpu::Texture();
 }
 
 wgpu::Texture FilterNodeExecution::apply(const fp::DiffuseLighting& primitive) {
@@ -3887,13 +3893,11 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = in1.getWidth();
-  const uint32_t height = in1.getHeight();
-
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterDisplacementMapOutput");
-  if (!output) {
+  const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterDisplacementMapOutput", extent, gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
@@ -3914,16 +3918,12 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
   params.yChannel = toIndex(primitive.yChannelSelector);
   params.pad = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  if (!dispatchRuntimeTwoInput(arena, displacementMapProgram_, in1, in2, *output, extent,
+                               UniformBytes(params), "FilterDisplacementMapPass",
+                               gpu::shader::programs::kDisplacementMapWorkgroupSize)) {
     return {};
   }
-
-  dispatchTwoInputUniform(arena, device_, displacementMapBindGroupLayout_.get(),
-                          displacementMapPipeline_.get(), in1, in2, output, uniformBuffer.buffer,
-                          uniformBuffer.offset, sizeof(DisplacementParams),
-                          "FilterDisplacementMapPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 namespace {
