@@ -83,26 +83,6 @@ gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device);
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device);
 
 /**
- * Compile the feBlend compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_blend.wgsl` via the `embed_resources()` Bazel rule.
- * The shader applies one of 16 W3C Compositing 1 blend modes to two
- * premultiplied-alpha input textures, using the same blend formulas as
- * `image_blit.wgsl`.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var in1_tex: texture_2d<f32>;`
- * - `@group(0) @binding(1) var in2_tex: texture_2d<f32>;`
- * - `@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(3) var<uniform> params: BlendParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device);
-
-/**
  * Compile the feConvolveMatrix compute shader for the given device.
  *
  * The WGSL source is embedded at build time from

@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/programs/Blend.h"
 #include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
@@ -281,6 +282,11 @@ TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildMorphologyModule(), "morphology");
+}
+
+TEST(MslXcrunValidation, EmittedBlendComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildBlendModule(), "blend");
 }
 
 TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {

@@ -27,6 +27,7 @@
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/Blend.h"
 #include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
@@ -54,6 +55,7 @@ struct ProgramEntry {
 
 /// Programs this tool knows how to emit. A new IR program adds one row.
 constexpr ProgramEntry kPrograms[] = {
+    {"blend", 1, &programs::BuildBlendModule},
     {"checkerboard", 0, &programs::BuildCheckerboardModule},
     {"color_space_convert", 1, &programs::BuildColorSpaceConvertModule},
     {"filter_color_matrix", 1, &programs::BuildFilterColorMatrixModule},

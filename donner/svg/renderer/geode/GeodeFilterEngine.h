@@ -507,8 +507,7 @@ private:
   RuntimeComputeProgram compositeProgram_;
 
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> blendPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
+  RuntimeComputeProgram blendProgram_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
   RuntimeComputeProgram morphologyProgram_;

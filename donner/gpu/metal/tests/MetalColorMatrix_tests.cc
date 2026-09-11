@@ -21,11 +21,13 @@
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/programs/Blend.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/tests/BlendSlice.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
 #include "donner/gpu/tests/ComponentTransferSlice.h"
@@ -354,6 +356,72 @@ TEST_F(MetalColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBound
   gpu::tests::CheckComponentTransferStorage(
       *device_, gpu::generated::component_transfer::BuildDescriptor(ShaderSourceKind::Msl),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, BlendSimpleModesMatchCpu) {
+  const auto module = shader::programs::BuildBlendModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (uint32_t mode = 0; mode < 6; ++mode) {
+    SCOPED_TRACE(mode);
+    gpu::tests::CheckBlendStorage(
+        *device_,
+        ShaderModuleDescriptor{"float",
+                               RcString(emitted.result()),
+                               ShaderSourceKind::Msl,
+                               {},
+                               shader::ComputeEntryPointsOf(module.result()),
+                               bindings.result()},
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, mode);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, BlendAdvancedSeparableModesMatchCpu) {
+  const auto module = shader::programs::BuildBlendModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (uint32_t mode = 6; mode < 12; ++mode) {
+    SCOPED_TRACE(mode);
+    gpu::tests::CheckBlendStorage(
+        *device_,
+        ShaderModuleDescriptor{"float",
+                               RcString(emitted.result()),
+                               ShaderSourceKind::Msl,
+                               {},
+                               shader::ComputeEntryPointsOf(module.result()),
+                               bindings.result()},
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, mode);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, BlendNonseparableModesMatchCpu) {
+  const auto module = shader::programs::BuildBlendModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (uint32_t mode = 12; mode < 16; ++mode) {
+    SCOPED_TRACE(mode);
+    gpu::tests::CheckBlendStorage(
+        *device_,
+        ShaderModuleDescriptor{"float",
+                               RcString(emitted.result()),
+                               ShaderSourceKind::Msl,
+                               {},
+                               shader::ComputeEntryPointsOf(module.result()),
+                               bindings.result()},
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, mode);
+  }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

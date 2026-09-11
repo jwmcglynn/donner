@@ -19,6 +19,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/BlendBindings.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
@@ -39,6 +40,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/ColorSpaceConvertWgsl.h"
+#include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
@@ -1819,10 +1821,15 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
   // --- feBlend W3C blend-mode pipeline (two inputs + output + uniform) ---
   {
-    auto [bgl, pipeline] = createTwoInputUniformPipeline(
-        dev, "FilterBlend", createFilterBlendShader(dev), sizeof(BlendParams));
-    blendBindGroupLayout_ = std::move(bgl);
-    blendPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::BlendBinding;
+    blendProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterBlend", EmbeddedWgsl(donner::embedded::kFilterBlendWgsl),
+        gpu::shader::programs::kBlendEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(BlendBinding::SourceTexture)),
+         SampledInputEntry(static_cast<uint32_t>(BlendBinding::DestinationTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(BlendBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(BlendBinding::Params))},
+        gpu::shader::programs::kBlendWorkgroupSize);
   }
 
   // Morphology shares the GPU command stream with the surrounding filter passes.
@@ -3535,12 +3542,11 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = in1.getWidth();
-  const uint32_t height = in1.getHeight();
-
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterBlendOutput");
-  if (!output) {
+  const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterBlendOutput", extent, gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
@@ -3550,15 +3556,12 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
   params.pad1 = 0;
   params.pad2 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  if (!dispatchRuntimeTwoInput(arena, blendProgram_, in1, in2, *output, extent,
+                               UniformBytes(params), "FilterBlendPass",
+                               gpu::shader::programs::kBlendWorkgroupSize)) {
     return {};
   }
-
-  dispatchTwoInputUniform(arena, device_, blendBindGroupLayout_.get(), blendPipeline_.get(), in1,
-                          in2, output, uniformBuffer.buffer, uniformBuffer.offset,
-                          sizeof(BlendParams), "FilterBlendPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyMorphology(

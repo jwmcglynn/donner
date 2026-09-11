@@ -107,6 +107,7 @@ donner_cc_library(
 donner_cc_library(
     name = "program_bindings",
     hdrs = [
+        "programs/BlendBindings.h",
         "programs/ColorSpaceConvertBindings.h",
         "programs/ComponentTransferBindings.h",
         "programs/CompositeBindings.h",
@@ -127,6 +128,7 @@ donner_cc_library(
 donner_cc_library(
     name = "programs",
     srcs = [
+        "programs/Blend.cc",
         "programs/Checkerboard.cc",
         "programs/ColorMatrix.cc",
         "programs/ColorSpaceConvert.cc",
@@ -146,6 +148,7 @@ donner_cc_library(
         "programs/Tile.cc",
     ],
     hdrs = [
+        "programs/Blend.h",
         "programs/Checkerboard.h",
         "programs/ColorMatrix.h",
         "programs/ColorSpaceConvert.h",
@@ -187,6 +190,7 @@ donner_cc_library(
 donner_cc_test(
     name = "shader_tests",
     srcs = [
+        "tests/BlendProgram_tests.cc",
         "tests/CheckerboardProgram_tests.cc",
         "tests/ColorMatrixProgram_tests.cc",
         "tests/ColorSpaceConvertProgram_tests.cc",

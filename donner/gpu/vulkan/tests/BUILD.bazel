@@ -137,6 +137,7 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
         "//donner/gpu",
+        "//donner/gpu:blend_slice",
         "//donner/gpu:blur_slice",
         "//donner/gpu:color_matrix_slice",
         "//donner/gpu:component_transfer_slice",

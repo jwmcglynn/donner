@@ -4,7 +4,6 @@
 
 #include "donner/base/RcString.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-#include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterConvolveMatrixWgsl.h"
 #include "embed_resources/FilterDiffuseLightingWgsl.h"
 #include "embed_resources/FilterDisplacementMapWgsl.h"
@@ -79,11 +78,6 @@ gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
   return createGpuShaderFromWgsl(device, "ImageBlit", donner::embedded::kImageBlitWgsl.data(),
                                  donner::embedded::kImageBlitWgsl.size());
-}
-
-wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterBlend", donner::embedded::kFilterBlendWgsl.data(),
-                              donner::embedded::kFilterBlendWgsl.size());
 }
 
 wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device) {

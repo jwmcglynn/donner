@@ -20,6 +20,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/programs/Blend.h"
 #include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
@@ -272,6 +273,11 @@ TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildMorphologyModule(), "morphology.spv");
+}
+
+TEST(SpirvValValidation, EmittedBlendComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildBlendModule(), "blend.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
