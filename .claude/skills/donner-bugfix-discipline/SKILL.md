@@ -26,7 +26,9 @@ sections "Debugging Discipline" and "Bug-Fix Commit Discipline".
    same failure the user reported (see the model message below); pasting raw stdout is optional.
 3. **Commit the red test on its own commit** so CI records a red-to-green transition on the branch.
 4. Fix the bug in a follow-up commit; the test now passes.
-5. `bazel test //...` must be fully green before pushing (see donner-build-test skill).
+5. `bazel test //...` must be fully green before merge readiness (see donner-build-test skill).
+   It remains the default pre-push gate; requested early delivery follows the narrower publication
+   gate in `AGENTS.md` and schedules full qualification without skipping it.
 6. `clang-format -i` every modified C/C++ file (or `git clang-format` for staged changes).
 
 If you cannot make the test fail at HEAD, **the test is wrong — not the bug**. Rework the test;
@@ -116,7 +118,7 @@ and the donner-editor-debugging skill.
 | "Glyph outline differences"                                                     | Same lazy-excuse family; hides wrong glyph position / transform / coverage bugs.                                                                                                                                                                                                                                             |
 | Percentage thresholds in pixel diffs                                            | They mask regressions smaller than the threshold. A private 5% comparator hid bug #582 for weeks. Diff is zero or the test fails with PNGs for inspection.                                                                                                                                                                   |
 | Private "boutique" comparators (`composeOver`, `CountDifferingPixelsInRect`, …) | Use / extend `bitmap_golden_compare` instead — see donner-pixel-diff skill.                                                                                                                                                                                                                                                  |
-| "Preexisting failure, not mine"                                                 | There is no such thing on this repo. A red test found while doing other work is now in scope: fix it or open + link a tracking issue explicitly.                                                                                                                                                                             |
+| "Preexisting failure, not mine"                                                 | A red test remains blocking. Fix it when it is in the unit's scope; otherwise report it to the coordinator for one assigned repair owner and linked repair. Never dismiss it or duplicate the repair across workers.                                                                                                        |
 
 ## 6. Diagnosable tests (the ToTT standard)
 
