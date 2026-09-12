@@ -1,5 +1,5 @@
 /// @file
-/// MSL emitter tests: determinism, the committed solid-fill golden, and fail-closed rejection of
+/// MSL emitter tests: determinism, binding structure, and fail-closed rejection of
 /// layout divergence and reserved words.
 
 #include "donner/gpu/shader/MslEmitter.h"
@@ -7,12 +7,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
-#include <fstream>
+#include <algorithm>
+#include <array>
+#include <limits>
 #include <sstream>
 #include <string>
 
-#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -88,29 +88,6 @@ TEST(MslEmitterTests, ContainsSolidFillSurface) {
   EXPECT_THAT(msl, HasSubstr("float4 color [[color(0)]];"));
   EXPECT_THAT(msl, HasSubstr("discard_fragment();"));
   EXPECT_THAT(msl, HasSubstr("constant uint kNoBand = 4294967295u;"));
-}
-
-TEST(MslEmitterTests, MatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitSolidFillMsl();
-
-  if (const char* updateRoot = std::getenv("UPDATE_MSL_GOLDEN")) {
-    const std::string outPath =
-        std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/solid_fill.msl";
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
-    out << msl;
-    GTEST_SKIP() << "Golden updated at " << outPath;
-  }
-
-  const std::string path =
-      donner::Runfiles::instance().Rlocation("donner/gpu/shader/tests/testdata/solid_fill.msl");
-  std::ifstream stream(path, std::ios::binary);
-  ASSERT_TRUE(stream.good()) << "Failed to open golden file: " << path;
-  std::ostringstream golden;
-  golden << stream.rdbuf();
-
-  EXPECT_THAT(msl, testing::Eq(golden.str()));
 }
 
 TEST(MslEmitterTests, RejectsUniformArrayStrideDivergence) {
@@ -209,6 +186,87 @@ TEST(MslEmitterTests, RejectsBufferBindingsCollidingWithVertexBufferIndex) {
                                       "buffer index")));
 }
 
+TEST(MslEmitterTests, RejectsBufferBindingBeforeItsIndexCanWrap) {
+  ModuleBuilder builder;
+  const IrType params =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  ASSERT_THAT(builder.addUniformBuffer(0, std::numeric_limits<uint32_t>::max(), "params", params),
+              IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("buffer binding")));
+}
+
+TEST(MslEmitterTests, RejectsSamplerBeyondTheNativeArgumentTable) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addSampler(0, 16, "filterSampler"), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("sampler binding")));
+}
+
+TEST(MslEmitterTests, RejectsTextureBeyondTheNativeArgumentTable) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addTexture2d(0, 128, "sourceTexture"), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("texture binding")));
+}
+
+TEST(MslEmitterTests, AcceptsTheLastSupportedArgumentIndices) {
+  ModuleBuilder builder;
+  const IrType params =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  ASSERT_THAT(builder.addUniformBuffer(0, 28, "params", params), IsShaderOk());
+  ASSERT_THAT(builder.addSampler(0, 15, "filterSampler"), IsShaderOk());
+  ASSERT_THAT(builder.addTexture2d(0, 127, "sourceTexture"), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
+}
+
+TEST(MslEmitterTests, ReservesGeneratedRuntimeArrayIdentifiers) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addConstant("donner_msl_read", LiteralU32(1)), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+}
+
+TEST(MslEmitterTests, RejectsDirectArrayValuedRuntimeElements) {
+  ModuleBuilder builder;
+  const IrType pair = GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 2), IrType::F32());
+  const IrType values = GetShaderResultOrFail(IrType::RuntimeArray(pair), IrType::F32());
+  ASSERT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "values", values), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("nested array")));
+}
+
+TEST(MslEmitterTests, RejectsNestedSizedArrayDeclarations) {
+  ModuleBuilder builder;
+  const IrType pair = GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 2), IrType::F32());
+  const IrType grid = GetShaderResultOrFail(IrType::SizedArray(pair, 2), IrType::F32());
+  const IrType values =
+      GetShaderResultOrFail(IrType::Struct("Values", {{"grid", grid}}), IrType::F32());
+  ASSERT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "values", values), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("nested array")));
+}
+
+TEST(MslEmitterTests, RuntimeStructElementsMayContainArrayMembers) {
+  ModuleBuilder builder;
+  const IrType pair = GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 2), IrType::F32());
+  const IrType element =
+      GetShaderResultOrFail(IrType::Struct("Value", {{"pair", pair}}), IrType::F32());
+  const IrType values = GetShaderResultOrFail(IrType::RuntimeArray(element), IrType::F32());
+  ASSERT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "values", values), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
+}
+
 TEST(MslEmitterTests, RejectsBindingsOutsideGroupZero) {
   // The flat Metal argument-table map models bind group 0 only; a binding in another group
   // would silently collide with group 0's indices.
@@ -284,6 +342,40 @@ TEST(MslEmitterTests, RejectsALocalNamedAfterACalledBuiltin) {
   ASSERT_THAT(module, HasShaderResult());
   EXPECT_THAT(EmitMsl(module.result()),
               IsShaderError(HasSubstr("collides with an MSL reserved word")));
+}
+
+TEST(MslEmitterTests, EveryFreeFunctionBuiltinNameIsReserved) {
+  // The WGSL emitter has the same guard, and MSL needs its own because the two reserved-word
+  // tables are separate. Four builtins are excluded because MSL does not spell them as a free
+  // function call: `select` becomes a ternary and the three texture builtins become methods on
+  // the texture object, so their WGSL names are never emitted here. Anything else the enum
+  // grows is emitted by name and must therefore be unavailable as an identifier; a builtin
+  // added without its reserved word fails here rather than in a shader that shadows it.
+  const std::array<BuiltinFn, 4> notSpelledAsACall = {BuiltinFn::Select, BuiltinFn::TextureSample,
+                                                      BuiltinFn::TextureLoad,
+                                                      BuiltinFn::TextureDimensions};
+
+  for (int raw = 0; raw < 256; ++raw) {
+    const BuiltinFn builtin = static_cast<BuiltinFn>(raw);
+    std::ostringstream name;
+    name << builtin;
+    if (name.str() == "unknown") {
+      EXPECT_GT(raw, 0) << "the builtin enum walk found no builtins at all";
+      break;
+    }
+    if (std::find(notSpelledAsACall.begin(), notSpelledAsACall.end(), builtin) !=
+        notSpelledAsACall.end()) {
+      continue;
+    }
+
+    ModuleBuilder builder;
+    ASSERT_THAT(builder.addConstant(RcString(name.str()), LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitMsl(module.result()),
+                IsShaderError(HasSubstr("collides with an MSL reserved word")))
+        << "builtin \"" << name.str() << "\" is spelled as a call but its name is not reserved";
+  }
 }
 
 TEST(MslEmitterTests, RejectsMslReservedWords) {

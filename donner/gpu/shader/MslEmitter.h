@@ -10,7 +10,7 @@
 namespace donner::gpu::shader {
 
 /**
- * Emits deterministic MSL text for \p module (design 0053 "Original emitters").
+ * Emits deterministic MSL text for \p module.
  *
  * Follows the same determinism discipline as \ref EmitWgsl: declaration-order emission with
  * dependency-ordered struct definitions, two-space indentation, LF-only lines with no trailing
@@ -19,7 +19,8 @@ namespace donner::gpu::shader {
  *
  * Mapping highlights:
  * - Types: f32 -> float, vecN<T> -> floatN/intN/uintN/boolN, mat4x4f -> float4x4, sized arrays
- *   -> C arrays, structs -> C++ structs. The MSL natural layout of every buffer-referenced
+ *   -> C arrays, structs -> C++ structs. Direct array-valued array elements are rejected.
+ *   The MSL natural layout of every buffer-referenced
  *   struct is verified member-by-member against the WGSL layout engine
  *   (\ref ComputeStructLayout); any divergence (for example MSL's 16-byte float3, or a uniform
  *   array whose WGSL stride was padded to 16) fails closed instead of emitting a silently
@@ -30,6 +31,10 @@ namespace donner::gpu::shader {
  *   parameters in module declaration order, and user-call sites forward them. Storage buffers
  *   are `device const` pointers (read-only expressed via const; `device` rather than `constant`
  *   address space so buffer sizes are unconstrained), uniform buffers are `constant T&`.
+ * - Runtime-array reads evaluate the index once and return zero outside the declared binding's
+ *   whole elements. A fixed byte-length table at buffer index 0 is forwarded through helpers;
+ *   the native backend supplies the exact ranges. Other indexing is unchanged. Identifiers
+ *   beginning with `donner_msl_` are reserved for generated helpers and parameters.
  * - Entry points: the vertex stage takes a generated `<name>_Input` struct via `[[stage_in]]`
  *   (fields carry `[[attribute(location)]]`) plus `[[instance_id]]`; the fragment stage takes a
  *   generated input struct whose members carry `[[position]]` / `[[user(locnN)]]`. Outputs are

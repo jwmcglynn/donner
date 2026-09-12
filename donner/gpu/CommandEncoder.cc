@@ -1,5 +1,6 @@
 #include "donner/gpu/CommandEncoder.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <sstream>
@@ -17,6 +18,27 @@ GpuError Err(GpuErrorType type, std::string message) {
   return GpuError{type, std::move(message)};
 }
 
+/// Validates one vertex or instance element range against its bound buffer.
+/// @param operation Recording operation named in an error. @param rangeKind Element kind.
+/// @param first First element. @param count Number of elements. @param strideBytes Element stride.
+/// @param slot Vertex-buffer slot. @param bytesAvailable Bytes available from its bound offset.
+std::optional<GpuError> ValidateVertexBufferRange(std::string_view operation,
+                                                  std::string_view rangeKind, uint64_t first,
+                                                  uint64_t count, uint64_t strideBytes, size_t slot,
+                                                  uint64_t bytesAvailable) {
+  const std::optional<uint64_t> lastElement = CheckedAdd(first, count);
+  const std::optional<uint64_t> bytesNeeded =
+      lastElement ? CheckedMul(*lastElement, strideBytes) : std::nullopt;
+  if (bytesNeeded && *bytesNeeded <= bytesAvailable) {
+    return std::nullopt;
+  }
+  return Err(GpuErrorType::OutOfBounds,
+             std::format("{}: {} range [{}, {}) with strideBytes {} overflows the "
+                         "vertex buffer bound at slot {} ({} bytes available)",
+                         operation, rangeKind, first, lastElement ? *lastElement : 0, strideBytes,
+                         slot, bytesAvailable));
+}
+
 }  // namespace
 
 Status RenderPassEncoder::setPipeline(const RenderPipeline& pipeline) {
@@ -32,6 +54,11 @@ Status RenderPassEncoder::setVertexBuffer(uint32_t slot, const Buffer& buffer,
   return encoder_->passSetVertexBuffer(slot, buffer, offsetBytes);
 }
 
+Status RenderPassEncoder::setIndexBuffer(const Buffer& buffer, IndexFormat format,
+                                         uint64_t offsetBytes) {
+  return encoder_->passSetIndexBuffer(buffer, format, offsetBytes);
+}
+
 Status RenderPassEncoder::setScissorRect(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
   return encoder_->passSetScissorRect(x, y, width, height);
 }
@@ -44,6 +71,13 @@ Status RenderPassEncoder::setViewport(float x, float y, float width, float heigh
 Status RenderPassEncoder::draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex,
                                uint32_t firstInstance) {
   return encoder_->passDraw(vertexCount, instanceCount, firstVertex, firstInstance);
+}
+
+Status RenderPassEncoder::drawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                                      uint32_t firstIndex, int32_t baseVertex,
+                                      uint32_t firstInstance) {
+  return encoder_->passDrawIndexed(indexCount, instanceCount, firstIndex, baseVertex,
+                                   firstInstance);
 }
 
 Status RenderPassEncoder::end() {
@@ -92,25 +126,102 @@ std::optional<GpuError> CommandEncoder::checkRecordable(PassKind requiredPass) {
 void CommandEncoder::resetPassBindings() {
   currentPipeline_.reset();
   boundVertexBuffers_.fill(std::nullopt);
+  boundIndexBuffer_.reset();
   boundBindGroups_.fill(std::nullopt);
+  passAttachmentTextures_.clear();
 }
 
 Status CommandEncoder::validateBoundBindGroups(std::string_view operation) {
-  for (size_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
-    if (!boundBindGroups_[index]) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("{}: the pipeline layout requires a bind group at index {} "
-                                  "but none is bound",
-                                  operation, index)));
+  // Called once per draw and per dispatch, on the path the Geode renderer runs through, so the
+  // collectors are encoder-owned and reused rather than allocated here. They are cleared, not
+  // shrunk, and they accumulate across every bound group, so a pass allocates at most once for
+  // the largest total those groups reach.
+  sampledTextureScratch_.clear();
+  storageTextureScratch_.clear();
+  for (uint32_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
+    auto group = validateBoundBindGroup(index, operation);
+    if (group.hasError()) {
+      return fail(std::move(group).error());
     }
-    if (!(boundBindGroups_[index]->layoutIdentity == currentPipeline_->bindGroupLayoutIds[index])) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("{}: the bind group at index {} was created against a "
-                                  "different layout than the pipeline expects",
-                                  operation, index)));
+    device_->collectBoundTextures(group.result().group->descriptor,
+                                  group.result().layout->descriptor.entries, sampledTextureScratch_,
+                                  storageTextureScratch_);
+  }
+  for (const auto& sampled : sampledTextureScratch_) {
+    for (const auto& storage : storageTextureScratch_) {
+      if (sampled.textureIdentity == storage.textureIdentity) {
+        return fail(Err(
+            GpuErrorType::UsageMismatch,
+            std::format("{}: active bind groups use one texture as both a sampled "
+                        "binding ({}) and a storage-write binding ({}) (texture slot "
+                        "{}, generation {})",
+                        operation, sampled.binding, storage.binding,
+                        sampled.textureIdentity.slotIndex, sampled.textureIdentity.generation)));
+      }
+    }
+  }
+  return validateBoundBufferRanges(operation);
+}
+
+Status CommandEncoder::validateBoundBufferRanges(std::string_view operation) {
+  for (const auto& requirement : currentPipeline_->bufferRequirements) {
+    // Engaged: createRenderPipeline and createComputePipeline bound requirement.group against
+    // the pipeline layout's group count, and validateBoundBindGroups has already returned an
+    // error for any group in that range that is unbound, so this optional cannot be empty here.
+    const ResourceIdentity identity = boundBindGroups_[requirement.group]->identity;
+    const auto* group = device_->bindGroups_.find(identity.slotIndex, identity.generation);
+    if (group == nullptr) {
+      return fail(Err(GpuErrorType::InvalidHandle,
+                      "Buffer range validation references a destroyed bind group"));
+    }
+    const auto entry =
+        std::ranges::find(group->descriptor.entries, requirement.binding, &BindGroupEntry::binding);
+    const BufferBinding* buffer = entry != group->descriptor.entries.end()
+                                      ? std::get_if<BufferBinding>(&entry->resource)
+                                      : nullptr;
+    if (buffer == nullptr || buffer->sizeBytes < requirement.minSizeBytes) {
+      return fail(Err(
+          GpuErrorType::InvalidDescriptor,
+          std::format(
+              "{}: group {} binding {} requires at least {} buffer bytes; declared range has {}",
+              operation, requirement.group, requirement.binding, requirement.minSizeBytes,
+              buffer ? buffer->sizeBytes : 0)));
     }
   }
   return OkStatus();
+}
+
+Result<CommandEncoder::ResolvedBindGroup> CommandEncoder::validateBoundBindGroup(
+    uint32_t index, std::string_view operation) {
+  if (!boundBindGroups_[index]) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("{}: the pipeline layout requires a bind group at index {} but none "
+                           "is bound",
+                           operation, index));
+  }
+  const BoundBindGroup& bound = *boundBindGroups_[index];
+  if (bound.layoutIdentity != currentPipeline_->bindGroupLayoutIds[index]) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("{}: the bind group at index {} was created against a different "
+                           "layout than the pipeline expects",
+                           operation, index));
+  }
+  const auto* group =
+      device_->bindGroups_.find(bound.identity.slotIndex, bound.identity.generation);
+  const auto* layout = device_->bindGroupLayouts_.find(bound.layoutIdentity.slotIndex,
+                                                       bound.layoutIdentity.generation);
+  if (group == nullptr || layout == nullptr) {
+    return Err(GpuErrorType::InvalidHandle,
+               std::format("{}: the bind group at index {} or its layout was destroyed", operation,
+                           index));
+  }
+  for (const BindGroupEntry& entry : group->descriptor.entries) {
+    if (Status status = revalidateBindGroupEntry(entry, operation, AttachmentAliasPolicy::Reject);
+        status.hasError()) {
+      return std::move(status).error();
+    }
+  }
+  return ResolvedBindGroup{group, layout};
 }
 
 Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescriptor& descriptor) {
@@ -137,8 +248,8 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   Extent2d passExtent;
   std::vector<TextureFormat> attachmentFormats;
   attachmentFormats.reserve(descriptor.colorAttachments.size());
-  std::vector<ResourceIdentity> seenViews;
-  seenViews.reserve(descriptor.colorAttachments.size());
+  std::vector<ResourceIdentity> seenTextures;
+  seenTextures.reserve(descriptor.colorAttachments.size());
   for (size_t i = 0; i < descriptor.colorAttachments.size(); ++i) {
     const RenderPassColorAttachment& attachment = descriptor.colorAttachments[i];
     auto viewRecord =
@@ -147,17 +258,18 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
       return fail(std::move(viewRecord).error()).error();
     }
 
-    const ResourceIdentity viewIdentity{attachment.view.slotIndex(), attachment.view.generation()};
-    for (const ResourceIdentity& seenView : seenViews) {
-      if (seenView == viewIdentity) {
+    const ResourceIdentity textureIdentity = viewRecord.result()->textureIdentity;
+    for (const ResourceIdentity& seenTexture : seenTextures) {
+      if (seenTexture == textureIdentity) {
         return fail(Err(GpuErrorType::InvalidDescriptor,
-                        std::format("beginRenderPass: attachment {} view \"{}\" appears in "
-                                    "multiple color attachments of the same pass",
-                                    i, viewRecord.result()->descriptor.label.str())))
+                        std::format(
+                            "beginRenderPass: attachment {} texture viewed by \"{}\" appears in "
+                            "multiple color attachments of the same pass",
+                            i, viewRecord.result()->descriptor.label.str())))
             .error();
       }
     }
-    seenViews.push_back(viewIdentity);
+    seenTextures.push_back(textureIdentity);
 
     if (!IsKnownEnumValue(attachment.loadOp)) {
       return fail(Err(GpuErrorType::InvalidDescriptor,
@@ -211,6 +323,7 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   passExtent_ = passExtent;
   passAttachmentFormats_ = std::move(attachmentFormats);
   resetPassBindings();
+  passAttachmentTextures_ = std::move(seenTextures);
   commands_.push_back(BeginRenderPassCommand{descriptor});
   return &passEncoder_;
 }
@@ -248,8 +361,11 @@ Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
     }
   }
 
-  currentPipeline_ = BoundPipeline{record.result()->descriptor.vertex.buffers,
-                                   record.result()->bindGroupLayoutIds};
+  currentPipeline_ =
+      BoundPipeline{record.result()->descriptor.vertex.buffers, record.result()->bindGroupLayoutIds,
+                    record.result()->descriptor.topology};
+  currentPipeline_->bufferRequirements.assign(record.result()->bufferRequirements.begin(),
+                                              record.result()->bufferRequirements.end());
   commands_.push_back(
       SetPipelineCommand{ResourceIdentity{pipeline.slotIndex(), pipeline.generation()}});
   return OkStatus();
@@ -286,19 +402,27 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
                                 record.result()->layoutIdentity.slotIndex)));
   }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
-    const Status entryStatus = revalidateBindGroupEntry(entry);
+    // Binding a group is not using it. A group bound at an index the eventual pipeline layout
+    // does not declare, or replaced before the draw, never reaches the backend, so rejecting an
+    // attachment alias here would fail sequences that are harmless. The draw and dispatch path
+    // applies the check to exactly the groups the active pipeline uses.
+    const Status entryStatus =
+        revalidateBindGroupEntry(entry, "setBindGroup", AttachmentAliasPolicy::Ignore);
     if (entryStatus.hasError()) {
       return entryStatus;
     }
   }
 
-  boundBindGroups_[index] = BoundBindGroup{bindGroup.slotIndex(), record.result()->layoutIdentity};
+  boundBindGroups_[index] = BoundBindGroup{{bindGroup.slotIndex(), bindGroup.generation()},
+                                           record.result()->layoutIdentity};
   commands_.push_back(
       SetBindGroupCommand{index, ResourceIdentity{bindGroup.slotIndex(), bindGroup.generation()}});
   return OkStatus();
 }
 
-Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
+Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry,
+                                                std::string_view operation,
+                                                AttachmentAliasPolicy attachmentAlias) {
   if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
     auto bufferRecord =
         device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
@@ -315,6 +439,13 @@ Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
     auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
     if (viewedTexture.hasError()) {
       return fail(std::move(viewedTexture).error());
+    }
+    if (attachmentAlias == AttachmentAliasPolicy::Reject &&
+        std::ranges::find(passAttachmentTextures_, viewRecord.result()->textureIdentity) !=
+            passAttachmentTextures_.end()) {
+      return fail(
+          Err(GpuErrorType::UsageMismatch,
+              std::format("{}: a texture binding aliases an active color attachment", operation)));
     }
   } else if (const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
     auto samplerRecord =
@@ -356,6 +487,52 @@ Status CommandEncoder::passSetVertexBuffer(uint32_t slot, const Buffer& buffer,
       BoundVertexBuffer{buffer.slotIndex(), record.result()->descriptor.byteSize - offsetBytes};
   commands_.push_back(SetVertexBufferCommand{
       slot, ResourceIdentity{buffer.slotIndex(), buffer.generation()}, offsetBytes});
+  return OkStatus();
+}
+
+Status CommandEncoder::passSetIndexBuffer(const Buffer& buffer, IndexFormat format,
+                                          uint64_t offsetBytes) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
+    return fail(std::move(*error));
+  }
+  auto record = device_->resolve(device_->buffers_, buffer, BufferTag::kName);
+  if (record.hasError()) {
+    return fail(std::move(record).error());
+  }
+  if (!HasAllFlags(record.result()->descriptor.usage, BufferUsage::Index)) {
+    return fail(Err(GpuErrorType::UsageMismatch,
+                    std::format("setIndexBuffer: buffer \"{}\" lacks the Index usage",
+                                record.result()->descriptor.label.str())));
+  }
+  if (!IsKnownEnumValue(format)) {
+    return fail(
+        Err(GpuErrorType::InvalidDescriptor,
+            std::format("setIndexBuffer: unknown index format {}", static_cast<uint32_t>(format))));
+  }
+  if (!device_->supportsFullIndexRange(format)) {
+    std::ostringstream formatName;
+    formatName << format;
+    return fail(Err(GpuErrorType::Unsupported,
+                    std::format("setIndexBuffer: this device cannot honor the full {} index range",
+                                formatName.str())));
+  }
+  const uint32_t indexBytes = IndexFormatByteSize(format);
+  if (offsetBytes % indexBytes != 0) {
+    return fail(Err(GpuErrorType::InvalidDescriptor,
+                    std::format("setIndexBuffer: offsetBytes {} is not a multiple of the {}-byte "
+                                "index width",
+                                offsetBytes, indexBytes)));
+  }
+  if (offsetBytes > record.result()->descriptor.byteSize) {
+    return fail(Err(GpuErrorType::OutOfBounds,
+                    std::format("setIndexBuffer: offsetBytes {} exceeds buffer \"{}\" size {}",
+                                offsetBytes, record.result()->descriptor.label.str(),
+                                record.result()->descriptor.byteSize)));
+  }
+
+  boundIndexBuffer_ = BoundIndexBuffer{format, record.result()->descriptor.byteSize - offsetBytes};
+  commands_.push_back(SetIndexBufferCommand{
+      ResourceIdentity{buffer.slotIndex(), buffer.generation()}, format, offsetBytes});
   return OkStatus();
 }
 
@@ -404,36 +581,92 @@ Status CommandEncoder::passDraw(uint32_t vertexCount, uint32_t instanceCount, ui
   if (!currentPipeline_) {
     return fail(Err(GpuErrorType::InvalidState, "draw: no pipeline is set"));
   }
-
-  for (size_t slot = 0; slot < currentPipeline_->vertexBuffers.size(); ++slot) {
-    const VertexBufferLayout& layout = currentPipeline_->vertexBuffers[slot];
-    if (!boundVertexBuffers_[slot]) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("draw: the pipeline requires a vertex buffer at slot {} but "
-                                  "none is bound",
-                                  slot)));
-    }
-    const bool perVertex = layout.stepMode == VertexStepMode::Vertex;
-    const uint64_t first = perVertex ? firstVertex : firstInstance;
-    const uint64_t count = perVertex ? vertexCount : instanceCount;
-    const std::optional<uint64_t> lastElement = CheckedAdd(first, count);
-    const std::optional<uint64_t> bytesNeeded =
-        lastElement ? CheckedMul(*lastElement, layout.strideBytes) : std::nullopt;
-    if (!bytesNeeded || *bytesNeeded > boundVertexBuffers_[slot]->bytesAvailable) {
-      return fail(
-          Err(GpuErrorType::OutOfBounds,
-              std::format("draw: {} range [{}, {}) with strideBytes {} overflows the "
-                          "vertex buffer bound at slot {} ({} bytes available)",
-                          perVertex ? "vertex" : "instance", first, lastElement ? *lastElement : 0,
-                          layout.strideBytes, slot, boundVertexBuffers_[slot]->bytesAvailable)));
-    }
+  if (Status slots = validateVertexSlots("draw", firstVertex, vertexCount, firstInstance,
+                                         instanceCount, /*checkVertexSlots=*/true);
+      slots.hasError()) {
+    return slots;
   }
-
   if (Status bindGroupStatus = validateBoundBindGroups("draw"); bindGroupStatus.hasError()) {
     return bindGroupStatus;
   }
 
   commands_.push_back(DrawCommand{vertexCount, instanceCount, firstVertex, firstInstance});
+  return OkStatus();
+}
+
+Status CommandEncoder::passDrawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                                       uint32_t firstIndex, int32_t baseVertex,
+                                       uint32_t firstInstance) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
+    return fail(std::move(*error));
+  }
+  if (!currentPipeline_) {
+    return fail(Err(GpuErrorType::InvalidState, "drawIndexed: no pipeline is set"));
+  }
+  // Metal always restarts an indexed strip on the all-ones index, the Vulkan pipelines disable
+  // restart, and the WebGPU adapter never declares a strip index format, so an indexed strip
+  // would render differently per backend; refuse it rather than pick one behavior silently.
+  if (currentPipeline_->topology != PrimitiveTopology::TriangleList) {
+    std::ostringstream topology;
+    topology << currentPipeline_->topology;
+    return fail(Err(GpuErrorType::Unsupported,
+                    std::format("drawIndexed: only TriangleList pipelines support indexed draws "
+                                "(pipeline topology is {})",
+                                topology.str())));
+  }
+  if (!boundIndexBuffer_) {
+    return fail(Err(GpuErrorType::InvalidState, "drawIndexed: no index buffer is bound"));
+  }
+  const std::optional<uint64_t> lastIndex = CheckedAdd(firstIndex, indexCount);
+  const std::optional<uint64_t> indexBytesNeeded =
+      lastIndex ? CheckedMul(*lastIndex, IndexFormatByteSize(boundIndexBuffer_->format))
+                : std::nullopt;
+  if (!indexBytesNeeded || *indexBytesNeeded > boundIndexBuffer_->bytesAvailable) {
+    std::ostringstream format;
+    format << boundIndexBuffer_->format;
+    return fail(Err(GpuErrorType::OutOfBounds,
+                    std::format("drawIndexed: {} index range [{}, {}) overflows the bound index "
+                                "buffer range ({} bytes available)",
+                                format.str(), firstIndex, lastIndex ? *lastIndex : 0,
+                                boundIndexBuffer_->bytesAvailable)));
+  }
+  if (Status slots = validateVertexSlots("drawIndexed", 0, 0, firstInstance, instanceCount,
+                                         /*checkVertexSlots=*/false);
+      slots.hasError()) {
+    return slots;
+  }
+  if (Status bindGroupStatus = validateBoundBindGroups("drawIndexed"); bindGroupStatus.hasError()) {
+    return bindGroupStatus;
+  }
+
+  commands_.push_back(
+      DrawIndexedCommand{indexCount, instanceCount, firstIndex, baseVertex, firstInstance});
+  return OkStatus();
+}
+
+Status CommandEncoder::validateVertexSlots(std::string_view operation, uint64_t firstVertex,
+                                           uint64_t vertexCount, uint64_t firstInstance,
+                                           uint64_t instanceCount, bool checkVertexSlots) {
+  for (size_t slot = 0; slot < currentPipeline_->vertexBuffers.size(); ++slot) {
+    const VertexBufferLayout& layout = currentPipeline_->vertexBuffers[slot];
+    if (!boundVertexBuffers_[slot]) {
+      return fail(Err(GpuErrorType::InvalidState,
+                      std::format("{}: the pipeline requires a vertex buffer at slot {} but "
+                                  "none is bound",
+                                  operation, slot)));
+    }
+    const bool perVertex = layout.stepMode == VertexStepMode::Vertex;
+    if (perVertex && !checkVertexSlots) {
+      continue;
+    }
+    const uint64_t first = perVertex ? firstVertex : firstInstance;
+    const uint64_t count = perVertex ? vertexCount : instanceCount;
+    if (std::optional<GpuError> error = ValidateVertexBufferRange(
+            operation, perVertex ? "vertex" : "instance", first, count, layout.strideBytes, slot,
+            boundVertexBuffers_[slot]->bytesAvailable)) {
+      return fail(std::move(*error));
+    }
+  }
   return OkStatus();
 }
 
@@ -641,6 +874,8 @@ Status CommandEncoder::computePassSetPipeline(const ComputePipeline& pipeline) {
   }
 
   currentPipeline_ = BoundPipeline{{}, record.result()->bindGroupLayoutIds};
+  currentPipeline_->bufferRequirements.assign(record.result()->bufferRequirements.begin(),
+                                              record.result()->bufferRequirements.end());
   commands_.push_back(
       SetComputePipelineCommand{ResourceIdentity{pipeline.slotIndex(), pipeline.generation()}});
   return OkStatus();

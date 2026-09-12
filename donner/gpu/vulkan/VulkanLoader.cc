@@ -265,9 +265,11 @@ Status VulkanLoader::loadDevice(VkDevice device) {
                 resolve("vkCmdBindDescriptorSets"));
   missing.store(api_.vkCmdBindVertexBuffers, "vkCmdBindVertexBuffers",
                 resolve("vkCmdBindVertexBuffers"));
+  missing.store(api_.vkCmdBindIndexBuffer, "vkCmdBindIndexBuffer", resolve("vkCmdBindIndexBuffer"));
   missing.store(api_.vkCmdSetViewport, "vkCmdSetViewport", resolve("vkCmdSetViewport"));
   missing.store(api_.vkCmdSetScissor, "vkCmdSetScissor", resolve("vkCmdSetScissor"));
   missing.store(api_.vkCmdDraw, "vkCmdDraw", resolve("vkCmdDraw"));
+  missing.store(api_.vkCmdDrawIndexed, "vkCmdDrawIndexed", resolve("vkCmdDrawIndexed"));
   missing.store(api_.vkCmdDispatch, "vkCmdDispatch", resolve("vkCmdDispatch"));
   missing.store(api_.vkCmdPipelineBarrier, "vkCmdPipelineBarrier", resolve("vkCmdPipelineBarrier"));
   missing.store(api_.vkCmdCopyBufferToImage, "vkCmdCopyBufferToImage",

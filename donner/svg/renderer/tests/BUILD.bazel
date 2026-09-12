@@ -17,6 +17,26 @@ filegroup(
     visibility = ["//tools/resvg_parity:__pkg__"],
 )
 
+donner_cc_test(
+    name = "pixel_format_utils_tests",
+    srcs = ["PixelFormatUtils_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:pixel_format_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_image_io_tests",
+    srcs = ["RendererImageIO_tests.cc"],
+    deps = [
+        ":renderer_image_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_image_io",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_library(
     name = "rgba_test_matchers",
     testonly = 1,
@@ -164,9 +184,18 @@ donner_cc_test(
     srcs = [
         "ImageComparisonTestFixture_tests.cc",
     ],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the symlink-resolution fail-closed rule can never see one and the case keeps skipping into
+    # a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base",
         "//donner/base:base_test_utils",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -305,6 +334,7 @@ donner_cc_test(
     # self-hosted RE lane (CI baseline, 2026-07-01).
     shard_count = 4,
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer",
@@ -582,6 +612,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css:core",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/components/filter:components",
         "//donner/svg/parser",
@@ -757,6 +788,7 @@ donner_variant_cc_test(
         },
     ],
     opens_gpu_device = True,
+    remote_parallel_ci = True,
     # Hundreds of independent image comparisons per variant. Unsharded, the
     # geode variant alone ran ~267 s on the self-hosted RE lane
     # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards

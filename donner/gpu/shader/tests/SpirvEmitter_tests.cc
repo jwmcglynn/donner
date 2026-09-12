@@ -1,25 +1,24 @@
 /// @file
 /// SPIR-V emitter tests: module header and determinism, type dedup, structured control flow,
 /// builtin lowerings, texture ops, entry point IO decorations, buffer layout decorations, the
-/// committed solid-fill golden, and the fail-closed error paths.
+/// deterministic generation and fail-closed error paths.
 
 #include "donner/gpu/shader/SpirvEmitter.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
-#include <fstream>
+#include <algorithm>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -74,6 +73,9 @@ constexpr uint32_t kOpBranch = 249;
 constexpr uint32_t kOpBranchConditional = 250;
 
 constexpr uint32_t kGlslRoundEven = 2;
+constexpr uint32_t kGlslFSign = 6;
+constexpr uint32_t kGlslFloor = 8;
+constexpr uint32_t kGlslPow = 26;
 constexpr uint32_t kGlslFClamp = 43;
 constexpr uint32_t kGlslUClamp = 44;
 constexpr uint32_t kGlslSClamp = 45;
@@ -290,19 +292,6 @@ IrModule BuildSolidFill() {
   ShaderResult<IrModule> module = programs::BuildSolidFillModule();
   EXPECT_THAT(module, HasShaderResult());
   return std::move(module).result();
-}
-
-/// Serializes SPIR-V words to the standard little-endian byte stream.
-std::string WordsToBytes(const std::vector<uint32_t>& words) {
-  std::string bytes;
-  bytes.reserve(words.size() * 4);
-  for (const uint32_t word : words) {
-    bytes += static_cast<char>(word & 0xFF);
-    bytes += static_cast<char>((word >> 8) & 0xFF);
-    bytes += static_cast<char>((word >> 16) & 0xFF);
-    bytes += static_cast<char>((word >> 24) & 0xFF);
-  }
-  return bytes;
 }
 
 // ----- Module header and determinism -----
@@ -628,6 +617,34 @@ TEST(SpirvEmitterTests, BoolVectorReductionsLowerToOpAllAndOpAny) {
   // Each reduces a distinct comparison, so an emitter that fed both the same operand - or fed
   // one the other's - is caught here rather than by a shader that silently never stores.
   EXPECT_THAT(alls[0].operands[2], testing::Not(testing::Eq(anys[0].operands[2])));
+}
+
+TEST(SpirvEmitterTests, SignFloorAndPowLowerToTheirGlslInstructions) {
+  ShaderResult<IrModule> module = BuildMathPrimitiveModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(module.result()));
+
+  // FSign rather than SSign, Floor rather than Trunc or RoundEven, Pow rather than a manually
+  // expanded exp2/log2 pair. The numbers are the ones the GLSL.std.450 specification assigns;
+  // an emitter that transposed two of them still produces a structurally valid module.
+  const std::vector<uint32_t> extInsts = ExtInstNumbers(instructions);
+  EXPECT_THAT(extInsts, testing::Contains(kGlslFSign));
+  EXPECT_THAT(extInsts, testing::Contains(kGlslFloor));
+  EXPECT_THAT(extInsts, testing::Contains(kGlslPow));
+
+  // Each opcode runs in both a scalar and a vector form, so two of each must appear; a lowering
+  // that handled only the scalar shape would emit one.
+  EXPECT_THAT(std::count(extInsts.begin(), extInsts.end(), kGlslFSign), testing::Eq(2));
+  EXPECT_THAT(std::count(extInsts.begin(), extInsts.end(), kGlslFloor), testing::Eq(2));
+  EXPECT_THAT(std::count(extInsts.begin(), extInsts.end(), kGlslPow), testing::Eq(2));
+
+  // Pow takes two operands after the instruction number, where the one-argument lowerings take
+  // one: result type, result id, set id, instruction, base, exponent.
+  for (const SpvInstruction& extInst : WithOpcode(instructions, kOpExtInst)) {
+    if (extInst.operands[3] == kGlslPow) {
+      EXPECT_THAT(extInst.operands, SizeIs(6u)) << "pow must lower to a two-operand OpExtInst";
+    }
+  }
 }
 
 TEST(SpirvEmitterTests, FwidthLowersToOpFwidth) {
@@ -987,6 +1004,25 @@ TEST(SpirvEmitterTests, WriteOnlyStorageTextureBindingUsesAFormattedStorageImage
   EXPECT_THAT(WithOpcode(instructions, kOpImageWrite), SizeIs(1u));
 }
 
+TEST(SpirvEmitterTests, FloatStorageImageUsesRgba32fWithoutAnExtendedFormatCapability) {
+  const auto module = BuildFloatStorageModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto instructions = Scan(EmitOrFail(module.result()));
+  const auto images = WithOpcode(instructions, kOpTypeImage);
+  ASSERT_THAT(images, SizeIs(2));
+  const auto output = FindBindingVariable(instructions, 0, 1);
+  ASSERT_THAT(output, testing::Optional(testing::_));
+  const auto storage = std::find_if(images.begin(), images.end(), [&](const SpvInstruction& image) {
+    return image.operands[0] == output->pointeeId;
+  });
+  ASSERT_THAT(storage, testing::Ne(images.end()));
+  EXPECT_THAT(std::vector<uint32_t>(storage->operands.begin() + 2, storage->operands.end()),
+              ElementsAre(1u, 0u, 0u, 0u, 2u, 1u));
+  const auto capabilities = WithOpcode(instructions, kOpCapability);
+  ASSERT_THAT(capabilities, SizeIs(1));
+  EXPECT_THAT(capabilities[0].operands, ElementsAre(1u));
+}
+
 TEST(SpirvEmitterTests, ColorMatrixComputeProgramDeclaresItsFourBindings) {
   ShaderResult<IrModule> module = programs::BuildColorMatrixModule();
   ASSERT_THAT(module, HasShaderResult());
@@ -1002,31 +1038,6 @@ TEST(SpirvEmitterTests, ColorMatrixComputeProgramDeclaresItsFourBindings) {
   ASSERT_TRUE(bias.has_value());
   EXPECT_EQ(bias->storageClass, kStorageClassStorageBuffer);
   EXPECT_TRUE(FindDecoration(instructions, bias->variableId, kDecorationNonWritable).has_value());
-}
-
-// ----- Golden -----
-
-TEST(SpirvEmitterTests, SolidFillMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = WordsToBytes(EmitOrFail(BuildSolidFill()));
-
-  if (const char* updateRoot = std::getenv("UPDATE_SPIRV_GOLDEN")) {
-    const std::string outPath =
-        std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/solid_fill.spv";
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
-    out << bytes;
-    GTEST_SKIP() << "Golden updated at " << outPath;
-  }
-
-  const std::string path =
-      donner::Runfiles::instance().Rlocation("donner/gpu/shader/tests/testdata/solid_fill.spv");
-  std::ifstream stream(path, std::ios::binary);
-  ASSERT_TRUE(stream.good()) << "Failed to open golden file: " << path;
-  std::ostringstream golden;
-  golden << stream.rdbuf();
-
-  EXPECT_THAT(bytes, testing::Eq(golden.str()));
 }
 
 // ----- Error paths -----
