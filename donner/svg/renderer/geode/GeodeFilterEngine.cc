@@ -19,6 +19,8 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/generated/DiffuseLightingShader.h"
+#include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
@@ -28,6 +30,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/GaussianBlurBindings.h"
+#include "donner/gpu/shader/programs/LightingBindings.h"
 #include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/MorphologyBindings.h"
 #include "donner/gpu/shader/programs/OffsetBindings.h"
@@ -887,8 +890,7 @@ void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
 }
 
 TurbulenceParams makeTurbulenceParams(
-    uint32_t width, uint32_t height,
-    const svg::components::filter_primitive::Turbulence& primitive,
+    uint32_t width, uint32_t height, const svg::components::filter_primitive::Turbulence& primitive,
     const Transform2d& deviceFromFilter, double baseFrequencyX, double baseFrequencyY,
     double seed) {
   TurbulenceParams params{};
@@ -923,52 +925,6 @@ struct DisplacementParams {
   uint32_t xChannel;
   uint32_t yChannel;
   uint32_t pad;
-};
-
-/// GPU storage buffer layout matching the WGSL diffuse `LightingParams` struct.
-struct DiffuseLightingParams {
-  float surfaceScale;
-  float diffuseConstant;
-  float pad0;
-  float pad1;
-
-  float lightR;
-  float lightG;
-  float lightB;
-  uint32_t lightType;
-
-  float azimuthRad;
-  float elevationRad;
-  float lightX;
-  float lightY;
-  float lightZ;
-  float userLightX;
-  float userLightY;
-  float userLightZ;
-
-  float pointsAtX;
-  float pointsAtY;
-  float pointsAtZ;
-  float spotExponent;
-
-  float userPointsAtX;
-  float userPointsAtY;
-  float userPointsAtZ;
-  float coneAngleRad;
-
-  float pixelToUser0;
-  float pixelToUser1;
-  float pixelToUser2;
-  float pixelToUser3;
-
-  float pixelToUser4;
-  float pixelToUser5;
-  uint32_t hasShear;
-  uint32_t hasConeAngle;
-  int32_t sampleMinX;
-  int32_t sampleMinY;
-  int32_t sampleMaxX;
-  int32_t sampleMaxY;
 };
 
 /// Uniform buffer layout matching the WGSL `DropShadowParams` struct.
@@ -1040,52 +996,6 @@ struct ColorSpaceConvertParams {
   uint32_t pad0;       //!< Trailing word the program declares; the two sizes must agree.
   uint32_t pad1;       //!< Trailing word the program declares; the two sizes must agree.
   uint32_t pad2;       //!< Trailing word the program declares; the two sizes must agree.
-};
-
-/// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
-struct SpecularLightingParams {
-  float surfaceScale;
-  float specularConstant;
-  float specularExponent;
-  float pad0;
-
-  float lightR;
-  float lightG;
-  float lightB;
-  uint32_t lightType;
-
-  float azimuthRad;
-  float elevationRad;
-  float lightX;
-  float lightY;
-  float lightZ;
-  float userLightX;
-  float userLightY;
-  float userLightZ;
-
-  float pointsAtX;
-  float pointsAtY;
-  float pointsAtZ;
-  float spotExponent;
-
-  float userPointsAtX;
-  float userPointsAtY;
-  float userPointsAtZ;
-  float coneAngleRad;
-
-  float pixelToUser0;
-  float pixelToUser1;
-  float pixelToUser2;
-  float pixelToUser3;
-
-  float pixelToUser4;
-  float pixelToUser5;
-  uint32_t hasShear;
-  uint32_t hasConeAngle;
-  int32_t sampleMinX;
-  int32_t sampleMinY;
-  int32_t sampleMaxX;
-  int32_t sampleMaxY;
 };
 
 /// Map a FilterGraph EdgeMode to the shader's uint.
@@ -1328,7 +1238,6 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   }
   const RcString& name = descriptor.label;
   const gpu::ComputeEntryPointInfo& entryPoint = descriptor.computeEntryPoints.front();
-
   gpu::Result<gpu::ShaderModule> shaderModule = runtime.createShaderModule(descriptor);
   if (!shaderModule.hasResult()) {
     return {};
@@ -1405,14 +1314,14 @@ std::string_view EmbeddedWgsl(std::span<const unsigned char> resource UTILS_LIFE
   return std::string_view(reinterpret_cast<const char*>(resource.data()), resource.size());
 }
 
-/// The bytes of \p value, for a uniform upload of a host struct.
+/// The bytes of \p value, for a parameter-buffer upload of a host struct.
 /// @param value Host-side block; the returned span aliases it and must not outlive it.
 template <typename T>
 std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&value), sizeof(T));
 }
 
-/// Records one source-to-destination compute dispatch with a uniform block, through the runtime.
+/// Records one source-to-destination compute dispatch with a parameter block, through the runtime.
 /// Returns false without recording anything when the pipeline was never built or any resource the
 /// pass needs is refused.
 ///
@@ -1974,90 +1883,32 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kDisplacementMapWorkgroupSize);
   }
 
-  // --- feDiffuseLighting pipeline (input + output + storage buffer) ---
+  // --- feDiffuseLighting pipeline, through the GPU runtime ---
   {
-    wgpu::BindGroupLayoutEntry entries[3]{};
-
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
-    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-    entries[0].texture.multisampled = false;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[1].storageTexture.format = kFormat;
-    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[2].binding = 2;
-    entries[2].visibility = wgpu::ShaderStage::Compute;
-    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[2].buffer.minBindingSize = sizeof(DiffuseLightingParams);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterDiffuseLightingBGL");
-    bglDesc.entryCount = 3;
-    bglDesc.entries = entries;
-    diffuseLightingBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterDiffuseLightingPipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {diffuseLightingBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterDiffuseLightingShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterDiffuseLightingPipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    diffuseLightingPipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::LightingBinding;
+    const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
+    diffuseLightingProgram_ =
+        CreateRuntimeComputeProgram(device_.adapterDevice(),
+                                    gpu::generated::diffuse_lighting::BuildDescriptor(
+                                        device_.adapterDevice().shaderSourceKind()),
+                                    {SampledInputEntry(binding(LightingBinding::InputTexture)),
+                                     StorageOutputEntry(binding(LightingBinding::OutputTexture)),
+                                     {binding(LightingBinding::Params), gpu::ShaderStage::Compute,
+                                      gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
-  // --- feSpecularLighting pipeline (input + output + storage buffer) ---
+  // --- feSpecularLighting pipeline, through the GPU runtime ---
   {
-    wgpu::BindGroupLayoutEntry entries[3]{};
-
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
-    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-    entries[0].texture.multisampled = false;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[1].storageTexture.format = kFormat;
-    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[2].binding = 2;
-    entries[2].visibility = wgpu::ShaderStage::Compute;
-    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[2].buffer.minBindingSize = sizeof(SpecularLightingParams);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterSpecularLightingBGL");
-    bglDesc.entryCount = 3;
-    bglDesc.entries = entries;
-    specularLightingBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterSpecularLightingPipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {specularLightingBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterSpecularLightingShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterSpecularLightingPipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    specularLightingPipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::LightingBinding;
+    const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
+    specularLightingProgram_ =
+        CreateRuntimeComputeProgram(device_.adapterDevice(),
+                                    gpu::generated::specular_lighting::BuildDescriptor(
+                                        device_.adapterDevice().shaderSourceKind()),
+                                    {SampledInputEntry(binding(LightingBinding::InputTexture)),
+                                     StorageOutputEntry(binding(LightingBinding::OutputTexture)),
+                                     {binding(LightingBinding::Params), gpu::ShaderStage::Compute,
+                                      gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
   // Shadow composition shares the runtime command stream with its blur passes.
@@ -3818,8 +3669,8 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
     return {};
   }
 
-  const TurbulenceParams params = makeTurbulenceParams(
-      width, height, primitive, deviceFromFilter, baseFrequencyX, baseFrequencyY, seed);
+  const TurbulenceParams params = makeTurbulenceParams(width, height, primitive, deviceFromFilter,
+                                                       baseFrequencyX, baseFrequencyY, seed);
 
   // Generate permutation + gradient tables from the seed.
   TurbulenceTables tables{};
@@ -4003,7 +3854,6 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
@@ -4017,17 +3867,18 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
                                                 "FilterDiffuseLightingTransparent");
   }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterDiffuseLightingOutput");
-  if (!output) {
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterDiffuseLightingOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
-  DiffuseLightingParams params{};
+  gpu::shader::programs::LightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
-  params.diffuseConstant = static_cast<float>(primitive.diffuseConstant);
-  params.pad0 = 0.0f;
-  params.pad1 = 0.0f;
+  params.lightingConstant = static_cast<float>(primitive.diffuseConstant);
 
   // feDiffuseLighting reads the input *alpha* as a height map (color-space-
   // independent) and modulates the light color. In linearRGB, tiny-skia converts
@@ -4060,53 +3911,12 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   params.sampleMaxY =
       boundedCeilInt32(samplePixels.bottomRight.y, 1, static_cast<int32_t>(height)) - 1;
 
-  // Upload as storage buffer.
-  wgpu::BufferDescriptor bufDesc{};
-  bufDesc.label = wgpuLabel("DiffuseLightingParamsStorage");
-  bufDesc.size = sizeof(DiffuseLightingParams);
-  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  bufDesc.mappedAtCreation = false;
-  wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
-  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
-  device_.countBufferWrite(sizeof(params));
-
-  // Build bind group.
-  ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = outputView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = paramsBuffer;
-  bgEntries[2].offset = 0;
-  bgEntries[2].size = sizeof(DiffuseLightingParams);
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterDiffuseLightingBindGroup");
-  bgDesc.layout = diffuseLightingBindGroupLayout_.get();
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterDiffuseLightingPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(diffuseLightingPipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  if (!dispatchRuntimeInputOutputParameters(arena, diffuseLightingProgram_, input, *output,
+                                            UniformBytes(params), "FilterDiffuseLightingPass",
+                                            gpu::shader::programs::kLightingWorkgroupSize)) {
+    return {};
+  }
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applySpecularLighting(
@@ -4118,7 +3928,6 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
@@ -4129,17 +3938,19 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
                                                 "FilterSpecularLightingTransparent");
   }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterSpecularLightingOutput");
-  if (!output) {
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterSpecularLightingOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
-  SpecularLightingParams params{};
+  gpu::shader::programs::LightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
-  params.specularConstant = static_cast<float>(primitive.specularConstant);
+  params.lightingConstant = static_cast<float>(primitive.specularConstant);
   params.specularExponent = static_cast<float>(std::min(primitive.specularExponent, 128.0));
-  params.pad0 = 0.0f;
 
   // feSpecularLighting: in linearRGB tiny-skia converts the light color sRGB→
   // linear and the output linear→sRGB; match it. (Input alpha = height map.)
@@ -4177,53 +3988,12 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   params.sampleMaxY =
       boundedCeilInt32(samplePixels.bottomRight.y, 1, static_cast<int32_t>(height)) - 1;
 
-  // Upload as storage buffer.
-  wgpu::BufferDescriptor bufDesc{};
-  bufDesc.label = wgpuLabel("SpecularLightingParamsStorage");
-  bufDesc.size = sizeof(SpecularLightingParams);
-  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  bufDesc.mappedAtCreation = false;
-  wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
-  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
-  device_.countBufferWrite(sizeof(params));
-
-  // Build bind group.
-  ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = outputView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = paramsBuffer;
-  bgEntries[2].offset = 0;
-  bgEntries[2].size = sizeof(SpecularLightingParams);
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterSpecularLightingBindGroup");
-  bgDesc.layout = specularLightingBindGroupLayout_.get();
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterSpecularLightingPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(specularLightingPipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  if (!dispatchRuntimeInputOutputParameters(arena, specularLightingProgram_, input, *output,
+                                            UniformBytes(params), "FilterSpecularLightingPass",
+                                            gpu::shader::programs::kLightingWorkgroupSize)) {
+    return {};
+  }
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyDropShadow(

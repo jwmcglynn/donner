@@ -30,6 +30,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -285,6 +286,14 @@ TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildMorphologyModule(), "morphology.spv");
+}
+
+TEST(SpirvValValidation, EmittedLightingComputesPassVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDiffuseLightingModule(),
+                             "diffuse_lighting.spv");
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildSpecularLightingModule(),
+                             "specular_lighting.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
