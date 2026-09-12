@@ -79,6 +79,18 @@ TEST(GeodeGlyphCacheTest, DistinctGlyphIdentitiesTakeDistinctEntries) {
   EXPECT_NE(cache.find(a), cache.find(otherFont));
 }
 
+TEST(GeodeGlyphCacheTest, CubicApproximationToleranceSeparatesCachedGeometry) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  const GlyphGeometryKey original = MakeKey(42);
+  GlyphGeometryKey refined = original;
+  refined.fillTolerance = 0.1 / 32.0;
+  InsertUsed(cache, original, 2u, 1u);
+  EXPECT_THAT(cache.find(refined), testing::IsNull());
+  InsertUsed(cache, refined, 4u, 1u);
+  EXPECT_THAT(cache.size(), testing::Eq(2u));
+  EXPECT_THAT(cache.find(refined)->encoded.curves.size(), testing::Eq(4u));
+}
+
 TEST(GeodeGlyphCacheTest, RepeatedLookupOfOneIdentityReusesTheSameEntry) {
   GeodeGlyphCache cache(/*deviceId=*/1u);
   const GlyphGeometryKey key = MakeKey(/*glyphIndex=*/42);

@@ -38,6 +38,9 @@ struct GeodePathCacheComponent {
   /// Fill-slot encode. Populated on first encode; reused on hit.
   /// Reset by the entt signal listener when geometry changes.
   std::optional<EncodedPath> fillEncode;
+  /// Approximation tolerance of `fillEncode`; zero for paths without cubic segments.
+  /// A finer encode remains reusable at coarser device scales.
+  double fillTolerance = 0.0;
   /// Live retained-byte charge for `fillEncode`.
   GeodeGeometryCacheReservation fillReservation;
 

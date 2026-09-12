@@ -19,6 +19,7 @@ donner_cc_library(
     # blessed pixelmatch comparator for their frozen-baseline comparisons.
     visibility = [
         "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer/geode:__pkg__",
         "//donner/svg/renderer/tests:__pkg__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],
