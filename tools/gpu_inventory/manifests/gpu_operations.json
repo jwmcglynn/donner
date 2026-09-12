@@ -863,6 +863,7 @@
         "Extent3D",
         "FilterMode",
         "FragmentState",
+        "Future",
         "FutureWaitInfo",
         "IndexFormat",
         "LoadOp",
@@ -939,7 +940,8 @@
         "Texture",
         "TextureFormat",
         "TextureUsage",
-        "TextureView"
+        "TextureView",
+        "WaitStatus"
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuUtil.h": {
@@ -1229,7 +1231,8 @@
         "TextureDescriptor",
         "TextureDimension",
         "TextureFormat",
-        "TextureUsage"
+        "TextureUsage",
+        "WaitStatus"
       ]
     },
     "donner/svg/renderer/tests/RendererGeodeGolden_tests.cc": {
