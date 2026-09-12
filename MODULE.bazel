@@ -145,7 +145,7 @@ single_version_override(
 )
 
 # brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
-bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
+bazel_dep(name = "brotli", version = "1.2.0.bcr.3")
 
 ##
 ## Test dependencies
@@ -174,7 +174,7 @@ single_version_override(
     version = "2026.1",
 )
 
-bazel_dep(name = "aspect_rules_js", version = "2.1.2", dev_dependency = True)
+bazel_dep(name = "aspect_rules_js", version = "2.9.3", dev_dependency = True)
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(
@@ -233,7 +233,7 @@ new_local_repository(
 # resvg-test-suite goldens are now vendored in-tree under
 # third_party/resvg-test-suite/ so they ship in the source archive.
 
-bazel_dep(name = "rules_python", version = "2.2.0", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "2.3.3", dev_dependency = True)
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local
