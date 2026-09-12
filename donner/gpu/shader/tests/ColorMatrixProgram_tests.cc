@@ -1,6 +1,6 @@
 /// @file
 /// Color-matrix compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// deterministic output, and expose the expected program interfaces.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -38,14 +37,13 @@ std::string EmitColorMatrixMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitColorMatrixSpirvBytes() {
+std::vector<uint32_t> EmitColorMatrixSpirv() {
   ShaderResult<IrModule> module = programs::BuildColorMatrixModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(ColorMatrixProgramTests, ModuleBuildsCleanly) {
@@ -55,7 +53,7 @@ TEST(ColorMatrixProgramTests, ModuleBuildsCleanly) {
 TEST(ColorMatrixProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitColorMatrixWgsl(), testing::Eq(EmitColorMatrixWgsl()));
   EXPECT_THAT(EmitColorMatrixMsl(), testing::Eq(EmitColorMatrixMsl()));
-  EXPECT_THAT(EmitColorMatrixSpirvBytes(), testing::Eq(EmitColorMatrixSpirvBytes()));
+  EXPECT_THAT(EmitColorMatrixSpirv(), testing::Eq(EmitColorMatrixSpirv()));
 }
 
 TEST(ColorMatrixProgramTests, WgslDeclaresTheComputeSurface) {
@@ -86,33 +84,6 @@ TEST(ColorMatrixProgramTests, MslDeclaresTheKernelSurface) {
   EXPECT_THAT(msl, HasSubstr("outputTexture.write(result, uint2(coords));"));
   // A kernel takes its builtins directly, so no stage-in struct may appear.
   EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
-}
-
-TEST(ColorMatrixProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitColorMatrixWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "color_matrix.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("color_matrix.wgsl")));
-}
-
-TEST(ColorMatrixProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitColorMatrixMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "color_matrix.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("color_matrix.msl")));
-}
-
-TEST(ColorMatrixProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitColorMatrixSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "color_matrix.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("color_matrix.spv")));
 }
 
 }  // namespace

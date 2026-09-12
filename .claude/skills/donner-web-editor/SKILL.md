@@ -16,7 +16,8 @@ the production backend and TinySkia as a tested fallback, not as an interchangea
 
 ## Route the request
 
-- For a local build or preview, stop after the local browser suite passes.
+- For a build or preview request, use the designated preview and test venue. Stop after the
+  Bazel-owned browser suite passes there.
 - For a deployment, read `references/hosting-contract.md` before changing hosting configuration or
   publishing any artifact.
 - For a browser editor bug, apply `donner-editor-debugging` and `donner-bugfix-discipline` first.
@@ -41,33 +42,27 @@ bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 
 The editor Wasm package is Geode-only; there is no software-fallback package.
 
-## 2. Serve and verify locally
+## 2. Preview and verify in the designated venue
 
-Serve Geode on localhost in one terminal:
+For an operator-requested manual preview, serve Geode in the designated preview venue:
 
 ```sh
 bazel run --config=editor-wasm //donner/editor/wasm:serve_http -- \
   --no-https --host 127.0.0.1
 ```
 
-Install the pinned browser-test dependency and run the headed Geode suite:
+This command starts a manual preview only; it is not browser-test validation. Use the Bazel-owned
+test targets below for validation in the designated test venue.
 
-```sh
-cd donner/editor/wasm/tests
-npm ci
-npx playwright install chromium
-cd ../../../..
-DONNER_WASM_BASE_URL=http://127.0.0.1:8000 \
-DONNER_WASM_BACKEND=geode \
-  bash donner/editor/wasm/tests/run_tests.sh --headed
-```
+Run browser coverage through the current Bazel-owned targets
+`//donner/editor/wasm/tests:chromium_remote_smoke` and
+`//donner/editor/wasm/tests:browser_presentation_regression_test`, using the prescribed test venue
+and strategy. Confirm the names in `donner/editor/wasm/tests/BUILD.bazel` before running them; this
+skill does not authorize local browser execution.
 
-Use the URL printed by the server if port 8000 was occupied.
-
-To reproduce the full CI browser job instead of one suite, run `tools/run-browser-ci.sh`. It builds
-the package, serves a private copy on a free port, verifies the served `editor.wasm` hash, and runs
-every CI lane in CI order with `CI=true`. That script is the single source of truth for the lane
-sequence in `.github/workflows/editor_wasm.yml`; change lanes there, not in the workflow.
+Use the repository's Bazel targets as the source of truth for dependency installation, serving,
+artifact verification, and lane selection. Do not invoke removed helper scripts or recreate their
+behavior with direct npm, Playwright, or ad-hoc local server commands.
 
 Require all of the following before packaging:
 

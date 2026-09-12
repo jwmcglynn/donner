@@ -59,6 +59,7 @@ IrType IrType::MakeVectorType(ScalarKind kind, uint32_t size) {
 std::ostream& operator<<(std::ostream& os, StorageTextureFormat value) {
   switch (value) {
     case StorageTextureFormat::Rgba8Unorm: return os << "rgba8unorm";
+    case StorageTextureFormat::Rgba32Float: return os << "rgba32float";
   }
   return os << "unknown";
 }

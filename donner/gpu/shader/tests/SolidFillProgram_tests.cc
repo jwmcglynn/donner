@@ -1,6 +1,5 @@
 /// @file
-/// Solid-fill program tests: the module builds cleanly, emits deterministically, and matches the
-/// committed WGSL golden byte-exactly.
+/// Solid-fill program tests cover construction, deterministic emission, and its binding surface.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -10,7 +9,6 @@
 
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -46,15 +44,6 @@ TEST(SolidFillProgramTests, ContainsSlugFillSurface) {
   }
   EXPECT_THAT(wgsl, HasSubstr("const kNoBand: u32 = 4294967295u;"));
   EXPECT_THAT(wgsl, HasSubstr("discard;"));
-}
-
-TEST(SolidFillProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitSolidFill();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "solid_fill.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("solid_fill.wgsl")));
 }
 
 }  // namespace

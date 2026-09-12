@@ -41,6 +41,7 @@ std::ostream& operator<<(std::ostream& os, TextureFormat value) {
     case TextureFormat::RGBA8Unorm: return os << "RGBA8Unorm";
     case TextureFormat::BGRA8Unorm: return os << "BGRA8Unorm";
     case TextureFormat::R8Unorm: return os << "R8Unorm";
+    case TextureFormat::RGBA32Float: return os << "RGBA32Float";
   }
   return os << "Unknown";
 }
@@ -113,6 +114,14 @@ std::ostream& operator<<(std::ostream& os, VertexStepMode value) {
   return os << "Unknown";
 }
 
+std::ostream& operator<<(std::ostream& os, IndexFormat value) {
+  switch (value) {
+    case IndexFormat::Uint16: return os << "Uint16";
+    case IndexFormat::Uint32: return os << "Uint32";
+  }
+  return os << "Unknown";
+}
+
 std::ostream& operator<<(std::ostream& os, PrimitiveTopology value) {
   switch (value) {
     case PrimitiveTopology::TriangleList: return os << "TriangleList";
@@ -155,6 +164,8 @@ std::ostream& operator<<(std::ostream& os, BindingType value) {
     case BindingType::SampledTexture2dFloat: return os << "SampledTexture2dFloat";
     case BindingType::FilteringSampler: return os << "FilteringSampler";
     case BindingType::WriteOnlyStorageTexture2d: return os << "WriteOnlyStorageTexture2d";
+    case BindingType::SampledTexture2dUnfilterableFloat:
+      return os << "SampledTexture2dUnfilterableFloat";
   }
   return os << "Unknown";
 }
@@ -255,7 +266,8 @@ bool IsKnownEnumValue(TextureFormat value) {
   switch (value) {
     case TextureFormat::RGBA8Unorm:
     case TextureFormat::BGRA8Unorm:
-    case TextureFormat::R8Unorm: return true;
+    case TextureFormat::R8Unorm:
+    case TextureFormat::RGBA32Float: return true;
   }
   return false;
 }
@@ -289,6 +301,14 @@ bool IsKnownEnumValue(VertexStepMode value) {
   switch (value) {
     case VertexStepMode::Vertex:
     case VertexStepMode::Instance: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(IndexFormat value) {
+  switch (value) {
+    case IndexFormat::Uint16:
+    case IndexFormat::Uint32: return true;
   }
   return false;
 }
@@ -334,7 +354,8 @@ bool IsKnownEnumValue(BindingType value) {
     case BindingType::ReadOnlyStorageBuffer:
     case BindingType::SampledTexture2dFloat:
     case BindingType::FilteringSampler:
-    case BindingType::WriteOnlyStorageTexture2d: return true;
+    case BindingType::WriteOnlyStorageTexture2d:
+    case BindingType::SampledTexture2dUnfilterableFloat: return true;
   }
   return false;
 }
@@ -394,6 +415,7 @@ uint32_t TextureFormatBytesPerTexel(TextureFormat format) {
     case TextureFormat::RGBA8Unorm:
     case TextureFormat::BGRA8Unorm: return 4;
     case TextureFormat::R8Unorm: return 1;
+    case TextureFormat::RGBA32Float: return 16;
   }
   return 0;
 }

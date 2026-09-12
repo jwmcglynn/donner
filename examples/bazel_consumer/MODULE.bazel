@@ -1,0 +1,9 @@
+module(name = "donner_bazel_consumer")
+
+bazel_dep(name = "donner")
+bazel_dep(name = "rules_cc", version = "0.2.22")
+
+local_path_override(
+    module_name = "donner",
+    path = "../..",
+)

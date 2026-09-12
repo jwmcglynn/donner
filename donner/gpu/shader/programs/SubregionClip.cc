@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "donner/gpu/shader/IrExpr.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ErrorLatch.h"
 
 namespace donner::gpu::shader::programs {
@@ -16,15 +17,15 @@ uint32_t BindingIndex(SubregionClipBinding binding) {
 }
 
 /// Adds the three module-scope bindings the entry point reads and writes.
-ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
+ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType,
+                         StorageTextureFormat format) {
   if (ShaderStatus status =
           builder.addTexture2d(0, BindingIndex(SubregionClipBinding::InputTexture), "inputTexture");
       status.hasError()) {
     return status;
   }
-  if (ShaderStatus status =
-          builder.addWriteOnlyStorageTexture2d(0, BindingIndex(SubregionClipBinding::OutputTexture),
-                                               "outputTexture", StorageTextureFormat::Rgba8Unorm);
+  if (ShaderStatus status = builder.addWriteOnlyStorageTexture2d(
+          0, BindingIndex(SubregionClipBinding::OutputTexture), "outputTexture", format);
       status.hasError()) {
     return status;
   }
@@ -32,9 +33,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
                                   paramsType);
 }
 
-}  // namespace
-
-ShaderResult<IrModule> BuildSubregionClipModule() {
+ShaderResult<IrModule> BuildClipModule(StorageTextureFormat format) {
   ErrorLatch e;
   ModuleBuilder builder;
 
@@ -50,10 +49,13 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
        // alignment computes for the same members, so one set of bytes describes the block on
        // both sides.
        IrType::Member{"pad0", IrType::U32()}, IrType::Member{"pad1", IrType::U32()}}));
-  e.ok(AddBindings(builder, paramsType));
+  e.ok(AddBindings(builder, paramsType, format));
+  if (format == StorageTextureFormat::Rgba8Unorm) {
+    e.ok(AddColorTransferFunctions(builder, 3));
+  }
 
   auto entryResult = builder.createComputeEntryPoint(
-      "cs_main",
+      RcString(kSubregionClipEntryPoint),
       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                BuiltinInput::GlobalInvocationId}},
       WorkgroupSize{kSubregionClipWorkgroupSize, kSubregionClipWorkgroupSize, 1});
@@ -109,9 +111,31 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
                        e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f), LiteralF32(0.0f),
                                                            LiteralF32(0.0f), LiteralF32(0.0f)}))));
   e.ok(fn.elseBranch());
-  e.ok(fn.textureStore(
-      outputTexture, coords,
-      e(CallBuiltin(BuiltinFn::TextureLoad, {inputTexture, coords, LiteralI32(0)}))));
+  IrExpr color = e(CallBuiltin(BuiltinFn::TextureLoad, {inputTexture, coords, LiteralI32(0)}));
+  if (format == StorageTextureFormat::Rgba8Unorm) {
+    color = e(fn.addVar("resolvedColor", IrType::Vec4f(), color));
+    e.ok(fn.beginIf(e(Ne(e(Member(params, "pad0")), LiteralU32(0)))));
+    const IrExpr alpha = e(fn.addLet("alpha", e(Swizzle(color, "w"))));
+    e.ok(fn.beginIf(e(Gt(alpha, LiteralF32(0.0f)))));
+    const IrExpr straight =
+        e(fn.addLet("straight", e(Mul(e(Swizzle(color, "xyz")), e(Div(LiteralF32(1.0f), alpha))))));
+    const IrExpr converted = e(ConstructVector(
+        IrType::Vec3f(),
+        {e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "x"))})),
+         e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "y"))})),
+         e(fn.callFunction("linear_channel_to_srgb", {e(Swizzle(straight, "z"))}))}));
+    e.ok(fn.assign(color, e(ConstructVector(IrType::Vec4f(), {e(Mul(converted, alpha)), alpha}))));
+    e.ok(fn.elseBranch());
+    e.ok(fn.assign(color, e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.0f)}))));
+    e.ok(fn.endIf());
+    e.ok(fn.endIf());
+    const IrExpr clamped = e(CallBuiltin(BuiltinFn::Saturate, {color}));
+    const IrExpr scaled = e(Mul(clamped, LiteralF32(255.0f)));
+    const IrExpr half = e(ConstructVector(IrType::Vec4f(), {LiteralF32(0.5f)}));
+    const IrExpr rounded = e(CallBuiltin(BuiltinFn::Floor, {e(Add(scaled, half))}));
+    color = e(Div(rounded, LiteralF32(255.0f)));
+  }
+  e.ok(fn.textureStore(outputTexture, coords, color));
   e.ok(fn.endIf());
   e.ok(fn.finish());
 
@@ -119,6 +143,16 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
     return *e.error;
   }
   return builder.build();
+}
+
+}  // namespace
+
+ShaderResult<IrModule> BuildSubregionClipModule() {
+  return BuildClipModule(StorageTextureFormat::Rgba32Float);
+}
+
+ShaderResult<IrModule> BuildFilterResolveModule() {
+  return BuildClipModule(StorageTextureFormat::Rgba8Unorm);
 }
 
 }  // namespace donner::gpu::shader::programs
