@@ -231,9 +231,10 @@ std::string DescribeCompositeSegments(
   return out.str();
 }
 
+// Downsample the high-zoom crop to bound filter work in these layer-metadata tests.
 EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = Vector2d(302.0,
                                                                                         390.0),
-                                                        double devicePixelRatio = 2.0) {
+                                                        double devicePixelRatio = 0.25) {
   ViewportState viewport;
   viewport.paneSize = Vector2d(892.0, 512.0);
   viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
