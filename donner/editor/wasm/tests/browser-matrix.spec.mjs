@@ -96,10 +96,10 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   // runfiles tree that is missing them.
   const lanes = [...buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)]
     .map(([, body]) => body);
-  assert.equal(
-    lanes.length,
-    2,
-    "every playwright_test lane must be checkable; update this contract when one is added",
+  assert.deepEqual(
+    lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
+    ["boot_presentation_test", "browser_presentation_regression_test", "chromium_remote_smoke"],
+    "every playwright_test lane must be named and checked; update this contract when one is added",
   );
   for (const lane of lanes) {
     const laneName = /name = "([^"]+)"/.exec(lane)?.[1];

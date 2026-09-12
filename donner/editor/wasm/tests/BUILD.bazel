@@ -99,3 +99,37 @@ playwright_bin.playwright_test(
         "@platforms//os:macos",
     ],
 )
+
+playwright_bin.playwright_test(
+    name = "boot_presentation_test",
+    size = "large",
+    timeout = "moderate",
+    args = [
+        "test",
+        "$(rootpath :boot-presentation.spec.ts)",
+        "--config=$(rootpath :playwright.boot-presentation.bazel.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "boot-presentation.spec.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.boot-presentation.bazel.config.js",
+        "playwright.config.js",
+        "remote-webserver.mjs",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)

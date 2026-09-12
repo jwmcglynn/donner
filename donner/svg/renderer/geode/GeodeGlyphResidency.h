@@ -70,13 +70,16 @@ struct GlyphGeometryKey {
   float stretchScaleX = 1.0f;
   float stretchScaleY = 1.0f;
   double rotateDegrees = 0.0;
+  /// Device-derived cubic approximation tolerance for the cached outline encode.
+  double fillTolerance = 0.1;
 
   bool operator==(const GlyphGeometryKey& other) const {
     return fontId == other.fontId && glyphIndex == other.glyphIndex &&
            bits(outlineScale) == bits(other.outlineScale) &&
            bits(stretchScaleX) == bits(other.stretchScaleX) &&
            bits(stretchScaleY) == bits(other.stretchScaleY) &&
-           bits(rotateDegrees) == bits(other.rotateDegrees);
+           bits(rotateDegrees) == bits(other.rotateDegrees) &&
+           bits(fillTolerance) == bits(other.fillTolerance);
   }
 
   /// Raw bit pattern of a float, so `-0.0f` and NaN payloads compare and hash
@@ -106,6 +109,7 @@ struct GlyphGeometryKeyHash {
     h = mix(h ^ GlyphGeometryKey::bits(key.stretchScaleX));
     h = mix(h ^ GlyphGeometryKey::bits(key.stretchScaleY));
     h = mix(h ^ GlyphGeometryKey::bits(key.rotateDegrees));
+    h = mix(h ^ GlyphGeometryKey::bits(key.fillTolerance));
     return static_cast<size_t>(h);
   }
 
