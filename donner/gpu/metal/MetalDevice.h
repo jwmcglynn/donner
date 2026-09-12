@@ -72,6 +72,9 @@ namespace donner::gpu::metal {
  */
 class MetalDevice final : public Device {
 public:
+  /// Native shader representation accepted by this device.
+  ShaderSourceKind shaderSourceKind() const override { return ShaderSourceKind::Msl; }
+
   /// Which memory model the backend builds its resources for.
   enum class MemoryModel : uint8_t {
     /// Take the model the Metal device reports. Production always uses this.

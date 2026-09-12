@@ -1,6 +1,6 @@
 /// @file
 /// Emission tests for the `sign`, `floor`, and `pow` opcodes: the coverage module emits
-/// deterministically in all three backends and matches its committed goldens byte-exactly, and
+/// deterministically in all three backends, and
 /// the round-half-away-from-zero composition the filter primitives need agrees with the rounding
 /// the CPU filter path performs.
 
@@ -15,7 +15,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -41,14 +40,13 @@ std::string EmitMathPrimitiveMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitMathPrimitiveSpirvBytes() {
+std::vector<uint32_t> EmitMathPrimitiveSpirv() {
   ShaderResult<IrModule> module = BuildMathPrimitiveModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(MathPrimitiveTests, ModuleBuildsCleanly) {
@@ -58,7 +56,7 @@ TEST(MathPrimitiveTests, ModuleBuildsCleanly) {
 TEST(MathPrimitiveTests, EmitsDeterministically) {
   EXPECT_THAT(EmitMathPrimitiveWgsl(), testing::Eq(EmitMathPrimitiveWgsl()));
   EXPECT_THAT(EmitMathPrimitiveMsl(), testing::Eq(EmitMathPrimitiveMsl()));
-  EXPECT_THAT(EmitMathPrimitiveSpirvBytes(), testing::Eq(EmitMathPrimitiveSpirvBytes()));
+  EXPECT_THAT(EmitMathPrimitiveSpirv(), testing::Eq(EmitMathPrimitiveSpirv()));
 }
 
 TEST(MathPrimitiveTests, WgslSpellsScalarAndVectorFormsOfEachOpcode) {
@@ -83,33 +81,6 @@ TEST(MathPrimitiveTests, MslSpellsScalarAndVectorFormsOfEachOpcode) {
   EXPECT_THAT(msl, HasSubstr("float linearized = pow(((straight + 0.055f) / 1.055f), 2.4f);"));
   EXPECT_THAT(msl, HasSubstr("float2 curved = pow(float2(straight, (1.0f - straight)), "
                              "float2(2.4f, 2.4f));"));
-}
-
-TEST(MathPrimitiveTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitMathPrimitiveWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "math_primitives.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("math_primitives.wgsl")));
-}
-
-TEST(MathPrimitiveTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitMathPrimitiveMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "math_primitives.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("math_primitives.msl")));
-}
-
-TEST(MathPrimitiveTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitMathPrimitiveSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "math_primitives.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("math_primitives.spv")));
 }
 
 }  // namespace

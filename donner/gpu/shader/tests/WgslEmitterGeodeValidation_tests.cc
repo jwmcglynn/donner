@@ -31,17 +31,22 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "tiny_skia/filter/ColorSpace.h"
+#include "tiny_skia/filter/GaussianBlur.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -224,6 +229,18 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
     // observes failure through the uncaptured-error marker instead.
     EXPECT_TRUE(static_cast<bool>(pipeline)) << "Render pipeline creation returned null";
   }
+}
+
+TEST(WgslEmitterGeodeValidation, CheckerboardPipelinesPassRendererValidation) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr) << "Checkerboard validation requires the selected WebGPU device";
+  testing::internal::CaptureStderr();
+  const bool replaceValid = device->checkerboardPipeline().valid();
+  const bool underlayValid = device->checkerboardUnderlayPipeline().valid();
+  const std::string errors = testing::internal::GetCapturedStderr();
+  EXPECT_TRUE(replaceValid) << "Replace pipeline must compile through the WebGPU device";
+  EXPECT_TRUE(underlayValid) << "Destination-over pipeline must compile through the WebGPU device";
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)));
 }
 
 TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValidation) {
@@ -1097,6 +1114,266 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
   }
 }
 
+/// Applies the four-tap box reference with left radius 1 and right radius 2.
+/// @param pixels Input and output float pixels.
+/// @param axis Blur axis, 0 for horizontal and 1 for vertical.
+/// @param edge Edge mode, matching the shader uniform values.
+void ApplyAsymmetricBoxBlurReference(tiny_skia::filter::FloatPixmap& pixels, uint32_t axis,
+                                     uint32_t edge) {
+  const auto input = pixels;
+  for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+    for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+      for (size_t c = 0; c < 4; ++c) {
+        float sum = 0;
+        for (int32_t tap = -1; tap <= 2; ++tap) {
+          int32_t sx = x + (axis == 0 ? tap : 0), sy = y + (axis == 1 ? tap : 0);
+          if (edge == 0 &&
+              (sx < 0 || sy < 0 || sx >= int32_t(kOffsetExtent) || sy >= int32_t(kOffsetExtent))) {
+            continue;
+          }
+          if (edge == 2) {
+            sx = (sx % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
+            sy = (sy % int32_t(kOffsetExtent) + kOffsetExtent) % kOffsetExtent;
+          } else {
+            sx = std::clamp(sx, 0, int32_t(kOffsetExtent) - 1);
+            sy = std::clamp(sy, 0, int32_t(kOffsetExtent) - 1);
+          }
+          sum += input.data()[(sy * kOffsetExtent + sx) * 4 + c];
+        }
+        pixels.data()[(y * kOffsetExtent + x) * 4 + c] = sum / 4;
+      }
+    }
+  }
+}
+
+/// Clears reference pixels outside the test subregion [2, 11) x [3, 10).
+/// @param pixels Float pixels to clip in place.
+void ClipBlurReference(tiny_skia::filter::FloatPixmap& pixels) {
+  for (uint32_t y = 0; y < kOffsetExtent; ++y) {
+    for (uint32_t x = 0; x < kOffsetExtent; ++x) {
+      if (x < 2 || x >= 11 || y < 3 || y >= 10) {
+        std::fill_n(pixels.data().begin() + (y * kOffsetExtent + x) * 4, 4, 0.0f);
+      }
+    }
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildGaussianBlurModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto source = OffsetSourceTexels();
+  size_t index = 0;
+  for (uint32_t axis : {0u, 1u}) {
+    for (uint32_t edge : {0u, 1u, 2u}) {
+      for (uint32_t kind : {0u, 1u, 2u}) {
+        for (uint32_t clip : {0u, 1u}) {
+          SCOPED_TRACE(testing::Message() << "axis=" << axis << " edge=" << edge << " kind=" << kind
+                                          << " clip=" << clip);
+          const float sigma = kind == 0 ? 0.5f : 0.0f;
+          const uint32_t params[] = {std::bit_cast<uint32_t>(sigma),
+                                     axis,
+                                     edge,
+                                     kind == 1 ? 1u : 0u,
+                                     1,
+                                     2,
+                                     2,
+                                     3,
+                                     11,
+                                     10,
+                                     clip,
+                                     0};
+          auto actual = RunInputOutputUniformProgram(
+              device->device(), device->queue(), wgsl.result(), source, kOffsetExtent,
+              kOffsetExtent,
+              std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+              programs::kGaussianBlurWorkgroupSize);
+          ASSERT_THAT(actual, testing::SizeIs(source.size()));
+          auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kOffsetExtent, kOffsetExtent);
+          ASSERT_THAT(pixels.has_value(), testing::IsTrue());
+          for (size_t i = 0; i < source.size(); ++i) {
+            pixels->data()[i] = float(source[i]) / 255.0f;
+          }
+          if (kind == 1) {
+            ApplyAsymmetricBoxBlurReference(*pixels, axis, edge);
+          } else {
+            tiny_skia::filter::gaussianBlur(*pixels, axis == 0 ? sigma : 0, axis == 1 ? sigma : 0,
+                                            static_cast<tiny_skia::filter::BlurEdgeMode>(edge));
+          }
+          if (clip) {
+            ClipBlurReference(*pixels);
+          }
+          const auto expected = pixels->toPixmap();
+          editor::tests::CompareBitmapToBitmap(
+              svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), actual,
+                                  kOffsetExtent * 4},
+              svg::RendererBitmap{
+                  Vector2i(kOffsetExtent, kOffsetExtent),
+                  std::vector<uint8_t>(expected.data().begin(), expected.data().end()),
+                  kOffsetExtent * 4},
+              "blur_case_" + std::to_string(index++), editor::tests::PixelmatchIdentityParams());
+        }
+      }
+    }
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTransparentEdges) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildMorphologyModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto source = OffsetSourceTexels();
+  const int32_t radii[][2] = {{0, 0}, {1, 0}, {0, 2}, {2, 3}, {31, 0}, {0, 31}};
+  size_t index = 0;
+  for (const auto& radius : radii) {
+    for (int32_t op = 0; op < 2; ++op) {
+      SCOPED_TRACE(testing::Message()
+                   << "radius " << radius[0] << "," << radius[1] << " op=" << op);
+      const int32_t params[] = {radius[0], radius[1], op, 0};
+      auto actual = RunInputOutputUniformProgram(
+          device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
+          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+          programs::kMorphologyWorkgroupSize);
+      ASSERT_THAT(actual, testing::SizeIs(source.size()));
+      std::vector<uint8_t> expected(source.size(), op == 0 ? 255 : 0);
+      for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+        for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+          const size_t destination = (y * kOffsetExtent + x) * 4;
+          for (int32_t dy = -radius[1]; dy <= radius[1]; ++dy) {
+            for (int32_t dx = -radius[0]; dx <= radius[0]; ++dx) {
+              const int32_t sx = x + dx, sy = y + dy;
+              for (size_t c = 0; c < 4; ++c) {
+                const uint8_t value =
+                    sx >= 0 && sy >= 0 && sx < int32_t(kOffsetExtent) && sy < int32_t(kOffsetExtent)
+                        ? source[(sy * kOffsetExtent + sx) * 4 + c]
+                        : 0;
+                expected[destination + c] = op == 0 ? std::min(expected[destination + c], value)
+                                                    : std::max(expected[destination + c], value);
+              }
+            }
+          }
+        }
+      }
+      editor::tests::CompareBitmapToBitmap(
+          svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), actual, kOffsetExtent * 4},
+          svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), expected, kOffsetExtent * 4},
+          "morphology_case_" + std::to_string(index++), editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  if (!device) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildTileModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto source = OffsetSourceTexels();
+  const int32_t rectangles[][4] = {{0, 0, 13, 13},  {2, 3, 4, 5}, {-2, -3, 4, 5}, {11, 12, 4, 5},
+                                   {-15, 17, 3, 2}, {0, 0, 0, 3}, {0, 0, 3, -1}};
+  size_t index = 0;
+  for (const auto& rect : rectangles) {
+    SCOPED_TRACE(testing::Message() << "rectangle " << index);
+    auto actual = RunInputOutputUniformProgram(
+        device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rect), sizeof(rect)),
+        programs::kTileWorkgroupSize);
+    ASSERT_THAT(actual, testing::SizeIs(source.size()));
+    std::vector<uint8_t> expected(source.size(), 0);
+    if (rect[2] > 0 && rect[3] > 0) {
+      for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
+        for (int32_t x = 0; x < int32_t(kOffsetExtent); ++x) {
+          const int32_t sx = std::clamp(((x - rect[0]) % rect[2] + rect[2]) % rect[2] + rect[0], 0,
+                                        int32_t(kOffsetExtent) - 1);
+          const int32_t sy = std::clamp(((y - rect[1]) % rect[3] + rect[3]) % rect[3] + rect[1], 0,
+                                        int32_t(kOffsetExtent) - 1);
+          std::copy_n(source.begin() + (sy * kOffsetExtent + sx) * 4, 4,
+                      expected.begin() + (y * kOffsetExtent + x) * 4);
+        }
+      }
+    }
+    editor::tests::CompareBitmapToBitmap(
+        svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), actual, kOffsetExtent * 4},
+        svg::RendererBitmap{Vector2i(kOffsetExtent, kOffsetExtent), expected, kOffsetExtent * 4},
+        "tile_rectangle_" + std::to_string(index++), editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, TilePreservesFloatStorageWithoutQuantization) {
+  auto geode = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geode) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+  auto module = programs::BuildTileModule();
+  ASSERT_THAT(module, HasShaderResult());
+  auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  const auto& device = geode->device();
+  const auto& queue = geode->queue();
+  constexpr uint32_t kWidth = 16, kHeight = 2, kRowBytes = kWidth * 4 * sizeof(float);
+  std::vector<float> values(kWidth * kHeight * 4);
+  for (size_t i = 0; i < values.size(); i += 4) {
+    values[i] = float(i) / 1024 + 0.000123f;
+    values[i + 1] = -0.5f;
+    values[i + 2] = 1.5f;
+    values[i + 3] = 0.7f;
+  }
+  wgpu::TextureDescriptor desc = {};
+  desc.size = {kWidth, kHeight, 1};
+  desc.format = wgpu::TextureFormat::RGBA32Float;
+  desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+  desc.mipLevelCount = 1;
+  desc.sampleCount = 1;
+  desc.dimension = wgpu::TextureDimension::_2D;
+  const auto source = device.createTexture(desc);
+  desc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  const auto destination = device.createTexture(desc);
+  wgpu::TexelCopyTextureInfo copy = {};
+  copy.texture = source;
+  wgpu::TexelCopyBufferLayout layout = {};
+  layout.bytesPerRow = kRowBytes;
+  layout.rowsPerImage = kHeight;
+  const wgpu::Extent3D extent = {kWidth, kHeight, 1};
+  queue.writeTexture(copy, values.data(), values.size() * sizeof(float), layout, extent);
+  wgpu::BufferDescriptor bufferDesc = {};
+  bufferDesc.size = values.size() * sizeof(float);
+  bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  const auto readback = device.createBuffer(bufferDesc);
+  auto encoder = device.createCommandEncoder();
+  const int32_t params[] = {0, 0, kWidth, kHeight};
+  ASSERT_THAT(
+      RecordInputOutputUniformProgram(
+          device, queue, encoder, wgsl.result(), source, destination,
+          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+          programs::kTileWorkgroupSize),
+      testing::IsTrue());
+  copy.texture = destination;
+  wgpu::TexelCopyBufferInfo bufferCopy = {};
+  bufferCopy.buffer = readback;
+  bufferCopy.layout = layout;
+  encoder.copyTextureToBuffer(copy, bufferCopy, extent);
+  auto commands = encoder.finish();
+  queue.submit(1, &commands);
+  const auto bytes = MapAndReadBack(device, readback, bufferDesc.size);
+  ASSERT_THAT(bytes, testing::SizeIs(bufferDesc.size));
+  std::vector<float> actual(values.size());
+  std::memcpy(actual.data(), bytes.data(), bytes.size());
+  EXPECT_THAT(actual, testing::ElementsAreArray(values));
+}
+
 /// Builds the color space conversion compute pipeline from \p module, mirroring the bind group
 /// layout the program declares: sampled input texture, write-only rgba8unorm storage output, and
 /// uniform params, all compute-visible.
@@ -1390,7 +1667,8 @@ void ExpectColorTransferBoundaries(bool resolve) {
     }
     std::vector<float> actual(expected.data().size());
     std::memcpy(actual.data(), bytes.data(), sizeBytes);
-    EXPECT_THAT(actual, testing::ElementsAreArray(expected.data())) << "direction=" << direction;
+    EXPECT_THAT(actual, testing::Pointwise(testing::Eq(), expected.data()))
+        << "direction=" << direction;
   }
 }
 

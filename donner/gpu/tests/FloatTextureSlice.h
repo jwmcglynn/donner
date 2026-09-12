@@ -14,13 +14,19 @@
 
 namespace donner::gpu::tests {
 
-/// Runs the shared float-storage module and checks all four returned float values exactly.
+/// Runs a one-texel sampled compute program and checks all four returned float values exactly.
 /// @param device Native device with bounded wait/readback support.
 /// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
+/// @param values Input texel values.
+/// @param expected Expected output values, compared exactly.
 template <typename DeviceType, typename Readback>
 void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                              Readback readbackBuffer) {
+                              Readback readbackBuffer,
+                              const std::array<float, 4>& values = {0.125f, 0.25f, 0.5f, 0.75f},
+                              const std::array<float, 4>& expected = {
+                                  0.125f + 1.0f / 4096, 0.25f + 1.0f / 4096, 0.5f + 1.0f / 4096,
+                                  0.75f + 1.0f / 4096}) {
   auto shader = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shader, HasResult());
   auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
@@ -51,7 +57,6 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   auto outputView = device.createTextureView(output.result(), TextureViewDescriptor{"output"});
   ASSERT_THAT(inputView, HasResult());
   ASSERT_THAT(outputView, HasResult());
-  const std::array<float, 4> values{0.125f, 0.25f, 0.5f, 0.75f};
   std::array<uint8_t, 256> upload{};
   std::memcpy(upload.data(), values.data(), sizeof(values));
   ASSERT_THAT(device.writeTexture(input.result(), upload, {0, 256, 1}, {1, 1}), IsOk());
@@ -84,9 +89,7 @@ void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& 
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(sizeof(values))));
   std::array<float, 4> actual{};
   std::memcpy(actual.data(), bytes.result().data(), sizeof(actual));
-  constexpr float increment = 1.0f / 4096.0f;
-  EXPECT_THAT(actual, testing::ElementsAre(0.125f + increment, 0.25f + increment, 0.5f + increment,
-                                           0.75f + increment));
+  EXPECT_THAT(actual, testing::ElementsAreArray(expected));
 }
 
 }  // namespace donner::gpu::tests

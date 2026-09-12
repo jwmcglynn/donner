@@ -20,16 +20,27 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -183,12 +194,21 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
   return builder.build();
 }
 
+TEST(SpirvValValidation, EmittedCheckerboardPassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCheckerboardModule(), "checkerboard.spv");
+}
+
 TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
   ExpectValidatesForVulkan11(SpirvVal(), programs::BuildFilterResolveModule(),
                              "filter_resolve.spv");
 }
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
   ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
+}
+
+TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildConvolveMatrixModule(),
+                             "convolve_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {
@@ -221,11 +241,71 @@ TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
                              "filter_color_matrix.spv");
 }
 
+TEST(SpirvValValidation, EmittedFilterImagePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterImageModule(), "filter_image.spv");
+}
+
 TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
+}
+
+TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildTileModule(), "tile.spv");
+}
+
+TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildComponentTransferModule(),
+                             "component_transfer.spv");
+}
+
+TEST(SpirvValValidation, EmittedTurbulenceComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildTurbulenceModule(), "turbulence.spv");
+}
+
+TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDropShadowModule(), "drop_shadow.spv");
+}
+
+TEST(SpirvValValidation, EmittedDisplacementMapComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDisplacementMapModule(),
+                             "displacement_map.spv");
+}
+
+TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildGaussianBlurModule(), "gaussian_blur.spv");
+}
+
+TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildMorphologyModule(), "morphology.spv");
+}
+
+TEST(SpirvValValidation, EmittedLightingComputesPassVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDiffuseLightingModule(),
+                             "diffuse_lighting.spv");
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildSpecularLightingModule(),
+                             "specular_lighting.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {

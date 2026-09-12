@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
 
 # The Vulkan solid-fill vertical slice renders the shared baseline scene
 # through donner::gpu + the emitted SPIR-V and compares it against an
@@ -75,6 +75,8 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
+        "//donner/gpu:checkerboard_pixel_tests",
+        "//donner/gpu:vertex_input_slice",
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
@@ -135,13 +137,30 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
         "//donner/gpu",
+        "//donner/gpu:blur_slice",
         "//donner/gpu:color_matrix_slice",
+        "//donner/gpu:component_transfer_slice",
+        "//donner/gpu:displacement_map_slice",
+        "//donner/gpu:convolve_matrix_slice",
+        "//donner/gpu:drop_shadow_slice",
+        "//donner/gpu:filter_image_slice",
         "//donner/gpu:float_texture_slice",
+        "//donner/gpu:lighting_slice",
+        "//donner/gpu:morphology_slice",
+        "//donner/gpu:tile_slice",
+        "//donner/gpu:turbulence_slice",
         "//donner/gpu/shader",
+        "//donner/gpu/shader:component_transfer_artifact",
+        "//donner/gpu/shader:displacement_map_artifact",
+        "//donner/gpu/shader:convolve_matrix_artifact",
+        "//donner/gpu/shader:drop_shadow_artifact",
+        "//donner/gpu/shader:filter_image_artifact",
         "//donner/gpu/shader:float_storage_test_module",
+        "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:spirv_emitter",
+        "//donner/gpu/shader:turbulence_artifact",
         "//donner/gpu/vulkan:vulkan_device",
         "//donner/gpu/vulkan:vulkan_resource_state",
         "@com_google_gtest//:gtest_main",
@@ -190,6 +209,43 @@ donner_cc_test(
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:spirv_emitter",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Indexed draws on a real device: the shared indexed scene (both index formats,
+# nonzero binding offsets and first indices, a negative base vertex, instancing
+# and a mid-pass scissor) compared byte-for-byte against the expected image, plus
+# an index range the encoder refuses before any command buffer exists. Like the
+# compute slice this compares against a host-computed image whose edges are all
+# pixel-aligned, so no driver is pinned.
+donner_cc_test(
+    name = "vulkan_indexed_draw_tests",
+    srcs = ["VulkanIndexedDraw_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:vertex_input_slice",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:spirv_emitter",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# The allocator calls a supplied entry-point table; these tests inject that
+# table to verify failure unwinding without opening a Vulkan loader or device.
+donner_cc_test(
+    name = "vulkan_buffer_allocator_tests",
+    srcs = ["VulkanBufferAllocator_tests.cc"],
+    deps = [
         "//donner/gpu/vulkan:vulkan_device",
         "@com_google_gtest//:gtest_main",
     ],

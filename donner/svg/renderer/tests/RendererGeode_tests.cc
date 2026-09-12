@@ -10,8 +10,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <latch>
 #include <limits>
 #include <optional>
+#include <thread>
 #include <utility>
 
 #include "donner/base/Box.h"
@@ -316,6 +318,50 @@ protected:
 };
 
 // ----------------------------------------------------------------------------
+
+TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
+  using namespace components;
+  constexpr uint32_t kWidth = 1024;
+  constexpr uint32_t kHeight = 768;
+  for (bool changePreference : {false, true}) {
+    SCOPED_TRACE(changePreference);
+    std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_TRUE(device);
+    RendererGeode renderer(device);
+    RenderViewport viewport;
+    viewport.size = Vector2d(kWidth, kHeight);
+    renderer.beginFrame(viewport);
+    FilterGraph graph;
+    FilterNode blur;
+    blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+    graph.nodes.push_back(blur);
+    renderer.setTransform(Transform2d::SkewX(0.2));
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {960, 640}));
+    const auto admitted = renderer.resourceStats();
+    ASSERT_FALSE(admitted.filterBudgetRejected);
+    if (changePreference) {
+      device->filterEngine().setMaximumTileExtentForTesting(16);
+    }
+    renderer.setTransform(Transform2d());
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kWidth, kHeight}), StrokeParams{});
+    renderer.popFilterLayer();
+    const auto observed = device->filterEngine().lastExecutionMemory();
+    ASSERT_GT(observed.tileExecutions, 1u);
+    uint64_t untiledWork = 0;
+    uint64_t untiledBytes = 0;
+    ASSERT_TRUE(FilterGraphExecutionCost(graph, uint64_t{kWidth} * kHeight,
+                                         FilterMemoryModel::GpuAllNodes, untiledWork,
+                                         untiledBytes));
+    EXPECT_GT(observed.workUnits, untiledWork);
+    EXPECT_GE(admitted.filterWorkUnits, observed.workUnits);
+    EXPECT_GE(admitted.filterRetainedBytes, observed.total());
+    renderer.endFrame();
+    EXPECT_FALSE(renderer.resourceStats().filterBudgetRejected);
+    EXPECT_FALSE(renderer.resourceStats().surfaceBudgetRejected);
+    EXPECT_FALSE(renderer.takeSnapshot().empty());
+  }
+}
 
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
   RendererGeode renderer = createRenderer();
@@ -722,26 +768,20 @@ TEST_F(RendererGeodeTest, DeviceLostWhileTheMapIsPendingIsReportedWithinASlice) 
   renderer.endFrame();
   (void)renderer.consumeReadbackStats();
 
-  // The cancellation predicate is polled once before the readback is set up at all, and then
-  // once per wait slice, before the slice itself. The second call is therefore the one place a
-  // test can stand between the map request and the first slice: the readback's own fast-fail on
-  // an already-lost device is behind us, no poll has run since the map was requested, so the
-  // slice cannot find the map already complete and must reach its lost-device check.
-  //
-  // If that call sequence ever changes, this lands on the fast-fail route instead, where no
-  // statistics are recorded - which the assertions below fail on rather than pass silently.
-  int predicateCalls = 0;
-  const auto start = std::chrono::steady_clock::now();
-  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly([&] {
-    if (++predicateCalls == 2) {
+  bool mapRequested = false;
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+      mapRequested = true;
       device->markDeviceLost("test-injected loss while the map was pending");
     }
-    return false;  // Never cancel: the loss, not the caller, must end this wait.
   });
+  const auto start = std::chrono::steady_clock::now();
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  device->setSnapshotReadbackHookForTesting({});
   const auto elapsed = std::chrono::steady_clock::now() - start;
 
   EXPECT_TRUE(snapshot.empty());
-  EXPECT_GE(predicateCalls, 2) << "the wait must have reached at least one slice";
+  EXPECT_THAT(mapRequested, testing::IsTrue());
   // Well under the ten-second readback deadline: the slice reports the loss rather than the
   // deadline discovering it.
   EXPECT_LT(elapsed, std::chrono::seconds(2));
@@ -766,10 +806,17 @@ TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
   renderer.endFrame();
   (void)renderer.consumeReadbackStats();
 
-  std::atomic<int> cancellationChecks{0};
+  std::atomic<bool> cancel{false};
+  sharedDevice()->setSnapshotReadbackHookForTesting(
+      [&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+        if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+          cancel.store(true, std::memory_order_relaxed);
+        }
+      });
   const auto start = std::chrono::steady_clock::now();
-  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly(
-      [&] { return cancellationChecks.fetch_add(1, std::memory_order_relaxed) >= 1; });
+  const RendererBitmap snapshot =
+      renderer.takeSnapshotInterruptibly([&] { return cancel.load(std::memory_order_relaxed); });
+  sharedDevice()->setSnapshotReadbackHookForTesting({});
   const auto elapsed = std::chrono::steady_clock::now() - start;
 
   EXPECT_TRUE(snapshot.empty());
@@ -1105,7 +1152,7 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
 }
 
-TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingOnRelease) {
+TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingWhenOwnerDrains) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
@@ -1118,8 +1165,12 @@ TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingOnRelease
   snapshot.reset();
 
   EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+            destroysBefore);
+  EXPECT_THAT(sharedDevice()->deferredTextureDestroyCountForTesting(), testing::Eq(1u));
+  sharedDevice()->drainDeferredTextureBackings();
+  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
             destroysBefore + 1u)
-      << "Dropping an owned presentation snapshot must explicitly destroy its GPU backing";
+      << "The owner-context drain must explicitly destroy released snapshot backing";
 }
 
 TEST_F(RendererGeodeTest, BorrowedTextureSnapshotNeverDestroysBacking) {
@@ -3133,21 +3184,72 @@ TEST_F(RendererGeodeTest, FilterInvalidConvolveMatrixClearsReusedTexture) {
   ASSERT_FALSE(warm.empty());
   EXPECT_THAT(pixelAt(warm, 32, 32), RgbaEq(255, 0, 0, 255));
 
-  components::FilterGraph graph;
-  components::FilterNode convolveNode;
-  components::filter_primitive::ConvolveMatrix convolve;
-  convolve.orderX = 3;
-  convolve.orderY = 3;
-  convolve.kernelMatrix = {1.0};  // Invalid: a 3x3 kernel requires nine values.
-  convolveNode.primitive = convolve;
-  convolveNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
-  graph.nodes.push_back(convolveNode);
+  using ConvolveMatrix = components::filter_primitive::ConvolveMatrix;
+  const auto makeGraph = [](const ConvolveMatrix& convolve) {
+    components::FilterGraph graph;
+    components::FilterNode convolveNode;
+    convolveNode.primitive = convolve;
+    convolveNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+    graph.nodes.push_back(convolveNode);
+    return graph;
+  };
+  const auto expectTransparent = [](const RendererBitmap& actual) {
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    EXPECT_THAT(pixelAt(actual, 32, 32), IsTransparent());
+    EXPECT_THAT(pixelAt(actual, 18, 18), IsTransparent());
+  };
 
-  RendererGeode invalidRenderer = createRenderer();
-  const RendererBitmap actual = renderGraph(invalidRenderer, graph);
-  ASSERT_FALSE(actual.empty());
-  EXPECT_THAT(pixelAt(actual, 32, 32), IsTransparent());
-  EXPECT_THAT(pixelAt(actual, 18, 18), IsTransparent());
+  const std::array<std::pair<const char*, ConvolveMatrix>, 4> invalidCases{{
+      {"zero order", ConvolveMatrix{.orderX = 0, .orderY = 1}},
+      {"coefficient count", ConvolveMatrix{.orderX = 3, .orderY = 3, .kernelMatrix = {1.0}}},
+      {"zero divisor",
+       ConvolveMatrix{.orderX = 1, .orderY = 1, .kernelMatrix = {1.0}, .divisor = 0.0}},
+      {"target outside kernel",
+       ConvolveMatrix{.orderX = 1, .orderY = 1, .kernelMatrix = {1.0}, .targetX = 1}},
+  }};
+
+  for (const auto& [name, convolve] : invalidCases) {
+    SCOPED_TRACE(name);
+    RendererGeode invalidRenderer = createRenderer();
+    expectTransparent(renderGraph(invalidRenderer, makeGraph(convolve)));
+  }
+
+  const ConvolveMatrix zeroDivisor{.orderX = 1, .orderY = 1, .kernelMatrix = {1.0}, .divisor = 0.0};
+  const std::array<std::pair<const char*, ConvolveMatrix>, 3> nonfiniteCases{{
+      {"non-finite divisor", ConvolveMatrix{.orderX = 1,
+                                            .orderY = 1,
+                                            .kernelMatrix = {1.0},
+                                            .divisor = std::numeric_limits<double>::infinity()}},
+      {"non-finite bias", ConvolveMatrix{.orderX = 1,
+                                         .orderY = 1,
+                                         .kernelMatrix = {1.0},
+                                         .bias = std::numeric_limits<double>::quiet_NaN()}},
+      {"non-finite coefficient",
+       ConvolveMatrix{
+           .orderX = 1, .orderY = 1, .kernelMatrix = {std::numeric_limits<double>::quiet_NaN()}}},
+  }};
+
+  for (const auto& [name, convolve] : nonfiniteCases) {
+    SCOPED_TRACE(name);
+    RendererGeode invalidRenderer = createRenderer();
+    const components::FilterGraph controlGraph = makeGraph(zeroDivisor);
+    const components::FilterGraph probeGraph = makeGraph(convolve);
+
+    expectTransparent(renderGraph(invalidRenderer, controlGraph));
+    expectTransparent(renderGraph(invalidRenderer, controlGraph));
+    const geode::GeodeCounters controlBefore = invalidRenderer.lastFrameTimings().counters;
+    expectTransparent(renderGraph(invalidRenderer, probeGraph));
+    const geode::GeodeCounters probe = invalidRenderer.lastFrameTimings().counters;
+    expectTransparent(renderGraph(invalidRenderer, controlGraph));
+    const geode::GeodeCounters controlAfter = invalidRenderer.lastFrameTimings().counters;
+
+    ASSERT_THAT(controlAfter.bufferWrites, testing::Eq(controlBefore.bufferWrites));
+    ASSERT_THAT(controlAfter.bufferWriteBytes, testing::Eq(controlBefore.bufferWriteBytes));
+    EXPECT_THAT(probe.bufferWrites, testing::Eq(controlBefore.bufferWrites))
+        << "Invalid convolution parameters must be rejected before a parameter-buffer upload";
+    EXPECT_THAT(probe.bufferWriteBytes, testing::Eq(controlBefore.bufferWriteBytes))
+        << "Invalid convolution parameters must be rejected before parameter bytes are uploaded";
+  }
 }
 
 TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {
@@ -4253,6 +4355,813 @@ TEST_F(RendererGeodeTest, ClippedVerticalOnlyFillWithEmptyVerticalBandsRenders) 
   ASSERT_FALSE(snapshot.empty());
   EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255))
       << "A clipped fill with no vertical bands must not invalidate the frame it is drawn in.";
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTexture) {
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::BGRA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(texture.isValid(), testing::IsTrue());
+  }
+  if (texture.isValid()) {
+    (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsInvalidContentBeforeTakingOwnership) {
+  for (const Vector2i dimensions :
+       {Vector2i(0, 4), Vector2i(-1, 4), Vector2i(5, 4), Vector2i(4, 5)}) {
+    SCOPED_TRACE(dimensions);
+    auto created = sharedDevice()->adapterDevice().createTexture(
+        {"snapshot",
+         {4, 4},
+         gpu::TextureFormat::RGBA8Unorm,
+         gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    {
+      auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          sharedDevice(), std::move(texture), dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          AlphaType::Premultiplied);
+      EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+      EXPECT_THAT(texture.isValid(), testing::IsTrue());
+    }
+    if (texture.isValid()) {
+      (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+    }
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsForeignOwnerWithoutConsumingTheTexture) {
+  auto other = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  ASSERT_THAT(other, testing::NotNull());
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        other, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(texture.isValid(), testing::IsTrue());
+  }
+  if (texture.isValid()) {
+    (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+  }
+}
+
+TEST_F(RendererGeodeTest, SnapshotContentCannotGrowBeyondItsBacking) {
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      sharedDevice(), std::move(texture), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  snapshot.setDimensions({5, 3});
+  EXPECT_THAT(snapshot.dimensions(), testing::Eq(Vector2i(2, 3)));
+  snapshot.setDimensions({2, -1});
+  EXPECT_THAT(snapshot.dimensions(), testing::Eq(Vector2i(2, 3)));
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsNullOwnerAndUnsupportedFormatWithoutConsumption) {
+  for (const bool missingOwner : {false, true}) {
+    SCOPED_TRACE(missingOwner);
+    const auto format = missingOwner ? gpu::TextureFormat::RGBA8Unorm : gpu::TextureFormat::R8Unorm;
+    auto created = sharedDevice()->adapterDevice().createTexture(
+        {"snapshot", {4, 4}, format, gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    {
+      auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          missingOwner ? nullptr : sharedDevice(), std::move(texture), {4, 4},
+          missingOwner ? wgpu::TextureFormat::RGBA8Unorm : wgpu::TextureFormat::R8Unorm,
+          AlphaType::Premultiplied);
+      EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+      EXPECT_THAT(texture.isValid(), testing::IsTrue());
+    }
+    if (texture.isValid()) {
+      (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+    }
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsReplacement) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  const gpu::TextureDescriptor descriptor{"snapshot",
+                                          {4, 4},
+                                          gpu::TextureFormat::RGBA8Unorm,
+                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
+  auto first = runtime.createTexture(descriptor);
+  ASSERT_FALSE(first.hasError()) << first.error();
+  gpu::Texture texture = std::move(first).result();
+  gpu::Texture stale =
+      gpu::Texture::CreateForBackend(texture.slotIndex(), texture.generation(), texture.deviceId());
+  ASSERT_FALSE(runtime.destroyTextureBacking(std::move(texture)).hasError());
+  auto replacement = runtime.createTexture(descriptor);
+  ASSERT_FALSE(replacement.hasError()) << replacement.error();
+  gpu::Texture live = std::move(replacement).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(stale), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(stale.isValid(), testing::IsTrue());
+  }
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(live)), testing::IsTrue());
+  (void)runtime.destroyTextureBacking(std::move(live));
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  auto created = runtime.createTexture({"host owner",
+                                        {4, 4},
+                                        gpu::TextureFormat::RGBA8Unorm,
+                                        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture owner = std::move(created).result();
+  auto imported = runtime.importExternalTexture(
+      runtime.wgpuTextureOf(owner), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc);
+  ASSERT_FALSE(imported.hasError()) << imported.error();
+  gpu::Texture registration = std::move(imported).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(registration), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(registration.isValid(), testing::IsTrue());
+  }
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(owner)), testing::IsTrue());
+  registration = {};
+  (void)runtime.destroyTextureBacking(std::move(owner));
+}
+
+void ExpectSolidRuntimeSnapshot(const RendererBitmap& actual, Vector2i dimensions,
+                                const std::array<uint8_t, 4>& color, const char* label) {
+  ASSERT_THAT(actual.dimensions, testing::Eq(dimensions));
+  RendererBitmap expected;
+  expected.dimensions = dimensions;
+  expected.rowBytes = actual.rowBytes;
+  expected.alphaType = actual.alphaType;
+  expected.pixels.resize(expected.rowBytes * dimensions.y);
+  for (int y = 0; y < dimensions.y; ++y) {
+    for (int x = 0; x < dimensions.x; ++x) {
+      std::copy(color.begin(), color.end(),
+                expected.pixels.begin() + y * expected.rowBytes + x * 4);
+    }
+  }
+  editor::tests::CompareBitmapToBitmap(actual, expected, label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotMovesPreserveTheResourceIdentity) {
+  auto created = sharedDevice()->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  const uint32_t slot = texture.slotIndex(), generation = texture.generation();
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      sharedDevice(), std::move(texture), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
+  EXPECT_THAT(texture.isValid(), testing::IsFalse());
+  EXPECT_THAT(snapshot.allocationDimensions(), testing::Eq(Vector2i(4, 4)));
+  EXPECT_THAT(snapshot.runtimeFormat(), testing::Optional(gpu::TextureFormat::RGBA8Unorm));
+  RendererGeodeTextureSnapshot moved(std::move(snapshot));
+  EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
+  ASSERT_THAT(moved.runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(moved.runtimeTexture()->slotIndex(), testing::Eq(slot));
+  EXPECT_THAT(moved.runtimeTexture()->generation(), testing::Eq(generation));
+  EXPECT_THAT(moved.deviceId(), testing::Eq(sharedDevice()->adapterDevice().deviceId()));
+  RendererGeodeTextureSnapshot assigned(nullptr, {}, Vector2i::Zero(),
+                                        wgpu::TextureFormat::Undefined);
+  assigned = std::move(moved);
+  EXPECT_THAT(moved.isValid(), testing::IsFalse());
+  ASSERT_THAT(assigned.runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(assigned.runtimeTexture()->slotIndex(), testing::Eq(slot));
+  EXPECT_THAT(assigned.setDimensions({4, 4}), testing::IsTrue());
+  EXPECT_THAT(assigned.dimensions(), testing::Eq(Vector2i(4, 4)));
+}
+
+TEST_F(RendererGeodeTest, BorrowedSnapshotNamesTheSameRuntimeTargetThatDetachmentTransfers) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+  const auto* base = renderer.borrowTextureSnapshot();
+  ASSERT_THAT(base, testing::NotNull());
+  const auto* borrowed = static_cast<const RendererGeodeTextureSnapshot*>(base);
+  ASSERT_THAT(borrowed->runtimeTexture(), testing::NotNull());
+  const uint32_t slot = borrowed->runtimeTexture()->slotIndex(),
+                 generation = borrowed->runtimeTexture()->generation();
+  const auto detached = renderer.takeTextureSnapshot();
+  ASSERT_THAT(detached, testing::NotNull());
+  const auto* owned = static_cast<const RendererGeodeTextureSnapshot*>(detached.get());
+  ASSERT_THAT(owned->runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(owned->runtimeTexture()->slotIndex(), testing::Eq(slot));
+  EXPECT_THAT(owned->runtimeTexture()->generation(), testing::Eq(generation));
+  EXPECT_THAT(renderer.borrowTextureSnapshot(), testing::IsNull());
+}
+
+TEST(RuntimeSnapshotLifetime, DetachedContentAndDeviceOutliveTheProducer) {
+  auto owner = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  ASSERT_THAT(owner, testing::NotNull());
+  std::weak_ptr<geode::GeodeDevice> lifetime = owner;
+  std::shared_ptr<const RendererTextureSnapshot> snapshot;
+  {
+    RendererGeode renderer(owner);
+    RenderViewport viewport;
+    viewport.size = {8, 8};
+    viewport.devicePixelRatio = 1;
+    renderer.beginFrame(viewport);
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawRect(Box2d({0, 0}, {8, 8}), StrokeParams{});
+    renderer.endFrame();
+    snapshot = renderer.takeTextureSnapshot();
+    ASSERT_THAT(snapshot, testing::NotNull());
+    renderer.beginFrame(viewport);
+    renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+    renderer.drawRect(Box2d({0, 0}, {8, 8}), StrokeParams{});
+    renderer.endFrame();
+  }
+  owner.reset();
+  EXPECT_THAT(lifetime.expired(), testing::IsFalse());
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {8, 8}, {255, 0, 0, 255},
+                             "runtime_snapshot_retained_content");
+  snapshot.reset();
+  EXPECT_THAT(lifetime.expired(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotContentAlphaAndBothByteFormatsRemainExact) {
+  for (bool bgra : {false, true}) {
+    for (bool straight : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "bgra=" << bgra << " straight=" << straight);
+      auto& runtime = sharedDevice()->adapterDevice();
+      auto created = runtime.createTexture(
+          {"snapshot",
+           {4, 4},
+           bgra ? gpu::TextureFormat::BGRA8Unorm : gpu::TextureFormat::RGBA8Unorm,
+           gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc | gpu::TextureUsage::Sampled});
+      ASSERT_FALSE(created.hasError()) << created.error();
+      gpu::Texture texture = std::move(created).result();
+      std::array<uint8_t, 1024> pixels{};
+      for (size_t y = 0; y < 4; ++y) {
+        for (size_t x = 0; x < 4; ++x) {
+          const bool content = x < 2 && y < 3;
+          const uint8_t red = straight ? 128 : 64;
+          const std::array<uint8_t, 4> color = content
+                                                   ? (bgra ? std::array<uint8_t, 4>{0, 0, red, 128}
+                                                           : std::array<uint8_t, 4>{red, 0, 0, 128})
+                                                   : std::array<uint8_t, 4>{0, 255, 0, 255};
+          std::copy(color.begin(), color.end(), pixels.begin() + y * 256 + x * 4);
+        }
+      }
+      ASSERT_FALSE(runtime.writeTexture(texture, pixels, {0, 256, 4}, {4, 4}).hasError());
+      auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          sharedDevice(), std::move(texture), {2, 3},
+          bgra ? wgpu::TextureFormat::BGRA8Unorm : wgpu::TextureFormat::RGBA8Unorm,
+          straight ? AlphaType::Unpremultiplied : AlphaType::Premultiplied);
+      ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
+      ExpectSolidRuntimeSnapshot(snapshot.takeSnapshot(), {2, 3}, {128, 0, 0, 128},
+                                 "runtime_snapshot_readback_formats");
+      RendererGeode renderer = createRenderer();
+      beginFrame(renderer);
+      EXPECT_THAT(renderer.drawTextureSnapshot(
+                      snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
+                  testing::IsTrue());
+      renderer.endFrame();
+      ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {64, 64}, {128, 0, 0, 128},
+                                 "runtime_snapshot_content_sampling");
+    }
+  }
+}
+
+TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
+  auto owner = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  ASSERT_THAT(owner, testing::NotNull());
+  auto created = owner->adapterDevice().createTexture(
+      {"snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      owner, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
+  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {4, 4}), 1, true),
+              testing::IsFalse());
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, RuntimeReadbackPreservesSampledOnlyAndCopyOnlyRoutes) {
+  for (bool sampled : {false, true}) {
+    SCOPED_TRACE(sampled);
+    auto& runtime = sharedDevice()->adapterDevice();
+    auto created = runtime.createTexture(
+        {"snapshot capability",
+         {4, 4},
+         gpu::TextureFormat::RGBA8Unorm,
+         gpu::TextureUsage::CopyDst |
+             (sampled ? gpu::TextureUsage::Sampled : gpu::TextureUsage::CopySrc)});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    std::array<uint8_t, 1024> pixels{};
+    for (size_t y = 0; y < 4; ++y) {
+      for (size_t x = 0; x < 4; ++x) {
+        pixels[y * 256 + x * 4 + 1] = 255;
+        pixels[y * 256 + x * 4 + 3] = 255;
+      }
+    }
+    ASSERT_FALSE(runtime.writeTexture(texture, pixels, {0, 256, 4}, {4, 4}).hasError());
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
+    ExpectSolidRuntimeSnapshot(snapshot.takeSnapshot(), {4, 4}, {0, 255, 0, 255},
+                               "runtime_snapshot_capability_routes");
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    EXPECT_THAT(renderer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {4, 4}), 1, true),
+                testing::Eq(sampled));
+    renderer.endFrame();
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsUnusableCapabilitiesWithoutConsumption) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  auto created = runtime.createTexture(
+      {"upload only", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopyDst});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture texture = std::move(created).result();
+  {
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(texture.isValid(), testing::IsTrue());
+  }
+  if (texture.isValid()) {
+    (void)runtime.destroyTextureBacking(std::move(texture));
+  }
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotMoveAssignmentReleasesThePreviousBacking) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  const gpu::TextureDescriptor descriptor{
+      "snapshot", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled};
+  auto first = runtime.createTexture(descriptor);
+  auto second = runtime.createTexture(descriptor);
+  ASSERT_FALSE(first.hasError()) << first.error();
+  ASSERT_FALSE(second.hasError()) << second.error();
+  gpu::Texture oldIdentity = gpu::Texture::CreateForBackend(
+      first.result().slotIndex(), first.result().generation(), first.result().deviceId());
+  auto destination = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      sharedDevice(), std::move(first).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  auto source = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      sharedDevice(), std::move(second).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  destination = std::move(source);
+  EXPECT_THAT(source.isValid(), testing::IsFalse());
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(oldIdentity)), testing::IsTrue());
+  sharedDevice()->drainDeferredTextureBackings();
+  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(oldIdentity)), testing::IsFalse());
+  ASSERT_THAT(destination.runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(runtime.ownsTextureBacking(*destination.runtimeTexture()), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, BorrowedRuntimeSnapshotCanBeDrawnWithoutReleasingTheProducerTarget) {
+  RendererGeode producer = createRenderer();
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  producer.endFrame();
+  const auto* borrowed = producer.borrowTextureSnapshot();
+  ASSERT_THAT(borrowed, testing::NotNull());
+  {
+    RendererGeode consumer = createRenderer();
+    beginFrame(consumer);
+    EXPECT_THAT(consumer.drawTextureSnapshot(
+                    *borrowed, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
+                testing::IsTrue());
+    consumer.endFrame();
+    ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                               "borrowed_runtime_snapshot_drawing");
+  }
+  const auto detached = producer.takeTextureSnapshot();
+  ASSERT_THAT(detached, testing::NotNull());
+  EXPECT_THAT(producer.borrowTextureSnapshot(), testing::IsNull());
+  ExpectSolidRuntimeSnapshot(detached->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "borrowed_runtime_snapshot_preserves_owner");
+  beginFrame(producer);
+  producer.endFrame();
+  ASSERT_THAT(producer.borrowTextureSnapshot(), testing::NotNull());
+  ExpectSolidRuntimeSnapshot(detached->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "borrowed_runtime_snapshot_next_frame");
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotBackingSurvivesUntilConsumerSubmission) {
+  RendererGeode consumer = createRenderer();
+  beginFrame(consumer);
+  gpu::Texture sourceIdentity;
+  {
+    RendererGeode producer = createRenderer();
+    beginFrame(producer);
+    producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    producer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    producer.endFrame();
+    const auto snapshot = producer.takeTextureSnapshot();
+    ASSERT_THAT(snapshot, testing::NotNull());
+    const auto* runtime =
+        static_cast<const RendererGeodeTextureSnapshot&>(*snapshot).runtimeTexture();
+    ASSERT_THAT(runtime, testing::NotNull());
+    sourceIdentity = gpu::Texture::CreateForBackend(runtime->slotIndex(), runtime->generation(),
+                                                    runtime->deviceId());
+    EXPECT_THAT(consumer.drawTextureSnapshot(
+                    *snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
+                testing::IsTrue());
+  }
+  EXPECT_THAT(sharedDevice()->adapterDevice().ownsTextureBacking(sourceIdentity),
+              testing::IsTrue());
+  consumer.endFrame();
+  EXPECT_THAT(sharedDevice()->adapterDevice().ownsTextureBacking(sourceIdentity),
+              testing::IsFalse());
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "runtime_snapshot_pending_submission");
+}
+
+TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission) {
+  RendererGeode consumer = createRenderer();
+  beginFrame(consumer);
+  {
+    wgpu::TextureDescriptor descriptor{};
+    descriptor.dimension = wgpu::TextureDimension::_2D;
+    descriptor.size = {4, 4, 1};
+    descriptor.mipLevelCount = 1;
+    descriptor.sampleCount = 1;
+    descriptor.format = wgpu::TextureFormat::RGBA8Unorm;
+    descriptor.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
+    wgpu::Texture texture = sharedDevice()->device().createTexture(descriptor);
+    ASSERT_THAT(static_cast<bool>(texture), testing::IsTrue());
+    std::array<uint8_t, 64> pixels;
+    for (size_t i = 0; i < pixels.size(); i += 4) {
+      pixels[i] = 255;
+      pixels[i + 1] = 0;
+      pixels[i + 2] = 0;
+      pixels[i + 3] = 255;
+    }
+    wgpu::TexelCopyTextureInfo destination{};
+    destination.texture = texture;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = 16;
+    layout.rowsPerImage = 4;
+    const wgpu::Extent3D size{4, 4, 1};
+    sharedDevice()->queue().writeTexture(destination, pixels.data(), pixels.size(), layout, size);
+    RendererGeodeTextureSnapshot snapshot(sharedDevice(), texture, {4, 4},
+                                          wgpu::TextureFormat::RGBA8Unorm);
+    for (int draw = 0; draw < 100; ++draw) {
+      EXPECT_THAT(consumer.drawTextureSnapshot(
+                      snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
+                  testing::IsTrue());
+    }
+  }
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "uploaded_snapshot_pending_submission");
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotBackingIsReleasedWhenConsumerFrameIsDiscarded) {
+  auto& runtime = sharedDevice()->adapterDevice();
+  RendererGeode consumer = createRenderer();
+  beginFrame(consumer);
+  gpu::Texture sourceIdentity;
+  {
+    auto created = runtime.createTexture(
+        {"snapshot", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture source = std::move(created).result();
+    sourceIdentity =
+        gpu::Texture::CreateForBackend(source.slotIndex(), source.generation(), source.deviceId());
+    const auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(source), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    EXPECT_THAT(consumer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {4, 4}), 1, true),
+                testing::IsTrue());
+  }
+  EXPECT_THAT(runtime.ownsTextureBacking(sourceIdentity), testing::IsTrue());
+  beginFrame(consumer);
+  EXPECT_THAT(runtime.ownsTextureBacking(sourceIdentity), testing::IsFalse());
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {0, 0, 0, 0},
+                             "runtime_snapshot_discarded_frame");
+}
+
+std::shared_ptr<geode::GeodeDevice> CreateSharedBackendContext(
+    const std::shared_ptr<geode::GeodeDevice>& device) {
+  geode::GeodeEmbedConfig config;
+  config.device = device->device();
+  config.queue = device->queue();
+  config.adapter = device->adapter();
+  config.textureFormat = device->textureFormat();
+  return geode::GeodeDevice::CreateFromExternal(config);
+}
+
+TEST_F(RendererGeodeTest, SharedBackendSnapshotPreservesIdentityAndCroppedContent) {
+  auto producer = CreateSharedBackendContext(sharedDevice());
+  auto consumer = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(producer, testing::NotNull());
+  ASSERT_THAT(consumer, testing::NotNull());
+  EXPECT_THAT(producer->adapterDevice().deviceId(),
+              testing::Ne(consumer->adapterDevice().deviceId()));
+  auto created = producer->adapterDevice().createTexture(
+      {"shared snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc | gpu::TextureUsage::CopyDst});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture source = std::move(created).result();
+  const uint32_t slot = source.slotIndex();
+  const uint32_t generation = source.generation();
+  std::array<uint8_t, 1024> pixels{};
+  for (size_t y = 0; y < 4; ++y) {
+    for (size_t x = 0; x < 4; ++x) {
+      pixels[y * 256 + x * 4 + (x < 2 && y < 3 ? 0 : 1)] = 255;
+      pixels[y * 256 + x * 4 + 3] = 255;
+    }
+  }
+  ASSERT_FALSE(
+      producer->adapterDevice().writeTexture(source, pixels, {0, 256, 4}, {4, 4}).hasError());
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      producer, std::move(source), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  RendererGeode renderer(consumer);
+  beginFrame(renderer);
+  for (int draw = 0; draw < 100; ++draw) {
+    EXPECT_THAT(renderer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {64, 64}), 1, true),
+                testing::IsTrue());
+  }
+  ASSERT_THAT(snapshot.runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(snapshot.runtimeTexture()->slotIndex(), testing::Eq(slot));
+  EXPECT_THAT(snapshot.runtimeTexture()->generation(), testing::Eq(generation));
+  EXPECT_THAT(snapshot.deviceId(), testing::Eq(producer->adapterDevice().deviceId()));
+  renderer.endFrame();
+  ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "shared_backend_snapshot_cropped_content");
+}
+
+TEST_F(RendererGeodeTest, SharedBackendSnapshotSurvivesProducerScopeUntilConsumerSubmission) {
+  auto producer = CreateSharedBackendContext(sharedDevice());
+  auto consumer = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(producer, testing::NotNull());
+  ASSERT_THAT(consumer, testing::NotNull());
+  std::weak_ptr<geode::GeodeDevice> producerLifetime = producer;
+  RendererGeode renderer(consumer);
+  beginFrame(renderer);
+  {
+    RendererGeode sourceRenderer(producer);
+    beginFrame(sourceRenderer);
+    sourceRenderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    sourceRenderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+    sourceRenderer.endFrame();
+    const auto snapshot = sourceRenderer.takeTextureSnapshot();
+    ASSERT_THAT(snapshot, testing::NotNull());
+    EXPECT_THAT(renderer.drawTextureSnapshot(*snapshot, Box2d({0, 0}, {64, 64}), 1, true),
+                testing::IsTrue());
+  }
+  producer.reset();
+  EXPECT_THAT(producerLifetime.expired(), testing::IsFalse());
+  renderer.endFrame();
+  EXPECT_THAT(producerLifetime.expired(), testing::IsTrue());
+  ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "shared_backend_snapshot_producer_scope");
+}
+
+TEST_F(RendererGeodeTest, RuntimeSnapshotReleaseOnAnotherThreadDefersOwnerSlotRetirement) {
+  auto owner = sharedDevice();
+  owner->drainDeferredDestroys();
+  const size_t pendingBefore = owner->deferredTextureDestroyCountForTesting();
+  auto created = owner->adapterDevice().createTexture(
+      {"threaded snapshot", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  gpu::Texture source = std::move(created).result();
+  gpu::Texture identity =
+      gpu::Texture::CreateForBackend(source.slotIndex(), source.generation(), source.deviceId());
+  auto snapshot = std::make_shared<RendererGeodeTextureSnapshot>(
+      RendererGeodeTextureSnapshot::AdoptRuntimeTexture(owner, std::move(source), {4, 4},
+                                                        wgpu::TextureFormat::RGBA8Unorm,
+                                                        AlphaType::Premultiplied));
+  std::thread releaser([snapshot = std::move(snapshot)]() mutable { snapshot.reset(); });
+  releaser.join();
+  EXPECT_THAT(owner->adapterDevice().ownsTextureBacking(identity), testing::IsTrue());
+  EXPECT_THAT(owner->deferredTextureDestroyCountForTesting(), testing::Eq(pendingBefore + 1));
+  owner->drainDeferredDestroys();
+  EXPECT_THAT(owner->adapterDevice().ownsTextureBacking(identity), testing::IsFalse());
+  EXPECT_THAT(owner->deferredTextureDestroyCountForTesting(), testing::Eq(pendingBefore));
+}
+
+TEST_F(RendererGeodeTest, SharedBackendPresentationRequiresAnOwningSnapshotLease) {
+  RendererGeode producer = createRenderer();
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  producer.endFrame();
+  const auto* borrowed = producer.borrowTextureSnapshot();
+  ASSERT_THAT(borrowed, testing::NotNull());
+  auto consumerDevice = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(consumerDevice, testing::NotNull());
+  RendererGeode consumer(consumerDevice);
+  beginFrame(consumer);
+  EXPECT_THAT(consumer.drawTextureSnapshot(*borrowed, Box2d({0, 0}, {64, 64}), 1, true),
+              testing::IsFalse());
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {0, 0, 0, 0},
+                             "shared_backend_borrowed_snapshot_refused");
+  const auto owned = producer.takeTextureSnapshot();
+  ASSERT_THAT(owned, testing::NotNull());
+  beginFrame(consumer);
+  EXPECT_THAT(consumer.drawTextureSnapshot(*owned, Box2d({0, 0}, {64, 64}), 1, true),
+              testing::IsTrue());
+  consumer.endFrame();
+  ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "shared_backend_owned_snapshot_accepted");
+}
+
+TEST_F(RendererGeodeTest, DetachedSnapshotReadbackDoesNotMutateProducerFrameCounters) {
+  RendererGeode producer = createRenderer();
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  producer.endFrame();
+  const auto snapshot = producer.takeTextureSnapshot();
+  ASSERT_THAT(snapshot, testing::NotNull());
+  beginFrame(producer);
+  const geode::GeodeCounters before = producer.lastFrameTimings().counters;
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_snapshot_readback");
+  const geode::GeodeCounters after = producer.lastFrameTimings().counters;
+  EXPECT_THAT(after.bufferCreates, testing::Eq(before.bufferCreates));
+  EXPECT_THAT(after.textureCreates, testing::Eq(before.textureCreates));
+  EXPECT_THAT(after.bindgroupCreates, testing::Eq(before.bindgroupCreates));
+  EXPECT_THAT(after.submits, testing::Eq(before.submits));
+  producer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackReusesOneContextAndAccountsForItsPool) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode producer(device);
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  producer.endFrame();
+  const auto snapshot = producer.takeTextureSnapshot();
+  ASSERT_THAT(snapshot, testing::NotNull());
+  const uint64_t buffersBefore = device->lifetimeBufferCreates();
+  const uint64_t texturesBefore = device->lifetimeTextureCreates();
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_cold");
+  const auto cold = device->consumeReadbackStats();
+  EXPECT_THAT(cold.contextCreates, testing::Eq(1u));
+  EXPECT_THAT(cold.bufferCreates, testing::Eq(1u));
+  EXPECT_THAT(cold.textureCreates, testing::Eq(1u));
+  EXPECT_THAT(cold.count, testing::Eq(1));
+  EXPECT_THAT(cold.submits, testing::Eq(1u));
+  EXPECT_THAT(cold.poolEntries, testing::Eq(1u));
+  EXPECT_THAT(cold.poolBytes, testing::Eq(32768u));
+  EXPECT_THAT(device->lifetimeBufferCreates(), testing::Eq(buffersBefore + 1));
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(texturesBefore + 1));
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_warm");
+  const auto warm = device->consumeReadbackStats();
+  EXPECT_THAT(warm.contextCreates, testing::Eq(0u));
+  EXPECT_THAT(warm.bufferCreates, testing::Eq(0u));
+  EXPECT_THAT(warm.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(warm.count, testing::Eq(1));
+  EXPECT_THAT(warm.poolBytes, testing::Eq(cold.poolBytes));
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackDeadlineBeforeAcquisitionAllocatesNothing) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.endFrame();
+  const uint64_t buffersBefore = device->lifetimeBufferCreates();
+  const uint64_t texturesBefore = device->lifetimeTextureCreates();
+  device->setSnapshotReadbackBudgetForTesting(std::chrono::milliseconds(0));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  const auto stats = renderer.consumeReadbackStats();
+  EXPECT_THAT(stats.captureTimeouts, testing::Eq(1u));
+  EXPECT_THAT(stats.contextCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.bufferCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.count, testing::Eq(0));
+  EXPECT_THAT(stats.deviceLost, testing::IsFalse());
+  EXPECT_THAT(device->lifetimeBufferCreates(), testing::Eq(buffersBefore));
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(texturesBefore));
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWithoutDeviceLoss) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  renderer.endFrame();
+  const auto snapshot = renderer.takeTextureSnapshot();
+  ASSERT_THAT(snapshot, testing::NotNull());
+  beginFrame(renderer);
+  renderer.endFrame();
+  std::latch acquired(1);
+  std::latch release(1);
+  std::atomic<bool> first{true};
+  std::atomic<bool> cancelWaiter{false};
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::ContextAcquired &&
+        first.exchange(false)) {
+      acquired.count_down();
+      release.wait();
+    } else if (phase == geode::GeodeDevice::SnapshotReadbackPhase::WaitingForContext) {
+      cancelWaiter.store(true, std::memory_order_relaxed);
+    }
+  });
+  RendererBitmap captured;
+  std::thread worker([&] { captured = snapshot->takeSnapshot(); });
+  acquired.wait();
+  device->setSnapshotReadbackBudgetForTesting(std::chrono::milliseconds(1));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  device->setSnapshotReadbackBudgetForTesting(geode::kReadbackMapTimeout);
+  cancelWaiter.store(false, std::memory_order_relaxed);
+  EXPECT_THAT(
+      renderer
+          .takeSnapshotInterruptibly([&] { return cancelWaiter.load(std::memory_order_relaxed); })
+          .empty(),
+      testing::IsTrue());
+  const auto blocked = renderer.consumeReadbackStats();
+  EXPECT_THAT(blocked.captureTimeouts, testing::Eq(1u));
+  EXPECT_THAT(blocked.captureCancellations, testing::Eq(1u));
+  EXPECT_THAT(blocked.contextCreates, testing::Eq(1u));
+  EXPECT_THAT(blocked.bufferCreates, testing::Eq(0u));
+  EXPECT_THAT(blocked.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(blocked.deviceLost, testing::IsFalse());
+  release.count_down();
+  for (int frame = 0; frame < 4; ++frame) {
+    beginFrame(renderer);
+    renderer.endFrame();
+    EXPECT_THAT(renderer.lastFrameTimings().counters.submits, testing::Eq(1u));
+  }
+  worker.join();
+  device->setSnapshotReadbackHookForTesting({});
+  ExpectSolidRuntimeSnapshot(captured, {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_with_active_producer");
+  EXPECT_THAT(device->consumeReadbackStats().count, testing::Eq(1));
+  ExpectSolidRuntimeSnapshot(snapshot->takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "isolated_readback_after_contention_timeout");
+  EXPECT_THAT(device->isDeviceLost(), testing::IsFalse());
+}
+
+TEST_F(RendererGeodeTest, IsolatedReadbackPoolRemainsBoundedAcrossSizes) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int size : {8, 16, 24, 32, 40}) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(size, size);
+    viewport.devicePixelRatio = 1;
+    renderer.beginFrame(viewport);
+    renderer.endFrame();
+    ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {size, size}, {0, 0, 0, 0},
+                               "isolated_readback_pool_sizes");
+    const auto stats = device->consumeReadbackStats();
+    EXPECT_THAT(stats.poolEntries, testing::Le(4u));
+    EXPECT_THAT(stats.poolBytes, testing::Gt(0u));
+  }
+  const auto retained = device->consumeReadbackStats();
+  EXPECT_THAT(retained.poolEntries, testing::Eq(4u));
+  EXPECT_THAT(retained.poolBytes, testing::Eq(42496u));
 }
 
 }  // namespace

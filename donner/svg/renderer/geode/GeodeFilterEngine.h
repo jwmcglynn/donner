@@ -13,6 +13,7 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <memory>
+#include <optional>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -113,6 +114,7 @@ struct FilterExecutionMemory {
   uint64_t standaloneBuffers = 0;  //!< Per-execution buffers retained until submission.
   uint64_t persistentBuffers = 0;  //!< Parameter arenas and immutable transfer tables.
 
+  uint64_t workUnits = 0;       //!< Work charged for the chosen execution plan.
   uint64_t tileExecutions = 0;  //!< Complete graph evaluations, including sampling halos.
 
   /// Total retained allocation bytes.
@@ -185,6 +187,9 @@ public:
    *   keep the two-submissions-per-frame shape.
    * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
    *   only the graph-local limit.
+   * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
+   *   this layout even if shared scratch state or planning preferences change. Invalid plans or
+   *   failed execution-time budgets return an empty texture instead of bypassing the filter.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
@@ -192,7 +197,8 @@ public:
                         const Transform2d& deviceFromFilter,
                         FilterTextureAllocator& textureAllocator,
                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                        svg::components::FilterExecutionBudget* executionBudget = nullptr);
+                        svg::components::FilterExecutionBudget* executionBudget = nullptr,
+                        std::optional<FilterTilePlan> admittedPlan = std::nullopt);
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass
@@ -446,7 +452,9 @@ private:
 
   /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
   /// @param arena Frame resources. @param output Existing image destination.
-  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const wgpu::Texture& output);
+  /// @param destinationExtent Dimensions to fill.
+  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const gpu::Texture& output,
+                                       gpu::Extent2d destinationExtent);
 
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.
@@ -483,8 +491,7 @@ private:
   GeodeDevice& device_;
 
   // Gaussian blur pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> gaussianBlurPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> blurBindGroupLayout_;
+  RuntimeComputeProgram blurProgram_;
 
   // feOffset pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram offsetProgram_;
@@ -506,44 +513,34 @@ private:
   ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> morphologyPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> morphologyBindGroupLayout_;
+  RuntimeComputeProgram morphologyProgram_;
 
   // feComponentTransfer LUT pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> componentTransferPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> componentTransferBindGroupLayout_;
+  RuntimeComputeProgram componentTransferProgram_;
 
-  // feConvolveMatrix kernel pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> convolveMatrixPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> convolveMatrixBindGroupLayout_;
+  /// Matrix-convolution pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram convolveMatrixProgram_;
 
-  // feTurbulence noise pipeline (output + storage buffer, no input texture).
-  ScopedWgpuHandle<wgpu::ComputePipeline> turbulencePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> turbulenceBindGroupLayout_;
+  // feTurbulence noise pipeline (output + parameter and table storage buffers).
+  RuntimeComputeProgram turbulenceProgram_;
 
   // feDisplacementMap pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> displacementMapPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> displacementMapBindGroupLayout_;
+  RuntimeComputeProgram displacementMapProgram_;
 
   // feDiffuseLighting pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> diffuseLightingPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> diffuseLightingBindGroupLayout_;
+  RuntimeComputeProgram diffuseLightingProgram_;
 
   // feSpecularLighting pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> specularLightingPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> specularLightingBindGroupLayout_;
+  RuntimeComputeProgram specularLightingProgram_;
 
   // feDropShadow compose pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> dropShadowPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> dropShadowBindGroupLayout_;
+  RuntimeComputeProgram dropShadowProgram_;
 
   // feImage placement pipeline (input texture + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> imagePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> imageBindGroupLayout_;
+  RuntimeComputeProgram imageProgram_;
 
   // feTile wraparound pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> tilePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> tileBindGroupLayout_;
+  RuntimeComputeProgram tileProgram_;
 
   // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram subregionClipProgram_;
@@ -561,7 +558,7 @@ private:
   /// bound command-buffer size (see FilterResourceArena).
   size_t framePassesInCommandBuffer_ = 0;
 
-  /// Per-frame uniform scratch buffer and bump-allocated slot cursor (see
+  /// Per-frame parameter scratch buffer and bump-allocated slot cursor (see
   /// FilterResourceCache). Pass bind groups are still created per pass:
   /// the pooled textures a pass binds rotate across frames, so their
   /// identities are not stable cache keys.

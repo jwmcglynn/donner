@@ -103,6 +103,10 @@ public:
    */
   gpu::Status destroyTextureBacking(gpu::Texture&& texture);
 
+  /// Whether a live handle owns adapter-allocated backing, rather than an external registration.
+  /// @param texture Handle whose device and generation are validated before inspecting ownership.
+  [[nodiscard]] bool ownsTextureBacking(const gpu::Texture& texture) const;
+
   /**
    * Destroys the backend object behind \p buffer explicitly, then releases its slot.
    *
@@ -357,6 +361,11 @@ private:
   /// @param setVertexBuffer Recorded command.
   gpu::Status encodeSetVertexBuffer(EncodingState& state,
                                     const gpu::SetVertexBufferCommand& setVertexBuffer);
+  /// Binds a recorded index buffer.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  gpu::Status encodeSetIndexBuffer(EncodingState& state,
+                                   const gpu::SetIndexBufferCommand& setIndexBuffer);
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -370,6 +379,10 @@ private:
   /// @param state Encoding state.
   /// @param draw Recorded command.
   gpu::Status encodeDraw(EncodingState& state, const gpu::DrawCommand& draw);
+  /// Issues an indexed draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  gpu::Status encodeDrawIndexed(EncodingState& state, const gpu::DrawIndexedCommand& draw);
   /// Ends the active render pass.
   /// @param state Encoding state.
   gpu::Status encodeEndRenderPass(EncodingState& state);

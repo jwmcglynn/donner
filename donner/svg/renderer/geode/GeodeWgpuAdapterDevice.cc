@@ -4,11 +4,15 @@
 #include <cassert>
 #include <chrono>
 #include <format>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/CheckedArithmetic.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -20,6 +24,66 @@ namespace {
 using gpu::GpuError;
 using gpu::GpuErrorType;
 using gpu::OkStatus;
+
+/// Makes a caller's minimally-sized final row safe for wgpu-native implementations that read a
+/// complete final row pitch. Keeps already-complete spans zero-copy and otherwise repacks into the
+/// smallest aligned row pitch, independent of unused stride in the caller's layout.
+gpu::Status PrepareWgpuTextureUpload(wgpu::TextureFormat textureFormat,
+                                     std::span<const uint8_t> callerData,
+                                     const gpu::TexelCopyBufferLayout& callerLayout,
+                                     const gpu::Extent2d& writeSize,
+                                     SmallVector<uint8_t, gpu::kTexelRowPitchAlignment>& ownedData,
+                                     std::span<const uint8_t>& uploadData,
+                                     gpu::TexelCopyBufferLayout& uploadLayout) {
+  uploadData = callerData;
+  uploadLayout = callerLayout;
+  const std::optional<uint64_t> fullRows =
+      gpu::CheckedMul(writeSize.height, callerLayout.bytesPerRow);
+  const std::optional<uint64_t> fullEnd =
+      fullRows ? gpu::CheckedAdd(callerLayout.offsetBytes, *fullRows) : std::nullopt;
+  if (fullEnd && *fullEnd <= callerData.size()) {
+    return OkStatus();
+  }
+
+  const uint32_t texelBytes =
+      gpu::TextureFormatBytesPerTexel(GpuTextureFormatFromWgpu(textureFormat));
+  const std::optional<uint64_t> rowBytes = gpu::CheckedMul(writeSize.width, texelBytes);
+  const std::optional<uint64_t> roundedRowBytes =
+      rowBytes ? gpu::CheckedAdd(*rowBytes, gpu::kTexelRowPitchAlignment - 1) : std::nullopt;
+  if (!roundedRowBytes) {
+    return GpuError{GpuErrorType::OutOfBounds,
+                    "writeTexture: compact wgpu row byte size overflows"};
+  }
+  const uint64_t compactBytesPerRow =
+      (*roundedRowBytes / gpu::kTexelRowPitchAlignment) * gpu::kTexelRowPitchAlignment;
+  const std::optional<uint64_t> compactBytes =
+      gpu::CheckedMul(compactBytesPerRow, writeSize.height);
+  if (!compactBytes || *compactBytes > std::numeric_limits<size_t>::max()) {
+    return GpuError{GpuErrorType::OutOfBounds,
+                    "writeTexture: compact wgpu upload byte size overflows"};
+  }
+
+  ownedData.resize(static_cast<size_t>(*compactBytes));
+  for (uint32_t row = 0; row < writeSize.height; ++row) {
+    const std::optional<uint64_t> sourceRowOffset =
+        gpu::CheckedMul(static_cast<uint64_t>(row), callerLayout.bytesPerRow);
+    const std::optional<uint64_t> sourceRow =
+        sourceRowOffset ? gpu::CheckedAdd(callerLayout.offsetBytes, *sourceRowOffset)
+                        : std::nullopt;
+    const std::optional<uint64_t> sourceEnd =
+        sourceRow ? gpu::CheckedAdd(*sourceRow, *rowBytes) : std::nullopt;
+    if (!sourceEnd || *sourceEnd > callerData.size()) {
+      return GpuError{GpuErrorType::OutOfBounds,
+                      "writeTexture: validated caller row range became invalid"};
+    }
+    std::copy_n(
+        callerData.begin() + static_cast<size_t>(*sourceRow), static_cast<size_t>(*rowBytes),
+        ownedData.begin() + static_cast<size_t>(row) * static_cast<size_t>(compactBytesPerRow));
+  }
+  uploadData = std::span<const uint8_t>(ownedData.data(), ownedData.size());
+  uploadLayout = {0, static_cast<uint32_t>(compactBytesPerRow), writeSize.height};
+  return OkStatus();
+}
 
 /// Ensures \p table covers \p slotIndex and stores \p value there. Slots are value-initialized
 /// (null handles) until written.
@@ -172,6 +236,10 @@ wgpu::VertexStepMode ToWgpuVertexStepMode(gpu::VertexStepMode mode) {
   return wgpu::VertexStepMode::Vertex;
 }
 
+wgpu::IndexFormat ToWgpuIndexFormat(gpu::IndexFormat format) {
+  return format == gpu::IndexFormat::Uint16 ? wgpu::IndexFormat::Uint16 : wgpu::IndexFormat::Uint32;
+}
+
 wgpu::PrimitiveTopology ToWgpuPrimitiveTopology(gpu::PrimitiveTopology topology) {
   switch (topology) {
     case gpu::PrimitiveTopology::TriangleList: return wgpu::PrimitiveTopology::TriangleList;
@@ -298,6 +366,12 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
     geodeDevice_.device().poll(true, nullptr);
   }
   return completedSerial() >= serial;
+}
+
+bool GeodeWgpuAdapterDevice::ownsTextureBacking(const gpu::Texture& texture) const {
+  return !validateTextureHandleForBackend(texture).hasError() &&
+         texture.slotIndex() < slotTextures_.size() &&
+         static_cast<bool>(slotTextures_[texture.slotIndex()].ownedTexture);
 }
 
 gpu::Status GeodeWgpuAdapterDevice::destroyTextureBacking(gpu::Texture&& texture) {
@@ -1226,15 +1300,25 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
                     std::format("texture slot {} has no wgpu texture", slotIndex)};
   }
 
+  SmallVector<uint8_t, gpu::kTexelRowPitchAlignment> ownedData;
+  std::span<const uint8_t> uploadData;
+  gpu::TexelCopyBufferLayout uploadLayout;
+  if (gpu::Status status = PrepareWgpuTextureUpload(texture.getFormat(), data, dataLayout,
+                                                    writeSize, ownedData, uploadData, uploadLayout);
+      status.hasError()) {
+    return status;
+  }
+
   wgpu::TexelCopyTextureInfo destination = {};
   destination.texture = texture;
   wgpu::TexelCopyBufferLayout layout = {};
-  layout.offset = dataLayout.offsetBytes;
-  layout.bytesPerRow = dataLayout.bytesPerRow;
-  layout.rowsPerImage = dataLayout.rowsPerImage;
+  layout.offset = uploadLayout.offsetBytes;
+  layout.bytesPerRow = uploadLayout.bytesPerRow;
+  layout.rowsPerImage = uploadLayout.rowsPerImage;
   const wgpu::Extent3D extent = {writeSize.width, writeSize.height, 1u};
-  geodeDevice_.queue().writeTexture(destination, data.data(), data.size(), layout, extent);
-  geodeDevice_.countTextureWrite(data.size());
+  geodeDevice_.queue().writeTexture(destination, uploadData.data(), uploadData.size(), layout,
+                                    extent);
+  geodeDevice_.countTextureWrite(uploadData.size());
   return OkStatus();
 }
 
@@ -1312,6 +1396,19 @@ gpu::Status GeodeWgpuAdapterDevice::encodeSetVertexBuffer(
   return OkStatus();
 }
 
+gpu::Status GeodeWgpuAdapterDevice::encodeSetIndexBuffer(
+    EncodingState& state, const gpu::SetIndexBufferCommand& setIndexBuffer) {
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, setIndexBuffer.bufferId.slotIndex);
+  if (!state.pass || !buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  state.pass.get().setIndexBuffer(buffer, ToWgpuIndexFormat(setIndexBuffer.format),
+                                  setIndexBuffer.offsetBytes, WGPU_WHOLE_SIZE);
+  return OkStatus();
+}
+
 gpu::Status GeodeWgpuAdapterDevice::encodeSetScissorRect(
     EncodingState& state, const gpu::SetScissorRectCommand& setScissor) {
   if (!state.pass) {
@@ -1336,6 +1433,21 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDraw(EncodingState& state, const gpu::
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
   state.pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+  geodeDevice_.countDraw();
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeDrawIndexed(EncodingState& state,
+                                                      const gpu::DrawIndexedCommand& draw) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  state.pass.get().drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex,
+                               draw.baseVertex, draw.firstInstance);
   geodeDevice_.countDraw();
   return OkStatus();
 }
@@ -1462,6 +1574,9 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
           [&](const gpu::SetVertexBufferCommand& setVertexBuffer) -> gpu::Status {
             return encodeSetVertexBuffer(state, setVertexBuffer);
           },
+          [&](const gpu::SetIndexBufferCommand& setIndexBuffer) -> gpu::Status {
+            return encodeSetIndexBuffer(state, setIndexBuffer);
+          },
           [&](const gpu::SetScissorRectCommand& setScissor) -> gpu::Status {
             return encodeSetScissorRect(state, setScissor);
           },
@@ -1469,6 +1584,9 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
             return encodeSetViewport(state, setViewport);
           },
           [&](const gpu::DrawCommand& draw) -> gpu::Status { return encodeDraw(state, draw); },
+          [&](const gpu::DrawIndexedCommand& draw) -> gpu::Status {
+            return encodeDrawIndexed(state, draw);
+          },
           [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
             return encodeEndRenderPass(state);
           },

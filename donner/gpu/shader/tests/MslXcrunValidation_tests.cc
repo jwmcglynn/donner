@@ -19,16 +19,27 @@
 #include <string_view>
 
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -160,6 +171,11 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
   return output;
 }
 
+TEST(MslXcrunValidation, EmittedCheckerboardCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildCheckerboardModule(), "checkerboard");
+}
+
 TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFilterResolveModule(), "filter_resolve");
@@ -167,6 +183,11 @@ TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");
+}
+
+TEST(MslXcrunValidation, EmittedConvolveMatrixCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildConvolveMatrixModule(), "convolve_matrix");
 }
 
 TEST(MslXcrunValidation, EmittedMergeCompilesWithMetalCompiler) {
@@ -230,11 +251,67 @@ TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
   ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
 }
 
+TEST(MslXcrunValidation, EmittedFilterImageCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildFilterImageModule(), "filter_image");
+}
+
 TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildOffsetModule(), "offset");
+}
+
+TEST(MslXcrunValidation, EmittedTileComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildTileModule(), "tile");
+}
+
+TEST(MslXcrunValidation, EmittedComponentTransferComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildComponentTransferModule(), "component_transfer");
+}
+
+TEST(MslXcrunValidation, EmittedTurbulenceComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildTurbulenceModule(), "turbulence");
+}
+
+TEST(MslXcrunValidation, EmittedDropShadowComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildDropShadowModule(), "drop_shadow");
+}
+
+TEST(MslXcrunValidation, EmittedDisplacementMapComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildDisplacementMapModule(), "displacement_map");
+}
+
+TEST(MslXcrunValidation, EmittedGaussianBlurComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildGaussianBlurModule(), "gaussian_blur");
+}
+
+TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildMorphologyModule(), "morphology");
+}
+
+TEST(MslXcrunValidation, EmittedLightingComputesCompileWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildDiffuseLightingModule(), "diffuse_lighting");
+  ExpectCompilesWithMetalCompiler(programs::BuildSpecularLightingModule(), "specular_lighting");
 }
 
 TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {

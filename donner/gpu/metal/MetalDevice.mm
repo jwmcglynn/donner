@@ -219,6 +219,9 @@ struct MetalDevice::Impl {
     id<MTLRenderPipelineState> state = nil;                        //!< Compiled pipeline state.
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Pipeline topology.
     CullMode cullMode = CullMode::None;                            //!< Pipeline cull mode.
+    std::vector<uint32_t>
+        vertexBufferIndices;     //!< Metal argument index for each active vertex slot.
+    bool usesBindGroup = false;  //!< The pipeline declares resource group zero.
   };
 
   std::vector<id<MTLBuffer>> buffers;                         //!< Buffer slots.
@@ -337,6 +340,14 @@ struct MetalDevice::Impl {
     /// Topology of the bound pipeline; Metal takes it per draw call rather than from the
     /// pipeline state object.
     PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
+    const RenderPipelineRecord* currentRenderPipeline = nullptr;
+    std::optional<ResourceIdentity> renderBindGroup;
+    bool renderInputsDirty =
+        true;  //!< Rebind after active layout or resource changes, not each draw.
+    std::array<std::optional<SetVertexBufferCommand>, kMaxVertexBuffers> vertexBindings;
+    /// Index buffer bound in the active render encoder. Metal takes the index buffer per draw
+    /// call, so the binding is only applied when an indexed draw is encoded.
+    std::optional<SetIndexBufferCommand> indexBinding;
     /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
     WorkgroupSize currentWorkgroupSize;
     // Bind-group records stay stable throughout synchronous submission encoding.
@@ -346,6 +357,20 @@ struct MetalDevice::Impl {
     std::optional<ResourceIdentity> lengthTableGroup;
     std::vector<id<MTLBuffer>> hostReadBuffers;  //!< GPU-written buffers needing CPU visibility.
   };
+
+  /// Marks the fixed length table and vertex-visible resource arguments occupied by the layout.
+  /// @param descriptor Pipeline declaring the resource layout.
+  Result<std::array<bool, shader::kMslVertexBufferIndex + 1>> vertexArgumentOccupancy(
+      const RenderPipelineDescriptor& descriptor) const;
+
+  /// Finds free vertex-stage argument indices without reducing resource-binding capacity.
+  /// @param descriptor Pipeline whose active vertex buffers and resource layout are reserved.
+  Result<std::vector<uint32_t>> vertexBufferIndices(
+      const RenderPipelineDescriptor& descriptor) const;
+
+  /// Applies only resources read by the active pipeline, then its logical vertex bindings.
+  /// @param state Current render encoder and recorded bindings.
+  Status bindRenderInputs(EncodingState& state);
 
   /// Opens a render encoder for a recorded pass and configures its color attachments.
   /// @param state Encoding state.
@@ -406,6 +431,11 @@ struct MetalDevice::Impl {
   /// @param setVertexBuffer Recorded command.
   Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
 
+  /// Retains a recorded index buffer binding for the next indexed draw.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  Status encodeSetIndexBuffer(EncodingState& state, const SetIndexBufferCommand& setIndexBuffer);
+
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -420,6 +450,11 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param draw Recorded command.
   Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Issues an indexed draw from the retained index binding with the bound pipeline's topology.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw);
 
   /// Closes the active render encoder.
   /// @param state Encoding state.
@@ -801,6 +836,78 @@ Status MetalDevice::onCreateShaderModule(uint32_t slotIndex,
   return OkStatus();
 }
 
+Result<std::array<bool, shader::kMslVertexBufferIndex + 1>>
+MetalDevice::Impl::vertexArgumentOccupancy(const RenderPipelineDescriptor& descriptor) const {
+  const PipelineLayoutDescriptor* pipelineLayout =
+      FindRecord(pipelineLayouts, descriptor.layout.slotIndex());
+  if (pipelineLayout == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "render pipeline layout is unavailable"};
+  }
+  std::array<bool, shader::kMslVertexBufferIndex + 1> occupied{};
+  occupied[shader::kMslBufferLengthsIndex] = true;
+  for (const BindGroupLayoutRef& groupRef : pipelineLayout->bindGroupLayouts) {
+    const BindGroupLayoutDescriptor* group = FindRecord(bindGroupLayouts, groupRef.slotIndex());
+    if (group == nullptr) {
+      return GpuError{GpuErrorType::InvalidState, "render bind group layout is unavailable"};
+    }
+    for (const BindGroupLayoutEntry& entry : group->entries) {
+      if (HasAllFlags(entry.visibility, ShaderStage::Vertex) &&
+          (entry.type == BindingType::UniformBuffer ||
+           entry.type == BindingType::ReadOnlyStorageBuffer)) {
+        occupied[shader::MslBufferIndex(entry.binding)] = true;
+      }
+    }
+  }
+  return occupied;
+}
+
+Result<std::vector<uint32_t>> MetalDevice::Impl::vertexBufferIndices(
+    const RenderPipelineDescriptor& descriptor) const {
+  auto occupancy = vertexArgumentOccupancy(descriptor);
+  if (occupancy.hasError()) {
+    return std::move(occupancy).error();
+  }
+  const auto& occupied = occupancy.result();
+  std::vector<uint32_t> indices;
+  for (uint32_t index = shader::kMslVertexBufferIndex;
+       index > 0 && indices.size() < descriptor.vertex.buffers.size(); --index) {
+    if (!occupied[index]) {
+      indices.push_back(index);
+    }
+  }
+  if (indices.size() != descriptor.vertex.buffers.size()) {
+    return GpuError{
+        GpuErrorType::Unsupported,
+        "vertex buffers and vertex-visible resource buffers exceed Metal argument-table capacity"};
+  }
+  return indices;
+}
+
+/// Translates only the active vertex layouts using their collision-free argument indices.
+/// @param vertex Active vertex state. @param indices Metal argument index for each layout.
+MTLVertexDescriptor* CreateVertexDescriptor(const VertexState& vertex,
+                                            const std::vector<uint32_t>& indices) {
+  if (vertex.buffers.empty()) {
+    return nil;
+  }
+  MTLVertexDescriptor* descriptor = [MTLVertexDescriptor vertexDescriptor];
+  for (size_t slot = 0; slot < vertex.buffers.size(); ++slot) {
+    const VertexBufferLayout& layout = vertex.buffers[slot];
+    const uint32_t index = indices[slot];
+    for (const VertexAttribute& attribute : layout.attributes) {
+      MTLVertexAttributeDescriptor* attributeDescriptor =
+          descriptor.attributes[attribute.shaderLocation];
+      attributeDescriptor.format = ToMtlVertexFormat(attribute.format);
+      attributeDescriptor.offset = attribute.offsetBytes;
+      attributeDescriptor.bufferIndex = index;
+    }
+    MTLVertexBufferLayoutDescriptor* layoutDescriptor = descriptor.layouts[index];
+    layoutDescriptor.stride = layout.strideBytes;
+    layoutDescriptor.stepFunction = ToMtlStepFunction(layout.stepMode);
+  }
+  return descriptor;
+}
+
 Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
                                            const RenderPipelineDescriptor& descriptor) {
   id<MTLLibrary> vertexLibrary =
@@ -833,29 +940,12 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
   pipelineDescriptor.vertexFunction = vertexFunction;
   pipelineDescriptor.fragmentFunction = fragmentFunction;
 
-  if (!descriptor.vertex.buffers.empty()) {
-    if (descriptor.vertex.buffers.size() != 1) {
-      return GpuError{GpuErrorType::Unsupported,
-                      "the Metal backend supports a single vertex buffer layout (slot 0) in this "
-                      "slice"};
-    }
-
-    const VertexBufferLayout& layout = descriptor.vertex.buffers[0];
-    MTLVertexDescriptor* vertexDescriptor = [MTLVertexDescriptor vertexDescriptor];
-    for (const VertexAttribute& attribute : layout.attributes) {
-      MTLVertexAttributeDescriptor* attributeDescriptor =
-          vertexDescriptor.attributes[attribute.shaderLocation];
-      attributeDescriptor.format = ToMtlVertexFormat(attribute.format);
-      attributeDescriptor.offset = attribute.offsetBytes;
-      attributeDescriptor.bufferIndex = shader::kMslVertexBufferIndex;
-    }
-
-    MTLVertexBufferLayoutDescriptor* layoutDescriptor =
-        vertexDescriptor.layouts[shader::kMslVertexBufferIndex];
-    layoutDescriptor.stride = layout.strideBytes;
-    layoutDescriptor.stepFunction = ToMtlStepFunction(layout.stepMode);
-    pipelineDescriptor.vertexDescriptor = vertexDescriptor;
+  auto vertexIndicesResult = impl_->vertexBufferIndices(descriptor);
+  if (vertexIndicesResult.hasError()) {
+    return std::move(vertexIndicesResult).error();
   }
+  std::vector<uint32_t> vertexIndices = std::move(vertexIndicesResult).result();
+  pipelineDescriptor.vertexDescriptor = CreateVertexDescriptor(descriptor.vertex, vertexIndices);
 
   for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
     const ColorTargetState& target = descriptor.fragment.targets[i];
@@ -884,8 +974,10 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
   }
 
   SetSlot(impl_->renderPipelines, slotIndex,
-          std::optional<Impl::RenderPipelineRecord>(
-              Impl::RenderPipelineRecord{pipelineState, descriptor.topology, descriptor.cullMode}));
+          std::optional<Impl::RenderPipelineRecord>(Impl::RenderPipelineRecord{
+              pipelineState, descriptor.topology, descriptor.cullMode, std::move(vertexIndices),
+              !FindRecord(impl_->pipelineLayouts, descriptor.layout.slotIndex())
+                   ->bindGroupLayouts.empty()}));
   return OkStatus();
 }
 
@@ -1093,6 +1185,11 @@ Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   }
 
   state.lengthTableGroup.reset();
+  state.currentRenderPipeline = nullptr;
+  state.renderBindGroup.reset();
+  state.vertexBindings.fill(std::nullopt);
+  state.indexBinding.reset();
+  state.renderInputsDirty = true;
   state.renderEncoder = [state.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (state.renderEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal render command encoder creation failed"};
@@ -1116,6 +1213,8 @@ Status MetalDevice::Impl::encodeSetPipeline(EncodingState& state,
   [state.renderEncoder
       setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack : MTLCullModeNone)];
   state.currentTopology = pipeline->topology;
+  state.renderInputsDirty |= state.currentRenderPipeline != pipeline;
+  state.currentRenderPipeline = pipeline;
   return OkStatus();
 }
 
@@ -1274,6 +1373,11 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                                 setBindGroup.bindGroupId.slotIndex)};
   }
 
+  if (state.renderEncoder != nil) {
+    state.renderInputsDirty |= state.renderBindGroup != setBindGroup.bindGroupId;
+    state.renderBindGroup = setBindGroup.bindGroupId;
+    return OkStatus();
+  }
   for (const BindGroupEntry& entry : bindGroup->descriptor.entries) {
     Status bindStatus = encodeBindGroupEntry(state, bindGroup->layout, entry);
     if (bindStatus.hasError()) {
@@ -1286,19 +1390,69 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
 
 Status MetalDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
                                                 const SetVertexBufferCommand& setVertexBuffer) {
-  if (setVertexBuffer.slot != 0) {
-    return GpuError{GpuErrorType::Unsupported,
-                    "the Metal backend supports vertex buffer slot 0 only in this slice"};
-  }
   id<MTLBuffer> buffer = GetSlot(buffers, setVertexBuffer.bufferId.slotIndex);
-  if (state.renderEncoder == nil || buffer == nil) {
+  if (state.renderEncoder == nil || buffer == nil ||
+      setVertexBuffer.slot >= state.vertexBindings.size()) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("setVertexBuffer: buffer slot {} is not encodable",
                                 setVertexBuffer.bufferId.slotIndex)};
   }
-  [state.renderEncoder setVertexBuffer:buffer
-                                offset:setVertexBuffer.offsetBytes
-                               atIndex:shader::kMslVertexBufferIndex];
+  const auto& prior = state.vertexBindings[setVertexBuffer.slot];
+  const bool changed = !prior || prior->bufferId != setVertexBuffer.bufferId ||
+                       prior->offsetBytes != setVertexBuffer.offsetBytes;
+  state.vertexBindings[setVertexBuffer.slot] = setVertexBuffer;
+  if (changed && state.currentRenderPipeline != nullptr &&
+      setVertexBuffer.slot < state.currentRenderPipeline->vertexBufferIndices.size()) {
+    state.renderInputsDirty = true;
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetIndexBuffer(EncodingState& state,
+                                               const SetIndexBufferCommand& setIndexBuffer) {
+  id<MTLBuffer> buffer = GetSlot(buffers, setIndexBuffer.bufferId.slotIndex);
+  if (state.renderEncoder == nil || buffer == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  state.indexBinding = setIndexBuffer;
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::bindRenderInputs(EncodingState& state) {
+  if (!state.renderInputsDirty) {
+    return OkStatus();
+  }
+  const RenderPipelineRecord* pipeline = state.currentRenderPipeline;
+  if (pipeline == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "draw without an active render pipeline"};
+  }
+  if (pipeline->usesBindGroup) {
+    const BindGroupRecord* group =
+        state.renderBindGroup ? FindRecord(bindGroups, state.renderBindGroup->slotIndex) : nullptr;
+    if (group == nullptr) {
+      return GpuError{GpuErrorType::InvalidState, "draw without a bound resource group"};
+    }
+    for (const BindGroupEntry& entry : group->descriptor.entries) {
+      Status status = encodeBindGroupEntry(state, group->layout, entry);
+      if (status.hasError()) {
+        return status;
+      }
+    }
+    encodeBufferLengths(state, *group, *state.renderBindGroup);
+  }
+  for (size_t slot = 0; slot < pipeline->vertexBufferIndices.size(); ++slot) {
+    const auto& binding = state.vertexBindings[slot];
+    id<MTLBuffer> buffer = binding ? GetSlot(buffers, binding->bufferId.slotIndex) : nil;
+    if (buffer == nil) {
+      return GpuError{GpuErrorType::InvalidState, "draw without a bound vertex buffer"};
+    }
+    [state.renderEncoder setVertexBuffer:buffer
+                                  offset:binding->offsetBytes
+                                 atIndex:pipeline->vertexBufferIndices[slot]];
+  }
+  state.renderInputsDirty = false;
   return OkStatus();
 }
 
@@ -1327,11 +1481,47 @@ Status MetalDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& dr
   if (state.renderEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
+  if (Status status = bindRenderInputs(state); status.hasError()) {
+    return status;
+  }
   [state.renderEncoder drawPrimitives:ToMtlPrimitiveType(state.currentTopology)
                           vertexStart:draw.firstVertex
                           vertexCount:draw.vertexCount
                         instanceCount:draw.instanceCount
                          baseInstance:draw.firstInstance];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
+  }
+  id<MTLBuffer> indexBuffer =
+      state.indexBinding ? GetSlot(buffers, state.indexBinding->bufferId.slotIndex) : nil;
+  if (indexBuffer == nil) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed without a bound index buffer"};
+  }
+  if (Status status = bindRenderInputs(state); status.hasError()) {
+    return status;
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  const uint64_t indexBytes = IndexFormatByteSize(state.indexBinding->format);
+  // The encoder bounded (firstIndex + indexCount) * indexBytes to the bound range in 64 bits.
+  const uint64_t indexBufferOffset =
+      state.indexBinding->offsetBytes + uint64_t{draw.firstIndex} * indexBytes;
+  [state.renderEncoder
+      drawIndexedPrimitives:ToMtlPrimitiveType(state.currentTopology)
+                 indexCount:draw.indexCount
+                  indexType:(state.indexBinding->format == IndexFormat::Uint16 ? MTLIndexTypeUInt16
+                                                                               : MTLIndexTypeUInt32)
+                indexBuffer:indexBuffer
+          indexBufferOffset:indexBufferOffset
+              instanceCount:draw.instanceCount
+                 baseVertex:draw.baseVertex
+               baseInstance:draw.firstInstance];
   return OkStatus();
 }
 
@@ -1416,12 +1606,16 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
     return encodeSetBindGroup(state, *setBindGroup);
   } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
     return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setIndexBuffer = std::get_if<SetIndexBufferCommand>(&command)) {
+    return encodeSetIndexBuffer(state, *setIndexBuffer);
   } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
     return encodeSetScissorRect(state, *setScissor);
   } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
     return encodeSetViewport(state, *setViewport);
   } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
     return encodeDraw(state, *draw);
+  } else if (const auto* drawIndexed = std::get_if<DrawIndexedCommand>(&command)) {
+    return encodeDrawIndexed(state, *drawIndexed);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
   }

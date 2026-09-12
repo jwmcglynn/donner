@@ -100,5 +100,92 @@ TEST_F(EncoderAllocationTests, RevalidationDoesNotAllocatePerDispatch) {
       << " recording the same " << kDispatches << " dispatches without one";
 }
 
+/// The same shape for the render path: one sampled texture reached through one bind group, drawn
+/// with indexed draws so the index-range check and the vertex-slot check run alongside the group
+/// revalidation.
+class IndexedDrawAllocationTests : public testing::Test {
+protected:
+  void SetUp() override {
+    texture_ = GetResultOrFail(device_.createTexture(
+        TextureDescriptor{"shared", {16, 16}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+    view_ = GetResultOrFail(device_.createTextureView(texture_, {"sharedView"}));
+    target_ = GetResultOrFail(device_.createTexture(TextureDescriptor{
+        "target", {4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+    targetView_ = GetResultOrFail(device_.createTextureView(target_, {"targetView"}));
+    sampledLayout_ = GetResultOrFail(device_.createBindGroupLayout(
+        {"sampled", {{0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat}}}));
+    sampled_ = GetResultOrFail(device_.createBindGroup(
+        {"textureGroup", sampledLayout_, {{0, TextureViewBinding{view_}}}}));
+    vertices_ = GetResultOrFail(
+        device_.createBuffer(BufferDescriptor{"vertices", 48, BufferUsage::Vertex}));
+    indices_ =
+        GetResultOrFail(device_.createBuffer(BufferDescriptor{"indices", 24, BufferUsage::Index}));
+    shader_ = GetResultOrFail(device_.createShaderModule(ShaderModuleDescriptor{
+        "solidFill", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
+  }
+
+  RenderPipeline makePipeline(std::vector<BindGroupLayoutRef> groups) {
+    const PipelineLayout layout =
+        GetResultOrFail(device_.createPipelineLayout({"activeGroups", std::move(groups)}));
+    return GetResultOrFail(device_.createRenderPipeline(RenderPipelineDescriptor{
+        "activeGroups", layout,
+        VertexState{
+            shader_,
+            "vsMain",
+            {VertexBufferLayout{
+                8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
+        FragmentState{shader_, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+  }
+
+  RecordingDevice device_;
+  Texture texture_;
+  TextureView view_;
+  Texture target_;
+  TextureView targetView_;
+  BindGroupLayout sampledLayout_;
+  BindGroup sampled_;
+  Buffer vertices_;
+  Buffer indices_;
+  ShaderModule shader_;
+  std::unique_ptr<CommandEncoder> encoder_;
+};
+
+TEST_F(IndexedDrawAllocationTests, RevalidationDoesNotAllocatePerIndexedDraw) {
+  // Same measurement as the dispatch case: the encoder with a validated group must not allocate
+  // more than the one without over the same number of recorded indexed draws.
+  constexpr uint32_t kDraws = 512;
+
+  const auto measure = [&](bool withBoundGroup) {
+    encoder_ = GetResultOrFail(device_.createCommandEncoder());
+    const RenderPipeline pipeline =
+        withBoundGroup ? makePipeline({sampledLayout_}) : makePipeline({});
+    RenderPassEncoder* pass = GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+        "pass", {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store, {}}}}));
+    EXPECT_THAT(pass->setPipeline(pipeline), IsOk());
+    EXPECT_THAT(pass->setVertexBuffer(0, vertices_), IsOk());
+    EXPECT_THAT(pass->setIndexBuffer(indices_, IndexFormat::Uint16), IsOk());
+    if (withBoundGroup) {
+      EXPECT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+    } else {
+      // Stands in for the setBindGroup command, so both encoders reach the window with the same
+      // recorded-command count.
+      EXPECT_THAT(pass->drawIndexed(12), IsOk());
+    }
+    EXPECT_THAT(pass->drawIndexed(12), IsOk());
+
+    benchmarks::allocations::Scope allocations;
+    for (uint32_t draw = 0; draw < kDraws; ++draw) {
+      EXPECT_THAT(pass->drawIndexed(12), IsOk());
+    }
+    return allocations.stop().allocationCalls;
+  };
+
+  const uint64_t baseline = measure(false);
+  const uint64_t validated = measure(true);
+  EXPECT_THAT(validated, testing::Le(baseline))
+      << validated << " allocations with a bound group versus " << baseline
+      << " recording the same " << kDraws << " indexed draws without one";
+}
+
 }  // namespace
 }  // namespace donner::gpu

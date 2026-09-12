@@ -34,7 +34,12 @@ All design documents live under `docs/design_docs/`.
 
 1. **Goals first.** Write a design doc driven by user/requester goals. Capture scope, constraints, open questions. **Non-goals matter as much as goals** — explicitly state what's out of scope to prevent scope creep, anchor review discussions, and give future readers a clear boundary. Iterate until user confirms ready before planning implementation.
 2. **Implementation plan.** Detailed plan + Markdown TODO checklist (`- [ ] Implement X`). Start with high-level milestones, expand into indented checkboxes when kicking off each milestone.
-3. **Iterative implementation.** Complete TODOs one at a time, gather feedback, update plan and check boxes to reflect progress. Always state the next planned step in summaries.
+3. **Iterative implementation.** Complete dependent TODOs in dependency order; independent items
+   may run in parallel. Update the implementation checklist at each completed unit, publication,
+   validation, and merge so it states current status with a short evidence link. Keep it concise:
+   replace stale state instead of appending a chronological work log. A shared checklist has one
+   editor; workers report a concise status and evidence update to that editor. Always state the next
+   planned step in summaries.
 4. **Finalization.** When a design ships, write the present-tense developer
    documentation it earned — either a new explainer via `developer_template.md`
    or folded into `../developer_docs.md`. **Never delete the design doc or free
@@ -93,3 +98,11 @@ The #582 postmortem in [0025-composited_rendering.md](0025-composited_rendering.
 ## Resvg Test Integration
 
 When writing design docs for renderer features, reference relevant resvg tests that validate the feature, include a test plan listing which should pass after implementation, update test status as work progresses, and document skip removals with references to the fixing implementation.
+
+## Shader Validation Patterns
+
+Shader designs use focused interface/structure assertions, deterministic generation, platform
+compiler validation, native execution, and renderer pixel regressions. Generated WGSL/MSL/SPIR-V
+stays in build outputs; do not plan committed or large inline emitted-shader goldens. Name the
+compiler and execution targets that verify each shader family. Renderer image goldens and IR
+serialization checks retain their own validation roles.

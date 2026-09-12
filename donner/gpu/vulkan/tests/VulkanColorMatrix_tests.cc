@@ -19,10 +19,31 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/generated/ComponentTransferShader.h"
+#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
+#include "donner/gpu/shader/generated/DiffuseLightingShader.h"
+#include "donner/gpu/shader/generated/DisplacementMapShader.h"
+#include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/generated/FilterImageShader.h"
+#include "donner/gpu/shader/generated/SpecularLightingShader.h"
+#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Morphology.h"
+#include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
+#include "donner/gpu/tests/ComponentTransferSlice.h"
+#include "donner/gpu/tests/ConvolveMatrixSlice.h"
+#include "donner/gpu/tests/DisplacementMapSlice.h"
+#include "donner/gpu/tests/DropShadowSlice.h"
+#include "donner/gpu/tests/FilterImageSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
+#include "donner/gpu/tests/LightingSlice.h"
+#include "donner/gpu/tests/MorphologySlice.h"
+#include "donner/gpu/tests/TileSlice.h"
+#include "donner/gpu/tests/TurbulenceSlice.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 
@@ -137,6 +158,174 @@ TEST_F(VulkanColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
                              shader::ComputeEntryPointsOf(module.result()),
                              bindings.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+class VulkanFilterImageTest : public VulkanColorMatrixTest,
+                              public testing::WithParamInterface<uint32_t> {};
+
+TEST_P(VulkanFilterImageTest, GeneratedDescriptorMatchesIndependentReference) {
+  const ShaderModuleDescriptor descriptor =
+      gpu::generated::filter_image::BuildDescriptor(ShaderSourceKind::Spirv);
+  ASSERT_THAT(descriptor.spirvWords, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1u));
+  for (size_t sceneIndex = 0; sceneIndex < 3; ++sceneIndex) {
+    SCOPED_TRACE(testing::Message() << "sceneIndex=" << sceneIndex);
+    gpu::tests::CheckFilterImageStorage(
+        *device_, descriptor,
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, GetParam(),
+        sceneIndex);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(SmoothNearestAndPixelated, VulkanFilterImageTest,
+                         testing::Values(0u, 1u, 2u));
+
+TEST_F(VulkanColorMatrixTest, VectorCeilAndExpRunThroughNativeCompiler) {
+  const auto module = shader::BuildVectorCeilExpModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             {},
+                             ShaderSourceKind::Spirv,
+                             emitted.result(),
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      {-0.5f, 0.5f, 0.0f, 1.0f}, {0.0f, 1.0f, 16.0f, 43.0f});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
+  const auto module = shader::programs::BuildTileModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckTileStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             {},
+                             ShaderSourceKind::Spirv,
+                             emitted.result(),
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
+  gpu::tests::CheckDropShadowStorage(
+      *device_, gpu::generated::drop_shadow::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, DisplacementUsesGeneratedArtifactAndIndependentPixelOracle) {
+  gpu::tests::CheckDisplacementMapStorage(
+      *device_, gpu::generated::displacement_map::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
+  const auto module = shader::programs::BuildGaussianBlurModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (uint32_t axis : {0u, 1u}) {
+    for (uint32_t kind : {0u, 1u, 2u}) {
+      for (uint32_t edgeMode : {0u, 1u, 2u}) {
+        SCOPED_TRACE(testing::Message()
+                     << "axis=" << axis << " kind=" << kind << " edge=" << edgeMode);
+        gpu::tests::CheckBlurStorage(
+            *device_,
+            ShaderModuleDescriptor{"float",
+                                   {},
+                                   ShaderSourceKind::Spirv,
+                                   emitted.result(),
+                                   shader::ComputeEntryPointsOf(module.result()),
+                                   bindings.result()},
+            [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+            kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode);
+      }
+    }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, MorphologyPreservesErosionDilationAndFloatStorage) {
+  const auto module = shader::programs::BuildMorphologyModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (bool erode : {false, true}) {
+    gpu::tests::CheckMorphologyStorage(
+        *device_,
+        ShaderModuleDescriptor{"float",
+                               {},
+                               ShaderSourceKind::Spirv,
+                               emitted.result(),
+                               shader::ComputeEntryPointsOf(module.result()),
+                               bindings.result()},
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, erode);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBoundaries) {
+  gpu::tests::CheckComponentTransferStorage(
+      *device_, gpu::generated::component_transfer::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, TurbulencePreservesSeedsOctavesTransformsAndStitching) {
+  gpu::tests::CheckTurbulenceStorage(
+      *device_, gpu::generated::turbulence::BuildDescriptor(ShaderSourceKind::Spirv),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatStorage) {
+  for (bool specular : {false, true}) {
+    const ShaderModuleDescriptor descriptor =
+        specular ? generated::specular_lighting::BuildDescriptor(device_->shaderSourceKind())
+                 : generated::diffuse_lighting::BuildDescriptor(device_->shaderSourceKind());
+    for (uint32_t lightType : {0u, 1u, 2u}) {
+      SCOPED_TRACE(testing::Message() << "specular=" << specular << " light=" << lightType);
+      gpu::tests::CheckLightingStorage(
+          *device_, descriptor,
+          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, specular,
+          lightType);
+    }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantics) {
+  const ShaderModuleDescriptor descriptor =
+      gpu::generated::convolve_matrix::BuildDescriptor(ShaderSourceKind::Spirv);
+  for (uint32_t edgeMode : {0u, 1u, 2u}) {
+    for (bool preserveAlpha : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "edgeMode=" << edgeMode << " preserveAlpha=" << preserveAlpha);
+      gpu::tests::CheckConvolveMatrixStorage(
+          *device_, descriptor,
+          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, edgeMode,
+          preserveAlpha);
+    }
+  }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

@@ -404,6 +404,10 @@ ShaderStatus FunctionBuilder::beginIf(const IrExpr& condition) {
                     function_.name));
   }
 
+  if (ShaderStatus status = verifyExprInScope(condition); status.hasError()) {
+    return status;
+  }
+
   BlockFrame frame;
   frame.kind = BlockFrame::Kind::IfThen;
   frame.condition = condition;
@@ -494,6 +498,9 @@ ShaderStatus FunctionBuilder::forCondition(const IrExpr& condition) {
   }
   if (blockStack_.back().forCondition) {
     return fail(Err("for condition already set", function_.name));
+  }
+  if (ShaderStatus status = verifyExprInScope(condition); status.hasError()) {
+    return status;
   }
   blockStack_.back().forCondition = condition;
   return OkShaderStatus();

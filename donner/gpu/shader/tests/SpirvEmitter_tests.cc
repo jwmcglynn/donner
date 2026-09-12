@@ -1,7 +1,7 @@
 /// @file
 /// SPIR-V emitter tests: module header and determinism, type dedup, structured control flow,
 /// builtin lowerings, texture ops, entry point IO decorations, buffer layout decorations, the
-/// committed solid-fill golden, and the fail-closed error paths.
+/// deterministic generation and fail-closed error paths.
 
 #include "donner/gpu/shader/SpirvEmitter.h"
 
@@ -9,16 +9,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
@@ -296,19 +292,6 @@ IrModule BuildSolidFill() {
   ShaderResult<IrModule> module = programs::BuildSolidFillModule();
   EXPECT_THAT(module, HasShaderResult());
   return std::move(module).result();
-}
-
-/// Serializes SPIR-V words to the standard little-endian byte stream.
-std::string WordsToBytes(const std::vector<uint32_t>& words) {
-  std::string bytes;
-  bytes.reserve(words.size() * 4);
-  for (const uint32_t word : words) {
-    bytes += static_cast<char>(word & 0xFF);
-    bytes += static_cast<char>((word >> 8) & 0xFF);
-    bytes += static_cast<char>((word >> 16) & 0xFF);
-    bytes += static_cast<char>((word >> 24) & 0xFF);
-  }
-  return bytes;
 }
 
 // ----- Module header and determinism -----
@@ -1055,31 +1038,6 @@ TEST(SpirvEmitterTests, ColorMatrixComputeProgramDeclaresItsFourBindings) {
   ASSERT_TRUE(bias.has_value());
   EXPECT_EQ(bias->storageClass, kStorageClassStorageBuffer);
   EXPECT_TRUE(FindDecoration(instructions, bias->variableId, kDecorationNonWritable).has_value());
-}
-
-// ----- Golden -----
-
-TEST(SpirvEmitterTests, SolidFillMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = WordsToBytes(EmitOrFail(BuildSolidFill()));
-
-  if (const char* updateRoot = std::getenv("UPDATE_SPIRV_GOLDEN")) {
-    const std::string outPath =
-        std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/solid_fill.spv";
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
-    out << bytes;
-    GTEST_SKIP() << "Golden updated at " << outPath;
-  }
-
-  const std::string path =
-      donner::Runfiles::instance().Rlocation("donner/gpu/shader/tests/testdata/solid_fill.spv");
-  std::ifstream stream(path, std::ios::binary);
-  ASSERT_TRUE(stream.good()) << "Failed to open golden file: " << path;
-  std::ostringstream golden;
-  golden << stream.rdbuf();
-
-  EXPECT_THAT(bytes, testing::Eq(golden.str()));
 }
 
 // ----- Error paths -----

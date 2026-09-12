@@ -154,6 +154,8 @@ std::string_view BuiltinFnName(BuiltinFn fn) {
     case BuiltinFn::Saturate: return "saturate";
     case BuiltinFn::Fract: return "fract";
     case BuiltinFn::Sqrt: return "sqrt";
+    case BuiltinFn::Sin: return "sin";
+    case BuiltinFn::Cos: return "cos";
     case BuiltinFn::Length: return "length";
     case BuiltinFn::Dot: return "dot";
     case BuiltinFn::Normalize: return "normalize";
@@ -161,6 +163,8 @@ std::string_view BuiltinFnName(BuiltinFn fn) {
     case BuiltinFn::Round: return "round";
     case BuiltinFn::Sign: return "sign";
     case BuiltinFn::Floor: return "floor";
+    case BuiltinFn::Ceil: return "ceil";
+    case BuiltinFn::Exp: return "exp";
     case BuiltinFn::Pow: return "pow";
     case BuiltinFn::Select: return "select";
     case BuiltinFn::Any: return "any";
@@ -705,10 +709,14 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
     case BuiltinFn::Saturate:
     case BuiltinFn::Fract:
     case BuiltinFn::Sqrt:
+    case BuiltinFn::Sin:
+    case BuiltinFn::Cos:
     case BuiltinFn::Fwidth:
     case BuiltinFn::Round:
     case BuiltinFn::Sign:
     case BuiltinFn::Floor:
+    case BuiltinFn::Ceil:
+    case BuiltinFn::Exp:
       if (args.size() != 1) return argCountError(1);
       if (!args[0].type().isFloatScalarOrVector()) {
         return ShaderError{
@@ -840,6 +848,8 @@ ShaderResult<IrExpr> CallBuiltinNamed(std::string_view name, std::vector<IrExpr>
       {"saturate", BuiltinFn::Saturate},
       {"fract", BuiltinFn::Fract},
       {"sqrt", BuiltinFn::Sqrt},
+      {"sin", BuiltinFn::Sin},
+      {"cos", BuiltinFn::Cos},
       {"length", BuiltinFn::Length},
       {"dot", BuiltinFn::Dot},
       {"normalize", BuiltinFn::Normalize},

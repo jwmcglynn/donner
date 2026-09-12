@@ -45,7 +45,7 @@ enum class BinaryOp : uint8_t {
 std::ostream& operator<<(std::ostream& os, BinaryOp value);
 
 /**
- * Builtin functions callable from IR (the solid-fill subset; everything else is rejected).
+ * Builtin functions callable from IR (the program-supported subset; everything else is rejected).
  *
  * \ref Sign, \ref Floor, and \ref Pow take f32 scalars and f32 vectors and return the shape
  * they were given. Their semantics are stated here because callers depend on them:
@@ -68,6 +68,8 @@ enum class BuiltinFn : uint8_t {
   Saturate,           //!< `saturate(x)`
   Fract,              //!< `fract(x)`
   Sqrt,               //!< `sqrt(x)`
+  Sin,                //!< `sin(x)`
+  Cos,                //!< `cos(x)`
   Length,             //!< `length(v)`
   Dot,                //!< `dot(a, b)`
   Normalize,          //!< `normalize(v)`
@@ -82,6 +84,8 @@ enum class BuiltinFn : uint8_t {
   TextureSample,      //!< `textureSample(texture, sampler, coords)`
   TextureLoad,        //!< `textureLoad(texture, coords, level)`
   TextureDimensions,  //!< `textureDimensions(texture)`
+  Ceil,               //!< `ceil(x)` for f32 scalars or vectors.
+  Exp,                //!< `exp(x)` for f32 scalars or vectors.
 };
 
 /**
@@ -298,8 +302,8 @@ ShaderResult<IrExpr> Ne(const IrExpr& lhs, const IrExpr& rhs, const RcString& la
 ///
 /// Unsigned only: an arithmetic shift of a signed value is a different instruction on every
 /// backend, and nothing in the shader set shifts a signed value. There is no left-shift sibling
-/// for the same reason - no shader uses one, and an operator with no caller has no golden that
-/// would catch it being emitted wrong.
+/// for the same reason - no shader uses one, and an operator with no caller has no execution test
+/// that would catch it being emitted wrong.
 ///
 /// @param lhs Value to shift. @param rhs Shift amount, u32 of the same shape as \p lhs.
 /// @param label Diagnostic label.
@@ -388,8 +392,7 @@ ShaderResult<IrExpr> CallBuiltin(BuiltinFn fn, std::vector<IrExpr> args,
                                  const RcString& label = "call");
 
 /**
- * Builtin function call by name; unknown names fail closed (only the solid-fill builtin subset
- * exists).
+ * Builtin function call by name; unknown names fail closed.
  *
  * @param name Builtin name, e.g. `"clamp"`.
  * @param args Call arguments.

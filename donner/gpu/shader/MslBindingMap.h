@@ -4,8 +4,9 @@
 /// backend.
 ///
 /// Bind group 0 uses one flat argument table per stage. Slot 0 carries exact declared buffer
-/// lengths, buffer binding `b` uses slot `1 + b`, and vertex data uses slot 30. Texture and
-/// sampler bindings use their binding numbers directly.
+/// lengths and buffer binding `b` uses slot `1 + b`. Vertex slot zero uses index 30; additional
+/// active vertex slots use unoccupied vertex-stage indices chosen from the pipeline layout.
+/// Texture and sampler bindings use their binding numbers directly.
 
 #include <cstdint>
 
@@ -22,7 +23,8 @@ inline constexpr uint32_t kMslBufferBindingCount = 29;
 inline constexpr uint32_t kMslTextureBindingCount = 128;
 /// Number of sampler argument slots per stage.
 inline constexpr uint32_t kMslSamplerBindingCount = 16;
-/// Dedicated Metal vertex buffer index for stage-in vertex data.
+/// Highest Metal buffer index, reserved for vertex slot zero. Additional vertex slots use
+/// lower indices not occupied by vertex-visible resource bindings in the active pipeline.
 inline constexpr uint32_t kMslVertexBufferIndex = 30;
 
 /// Metal buffer argument-table index for an RHI buffer binding (uniform or storage).

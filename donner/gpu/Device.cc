@@ -1983,6 +1983,14 @@ Status Device::checkSubmissionCommand(const Command& command,
             return std::move(bufferRecord).error();
           }
           return OkStatus();
+        } else if constexpr (std::is_same_v<CommandType, SetIndexBufferCommand>) {
+          auto bufferRecord =
+              checkSubmissionResource(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
+                                      BufferTag::kName, "recorded setIndexBuffer", uses);
+          if (bufferRecord.hasError()) {
+            return std::move(bufferRecord).error();
+          }
+          return OkStatus();
         } else if constexpr (std::is_same_v<CommandType, CopyTextureToBufferCommand>) {
           return checkSubmissionCopyToBuffer(typedCommand, uses);
         } else if constexpr (std::is_same_v<CommandType, CopyTextureToTextureCommand>) {

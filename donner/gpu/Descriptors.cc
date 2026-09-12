@@ -114,6 +114,14 @@ std::ostream& operator<<(std::ostream& os, VertexStepMode value) {
   return os << "Unknown";
 }
 
+std::ostream& operator<<(std::ostream& os, IndexFormat value) {
+  switch (value) {
+    case IndexFormat::Uint16: return os << "Uint16";
+    case IndexFormat::Uint32: return os << "Uint32";
+  }
+  return os << "Unknown";
+}
+
 std::ostream& operator<<(std::ostream& os, PrimitiveTopology value) {
   switch (value) {
     case PrimitiveTopology::TriangleList: return os << "TriangleList";
@@ -293,6 +301,14 @@ bool IsKnownEnumValue(VertexStepMode value) {
   switch (value) {
     case VertexStepMode::Vertex:
     case VertexStepMode::Instance: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(IndexFormat value) {
+  switch (value) {
+    case IndexFormat::Uint16:
+    case IndexFormat::Uint32: return true;
   }
   return false;
 }

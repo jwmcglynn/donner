@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -22,6 +23,7 @@
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SubRectangleCopyScene.h"
+#include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -234,6 +236,73 @@ protected:
   std::unique_ptr<GeodeDevice> geodeDevice_;
   std::unique_ptr<GeodeWgpuAdapterDevice> adapter_;
 };
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadDoesNotReadBeyondCallerSpan) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"minimalUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  const std::array<uint8_t, 4> pixel{17, 34, 51, 68};
+  ASSERT_THAT(adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, 256, 1},
+                                     gpu::Extent2d{1, 1}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(17, 34, 51, 68));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadPreservesOffsetAndMultipleRows) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"offsetUpload", gpu::Extent2d{2, 2}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  std::vector<uint8_t> pixels(4 + 256 + 8, 0);
+  pixels[4] = 1;
+  pixels[5] = 2;
+  pixels[6] = 3;
+  pixels[7] = 4;
+  pixels[8] = 5;
+  pixels[9] = 6;
+  pixels[10] = 7;
+  pixels[11] = 8;
+  pixels[260] = 9;
+  pixels[261] = 10;
+  pixels[262] = 11;
+  pixels[263] = 12;
+  pixels[264] = 13;
+  pixels[265] = 14;
+  pixels[266] = 15;
+  pixels[267] = 16;
+  ASSERT_THAT(adapter_->writeTexture(texture, pixels, gpu::TexelCopyBufferLayout{4, 256, 2},
+                                     gpu::Extent2d{2, 2}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 2);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(1, 2, 3, 4));
+  EXPECT_THAT(PixelAt(readback, 1, 0), ElementsAre(5, 6, 7, 8));
+  EXPECT_THAT(PixelAt(readback, 0, 1), ElementsAre(9, 10, 11, 12));
+  EXPECT_THAT(PixelAt(readback, 1, 1), ElementsAre(13, 14, 15, 16));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadIgnoresUnusedGiganticStride) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(gpu::TextureDescriptor{
+      "hugeStrideUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  const std::array<uint8_t, 4> pixel{21, 42, 63, 84};
+  constexpr uint32_t kHugeAlignedStride =
+      std::numeric_limits<uint32_t>::max() & ~(gpu::kTexelRowPitchAlignment - 1);
+  ASSERT_THAT(
+      adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, kHugeAlignedStride, 1},
+                             gpu::Extent2d{1, 1}),
+      gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(21, 42, 63, 84));
+}
 
 TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
   // ----- Every resource kind the pipeline family uses, created through the adapter -----
@@ -651,6 +720,76 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FloatTextureDispatchPreservesSubBytePrecisio
         }
         return result;
       });
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests,
+       IndexedQuadsWithOffsetsInstancingAndScissorMatchTheExpectedImage) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckIndexedDrawScene(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"attributes", RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        constexpr uint64_t kReadbackBytes = 256 * 12;
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, kReadbackBytes);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      });
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, VectorCeilAndExpRunThroughWebGpu) {
+  const auto module = gpu::shader::BuildVectorCeilExpModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"float",
+                                  RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl,
+                                  {},
+                                  gpu::shader::ComputeEntryPointsOf(module.result())},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      },
+      {-0.5f, 0.5f, 0.0f, 1.0f}, {0.0f, 1.0f, 16.0f, 43.0f});
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitEncodesAComputePassThatWritesItsStorageTexture) {

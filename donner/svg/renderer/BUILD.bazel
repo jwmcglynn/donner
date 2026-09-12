@@ -402,6 +402,7 @@ donner_cc_library(
         ":renderer_driver",
         ":renderer_interface",
         "//donner/base",
+        "//donner/gpu",
         "//donner/svg",
         "//donner/svg/components",
         "//donner/svg/renderer/geode:geo_encoder",
