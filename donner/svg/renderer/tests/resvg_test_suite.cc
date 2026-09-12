@@ -140,17 +140,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"type=matrix-with-empty-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-non-normalized-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")
-                     .withGeodeGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/geode/"
-                         "filters_feColorMatrix_type=matrix-with-non-normalized-values.png",
-                         "Geode renders the gradient byte-identically to tiny-skia (verified), but "
-                         "its 8-bit premultiplied filter intermediates, un-premultiplied at the "
-                         "rect's edge-AA columns and amplified ~100x by the -100 matrix "
-                         "coefficient, diverge from tiny-skia's float pipeline in thin 1px "
-                         "vertical "
-                         "bands at the gradient stop transitions. Geode's output is correct; only "
-                         "the pathological amplification of sub-LSB precision differs.")},
+                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")},
                 {"type=matrix-with-not-enough-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-too-many-values.svg",

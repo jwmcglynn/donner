@@ -10,11 +10,10 @@
 /// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
 /// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
 /// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`,
-/// `feDropShadow`, `feImage`, `feTile`. Other primitives are passed
-/// through (the input texture is forwarded unchanged) with a one-shot
-/// warning.
+/// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <memory>
+#include <optional>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -93,6 +92,35 @@ public:
                                               const gpu::TextureDescriptor& desc) = 0;
 };
 
+/// Exact-resolution tile layout with overlapping sampling halos.
+struct FilterTilePlan {
+  uint32_t width = 0;       //!< Full source/output width.
+  uint32_t height = 0;      //!< Full source/output height.
+  uint32_t tileWidth = 0;   //!< Fixed working width, including halos.
+  uint32_t tileHeight = 0;  //!< Fixed working height, including halos.
+  uint32_t coreWidth = 0;   //!< Non-overlapping output step.
+  uint32_t coreHeight = 0;  //!< Non-overlapping output step.
+  uint64_t tiles = 1;       //!< Number of complete graph executions.
+  uint64_t pixels() const { return uint64_t{tileWidth} * tileHeight; }
+  uint64_t workPixels() const { return pixels() * tiles; }
+  uint64_t additionalTextureBytes() const {
+    return tiles > 1 ? (uint64_t{width} * height + pixels()) * 4 : 0;
+  }
+};
+
+/// GPU allocation bytes retained by an execution, excluding the caller's source/capture.
+struct FilterExecutionMemory {
+  uint64_t textures = 0;           //!< Texture descriptors, including dead reusable scratch.
+  uint64_t standaloneBuffers = 0;  //!< Per-execution buffers retained until submission.
+  uint64_t persistentBuffers = 0;  //!< Parameter arenas and immutable transfer tables.
+
+  uint64_t workUnits = 0;       //!< Work charged for the chosen execution plan.
+  uint64_t tileExecutions = 0;  //!< Complete graph evaluations, including sampling halos.
+
+  /// Total retained allocation bytes.
+  uint64_t total() const { return textures + standaloneBuffers + persistentBuffers; }
+};
+
 /**
  * GPU filter-graph executor.
  *
@@ -159,6 +187,9 @@ public:
    *   keep the two-submissions-per-frame shape.
    * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
    *   only the graph-local limit.
+   * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
+   *   this layout even if shared scratch state or planning preferences change. Invalid plans or
+   *   failed execution-time budgets return an empty texture instead of bypassing the filter.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
@@ -166,7 +197,8 @@ public:
                         const Transform2d& deviceFromFilter,
                         FilterTextureAllocator& textureAllocator,
                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                        svg::components::FilterExecutionBudget* executionBudget = nullptr);
+                        svg::components::FilterExecutionBudget* executionBudget = nullptr,
+                        std::optional<FilterTilePlan> admittedPlan = std::nullopt);
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass
@@ -186,8 +218,25 @@ public:
    */
   void beginFrame();
 
+  /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
+  uint64_t retainedBufferBytes() const;
+
+  /// Plans bounded working textures without changing sample coordinates or resolution.
+  /// @param graph Graph to execute. @param width Source width. @param height Source height.
+  /// @param deviceFromFilter Original filter-to-device transform.
+  FilterTilePlan executionPlan(const svg::components::FilterGraph& graph, uint32_t width,
+                               uint32_t height, const Transform2d& deviceFromFilter) const;
+
+  /// Lower the working extent for deterministic tile-boundary tests.
+  /// @param extent Maximum dimension, between 16 and 512 pixels.
+  void setMaximumTileExtentForTesting(uint32_t extent);
+
+  /// Observed allocation footprint of the most recent execution; does not own resources.
+  FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
+
 private:
   friend struct FilterGraphExecution;
+  friend struct FilterNodeExecution;
   /// Two-pass separable Gaussian blur via compute shader.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
@@ -401,6 +450,12 @@ private:
                            const svg::components::FilterNode& node,
                            const Transform2d& deviceFromFilter, const Box2d& placementRegionUser);
 
+  /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
+  /// @param arena Frame resources. @param output Existing image destination.
+  /// @param destinationExtent Dimensions to fill.
+  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const gpu::Texture& output,
+                                       gpu::Extent2d destinationExtent);
+
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.
   /// @param srcX Source rectangle X origin in pixels.
@@ -419,10 +474,11 @@ private:
   /// @param usrY0 User-space subregion top edge.
   /// @param usrX1 User-space subregion right edge.
   /// @param usrY1 User-space subregion bottom edge.
+  /// @param resolve True for the final RGBA8 clip and half-up quantization.
   /// @return A new texture with out-of-subregion pixels cleared.
   wgpu::Texture applySubregionClip(FilterResourceArena& arena, const wgpu::Texture& input,
                                    const Transform2d& filterFromDevice, double usrX0, double usrY0,
-                                   double usrX1, double usrY1);
+                                   double usrX1, double usrY1, bool resolve = false);
 
   /// Convert a texture between sRGB and linearRGB color spaces.
   /// Used to implement `color-interpolation-filters: linearRGB` (the SVG default).
@@ -435,12 +491,10 @@ private:
   GeodeDevice& device_;
 
   // Gaussian blur pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> gaussianBlurPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> blurBindGroupLayout_;
+  RuntimeComputeProgram blurProgram_;
 
-  // feOffset pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> offsetPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> offsetBindGroupLayout_;
+  // feOffset pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram offsetProgram_;
 
   // feColorMatrix pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram colorMatrixProgram_;
@@ -448,67 +502,55 @@ private:
   // feFlood pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram floodProgram_;
 
-  // feMerge alpha-over blit pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> mergePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> mergeBindGroupLayout_;
+  /// Source-over merge pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram mergeProgram_;
 
-  // feComposite Porter-Duff pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> compositePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> compositeBindGroupLayout_;
+  /// Porter-Duff and arithmetic pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram compositeProgram_;
 
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
   ScopedWgpuHandle<wgpu::ComputePipeline> blendPipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> morphologyPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> morphologyBindGroupLayout_;
+  RuntimeComputeProgram morphologyProgram_;
 
   // feComponentTransfer LUT pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> componentTransferPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> componentTransferBindGroupLayout_;
+  RuntimeComputeProgram componentTransferProgram_;
 
-  // feConvolveMatrix kernel pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> convolveMatrixPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> convolveMatrixBindGroupLayout_;
+  /// Matrix-convolution pipeline recorded through the GPU runtime.
+  RuntimeComputeProgram convolveMatrixProgram_;
 
-  // feTurbulence noise pipeline (output + storage buffer, no input texture).
-  ScopedWgpuHandle<wgpu::ComputePipeline> turbulencePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> turbulenceBindGroupLayout_;
+  // feTurbulence noise pipeline (output + parameter and table storage buffers).
+  RuntimeComputeProgram turbulenceProgram_;
 
   // feDisplacementMap pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> displacementMapPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> displacementMapBindGroupLayout_;
+  RuntimeComputeProgram displacementMapProgram_;
 
   // feDiffuseLighting pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> diffuseLightingPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> diffuseLightingBindGroupLayout_;
+  RuntimeComputeProgram diffuseLightingProgram_;
 
   // feSpecularLighting pipeline (input + output + storage buffer).
-  ScopedWgpuHandle<wgpu::ComputePipeline> specularLightingPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> specularLightingBindGroupLayout_;
+  RuntimeComputeProgram specularLightingProgram_;
 
   // feDropShadow compose pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> dropShadowPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> dropShadowBindGroupLayout_;
+  RuntimeComputeProgram dropShadowProgram_;
 
   // feImage placement pipeline (input texture + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> imagePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> imageBindGroupLayout_;
+  RuntimeComputeProgram imageProgram_;
 
   // feTile wraparound pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> tilePipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> tileBindGroupLayout_;
+  RuntimeComputeProgram tileProgram_;
 
   // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram subregionClipProgram_;
+  RuntimeComputeProgram filterResolveProgram_;
 
-  // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> colorSpaceConvertPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> colorSpaceConvertBindGroupLayout_;
+  // sRGB to linear color space conversion pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram colorSpaceConvertProgram_;
+  gpu::Buffer colorTransferTable_;
 
   bool verbose_ = false;
-  bool warnedUnsupported_ = false;
 
   /// Frame-scoped count of filter passes recorded into the shared frame
   /// command encoder, across every execute() call in the frame. Reset by
@@ -516,11 +558,14 @@ private:
   /// bound command-buffer size (see FilterResourceArena).
   size_t framePassesInCommandBuffer_ = 0;
 
-  /// Per-frame uniform scratch buffer and bump-allocated slot cursor (see
+  /// Per-frame parameter scratch buffer and bump-allocated slot cursor (see
   /// FilterResourceCache). Pass bind groups are still created per pass:
   /// the pooled textures a pass binds rotate across frames, so their
   /// identities are not stable cache keys.
   std::unique_ptr<FilterResourceCache> resourceCache_;
+  FilterExecutionMemory lastExecutionMemory_;
+  uint32_t preferredTileExtent_ = 512;
+  bool adaptiveTiles_ = true;
 };
 
 }  // namespace donner::geode

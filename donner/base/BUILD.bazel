@@ -265,6 +265,25 @@ donner_cc_test(
     ],
 )
 
+config_setting(
+    name = "gcc_compiler",
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "gcc"},
+)
+
+# GCC's uninitialized-storage analysis needs optimization to see through the inline moves.
+donner_cc_test(
+    name = "rcstring_compile_tests",
+    srcs = ["tests/RcStringCompile_tests.cc"],
+    copts = ["-O2"] + select({
+        ":gcc_compiler": ["-Werror=maybe-uninitialized"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":base",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_fuzzer(
     name = "bezier_utils_fuzzer",
     srcs = [

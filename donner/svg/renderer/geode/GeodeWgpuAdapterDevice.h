@@ -10,11 +10,13 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string_view>
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/base/SmallVector.h"
 #include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
@@ -37,7 +39,7 @@ class GeodeDevice;
  * pipelines).
  *
  * Thread affinity matches \c donner::gpu::Device: single-threaded use. Completion callbacks
- * touch only the atomic completed-serial counter.
+ * touch only shared completion state, guarded independently of the adapter lifetime.
  */
 class GeodeWgpuAdapterDevice final : public gpu::Device {
 public:
@@ -100,6 +102,10 @@ public:
    * @param texture Live texture handle of this adapter; consumed either way.
    */
   gpu::Status destroyTextureBacking(gpu::Texture&& texture);
+
+  /// Whether a live handle owns adapter-allocated backing, rather than an external registration.
+  /// @param texture Handle whose device and generation are validated before inspecting ownership.
+  [[nodiscard]] bool ownsTextureBacking(const gpu::Texture& texture) const;
 
   /**
    * Destroys the backend object behind \p buffer explicitly, then releases its slot.
@@ -190,12 +196,21 @@ public:
   bool hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const;
 
   /**
-   * Reports that the host submitted a command buffer carrying every stream replayed since the
-   * previous report, so their completion can now be observed. Advances \ref completedSerial to
-   * the highest replayed serial once the queue drains, exactly as an adapter-owned submit does.
-   * A no-op when nothing has been replayed since the last report.
+   * Reports the queue submission of every stream replayed into \p encoder. Its serials remain
+   * incomplete until that submission's callback runs, and completion cannot pass another host's
+   * unfinished serials. A no-op when this encoder has no replayed streams awaiting submission.
+   *
+   * @param encoder Host encoder whose finished command buffer was submitted.
    */
-  void notifyHostSubmitted();
+  void notifyHostSubmitted(wgpu::CommandEncoder encoder);
+
+  /**
+   * Discards every unsubmitted stream replayed into \p encoder. Retires those serials only once
+   * earlier queued work has drained. The caller must not subsequently submit the discarded work.
+   *
+   * @param encoder Host encoder being abandoned before submission.
+   */
+  void notifyHostDiscarded(wgpu::CommandEncoder encoder);
 
   /**
    * Submits \p commands straight to the queue, even while a host command encoder is installed.
@@ -290,9 +305,31 @@ private:
     wgpu::Texture texture;                         //!< Borrowed alias; null when the slot is dead.
   };
 
-  /// State shared with queue work-done callbacks.
+  friend struct GeodeWgpuAdapterDeviceTestAccess;
+
+  /// State retained by callbacks after their adapter may have been destroyed.
   struct CompletionState {
-    std::atomic<uint64_t> completedSerial{0};  //!< Highest completed submission serial.
+    /// One host's interleaved logical serials, or one standalone submission.
+    struct Pending {
+      WGPUCommandEncoder host = nullptr;  //!< Non-null only until the host submits or discards.
+      uint64_t firstSerial = 0;           //!< Unique ticket retained by its completion callback.
+      uint64_t lastSerial = 0;            //!< Highest serial in this submission.
+    };
+
+    /// Records a logical submission; a null host denotes a standalone queue submission.
+    /// @param host Host identity, or null for standalone work. @param serial Logical serial.
+    void record(WGPUCommandEncoder host, uint64_t serial);
+    /// Freezes a host range for its callback, returning its ticket or zero if no work is pending.
+    /// @param host Host whose work was queued or discarded.
+    uint64_t closeHost(WGPUCommandEncoder host);
+    /// Completes exactly one queued range and publishes the contiguous completed prefix.
+    /// @param ticket Unique first serial of the completed range.
+    void complete(uint64_t ticket);
+
+    std::atomic<uint64_t> completedSerial{0};  //!< Highest serial with no unfinished predecessor.
+    std::mutex mutex;                 //!< Protects ranges and their completed high-water mark.
+    SmallVector<Pending, 4> pending;  //!< Includes queued ranges until their callbacks run.
+    uint64_t completedHighWater = 0;  //!< Highest serial seen by a completed callback.
   };
 
   /// Mutable state threaded through the encoding of one command stream.
@@ -324,6 +361,11 @@ private:
   /// @param setVertexBuffer Recorded command.
   gpu::Status encodeSetVertexBuffer(EncodingState& state,
                                     const gpu::SetVertexBufferCommand& setVertexBuffer);
+  /// Binds a recorded index buffer.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  gpu::Status encodeSetIndexBuffer(EncodingState& state,
+                                   const gpu::SetIndexBufferCommand& setIndexBuffer);
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -337,6 +379,10 @@ private:
   /// @param state Encoding state.
   /// @param draw Recorded command.
   gpu::Status encodeDraw(EncodingState& state, const gpu::DrawCommand& draw);
+  /// Issues an indexed draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  gpu::Status encodeDrawIndexed(EncodingState& state, const gpu::DrawIndexedCommand& draw);
   /// Ends the active render pass.
   /// @param state Encoding state.
   gpu::Status encodeEndRenderPass(EncodingState& state);
@@ -383,9 +429,9 @@ private:
   /// @param resourceName Resource type name. @param slotIndex Slot to clear.
   bool clearPipelineSlot(std::string_view resourceName, uint32_t slotIndex);
 
-  /// Attaches the queue work-done callback that advances \ref completedSerial to \p serial.
-  /// @param serial Submission serial the callback completes.
-  void advanceCompletedSerialWhenQueueDrains(uint64_t serial);
+  /// Attaches a queue callback retaining only shared completion state and a unique ticket.
+  /// @param ticket First serial of the queued or discarded range.
+  void completeWhenQueueDrains(uint64_t ticket);
 
   GeodeDevice& geodeDevice_;
 
@@ -398,20 +444,6 @@ private:
   /// Whether the next submit replays into the host encoder rather than reaching the queue: a
   /// host encoder is installed and this submit is not a standalone one.
   bool replaysIntoHostEncoder() const;
-
-  /// Records \p submissionSerial as replayed into the host encoder but not yet queued.
-  /// @param submissionSerial Serial of the stream just replayed.
-  void recordPendingHostSerial(uint64_t submissionSerial);
-  /// Highest serial replayed into \ref hostCommandEncoder_ since the last
-  /// \ref notifyHostSubmitted; 0 when nothing is awaiting the host's submit.
-  uint64_t hostPendingSerial_ = 0;
-  /// Oldest serial replayed into \ref hostCommandEncoder_ since the last \ref
-  /// notifyHostSubmitted, or 0 when nothing is awaiting that submit. A completion may not report
-  /// past this, because everything from here up has been recorded but not queued.
-  uint64_t hostFirstPendingSerial_ = 0;
-  /// Highest serial a standalone submit queued while a host frame was pending, or 0. Those
-  /// completions report capped, so the frame's flush is what finally covers them.
-  uint64_t standaloneWhilePendingSerial_ = 0;
 
   /// State of one pending or completed host mapping.
   ///

@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # Tests for the Metal vertical slices: the solid-fill pixel comparison against
@@ -38,7 +38,10 @@ donner_cc_test(
 # so validation issues abort loudly.
 donner_cc_test(
     name = "metal_solid_fill_tests",
-    srcs = ["MetalSolidFill_tests.cc"],
+    srcs = [
+        "MetalSolidFill_tests.cc",
+        "MetalVertexBindings_tests.cc",
+    ],
     data = ["//donner/gpu/baseline:baselines"],
     env = {
         "MTL_DEBUG_LAYER": "1",
@@ -59,12 +62,17 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
+        "//donner/gpu:checkerboard_pixel_tests",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:vertex_input_slice",
         "//donner/gpu/baseline:frozen_baseline_policy",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:stage_io_test_modules",
+        "//donner/svg/renderer/geode:checkerboard_pipeline",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "@com_google_gtest//:gtest_main",
     ],
@@ -92,11 +100,31 @@ donner_cc_test(
     deps = [
         ":metal_device_gate",
         "//donner/gpu",
+        "//donner/gpu:blur_slice",
         "//donner/gpu:color_matrix_slice",
+        "//donner/gpu:component_transfer_slice",
+        "//donner/gpu:displacement_map_slice",
+        "//donner/gpu:convolve_matrix_slice",
+        "//donner/gpu:drop_shadow_slice",
+        "//donner/gpu:filter_image_slice",
+        "//donner/gpu:float_texture_slice",
+        "//donner/gpu:lighting_slice",
+        "//donner/gpu:morphology_slice",
+        "//donner/gpu:tile_slice",
+        "//donner/gpu:turbulence_slice",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
+        "//donner/gpu/shader:component_transfer_artifact",
+        "//donner/gpu/shader:displacement_map_artifact",
+        "//donner/gpu/shader:convolve_matrix_artifact",
+        "//donner/gpu/shader:drop_shadow_artifact",
+        "//donner/gpu/shader:filter_image_artifact",
+        "//donner/gpu/shader:float_storage_test_module",
+        "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:turbulence_artifact",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -125,6 +153,54 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu:sub_rectangle_copy_scene",
         "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "metal_queue_writes_tests",
+    srcs = ["MetalQueueWrites_tests.cc"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "metal_buffer_bounds_tests",
+    srcs = [
+        "MetalBufferBounds_tests.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    env_inherit = ["GITHUB_ACTIONS"],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:msl_emitter",
+        "//donner/gpu/shader:programs",
         "@com_google_gtest//:gtest_main",
     ],
 )

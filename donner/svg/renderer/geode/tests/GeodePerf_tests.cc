@@ -118,8 +118,32 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
                c.bufferWriteBytes, c.textureWriteBytes);
 }
 
+/// Render one frame and include its isolated snapshot cost in the returned test sample.
+geode::GeodeCounters renderAndCaptureCounters(RendererGeode& renderer, SVGDocument& document) {
+  (void)renderer.consumeReadbackStats();
+  renderer.draw(document);
+
+  // Capture has its own context and counters. Include its work in these
+  // aggregate ceilings without attributing it to the producer's frame.
+  EXPECT_FALSE(renderer.takeSnapshot().empty());
+  const RendererReadbackStats readback = renderer.consumeReadbackStats();
+  EXPECT_EQ(readback.count, 1);
+  EXPECT_EQ(readback.captureCancellations, 0u);
+  EXPECT_EQ(readback.captureTimeouts, 0u);
+  EXPECT_FALSE(readback.deviceLost);
+  EXPECT_EQ(readback.submits, 1u);
+  EXPECT_EQ(readback.bindgroupCreates, 1u);
+
+  geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+  counters.bufferCreates += readback.bufferCreates;
+  counters.textureCreates += readback.textureCreates;
+  counters.bindgroupCreates += readback.bindgroupCreates;
+  counters.submits += readback.submits;
+  return counters;
+}
+
 /// Fully render `svgSource` through a RendererGeode backed by a shared
-/// device, then return the per-frame counters.
+/// device, then return the combined frame and snapshot-readback counters.
 ///
 /// `RendererGeode::draw()` internally drives its own `beginFrame` →
 /// traversal → `endFrame` cycle using the SVG's own viewBox dimensions,
@@ -136,13 +160,7 @@ geode::GeodeCounters renderAndGetCounters(std::string_view svgSource,
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);
-  renderer.draw(document);
-
-  // `takeSnapshot()` allocates a readback buffer + issues its own submit.
-  // Include it so steady-state cost isn't hidden.
-  (void)renderer.takeSnapshot();
-
-  return renderer.lastFrameTimings().counters;
+  return renderAndCaptureCounters(renderer, document);
 }
 
 class GeodePerfTest : public ::testing::Test {
@@ -596,20 +614,14 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 
   // First frame. `draw()` internally manages beginFrame/endFrame using
   // the document's viewBox dimensions (200×200 for kSimpleShapesSvg).
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
-
-  const auto firstCounters = renderer.lastFrameTimings().counters;
+  const auto firstCounters = renderAndCaptureCounters(renderer, document);
   EXPECT_GT(firstCounters.pathEncodes, 0u);  // Sanity: something happened.
 
   // Second frame: same document, same size. Counters reset in beginFrame
   // and should accumulate only this frame's work. Render targets are
   // reused across same-size frames, so the second
   // frame's textureCreates should be strictly smaller.
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
-
-  const auto secondCounters = renderer.lastFrameTimings().counters;
+  const auto secondCounters = renderAndCaptureCounters(renderer, document);
 
   // Second-frame counters are strictly this-frame only (beginFrame
   // resets). With `GeodePathCacheComponent` in place, an unchanged
@@ -639,7 +651,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 // ---------------------------------------------------------------------------
 
 /// Helper: two consecutive renders of the same document, returning only
-/// the SECOND frame's counters. Used by the zero-encode assertions.
+/// the SECOND frame's combined render/capture counters. Used by the zero-encode assertions.
 geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
                                              const std::shared_ptr<geode::GeodeDevice>& device) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
@@ -651,14 +663,11 @@ geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
+  (void)renderAndCaptureCounters(renderer, document);
   // First-frame counters intentionally discarded - we only care about the
   // steady-state second frame.
 
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
-  return renderer.lastFrameTimings().counters;
+  return renderAndCaptureCounters(renderer, document);
 }
 
 TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {

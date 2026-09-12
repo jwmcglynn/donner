@@ -557,7 +557,7 @@ jobs:
           # workspace), which `bazel test` reports as exit 4. The wrapper
           # maps only that status to success; every other failure still fails.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
             $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -698,7 +698,7 @@ jobs:
       # 2026-07-11, twice in a row on organic load; same signature as the
       # 2026-07-02 coverage-lane incident that motivated coverage.yml's 60s).
       # 60s still fast-fails a genuinely dead endpoint.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
       # logs so slow runs can be attributed to targets/actions without live
       # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
@@ -952,11 +952,25 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
+          # The paired targets share the same transitioned implementation and
+          # shard count. Their no-local requirement fails closed if remote
+          # execution is unavailable.
+          # Intentional word splitting: each Bazel label is one argument.
+          # shellcheck disable=SC2086
+          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py $TARGETS)"; then
+            echo "::error::Failed to select remote GPU test targets."
+            exit 1
+          fi
+          if [[ -z "${mapped_targets// /}" ]]; then
+            echo "::error::Remote GPU target selection became empty."
+            exit 1
+          fi
+          TARGETS="$mapped_targets"
           tools/ci_bazel_test.sh "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test/console.log" \
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-local-gpu-isolated \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1003,20 +1017,14 @@ jobs:
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
-      # Editor tests whose WebGPU/Geode arm is compiled out of the default
-      # tiny_skia build and which carry no `variants = ["geode"]` wrapper, so
-      # the plain `bazel test //...` sweep above never executes them. Without
-      # this step they run on no lane at all. Measured on Apple Silicon with a
-      # warm build: 74 s wall, ~62 s of it test execution (`test:geode` pins
-      # `--local_test_jobs=1`, so the suite is serial). The whole
-      # `//donner/editor/...` tree under `--config=geode` is 260 tests / 193 s
-      # if this ever needs widening.
+      # Exercise the Geode editor configuration through transitioned wrappers, which
+      # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
-        //donner/editor/tests:editor_window_tests
-        //donner/editor/tests:layer_thumbnail_golden_tests
-        //donner/editor/tests:async_renderer_tests
-        //donner/editor/tests:rnr_replay_tests
-        //donner/editor/tests:gl_rnr_replay_tests
+        //donner/editor/tests:editor_window_tests_geode
+        //donner/editor/tests:layer_thumbnail_golden_tests_geode
+        //donner/editor/tests:async_renderer_tests_geode
+        //donner/editor/tests:rnr_replay_tests_geode
+        //donner/editor/tests:gl_rnr_replay_tests_geode
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1075,7 +1083,7 @@ jobs:
           # toolchain runs it.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
@@ -1124,13 +1132,13 @@ jobs:
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
-      # targets need an explicit invocation and for the measured runtime.
+      # targets need an explicit invocation.
       GEODE_EDITOR_TARGETS: >-
-        //donner/editor/tests:editor_window_tests
-        //donner/editor/tests:layer_thumbnail_golden_tests
-        //donner/editor/tests:async_renderer_tests
-        //donner/editor/tests:rnr_replay_tests
-        //donner/editor/tests:gl_rnr_replay_tests
+        //donner/editor/tests:editor_window_tests_geode
+        //donner/editor/tests:layer_thumbnail_golden_tests_geode
+        //donner/editor/tests:async_renderer_tests_geode
+        //donner/editor/tests:rnr_replay_tests_geode
+        //donner/editor/tests:gl_rnr_replay_tests_geode
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1173,7 +1181,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.

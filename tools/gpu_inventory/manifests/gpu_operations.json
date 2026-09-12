@@ -356,7 +356,8 @@
         "setPipeline",
         "submit",
         "unmap",
-        "writeBuffer"
+        "writeBuffer",
+        "writeTexture"
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -410,6 +411,7 @@
         "ShaderStage",
         "StorageTextureAccess",
         "TexelCopyBufferInfo",
+        "TexelCopyBufferLayout",
         "TexelCopyTextureInfo",
         "Texture",
         "TextureDescriptor",
@@ -482,6 +484,8 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue",
         "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
@@ -500,6 +504,10 @@
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
+      "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue"
+      ],
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
@@ -524,16 +532,12 @@
         "QueueWorkDoneCallbackInfo"
       ]
     },
-    "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc": {
+    "donner/svg/renderer/geode/GeodeCheckerboardPass.cc": {
       "operations": [
         "beginRenderPass",
         "createBindGroup",
-        "createBindGroupLayout",
         "createBuffer",
         "createCommandEncoder",
-        "createPipelineLayout",
-        "createRenderPipeline",
-        "createShaderModule",
         "draw",
         "finish",
         "setBindGroup",
@@ -674,6 +678,7 @@
         "createView",
         "dispatchWorkgroups",
         "finish",
+        "release",
         "setBindGroup",
         "setPipeline",
         "submit",
@@ -707,7 +712,6 @@
         "ComputePipeline",
         "ComputePipelineDescriptor",
         "Device",
-        "Extent3D",
         "LoadOp",
         "PipelineLayout",
         "PipelineLayoutDescriptor",
@@ -718,11 +722,10 @@
         "ShaderStage",
         "StorageTextureAccess",
         "StoreOp",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
         "Texture",
         "TextureFormat",
         "TextureSampleType",
+        "TextureUsage",
         "TextureView",
         "TextureViewDimension"
       ]
@@ -780,6 +783,7 @@
         "createView",
         "dispatchWorkgroups",
         "draw",
+        "drawIndexed",
         "finish",
         "getCapabilities",
         "getConstMappedRange",
@@ -788,6 +792,7 @@
         "poll",
         "present",
         "setBindGroup",
+        "setIndexBuffer",
         "setPipeline",
         "setScissorRect",
         "setVertexBuffer",
@@ -819,6 +824,7 @@
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_R8Unorm",
+        "WGPUTextureFormat_RGBA32Float",
         "WGPUTextureFormat_RGBA8Unorm",
         "WGPUTextureUsage",
         "WGPUTextureUsage_CopyDst",
@@ -858,6 +864,7 @@
         "FilterMode",
         "FragmentState",
         "FutureWaitInfo",
+        "IndexFormat",
         "LoadOp",
         "MapMode",
         "PipelineLayout",
@@ -910,6 +917,9 @@
       "wgpuCFunctions": [
         "wgpuTextureOf",
         "wgpuTextureViewOf"
+      ],
+      "wgpuCTypes": [
+        "WGPUCommandEncoder"
       ],
       "wgpuCppTokens": [
         "BindGroup",
@@ -1066,17 +1076,28 @@
         "TextureUsage"
       ]
     },
+    "donner/svg/renderer/geode/tests/GeodeFilterEngine_tests.cc": {
+      "operations": [
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "submit"
+      ],
+      "wgpuCFunctions": [
+        "wgpuTextureOf"
+      ],
+      "wgpuCppTokens": [
+        "CommandBuffer",
+        "CommandEncoder",
+        "Texture"
+      ]
+    },
     "donner/svg/renderer/geode/tests/GeodePerf_tests.cc": {
       "operations": [
         "draw"
       ],
       "wgpuCppTokens": [
         "Texture"
-      ]
-    },
-    "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc": {
-      "wgpuCppTokens": [
-        "ShaderModule"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeSnapshotReadback_tests.cc": {
@@ -1158,11 +1179,22 @@
     },
     "donner/svg/renderer/tests/RendererGeode_tests.cc": {
       "operations": [
-        "draw"
+        "createTexture",
+        "draw",
+        "writeTexture"
+      ],
+      "wgpuCFunctions": [
+        "wgpuTextureOf"
       ],
       "wgpuCppTokens": [
+        "Extent3D",
+        "TexelCopyBufferLayout",
+        "TexelCopyTextureInfo",
         "Texture",
-        "TextureFormat"
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/tests/RendererTestBackendGeode.cc": {

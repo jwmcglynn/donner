@@ -24,7 +24,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
   }
   if (ShaderStatus status = builder.addWriteOnlyStorageTexture2d(
           0, BindingIndex(FilterColorMatrixBinding::OutputTexture), "outputTexture",
-          StorageTextureFormat::Rgba8Unorm);
+          StorageTextureFormat::Rgba32Float);
       status.hasError()) {
     return status;
   }

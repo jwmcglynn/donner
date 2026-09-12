@@ -80,6 +80,19 @@ TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvers
   EXPECT_LE(countBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
 }
 
+TEST(RendererSurfaceBudgetTest, CapacityPreflightDoesNotPoisonLaterReservations) {
+  RendererSurfaceBudget budget;
+  budget.setLimitsForTesting({.bytes = 1024, .surfaces = 4});
+  ASSERT_TRUE(budget.reserve(8, 8));
+  EXPECT_FALSE(budget.canReserveBytes(1024, 1));
+  EXPECT_FALSE(budget.canReserveBytes(1, 4));
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_EQ(budget.bytes(), 256u);
+  EXPECT_EQ(budget.surfaces(), 1u);
+  EXPECT_TRUE(budget.canReserveBytes(768, 3));
+  EXPECT_TRUE(budget.reserve(8, 8, 3));
+}
+
 TEST(RendererSurfaceBudgetTest, ReleasedSurfacesRestoreActiveCapacity) {
   RendererSurfaceBudget budget;
   EXPECT_TRUE(budget.reserve(4096, 4096, 4));

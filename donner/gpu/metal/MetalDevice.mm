@@ -7,10 +7,13 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -19,6 +22,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/shader/MslBindingMap.h"
 
@@ -71,6 +75,7 @@ MTLPixelFormat ToMtlPixelFormat(TextureFormat format) {
     case TextureFormat::RGBA8Unorm: return MTLPixelFormatRGBA8Unorm;
     case TextureFormat::BGRA8Unorm: return MTLPixelFormatBGRA8Unorm;
     case TextureFormat::R8Unorm: return MTLPixelFormatR8Unorm;
+    case TextureFormat::RGBA32Float: return MTLPixelFormatRGBA32Float;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
   return MTLPixelFormatRGBA8Unorm;
@@ -181,10 +186,12 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
 /// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
 /// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
 struct CompletionState {
-  std::atomic<uint64_t> completedSerial{0};  //!< Highest completed submission serial.
-  std::atomic<bool> hadError{false};         //!< True once any command buffer reported an error.
-  std::mutex mutex;                          //!< Guards errorMessage.
-  std::string errorMessage;                  //!< Message of the first captured execution error.
+  std::atomic<uint64_t> completedSerial{0};       //!< Highest completed submission serial.
+  std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
+  std::atomic<uint64_t> inFlightPayloadBytes{0};  //!< Logical bytes charged to the upload budget.
+  std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
+  std::mutex mutex;                   //!< Guards errorMessage.
+  std::string errorMessage;           //!< Message of the first captured execution error.
 };
 
 }  // namespace
@@ -192,8 +199,9 @@ struct CompletionState {
 /// Objective-C++ state of a MetalDevice: the Metal device and queue plus per-resource slot
 /// tables mirroring the validated slot indices handed to the `on*` hooks.
 struct MetalDevice::Impl {
-  id<MTLDevice> device = nil;              //!< The Metal device; set by Create.
-  id<MTLCommandQueue> commandQueue = nil;  //!< Lazily created on first submit.
+  id<MTLDevice> device = nil;               //!< The Metal device; set by Create.
+  id<MTLCommandQueue> commandQueue = nil;   //!< Lazily created on first submit.
+  id<MTLSharedEvent> submissionGate = nil;  //!< Optional test-controlled execution pause.
 
   /// A bind group plus the layout slot it was created against (for per-binding visibility).
   struct BindGroupRecord {
@@ -202,6 +210,7 @@ struct MetalDevice::Impl {
     /// are immutable value descriptors, so the copy stays correct even if the layout object is
     /// destroyed and its slot recycled; encode never looks the layout up by slot.
     BindGroupLayoutDescriptor layout;
+    std::array<uint32_t, shader::kMslBufferBindingCount> bufferLengths{};
   };
 
   /// A compiled render pipeline plus the encoder state every draw through it uses (cull mode
@@ -210,6 +219,9 @@ struct MetalDevice::Impl {
     id<MTLRenderPipelineState> state = nil;                        //!< Compiled pipeline state.
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Pipeline topology.
     CullMode cullMode = CullMode::None;                            //!< Pipeline cull mode.
+    std::vector<uint32_t>
+        vertexBufferIndices;     //!< Metal argument index for each active vertex slot.
+    bool usesBindGroup = false;  //!< The pipeline declares resource group zero.
   };
 
   std::vector<id<MTLBuffer>> buffers;                         //!< Buffer slots.
@@ -233,6 +245,93 @@ struct MetalDevice::Impl {
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
 
+  /// A host write waiting for the queue, retaining its exact native destination.
+  struct PendingWrite {
+    uint32_t slotIndex = 0;
+    id<MTLBuffer> buffer = nil;
+    id<MTLTexture> texture = nil;
+    uint64_t offsetBytes = 0;
+    Extent2d size;
+    uint32_t bytesPerRow = 0;
+    uint64_t payloadBytes = 0;
+    std::vector<uint8_t> bytes;
+  };
+
+  std::vector<PendingWrite> pendingWrites;
+  std::vector<uint64_t> bufferUploadSerials;
+  std::vector<uint64_t> textureUploadSerials;
+  uint64_t uploadStagingByteBudget = kMaxBufferByteSize;
+  std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5);
+  uint64_t pendingStagingBytes = 0;
+  uint64_t pendingPayloadBytes = 0;
+  uint64_t stagingAllocations = 0;
+  uint64_t submittedUploadBatches = 0;
+  uint64_t unalignedWriteWaits = 0;
+
+  static constexpr uint64_t StagingSize(uint64_t byteCount) {
+    return (byteCount + 255u) & ~uint64_t{255};
+  }
+
+  bool hasPendingWrite(id<MTLBuffer> buffer, id<MTLTexture> texture) const {
+    return std::ranges::any_of(pendingWrites, [&](const PendingWrite& write) {
+      return write.buffer == buffer && write.texture == texture;
+    });
+  }
+
+  /// Reuses an identical destination range while keeping the newest write last in queue order.
+  Result<PendingWrite*> queueWrite(PendingWrite write, size_t byteCount) {
+    const auto previous = std::ranges::find_if(pendingWrites, [&](const PendingWrite& pending) {
+      return pending.buffer == write.buffer && pending.texture == write.texture &&
+             pending.offsetBytes == write.offsetBytes && pending.size == write.size &&
+             pending.bytes.size() == byteCount;
+    });
+    const uint64_t replacedStagingBytes =
+        previous == pendingWrites.end() ? 0 : StagingSize(previous->bytes.size());
+    const uint64_t replacedPayloadBytes =
+        previous == pendingWrites.end() ? 0 : previous->payloadBytes;
+    const uint64_t queuedStagingBytes =
+        pendingStagingBytes - replacedStagingBytes + StagingSize(byteCount);
+    const uint64_t queuedPayloadBytes =
+        pendingPayloadBytes - replacedPayloadBytes + write.payloadBytes;
+    const uint64_t inFlightPayloadBytes =
+        completionState->inFlightPayloadBytes.load(std::memory_order_acquire);
+    const uint64_t inFlightStagingBytes =
+        completionState->inFlightStagingBytes.load(std::memory_order_acquire);
+    const uint64_t packedBudget = std::max(kMaxBufferByteSize, uploadStagingByteBudget);
+    if (queuedStagingBytes > kMaxBufferByteSize || queuedPayloadBytes > uploadStagingByteBudget ||
+        inFlightPayloadBytes > uploadStagingByteBudget - queuedPayloadBytes ||
+        inFlightStagingBytes > packedBudget - queuedStagingBytes ||
+        (previous == pendingWrites.end() && pendingWrites.size() >= 16'384)) {
+      return GpuError{
+          GpuErrorType::LimitExceeded,
+          std::format(
+              "Metal upload budget exceeded: {} queued / {} in-flight payload bytes "
+              "(limit {}), {} queued / {} in-flight packed bytes (limit {}), {} pending writes",
+              queuedPayloadBytes, inFlightPayloadBytes, uploadStagingByteBudget, queuedStagingBytes,
+              inFlightStagingBytes, packedBudget, pendingWrites.size())};
+    }
+    if (previous != pendingWrites.end()) {
+      write.bytes = std::move(previous->bytes);
+      pendingWrites.erase(previous);
+    }
+    write.bytes.resize(byteCount);
+    pendingStagingBytes = queuedStagingBytes;
+    pendingPayloadBytes = queuedPayloadBytes;
+    pendingWrites.push_back(std::move(write));
+    return &pendingWrites.back();
+  }
+
+  void discardPendingWrites(id<MTLBuffer> buffer, id<MTLTexture> texture) {
+    std::erase_if(pendingWrites, [&](const PendingWrite& write) {
+      if (write.buffer != buffer || write.texture != texture) {
+        return false;
+      }
+      pendingStagingBytes -= StagingSize(write.bytes.size());
+      pendingPayloadBytes -= write.payloadBytes;
+      return true;
+    });
+  }
+
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
     id<MTLCommandBuffer> commandBuffer = nil;           //!< Command buffer being encoded.
@@ -241,9 +340,37 @@ struct MetalDevice::Impl {
     /// Topology of the bound pipeline; Metal takes it per draw call rather than from the
     /// pipeline state object.
     PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
+    const RenderPipelineRecord* currentRenderPipeline = nullptr;
+    std::optional<ResourceIdentity> renderBindGroup;
+    bool renderInputsDirty =
+        true;  //!< Rebind after active layout or resource changes, not each draw.
+    std::array<std::optional<SetVertexBufferCommand>, kMaxVertexBuffers> vertexBindings;
+    /// Index buffer bound in the active render encoder. Metal takes the index buffer per draw
+    /// call, so the binding is only applied when an indexed draw is encoded.
+    std::optional<SetIndexBufferCommand> indexBinding;
     /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
     WorkgroupSize currentWorkgroupSize;
+    // Bind-group records stay stable throughout synchronous submission encoding.
+    /// Identity of the bind group whose length table is already bound on this encoder, keyed
+    /// by (slot, generation) rather than by record address so a recycled slot cannot read as a
+    /// hit. Reset whenever an encoder begins.
+    std::optional<ResourceIdentity> lengthTableGroup;
+    std::vector<id<MTLBuffer>> hostReadBuffers;  //!< GPU-written buffers needing CPU visibility.
   };
+
+  /// Marks the fixed length table and vertex-visible resource arguments occupied by the layout.
+  /// @param descriptor Pipeline declaring the resource layout.
+  Result<std::array<bool, shader::kMslVertexBufferIndex + 1>> vertexArgumentOccupancy(
+      const RenderPipelineDescriptor& descriptor) const;
+
+  /// Finds free vertex-stage argument indices without reducing resource-binding capacity.
+  /// @param descriptor Pipeline whose active vertex buffers and resource layout are reserved.
+  Result<std::vector<uint32_t>> vertexBufferIndices(
+      const RenderPipelineDescriptor& descriptor) const;
+
+  /// Applies only resources read by the active pipeline, then its logical vertex bindings.
+  /// @param state Current render encoder and recorded bindings.
+  Status bindRenderInputs(EncodingState& state);
 
   /// Opens a render encoder for a recorded pass and configures its color attachments.
   /// @param state Encoding state.
@@ -254,6 +381,14 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param setPipeline Recorded command.
   Status encodeSetPipeline(EncodingState& state, const SetPipelineCommand& setPipeline);
+
+  /// Uploads \p group's declared buffer lengths into the reserved argument slot of every stage
+  /// the active encoder has, skipping the upload when that group's table is already bound.
+  /// @param state Encoder state for the pass being recorded.
+  /// @param group Bind group whose declared lengths are uploaded.
+  /// @param groupId Identity of \p group, used to skip a redundant upload.
+  void encodeBufferLengths(EncodingState& state, const BindGroupRecord& group,
+                           const ResourceIdentity& groupId);
 
   /// Binds one buffer entry to the stages its layout entry declares.
   /// @param state Encoding state.
@@ -296,6 +431,11 @@ struct MetalDevice::Impl {
   /// @param setVertexBuffer Recorded command.
   Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
 
+  /// Retains a recorded index buffer binding for the next indexed draw.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  Status encodeSetIndexBuffer(EncodingState& state, const SetIndexBufferCommand& setIndexBuffer);
+
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -310,6 +450,11 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param draw Recorded command.
   Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Issues an indexed draw from the retained index binding with the bound pipeline's topology.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw);
 
   /// Closes the active render encoder.
   /// @param state Encoding state.
@@ -378,13 +523,36 @@ struct MetalDevice::Impl {
   /// Whether host-visible resources need explicit publication in both directions.
   bool needsExplicitHostCoherency() const { return !unifiedMemory; }
 
-  /// Publishes every live host-visible resource's device-side changes back to the host copy, for
-  /// a memory model that keeps the two apart. A no-op where the two are one copy.
+  /// Records a GPU-written buffer whose host copy must be current after completion.
+  void requireHostSync(EncodingState& state, id<MTLBuffer> buffer);
+
+  /// Publishes the GPU-written buffers needed by the host, once per distinct buffer.
   /// @param state Encoding state.
   Status encodeHostCoherencySync(EncodingState& state);
+
+  /// Encodes all queued writes ahead of this submission without submitting separate work.
+  Status encodePendingWrites(EncodingState& state);
+
+  /// Creates a command buffer and encodes its optional pause and queued uploads.
+  Status beginSubmission(EncodingState& state);
+
+  /// Copies host bytes into an idle buffer and publishes managed-memory changes.
+  void writeIdleBuffer(id<MTLBuffer> buffer, uint64_t offsetBytes, std::span<const uint8_t> bytes);
+
+  /// Applies queued writes after this buffer's GPU uses have completed.
+  void flushIdleBufferWrites(id<MTLBuffer> buffer);
+
+  /// Records upload-only resource uses and consumes a successfully submitted upload batch.
+  void didSubmitWrites(uint64_t submissionSerial);
 };
 
-std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel) {
+std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
+                                                 uint64_t uploadStagingByteBudget,
+                                                 std::chrono::milliseconds unalignedWriteTimeout) {
+  if (uploadStagingByteBudget == 0 || unalignedWriteTimeout < std::chrono::milliseconds::zero() ||
+      unalignedWriteTimeout > std::chrono::seconds(5)) {
+    return nullptr;
+  }
   id<MTLDevice> device = MTLCreateSystemDefaultDevice();
   if (device == nil) {
     return nullptr;
@@ -392,6 +560,8 @@ std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel) {
 
   std::unique_ptr<MetalDevice> result(new MetalDevice());
   result->impl_->device = device;
+  result->impl_->uploadStagingByteBudget = uploadStagingByteBudget;
+  result->impl_->unalignedWriteTimeout = unalignedWriteTimeout;
   // Ask the device rather than assuming. On a unified-memory device the CPU and GPU address one
   // copy of a shared resource and nothing has to be moved between them; on a device without it,
   // a shared resource is not the same bytes on both sides, and reading GPU output through the
@@ -416,7 +586,35 @@ uint64_t MetalDevice::deviceWritePublishCountForTest() const {
 
 MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {}
 
+MetalDevice::WriteStats MetalDevice::writeStatsForTest() const {
+  return WriteStats{impl_->pendingWrites.size(),
+                    impl_->completionState->inFlightStagingBytes.load(std::memory_order_acquire),
+                    impl_->pendingStagingBytes,
+                    impl_->stagingAllocations,
+                    impl_->submittedUploadBatches,
+                    impl_->unalignedWriteWaits};
+}
+
+Status MetalDevice::pauseSubmissionsForTest() {
+  if (impl_->submissionGate != nil) {
+    return GpuError{GpuErrorType::InvalidState, "a Metal submission pause is already active"};
+  }
+  impl_->submissionGate = [impl_->device newSharedEvent];
+  if (impl_->submissionGate == nil) {
+    return GpuError{GpuErrorType::Unsupported, "Metal shared events are unavailable"};
+  }
+  return OkStatus();
+}
+
+void MetalDevice::resumeSubmissionsForTest() {
+  if (impl_->submissionGate != nil) {
+    impl_->submissionGate.signaledValue = 1;
+    impl_->submissionGate = nil;
+  }
+}
+
 MetalDevice::~MetalDevice() {
+  resumeSubmissionsForTest();
   // Wait for in-flight submissions so deferred destructions drain before Impl teardown releases
   // the remaining Metal objects. On timeout (a hung submission) teardown proceeds anyway: Metal
   // itself retains every resource referenced by a committed command buffer until it completes,
@@ -490,6 +688,7 @@ Status MetalDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& d
   }
 
   SetSlot(impl_->buffers, slotIndex, buffer);
+  SetSlot(impl_->bufferUploadSerials, slotIndex, uint64_t{0});
   return OkStatus();
 }
 
@@ -525,6 +724,7 @@ Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor&
   }
 
   SetSlot(impl_->textures, slotIndex, texture);
+  SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
   return OkStatus();
 }
 
@@ -557,6 +757,18 @@ Status MetalDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescriptor&
 
 Status MetalDevice::onCreateBindGroupLayout(uint32_t slotIndex,
                                             const BindGroupLayoutDescriptor& descriptor) {
+  for (const BindGroupLayoutEntry& entry : descriptor.entries) {
+    const bool invalidBuffer = (entry.type == BindingType::UniformBuffer ||
+                                entry.type == BindingType::ReadOnlyStorageBuffer) &&
+                               entry.binding >= shader::kMslBufferBindingCount;
+    const bool invalidSampler = entry.type == BindingType::FilteringSampler &&
+                                entry.binding >= shader::kMslSamplerBindingCount;
+    if (invalidBuffer || invalidSampler) {
+      return GpuError{GpuErrorType::Unsupported,
+                      std::format("Metal {} binding {} exceeds the native argument table",
+                                  invalidBuffer ? "buffer" : "sampler", entry.binding)};
+    }
+  }
   SetSlot(impl_->bindGroupLayouts, slotIndex, std::optional<BindGroupLayoutDescriptor>(descriptor));
   return OkStatus();
 }
@@ -571,8 +783,21 @@ Status MetalDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescrip
                     std::format("bind group layout slot {} has no Metal-side descriptor",
                                 descriptor.layout.slotIndex())};
   }
-  SetSlot(impl_->bindGroups, slotIndex,
-          std::optional<Impl::BindGroupRecord>(Impl::BindGroupRecord{descriptor, *layout}));
+  Impl::BindGroupRecord record{descriptor, *layout};
+  for (const BindGroupEntry& entry : descriptor.entries) {
+    if (const auto* buffer = std::get_if<BufferBinding>(&entry.resource)) {
+      // createBindGroup enforces a bijection with the layout, and onCreateBindGroupLayout
+      // rejects buffer bindings at or above kMslBufferBindingCount, so this index is in range.
+      // kMaxBindings is larger than that, so state the invariant where the write happens.
+      UTILS_RELEASE_ASSERT_MSG(entry.binding < shader::kMslBufferBindingCount,
+                               "buffer binding is inside the Metal argument table");
+      static_assert(kMaxBufferByteSize <= std::numeric_limits<uint32_t>::max(),
+                    "buffer lengths are uploaded as uint32; raising the buffer size cap must not "
+                    "silently truncate a declared range");
+      record.bufferLengths[entry.binding] = static_cast<uint32_t>(buffer->sizeBytes);
+    }
+  }
+  SetSlot(impl_->bindGroups, slotIndex, std::optional<Impl::BindGroupRecord>(std::move(record)));
   return OkStatus();
 }
 
@@ -611,6 +836,78 @@ Status MetalDevice::onCreateShaderModule(uint32_t slotIndex,
   return OkStatus();
 }
 
+Result<std::array<bool, shader::kMslVertexBufferIndex + 1>>
+MetalDevice::Impl::vertexArgumentOccupancy(const RenderPipelineDescriptor& descriptor) const {
+  const PipelineLayoutDescriptor* pipelineLayout =
+      FindRecord(pipelineLayouts, descriptor.layout.slotIndex());
+  if (pipelineLayout == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "render pipeline layout is unavailable"};
+  }
+  std::array<bool, shader::kMslVertexBufferIndex + 1> occupied{};
+  occupied[shader::kMslBufferLengthsIndex] = true;
+  for (const BindGroupLayoutRef& groupRef : pipelineLayout->bindGroupLayouts) {
+    const BindGroupLayoutDescriptor* group = FindRecord(bindGroupLayouts, groupRef.slotIndex());
+    if (group == nullptr) {
+      return GpuError{GpuErrorType::InvalidState, "render bind group layout is unavailable"};
+    }
+    for (const BindGroupLayoutEntry& entry : group->entries) {
+      if (HasAllFlags(entry.visibility, ShaderStage::Vertex) &&
+          (entry.type == BindingType::UniformBuffer ||
+           entry.type == BindingType::ReadOnlyStorageBuffer)) {
+        occupied[shader::MslBufferIndex(entry.binding)] = true;
+      }
+    }
+  }
+  return occupied;
+}
+
+Result<std::vector<uint32_t>> MetalDevice::Impl::vertexBufferIndices(
+    const RenderPipelineDescriptor& descriptor) const {
+  auto occupancy = vertexArgumentOccupancy(descriptor);
+  if (occupancy.hasError()) {
+    return std::move(occupancy).error();
+  }
+  const auto& occupied = occupancy.result();
+  std::vector<uint32_t> indices;
+  for (uint32_t index = shader::kMslVertexBufferIndex;
+       index > 0 && indices.size() < descriptor.vertex.buffers.size(); --index) {
+    if (!occupied[index]) {
+      indices.push_back(index);
+    }
+  }
+  if (indices.size() != descriptor.vertex.buffers.size()) {
+    return GpuError{
+        GpuErrorType::Unsupported,
+        "vertex buffers and vertex-visible resource buffers exceed Metal argument-table capacity"};
+  }
+  return indices;
+}
+
+/// Translates only the active vertex layouts using their collision-free argument indices.
+/// @param vertex Active vertex state. @param indices Metal argument index for each layout.
+MTLVertexDescriptor* CreateVertexDescriptor(const VertexState& vertex,
+                                            const std::vector<uint32_t>& indices) {
+  if (vertex.buffers.empty()) {
+    return nil;
+  }
+  MTLVertexDescriptor* descriptor = [MTLVertexDescriptor vertexDescriptor];
+  for (size_t slot = 0; slot < vertex.buffers.size(); ++slot) {
+    const VertexBufferLayout& layout = vertex.buffers[slot];
+    const uint32_t index = indices[slot];
+    for (const VertexAttribute& attribute : layout.attributes) {
+      MTLVertexAttributeDescriptor* attributeDescriptor =
+          descriptor.attributes[attribute.shaderLocation];
+      attributeDescriptor.format = ToMtlVertexFormat(attribute.format);
+      attributeDescriptor.offset = attribute.offsetBytes;
+      attributeDescriptor.bufferIndex = index;
+    }
+    MTLVertexBufferLayoutDescriptor* layoutDescriptor = descriptor.layouts[index];
+    layoutDescriptor.stride = layout.strideBytes;
+    layoutDescriptor.stepFunction = ToMtlStepFunction(layout.stepMode);
+  }
+  return descriptor;
+}
+
 Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
                                            const RenderPipelineDescriptor& descriptor) {
   id<MTLLibrary> vertexLibrary =
@@ -643,29 +940,12 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
   pipelineDescriptor.vertexFunction = vertexFunction;
   pipelineDescriptor.fragmentFunction = fragmentFunction;
 
-  if (!descriptor.vertex.buffers.empty()) {
-    if (descriptor.vertex.buffers.size() != 1) {
-      return GpuError{GpuErrorType::Unsupported,
-                      "the Metal backend supports a single vertex buffer layout (slot 0) in this "
-                      "slice"};
-    }
-
-    const VertexBufferLayout& layout = descriptor.vertex.buffers[0];
-    MTLVertexDescriptor* vertexDescriptor = [MTLVertexDescriptor vertexDescriptor];
-    for (const VertexAttribute& attribute : layout.attributes) {
-      MTLVertexAttributeDescriptor* attributeDescriptor =
-          vertexDescriptor.attributes[attribute.shaderLocation];
-      attributeDescriptor.format = ToMtlVertexFormat(attribute.format);
-      attributeDescriptor.offset = attribute.offsetBytes;
-      attributeDescriptor.bufferIndex = shader::kMslVertexBufferIndex;
-    }
-
-    MTLVertexBufferLayoutDescriptor* layoutDescriptor =
-        vertexDescriptor.layouts[shader::kMslVertexBufferIndex];
-    layoutDescriptor.stride = layout.strideBytes;
-    layoutDescriptor.stepFunction = ToMtlStepFunction(layout.stepMode);
-    pipelineDescriptor.vertexDescriptor = vertexDescriptor;
+  auto vertexIndicesResult = impl_->vertexBufferIndices(descriptor);
+  if (vertexIndicesResult.hasError()) {
+    return std::move(vertexIndicesResult).error();
   }
+  std::vector<uint32_t> vertexIndices = std::move(vertexIndicesResult).result();
+  pipelineDescriptor.vertexDescriptor = CreateVertexDescriptor(descriptor.vertex, vertexIndices);
 
   for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
     const ColorTargetState& target = descriptor.fragment.targets[i];
@@ -694,8 +974,10 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
   }
 
   SetSlot(impl_->renderPipelines, slotIndex,
-          std::optional<Impl::RenderPipelineRecord>(
-              Impl::RenderPipelineRecord{pipelineState, descriptor.topology, descriptor.cullMode}));
+          std::optional<Impl::RenderPipelineRecord>(Impl::RenderPipelineRecord{
+              pipelineState, descriptor.topology, descriptor.cullMode, std::move(vertexIndices),
+              !FindRecord(impl_->pipelineLayouts, descriptor.layout.slotIndex())
+                   ->bindGroupLayouts.empty()}));
   return OkStatus();
 }
 
@@ -743,6 +1025,14 @@ Status MetalDevice::onCreateComputePipeline(uint32_t slotIndex,
   return OkStatus();
 }
 
+void MetalDevice::onRetireBuffer(uint32_t slotIndex) {
+  impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
+}
+
+void MetalDevice::onRetireTexture(uint32_t slotIndex) {
+  impl_->discardPendingWrites(nil, GetSlot(impl_->textures, slotIndex));
+}
+
 void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   // Clearing a slot to nil / nullopt releases the ObjC object under ARC. Unknown resource names
   // are ignored; the base class owns their bookkeeping.
@@ -769,6 +1059,24 @@ void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slot
   }
 }
 
+void MetalDevice::Impl::writeIdleBuffer(id<MTLBuffer> buffer, uint64_t offsetBytes,
+                                        std::span<const uint8_t> bytes) {
+  std::memcpy(static_cast<uint8_t*>(buffer.contents) + offsetBytes, bytes.data(), bytes.size());
+  if (needsExplicitHostCoherency()) {
+    [buffer didModifyRange:NSMakeRange(offsetBytes, bytes.size())];
+    ++hostWritePublishCount;
+  }
+}
+
+void MetalDevice::Impl::flushIdleBufferWrites(id<MTLBuffer> buffer) {
+  for (const PendingWrite& pending : pendingWrites) {
+    if (pending.buffer == buffer) {
+      writeIdleBuffer(buffer, pending.offsetBytes, pending.bytes);
+    }
+  }
+  discardPendingWrites(buffer, nil);
+}
+
 Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                   std::span<const uint8_t> data) {
   id<MTLBuffer> buffer = GetSlot(impl_->buffers, slotIndex);
@@ -777,15 +1085,36 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                     std::format("buffer slot {} has no Metal buffer", slotIndex)};
   }
 
-  if (!data.empty()) {
-    std::memcpy(static_cast<uint8_t*>(buffer.contents) + offsetBytes, data.data(), data.size());
-    if (impl_->needsExplicitHostCoherency()) {
-      // The write landed in the host's copy; the GPU reads its own until the range is published.
-      [buffer didModifyRange:NSMakeRange(static_cast<NSUInteger>(offsetBytes),
-                                         static_cast<NSUInteger>(data.size()))];
-      ++impl_->hostWritePublishCount;
-    }
+  if (data.empty()) {
+    return OkStatus();
   }
+  const uint64_t lastUse =
+      std::max(bufferLastUseSerial(slotIndex), GetSlot(impl_->bufferUploadSerials, slotIndex));
+  if (lastUse > completedSerial() || impl_->hasPendingWrite(buffer, nil)) {
+    if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
+      auto queued = impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
+                                                         .buffer = buffer,
+                                                         .offsetBytes = offsetBytes,
+                                                         .payloadBytes = data.size()},
+                                      data.size());
+      if (queued.hasError()) {
+        return std::move(queued).error();
+      }
+      std::memcpy(queued.result()->bytes.data(), data.data(), data.size());
+      return OkStatus();
+    }
+    if (lastUse > completedSerial()) {
+      ++impl_->unalignedWriteWaits;
+      if (!waitForSerial(lastUse,
+                         std::chrono::duration<double>(impl_->unalignedWriteTimeout).count())) {
+        return GpuError{
+            GpuErrorType::InvalidState,
+            std::format("Metal unaligned buffer write could not complete submission {}", lastUse)};
+      }
+    }
+    impl_->flushIdleBufferWrites(buffer);
+  }
+  impl_->writeIdleBuffer(buffer, offsetBytes, data);
   return OkStatus();
 }
 
@@ -796,6 +1125,32 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
   if (texture == nil) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("texture slot {} has no Metal texture", slotIndex)};
+  }
+
+  const uint64_t lastUse =
+      std::max(textureLastUseSerial(slotIndex), GetSlot(impl_->textureUploadSerials, slotIndex));
+  if (lastUse > completedSerial() || impl_->hasPendingWrite(nil, texture)) {
+    const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatRGBA32Float ? 16
+                                : texture.pixelFormat == MTLPixelFormatR8Unorm   ? 1
+                                                                                 : 4;
+    const uint32_t rowBytes = writeSize.width * texelBytes;
+    const uint32_t rowPitch = static_cast<uint32_t>(Impl::StagingSize(rowBytes));
+    auto queued =
+        impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
+                                             .texture = texture,
+                                             .size = writeSize,
+                                             .bytesPerRow = rowPitch,
+                                             .payloadBytes = uint64_t{rowBytes} * writeSize.height},
+                          uint64_t{rowPitch} * writeSize.height);
+    if (queued.hasError()) {
+      return std::move(queued).error();
+    }
+    for (uint32_t row = 0; row < writeSize.height; ++row) {
+      std::memcpy(queued.result()->bytes.data() + uint64_t{row} * rowPitch,
+                  data.data() + dataLayout.offsetBytes + uint64_t{row} * dataLayout.bytesPerRow,
+                  rowBytes);
+    }
+    return OkStatus();
   }
 
   [texture replaceRegion:MTLRegionMake2D(0, 0, writeSize.width, writeSize.height)
@@ -829,6 +1184,12 @@ Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
                           attachment.clearColor[2], attachment.clearColor[3]);
   }
 
+  state.lengthTableGroup.reset();
+  state.currentRenderPipeline = nullptr;
+  state.renderBindGroup.reset();
+  state.vertexBindings.fill(std::nullopt);
+  state.indexBinding.reset();
+  state.renderInputsDirty = true;
   state.renderEncoder = [state.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (state.renderEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal render command encoder creation failed"};
@@ -852,6 +1213,8 @@ Status MetalDevice::Impl::encodeSetPipeline(EncodingState& state,
   [state.renderEncoder
       setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack : MTLCullModeNone)];
   state.currentTopology = pipeline->topology;
+  state.renderInputsDirty |= state.currentRenderPipeline != pipeline;
+  state.currentRenderPipeline = pipeline;
   return OkStatus();
 }
 
@@ -873,6 +1236,14 @@ Status MetalDevice::Impl::encodeBufferBinding(EncodingState& state, const BindGr
         GpuErrorType::InvalidState,
         std::format("setBindGroup: binding {} does not resolve to a Metal buffer", entry.binding)};
   }
+  // The buffer itself stays gated on the layout's declared visibility, unlike the length table
+  // above. That is a deliberate asymmetry with a known gap: the table is safe to over-bind, while
+  // binding a buffer to a stage its layout does not declare would silently accept a layout that
+  // disagrees with the shader. The gap is that a module with interface metadata omitted, which
+  // this backend still accepts, is not cross-checked against the layout, so a stage the IR reads
+  // but the layout does not declare leaves the generated code with a bounded index into a nil
+  // pointer. Closing it belongs with metadata admission, not here; supplying the facts makes
+  // pipeline creation reject the disagreement outright.
   if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Vertex)) {
     [state.renderEncoder setVertexBuffer:buffer
                                   offset:bufferBinding.offsetBytes
@@ -958,6 +1329,37 @@ Status MetalDevice::Impl::encodeBindGroupEntry(EncodingState& state,
   return OkStatus();
 }
 
+void MetalDevice::Impl::encodeBufferLengths(EncodingState& state, const BindGroupRecord& group,
+                                            const ResourceIdentity& groupId) {
+  if (state.lengthTableGroup == groupId) {
+    return;
+  }
+  state.lengthTableGroup = groupId;
+  const uint32_t* lengths = group.bufferLengths.data();
+  constexpr size_t kLengthBytes = sizeof(group.bufferLengths);
+  // Bound to every stage the active encoder has, deliberately without consulting the layout.
+  // MslEmitter declares and dereferences donner_msl_lengths in every entry point of a module
+  // that holds any runtime-array binding, which is a fact about the IR; the bind-group layout's
+  // binding types and visibility are a different fact and can be narrower. Gating the upload on
+  // the layout leaves a shader dereferencing a nil constant uint* whenever the two disagree -
+  // for instance a buffer declared ReadOnlyStorageBuffer in the IR but UniformBuffer in the
+  // layout - which is exactly the unbounded read this table exists to prevent. Binding an
+  // argument index a pipeline does not read costs one setBytes of a fixed 116-byte table.
+  if (state.renderEncoder != nil) {
+    [state.renderEncoder setVertexBytes:lengths
+                                 length:kLengthBytes
+                                atIndex:shader::kMslBufferLengthsIndex];
+    [state.renderEncoder setFragmentBytes:lengths
+                                   length:kLengthBytes
+                                  atIndex:shader::kMslBufferLengthsIndex];
+  }
+  if (state.computeEncoder != nil) {
+    [state.computeEncoder setBytes:lengths
+                            length:kLengthBytes
+                           atIndex:shader::kMslBufferLengthsIndex];
+  }
+}
+
 Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                                              const SetBindGroupCommand& setBindGroup) {
   if (setBindGroup.index != 0) {
@@ -971,30 +1373,86 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                                 setBindGroup.bindGroupId.slotIndex)};
   }
 
+  if (state.renderEncoder != nil) {
+    state.renderInputsDirty |= state.renderBindGroup != setBindGroup.bindGroupId;
+    state.renderBindGroup = setBindGroup.bindGroupId;
+    return OkStatus();
+  }
   for (const BindGroupEntry& entry : bindGroup->descriptor.entries) {
     Status bindStatus = encodeBindGroupEntry(state, bindGroup->layout, entry);
     if (bindStatus.hasError()) {
       return bindStatus;
     }
   }
+  encodeBufferLengths(state, *bindGroup, setBindGroup.bindGroupId);
   return OkStatus();
 }
 
 Status MetalDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
                                                 const SetVertexBufferCommand& setVertexBuffer) {
-  if (setVertexBuffer.slot != 0) {
-    return GpuError{GpuErrorType::Unsupported,
-                    "the Metal backend supports vertex buffer slot 0 only in this slice"};
-  }
   id<MTLBuffer> buffer = GetSlot(buffers, setVertexBuffer.bufferId.slotIndex);
-  if (state.renderEncoder == nil || buffer == nil) {
+  if (state.renderEncoder == nil || buffer == nil ||
+      setVertexBuffer.slot >= state.vertexBindings.size()) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("setVertexBuffer: buffer slot {} is not encodable",
                                 setVertexBuffer.bufferId.slotIndex)};
   }
-  [state.renderEncoder setVertexBuffer:buffer
-                                offset:setVertexBuffer.offsetBytes
-                               atIndex:shader::kMslVertexBufferIndex];
+  const auto& prior = state.vertexBindings[setVertexBuffer.slot];
+  const bool changed = !prior || prior->bufferId != setVertexBuffer.bufferId ||
+                       prior->offsetBytes != setVertexBuffer.offsetBytes;
+  state.vertexBindings[setVertexBuffer.slot] = setVertexBuffer;
+  if (changed && state.currentRenderPipeline != nullptr &&
+      setVertexBuffer.slot < state.currentRenderPipeline->vertexBufferIndices.size()) {
+    state.renderInputsDirty = true;
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetIndexBuffer(EncodingState& state,
+                                               const SetIndexBufferCommand& setIndexBuffer) {
+  id<MTLBuffer> buffer = GetSlot(buffers, setIndexBuffer.bufferId.slotIndex);
+  if (state.renderEncoder == nil || buffer == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  state.indexBinding = setIndexBuffer;
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::bindRenderInputs(EncodingState& state) {
+  if (!state.renderInputsDirty) {
+    return OkStatus();
+  }
+  const RenderPipelineRecord* pipeline = state.currentRenderPipeline;
+  if (pipeline == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "draw without an active render pipeline"};
+  }
+  if (pipeline->usesBindGroup) {
+    const BindGroupRecord* group =
+        state.renderBindGroup ? FindRecord(bindGroups, state.renderBindGroup->slotIndex) : nullptr;
+    if (group == nullptr) {
+      return GpuError{GpuErrorType::InvalidState, "draw without a bound resource group"};
+    }
+    for (const BindGroupEntry& entry : group->descriptor.entries) {
+      Status status = encodeBindGroupEntry(state, group->layout, entry);
+      if (status.hasError()) {
+        return status;
+      }
+    }
+    encodeBufferLengths(state, *group, *state.renderBindGroup);
+  }
+  for (size_t slot = 0; slot < pipeline->vertexBufferIndices.size(); ++slot) {
+    const auto& binding = state.vertexBindings[slot];
+    id<MTLBuffer> buffer = binding ? GetSlot(buffers, binding->bufferId.slotIndex) : nil;
+    if (buffer == nil) {
+      return GpuError{GpuErrorType::InvalidState, "draw without a bound vertex buffer"};
+    }
+    [state.renderEncoder setVertexBuffer:buffer
+                                  offset:binding->offsetBytes
+                                 atIndex:pipeline->vertexBufferIndices[slot]];
+  }
+  state.renderInputsDirty = false;
   return OkStatus();
 }
 
@@ -1023,11 +1481,47 @@ Status MetalDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& dr
   if (state.renderEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
+  if (Status status = bindRenderInputs(state); status.hasError()) {
+    return status;
+  }
   [state.renderEncoder drawPrimitives:ToMtlPrimitiveType(state.currentTopology)
                           vertexStart:draw.firstVertex
                           vertexCount:draw.vertexCount
                         instanceCount:draw.instanceCount
                          baseInstance:draw.firstInstance];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
+  }
+  id<MTLBuffer> indexBuffer =
+      state.indexBinding ? GetSlot(buffers, state.indexBinding->bufferId.slotIndex) : nil;
+  if (indexBuffer == nil) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed without a bound index buffer"};
+  }
+  if (Status status = bindRenderInputs(state); status.hasError()) {
+    return status;
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  const uint64_t indexBytes = IndexFormatByteSize(state.indexBinding->format);
+  // The encoder bounded (firstIndex + indexCount) * indexBytes to the bound range in 64 bits.
+  const uint64_t indexBufferOffset =
+      state.indexBinding->offsetBytes + uint64_t{draw.firstIndex} * indexBytes;
+  [state.renderEncoder
+      drawIndexedPrimitives:ToMtlPrimitiveType(state.currentTopology)
+                 indexCount:draw.indexCount
+                  indexType:(state.indexBinding->format == IndexFormat::Uint16 ? MTLIndexTypeUInt16
+                                                                               : MTLIndexTypeUInt32)
+                indexBuffer:indexBuffer
+          indexBufferOffset:indexBufferOffset
+              instanceCount:draw.instanceCount
+                 baseVertex:draw.baseVertex
+               baseInstance:draw.firstInstance];
   return OkStatus();
 }
 
@@ -1065,6 +1559,7 @@ Status MetalDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
         destinationBytesPerRow:copy.layout.bytesPerRow
       destinationBytesPerImage:static_cast<uint64_t>(copy.layout.bytesPerRow) *
                                copy.layout.rowsPerImage];
+  requireHostSync(state, buffer);
   [blitEncoder endEncoding];
   return OkStatus();
 }
@@ -1111,12 +1606,16 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
     return encodeSetBindGroup(state, *setBindGroup);
   } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
     return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setIndexBuffer = std::get_if<SetIndexBufferCommand>(&command)) {
+    return encodeSetIndexBuffer(state, *setIndexBuffer);
   } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
     return encodeSetScissorRect(state, *setScissor);
   } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
     return encodeSetViewport(state, *setViewport);
   } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
     return encodeDraw(state, *draw);
+  } else if (const auto* drawIndexed = std::get_if<DrawIndexedCommand>(&command)) {
+    return encodeDrawIndexed(state, *drawIndexed);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
   }
@@ -1124,6 +1623,7 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
 }
 
 Status MetalDevice::Impl::beginEncodedComputePass(EncodingState& state) {
+  state.lengthTableGroup.reset();
   state.computeEncoder = [state.commandBuffer computeCommandEncoder];
   if (state.computeEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal compute command encoder creation failed"};
@@ -1207,6 +1707,10 @@ Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& com
 
 void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t submissionSerial) {
   std::shared_ptr<CompletionState> sharedState = completionState;
+  const uint64_t uploadBytes = pendingStagingBytes;
+  const uint64_t payloadBytes = pendingPayloadBytes;
+  sharedState->inFlightStagingBytes.fetch_add(uploadBytes, std::memory_order_relaxed);
+  sharedState->inFlightPayloadBytes.fetch_add(payloadBytes, std::memory_order_relaxed);
   [state.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
     if (completedBuffer.error != nil) {
       sharedState->hadError.store(true, std::memory_order_release);
@@ -1217,6 +1721,10 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
       }
     }
 
+    // Make the reservation available before a completion waiter observes this serial.
+    sharedState->inFlightStagingBytes.fetch_sub(uploadBytes, std::memory_order_release);
+    sharedState->inFlightPayloadBytes.fetch_sub(payloadBytes, std::memory_order_release);
+
     // Monotonic max: handlers may complete out of order across command buffers.
     uint64_t previous = sharedState->completedSerial.load(std::memory_order_relaxed);
     while (previous < submissionSerial &&
@@ -1225,46 +1733,122 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
   }];
 }
 
-Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
-  if (!needsExplicitHostCoherency()) {
-    return OkStatus();  // One copy addressed from both sides; nothing to publish.
+void MetalDevice::Impl::requireHostSync(EncodingState& state, id<MTLBuffer> buffer) {
+  if (needsExplicitHostCoherency() &&
+      std::ranges::find(state.hostReadBuffers, buffer) == state.hostReadBuffers.end()) {
+    state.hostReadBuffers.push_back(buffer);
   }
+}
 
+Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
+  if (state.hostReadBuffers.empty()) {
+    return OkStatus();
+  }
   id<MTLBlitCommandEncoder> blitEncoder = [state.commandBuffer blitCommandEncoder];
   if (blitEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState,
                     "Metal blit command encoder creation failed for the host-coherency sync"};
   }
-  for (id<MTLBuffer> buffer : buffers) {
-    if (buffer != nil) {
-      [blitEncoder synchronizeResource:buffer];
-    }
-  }
-  for (id<MTLTexture> texture : textures) {
-    if (texture != nil) {
-      [blitEncoder synchronizeResource:texture];
-    }
+  for (id<MTLBuffer> buffer : state.hostReadBuffers) {
+    [blitEncoder synchronizeResource:buffer];
   }
   [blitEncoder endEncoding];
   ++deviceWritePublishCount;
   return OkStatus();
 }
 
-Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                             std::span<const Command> commands) {
-  (void)commandBufferSlotIndex;
+Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
+  if (pendingWrites.empty()) {
+    return OkStatus();
+  }
+  const MTLResourceOptions options =
+      unifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
+  id<MTLBuffer> staging = [device newBufferWithLength:pendingStagingBytes options:options];
+  ++stagingAllocations;
+  if (staging == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal queue-write staging allocation failed"};
+  }
+  uint64_t sourceOffset = 0;
+  for (const PendingWrite& write : pendingWrites) {
+    std::memcpy(static_cast<uint8_t*>(staging.contents) + sourceOffset, write.bytes.data(),
+                write.bytes.size());
+    sourceOffset += StagingSize(write.bytes.size());
+  }
+  if (needsExplicitHostCoherency()) {
+    [staging didModifyRange:NSMakeRange(0, pendingStagingBytes)];
+    ++hostWritePublishCount;
+  }
+  id<MTLBlitCommandEncoder> blit = [state.commandBuffer blitCommandEncoder];
+  if (blit == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal queue-write blit encoder creation failed"};
+  }
+  sourceOffset = 0;
+  for (const PendingWrite& write : pendingWrites) {
+    if (write.buffer != nil) {
+      [blit copyFromBuffer:staging
+               sourceOffset:sourceOffset
+                   toBuffer:write.buffer
+          destinationOffset:write.offsetBytes
+                       size:write.bytes.size()];
+      requireHostSync(state, write.buffer);
+    } else {
+      [blit copyFromBuffer:staging
+                 sourceOffset:sourceOffset
+            sourceBytesPerRow:write.bytesPerRow
+          sourceBytesPerImage:0
+                   sourceSize:MTLSizeMake(write.size.width, write.size.height, 1)
+                    toTexture:write.texture
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+    }
+    sourceOffset += StagingSize(write.bytes.size());
+  }
+  [blit endEncoding];
+  return OkStatus();
+}
 
-  if (impl_->commandQueue == nil) {
-    impl_->commandQueue = [impl_->device newCommandQueue];
-    if (impl_->commandQueue == nil) {
+Status MetalDevice::Impl::beginSubmission(EncodingState& state) {
+  if (commandQueue == nil) {
+    commandQueue = [device newCommandQueue];
+    if (commandQueue == nil) {
       return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
     }
   }
 
-  Impl::EncodingState state;
-  state.commandBuffer = [impl_->commandQueue commandBuffer];
+  state.commandBuffer = [commandQueue commandBuffer];
   if (state.commandBuffer == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal command buffer creation failed"};
+  }
+
+  if (submissionGate != nil) {
+    [state.commandBuffer encodeWaitForEvent:submissionGate value:1];
+  }
+
+  return encodePendingWrites(state);
+}
+
+void MetalDevice::Impl::didSubmitWrites(uint64_t submissionSerial) {
+  if (!pendingWrites.empty()) {
+    // Upload destinations need ordering even when the caller's command stream never names them.
+    for (const PendingWrite& write : pendingWrites) {
+      SetSlot(write.buffer != nil ? bufferUploadSerials : textureUploadSerials, write.slotIndex,
+              submissionSerial);
+    }
+    ++submittedUploadBatches;
+    pendingWrites.clear();
+    pendingStagingBytes = 0;
+    pendingPayloadBytes = 0;
+  }
+}
+
+Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
+                             std::span<const Command> commands) {
+  (void)commandBufferSlotIndex;
+
+  Impl::EncodingState state;
+  if (Status status = impl_->beginSubmission(state); status.hasError()) {
+    return status;
   }
 
   // On any encoding failure, close an open encoder before returning so the un-committed command
@@ -1294,18 +1878,14 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
         GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
   }
 
-  // Publish every host-visible resource's GPU-side changes before the buffer completes, so a
-  // host read after the completion sees them. Only a device without unified memory needs this,
-  // and there it has to happen inside the submission: once the command buffer has completed
-  // there is no encoder left to do it with. It covers every live resource rather than tracking
-  // which this stream touched - the cost falls only on the path that already needs the copy, and
-  // a missed resource here is silently wrong data rather than a reported failure.
+  // Queued buffer uploads and readback copies are the only GPU buffer writers.
   if (Status status = impl_->encodeHostCoherencySync(state); status.hasError()) {
     return failEncoding(std::move(status));
   }
 
   impl_->attachCompletionHandler(state, submissionSerial);
   [state.commandBuffer commit];
+  impl_->didSubmitWrites(submissionSerial);
 
   return OkStatus();
 }

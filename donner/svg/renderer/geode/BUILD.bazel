@@ -259,6 +259,22 @@ donner_multi_transitioned_test(
 )
 
 donner_cc_library(
+    name = "checkerboard_pipeline",
+    srcs = ["GeodeCheckerboardPipeline.cc"],
+    hdrs = ["GeodeCheckerboardPipeline.h"],
+    visibility = [
+        "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/gpu",
+        "//donner/gpu/shader:checkerboard_artifact",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+donner_cc_library(
     name = "geode_device",
     # GeodeFilterEngine and GeodePipeline / GeodeImagePipeline are folded
     # into this library so `GeodeDevice` can own them as shared-across-
@@ -268,7 +284,7 @@ donner_cc_library(
     # no longer has a meaningful life independent of a `GeodeDevice`,
     # so the merge is semantic rather than mechanical.
     srcs = [
-        "GeodeCheckerboardPipeline.cc",
+        "GeodeCheckerboardPass.cc",
         "GeodeDevice.cc",
         "GeodeFilterEngine.cc",
         "GeodeImagePipeline.cc",
@@ -281,7 +297,6 @@ donner_cc_library(
     ],
     hdrs = [
         "GeodeCallbackState.h",
-        "GeodeCheckerboardPipeline.h",
         "GeodeDevice.h",
         "GeodeFilterEngine.h",
         "GeodeGpuContext.h",
@@ -314,18 +329,34 @@ donner_cc_library(
         "//examples:__pkg__",
     ],
     deps = [
+        ":checkerboard_pipeline",
+        ":color_space_convert_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_component_transfer_wgsl",
+        ":filter_composite_wgsl",
+        ":filter_displacement_map_wgsl",
+        ":filter_drop_shadow_wgsl",
+        ":filter_merge_wgsl",
+        ":filter_morphology_wgsl",
+        ":filter_resolve_wgsl",
+        ":filter_tile_wgsl",
         ":flood_wgsl",
+        ":gaussian_blur_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
+        ":offset_wgsl",
         ":snapshot_unpremultiply_wgsl",
         ":subregion_clip_wgsl",
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
+        "//donner/gpu/shader:filter_image_artifact",
+        "//donner/gpu/shader:lighting_artifacts",
+        "//donner/gpu/shader:convolve_matrix_artifact",
         "//donner/gpu/shader:program_bindings",
+        "//donner/gpu/shader:turbulence_artifact",
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -340,8 +371,13 @@ donner_cc_test(
         ":geode_device",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
+        "//donner/gpu:float_texture_slice",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:sub_rectangle_copy_scene",
+        "//donner/gpu:vertex_input_slice",
+        "//donner/gpu/shader:float_storage_test_module",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:wgsl_emitter",
     ],
 )
 
@@ -390,9 +426,7 @@ donner_multi_transitioned_test(
 # identical on every build. The tool is program-name driven, so a filter family migrating onto
 # the IR adds a row to its table and a genrule like this one.
 #
-# The emitted bytes are the same bytes the program's committed golden pins - the golden test
-# compares that same EmitWgsl output - so the artifact embedded here and the artifact reviewed in
-# the diff cannot disagree without a test failing.
+# Compiler and renderer tests validate generated shader interfaces and behavior.
 genrule(
     name = "snapshot_unpremultiply_generated",
     outs = ["generated/snapshot_unpremultiply.wgsl"],
@@ -441,6 +475,40 @@ embed_resources(
     header_output = "embed_resources/SubregionClipWgsl.h",
     resources = {
         "kSubregionClipWgsl": "generated/subregion_clip.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
+    name = "offset_generated",
+    outs = ["generated/offset.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) offset " +
+          "$(location generated/offset.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "offset_wgsl",
+    header_output = "embed_resources/OffsetWgsl.h",
+    resources = {
+        "kOffsetWgsl": "generated/offset.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
+    name = "color_space_convert_generated",
+    outs = ["generated/color_space_convert.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) color_space_convert " +
+          "$(location generated/color_space_convert.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "color_space_convert_wgsl",
+    header_output = "embed_resources/ColorSpaceConvertWgsl.h",
+    resources = {
+        "kColorSpaceConvertWgsl": "generated/color_space_convert.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -506,42 +574,54 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: Gaussian blur compute shader (two-pass separable).
+# Gaussian blur compute shader (two-pass separable).
+genrule(
+    name = "gaussian_blur_generated",
+    outs = ["generated/gaussian_blur.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) gaussian_blur " +
+          "$(location generated/gaussian_blur.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "gaussian_blur_wgsl",
     header_output = "embed_resources/GaussianBlurWgsl.h",
     resources = {
-        "kGaussianBlurWgsl": "shaders/gaussian_blur.wgsl",
+        "kGaussianBlurWgsl": "generated/gaussian_blur.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feOffset compute shader (pixel shift).
-embed_resources(
-    name = "filter_offset_wgsl",
-    header_output = "embed_resources/FilterOffsetWgsl.h",
-    resources = {
-        "kFilterOffsetWgsl": "shaders/filter_offset.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+genrule(
+    name = "emit_filter_merge",
+    outs = ["generated/filter_merge.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) merge " +
+          "$(location generated/filter_merge.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
 )
 
-# Phase 7: feMerge alpha-over blit compute shader.
 embed_resources(
     name = "filter_merge_wgsl",
     header_output = "embed_resources/FilterMergeWgsl.h",
     resources = {
-        "kFilterMergeWgsl": "shaders/filter_merge.wgsl",
+        "kFilterMergeWgsl": "generated/filter_merge.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feComposite Porter-Duff compositing compute shader.
+genrule(
+    name = "emit_filter_composite",
+    outs = ["generated/filter_composite.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) composite " +
+          "$(location generated/filter_composite.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_composite_wgsl",
     header_output = "embed_resources/FilterCompositeWgsl.h",
     resources = {
-        "kFilterCompositeWgsl": "shaders/filter_composite.wgsl",
+        "kFilterCompositeWgsl": "generated/filter_composite.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -557,110 +637,88 @@ embed_resources(
 )
 
 # Phase 7: feMorphology compute shader (erode / dilate).
+genrule(
+    name = "filter_morphology_generated",
+    outs = ["generated/filter_morphology.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) morphology " +
+          "$(location generated/filter_morphology.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_morphology_wgsl",
     header_output = "embed_resources/FilterMorphologyWgsl.h",
     resources = {
-        "kFilterMorphologyWgsl": "shaders/filter_morphology.wgsl",
+        "kFilterMorphologyWgsl": "generated/filter_morphology.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feComponentTransfer compute shader (per-channel LUT).
+genrule(
+    name = "filter_component_transfer_generated",
+    outs = ["generated/filter_component_transfer.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) component_transfer " +
+          "$(location generated/filter_component_transfer.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_component_transfer_wgsl",
     header_output = "embed_resources/FilterComponentTransferWgsl.h",
     resources = {
-        "kFilterComponentTransferWgsl": "shaders/filter_component_transfer.wgsl",
+        "kFilterComponentTransferWgsl": "generated/filter_component_transfer.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feConvolveMatrix compute shader (NxM kernel convolution).
-embed_resources(
-    name = "filter_convolve_matrix_wgsl",
-    header_output = "embed_resources/FilterConvolveMatrixWgsl.h",
-    resources = {
-        "kFilterConvolveMatrixWgsl": "shaders/filter_convolve_matrix.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+genrule(
+    name = "filter_displacement_map_generated",
+    outs = ["generated/filter_displacement_map.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) displacement_map " +
+          "$(location generated/filter_displacement_map.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
 )
 
-# Phase 7: feTurbulence compute shader (Perlin noise generator).
-embed_resources(
-    name = "filter_turbulence_wgsl",
-    header_output = "embed_resources/FilterTurbulenceWgsl.h",
-    resources = {
-        "kFilterTurbulenceWgsl": "shaders/filter_turbulence.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feDisplacementMap compute shader (per-pixel displacement).
 embed_resources(
     name = "filter_displacement_map_wgsl",
     header_output = "embed_resources/FilterDisplacementMapWgsl.h",
     resources = {
-        "kFilterDisplacementMapWgsl": "shaders/filter_displacement_map.wgsl",
+        "kFilterDisplacementMapWgsl": "generated/filter_displacement_map.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feDiffuseLighting compute shader (Lambertian shading).
-embed_resources(
-    name = "filter_diffuse_lighting_wgsl",
-    header_output = "embed_resources/FilterDiffuseLightingWgsl.h",
-    resources = {
-        "kFilterDiffuseLightingWgsl": "shaders/filter_diffuse_lighting.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+genrule(
+    name = "filter_drop_shadow_generated",
+    outs = ["generated/filter_drop_shadow.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) drop_shadow " +
+          "$(location generated/filter_drop_shadow.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
 )
 
-# Phase 7: feSpecularLighting compute shader (Phong shading).
-embed_resources(
-    name = "filter_specular_lighting_wgsl",
-    header_output = "embed_resources/FilterSpecularLightingWgsl.h",
-    resources = {
-        "kFilterSpecularLightingWgsl": "shaders/filter_specular_lighting.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feDropShadow compose compute shader (offset + flood + source-over).
 embed_resources(
     name = "filter_drop_shadow_wgsl",
     header_output = "embed_resources/FilterDropShadowWgsl.h",
     resources = {
-        "kFilterDropShadowWgsl": "shaders/filter_drop_shadow.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feImage compute shader (bilinear image placement).
-embed_resources(
-    name = "filter_image_wgsl",
-    header_output = "embed_resources/FilterImageWgsl.h",
-    resources = {
-        "kFilterImageWgsl": "shaders/filter_image.wgsl",
+        "kFilterDropShadowWgsl": "generated/filter_drop_shadow.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
 # Phase 7: feTile compute shader (wraparound tiling).
+genrule(
+    name = "filter_tile_generated",
+    outs = ["generated/filter_tile.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) tile " +
+          "$(location generated/filter_tile.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
 embed_resources(
     name = "filter_tile_wgsl",
     header_output = "embed_resources/FilterTileWgsl.h",
     resources = {
-        "kFilterTileWgsl": "shaders/filter_tile.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-embed_resources(
-    name = "filter_color_space_convert_wgsl",
-    header_output = "embed_resources/FilterColorSpaceConvertWgsl.h",
-    resources = {
-        "kFilterColorSpaceConvertWgsl": "shaders/filter_color_space_convert.wgsl",
+        "kFilterTileWgsl": "generated/filter_tile.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -676,21 +734,6 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
-        ":filter_color_space_convert_wgsl",
-        ":filter_component_transfer_wgsl",
-        ":filter_composite_wgsl",
-        ":filter_convolve_matrix_wgsl",
-        ":filter_diffuse_lighting_wgsl",
-        ":filter_displacement_map_wgsl",
-        ":filter_drop_shadow_wgsl",
-        ":filter_image_wgsl",
-        ":filter_merge_wgsl",
-        ":filter_morphology_wgsl",
-        ":filter_offset_wgsl",
-        ":filter_specular_lighting_wgsl",
-        ":filter_tile_wgsl",
-        ":filter_turbulence_wgsl",
-        ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
@@ -1025,21 +1068,41 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# The embedded artifact and the committed golden must be the same bytes; see the test's own note
-# for why "by construction" is not enough.
 donner_cc_test(
-    name = "generated_shader_artifacts_tests",
-    srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
-    data = ["//donner/gpu/shader:program_goldens"],
+    name = "geode_filter_engine_tests_impl",
+    srcs = ["tests/GeodeFilterEngine_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
     deps = [
-        ":filter_color_matrix_wgsl",
-        ":flood_wgsl",
-        ":snapshot_unpremultiply_wgsl",
-        ":subregion_clip_wgsl",
-        "//donner/base",
-        "//donner/base:base_test_utils",
-        "@com_google_gtest//:gtest_main",
+        ":geode_device",
+        ":geode_wgpu_util",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg/components/filter:components",
     ],
 )
 
+donner_multi_transitioned_test(
+    name = "geode_filter_engine_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_filter_engine_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_package()
+
+genrule(
+    name = "filter_resolve_generated",
+    outs = ["generated/filter_resolve.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_resolve " +
+          "$(location generated/filter_resolve.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "filter_resolve_wgsl",
+    header_output = "embed_resources/FilterResolveWgsl.h",
+    resources = {"kFilterResolveWgsl": "generated/filter_resolve.wgsl"},
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)

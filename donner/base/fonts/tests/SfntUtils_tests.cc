@@ -872,4 +872,144 @@ TEST(SfntUtils, ReportsExactRetainedIndexBytes) {
 }
 
 }  // namespace
+/// Route an expression's 0/1 result to local subroutines with distinct outline costs.
+std::vector<uint8_t> CffExpressionGlyph(std::vector<uint8_t> expression) {
+  // -107 add callsubr endchar: Type2's local-subroutine bias is107 for this tiny INDEX.
+  expression.insert(expression.end(), {32, 12, 10, 10, 14});
+  return MakeCff1WithSubrs(std::move(expression), {
+                                                      {139, 139, 21, 149, 139, 5, 11},
+                                                      {139, 139, 21, 149, 139, 149, 139, 5, 11},
+                                                  });
+}
+
+TEST(SfntUtils, CffArithmeticSelectsTheProvenSubroutineCost) {
+  struct Case {
+    const char* name;
+    std::vector<uint8_t> expression;
+    uint32_t selected;
+  };
+  const std::vector<Case> cases{
+      {"add", {141, 138, 12, 10}, 1},     {"subtract", {142, 141, 12, 11}, 1},
+      {"divide", {143, 143, 12, 12}, 1},  {"multiply", {140, 140, 12, 24}, 1},
+      {"and-true", {141, 142, 12, 3}, 1}, {"and-false", {139, 142, 12, 3}, 0},
+      {"or-true", {139, 140, 12, 4}, 1},  {"or-false", {139, 139, 12, 4}, 0},
+      {"equal", {142, 142, 12, 15}, 1},   {"unequal", {142, 141, 12, 15}, 0},
+      {"not-zero", {139, 12, 5}, 1},      {"not-nonzero", {142, 12, 5}, 0},
+      {"abs", {138, 12, 9}, 1},           {"negate", {138, 12, 14}, 1},
+      {"sqrt", {140, 12, 26}, 1},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    const auto result =
+        ValidateCffOutlineComplexities(CffExpressionGlyph(item.expression), false, 1);
+    ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
+    ASSERT_EQ(result.glyphs.size(), 1u);
+    EXPECT_EQ(result.glyphs.front().maximumVertices, 3u + item.selected);
+    EXPECT_GT(result.glyphs.front().work, 0u);
+  }
+}
+
+TEST(SfntUtils, CffStackAndTransientOperationsPreserveSubroutineSelection) {
+  struct Case {
+    const char* name;
+    std::vector<uint8_t> expression;
+    uint32_t selected;
+  };
+  const std::vector<Case> cases{
+      {"put-get-last-slot", {140, 170, 12, 20, 170, 12, 21}, 1},
+      {"dup-subtract", {140, 12, 27, 12, 11}, 0},
+      {"exchange-subtract", {139, 140, 12, 28, 12, 11}, 1},
+      {"index-copy-top", {140, 139, 12, 29, 12, 11}, 0},
+      {"drop", {140, 142, 12, 18}, 1},
+      {"roll-forward", {139, 140, 141, 140, 12, 30, 12, 11}, 1},
+      {"roll-backward", {139, 140, 141, 138, 12, 30, 12, 11}, 1},
+      {"roll-zero-count", {140, 139, 140, 12, 30}, 1},
+      {"ifelse-first", {140, 139, 141, 142, 12, 22}, 1},
+      {"ifelse-second", {140, 139, 142, 141, 12, 22}, 0},
+      {"ifelse-equal", {140, 139, 142, 142, 12, 22}, 1},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    const auto table = CffExpressionGlyph(item.expression);
+    const auto result = ValidateCffOutlineComplexities(table, false, 1);
+    ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
+    ASSERT_EQ(result.glyphs.size(), 1u);
+    EXPECT_EQ(result.glyphs.front().maximumVertices, 3u + item.selected);
+    // Exercise each operation under the caller's exact measured work limit too.
+    EXPECT_EQ(ValidateCffOutlineComplexities(table, false, 1, result.work).status,
+              CffOutlineValidationStatus::Complete);
+    EXPECT_EQ(ValidateCffOutlineComplexities(table, false, 1, result.work - 1).status,
+              CffOutlineValidationStatus::WorkLimitExceeded);
+  }
+}
+
+TEST(SfntUtils, CffRejectsUnprovenSubroutineTargetsAndArithmeticFaults) {
+  const std::vector<std::vector<uint8_t>> expressions{
+      {140, 139, 12, 12},               // Divide by zero.
+      {138, 12, 26},                    // Square root of a negative value.
+      {12, 23},                         // Random cannot prove a subroutine index.
+      {12, 23, 140, 12, 10},            // Unknown arithmetic stays unknown.
+      {12, 23, 12, 9},                  // Unknown unary arithmetic stays unknown.
+      {140, 139, 12, 23, 140, 12, 22},  // Unknown ifelse condition cannot choose a branch.
+      {140, 171, 12, 20},               // Transient put index32 is outside the array.
+      {171, 12, 21},                    // Transient get index32 is outside the array.
+      {140, 141, 12, 29},               // index2 exceeds a one-value stack.
+      {140, 141, 140, 12, 30},          // roll2 exceeds a one-value stack.
+      {140, 138, 140, 12, 30},          // Negative roll count.
+      {140, 140, 141, 12, 12, 12, 20},  // Fractional transient index.
+  };
+  for (const auto& expression : expressions) {
+    EXPECT_EQ(ValidateCffOutlineComplexities(CffExpressionGlyph(expression), false, 1).status,
+              CffOutlineValidationStatus::Invalid);
+  }
+}
+
+TEST(SfntUtils, CffEscapedOperatorsRejectOperandUnderflow) {
+  for (uint8_t op : {3, 4, 5, 9, 10, 11, 12, 14, 15, 18, 20, 21, 22, 24, 26, 27, 28, 29, 30}) {
+    SCOPED_TRACE(int(op));
+    EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff1WithSubrs({12, op, 14}, {}), false, 1).status,
+              CffOutlineValidationStatus::Invalid);
+  }
+}
+
+TEST(SfntUtils, CffCurveAndLineFamiliesHaveExactExpansionBounds) {
+  struct Case {
+    uint8_t op;
+    uint8_t operands;
+    uint32_t vertices;
+    bool escaped = false;
+  };
+  const std::vector<Case> cases{
+      {5, 2, 3},        {6, 3, 5},         {7, 2, 4},        {8, 6, 5},
+      {24, 8, 6},       {25, 8, 6},        {26, 4, 5},       {26, 5, 5},
+      {27, 4, 5},       {27, 5, 5},        {30, 4, 5},       {31, 5, 5},
+      {34, 7, 8, true}, {35, 13, 8, true}, {36, 9, 8, true}, {37, 11, 8, true},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(int(item.op));
+    std::vector<uint8_t> program{139, 139, 21};  // Open a contour at the origin.
+    program.insert(program.end(), item.operands, 139);
+    if (item.escaped) program.push_back(12);
+    program.push_back(item.op);
+    program.push_back(14);
+    const auto result = ValidateCffOutlineComplexities(MakeCff1WithSubrs(program, {}), false, 1);
+    ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
+    ASSERT_EQ(result.glyphs.size(), 1u);
+    EXPECT_EQ(result.glyphs.front().maximumVertices, item.vertices);
+    program.erase(program.begin(), program.begin() + 3);
+    EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff1WithSubrs(program, {}), false, 1).status,
+              CffOutlineValidationStatus::Invalid)
+        << "Drawing requires a preceding moveto";
+  }
+}
+
+TEST(SfntUtils, Cff2DoesNotAcceptCff1ArithmeticExtensions) {
+  for (const std::vector<uint8_t>& program :
+       {std::vector<uint8_t>{140, 140, 12, 10}, std::vector<uint8_t>{140, 170, 12, 20},
+        std::vector<uint8_t>{12, 23}}) {
+    EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff2WithCharString(program), true, 1).status,
+              CffOutlineValidationStatus::Invalid);
+  }
+}
+
 }  // namespace donner::fonts

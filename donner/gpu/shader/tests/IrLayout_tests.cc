@@ -90,6 +90,10 @@ TEST(IrLayoutTests, NonHostShareableTypesHaveNoLayout) {
   EXPECT_THAT(ComputeTypeLayout(IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba8Unorm),
                                 AddressSpace::Storage),
               IsShaderError(HasSubstr("resource type")));
+  EXPECT_THAT(
+      ComputeTypeLayout(IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba32Float),
+                        AddressSpace::Storage),
+      IsShaderError(HasSubstr("resource type")));
 }
 
 TEST(IrLayoutTests, Vec3PaddingInsideStruct) {
@@ -294,6 +298,55 @@ TEST(IrLayoutAnchorTests, InstanceTransformIs32Bytes) {
   EXPECT_THAT(layout.sizeBytes, Eq(32u));
   EXPECT_THAT(layout.alignBytes, Eq(16u));
   EXPECT_THAT(layout.members, ElementsAre(OffsetIs(0), OffsetIs(16)));
+}
+
+TEST(IrLayoutOverflowTests, ArrayMultiplicationCannotWrapToASmallBinding) {
+  const IrType overflowing =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 0x10000001u), IrType::F32());
+  for (AddressSpace space : {AddressSpace::Storage, AddressSpace::Uniform}) {
+    EXPECT_THAT(ComputeTypeLayout(overflowing, space), IsShaderError(testing::HasSubstr("32-bit")));
+  }
+  const IrType largest =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 0x0fffffffu), IrType::F32());
+  EXPECT_THAT(GetShaderResultOrFail(ComputeTypeLayout(largest, AddressSpace::Storage)),
+              testing::Eq(TypeLayout{16, 0xfffffff0u}));
+}
+
+TEST(IrLayoutOverflowTests, StructMemberAdditionCannotWrap) {
+  const IrType half =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 0x08000000u), IrType::F32());
+  const IrType combined = GetShaderResultOrFail(
+      IrType::Struct("Combined", {{"first", half}, {"second", half}}), IrType::F32());
+  EXPECT_THAT(ComputeStructLayout(combined, AddressSpace::Storage),
+              IsShaderError(testing::HasSubstr("32-bit")));
+}
+
+TEST(IrLayoutOverflowTests, MemberAlignmentAndFinalSizeRoundingCannotWrap) {
+  const IrType leading =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::F32(), 0x3fffffffu), IrType::F32());
+  const IrType memberRoundUp = GetShaderResultOrFail(
+      IrType::Struct("MemberRoundUp", {{"leading", leading}, {"aligned", IrType::Vec4f()}}),
+      IrType::F32());
+  EXPECT_THAT(ComputeStructLayout(memberRoundUp, AddressSpace::Storage),
+              IsShaderError(testing::HasSubstr("32-bit")));
+  const IrType trailing =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::F32(), 0x3ffffffbu), IrType::F32());
+  const IrType finalRoundUp = GetShaderResultOrFail(
+      IrType::Struct("FinalRoundUp", {{"aligned", IrType::Vec4f()}, {"trailing", trailing}}),
+      IrType::F32());
+  EXPECT_THAT(ComputeStructLayout(finalRoundUp, AddressSpace::Storage),
+              IsShaderError(testing::HasSubstr("32-bit")));
+}
+
+TEST(IrLayoutOverflowTests, UniformPaddingCannotWrapALargeNestedStruct) {
+  const IrType array =
+      GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 0x0fffffffu), IrType::F32());
+  const IrType nested =
+      GetShaderResultOrFail(IrType::Struct("Nested", {{"items", array}}), IrType::F32());
+  const IrType outer = GetShaderResultOrFail(
+      IrType::Struct("Outer", {{"nested", nested}, {"tail", IrType::Vec4f()}}), IrType::F32());
+  EXPECT_THAT(ComputeStructLayout(outer, AddressSpace::Uniform),
+              IsShaderError(testing::HasSubstr("32-bit")));
 }
 
 }  // namespace

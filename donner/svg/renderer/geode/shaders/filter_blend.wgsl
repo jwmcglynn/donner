@@ -26,7 +26,7 @@ struct BlendParams {
 
 @group(0) @binding(0) var in1_tex: texture_2d<f32>;   // Source (in).
 @group(0) @binding(1) var in2_tex: texture_2d<f32>;   // Backdrop (in2).
-@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var output_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<uniform> params: BlendParams;
 
 // ============================================================================

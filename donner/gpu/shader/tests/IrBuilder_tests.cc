@@ -49,6 +49,17 @@ IrExpr U32Val() {
 
 // == Types ====================================================================================
 
+TEST(IrBuilderTests, CeilAndExpRequireOneFloatScalarOrVector) {
+  for (BuiltinFn fn : {BuiltinFn::Ceil, BuiltinFn::Exp}) {
+    EXPECT_THAT(CallBuiltin(fn, {F32Val()}), HasShaderResult());
+    EXPECT_THAT(CallBuiltin(fn, {Vec2fVal()}), HasShaderResult());
+    EXPECT_THAT(CallBuiltin(fn, {LiteralI32(1)}), IsShaderError(HasSubstr("requires f32")));
+    EXPECT_THAT(CallBuiltin(fn, {}), IsShaderError(HasSubstr("expects 1 arguments")));
+    EXPECT_THAT(CallBuiltin(fn, {F32Val(), F32Val()}),
+                IsShaderError(HasSubstr("expects 1 arguments")));
+  }
+}
+
 TEST(IrTypeTests, IdenticalTypesCompareEqual) {
   EXPECT_EQ(IrType::Vec2f(), IrType::Vec2(ScalarKind::F32));
   EXPECT_NE(IrType::Vec2f(), IrType::Vec2i());
@@ -860,6 +871,22 @@ IrParam GlobalIdParam() {
                  BuiltinInput::GlobalInvocationId};
 }
 
+TEST(ComputeEntryPointTests, FloatStorageFormatKeepsItsIdentityAndWgslSpelling) {
+  const IrType floatTexture = IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba32Float);
+  EXPECT_THAT(floatTexture.storageTextureFormat(), testing::Eq(StorageTextureFormat::Rgba32Float));
+  EXPECT_THAT(floatTexture.toString(), testing::Eq("texture_storage_2d<rgba32float, write>"));
+  EXPECT_THAT(floatTexture,
+              testing::Ne(IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba8Unorm)));
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.addWriteOnlyStorageTexture2d(0, 0, "output", StorageTextureFormat::Rgba32Float),
+      IsShaderOk());
+  const auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  ASSERT_THAT(module.result().bindings(), testing::SizeIs(1));
+  EXPECT_THAT(module.result().bindings()[0].type, testing::Eq(floatTexture));
+}
+
 TEST(ComputeEntryPointTests, AcceptsGlobalInvocationIdAndAWriteOnlyStorageTexture) {
   ModuleBuilder builder;
   AddStorageTextureBinding(builder);
@@ -990,6 +1017,418 @@ TEST(ComputeEntryPointTests, TextureStoreRejectsIllTypedOperands) {
     EXPECT_THAT(function.textureStore(storageTexture, intCoords, Vec2fVal()),
                 IsShaderError(HasSubstr("value must be vec4<f32>")));
   }
+}
+
+TEST(ModuleBuilderLifecycle, AnOpenFunctionExcludesEveryOtherEntryAndModuleBuild) {
+  ModuleBuilder builder;
+  {
+    auto result = builder.createFunction("open", {}, std::nullopt);
+    ASSERT_THAT(result, HasShaderResult());
+    FunctionBuilder function = std::move(result).result();
+    EXPECT_THAT(builder.createFunction("next", {}, std::nullopt),
+                IsShaderError(HasSubstr("finish the previous function")));
+    EXPECT_THAT(builder.createVertexEntryPoint("vertex", {}, {}),
+                IsShaderError(HasSubstr("finish the previous function")));
+    EXPECT_THAT(builder.createFragmentEntryPoint("fragment", {}, {}),
+                IsShaderError(HasSubstr("finish the previous function")));
+    EXPECT_THAT(builder.createComputeEntryPoint("compute", {}, {1, 1, 1}),
+                IsShaderError(HasSubstr("finish the previous function")));
+    EXPECT_THAT(builder.build(), IsShaderError(HasSubstr("finish the in-progress function")));
+  }
+  auto next = builder.createFunction("next", {}, std::nullopt);
+  ASSERT_THAT(next, HasShaderResult());
+  EXPECT_THAT(next.result().finish(), IsShaderOk());
+  const auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  ASSERT_THAT(module.result().functions(), testing::SizeIs(1));
+  EXPECT_THAT(module.result().functions().front().name, testing::Eq(RcString("next")));
+}
+
+TEST_F(FunctionBuilderTests, FinishedFunctionsCannotBeMutatedOrRegisteredTwice) {
+  FunctionBuilder function = startFunction();
+  ASSERT_THAT(function.finish(), IsShaderOk());
+  EXPECT_THAT(function.addLet("later", F32Val()), IsShaderError(HasSubstr("already finished")));
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("already finished")));
+  const auto module = builder_.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(module.result().functions(), testing::SizeIs(1));
+}
+
+TEST_F(FunctionBuilderTests, FirstFailureSurvivesEverySubsequentMutation) {
+  FunctionBuilder function = startFunction();
+  const auto mutableValue =
+      GetShaderResultOrFail(function.addVar("v", IrType::F32(), F32Val()), F32Val());
+  ASSERT_THAT(function.addLet("v", F32Val()), IsShaderError(HasSubstr("already declared")));
+  const auto error = IsShaderError(HasSubstr("already declared"));
+  EXPECT_THAT(function.addLet("later", F32Val()), error);
+  EXPECT_THAT(function.addVar("later", IrType::F32(), F32Val()), error);
+  EXPECT_THAT(function.assign(mutableValue, F32Val()), error);
+  EXPECT_THAT(function.beginIf(LiteralBool(true)), error);
+  EXPECT_THAT(function.elseBranch(), error);
+  EXPECT_THAT(function.endIf(), error);
+  EXPECT_THAT(function.beginFor("i", LiteralU32(0)), error);
+  EXPECT_THAT(function.forCondition(LiteralBool(true)), error);
+  EXPECT_THAT(function.forContinuing(mutableValue, F32Val()), error);
+  EXPECT_THAT(function.endFor(), error);
+  EXPECT_THAT(function.breakStmt(), error);
+  EXPECT_THAT(function.continueStmt(), error);
+  EXPECT_THAT(function.returnValue(F32Val()), error);
+  EXPECT_THAT(function.returnVoid(), error);
+  EXPECT_THAT(function.returnOutputs({Vec4fVal()}), error);
+  EXPECT_THAT(function.discard(), error);
+  EXPECT_THAT(function.textureStore(F32Val(), Vec2uVal(), Vec4fVal()), error);
+  EXPECT_THAT(function.finish(), error);
+}
+
+TEST(ModuleBuilderValidation, FunctionsAndConstantsShareTheModuleNamespace) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addConstant("constant", F32Val()), IsShaderOk());
+  EXPECT_THAT(builder.addConstant("constant", F32Val()),
+              IsShaderError(HasSubstr("already exists")));
+  EXPECT_THAT(builder.createFunction("constant", {}, std::nullopt),
+              IsShaderError(HasSubstr("already exists")));
+  EXPECT_THAT(builder.createVertexEntryPoint("constant", {}, {}),
+              IsShaderError(HasSubstr("already exists")));
+  EXPECT_THAT(builder.createFragmentEntryPoint("constant", {}, {}),
+              IsShaderError(HasSubstr("already exists")));
+  EXPECT_THAT(builder.createComputeEntryPoint("constant", {}, {1, 1, 1}),
+              IsShaderError(HasSubstr("already exists")));
+  auto function = builder.createFunction("function", {}, std::nullopt);
+  ASSERT_THAT(function, HasShaderResult());
+  ASSERT_THAT(function.result().finish(), IsShaderOk());
+  EXPECT_THAT(builder.addConstant("function", F32Val()),
+              IsShaderError(HasSubstr("already exists")));
+}
+
+TEST(ModuleBuilderValidation, DuplicateParametersDoNotAcquireTheFunctionSlot) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.createFunction("duplicate", {{"x", IrType::F32()}, {"x", IrType::U32()}},
+                                     std::nullopt),
+              IsShaderError(HasSubstr("duplicate parameter name x")));
+  auto valid = builder.createFunction("valid", {{"x", IrType::F32()}}, std::nullopt);
+  ASSERT_THAT(valid, HasShaderResult());
+  EXPECT_THAT(valid.result().finish(), IsShaderOk());
+}
+
+TEST_F(FunctionBuilderTests, ResourceTypesCannotBecomeLocalVariables) {
+  auto function = startFunction();
+  EXPECT_THAT(function.addVar("texture", IrType::Texture2dF32(), std::nullopt),
+              IsShaderError(HasSubstr("not plain data")));
+}
+
+TEST_F(FunctionBuilderTests, AssignmentReportsATypeMismatchOnAMutableTarget) {
+  auto function = startFunction();
+  const auto target =
+      GetShaderResultOrFail(function.addVar("value", IrType::F32(), F32Val()), F32Val());
+  EXPECT_THAT(function.assign(target, LiteralU32(2)),
+              IsShaderError(HasSubstr("assignment type mismatch")));
+}
+
+TEST_F(FunctionBuilderTests, AVariableInitializerCannotEscapeItsDefiningBranch) {
+  auto function = startFunction();
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const auto temporary = GetShaderResultOrFail(function.addLet("temporary", F32Val()), F32Val());
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  EXPECT_THAT(function.addVar("escaped", IrType::F32(), temporary),
+              IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, AVariableCannotRedeclareAnExistingParameter) {
+  auto function = startFunction();
+  EXPECT_THAT(function.addVar("t", IrType::F32(), F32Val()),
+              IsShaderError(HasSubstr("already declared")));
+}
+
+TEST_F(FunctionBuilderTests, AssignmentRejectsAnOutOfScopeRightHandSide) {
+  auto function = startFunction();
+  const auto target =
+      GetShaderResultOrFail(function.addVar("value", IrType::F32(), F32Val()), F32Val());
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const auto temporary = GetShaderResultOrFail(function.addLet("temporary", F32Val()), F32Val());
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  EXPECT_THAT(function.assign(target, temporary), IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST(FunctionBuilderScope, ExpressionsCannotImportAnotherModulesResources) {
+  ModuleBuilder donor;
+  ASSERT_THAT(donor.addTexture2d(0, 0, "foreign"), IsShaderOk());
+  auto donorResult = donor.createFunction("donor", {}, std::nullopt);
+  ASSERT_THAT(donorResult, HasShaderResult());
+  const auto foreign = GetShaderResultOrFail(donorResult.result().ref("foreign"), F32Val());
+  ModuleBuilder target;
+  auto result = target.createFunction("target", {}, std::nullopt);
+  ASSERT_THAT(result, HasShaderResult());
+  EXPECT_THAT(result.result().addLet("borrowed", foreign),
+              IsShaderError(HasSubstr("unknown module-scope name foreign")));
+}
+
+TEST(FunctionBuilderControlFlow, ClosingOrContinuingAClosedBlockFailsPrecisely) {
+  struct Case {
+    ShaderStatus (FunctionBuilder::*action)();
+    const char* message;
+  };
+  const Case cases[] = {{&FunctionBuilder::elseBranch, "elseBranch without an open if"},
+                        {&FunctionBuilder::endIf, "endIf without an open if"},
+                        {&FunctionBuilder::endFor, "endFor without an open for"},
+                        {&FunctionBuilder::continueStmt, "continue outside of a loop"}};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.message);
+    ModuleBuilder builder;
+    auto result = builder.createFunction("control", {}, std::nullopt);
+    ASSERT_THAT(result, HasShaderResult());
+    EXPECT_THAT((result.result().*test.action)(), IsShaderError(HasSubstr(test.message)));
+  }
+}
+
+TEST_F(FunctionBuilderTests, ForConditionNeedsAnOpenLoop) {
+  auto function = startFunction();
+  EXPECT_THAT(function.forCondition(LiteralBool(true)),
+              IsShaderError(HasSubstr("without an open for")));
+}
+
+TEST_F(FunctionBuilderTests, ForConditionRequiresBoolOnTheFirstAttempt) {
+  auto function = startFunction();
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  EXPECT_THAT(function.forCondition(F32Val()),
+              IsShaderError(HasSubstr("for condition must be bool")));
+}
+
+TEST_F(FunctionBuilderTests, ForConditionCannotBeReplaced) {
+  auto function = startFunction();
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  ASSERT_THAT(function.forCondition(LiteralBool(true)), IsShaderOk());
+  EXPECT_THAT(function.forCondition(LiteralBool(false)),
+              IsShaderError(HasSubstr("for condition already set")));
+}
+
+TEST_F(FunctionBuilderTests, ContinuingNeedsAnOpenLoop) {
+  auto function = startFunction();
+  const auto variable =
+      GetShaderResultOrFail(function.addVar("v", IrType::F32(), F32Val()), F32Val());
+  EXPECT_THAT(function.forContinuing(variable, F32Val()),
+              IsShaderError(HasSubstr("without an open for")));
+}
+
+TEST_F(FunctionBuilderTests, ContinuingRejectsAnImmutableTarget) {
+  auto function = startFunction();
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  EXPECT_THAT(function.forContinuing(F32Val(), F32Val()),
+              IsShaderError(HasSubstr("mutable lvalue")));
+}
+
+TEST_F(FunctionBuilderTests, ContinuingRejectsAMismatchedUpdateType) {
+  auto function = startFunction();
+  const auto index = GetShaderResultOrFail(function.beginFor("i", LiteralU32(0)), F32Val());
+  EXPECT_THAT(function.forContinuing(index, F32Val()),
+              IsShaderError(HasSubstr("type-correct assignment")));
+}
+
+TEST_F(FunctionBuilderTests, ContinuingCannotBeReplaced) {
+  auto function = startFunction();
+  const auto index = GetShaderResultOrFail(function.beginFor("i", LiteralU32(0)), F32Val());
+  ASSERT_THAT(function.forContinuing(index, LiteralU32(1)), IsShaderOk());
+  EXPECT_THAT(function.forContinuing(index, LiteralU32(2)),
+              IsShaderError(HasSubstr("continuing already set")));
+}
+
+TEST_F(FunctionBuilderTests, DuplicateLoopVariableRejectsTheHeader) {
+  auto function = startFunction();
+  EXPECT_THAT(function.beginFor("t", F32Val()), IsShaderError(HasSubstr("already declared")));
+}
+
+TEST_F(FunctionBuilderTests, LoopInitializerCannotReferenceAClosedBranch) {
+  auto function = startFunction();
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const auto temporary = GetShaderResultOrFail(function.addLet("temporary", F32Val()), F32Val());
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  EXPECT_THAT(function.beginFor("i", temporary), IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST(FunctionBuilderReturns, StageOutputsReportTypeMismatchBeforeFinish) {
+  ModuleBuilder builder;
+  auto result = builder.createFragmentEntryPoint("fragment", {}, {{"color", IrType::Vec4f(), 0}});
+  ASSERT_THAT(result, HasShaderResult());
+  EXPECT_THAT(result.result().returnOutputs({Vec2fVal()}),
+              IsShaderError(HasSubstr("output 0 (color) type mismatch")));
+}
+
+TEST(FunctionBuilderReturns, StageEntryCannotReturnAPlainValue) {
+  ModuleBuilder builder;
+  auto result = builder.createFragmentEntryPoint("fragment", {}, {{"color", IrType::Vec4f(), 0}});
+  ASSERT_THAT(result, HasShaderResult());
+  EXPECT_THAT(result.result().returnValue(Vec4fVal()),
+              IsShaderError(HasSubstr("via returnOutputs")));
+}
+
+TEST_F(FunctionBuilderTests, AValueReturningFunctionCannotReturnVoid) {
+  auto function = startFunction(IrType::F32());
+  EXPECT_THAT(function.returnVoid(), IsShaderError(HasSubstr("returnVoid requires")));
+}
+
+TEST(FunctionBuilderCalls, VoidCalleesAreNotExpressions) {
+  ModuleBuilder builder;
+  auto callee = builder.createFunction("voidCallee", {}, std::nullopt);
+  ASSERT_THAT(callee, HasShaderResult());
+  ASSERT_THAT(callee.result().finish(), IsShaderOk());
+  auto caller = builder.createFunction("caller", {}, std::nullopt);
+  ASSERT_THAT(caller, HasShaderResult());
+  EXPECT_THAT(caller.result().callFunction("voidCallee", {}),
+              IsShaderError(HasSubstr("returns void")));
+}
+
+TEST(FunctionBuilderCalls, ArgumentTypesAreValidatedOnTheFirstCall) {
+  ModuleBuilder builder;
+  auto callee = builder.createFunction("identity", {{"value", IrType::F32()}}, IrType::F32());
+  ASSERT_THAT(callee, HasShaderResult());
+  const auto value = GetShaderResultOrFail(callee.result().ref("value"), F32Val());
+  ASSERT_THAT(callee.result().returnValue(value), IsShaderOk());
+  ASSERT_THAT(callee.result().finish(), IsShaderOk());
+  auto caller = builder.createFunction("caller", {}, std::nullopt);
+  ASSERT_THAT(caller, HasShaderResult());
+  EXPECT_THAT(caller.result().callFunction("identity", {LiteralU32(0)}),
+              IsShaderError(HasSubstr("argument 0 type mismatch")));
+}
+
+TEST(StageIoValidation, UnlocatedInputsAndInvalidOutputTypesAreRejected) {
+  ModuleBuilder builder;
+  const std::vector<IrOutputMember> position{
+      {"position", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}};
+  EXPECT_THAT(builder.createVertexEntryPoint("vertex", {{"unlocated", IrType::F32()}}, position),
+              IsShaderError(HasSubstr("needs a location or builtin")));
+  EXPECT_THAT(builder.createVertexEntryPoint("vertex", {{"boolean", IrType::Bool(), 0}}, position),
+              IsShaderError(HasSubstr("must be a numeric scalar or vector")));
+  EXPECT_THAT(
+      builder.createVertexEntryPoint(
+          "vertex", {}, {{"badPosition", IrType::Vec2f(), std::nullopt, BuiltinOutput::Position}}),
+      IsShaderError(HasSubstr("must be position: vec4<f32>")));
+  EXPECT_THAT(builder.createVertexEntryPoint("vertex", {}, {{"unlocated", IrType::Vec4f()}}),
+              IsShaderError(HasSubstr("needs a location or builtin")));
+  EXPECT_THAT(builder.createFragmentEntryPoint("fragment", {{"unlocated", IrType::F32()}},
+                                               {{"color", IrType::Vec4f(), 0}}),
+              IsShaderError(HasSubstr("must have a location or builtin")));
+  EXPECT_THAT(builder.createFragmentEntryPoint("fragment", {{"boolean", IrType::Bool(), 0}},
+                                               {{"color", IrType::Vec4f(), 0}}),
+              IsShaderError(HasSubstr("must be a numeric scalar or vector")));
+  EXPECT_THAT(builder.createFragmentEntryPoint("fragment", {}, {{"unlocated", IrType::Vec4f()}}),
+              IsShaderError(HasSubstr("must have a location")));
+  EXPECT_THAT(
+      builder.createComputeEntryPoint("compute", {{"boolean", IrType::Bool(), 0}}, {1, 1, 1}),
+      IsShaderError(HasSubstr("must be a numeric scalar or vector")));
+}
+
+TEST(ComputeStageRestrictions, DerivativesAreFoundInLoopHeadersAndNestedElseBlocks) {
+  for (int placement = 0; placement < 3; ++placement) {
+    SCOPED_TRACE(placement);
+    ModuleBuilder builder;
+    auto result = builder.createComputeEntryPoint("compute", {}, {1, 1, 1});
+    ASSERT_THAT(result, HasShaderResult());
+    auto& function = result.result();
+    const auto derivative =
+        GetShaderResultOrFail(CallBuiltin(BuiltinFn::Fwidth, {F32Val()}), F32Val());
+    if (placement == 0) {
+      ASSERT_THAT(function.beginFor("i", derivative), HasShaderResult());
+      ASSERT_THAT(function.breakStmt(), IsShaderOk());
+      ASSERT_THAT(function.endFor(), IsShaderOk());
+    } else if (placement == 1) {
+      const auto index = GetShaderResultOrFail(function.beginFor("i", F32Val()), F32Val());
+      ASSERT_THAT(function.forContinuing(index, derivative), IsShaderOk());
+      ASSERT_THAT(function.breakStmt(), IsShaderOk());
+      ASSERT_THAT(function.endFor(), IsShaderOk());
+    } else {
+      ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+      ASSERT_THAT(function.elseBranch(), IsShaderOk());
+      ASSERT_THAT(function.addLet("d", derivative), HasShaderResult());
+      ASSERT_THAT(function.endIf(), IsShaderOk());
+    }
+    EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("fragment-only")));
+  }
+}
+
+TEST(FunctionBuilderStorage, StorageWritesValidateEveryOperandsScope) {
+  for (int escapedOperand = 0; escapedOperand < 3; ++escapedOperand) {
+    SCOPED_TRACE(escapedOperand);
+    ModuleBuilder donor;
+    ASSERT_THAT(
+        donor.addWriteOnlyStorageTexture2d(0, 0, "foreign", StorageTextureFormat::Rgba32Float),
+        IsShaderOk());
+    auto donorFunction = donor.createFunction("donor", {}, std::nullopt);
+    ASSERT_THAT(donorFunction, HasShaderResult());
+    const auto foreignTexture =
+        GetShaderResultOrFail(donorFunction.result().ref("foreign"), F32Val());
+    ModuleBuilder builder;
+    ASSERT_THAT(
+        builder.addWriteOnlyStorageTexture2d(0, 0, "output", StorageTextureFormat::Rgba32Float),
+        IsShaderOk());
+    auto result = builder.createComputeEntryPoint("writer", {}, {1, 1, 1});
+    ASSERT_THAT(result, HasShaderResult());
+    auto& function = result.result();
+    const auto output = GetShaderResultOrFail(function.ref("output"), F32Val());
+    ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+    const auto escapedCoords =
+        GetShaderResultOrFail(function.addLet("coords", Vec2uVal()), F32Val());
+    const auto escapedValue = GetShaderResultOrFail(function.addLet("color", Vec4fVal()), F32Val());
+    ASSERT_THAT(function.endIf(), IsShaderOk());
+    EXPECT_THAT(function.textureStore(escapedOperand == 0 ? foreignTexture : output,
+                                      escapedOperand == 1 ? escapedCoords : Vec2uVal(),
+                                      escapedOperand == 2 ? escapedValue : Vec4fVal()),
+                IsShaderError(
+                    HasSubstr(escapedOperand == 0 ? "unknown module-scope name" : "out of scope")));
+  }
+}
+
+TEST(FunctionBuilderControlFlow, ContinuingRejectsEscapedTargetsAndValues) {
+  for (bool escapeTarget : {false, true}) {
+    SCOPED_TRACE(escapeTarget);
+    ModuleBuilder builder;
+    auto result = builder.createFunction("loop", {}, std::nullopt);
+    ASSERT_THAT(result, HasShaderResult());
+    auto& function = result.result();
+    ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+    const auto escaped =
+        GetShaderResultOrFail(function.addVar("escaped", IrType::U32(), LiteralU32(0)), F32Val());
+    ASSERT_THAT(function.endIf(), IsShaderOk());
+    const auto index = GetShaderResultOrFail(function.beginFor("i", LiteralU32(0)), F32Val());
+    EXPECT_THAT(function.forContinuing(escapeTarget ? escaped : index,
+                                       escapeTarget ? LiteralU32(1) : escaped),
+                IsShaderError(HasSubstr("out of scope")));
+  }
+}
+
+TEST_F(FunctionBuilderTests, IfConditionCannotReferenceAClosedBranchLocal) {
+  FunctionBuilder function = startFunction();
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr expired =
+      GetShaderResultOrFail(function.addLet("expired", LiteralBool(true)), LiteralBool(false));
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  // Keep the typed expression after its declaration has left scope. It must not
+  // become an undeclared name in the next generated conditional.
+  EXPECT_THAT(function.beginIf(expired), IsShaderError(HasSubstr("out of scope")));
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, ForConditionCannotReferenceAClosedBranchLocal) {
+  FunctionBuilder function = startFunction();
+  ASSERT_THAT(function.beginIf(LiteralBool(true)), IsShaderOk());
+  const IrExpr expired =
+      GetShaderResultOrFail(function.addLet("expired", LiteralBool(true)), LiteralBool(false));
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  EXPECT_THAT(function.forCondition(expired), IsShaderError(HasSubstr("out of scope")));
+  EXPECT_THAT(function.finish(), IsShaderError(HasSubstr("out of scope")));
+}
+
+TEST_F(FunctionBuilderTests, ConditionalHeadersAcceptEnclosingScopeExpressions) {
+  FunctionBuilder function = startFunction();
+  const IrExpr condition =
+      GetShaderResultOrFail(function.addLet("condition", LiteralBool(true)), LiteralBool(false));
+  ASSERT_THAT(function.beginIf(condition), IsShaderOk());
+  ASSERT_THAT(function.endIf(), IsShaderOk());
+  ASSERT_THAT(function.beginFor("i", LiteralU32(0)), HasShaderResult());
+  ASSERT_THAT(function.forCondition(condition), IsShaderOk());
+  ASSERT_THAT(function.breakStmt(), IsShaderOk());
+  ASSERT_THAT(function.endFor(), IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+  EXPECT_THAT(builder_.build(), HasShaderResult());
 }
 
 }  // namespace

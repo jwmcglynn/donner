@@ -1,9 +1,8 @@
+load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
-load("//build_defs:package.bzl", "donner_package")
 
-# donner::gpu::shader - the typed shader IR core, its WGSL-rule layout engine,
-# and the WGSL/MSL/SPIR-V emitters.
+# The typed shader IR and each emitter have independent compilation dependencies.
 #
 # A typed immutable IR with a validating builder, host-shareable layout
 # computation per the WGSL specification's memory layout rules, deterministic
@@ -18,9 +17,6 @@ donner_cc_library(
         "IrModule.cc",
         "IrSerialization.cc",
         "IrType.cc",
-        "MslEmitter.cc",
-        "SpirvEmitter.cc",
-        "WgslEmitter.cc",
     ],
     hdrs = [
         "IrExpr.h",
@@ -28,15 +24,52 @@ donner_cc_library(
         "IrModule.h",
         "IrStatement.h",
         "IrType.h",
-        "MslBindingMap.h",
-        "MslEmitter.h",
         "ShaderError.h",
         "ShaderResult.h",
-        "SpirvEmitter.h",
-        "WgslEmitter.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
+        "//donner/base",
+    ],
+)
+
+# Backend binding constants do not require the shader IR or any emitter.
+donner_cc_library(
+    name = "msl_binding_map",
+    hdrs = ["MslBindingMap.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
+    name = "msl_emitter",
+    srcs = ["MslEmitter.cc"],
+    hdrs = ["MslEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":msl_binding_map",
+        ":shader",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "spirv_emitter",
+    srcs = ["SpirvEmitter.cc"],
+    hdrs = ["SpirvEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "wgsl_emitter",
+    srcs = ["WgslEmitter.cc"],
+    hdrs = ["WgslEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
         "//donner/base",
     ],
 )
@@ -51,7 +84,7 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         ":shader",
-        "//donner/gpu",
+        "//donner/gpu:descriptors",
     ],
 )
 
@@ -74,10 +107,24 @@ donner_cc_library(
 donner_cc_library(
     name = "program_bindings",
     hdrs = [
+        "programs/ColorSpaceConvertBindings.h",
+        "programs/ComponentTransferBindings.h",
+        "programs/CompositeBindings.h",
+        "programs/DisplacementMapBindings.h",
+        "programs/ConvolveMatrixBindings.h",
+        "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
+        "programs/FilterImageBindings.h",
         "programs/FloodBindings.h",
+        "programs/GaussianBlurBindings.h",
+        "programs/LightingBindings.h",
+        "programs/MergeBindings.h",
+        "programs/MorphologyBindings.h",
+        "programs/OffsetBindings.h",
         "programs/SnapshotUnpremultiplyBindings.h",
         "programs/SubregionClipBindings.h",
+        "programs/TileBindings.h",
+        "programs/TurbulenceBindings.h",
     ],
     visibility = ["//visibility:public"],
 )
@@ -85,21 +132,53 @@ donner_cc_library(
 donner_cc_library(
     name = "programs",
     srcs = [
+        "programs/Checkerboard.cc",
         "programs/ColorMatrix.cc",
+        "programs/ColorSpaceConvert.cc",
+        "programs/ComponentTransfer.cc",
+        "programs/Composite.cc",
+        "programs/DisplacementMap.cc",
+        "programs/ConvolveMatrix.cc",
+        "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
+        "programs/FilterImage.cc",
         "programs/Flood.cc",
+        "programs/GaussianBlur.cc",
+        "programs/Lighting.cc",
+        "programs/Merge.cc",
+        "programs/Morphology.cc",
+        "programs/Offset.cc",
+        "programs/RoundHalfAwayFromZero.cc",
         "programs/SnapshotUnpremultiply.cc",
         "programs/SolidFill.cc",
         "programs/SubregionClip.cc",
+        "programs/Tile.cc",
+        "programs/Turbulence.cc",
     ],
     hdrs = [
+        "programs/Checkerboard.h",
         "programs/ColorMatrix.h",
+        "programs/ColorSpaceConvert.h",
+        "programs/ComponentTransfer.h",
+        "programs/Composite.h",
+        "programs/DisplacementMap.h",
+        "programs/ConvolveMatrix.h",
+        "programs/DropShadow.h",
         "programs/ErrorLatch.h",
         "programs/FilterColorMatrix.h",
+        "programs/FilterImage.h",
         "programs/Flood.h",
+        "programs/GaussianBlur.h",
+        "programs/Lighting.h",
+        "programs/Merge.h",
+        "programs/Morphology.h",
+        "programs/Offset.h",
+        "programs/RoundHalfAwayFromZero.h",
         "programs/SnapshotUnpremultiply.h",
         "programs/SolidFill.h",
         "programs/SubregionClip.h",
+        "programs/Tile.h",
+        "programs/Turbulence.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -109,55 +188,73 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "float_storage_test_module",
+    testonly = 1,
+    hdrs = ["tests/FloatStorageModule.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":programs",
+        ":shader",
+    ],
+)
+
 donner_cc_test(
     name = "shader_tests",
     srcs = [
+        "tests/CheckerboardProgram_tests.cc",
         "tests/ColorMatrixProgram_tests.cc",
+        "tests/ColorSpaceConvertProgram_tests.cc",
+        "tests/ComponentTransferProgram_tests.cc",
+        "tests/CompositeProgram_tests.cc",
+        "tests/DisplacementMapProgram_tests.cc",
+        "tests/ConvolveMatrixProgram_tests.cc",
+        "tests/DropShadowProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
+        "tests/FilterImageProgram_tests.cc",
         "tests/FloodProgram_tests.cc",
+        "tests/GaussianBlurProgram_tests.cc",
         "tests/IrBuilder_tests.cc",
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
+        "tests/LightingProgram_tests.cc",
         "tests/MathPrimitiveCoverageModule.h",
         "tests/MathPrimitives_tests.cc",
+        "tests/MergeProgram_tests.cc",
+        "tests/ModuleInterface_tests.cc",
+        "tests/MorphologyProgram_tests.cc",
         "tests/MslEmitter_tests.cc",
+        "tests/OffsetProgram_tests.cc",
         "tests/ReductionCoverageModule.h",
-        "tests/ShaderGoldenUtils.h",
         "tests/ShaderTestUtils.h",
         "tests/SnapshotUnpremultiplyProgram_tests.cc",
         "tests/SolidFillProgram_tests.cc",
         "tests/SpirvEmitter_tests.cc",
         "tests/SubregionClipProgram_tests.cc",
+        "tests/TileProgram_tests.cc",
+        "tests/TurbulenceProgram_tests.cc",
         "tests/WgslEmitter_tests.cc",
     ],
-    data = [
-        "tests/testdata/color_matrix.msl",
-        "tests/testdata/color_matrix.spv",
-        "tests/testdata/color_matrix.wgsl",
-        "tests/testdata/filter_color_matrix.msl",
-        "tests/testdata/filter_color_matrix.spv",
-        "tests/testdata/filter_color_matrix.wgsl",
-        "tests/testdata/flood.msl",
-        "tests/testdata/flood.spv",
-        "tests/testdata/flood.wgsl",
-        "tests/testdata/math_primitives.msl",
-        "tests/testdata/math_primitives.spv",
-        "tests/testdata/math_primitives.wgsl",
-        "tests/testdata/snapshot_unpremultiply.msl",
-        "tests/testdata/snapshot_unpremultiply.spv",
-        "tests/testdata/snapshot_unpremultiply.wgsl",
-        "tests/testdata/solid_fill.msl",
-        "tests/testdata/solid_fill.spv",
-        "tests/testdata/solid_fill.wgsl",
-        "tests/testdata/subregion_clip.msl",
-        "tests/testdata/subregion_clip.spv",
-        "tests/testdata/subregion_clip.wgsl",
-    ],
     deps = [
+        ":checkerboard_artifact",
+        ":component_transfer_artifact",
+        ":displacement_map_artifact",
+        ":convolve_matrix_artifact",
+        ":drop_shadow_artifact",
+        ":filter_image_artifact",
+        ":float_storage_test_module",
+        ":lighting_artifacts",
+        ":module_interface",
+        ":msl_emitter",
         ":programs",
         ":shader",
+        ":spirv_emitter",
         ":stage_io_test_modules",
+        ":turbulence_artifact",
+        ":wgsl_emitter",
         "//donner/base:base_test_utils",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
     ],
@@ -213,6 +310,8 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":external_tool_gate",
+        ":float_storage_test_module",
+        ":msl_emitter",
         ":programs",
         ":shader",
         ":stage_io_test_modules",
@@ -235,8 +334,10 @@ donner_cc_test(
     ],
     data = ["@spirv_tools//:spirv-val"],
     deps = [
+        ":float_storage_test_module",
         ":programs",
         ":shader",
+        ":spirv_emitter",
         ":stage_io_test_modules",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
@@ -259,13 +360,17 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":float_storage_test_module",
         ":programs",
         ":shader",
+        ":wgsl_emitter",
         "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 
@@ -278,17 +383,162 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# The committed goldens, exposed so a consumer of a generated artifact can assert the two are the
-# same bytes rather than asserting it in prose.
-filegroup(
-    name = "program_goldens",
-    srcs = [
-        "tests/testdata/filter_color_matrix.wgsl",
-        "tests/testdata/flood.wgsl",
-        "tests/testdata/snapshot_unpremultiply.wgsl",
-        "tests/testdata/subregion_clip.wgsl",
+genrule(
+    name = "checkerboard_generated",
+    outs = ["generated/CheckerboardShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) checkerboard " +
+          "$(location generated/CheckerboardShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+genrule(
+    name = "diffuse_lighting_generated",
+    outs = ["generated/DiffuseLightingShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) diffuse_lighting " +
+          "$(location generated/DiffuseLightingShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+genrule(
+    name = "specular_lighting_generated",
+    outs = ["generated/SpecularLightingShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) specular_lighting " +
+          "$(location generated/SpecularLightingShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+genrule(
+    name = "convolve_matrix_generated",
+    outs = ["generated/ConvolveMatrixShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) convolve_matrix " +
+          "$(location generated/ConvolveMatrixShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "lighting_artifacts",
+    hdrs = [
+        "generated/DiffuseLightingShader.h",
+        "generated/SpecularLightingShader.h",
     ],
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_artifact",
+    hdrs = ["generated/ConvolveMatrixShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+donner_cc_library(
+    name = "checkerboard_artifact",
+    hdrs = ["generated/CheckerboardShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "drop_shadow_generated",
+    outs = ["generated/DropShadowShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) drop_shadow " +
+          "$(location generated/DropShadowShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "drop_shadow_artifact",
+    hdrs = ["generated/DropShadowShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "component_transfer_generated",
+    outs = ["generated/ComponentTransferShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) component_transfer " +
+          "$(location generated/ComponentTransferShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "component_transfer_artifact",
+    hdrs = ["generated/ComponentTransferShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "displacement_map_generated",
+    outs = ["generated/DisplacementMapShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) displacement_map " +
+          "$(location generated/DisplacementMapShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "displacement_map_artifact",
+    hdrs = ["generated/DisplacementMapShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "turbulence_generated",
+    outs = ["generated/TurbulenceShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) turbulence " +
+          "$(location generated/TurbulenceShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "turbulence_artifact",
+    hdrs = ["generated/TurbulenceShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "filter_image_generated",
+    outs = ["generated/FilterImageShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_image " +
+          "$(location generated/FilterImageShader.h) --descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "filter_image_artifact",
+    hdrs = ["generated/FilterImageShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
 )
 
 donner_package()
+
+donner_cc_test(
+    name = "filter_compositing_parity_tests_impl",
+    srcs = ["tests/FilterCompositingParity_tests.cc"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "filter_compositing_parity_tests",
+    timeout = "moderate",
+    testonly = 1,
+    dep = ":filter_compositing_parity_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
