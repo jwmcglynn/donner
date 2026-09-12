@@ -1016,7 +1016,7 @@ jobs:
       BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
@@ -1049,6 +1049,54 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Fetch Metal validation dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: >-
+            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
+            //donner/gpu/metal/tests:all
+
+      - name: Select Metal validation profile
+        id: metal_profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --nocache_test_results --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //donner/gpu/metal/tests:metal_validation_profile
+          profile=$(python3 tools/metal_validation_profile.py \
+            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
+          case "$profile" in
+            full)
+              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            paravirtual-texture-usage-off)
+              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0" >> "$GITHUB_ENV"
+              echo "Metal: verified virtual-GPU texture-check exception; API, buffer, threadgroup, and pixel checks remain active. A full-validation receipt for the PR head is required before merge. See docs/metal_validation.md." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::Unsupported Metal validation profile."
+              exit 1
+              ;;
+          esac
+
+      - name: Metal validation preflight
+        id: metal_preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //donner/gpu/metal/tests:metal_buffer_bounds_tests \
+            //donner/gpu/metal/tests:metal_color_matrix_tests \
+            //donner/gpu/metal/tests:metal_queue_writes_tests \
+            //donner/gpu/metal/tests:metal_solid_fill_tests \
+            //donner/gpu/metal/tests:metal_sub_rectangle_copy_tests \
+            //donner/gpu/metal/tests:metal_shader_memory_validation_tests
 
       - name: Build
         shell: bash
@@ -1097,7 +1145,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -1129,7 +1177,7 @@ jobs:
       # is unset (e.g. forks), --remote_cache= is empty and bazel builds without
       # a remote cache.
       BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=${{ vars.BAZEL_REMOTE_CACHE }} --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
       # targets need an explicit invocation.
@@ -1154,6 +1202,29 @@ jobs:
           test -x /opt/homebrew/bin/bazelisk
           test -x /opt/homebrew/bin/bazel
           test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
+
+      - name: Require full Metal shader validation
+        id: metal_profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk --nohome_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //donner/gpu/metal/tests:metal_full_validation_required
+
+      - name: Metal validation preflight
+        id: metal_preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --nocache_test_results --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //donner/gpu/metal/tests:metal_buffer_bounds_tests \
+            //donner/gpu/metal/tests:metal_color_matrix_tests \
+            //donner/gpu/metal/tests:metal_queue_writes_tests \
+            //donner/gpu/metal/tests:metal_solid_fill_tests \
+            //donner/gpu/metal/tests:metal_sub_rectangle_copy_tests \
+            //donner/gpu/metal/tests:metal_shader_memory_validation_tests
 
       - name: Build
         shell: bash
@@ -1195,7 +1266,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

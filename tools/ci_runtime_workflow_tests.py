@@ -75,6 +75,57 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 timeout=timeout,
             )
 
+    def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
+        hosted = self._job_body("macos")
+        fetching = self._step_body(hosted, "Fetch Metal validation dependencies")
+        self.assertIn("nick-fields/retry@v4", fetching)
+        self.assertIn("bazelisk fetch --config=ci", fetching)
+        self.assertIn("max_attempts: 3", fetching)
+        self.assertNotIn("bazelisk test", fetching)
+        self.assertLess(hosted.index("Fetch Metal validation dependencies"),
+                        hosted.index("Select Metal validation profile"))
+        selection = self._step_body(hosted, "Select Metal validation profile")
+        self.assertIn("//donner/gpu/metal/tests:metal_validation_profile", selection)
+        self.assertIn("tools/metal_validation_profile.py", selection)
+        self.assertIn("--nocache_test_results", selection)
+        case_start = selection.index('          case "$profile" in')
+        case_end = selection.index("          esac", case_start) + len("          esac")
+        script = "#!/bin/bash\nset -euo pipefail\n" + textwrap.dedent(selection[case_start:case_end])
+        for profile, expected_status, expected_flags in (
+            ("full", 0, ""),
+            ("paravirtual-texture-usage-off", 0,
+             "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0\n"),
+            ("unknown", 1, ""),
+            ("", 1, ""),
+        ):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                env_file = Path(temporary) / "environment"
+                summary = Path(temporary) / "summary"
+                result = self._run_script(script, [], env={
+                    "profile": profile, "GITHUB_ENV": str(env_file),
+                    "GITHUB_STEP_SUMMARY": str(summary),
+                })
+                self.assertEqual(expected_status, result.returncode, result.stderr)
+                self.assertEqual(expected_flags, env_file.read_text() if env_file.exists() else "")
+        for job_name in ("macos", "macos-self-hosted"):
+            job = self._job_body(job_name)
+            preflight = self._step_body(job, "Metal validation preflight")
+            self.assertIn("--nocache_test_results", preflight)
+            self.assertLess(job.index("Metal validation preflight"), job.index("- name: Build"))
+            for target in (
+                "metal_buffer_bounds_tests", "metal_color_matrix_tests", "metal_queue_writes_tests",
+                "metal_solid_fill_tests", "metal_sub_rectangle_copy_tests",
+                "metal_shader_memory_validation_tests",
+            ):
+                self.assertIn("//donner/gpu/metal/tests:" + target, preflight)
+            self.assertIn("steps.metal_preflight.outcome == 'failure'", job)
+        trusted = self._job_body("macos-self-hosted")
+        required = self._step_body(trusted, "Require full Metal shader validation")
+        self.assertIn("--test_tag_filters=", required)
+        self.assertIn("--nocache_test_results", required)
+        self.assertIn("//donner/gpu/metal/tests:metal_full_validation_required", required)
+        self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
+
     def test_coverage_does_not_expand_ci_config_twice(self):
         """The coverage command inherits its CI config from the runner rc."""
         flag_line = re.search(

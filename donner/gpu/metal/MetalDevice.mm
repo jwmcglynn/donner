@@ -665,6 +665,21 @@ Result<std::vector<uint8_t>> MetalDevice::readBackBuffer(const Buffer& buffer) {
   return std::vector<uint8_t>(contents, contents + metalBuffer.length);
 }
 
+Result<MetalDevice::NativeTextureUsage> MetalDevice::textureUsageForTest(
+    const Texture& texture) const {
+  if (Status status = validateTextureHandleForBackend(texture); status.hasError()) {
+    return std::move(status).error();
+  }
+  id<MTLTexture> nativeTexture = GetSlot(impl_->textures, texture.slotIndex());
+  if (nativeTexture == nil) {
+    return GpuError{GpuErrorType::InvalidHandle, "texture does not name a live Metal allocation"};
+  }
+  const MTLTextureUsage usage = nativeTexture.usage;
+  return NativeTextureUsage{(usage & MTLTextureUsageShaderRead) != 0,
+                            (usage & MTLTextureUsageShaderWrite) != 0,
+                            (usage & MTLTextureUsageRenderTarget) != 0};
+}
+
 std::string MetalDevice::adapterName() const {
   NSString* name = [impl_->device name];
   return name != nil ? std::string([name UTF8String]) : std::string();
