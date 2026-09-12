@@ -4909,17 +4909,24 @@ class HeadlessGeodeDevicePool {
 public:
   std::shared_ptr<geode::GeodeDevice> acquire() {
     std::shared_ptr<geode::GeodeDevice> device;
-    {
-      const std::lock_guard lock(mutex_);
-      if (!idle_.empty()) {
+    for (;;) {
+      {
+        const std::lock_guard lock(mutex_);
+        if (idle_.empty()) {
+          break;
+        }
         device = std::move(idle_.back());
         idle_.pop_back();
       }
+      if (device && !device->isDeviceLost()) {
+        break;
+      }
+      device.reset();
     }
     if (!device) {
       device = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
     }
-    if (!device) {
+    if (!device || device->isDeviceLost()) {
       return nullptr;
     }
 
@@ -4938,6 +4945,9 @@ private:
   };
 
   void release(std::shared_ptr<geode::GeodeDevice> device) {
+    if (!device || device->isDeviceLost()) {
+      return;
+    }
     const std::lock_guard lock(mutex_);
     if (idle_.size() < kMaxIdleDevices) {
       idle_.push_back(std::move(device));
