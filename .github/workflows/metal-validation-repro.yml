@@ -1,0 +1,48 @@
+name: Metal validation reproduction
+
+on:
+  push:
+    branches: [renovate-metal-validation-repro]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metal-validation-repro-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-compute:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Compare native compute texture storage modes
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --macos_minimum_os=13.3 \
+            --test_env=HOME --test_output=all --nocache_test_results \
+            //donner/gpu/metal/tests:metal_native_compute_validation_tests
+
+      - name: Upload native validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: metal-native-validation-${{ github.run_id }}
+          path: bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_validation_tests
+          if-no-files-found: ignore
+          retention-days: 7

@@ -220,4 +220,36 @@ donner_cc_test(
     ],
 )
 
+objc_library(
+    name = "metal_native_compute_validation_impl",
+    testonly = True,
+    srcs = ["MetalNativeComputeValidation_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+    ],
+    alwayslink = True,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@com_google_gtest//:gtest"],
+)
+
+# Each storage mode runs in its own process so a native validation abort preserves the others.
+cc_test(
+    name = "metal_native_compute_validation_tests",
+    size = "small",
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+    },
+    shard_count = 3,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_native_compute_validation_impl",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()
