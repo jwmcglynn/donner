@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
+load("//donner/editor:editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -99,6 +100,34 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
         "@nlohmann_json//:json",
     ],
+)
+
+# Native replay must use the editor's backend; hosted macOS has WebGPU but no NSGL context.
+donner_cc_test(
+    name = "editor_control_replay_test_impl",
+    srcs = ["EditorControlReplay_tests.cc"],
+    tags = ["manual"],
+    target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
+    visibility = ["//visibility:private"],
+    deps = [
+        ":editor_control_session",
+        "//donner/base:base_test_utils",
+        "//donner/editor:imgui_headers",
+        "//donner/editor/repro:gl_rnr_replay",
+        "//donner/editor/repro:repro_file",
+        "@com_google_gtest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "editor_control_replay_tests",
+    dep = ":editor_control_replay_test_impl",
+    opens_gpu_device = True,
+    renderer_backend = EDITOR_RENDERER_BACKEND,
+    target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
+    text = EDITOR_TEXT,
+    text_full = EDITOR_TEXT_FULL,
 )
 
 py_test(
