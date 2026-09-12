@@ -267,7 +267,7 @@ def extract_versions_from_module_bazel() -> Dict[str, str]:
 _MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, str, str]] = {
     "googletest": (
         "googletest", "https://github.com/google/googletest.git",
-        "v1.17.0", "52eb8108c5bdec04579160ae17225d66034bd723",
+        "v1.18.0", "063de7e9578f82b369302001269680b4b1553359",
     ),
     "nlohmann_json": (
         "nlohmann_json", "https://github.com/nlohmann/json.git",
