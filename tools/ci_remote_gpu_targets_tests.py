@@ -1,14 +1,26 @@
 """Tests for exact remote GPU wrapper selection."""
 
-from pathlib import Path
+import os
 import subprocess
-import sys
 import unittest
+
+from python.runfiles import runfiles
 
 from tools.ci_remote_gpu_targets import REMOTE_TARGETS, select_remote_targets
 
 
 class CiRemoteGpuTargetsTest(unittest.TestCase):
+    def run_cli(self, *args):
+        resolver = runfiles.Create()
+        return subprocess.run(
+            [resolver.Rlocation("donner/tools/ci_remote_gpu_targets"), *args],
+            env={**os.environ, **resolver.EnvVars()},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
     def test_mapping_is_limited_to_measured_sharded_suites(self):
         self.assertEqual(
             {
@@ -24,16 +36,7 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
         self.assertEqual([], select_remote_targets([]))
 
     def test_empty_cli_selection_emits_no_array_element(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                Path(__file__).with_name("ci_remote_gpu_targets.py"),
-                "--one-per-line",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = self.run_cli("--one-per-line")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("", result.stdout)
 
@@ -41,29 +44,13 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
         self.assertEqual(["//..."], select_remote_targets(["//..."]))
 
     def test_invalid_cli_option_fails(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                Path(__file__).with_name("ci_remote_gpu_targets.py"),
-                "--invalid",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertNotEqual(0, result.returncode)
+        result = self.run_cli("--invalid")
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("unrecognized arguments: --invalid", result.stderr)
 
     def test_nonempty_cli_selection_is_exact(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                Path(__file__).with_name("ci_remote_gpu_targets.py"),
-                "//donner/editor/tests:rnr_replay_tests_geode",
-                "//other:test",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        result = self.run_cli(
+            "//donner/editor/tests:rnr_replay_tests_geode", "//other:test"
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(

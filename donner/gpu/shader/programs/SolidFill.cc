@@ -1,5 +1,6 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -31,8 +32,8 @@ struct RayConfig {
   const char* loaderName;     //!< load_h_curve / load_v_curve.
   const char* solveAxis;      //!< Monotone axis solved against: "y" (horiz) or "x" (vert).
   const char* evalAxis;       //!< Axis the crossing position is evaluated on: "x" or "y".
-  float signWhenPositive;     //!< Winding sign when d(solveAxis)/dt >= 0.
-  float signWhenNegative;     //!< Winding sign otherwise.
+  float signWhenPositive;     //!< Winding sign when the monotone axis increases.
+  float signWhenNegative;     //!< Winding sign when the monotone axis decreases.
 };
 
 /// Builds one of the two curve loaders (load_h_curve / load_v_curve), which unpack six floats
@@ -68,8 +69,8 @@ void BuildCurveLoader(ErrorLatch& e, ModuleBuilder& builder, const IrType& quadr
 /// Each crossing is found by solving the curve's quadratic along the ray's axis and evaluating
 /// the curve at that root, so coverage is computed from the curve equation rather than sampled
 /// from it, which is what keeps an edge exact at any magnification. The crossing's signed
-/// distance from the pixel center gives its coverage contribution and the curve's derivative
-/// there gives the direction it is crossed in, so the winding sign falls out of the same solve.
+/// distance from the pixel center gives its coverage contribution. Ordered axis endpoints give
+/// its crossing direction even when the tangent at the root is flat.
 void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCoverageType,
                      const RayConfig& config) {
   auto result =
@@ -116,16 +117,11 @@ void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCov
     e.ok(fn.continueStmt());
     e.ok(fn.endIf());
 
-    // Quadratic coefficients along the solve axis: a t^2 + b t + c = 0 at the sample.
-    const IrExpr a =
-        e(fn.addLet("a", e(Add(e(Sub(curvePoint("p0", config.solveAxis),
-                                     e(Mul(F(2.0f), curvePoint("p1", config.solveAxis))))),
-                               curvePoint("p2", config.solveAxis)))));
-    const IrExpr b = e(fn.addLet("b", e(Mul(F(2.0f), e(Sub(curvePoint("p1", config.solveAxis),
-                                                           curvePoint("p0", config.solveAxis)))))));
-    const IrExpr c =
-        e(fn.addLet("c", e(Sub(curvePoint("p0", config.solveAxis), sampleOnSolveAxis))));
-    const IrExpr roots = e(fn.addLet("roots", e(fn.callFunction("solve_quadratic", {a, b, c}))));
+    const IrExpr roots = e(fn.addLet(
+        "roots",
+        e(fn.callFunction("solve_quadratic",
+                          {curvePoint("p0", config.solveAxis), curvePoint("p1", config.solveAxis),
+                           curvePoint("p2", config.solveAxis), sampleOnSolveAxis}))));
 
     const IrExpr k = e(fn.beginFor("k", I(0)));
     e.ok(fn.forCondition(e(Lt(k, I(2)))));
@@ -149,15 +145,12 @@ void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCov
       // Signed pixel distance of the crossing from the pixel center.
       const IrExpr r =
           e(fn.addLet("r", e(Mul(e(Sub(crossing, e(Swizzle(sample, config.evalAxis)))), ppem))));
-      const IrExpr derivative = e(fn.addLet(
-          "d_dt", e(Add(e(Mul(e(Mul(F(2.0f), omt)), e(Sub(curvePoint("p1", config.solveAxis),
-                                                          curvePoint("p0", config.solveAxis))))),
-                        e(Mul(e(Mul(F(2.0f), t)), e(Sub(curvePoint("p2", config.solveAxis),
-                                                        curvePoint("p1", config.solveAxis)))))))));
+      // Endpoint order preserves winding when the tangent derivative is zero.
+      const IrExpr increasing =
+          e(Gt(curvePoint("p2", config.solveAxis), curvePoint("p0", config.solveAxis)));
       const IrExpr sign = e(fn.addLet(
-          "s",
-          e(CallBuiltin(BuiltinFn::Select, {F(config.signWhenNegative), F(config.signWhenPositive),
-                                            e(Ge(derivative, F(0.0f)))}))));
+          "s", e(CallBuiltin(BuiltinFn::Select, {F(config.signWhenNegative),
+                                                 F(config.signWhenPositive), increasing}))));
 
       e.ok(fn.assign(
           e(Member(resultVar, "cov")),
@@ -293,25 +286,69 @@ ShaderResult<IrModule> BuildSolidFillModule() {
   BuildCurveLoader(e, builder, quadraticType, "load_h_curve", "curveData");
   BuildCurveLoader(e, builder, quadraticType, "load_v_curve", "vCurveData");
 
-  // ----- solve_quadratic(a, b, c) -> vec2f (Citardauq form) -----
+  // Endpoint ownership is already checked by the monotone-axis caller.
   {
-    auto result = builder.createFunction(
-        "solve_quadratic", {IrParam{"a", f32}, IrParam{"b", f32}, IrParam{"c", f32}}, vec2f);
+    auto result = builder.createFunction("solve_quadratic",
+                                         {IrParam{"start", f32}, IrParam{"control", f32},
+                                          IrParam{"end", f32}, IrParam{"sample", f32}},
+                                         vec2f);
     if (result.hasError()) {
       return std::move(result).error();
     }
     FunctionBuilder fn = std::move(result).result();
 
-    const IrExpr a = e(fn.ref("a"));
-    const IrExpr b = e(fn.ref("b"));
-    const IrExpr c = e(fn.ref("c"));
+    const IrExpr start = e(fn.ref("start"));
+    const IrExpr control = e(fn.ref("control"));
+    const IrExpr end = e(fn.ref("end"));
+    const IrExpr sample = e(fn.ref("sample"));
     const IrExpr roots =
         e(fn.addVar("roots", vec2f, e(ConstructVector(vec2f, {F(-1.0f), F(-1.0f)}))));
+    const IrExpr coordinates = e(ConstructVector(vec4f, {start, control, end, sample}));
+    const IrExpr maximumFloat = e(ConstructVector(vec4f, {F(std::numeric_limits<float>::max())}));
+    e.ok(fn.beginIf(e(Not(e(CallBuiltin(
+        BuiltinFn::All, {e(Le(e(CallBuiltin(BuiltinFn::Abs, {coordinates})), maximumFloat))}))))));
+    e.ok(fn.returnValue(roots));
+    e.ok(fn.endIf());
 
-    // Degenerate (nearly linear) curves solve bt + c = 0.
-    e.ok(fn.beginIf(e(Lt(e(CallBuiltin(BuiltinFn::Abs, {a})), F(1e-4f)))));
+    // Preserve endpoint identity before coefficient rounding can move a root outside [0, 1].
+    e.ok(fn.beginIf(e(Eq(sample, start))));
+    e.ok(fn.returnValue(e(ConstructVector(vec2f, {F(0.0f), F(-1.0f)}))));
+    e.ok(fn.endIf());
+    e.ok(fn.beginIf(e(Eq(sample, end))));
+    e.ok(fn.returnValue(e(ConstructVector(vec2f, {F(1.0f), F(-1.0f)}))));
+    e.ok(fn.endIf());
+
+    const IrExpr a = e(fn.addVar("a", f32, e(Add(e(Sub(start, control)), e(Sub(end, control))))));
+    const IrExpr b = e(fn.addVar("b", f32, e(Mul(F(2.0f), e(Sub(control, start))))));
+    const IrExpr c = e(fn.addVar("c", f32, e(Sub(start, sample))));
+    const IrType vec3f = IrType::Vec3f();
+    const IrExpr coefficients = e(ConstructVector(vec3f, {a, b, c}));
+    const IrExpr coefficientMagnitudes = e(CallBuiltin(BuiltinFn::Abs, {coefficients}));
+    const IrExpr coefficientBounds =
+        e(ConstructVector(vec3f, {F(std::numeric_limits<float>::max())}));
+    const IrExpr finiteCoefficients =
+        e(CallBuiltin(BuiltinFn::All, {e(Le(coefficientMagnitudes, coefficientBounds))}));
+    e.ok(fn.beginIf(e(Not(finiteCoefficients))));
+    e.ok(fn.returnValue(roots));
+    e.ok(fn.endIf());
+    const IrExpr coefficientScale = e(fn.addLet(
+        "coefficient_scale",
+        e(CallBuiltin(BuiltinFn::Max,
+                      {e(CallBuiltin(BuiltinFn::Max, {e(CallBuiltin(BuiltinFn::Abs, {a})),
+                                                      e(CallBuiltin(BuiltinFn::Abs, {b}))})),
+                       e(CallBuiltin(BuiltinFn::Abs, {c}))}))));
+    // Rescale extreme coefficients before squaring to avoid overflow and underflow.
+    e.ok(fn.beginIf(
+        e(Or(e(Gt(coefficientScale, F(1e15f))),
+             e(And(e(Gt(coefficientScale, F(0.0f))), e(Lt(coefficientScale, F(1e-15f)))))))));
+    e.ok(fn.assign(a, e(Div(a, coefficientScale))));
+    e.ok(fn.assign(b, e(Div(b, coefficientScale))));
+    e.ok(fn.assign(c, e(Div(c, coefficientScale))));
+    e.ok(fn.endIf());
+
+    e.ok(fn.beginIf(e(Eq(a, F(0.0f)))));
     {
-      e.ok(fn.beginIf(e(Gt(e(CallBuiltin(BuiltinFn::Abs, {b})), F(1e-6f)))));
+      e.ok(fn.beginIf(e(Ne(b, F(0.0f)))));
       {
         const IrExpr t = e(fn.addLet("t", e(Div(e(Neg(c)), b))));
         e.ok(fn.beginIf(e(And(e(Ge(t, F(0.0f))), e(Le(t, F(1.0f)))))));
@@ -324,21 +361,23 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     e.ok(fn.endIf());
 
     const IrExpr disc = e(fn.addLet("disc", e(Sub(e(Mul(b, b)), e(Mul(e(Mul(F(4.0f), a)), c))))));
-    e.ok(fn.beginIf(e(Lt(disc, F(0.0f)))));
+    e.ok(fn.beginIf(e(Not(e(Ge(disc, F(0.0f)))))));
     e.ok(fn.returnValue(roots));
     e.ok(fn.endIf());
-
     const IrExpr sqrtDisc = e(fn.addLet("sqrt_disc", e(CallBuiltin(BuiltinFn::Sqrt, {disc}))));
     // Citardauq: divide by the larger-magnitude root to avoid catastrophic cancellation.
     const IrExpr q = e(fn.addLet(
         "q", e(Mul(F(-0.5f), e(Add(b, e(CallBuiltin(BuiltinFn::Select, {e(Neg(sqrtDisc)), sqrtDisc,
                                                                         e(Ge(b, F(0.0f)))}))))))));
+    e.ok(fn.beginIf(e(Eq(q, F(0.0f)))));
+    const IrExpr repeated = e(fn.addLet("t", e(Mul(e(Neg(b)), e(Div(F(0.5f), a))))));
+    e.ok(fn.beginIf(e(And(e(Ge(repeated, F(0.0f))), e(Le(repeated, F(1.0f)))))));
+    e.ok(fn.assign(e(Swizzle(roots, "x")), repeated));
+    e.ok(fn.endIf());
+    e.ok(fn.returnValue(roots));
+    e.ok(fn.endIf());
     const IrExpr t0 = e(fn.addLet("t0", e(Div(q, a))));
-    const IrExpr t1 = e(fn.addLet(
-        "t1", e(CallBuiltin(BuiltinFn::Select,
-                            {e(Div(c, q)), e(Mul(e(Add(e(Neg(b)), sqrtDisc)), e(Div(F(0.5f), a)))),
-                             e(Lt(e(CallBuiltin(BuiltinFn::Abs, {q})), F(1e-30f)))}))));
-
+    const IrExpr t1 = e(fn.addLet("t1", e(Div(c, q))));
     e.ok(fn.beginIf(e(And(e(Ge(t0, F(0.0f))), e(Le(t0, F(1.0f)))))));
     e.ok(fn.assign(e(Swizzle(roots, "x")), t0));
     e.ok(fn.endIf());

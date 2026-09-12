@@ -1,7 +1,7 @@
 # Written by //donner/gpu/baseline:capture_baselines. Do not edit by hand.
 # Frozen pixels are only comparable against the adapter recorded here.
 schemaVersion: 1
-sourceRevision: 96bebe5c843d2a6e6c4d1ce6c9e3289dd95f71b2
+sourceRevision: 69fb8aa2e70032da23063dd39abc7ea6fd7a9fe7
 sourceTreeClean: clean
 rendererPath: wgpu-native Geode production path (GeodeDevice+GeoEncoder)
 rendererBackend: geode
