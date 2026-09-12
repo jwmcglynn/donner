@@ -133,6 +133,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn(verification, body)
                 self.assertLess(body.index(verification), body.index("tar "))
 
+    def test_documentation_publication_requires_a_manual_request(self):
+        workflow = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
+        deploy = workflow.split("\n  deploy:\n", 1)[1]
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
+        self.assertIn("branches: [\"main\"]", workflow)
+
     def test_release_builds_once_then_attests_and_publishes(self):
         release = self.supply_chain_files[".github/workflows/release.yml"]
         self.assertIn("types: [published]", release)

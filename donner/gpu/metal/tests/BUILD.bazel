@@ -46,9 +46,14 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
@@ -90,9 +95,14 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
@@ -144,9 +154,14 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
@@ -172,9 +187,14 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
@@ -200,9 +220,14 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     env_inherit = ["GITHUB_ACTIONS"],
     target_compatible_with = ["@platforms//os:macos"],
@@ -216,6 +241,104 @@ donner_cc_test(
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "metal_validation_profile_classifier",
+    testonly = True,
+    srcs = ["MetalValidationProfile.cc"],
+    hdrs = ["MetalValidationProfile.h"],
+)
+
+cc_test(
+    name = "metal_validation_profile_unit_tests",
+    size = "small",
+    srcs = ["MetalValidationProfile_tests.cc"],
+    deps = [
+        ":metal_validation_profile_classifier",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+objc_library(
+    name = "metal_validation_profile_probe_impl",
+    testonly = True,
+    srcs = ["MetalValidationProfile_main.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+    ],
+    alwayslink = True,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":metal_validation_profile_classifier"],
+)
+
+_METAL_VALIDATION_PROBE_ENV = {
+    "MTL_DEBUG_LAYER": "1",
+    "MTL_SHADER_VALIDATION": "1",
+    "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+    "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+    "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
+    "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+    "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+    "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+    "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+    "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
+    "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+}
+
+cc_test(
+    name = "metal_validation_profile",
+    size = "small",
+    env = _METAL_VALIDATION_PROBE_ENV,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":metal_validation_profile_probe_impl"],
+)
+
+cc_test(
+    name = "metal_full_validation_required",
+    size = "small",
+    args = ["--require-full"],
+    env = _METAL_VALIDATION_PROBE_ENV,
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":metal_validation_profile_probe_impl"],
+)
+
+objc_library(
+    name = "metal_shader_memory_validation_impl",
+    testonly = True,
+    srcs = ["MetalShaderMemoryValidation_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+    ],
+    alwayslink = True,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@com_google_gtest//:gtest"],
+)
+
+cc_test(
+    name = "metal_shader_memory_validation_tests",
+    size = "small",
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+    },
+    shard_count = 1,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_shader_memory_validation_impl",
         "@com_google_gtest//:gtest_main",
     ],
 )
