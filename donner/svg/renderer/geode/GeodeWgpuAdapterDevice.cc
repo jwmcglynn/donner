@@ -733,6 +733,9 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
     (void)slice;
     return true;
   }
+  if (timedMapWaitForTest_) {
+    return finishMapWaitSlice(mappingSlotIndex, timedMapWaitForTest_());
+  }
 #ifdef __EMSCRIPTEN__
   // The browser instance is created asking for TimedWaitAny (see GeodeDevice::CreateHeadless)
   // exactly so this wait exists: on a worker thread the map completion is a browser-side event,
@@ -767,13 +770,21 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
     instanceWaitUsable.store(false, std::memory_order_relaxed);
     return false;
   }
-  slot.usedTimedWaitAny = true;
-  return true;
+  return finishMapWaitSlice(mappingSlotIndex, waitStatus);
 #else
   (void)mappingSlotIndex;
   (void)slice;
   return false;
 #endif
+}
+
+bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
+                                                wgpu::WaitStatus status) {
+  if (status != wgpu::WaitStatus::Success && status != wgpu::WaitStatus::TimedOut) {
+    return false;
+  }
+  slotMappings_[mappingSlotIndex].usedTimedWaitAny = true;
+  return true;
 }
 
 gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,

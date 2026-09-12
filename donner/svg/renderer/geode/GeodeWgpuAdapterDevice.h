@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -516,6 +517,12 @@ private:
   /// @return True if the slice was waited on the event (so the caller re-reads the completion
   ///   rather than polling), false if this platform or this thread cannot event-wait it.
   bool waitOnMapFutureSlice(uint32_t mappingSlotIndex, std::chrono::microseconds slice);
+
+  /// Applies a completed event-wait slice through the same path on browsers and in tests.
+  bool finishMapWaitSlice(uint32_t mappingSlotIndex, wgpu::WaitStatus status);
+
+  /// Test-only replacement for the suspending backend wait; may exercise reentrant slot changes.
+  std::function<wgpu::WaitStatus()> timedMapWaitForTest_;
 
   /// Makes \ref waitOnMapFutureSlice report that an event wait handled the slice without one
   /// having happened, so the browser arm's contract can be checked where that arm is compiled
