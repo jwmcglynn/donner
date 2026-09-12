@@ -267,6 +267,12 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 - **All new or edited tests must follow the ToTT checklist.** Use `EXPECT_THAT` and matchers for arrays, buffers, records, structs, pixels, geometry, optionals, variants, and related fields; scalar `EXPECT_EQ` is fine only when it already prints the full contract. Avoid bare `EXPECT_TRUE`/`EXPECT_FALSE`/`ASSERT_TRUE` conditions unless the condition itself is the named contract, and add `PrintTo`/`operator<<` or a named helper when the default failure output is opaque.
 - **Keep each local developer test case under 10s.** Agent-authored or agent-edited gtest cases that exceed 10s on a local dev box are bugs to fix by splitting the case, sampling expensive replays, replacing sleeps with deterministic hooks, or refactoring the code under test. Put genuinely long coverage/perf scenarios behind explicit `manual` or `perf` targets with justification; do not make >10s cases part of the normal local/PR gate.
 
+## Full Metal Validation Before Merge
+
+- A PR using the hosted virtual-GPU texture-check exception needs full Metal validation on capable hardware at the exact current head before merge. Follow `docs/metal_validation.md` and run `tools/verify_metal_validation.py` from a clean committed checkout, using the required execution configuration.
+- Missing capability, missing or stale evidence, skipped cases, or any failed gate blocks merging. A new PR head invalidates the previous local receipt. A CI lane counts as equivalent only when it runs the strict capability gate and complete full-validation Metal suite for that candidate.
+- Keep receipts and raw build evidence local. Never infer full texture-check coverage from hosted green checks, disable all shader validation, weaken pixel assertions, or broaden the recognized runtime exception without causal evidence and review.
+
 ## Pixel Diff & Threshold Philosophy
 
 - **Root-cause pixel diffs, always** — even in vendored libraries like tiny-skia-cpp. Don't bump thresholds or inflate max-diff pixels to mask failures; investigate *why* pixels differ. Threshold changes are a last resort requiring explicit human approval.
