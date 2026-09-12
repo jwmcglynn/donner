@@ -703,6 +703,7 @@ struct VulkanDevice::Impl {
   VkQueue queue = VK_NULL_HANDLE;              //!< The single graphics queue.
   uint32_t queueFamilyIndex = 0;               //!< Family index of \ref queue.
   VkCommandPool commandPool = VK_NULL_HANDLE;  //!< Pool for all command buffers.
+  bool fullDrawIndexUint32 = false;            //!< Whether the full Uint32 index range is enabled.
 
   /// A buffer plus the memory it was bound into, persistently mapped (host-visible + coherent;
   /// see the class comment for why every buffer is host-visible in this slice). Where that
@@ -1093,6 +1094,15 @@ struct VulkanDevice::Impl {
     const ComputePipelineRecord* currentComputePipeline = nullptr;
     /// Groups bound by index; their records remain live throughout command encoding.
     std::array<const BindGroupRecord*, kMaxBindGroups> boundGroups = {};
+    /// Recorded index binding whose native bind waits for the first nonzero indexed draw.
+    struct PendingIndexBinding {
+      VkBuffer buffer = VK_NULL_HANDLE;              //!< Buffer to bind.
+      VkDeviceSize offsetBytes = 0;                  //!< Byte offset of the first index.
+      VkIndexType indexType = VK_INDEX_TYPE_UINT16;  //!< Width of each index.
+    };
+    /// vkCmdBindIndexBuffer requires offset < buffer size, but the encoder accepts a binding
+    /// exactly at the end as an empty range; only a nonzero draw proves the range nonempty.
+    std::optional<PendingIndexBinding> pendingIndexBinding;
   };
 
   /// Records the barrier that puts \p textureSlot into \p usage, if one is needed, and stages
@@ -1149,6 +1159,11 @@ struct VulkanDevice::Impl {
   /// @param setVertexBuffer Recorded command.
   Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
 
+  /// Records an index binding; the native bind is issued by the first nonzero indexed draw.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  Status encodeSetIndexBuffer(EncodingState& state, const SetIndexBufferCommand& setIndexBuffer);
+
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -1163,6 +1178,16 @@ struct VulkanDevice::Impl {
   /// @param state Encoding state.
   /// @param draw Recorded command.
   Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Binds every descriptor set the pipeline layout declares and issues the indexed draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw);
+
+  /// Binds every descriptor set the active pipeline layout declares, shared by both draws.
+  /// @param state Encoding state.
+  /// @param operation Operation name for diagnostics.
+  Status bindDrawDescriptorSets(EncodingState& state, std::string_view operation);
 
   /// Ends the active render pass and resets the per-pass binding state.
   /// @param state Encoding state.
@@ -1351,6 +1376,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   }
   VkPhysicalDeviceFeatures enabledFeatures = {};
   enabledFeatures.robustBufferAccess = VK_TRUE;
+  // Optional, so a device without it still creates; the runtime then refuses Uint32 index
+  // buffers instead of letting 32-bit index values above the driver's cap read undefined data.
+  const bool fullDrawIndexUint32 = supportedFeatures.fullDrawIndexUint32 == VK_TRUE;
+  enabledFeatures.fullDrawIndexUint32 = static_cast<VkBool32>(fullDrawIndexUint32);
 
   const float queuePriority = 1.0f;
   VkDeviceQueueCreateInfo queueInfo = {};
@@ -1360,10 +1389,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   queueInfo.pQueuePriorities = &queuePriority;
 
   // Vulkan 1.1 core for every production path: no device extensions, and no optional features
-  // beyond the mandatory robustBufferAccess (read-only storage buffer access in the fragment
-  // stage and negative-height viewports are core). Tests that need to hold a submission open ask
-  // for VK_KHR_timeline_semaphore through CreateWithTimelineSemaphoreForTest; that is the only
-  // extension this backend ever enables, and it is never enabled for a device the product uses.
+  // beyond the mandatory robustBufferAccess and, when the device offers it, fullDrawIndexUint32
+  // (otherwise supportsFullIndexRange refuses each Uint32 binding; read-only storage buffer
+  // access in the fragment stage and negative-height viewports are core). Tests that need to
+  // hold a submission open ask for VK_KHR_timeline_semaphore through
+  // CreateWithTimelineSemaphoreForTest; that is the only extension this backend ever enables, and
+  // it is never enabled for a device the product uses.
   VkDeviceCreateInfo deviceInfo = {};
   deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceInfo.queueCreateInfoCount = 1;
@@ -1420,6 +1451,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   impl.device = device;
   impl.queueFamilyIndex = selectedQueueFamily;
   impl.commandPool = commandPool;
+  impl.fullDrawIndexUint32 = fullDrawIndexUint32;
   api.vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
   api.vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
   impl.bufferAllocator = std::make_unique<DedicatedBufferAllocator>(impl.memoryProperties);
@@ -1558,6 +1590,14 @@ size_t VulkanDevice::pendingTextureUploadCountForTest() const {
 
 void VulkanDevice::deferTextureUploadPollingForTest(bool defer) {
   impl_->deferUploadPolling = defer;
+}
+
+bool VulkanDevice::supportsFullIndexRange(IndexFormat format) const {
+  return format != IndexFormat::Uint32 || impl_->fullDrawIndexUint32;
+}
+
+void VulkanDevice::disableFullUint32IndexRangeForTest() {
+  impl_->fullDrawIndexUint32 = false;
 }
 
 std::string VulkanDevice::lastErrorForTest() const {
@@ -2681,6 +2721,22 @@ Status VulkanDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
   return OkStatus();
 }
 
+Status VulkanDevice::Impl::encodeSetIndexBuffer(EncodingState& state,
+                                                const SetIndexBufferCommand& setIndexBuffer) {
+  const BufferRecord* buffer = FindRecord(buffers, setIndexBuffer.bufferId.slotIndex);
+  if (!state.inRenderPass || buffer == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  // Deferred rather than bound here: an empty binding at the buffer end is valid for the encoder
+  // but an invalid vkCmdBindIndexBuffer offset, and a zero-count draw never needs it.
+  state.pendingIndexBinding = EncodingState::PendingIndexBinding{
+      buffer->buffer, setIndexBuffer.offsetBytes,
+      setIndexBuffer.format == IndexFormat::Uint16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32};
+  return OkStatus();
+}
+
 Status VulkanDevice::Impl::encodeSetScissorRect(EncodingState& state,
                                                 const SetScissorRectCommand& setScissor) {
   if (!state.inRenderPass) {
@@ -2710,9 +2766,11 @@ Status VulkanDevice::Impl::encodeSetViewport(EncodingState& state,
   return OkStatus();
 }
 
-Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& draw) {
+Status VulkanDevice::Impl::bindDrawDescriptorSets(EncodingState& state,
+                                                  std::string_view operation) {
   if (!state.inRenderPass || state.currentPipeline == nullptr) {
-    return GpuError{GpuErrorType::InvalidState, "draw without an active pass and pipeline"};
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("{} without an active pass and pipeline", operation)};
   }
   // Bind every set the pipeline layout declares. The encoder's draw-time validation
   // guarantees each declared group index is bound; this re-check fails closed anyway.
@@ -2720,16 +2778,43 @@ Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& d
        ++setIndex) {
     const BindGroupRecord* group = state.boundGroups[setIndex];
     if (group == nullptr) {
-      return GpuError{
-          GpuErrorType::InvalidState,
-          std::format("draw: pipeline layout requires bind group {} but none is bound", setIndex)};
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("{}: pipeline layout requires bind group {} but none is bound",
+                                  operation, setIndex)};
     }
     api->vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  state.currentPipeline->layout->layout, setIndex, 1, &group->set, 0,
                                  nullptr);
   }
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& draw) {
+  if (Status status = bindDrawDescriptorSets(state, "draw"); status.hasError()) {
+    return status;
+  }
   api->vkCmdDraw(state.commandBuffer, draw.vertexCount, draw.instanceCount, draw.firstVertex,
                  draw.firstInstance);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw) {
+  if (Status status = bindDrawDescriptorSets(state, "drawIndexed"); status.hasError()) {
+    return status;
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  // The encoder bounded this draw's index range inside the binding, so the offset is in range.
+  if (state.pendingIndexBinding) {
+    api->vkCmdBindIndexBuffer(state.commandBuffer, state.pendingIndexBinding->buffer,
+                              state.pendingIndexBinding->offsetBytes,
+                              state.pendingIndexBinding->indexType);
+    state.pendingIndexBinding.reset();
+  }
+  api->vkCmdDrawIndexed(state.commandBuffer, draw.indexCount, draw.instanceCount, draw.firstIndex,
+                        draw.baseVertex, draw.firstInstance);
   return OkStatus();
 }
 
@@ -2741,6 +2826,7 @@ Status VulkanDevice::Impl::encodeEndRenderPass(EncodingState& state) {
   state.inRenderPass = false;
   state.currentPipeline = nullptr;
   state.boundGroups.fill(nullptr);
+  state.pendingIndexBinding.reset();
   return OkStatus();
 }
 
@@ -2781,20 +2867,26 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   api->vkCmdCopyImageToBuffer(state.commandBuffer, texture->image,
                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer->buffer, 1, &copyRegion);
 
-  // Make the transfer write visible to host reads (readback maps the buffer after the
-  // fence): TRANSFER write -> HOST read.
+  // A CopyDst buffer may next be consumed through any other declared BufferUsage in this stream.
+  // Preserve host readback while making the write visible to draw, shader, and transfer commands.
   VkBufferMemoryBarrier bufferBarrier = {};
   bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
   bufferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  bufferBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  bufferBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
+                                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                                VK_ACCESS_TRANSFER_WRITE_BIT;
   bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   bufferBarrier.buffer = buffer->buffer;
   bufferBarrier.offset = 0;
   bufferBarrier.size = VK_WHOLE_SIZE;
+  constexpr VkPipelineStageFlags kBufferConsumerStages =
+      VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
   api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0,
-                            nullptr);
+                            kBufferConsumerStages, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
   return OkStatus();
 }
 
@@ -2811,12 +2903,16 @@ std::optional<Status> VulkanDevice::Impl::encodeRenderCommand(EncodingState& sta
     return encodeSetBindGroup(state, *setBindGroup);
   } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
     return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setIndexBuffer = std::get_if<SetIndexBufferCommand>(&command)) {
+    return encodeSetIndexBuffer(state, *setIndexBuffer);
   } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
     return encodeSetScissorRect(state, *setScissor);
   } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
     return encodeSetViewport(state, *setViewport);
   } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
     return encodeDraw(state, *draw);
+  } else if (const auto* drawIndexed = std::get_if<DrawIndexedCommand>(&command)) {
+    return encodeDrawIndexed(state, *drawIndexed);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
   }

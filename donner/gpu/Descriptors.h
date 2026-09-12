@@ -259,6 +259,24 @@ enum class VertexStepMode : uint8_t {
   Instance,  //!< Advance per instance.
 };
 
+/// Element width of an index buffer bound with `RenderPassEncoder::setIndexBuffer`. Every backend
+/// honors the full unsigned range of the width; a device that cannot is reported through
+/// `Device::supportsFullIndexRange` and refuses the binding.
+enum class IndexFormat : uint8_t {
+  Uint16,  //!< 16-bit unsigned indices, two bytes each.
+  Uint32,  //!< 32-bit unsigned indices, four bytes each.
+};
+
+/// Bytes occupied by one index of \p format, or 0 for an unknown enumerator so callers fail
+/// closed instead of dividing by a guess. @param format Index format.
+constexpr uint32_t IndexFormatByteSize(IndexFormat format) {
+  switch (format) {
+    case IndexFormat::Uint16: return 2;
+    case IndexFormat::Uint32: return 4;
+  }
+  return 0;
+}
+
 /// Primitive topology for render pipelines.
 enum class PrimitiveTopology : uint8_t {
   TriangleList,   //!< Separate triangles.
@@ -338,6 +356,8 @@ std::ostream& operator<<(std::ostream& os, VertexFormat value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, VertexStepMode value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, IndexFormat value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, PrimitiveTopology value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, CullMode value);
@@ -373,6 +393,8 @@ bool IsKnownEnumValue(AddressMode value);
 bool IsKnownEnumValue(VertexFormat value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
 bool IsKnownEnumValue(VertexStepMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(IndexFormat value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
 bool IsKnownEnumValue(PrimitiveTopology value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.

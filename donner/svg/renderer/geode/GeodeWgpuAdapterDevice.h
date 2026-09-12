@@ -361,6 +361,11 @@ private:
   /// @param setVertexBuffer Recorded command.
   gpu::Status encodeSetVertexBuffer(EncodingState& state,
                                     const gpu::SetVertexBufferCommand& setVertexBuffer);
+  /// Binds a recorded index buffer.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  gpu::Status encodeSetIndexBuffer(EncodingState& state,
+                                   const gpu::SetIndexBufferCommand& setIndexBuffer);
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -374,6 +379,10 @@ private:
   /// @param state Encoding state.
   /// @param draw Recorded command.
   gpu::Status encodeDraw(EncodingState& state, const gpu::DrawCommand& draw);
+  /// Issues an indexed draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  gpu::Status encodeDrawIndexed(EncodingState& state, const gpu::DrawIndexedCommand& draw);
   /// Ends the active render pass.
   /// @param state Encoding state.
   gpu::Status encodeEndRenderPass(EncodingState& state);

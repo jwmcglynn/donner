@@ -267,6 +267,56 @@ destroy texture#0
   EXPECT_THAT(device.serialize(), Eq(kExpected));
 }
 
+TEST(RecordingDeviceTests, IndexedDrawSerializesBindingAndDrawParameters) {
+  RecordingDevice device;
+  const Texture target = GetResultOrFail(device.createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView view =
+      GetResultOrFail(device.createTextureView(target, TextureViewDescriptor{"targetView"}));
+  const Buffer vertices =
+      GetResultOrFail(device.createBuffer(BufferDescriptor{"vertices", 48, BufferUsage::Vertex}));
+  const Buffer indices =
+      GetResultOrFail(device.createBuffer(BufferDescriptor{"indices", 32, BufferUsage::Index}));
+  const PipelineLayout layout =
+      GetResultOrFail(device.createPipelineLayout(PipelineLayoutDescriptor{"empty", {}}));
+  const ShaderModule shader = GetResultOrFail(device.createShaderModule(ShaderModuleDescriptor{
+      "solidFill", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
+  const RenderPipeline pipeline =
+      GetResultOrFail(device.createRenderPipeline(RenderPipelineDescriptor{
+          "solid", layout,
+          VertexState{
+              shader,
+              "vsMain",
+              {VertexBufferLayout{
+                  8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
+          FragmentState{shader, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+      "pass", {RenderPassColorAttachment{view, LoadOp::Clear, StoreOp::Store, {}}}}));
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setVertexBuffer(0, vertices), IsOk());
+  ASSERT_THAT(pass->setIndexBuffer(indices, IndexFormat::Uint16, 4), IsOk());
+  ASSERT_THAT(pass->drawIndexed(6, 2, 1, -3, 1), IsOk());
+  ASSERT_THAT(pass->setIndexBuffer(indices, IndexFormat::Uint32, 8), IsOk());
+  ASSERT_THAT(pass->drawIndexed(3), IsOk());
+  ASSERT_THAT(pass->end(), IsOk());
+  auto commandBuffer = encoder->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+  ASSERT_THAT(device.submit(std::move(commandBuffer).result()), HasResult());
+
+  // One line per command, slot identities only, every parameter spelled out including the
+  // signed base vertex, so two draws differing in any field serialize differently.
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("  setIndexBuffer buffer=buffer#1 format=Uint16 offsetBytes=4\n"
+                        "  drawIndexed indexCount=6 instanceCount=2 firstIndex=1 baseVertex=-3 "
+                        "firstInstance=1\n"
+                        "  setIndexBuffer buffer=buffer#1 format=Uint32 offsetBytes=8\n"
+                        "  drawIndexed indexCount=3 instanceCount=1 firstIndex=0 baseVertex=0 "
+                        "firstInstance=0\n"
+                        "  endRenderPass\n"));
+}
+
 TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSourceDestinationAndSize) {
   RecordingDevice device;
   const Texture source = GetResultOrFail(device.createTexture(TextureDescriptor{

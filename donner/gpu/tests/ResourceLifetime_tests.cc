@@ -208,6 +208,108 @@ TEST_F(DeferredDestructionTests, TextureCopyOperandsDeferAndReleaseInDestruction
   EXPECT_THAT(device_.backendReleases(), ElementsAre(sourceId, destinationId));
 }
 
+/// Deferred-destruction tests for an index buffer referenced by an in-flight indexed draw.
+class IndexedDrawDeferredDestructionTests : public testing::Test {
+protected:
+  void SetUp() override {
+    target_ = GetResultOrFail(device_.createTexture(TextureDescriptor{
+        "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+    targetView_ =
+        GetResultOrFail(device_.createTextureView(target_, TextureViewDescriptor{"targetView"}));
+    vertexBuffer_ = GetResultOrFail(
+        device_.createBuffer(BufferDescriptor{"vertices", 48, BufferUsage::Vertex}));
+    // The layout and shader stay alive for the whole test: dropping them here would release them
+    // to the backend at once and pollute the deferred-release expectations below.
+    pipelineLayout_ =
+        GetResultOrFail(device_.createPipelineLayout(PipelineLayoutDescriptor{"empty", {}}));
+    shader_ = GetResultOrFail(device_.createShaderModule(ShaderModuleDescriptor{
+        "solidFill", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
+    pipeline_ = GetResultOrFail(device_.createRenderPipeline(RenderPipelineDescriptor{
+        "solid", pipelineLayout_,
+        VertexState{
+            shader_,
+            "vsMain",
+            {VertexBufferLayout{
+                8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
+        FragmentState{shader_, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+  }
+
+  Buffer createIndexBuffer() {
+    return GetResultOrFail(
+        device_.createBuffer(BufferDescriptor{"indices", 24, BufferUsage::Index}));
+  }
+
+  /// Submits one indexed draw reading \p indices and returns the submission serial.
+  uint64_t submitIndexedDraw(const Buffer& indices) {
+    std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+    RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+        "pass", {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store, {}}}}));
+    EXPECT_THAT(pass->setPipeline(pipeline_), IsOk());
+    EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_), IsOk());
+    EXPECT_THAT(pass->setIndexBuffer(indices, IndexFormat::Uint16), IsOk());
+    EXPECT_THAT(pass->drawIndexed(12), IsOk());
+    EXPECT_THAT(pass->end(), IsOk());
+    CommandBuffer commands = GetResultOrFail(encoder->finish());
+    return GetResultOrFail(device_.submit(std::move(commands)));
+  }
+
+  ManualCompletionDevice device_;
+  Texture target_;
+  TextureView targetView_;
+  Buffer vertexBuffer_;
+  PipelineLayout pipelineLayout_;
+  ShaderModule shader_;
+  RenderPipeline pipeline_;
+};
+
+TEST_F(IndexedDrawDeferredDestructionTests, DestroyWhileInFlightDefersBackendRelease) {
+  Buffer indices = createIndexBuffer();
+  const uint32_t slot = indices.slotIndex();
+  const uint64_t serial = submitIndexedDraw(indices);
+
+  // The handle retires now, but the backend object outlives the submission that reads it, and
+  // the retired slot is not handed out again while that object is alive.
+  EXPECT_THAT(device_.destroyBuffer(std::move(indices)), IsOk());
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), IsEmpty());
+  const Buffer unrelated = createIndexBuffer();
+  EXPECT_THAT(unrelated.slotIndex(), Ne(slot));
+
+  device_.completeUpTo(serial);
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), ElementsAre("buffer#" + std::to_string(slot)));
+}
+
+TEST_F(IndexedDrawDeferredDestructionTests, RaiiDropWhileInFlightAlsoDefers) {
+  uint64_t serial = 0;
+  uint32_t slot = 0;
+  {
+    const Buffer indices = createIndexBuffer();
+    slot = indices.slotIndex();
+    serial = submitIndexedDraw(indices);
+  }
+  EXPECT_THAT(device_.backendReleases(), IsEmpty());
+  device_.completeUpTo(serial);
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), ElementsAre("buffer#" + std::to_string(slot)));
+}
+
+TEST_F(IndexedDrawDeferredDestructionTests, LaterSubmissionExtendsDeferral) {
+  Buffer indices = createIndexBuffer();
+  const uint32_t slot = indices.slotIndex();
+  const uint64_t firstSerial = submitIndexedDraw(indices);
+  const uint64_t secondSerial = submitIndexedDraw(indices);
+  ASSERT_THAT(secondSerial, Eq(firstSerial + 1));
+  EXPECT_THAT(device_.destroyBuffer(std::move(indices)), IsOk());
+
+  device_.completeUpTo(firstSerial);
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), IsEmpty());
+  device_.completeUpTo(secondSerial);
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), ElementsAre("buffer#" + std::to_string(slot)));
+}
+
 TEST_F(DeferredDestructionTests, LaterSubmissionExtendsDeferral) {
   Texture texture = createSourceTexture();
   Buffer buffer = createReadbackBuffer();
@@ -244,6 +346,8 @@ protected:
         BufferDescriptor{"uniforms", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
     readbackBuffer_ = GetResultOrFail(device_.createBuffer(
         BufferDescriptor{"readback", 1024, BufferUsage::CopyDst | BufferUsage::MapRead}));
+    indexBuffer_ =
+        GetResultOrFail(device_.createBuffer(BufferDescriptor{"indices", 24, BufferUsage::Index}));
 
     bindGroupLayout_ = GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
         "uniforms",
@@ -284,12 +388,28 @@ protected:
     return GetResultOrFail(encoder->finish());
   }
 
+  /// Records the pass with an indexed draw instead of a plain one.
+  CommandBuffer recordIndexedScene() {
+    std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+    RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+        "mainPass",
+        {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store, {0, 0, 0.5, 1}}}}));
+    EXPECT_THAT(pass->setPipeline(pipeline_), IsOk());
+    EXPECT_THAT(pass->setBindGroup(0, bindGroup_), IsOk());
+    EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_), IsOk());
+    EXPECT_THAT(pass->setIndexBuffer(indexBuffer_, IndexFormat::Uint16), IsOk());
+    EXPECT_THAT(pass->drawIndexed(12), IsOk());
+    EXPECT_THAT(pass->end(), IsOk());
+    return GetResultOrFail(encoder->finish());
+  }
+
   RecordingDevice device_;
   Texture target_;
   TextureView targetView_;
   Buffer vertexBuffer_;
   Buffer uniformBuffer_;
   Buffer readbackBuffer_;
+  Buffer indexBuffer_;
   BindGroupLayout bindGroupLayout_;
   PipelineLayout pipelineLayout_;
   BindGroup bindGroup_;
@@ -309,6 +429,32 @@ TEST_F(SubmitStalenessTests, DestroyedVertexBufferRejectsSubmit) {
       device_.submit(std::move(commands)),
       IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
                             AllOf(HasSubstr("setVertexBuffer"), HasSubstr("destroyed buffer"))));
+}
+
+TEST_F(SubmitStalenessTests, IntactIndexedSceneSubmits) {
+  CommandBuffer commands = recordIndexedScene();
+  EXPECT_THAT(device_.submit(std::move(commands)), HasResult());
+}
+
+TEST_F(SubmitStalenessTests, DestroyedIndexBufferRejectsSubmit) {
+  CommandBuffer commands = recordIndexedScene();
+  ASSERT_THAT(device_.destroyBuffer(std::move(indexBuffer_)), IsOk());
+  EXPECT_THAT(
+      device_.submit(std::move(commands)),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                            AllOf(HasSubstr("setIndexBuffer"), HasSubstr("destroyed buffer"))));
+}
+
+TEST_F(SubmitStalenessTests, RecycledIndexBufferSlotRejectsSubmit) {
+  CommandBuffer commands = recordIndexedScene();
+  const uint32_t slot = indexBuffer_.slotIndex();
+  ASSERT_THAT(device_.destroyBuffer(std::move(indexBuffer_)), IsOk());
+  // A new index buffer in the same slot must not satisfy the recorded (slot, generation).
+  const Buffer replacement = GetResultOrFail(
+      device_.createBuffer(BufferDescriptor{"replacement", 24, BufferUsage::Index}));
+  ASSERT_THAT(replacement.slotIndex(), Eq(slot));
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("setIndexBuffer")));
 }
 
 TEST_F(SubmitStalenessTests, DestroyedPipelineRejectsSubmit) {

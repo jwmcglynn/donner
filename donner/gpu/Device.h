@@ -239,6 +239,15 @@ public:
   /// native backends override this so callers select the matching build-time artifact.
   virtual ShaderSourceKind shaderSourceKind() const { return ShaderSourceKind::Wgsl; }
 
+  /// Whether indexed draws through this device honor every value of \p format. Metal and WebGPU
+  /// always do; a Vulkan device without `fullDrawIndexUint32` caps 32-bit indices below the full
+  /// range, and `RenderPassEncoder::setIndexBuffer` refuses that format on it rather than let a
+  /// driver truncate index values. @param format Index format to query.
+  virtual bool supportsFullIndexRange(IndexFormat format) const {
+    (void)format;
+    return true;
+  }
+
   /**
    * Creates a buffer. Fails closed on zero or oversized `byteSize` or empty usage.
    *

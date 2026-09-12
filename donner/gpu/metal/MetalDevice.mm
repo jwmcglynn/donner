@@ -345,6 +345,9 @@ struct MetalDevice::Impl {
     bool renderInputsDirty =
         true;  //!< Rebind after active layout or resource changes, not each draw.
     std::array<std::optional<SetVertexBufferCommand>, kMaxVertexBuffers> vertexBindings;
+    /// Index buffer bound in the active render encoder. Metal takes the index buffer per draw
+    /// call, so the binding is only applied when an indexed draw is encoded.
+    std::optional<SetIndexBufferCommand> indexBinding;
     /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
     WorkgroupSize currentWorkgroupSize;
     // Bind-group records stay stable throughout synchronous submission encoding.
@@ -428,6 +431,11 @@ struct MetalDevice::Impl {
   /// @param setVertexBuffer Recorded command.
   Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
 
+  /// Retains a recorded index buffer binding for the next indexed draw.
+  /// @param state Encoding state.
+  /// @param setIndexBuffer Recorded command.
+  Status encodeSetIndexBuffer(EncodingState& state, const SetIndexBufferCommand& setIndexBuffer);
+
   /// Sets an explicit scissor rectangle.
   /// @param state Encoding state.
   /// @param setScissor Recorded command.
@@ -442,6 +450,11 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param draw Recorded command.
   Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Issues an indexed draw from the retained index binding with the bound pipeline's topology.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw);
 
   /// Closes the active render encoder.
   /// @param state Encoding state.
@@ -1175,6 +1188,7 @@ Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   state.currentRenderPipeline = nullptr;
   state.renderBindGroup.reset();
   state.vertexBindings.fill(std::nullopt);
+  state.indexBinding.reset();
   state.renderInputsDirty = true;
   state.renderEncoder = [state.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (state.renderEncoder == nil) {
@@ -1394,6 +1408,18 @@ Status MetalDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
   return OkStatus();
 }
 
+Status MetalDevice::Impl::encodeSetIndexBuffer(EncodingState& state,
+                                               const SetIndexBufferCommand& setIndexBuffer) {
+  id<MTLBuffer> buffer = GetSlot(buffers, setIndexBuffer.bufferId.slotIndex);
+  if (state.renderEncoder == nil || buffer == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  state.indexBinding = setIndexBuffer;
+  return OkStatus();
+}
+
 Status MetalDevice::Impl::bindRenderInputs(EncodingState& state) {
   if (!state.renderInputsDirty) {
     return OkStatus();
@@ -1463,6 +1489,39 @@ Status MetalDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& dr
                           vertexCount:draw.vertexCount
                         instanceCount:draw.instanceCount
                          baseInstance:draw.firstInstance];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawIndexedCommand& draw) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
+  }
+  id<MTLBuffer> indexBuffer =
+      state.indexBinding ? GetSlot(buffers, state.indexBinding->bufferId.slotIndex) : nil;
+  if (indexBuffer == nil) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed without a bound index buffer"};
+  }
+  if (Status status = bindRenderInputs(state); status.hasError()) {
+    return status;
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  const uint64_t indexBytes = IndexFormatByteSize(state.indexBinding->format);
+  // The encoder bounded (firstIndex + indexCount) * indexBytes to the bound range in 64 bits.
+  const uint64_t indexBufferOffset =
+      state.indexBinding->offsetBytes + uint64_t{draw.firstIndex} * indexBytes;
+  [state.renderEncoder
+      drawIndexedPrimitives:ToMtlPrimitiveType(state.currentTopology)
+                 indexCount:draw.indexCount
+                  indexType:(state.indexBinding->format == IndexFormat::Uint16 ? MTLIndexTypeUInt16
+                                                                               : MTLIndexTypeUInt32)
+                indexBuffer:indexBuffer
+          indexBufferOffset:indexBufferOffset
+              instanceCount:draw.instanceCount
+                 baseVertex:draw.baseVertex
+               baseInstance:draw.firstInstance];
   return OkStatus();
 }
 
@@ -1547,12 +1606,16 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
     return encodeSetBindGroup(state, *setBindGroup);
   } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
     return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setIndexBuffer = std::get_if<SetIndexBufferCommand>(&command)) {
+    return encodeSetIndexBuffer(state, *setIndexBuffer);
   } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
     return encodeSetScissorRect(state, *setScissor);
   } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
     return encodeSetViewport(state, *setViewport);
   } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
     return encodeDraw(state, *draw);
+  } else if (const auto* drawIndexed = std::get_if<DrawIndexedCommand>(&command)) {
+    return encodeDrawIndexed(state, *drawIndexed);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
   }

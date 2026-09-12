@@ -236,6 +236,10 @@ wgpu::VertexStepMode ToWgpuVertexStepMode(gpu::VertexStepMode mode) {
   return wgpu::VertexStepMode::Vertex;
 }
 
+wgpu::IndexFormat ToWgpuIndexFormat(gpu::IndexFormat format) {
+  return format == gpu::IndexFormat::Uint16 ? wgpu::IndexFormat::Uint16 : wgpu::IndexFormat::Uint32;
+}
+
 wgpu::PrimitiveTopology ToWgpuPrimitiveTopology(gpu::PrimitiveTopology topology) {
   switch (topology) {
     case gpu::PrimitiveTopology::TriangleList: return wgpu::PrimitiveTopology::TriangleList;
@@ -1392,6 +1396,19 @@ gpu::Status GeodeWgpuAdapterDevice::encodeSetVertexBuffer(
   return OkStatus();
 }
 
+gpu::Status GeodeWgpuAdapterDevice::encodeSetIndexBuffer(
+    EncodingState& state, const gpu::SetIndexBufferCommand& setIndexBuffer) {
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, setIndexBuffer.bufferId.slotIndex);
+  if (!state.pass || !buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  state.pass.get().setIndexBuffer(buffer, ToWgpuIndexFormat(setIndexBuffer.format),
+                                  setIndexBuffer.offsetBytes, WGPU_WHOLE_SIZE);
+  return OkStatus();
+}
+
 gpu::Status GeodeWgpuAdapterDevice::encodeSetScissorRect(
     EncodingState& state, const gpu::SetScissorRectCommand& setScissor) {
   if (!state.pass) {
@@ -1416,6 +1433,21 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDraw(EncodingState& state, const gpu::
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
   state.pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+  geodeDevice_.countDraw();
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeDrawIndexed(EncodingState& state,
+                                                      const gpu::DrawIndexedCommand& draw) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  state.pass.get().drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex,
+                               draw.baseVertex, draw.firstInstance);
   geodeDevice_.countDraw();
   return OkStatus();
 }
@@ -1542,6 +1574,9 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
           [&](const gpu::SetVertexBufferCommand& setVertexBuffer) -> gpu::Status {
             return encodeSetVertexBuffer(state, setVertexBuffer);
           },
+          [&](const gpu::SetIndexBufferCommand& setIndexBuffer) -> gpu::Status {
+            return encodeSetIndexBuffer(state, setIndexBuffer);
+          },
           [&](const gpu::SetScissorRectCommand& setScissor) -> gpu::Status {
             return encodeSetScissorRect(state, setScissor);
           },
@@ -1549,6 +1584,9 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
             return encodeSetViewport(state, setViewport);
           },
           [&](const gpu::DrawCommand& draw) -> gpu::Status { return encodeDraw(state, draw); },
+          [&](const gpu::DrawIndexedCommand& draw) -> gpu::Status {
+            return encodeDrawIndexed(state, draw);
+          },
           [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
             return encodeEndRenderPass(state);
           },
