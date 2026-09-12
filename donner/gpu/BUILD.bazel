@@ -81,6 +81,21 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
 )
 
+donner_cc_library(
+    name = "convolve_matrix_slice",
+    testonly = 1,
+    hdrs = ["tests/ConvolveMatrixSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:program_bindings",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
 # The sub-rectangle texture-copy scene shared by the backend copy slices: the
 # same source pattern, destination fill, copy rectangle, origins, and expected
 # image.

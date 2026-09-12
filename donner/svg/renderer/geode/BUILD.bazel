@@ -354,6 +354,7 @@ donner_cc_library(
         "//donner/gpu",
         "//donner/gpu/shader:filter_image_artifact",
         "//donner/gpu/shader:lighting_artifacts",
+        "//donner/gpu/shader:convolve_matrix_artifact",
         "//donner/gpu/shader:program_bindings",
         "//donner/gpu/shader:turbulence_artifact",
         "//donner/svg/components/filter:components",
@@ -669,16 +670,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Phase 7: feConvolveMatrix compute shader (NxM kernel convolution).
-embed_resources(
-    name = "filter_convolve_matrix_wgsl",
-    header_output = "embed_resources/FilterConvolveMatrixWgsl.h",
-    resources = {
-        "kFilterConvolveMatrixWgsl": "shaders/filter_convolve_matrix.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 genrule(
     name = "filter_displacement_map_generated",
     outs = ["generated/filter_displacement_map.wgsl"],
@@ -742,7 +733,6 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
-        ":filter_convolve_matrix_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",

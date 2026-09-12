@@ -5,7 +5,6 @@
 #include "donner/base/RcString.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
-#include "embed_resources/FilterConvolveMatrixWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
@@ -79,12 +78,6 @@ gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
 wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterBlend", donner::embedded::kFilterBlendWgsl.data(),
                               donner::embedded::kFilterBlendWgsl.size());
-}
-
-wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterConvolveMatrix",
-                              donner::embedded::kFilterConvolveMatrixWgsl.data(),
-                              donner::embedded::kFilterConvolveMatrixWgsl.size());
 }
 
 }  // namespace donner::geode

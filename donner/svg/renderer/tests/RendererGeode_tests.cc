@@ -3184,21 +3184,72 @@ TEST_F(RendererGeodeTest, FilterInvalidConvolveMatrixClearsReusedTexture) {
   ASSERT_FALSE(warm.empty());
   EXPECT_THAT(pixelAt(warm, 32, 32), RgbaEq(255, 0, 0, 255));
 
-  components::FilterGraph graph;
-  components::FilterNode convolveNode;
-  components::filter_primitive::ConvolveMatrix convolve;
-  convolve.orderX = 3;
-  convolve.orderY = 3;
-  convolve.kernelMatrix = {1.0};  // Invalid: a 3x3 kernel requires nine values.
-  convolveNode.primitive = convolve;
-  convolveNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
-  graph.nodes.push_back(convolveNode);
+  using ConvolveMatrix = components::filter_primitive::ConvolveMatrix;
+  const auto makeGraph = [](const ConvolveMatrix& convolve) {
+    components::FilterGraph graph;
+    components::FilterNode convolveNode;
+    convolveNode.primitive = convolve;
+    convolveNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+    graph.nodes.push_back(convolveNode);
+    return graph;
+  };
+  const auto expectTransparent = [](const RendererBitmap& actual) {
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    EXPECT_THAT(pixelAt(actual, 32, 32), IsTransparent());
+    EXPECT_THAT(pixelAt(actual, 18, 18), IsTransparent());
+  };
 
-  RendererGeode invalidRenderer = createRenderer();
-  const RendererBitmap actual = renderGraph(invalidRenderer, graph);
-  ASSERT_FALSE(actual.empty());
-  EXPECT_THAT(pixelAt(actual, 32, 32), IsTransparent());
-  EXPECT_THAT(pixelAt(actual, 18, 18), IsTransparent());
+  const std::array<std::pair<const char*, ConvolveMatrix>, 4> invalidCases{{
+      {"zero order", ConvolveMatrix{.orderX = 0, .orderY = 1}},
+      {"coefficient count", ConvolveMatrix{.orderX = 3, .orderY = 3, .kernelMatrix = {1.0}}},
+      {"zero divisor",
+       ConvolveMatrix{.orderX = 1, .orderY = 1, .kernelMatrix = {1.0}, .divisor = 0.0}},
+      {"target outside kernel",
+       ConvolveMatrix{.orderX = 1, .orderY = 1, .kernelMatrix = {1.0}, .targetX = 1}},
+  }};
+
+  for (const auto& [name, convolve] : invalidCases) {
+    SCOPED_TRACE(name);
+    RendererGeode invalidRenderer = createRenderer();
+    expectTransparent(renderGraph(invalidRenderer, makeGraph(convolve)));
+  }
+
+  const ConvolveMatrix zeroDivisor{.orderX = 1, .orderY = 1, .kernelMatrix = {1.0}, .divisor = 0.0};
+  const std::array<std::pair<const char*, ConvolveMatrix>, 3> nonfiniteCases{{
+      {"non-finite divisor", ConvolveMatrix{.orderX = 1,
+                                            .orderY = 1,
+                                            .kernelMatrix = {1.0},
+                                            .divisor = std::numeric_limits<double>::infinity()}},
+      {"non-finite bias", ConvolveMatrix{.orderX = 1,
+                                         .orderY = 1,
+                                         .kernelMatrix = {1.0},
+                                         .bias = std::numeric_limits<double>::quiet_NaN()}},
+      {"non-finite coefficient",
+       ConvolveMatrix{
+           .orderX = 1, .orderY = 1, .kernelMatrix = {std::numeric_limits<double>::quiet_NaN()}}},
+  }};
+
+  for (const auto& [name, convolve] : nonfiniteCases) {
+    SCOPED_TRACE(name);
+    RendererGeode invalidRenderer = createRenderer();
+    const components::FilterGraph controlGraph = makeGraph(zeroDivisor);
+    const components::FilterGraph probeGraph = makeGraph(convolve);
+
+    expectTransparent(renderGraph(invalidRenderer, controlGraph));
+    expectTransparent(renderGraph(invalidRenderer, controlGraph));
+    const geode::GeodeCounters controlBefore = invalidRenderer.lastFrameTimings().counters;
+    expectTransparent(renderGraph(invalidRenderer, probeGraph));
+    const geode::GeodeCounters probe = invalidRenderer.lastFrameTimings().counters;
+    expectTransparent(renderGraph(invalidRenderer, controlGraph));
+    const geode::GeodeCounters controlAfter = invalidRenderer.lastFrameTimings().counters;
+
+    ASSERT_THAT(controlAfter.bufferWrites, testing::Eq(controlBefore.bufferWrites));
+    ASSERT_THAT(controlAfter.bufferWriteBytes, testing::Eq(controlBefore.bufferWriteBytes));
+    EXPECT_THAT(probe.bufferWrites, testing::Eq(controlBefore.bufferWrites))
+        << "Invalid convolution parameters must be rejected before a parameter-buffer upload";
+    EXPECT_THAT(probe.bufferWriteBytes, testing::Eq(controlBefore.bufferWriteBytes))
+        << "Invalid convolution parameters must be rejected before parameter bytes are uploaded";
+  }
 }
 
 TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {

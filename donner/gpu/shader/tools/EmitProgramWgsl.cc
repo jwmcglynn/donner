@@ -31,6 +31,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
@@ -72,6 +73,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"component_transfer", 1, &programs::BuildComponentTransferModule},
     {"displacement_map", 1, &programs::BuildDisplacementMapModule},
     {"drop_shadow", 1, &programs::BuildDropShadowModule},
+    {"convolve_matrix", 1, &programs::BuildConvolveMatrixModule},
     {"offset", 1, &programs::BuildOffsetModule},
     {"tile", 1, &programs::BuildTileModule},
     {"turbulence", 1, &programs::BuildTurbulenceModule},
@@ -164,7 +166,18 @@ bool WriteDescriptorHeader(std::string_view program, const IrModule& module, std
   ShaderResult<std::vector<uint32_t>> spirv = EmitSpirv(module);
   ShaderResult<std::vector<ShaderBufferBindingInfo>> bindings = BufferBindingsOf(module);
   if (msl.hasError() || spirv.hasError() || bindings.hasError()) {
-    std::fprintf(stderr, "emit_program_wgsl: native artifact generation failed\n");
+    std::ostringstream diagnostic;
+    diagnostic << "emit_program_wgsl: native artifact generation failed";
+    if (msl.hasError()) {
+      diagnostic << "\n  MSL: " << msl.error();
+    }
+    if (spirv.hasError()) {
+      diagnostic << "\n  SPIR-V: " << spirv.error();
+    }
+    if (bindings.hasError()) {
+      diagnostic << "\n  bindings: " << bindings.error();
+    }
+    std::fprintf(stderr, "%s\n", diagnostic.str().c_str());
     return false;
   }
 

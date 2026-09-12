@@ -20,6 +20,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
@@ -27,6 +28,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
+#include "donner/gpu/shader/programs/ConvolveMatrixBindings.h"
 #include "donner/gpu/shader/programs/DisplacementMapBindings.h"
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
@@ -755,20 +757,6 @@ struct MorphologyParams {
   uint32_t pad;
 };
 
-/// GPU storage buffer layout matching the WGSL `ConvolveParams` struct.
-/// Uses storage (not uniform) because WGSL uniform array<f32,N> has 16-byte element stride.
-struct ConvolveParams {
-  int32_t orderX;
-  int32_t orderY;
-  int32_t targetX;
-  int32_t targetY;
-  float divisor;
-  float bias;
-  uint32_t edgeMode;
-  uint32_t preserveAlpha;
-  float kernel[25];  // Row-major kernel values (max 5×5).
-};
-
 /// GPU storage buffer layout matching the WGSL `TurbulenceParams` struct.
 struct TurbulenceParams {
   float baseFreqX;
@@ -1216,10 +1204,10 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   return program;
 }
 
-/// Builds a compute pipeline from build-time emitted \p wgsl and its transcribed interface.
+/// Builds a WGSL compute pipeline through the descriptor-based runtime path.
 /// @param runtime Device to create through. @param name Debug label stem.
-/// @param wgsl Emitted WGSL source. @param entryPoint Compute entry point name.
-/// @param layoutEntries Bind group 0 entries. @param workgroupSize Entry point size on x and y.
+/// @param wgsl Emitted source. @param entryPoint Compute entry point name.
+/// @param layoutEntries Bind group 0 entries. @param workgroupSize Workgroup x/y extent.
 RuntimeComputeProgram CreateRuntimeComputeProgram(
     gpu::Device& runtime, std::string_view name, std::string_view wgsl, std::string_view entryPoint,
     std::vector<gpu::BindGroupLayoutEntry> layoutEntries, uint32_t workgroupSize) {
@@ -1720,51 +1708,19 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kComponentTransferWorkgroupSize);
   }
 
-  // --- feConvolveMatrix pipeline (input + output + storage buffer for params) ---
-  // Uses ReadOnlyStorage instead of Uniform because WGSL uniform arrays
-  // have 16-byte element stride, making array<f32, 25> 400 bytes vs 100.
   {
-    wgpu::BindGroupLayoutEntry entries[3]{};
-
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
-    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-    entries[0].texture.multisampled = false;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[1].storageTexture.format = kFormat;
-    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[2].binding = 2;
-    entries[2].visibility = wgpu::ShaderStage::Compute;
-    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[2].buffer.minBindingSize = sizeof(ConvolveParams);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterConvolveMatrixBGL");
-    bglDesc.entryCount = 3;
-    bglDesc.entries = entries;
-    convolveMatrixBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterConvolveMatrixPipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {convolveMatrixBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterConvolveMatrixShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterConvolveMatrixPipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    convolveMatrixPipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::ConvolveMatrixBinding;
+    convolveMatrixProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(),
+        gpu::generated::convolve_matrix::BuildDescriptor(
+            device_.adapterDevice().shaderSourceKind()),
+        {SampledInputEntry(static_cast<uint32_t>(ConvolveMatrixBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(ConvolveMatrixBinding::OutputTexture)),
+         {static_cast<uint32_t>(ConvolveMatrixBinding::Params), gpu::ShaderStage::Compute,
+          gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
+  // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
     using gpu::shader::programs::TurbulenceBinding;
     turbulenceProgram_ = CreateRuntimeComputeProgram(
@@ -3430,10 +3386,60 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
 
 namespace {
 
-bool HasValidConvolveKernel(const svg::components::filter_primitive::ConvolveMatrix& primitive,
-                            int requiredSize) {
-  return primitive.orderX > 0 && primitive.orderY > 0 && requiredSize <= 25 &&
-         static_cast<int>(primitive.kernelMatrix.size()) == requiredSize;
+std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixParams(
+    const svg::components::filter_primitive::ConvolveMatrix& primitive) {
+  using gpu::shader::programs::ConvolveMatrixParams;
+  using gpu::shader::programs::kConvolveMatrixKernelCapacity;
+  if (primitive.orderX <= 0 || primitive.orderY <= 0 ||
+      primitive.orderX > static_cast<int>(kConvolveMatrixKernelCapacity) ||
+      primitive.orderY > static_cast<int>(kConvolveMatrixKernelCapacity)) {
+    return std::nullopt;
+  }
+  const size_t requiredSize = static_cast<size_t>(primitive.orderX) * primitive.orderY;
+  if (requiredSize > kConvolveMatrixKernelCapacity ||
+      primitive.kernelMatrix.size() != requiredSize) {
+    return std::nullopt;
+  }
+
+  const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
+  const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
+  if (targetX < 0 || targetX >= primitive.orderX || targetY < 0 || targetY >= primitive.orderY) {
+    return std::nullopt;
+  }
+
+  double divisor = 0.0;
+  if (primitive.divisor.has_value()) {
+    divisor = *primitive.divisor;
+  } else {
+    for (double coefficient : primitive.kernelMatrix) {
+      divisor += coefficient;
+    }
+    if (std::abs(divisor) < 1e-10) {
+      divisor = 1.0;
+    }
+  }
+  const float divisorF32 = static_cast<float>(divisor);
+  const float biasF32 = static_cast<float>(primitive.bias);
+  if (!std::isfinite(divisorF32) || divisorF32 == 0.0f || !std::isfinite(biasF32)) {
+    return std::nullopt;
+  }
+
+  ConvolveMatrixParams result{};
+  result.orderX = primitive.orderX;
+  result.orderY = primitive.orderY;
+  result.targetX = targetX;
+  result.targetY = targetY;
+  result.divisor = divisorF32;
+  result.bias = biasF32;
+  result.edgeMode = toConvolveEdgeMode(primitive.edgeMode);
+  result.preserveAlpha = primitive.preserveAlpha ? 1u : 0u;
+  for (size_t index = 0; index < requiredSize; ++index) {
+    result.kernel[index] = static_cast<float>(primitive.kernelMatrix[index]);
+    if (!std::isfinite(result.kernel[index])) {
+      return std::nullopt;
+    }
+  }
+  return result;
 }
 
 }  // namespace
@@ -3445,115 +3451,36 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
     return {};
   }
 
-  const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
   const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
   const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
-  const int requiredSize = primitive.orderX * primitive.orderY;
-
-  // Compute effective divisor.
-  double divisor = 1.0;
-  if (primitive.divisor.has_value()) {
-    divisor = primitive.divisor.value();
-  } else {
-    double sum = 0.0;
-    for (double v : primitive.kernelMatrix) {
-      sum += v;
-    }
-    divisor = (std::abs(sum) < 1e-10) ? 1.0 : sum;
-  }
-
-  // SVG spec validation: invalid parameters produce transparent black.
-  // Matches the CPU reference's guard in FilterGraph.cpp.
-  // The shader kernel array holds 25 elements, so any orderX*orderY <= 25 is valid.
-  const bool invalid = !HasValidConvolveKernel(primitive, requiredSize) || targetX < 0 ||
-                       targetX >= primitive.orderX || targetY < 0 || targetY >= primitive.orderY ||
-                       (primitive.divisor.has_value() && primitive.divisor.value() == 0.0);
-
-  if (invalid) {
+  const std::optional<gpu::shader::programs::ConvolveMatrixParams> params =
+      BuildConvolveMatrixParams(primitive);
+  if (!params.has_value()) {
     if (verbose_) {
       std::cerr << "GeodeFilterEngine: feConvolveMatrix invalid params (" << primitive.orderX << "×"
                 << primitive.orderY << ", targetX=" << targetX << ", targetY=" << targetY
-                << ", divisor=" << divisor << "); outputting transparent black\n";
+                << "); outputting transparent black\n";
     }
     // Return a transparent texture (matches CPU reference behavior).
     return createTransparentIntermediateTexture(arena, width, height,
                                                 "FilterConvolveMatrixTransparent");
   }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterConvolveMatrixOutput");
-  if (!output) {
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterConvolveMatrixOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
-
-  ConvolveParams params{};
-  params.orderX = primitive.orderX;
-  params.orderY = primitive.orderY;
-  params.targetX = targetX;
-  params.targetY = targetY;
-  params.divisor = static_cast<float>(divisor);
-  params.bias = static_cast<float>(primitive.bias);
-  params.edgeMode = toConvolveEdgeMode(primitive.edgeMode);
-  params.preserveAlpha = primitive.preserveAlpha ? 1u : 0u;
-
-  // Fill kernel array (row-major, max 25 entries).
-  std::fill(std::begin(params.kernel), std::end(params.kernel), 0.0f);
-  const int count = std::min(static_cast<int>(primitive.kernelMatrix.size()),
-                             primitive.orderX * primitive.orderY);
-  for (int i = 0; i < count && i < 25; ++i) {
-    params.kernel[i] = static_cast<float>(primitive.kernelMatrix[i]);
+  if (!dispatchRuntimeInputOutputParameters(arena, convolveMatrixProgram_, input, *output,
+                                            UniformBytes(*params), "FilterConvolveMatrixPass",
+                                            gpu::shader::programs::kConvolveMatrixWorkgroupSize)) {
+    return {};
   }
-
-  // Upload as a storage buffer (not uniform - array<f32,25> has 16-byte stride in uniform).
-  wgpu::BufferDescriptor bufDesc{};
-  bufDesc.label = wgpuLabel("ConvolveMatrixParamsStorage");
-  bufDesc.size = sizeof(ConvolveParams);
-  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  bufDesc.mappedAtCreation = false;
-  wgpu::Buffer paramsBuffer = arena.createBuffer(dev, bufDesc);
-  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
-  device_.countBufferWrite(sizeof(params));
-
-  // Build bind group.
-  ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = outputView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = paramsBuffer;
-  bgEntries[2].offset = 0;
-  bgEntries[2].size = sizeof(ConvolveParams);
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterConvolveMatrixBindGroup");
-  bgDesc.layout = convolveMatrixBindGroupLayout_.get();
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterConvolveMatrixPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(convolveMatrixPipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyTurbulence(
