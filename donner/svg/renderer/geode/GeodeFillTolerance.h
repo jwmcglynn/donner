@@ -24,9 +24,14 @@ inline constexpr double kMinFillCubicTolerance = 1e-6;
  * @param deviceFromLocal Transform applied to the encoded path at draw time.
  */
 inline double FillCubicToleranceFor(const Transform2d& deviceFromLocal) {
-  const double largestCoefficient =
-      std::max({std::abs(deviceFromLocal.data[0]), std::abs(deviceFromLocal.data[1]),
-                std::abs(deviceFromLocal.data[2]), std::abs(deviceFromLocal.data[3])});
+  double largestCoefficient = 0.0;
+  for (double coefficient : {deviceFromLocal.data[0], deviceFromLocal.data[1],
+                             deviceFromLocal.data[2], deviceFromLocal.data[3]}) {
+    if (!std::isfinite(coefficient)) {
+      return kMinFillCubicTolerance;
+    }
+    largestCoefficient = std::max(largestCoefficient, std::abs(coefficient));
+  }
   // Clamp before squaring large coefficients in the singular-value calculation.
   if (largestCoefficient >= kFillCubicDevicePixels / kMinFillCubicTolerance) {
     return kMinFillCubicTolerance;

@@ -20,6 +20,19 @@ TEST(GeodeFillTolerance, RefinesOnlyAtScaleBucketCrossings) {
   EXPECT_DOUBLE_EQ(FillCubicToleranceFor(Transform2d::Scale(1e200)), kMinFillCubicTolerance);
 }
 
+TEST(GeodeFillTolerance, NonfiniteLinearCoefficientsUseBoundedConservativeTolerance) {
+  for (double invalid :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()}) {
+    for (size_t index = 0; index < 4; ++index) {
+      Transform2d deviceFromLocal;
+      deviceFromLocal.data[index] = invalid;
+      EXPECT_DOUBLE_EQ(FillCubicToleranceFor(deviceFromLocal), kMinFillCubicTolerance)
+          << "linear coefficient " << index << " was " << invalid;
+    }
+  }
+}
+
 TEST(GeodeFillTolerance, BoundsCubicShapeErrorUnderAffineTransforms) {
   const Path cubic = PathBuilder()
                          .moveTo({0.0, 0.0})
