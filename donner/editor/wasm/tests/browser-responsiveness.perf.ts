@@ -7,6 +7,7 @@ interface Diagnostics extends Window {
     renderedFrames: number;
     uiFrameMsSamples: number[];
     lastFrameAtMs: number;
+    phaseTotalsMs?: Record<string, number>;
   };
   __donnerHostFrameTiming?: { frames: number; sums: Record<string, number> };
   __donnerAsyncifySuspendStats?: {
@@ -43,6 +44,12 @@ interface Diagnostics extends Window {
     [name: string]: unknown;
   };
   __donnerSampleThumbnailStats?: { pending: boolean; active: boolean; resultReady: boolean };
+  __donnerLayerThumbnailStats?: {
+    rowCount: number;
+    renderedCount: number;
+    deferredCount: number;
+    snapshotRebuildCount: number;
+  };
   __donnerFrameTickStats?: unknown;
   __donnerMemoryStats?: unknown;
   __donnerImGuiDrawStats?: unknown;
@@ -61,6 +68,7 @@ async function snapshot(page: Page, detailed = false) {
       viewport: state.__donnerViewportStats,
       worker: state.__donnerWorkerStats,
       thumbnails: state.__donnerSampleThumbnailStats,
+      layerThumbnails: state.__donnerLayerThumbnailStats,
       ticks: state.__donnerFrameTickStats,
       memory: detailed ? state.__donnerMemoryStats : undefined,
       draw: state.__donnerImGuiDrawStats,
@@ -90,6 +98,13 @@ function phaseReport(before: Snapshot, after: Snapshot, inputToFrameMs: number[]
     uiFrameMs: distribution(
       after.frameLoop?.uiFrameMsSamples.slice(before.frameLoop?.uiFrameMsSamples.length ?? 0) ?? [],
     ),
+    uiPhaseMeanMs: Object.fromEntries(
+      Object.entries(after.frameLoop?.phaseTotalsMs ?? {}).map(([name, total]) => [
+        name,
+        (total - (before.frameLoop?.phaseTotalsMs?.[name] ?? 0)) / Math.max(frames, 1),
+      ]),
+    ),
+    layerThumbnails: after.layerThumbnails,
     hostMeanMs: Object.fromEntries(
       Object.entries(after.host?.sums ?? {}).map(([name, total]) => [
         name,
