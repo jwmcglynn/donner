@@ -145,12 +145,40 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+py_binary(
+    name = "ci_remote_gpu_targets",
+    srcs = ["ci_remote_gpu_targets.py"],
+)
+
 py_test(
     name = "ci_remote_gpu_targets_tests",
     size = "small",
     srcs = [
         "ci_remote_gpu_targets.py",
         "ci_remote_gpu_targets_tests.py",
+    ],
+    data = [":ci_remote_gpu_targets"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "check_python_quality_tests",
+    size = "small",
+    srcs = [
+        "check_python_quality.py",
+        "check_python_quality_tests.py",
+    ],
+    imports = ["."],
+)
+
+py_test(
+    name = "verify_metal_validation_tests",
+    size = "small",
+    imports = ["."],
+    srcs = [
+        "metal_validation_profile.py",
+        "verify_metal_validation.py",
+        "verify_metal_validation_tests.py",
     ],
 )
 
