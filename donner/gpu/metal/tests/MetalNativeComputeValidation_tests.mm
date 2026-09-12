@@ -45,13 +45,31 @@ std::ostream& operator<<(std::ostream& os, PipelineFactory factory) {
   return os << PipelineFactoryName(factory);
 }
 
+enum class ResourceDeclaration { Implicit, Read, Write, ReadWrite };
+
+std::string ResourceDeclarationName(ResourceDeclaration declaration) {
+  switch (declaration) {
+    case ResourceDeclaration::Implicit: return "Implicit";
+    case ResourceDeclaration::Read: return "Read";
+    case ResourceDeclaration::Write: return "Write";
+    case ResourceDeclaration::ReadWrite: return "ReadWrite";
+  }
+  return "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, ResourceDeclaration declaration) {
+  return os << ResourceDeclarationName(declaration);
+}
+
 struct NativeComputeCase {
   MTLStorageMode storageMode;
   PipelineFactory factory;
+  ResourceDeclaration resourceDeclaration = ResourceDeclaration::Implicit;
 };
 
 void PrintTo(const NativeComputeCase& value, std::ostream* os) {
-  *os << "storage=" << StorageModeName(value.storageMode) << " factory=" << value.factory;
+  *os << "storage=" << StorageModeName(value.storageMode) << " factory=" << value.factory
+      << " resource_declaration=" << value.resourceDeclaration;
 }
 
 class MetalNativeComputeValidationTest : public testing::TestWithParam<NativeComputeCase> {};
@@ -59,12 +77,18 @@ class MetalNativeComputeValidationTest : public testing::TestWithParam<NativeCom
 TEST_P(MetalNativeComputeValidationTest, ConstantColorWriteAtTextureSlotOne) {
   @autoreleasepool {
     const NativeComputeCase testCase = GetParam();
-    for (const char* name :
-         {"MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION", "MTL_SHADER_VALIDATION_ABORT_ON_FAULT",
-          "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING",
-          "MTL_SHADER_VALIDATION_REPORT_TO_STDERR"}) {
+    const char* expectedShaderValidation =
+        std::getenv("DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION");
+    ASSERT_THAT(expectedShaderValidation, testing::AnyOf(testing::StrEq("0"), testing::StrEq("1")))
+        << "The diagnostic target must specify its shader-validation control";
+    ASSERT_STREQ(std::getenv("MTL_SHADER_VALIDATION"), expectedShaderValidation);
+    for (const char* name : {"MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION_ABORT_ON_FAULT",
+                             "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING",
+                             "MTL_SHADER_VALIDATION_REPORT_TO_STDERR"}) {
       ASSERT_STREQ(std::getenv(name), "1") << name;
     }
+    std::cerr << "Native Metal control: requested_shader_validation=" << expectedShaderValidation
+              << std::endl;
 
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     ASSERT_THAT(device != nil, testing::IsTrue()) << "MTLCreateSystemDefaultDevice returned nil";
@@ -73,7 +97,8 @@ TEST_P(MetalNativeComputeValidationTest, ConstantColorWriteAtTextureSlotOne) {
               << " device=" << device.name.UTF8String
               << " unified_memory=" << static_cast<bool>(device.hasUnifiedMemory)
               << " requested_storage=" << StorageModeName(testCase.storageMode)
-              << " requested_factory=" << testCase.factory << std::endl;
+              << " requested_factory=" << testCase.factory
+              << " resource_declaration=" << testCase.resourceDeclaration << std::endl;
 
     MTLTextureDescriptor* descriptor =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -161,6 +186,18 @@ kernel void write_constant_red(texture2d<float, access::write> output [[texture(
     ASSERT_THAT(compute != nil, testing::IsTrue()) << "Native compute encoder creation failed";
     [compute setComputePipelineState:pipeline];
     [compute setTexture:texture atIndex:1];
+    switch (testCase.resourceDeclaration) {
+      case ResourceDeclaration::Implicit: break;
+      case ResourceDeclaration::Read:
+        [compute useResource:texture usage:MTLResourceUsageRead];
+        break;
+      case ResourceDeclaration::Write:
+        [compute useResource:texture usage:MTLResourceUsageWrite];
+        break;
+      case ResourceDeclaration::ReadWrite:
+        [compute useResource:texture usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+        break;
+    }
     [compute dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
     [compute endEncoding];
 
@@ -195,10 +232,20 @@ INSTANTIATE_TEST_SUITE_P(
                     NativeComputeCase{MTLStorageModeManaged, PipelineFactory::Function},
                     NativeComputeCase{MTLStorageModePrivate, PipelineFactory::Function},
                     NativeComputeCase{MTLStorageModeShared, PipelineFactory::DescriptorDefault},
-                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::DescriptorEnabled}),
+                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::DescriptorEnabled},
+                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::Function,
+                                      ResourceDeclaration::Read},
+                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::Function,
+                                      ResourceDeclaration::Write},
+                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::Function,
+                                      ResourceDeclaration::ReadWrite}),
     [](const testing::TestParamInfo<NativeComputeCase>& info) {
-      return StorageModeName(info.param.storageMode) + "_" +
-             PipelineFactoryName(info.param.factory);
+      std::string name =
+          StorageModeName(info.param.storageMode) + "_" + PipelineFactoryName(info.param.factory);
+      if (info.param.resourceDeclaration != ResourceDeclaration::Implicit) {
+        name += "_Resource" + ResourceDeclarationName(info.param.resourceDeclaration);
+      }
+      return name;
     });
 
 }  // namespace

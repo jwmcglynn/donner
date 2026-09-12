@@ -233,18 +233,40 @@ objc_library(
     deps = ["@com_google_gtest//:gtest"],
 )
 
-# Each storage/factory case runs in its own process so a native abort preserves the others.
+# Each native control runs in its own process so a validation abort preserves the others.
 cc_test(
     name = "metal_native_compute_validation_tests",
     size = "small",
     env = {
+        "DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION": "1",
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
     },
-    shard_count = 5,
+    shard_count = 8,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_native_compute_validation_impl",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Paired native compute control with API validation and uninstrumented shader execution.
+cc_test(
+    name = "metal_native_compute_api_only_tests",
+    size = "small",
+    args = ["--gtest_filter=StorageAndFactories/MetalNativeComputeValidationTest.ConstantColorWriteAtTextureSlotOne/Shared_Function"],
+    env = {
+        "DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION": "0",
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "0",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+    },
+    shard_count = 1,
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_native_compute_validation_impl",

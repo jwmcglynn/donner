@@ -30,19 +30,22 @@ jobs:
           external-cache: true
           cache-save: false
 
-      - name: Compare native compute storage and pipeline controls
+      - name: Compare native compute validation controls
         shell: bash
         run: |
           set -euo pipefail
           bazelisk test --config=ci --macos_minimum_os=13.3 \
-            --test_env=HOME --test_output=all --nocache_test_results \
-            //donner/gpu/metal/tests:metal_native_compute_validation_tests
+            --test_env=HOME --test_output=all --nocache_test_results --keep_going \
+            //donner/gpu/metal/tests:metal_native_compute_validation_tests \
+            //donner/gpu/metal/tests:metal_native_compute_api_only_tests
 
       - name: Upload native validation evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: metal-native-validation-${{ github.run_id }}
-          path: bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_validation_tests
+          path: |
+            bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_validation_tests
+            bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_api_only_tests
           if-no-files-found: ignore
           retention-days: 7
