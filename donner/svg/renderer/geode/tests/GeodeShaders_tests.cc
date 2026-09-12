@@ -152,52 +152,92 @@ protected:
     return result;
   }
 
-  static svg::RendererBitmap coverage(EndpointShader shader, bool transpose, bool reverse,
-                                      CoverageProbe probe = CoverageProbe::Endpoint) {
-    // These are the independently rounded control points of the two line segments meeting at
-    // the lightning tip in donner_splash.svg, with a horizontal closing edge between them.
-    std::array<float, 12> curves = {623.76f, 226.98f, 625.67f,  225.365f, 627.58f, 223.75f,
-                                    627.56f, 223.75f, 625.095f, 224.725f, 622.63f, 225.7f};
+  struct ProbeInput {
+    std::array<float, 12> curves;
     std::array<float, 2> sample = {540.0f, 223.75f};
-    const bool singleCrossing =
-        probe != CoverageProbe::Endpoint && probe != CoverageProbe::FlatEndpoint;
-    if (singleCrossing && probe != CoverageProbe::OwnedEndpoint) {
-      curves = {627.0f, 223.0f, 627.0f, 224.0f, 627.0f, 225.0f};
+    uint32_t curveCount = 1;
+  };
+
+  /// Owners remain in the calling scope until the output has been read back.
+  struct ProbePipeline {
+    ScopedWgpuHandle<wgpu::ShaderModule> module;
+    ScopedWgpuHandle<wgpu::ComputePipeline> pipeline;
+  };
+
+  struct ProbeBinding {
+    ScopedWgpuHandle<wgpu::BindGroupLayout> layout;
+    wgpu::BindGroup group;
+  };
+
+  struct ProbeOutput {
+    ProbeBinding binding;
+    wgpu::Texture texture;
+    wgpu::Buffer readbackBuffer;
+  };
+
+  static void configureBoundaryInput(ProbeInput& input, CoverageProbe probe) {
+    if (probe == CoverageProbe::BelowStart) {
+      input.sample[1] = std::nextafter(223.0f, -std::numeric_limits<float>::infinity());
+    } else if (probe == CoverageProbe::AtMaximum) {
+      input.sample[1] = 225.0f;
+    } else if (probe == CoverageProbe::InvalidControl) {
+      input.curves[3] = std::numeric_limits<float>::infinity();
+      input.sample[1] = 223.0f;
+    } else if (probe == CoverageProbe::InvalidSample) {
+      input.sample[1] = std::numeric_limits<float>::quiet_NaN();
     }
+  }
+
+  static void configureProbeInput(ProbeInput& input, CoverageProbe probe) {
     if (probe == CoverageProbe::FlatEndpoint || probe == CoverageProbe::FlatOwnedEndpoint) {
-      curves = {627.0f, 4.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 4.0f};
-      sample[1] = 0.0f;
+      input.curves = {627.0f, 4.0f, 627.0f, 0.0f, 627.0f, 0.0f,
+                      627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 4.0f};
+      input.sample[1] = 0.0f;
     }
     if (probe == CoverageProbe::NearLinear || probe == CoverageProbe::LargeQuadratic ||
         probe == CoverageProbe::SmallQuadratic) {
       const float scale = probe == CoverageProbe::LargeQuadratic   ? 1e30f
                           : probe == CoverageProbe::SmallQuadratic ? 1e-25f
                                                                    : 1e-6f;
-      curves = {627.0f, 0.0f, 627.0f, scale, 627.0f, 4.0f * scale};
-      sample[1] = 3.0f * scale;
-    } else if (probe == CoverageProbe::BelowStart) {
-      sample[1] = std::nextafter(223.0f, -std::numeric_limits<float>::infinity());
-    } else if (probe == CoverageProbe::AtMaximum) {
-      sample[1] = 225.0f;
-    } else if (probe == CoverageProbe::InvalidControl) {
-      curves[3] = std::numeric_limits<float>::infinity();
-      sample[1] = 223.0f;
-    } else if (probe == CoverageProbe::InvalidSample) {
-      sample[1] = std::numeric_limits<float>::quiet_NaN();
+      input.curves = {627.0f, 0.0f, 627.0f, scale, 627.0f, 4.0f * scale};
+      input.sample[1] = 3.0f * scale;
+    } else {
+      configureBoundaryInput(input, probe);
     }
+  }
+
+  static void orientProbeInput(ProbeInput& input, bool transpose, bool reverse) {
     if (reverse) {
       for (size_t first : {0u, 6u}) {
-        std::swap(curves[first], curves[first + 4]);
-        std::swap(curves[first + 1], curves[first + 5]);
+        std::swap(input.curves[first], input.curves[first + 4]);
+        std::swap(input.curves[first + 1], input.curves[first + 5]);
       }
     }
     if (transpose) {
-      std::swap(sample[0], sample[1]);
-      for (size_t i = 0; i < curves.size(); i += 2) {
-        std::swap(curves[i], curves[i + 1]);
+      std::swap(input.sample[0], input.sample[1]);
+      for (size_t i = 0; i < input.curves.size(); i += 2) {
+        std::swap(input.curves[i], input.curves[i + 1]);
       }
     }
+  }
 
+  static ProbeInput makeProbeInput(CoverageProbe probe, bool transpose, bool reverse) {
+    // These are the independently rounded control points of the two line segments meeting at
+    // the lightning tip in donner_splash.svg, with a horizontal closing edge between them.
+    ProbeInput input{{623.76f, 226.98f, 625.67f, 225.365f, 627.58f, 223.75f, 627.56f, 223.75f,
+                      625.095f, 224.725f, 622.63f, 225.7f}};
+    const bool singleCrossing =
+        probe != CoverageProbe::Endpoint && probe != CoverageProbe::FlatEndpoint;
+    input.curveCount = singleCrossing ? 1u : 2u;
+    if (singleCrossing && probe != CoverageProbe::OwnedEndpoint) {
+      input.curves = {627.0f, 223.0f, 627.0f, 224.0f, 627.0f, 225.0f};
+    }
+    configureProbeInput(input, probe);
+    orientProbeInput(input, transpose, reverse);
+    return input;
+  }
+
+  static std::string coverageSource(EndpointShader shader, bool transpose) {
     std::string wgsl = source(shader);
     const std::string function = transpose ? "accumulateVert" : "accumulateHoriz";
     const std::string paint = shader == EndpointShader::Fill ? "paint, " : "";
@@ -214,34 +254,45 @@ fn endpoint_coverage() {
     wgsl += R"(  textureStore(endpointResult, vec2i(0), vec4f(abs(ray.cov), 0.0, 0.0, 1.0));
 }
 )";
+    return wgsl;
+  }
 
-    ScopedWgpuResourceArena resources;
+  static ProbePipeline createProbePipeline(const std::string& wgsl) {
     const auto& runtime = device()->device();
-    const auto& queue = device()->queue();
     wgpu::ShaderSourceWGSL wgslSource{wgpu::Default};
     wgslSource.code = wgpuLabel(wgsl);
     wgpu::ShaderModuleDescriptor moduleDesc{wgpu::Default};
     moduleDesc.nextInChain = &wgslSource.chain;
-    const ScopedWgpuHandle<wgpu::ShaderModule> module(runtime.createShaderModule(moduleDesc));
+    ProbePipeline result;
+    result.module = ScopedWgpuHandle<wgpu::ShaderModule>(runtime.createShaderModule(moduleDesc));
     wgpu::ComputePipelineDescriptor pipelineDesc{};
-    pipelineDesc.compute.module = module.get();
+    pipelineDesc.compute.module = result.module.get();
     pipelineDesc.compute.entryPoint = wgpuLabel("endpoint_coverage");
-    const ScopedWgpuHandle<wgpu::ComputePipeline> pipeline(
-        runtime.createComputePipeline(pipelineDesc));
+    result.pipeline =
+        ScopedWgpuHandle<wgpu::ComputePipeline>(runtime.createComputePipeline(pipelineDesc));
+    return result;
+  }
 
-    const auto storage = [&](const void* data, size_t size) {
-      wgpu::BufferDescriptor descriptor{};
-      descriptor.size = size;
-      descriptor.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-      const wgpu::Buffer buffer = resources.retain(runtime.createBuffer(descriptor));
-      queue.writeBuffer(buffer, 0, data, size);
-      return buffer;
-    };
-    const std::array<uint32_t, 8> band = {0, singleCrossing ? 1u : 2u};
+  static wgpu::Buffer storageBuffer(ScopedWgpuResourceArena& resources, const void* data,
+                                    size_t size) {
+    wgpu::BufferDescriptor descriptor{};
+    descriptor.size = size;
+    descriptor.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    const wgpu::Buffer buffer = resources.retain(device()->device().createBuffer(descriptor));
+    device()->queue().writeBuffer(buffer, 0, data, size);
+    return buffer;
+  }
+
+  static ProbeBinding createGeometryBinding(ScopedWgpuResourceArena& resources,
+                                            const wgpu::ComputePipeline& pipeline,
+                                            const ProbeInput& input, EndpointShader shader,
+                                            bool transpose) {
+    const std::array<uint32_t, 8> band = {0, input.curveCount};
     const std::array<uint32_t, 2> indices = {0, 1};
-    const wgpu::Buffer bandBuffer = storage(band.data(), sizeof(band));
-    const wgpu::Buffer curveBuffer = storage(curves.data(), sizeof(curves));
-    const wgpu::Buffer indexBuffer = storage(indices.data(), sizeof(indices));
+    const wgpu::Buffer bandBuffer = storageBuffer(resources, band.data(), sizeof(band));
+    const wgpu::Buffer curveBuffer =
+        storageBuffer(resources, input.curves.data(), sizeof(input.curves));
+    const wgpu::Buffer indexBuffer = storageBuffer(resources, indices.data(), sizeof(indices));
     const bool typed = shader == EndpointShader::TypedFill;
     const bool fill = shader == EndpointShader::Fill;
     const uint32_t bandBinding = !transpose ? 1 : (typed || fill ? 8 : 5);
@@ -253,18 +304,24 @@ fn endpoint_coverage() {
     entries[0].size = sizeof(band);
     entries[1].binding = curveBinding;
     entries[1].buffer = curveBuffer;
-    entries[1].size = sizeof(curves);
+    entries[1].size = sizeof(input.curves);
     entries[2].binding = indexBinding;
     entries[2].buffer = indexBuffer;
     entries[2].size = sizeof(indices);
+    ProbeBinding result;
+    result.layout = ScopedWgpuHandle<wgpu::BindGroupLayout>(pipeline.getBindGroupLayout(0));
     wgpu::BindGroupDescriptor groupDesc{};
-    const ScopedWgpuHandle<wgpu::BindGroupLayout> geometryLayout(
-        pipeline.get().getBindGroupLayout(0));
-    groupDesc.layout = geometryLayout.get();
+    groupDesc.layout = result.layout.get();
     groupDesc.entries = entries.data();
     groupDesc.entryCount = typed ? 2 : 3;
-    const wgpu::BindGroup geometry = resources.retain(runtime.createBindGroup(groupDesc));
+    result.group = resources.retain(device()->device().createBindGroup(groupDesc));
+    return result;
+  }
 
+  static ProbeOutput createProbeOutput(ScopedWgpuResourceArena& resources,
+                                       const wgpu::ComputePipeline& pipeline,
+                                       const std::array<float, 2>& sample) {
+    const auto& runtime = device()->device();
     wgpu::TextureDescriptor textureDesc{};
     textureDesc.size = {1, 1, 1};
     textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
@@ -272,42 +329,61 @@ fn endpoint_coverage() {
     textureDesc.mipLevelCount = 1;
     textureDesc.sampleCount = 1;
     textureDesc.dimension = wgpu::TextureDimension::_2D;
-    const wgpu::Texture texture = resources.retain(runtime.createTexture(textureDesc));
-    const wgpu::Buffer sampleBuffer = storage(sample.data(), sizeof(sample));
+    ProbeOutput result;
+    result.texture = resources.retain(runtime.createTexture(textureDesc));
+    const wgpu::Buffer sampleBuffer = storageBuffer(resources, sample.data(), sizeof(sample));
     std::array<wgpu::BindGroupEntry, 2> outputEntries{};
     outputEntries[0].binding = 0;
-    outputEntries[0].textureView = resources.retain(texture.createView());
+    outputEntries[0].textureView = resources.retain(result.texture.createView());
     outputEntries[1].binding = 1;
     outputEntries[1].buffer = sampleBuffer;
     outputEntries[1].size = sizeof(sample);
-    const ScopedWgpuHandle<wgpu::BindGroupLayout> outputLayout(
-        pipeline.get().getBindGroupLayout(1));
-    groupDesc.layout = outputLayout.get();
+    result.binding.layout = ScopedWgpuHandle<wgpu::BindGroupLayout>(pipeline.getBindGroupLayout(1));
+    wgpu::BindGroupDescriptor groupDesc{};
+    groupDesc.layout = result.binding.layout.get();
     groupDesc.entries = outputEntries.data();
     groupDesc.entryCount = outputEntries.size();
-    const wgpu::BindGroup output = resources.retain(runtime.createBindGroup(groupDesc));
+    result.binding.group = resources.retain(runtime.createBindGroup(groupDesc));
     wgpu::BufferDescriptor readbackDesc{};
     readbackDesc.size = 256;
     readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    const wgpu::Buffer buffer = resources.retain(runtime.createBuffer(readbackDesc));
-    const ScopedWgpuHandle<wgpu::CommandEncoder> encoder(runtime.createCommandEncoder());
+    result.readbackBuffer = resources.retain(runtime.createBuffer(readbackDesc));
+    return result;
+  }
+
+  static svg::RendererBitmap dispatchCoverage(const wgpu::ComputePipeline& pipeline,
+                                              const wgpu::BindGroup& geometry,
+                                              const ProbeOutput& output) {
+    const ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device()->device().createCommandEncoder());
     const ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass());
-    pass.get().setPipeline(pipeline.get());
+    pass.get().setPipeline(pipeline);
     pass.get().setBindGroup(0, geometry, 0, nullptr);
-    pass.get().setBindGroup(1, output, 0, nullptr);
+    pass.get().setBindGroup(1, output.binding.group, 0, nullptr);
     pass.get().dispatchWorkgroups(1, 1, 1);
     pass.get().end();
     wgpu::TexelCopyTextureInfo from{};
-    from.texture = texture;
+    from.texture = output.texture;
     wgpu::TexelCopyBufferInfo to{};
-    to.buffer = buffer;
+    to.buffer = output.readbackBuffer;
     to.layout.bytesPerRow = 256;
     to.layout.rowsPerImage = 1;
     const wgpu::Extent3D extent{1, 1, 1};
     encoder.get().copyTextureToBuffer(from, to, extent);
     const ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-    queue.submit(1, &commands.get());
-    return svg::RendererBitmap{Vector2i(1, 1), readback(buffer), 4};
+    device()->queue().submit(1, &commands.get());
+    return svg::RendererBitmap{Vector2i(1, 1), readback(output.readbackBuffer), 4};
+  }
+
+  static svg::RendererBitmap coverage(EndpointShader shader, bool transpose, bool reverse,
+                                      CoverageProbe probe = CoverageProbe::Endpoint) {
+    const ProbeInput input = makeProbeInput(probe, transpose, reverse);
+    const std::string wgsl = coverageSource(shader, transpose);
+    ScopedWgpuResourceArena resources;
+    const ProbePipeline pipeline = createProbePipeline(wgsl);
+    const ProbeBinding geometry =
+        createGeometryBinding(resources, pipeline.pipeline.get(), input, shader, transpose);
+    const ProbeOutput output = createProbeOutput(resources, pipeline.pipeline.get(), input.sample);
+    return dispatchCoverage(pipeline.pipeline.get(), geometry.group, output);
   }
 
   static void expectFlatTangentCancellation(EndpointShader shader) {
