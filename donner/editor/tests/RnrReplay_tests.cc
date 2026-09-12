@@ -499,22 +499,8 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
     EXPECT_LE(snapshot.resources.filterRetainedBytes, svg::components::kMaximumFilterFrameBytes);
   }
 
-  // Both backends have a bounded rounding difference in this filtered image, but of different
-  // kinds, so each arm gets its own documented allowance.
-  //
-  // TinySkia: cross-toolchain rounding only, all sub-threshold. Threshold below the renderer
-  // suite default and no pixel may exceed it, antialiased pixels included.
-  //
-  // Geode: the golden is one GPU's rasterization of this frame, and no other GPU reproduces it
-  // bit-exactly. Two effects, both measured against the committed golden on Apple Metal:
-  // ~10% of the frame differs by exactly one LSB in the gradient backdrop (all of it below the
-  // perceptual threshold or classified as antialiasing), and a near-horizontal lightning stroke
-  // edge whose coverage sits on a scanline boundary resolves to the other side of that boundary,
-  // flipping 29 pixels of one scanline outright - a contiguous run, so pixelmatch does not read
-  // it as antialiasing. The budget below covers two such knife-edge runs. It is three orders of
-  // magnitude below the regression this test guards (the filtered element disappearing changes
-  // over 100k pixels), so it cannot mask one. A bit-exact GPU golden is not portable across
-  // rasterizers and cannot gate CI.
+  // Exact GPU endpoint probes guard shared-vertex winding independently of the full-frame
+  // comparison's existing allowance for filtered-image rounding differences.
   constexpr int kGeodeCrossRasterizerEdgePixelBudget = 64;
   const std::string_view goldenPath =
       snapshot.usesTexturePresentation ? kGeodeGoldenPath : kTinySkiaGoldenPath;

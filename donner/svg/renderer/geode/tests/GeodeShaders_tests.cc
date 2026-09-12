@@ -83,7 +83,9 @@ enum class CoverageProbe {
   AtMaximum,
   InvalidControl,
   InvalidSample,
-  FlatEndpoint
+  FlatEndpoint,
+  OwnedEndpoint,
+  FlatOwnedEndpoint
 };
 
 /// Dispatches the production coverage function at an exact shared endpoint, bypassing only
@@ -159,10 +161,10 @@ protected:
     std::array<float, 2> sample = {540.0f, 223.75f};
     const bool singleCrossing =
         probe != CoverageProbe::Endpoint && probe != CoverageProbe::FlatEndpoint;
-    if (singleCrossing) {
+    if (singleCrossing && probe != CoverageProbe::OwnedEndpoint) {
       curves = {627.0f, 223.0f, 627.0f, 224.0f, 627.0f, 225.0f};
     }
-    if (probe == CoverageProbe::FlatEndpoint) {
+    if (probe == CoverageProbe::FlatEndpoint || probe == CoverageProbe::FlatOwnedEndpoint) {
       curves = {627.0f, 4.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 4.0f};
       sample[1] = 0.0f;
     }
@@ -330,11 +332,13 @@ fn endpoint_coverage() {
     for (CoverageProbe probe :
          {CoverageProbe::NearLinear, CoverageProbe::LargeQuadratic, CoverageProbe::SmallQuadratic,
           CoverageProbe::BelowStart, CoverageProbe::AtMaximum, CoverageProbe::InvalidControl,
-          CoverageProbe::InvalidSample}) {
+          CoverageProbe::InvalidSample, CoverageProbe::OwnedEndpoint,
+          CoverageProbe::FlatOwnedEndpoint}) {
       SCOPED_TRACE(static_cast<int>(probe));
-      const bool crosses = probe == CoverageProbe::NearLinear ||
-                           probe == CoverageProbe::LargeQuadratic ||
-                           probe == CoverageProbe::SmallQuadratic;
+      const bool crosses =
+          probe == CoverageProbe::NearLinear || probe == CoverageProbe::LargeQuadratic ||
+          probe == CoverageProbe::SmallQuadratic || probe == CoverageProbe::OwnedEndpoint ||
+          probe == CoverageProbe::FlatOwnedEndpoint;
       for (bool transpose : {false, true}) {
         for (bool reverse : {false, true}) {
           SCOPED_TRACE(transpose);

@@ -258,6 +258,7 @@
       ],
       "features": [
         "abs",
+        "all",
         "array",
         "break",
         "clamp",
@@ -395,6 +396,7 @@
       ],
       "features": [
         "abs",
+        "all",
         "array",
         "break",
         "clamp",
@@ -527,6 +529,7 @@
       ],
       "features": [
         "abs",
+        "all",
         "array",
         "break",
         "clamp",
