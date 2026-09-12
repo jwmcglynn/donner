@@ -722,7 +722,8 @@ Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor&
     usage |= MTLTextureUsageShaderRead;
   }
   if (HasAllFlags(descriptor.usage, TextureUsage::StorageBinding)) {
-    usage |= MTLTextureUsageShaderWrite;
+    // Use conservative storage usage for legacy shader validation.
+    usage |= MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
   }
   textureDescriptor.usage = usage;
   // Host-visible either way: render targets and storage textures are read back through blits
