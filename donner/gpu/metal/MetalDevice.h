@@ -170,6 +170,17 @@ public:
    */
   Result<std::vector<uint8_t>> readBackBuffer(const Buffer& buffer);
 
+  /// Native texture access declared to Metal, exposed for allocation-contract tests.
+  struct NativeTextureUsage {
+    bool shaderRead = false;    //!< Native shader-read usage.
+    bool shaderWrite = false;   //!< Native shader-write usage.
+    bool renderTarget = false;  //!< Native render-target usage.
+  };
+
+  /// Reads native usage after validating the texture's device, liveness, and generation.
+  /// @param texture A live texture owned by this device.
+  Result<NativeTextureUsage> textureUsageForTest(const Texture& texture) const;
+
   /// Message of the most recent asynchronous command-buffer execution error captured by a
   /// completion handler, or an empty string if none occurred. Test/diagnostic accessor.
   std::string lastErrorForTest() const;
