@@ -1812,6 +1812,70 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
       << "Zoom inside the same scale bucket must reuse the fill encode.";
 }
 
+TEST_F(RendererGeodeTest, CubicFillRefinementPreservesPendingInstances) {
+  Registry registry;
+  const EntityHandle source(registry, registry.create());
+  const Path cubic = PathBuilder()
+                         .moveTo({0.0, 0.0})
+                         .curveTo({1.0 / 3.0, 0.0}, {2.0 / 3.0, 0.0}, {1.0, 1.0})
+                         .lineTo({1.0, 0.0})
+                         .closePath()
+                         .build();
+  const auto render = [&](EntityHandle entity) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawPath(PathShape{.path = &cubic, .sourceEntity = entity}, StrokeParams{});
+    renderer.setTransform(Transform2d::Scale(32.0) * Transform2d::Translate(16.0, 16.0));
+    renderer.drawPath(PathShape{.path = &cubic, .sourceEntity = entity}, StrokeParams{});
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+  editor::tests::CompareBitmapToBitmap(render(source), render(EntityHandle()),
+                                       "cubic_fill_scale_batch",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, CubicFillRefinementReuploadsSolidAndGradientResidency) {
+  for (bool gradient : {false, true}) {
+    SCOPED_TRACE(gradient);
+    ParseWarningSink warningSink;
+    constexpr const char* source = R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <defs><linearGradient id="g"><stop stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+        <path id="p" d="M0 0 C.3333333333333333 0 .6666666666666666 0 1 1 L1 0 Z"/>
+      </svg>)svg";
+    const auto makeDocument = [&]() {
+      auto parsed = parser::SVGParser::ParseSVG(source, warningSink);
+      EXPECT_THAT(parsed.hasError(), testing::IsFalse());
+      SVGDocument document = std::move(parsed).result();
+      document.querySelector("#p")->setAttribute("fill", gradient ? "url(#g)" : "red");
+      RendererUtils::prepareDocumentForRendering(document, false, warningSink);
+      return document;
+    };
+    SVGDocument warmedDocument = makeDocument();
+    SVGDocument freshDocument = makeDocument();
+    const auto render = [&](RendererGeode& renderer, SVGDocument& document, double scale) {
+      const Entity entity = document.querySelector("#p")->unsafeEntityHandle().entity();
+      RenderViewport viewport;
+      viewport.size = Vector2d(64.0, 64.0);
+      viewport.devicePixelRatio = 1.0;
+      RendererDriver(renderer).drawEntityRange(document.registry(), entity, entity, viewport,
+                                               Transform2d::Scale(scale));
+      return renderer.takeSnapshot();
+    };
+    RendererGeode warmed = createRenderer();
+    RendererGeode fresh = createRenderer();
+    (void)render(warmed, warmedDocument, 1.0);
+    const RendererBitmap actual = render(warmed, warmedDocument, 32.0);
+    const RendererBitmap expected = render(fresh, freshDocument, 32.0);
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         gradient ? "cubic_gradient_zoom" : "cubic_solid_zoom",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 /// The resident gradient draw skips its uniform rewrite when the
 /// GradientUniforms block is byte-identical to the previous frame, so every
 /// gradient property the shader consumes must flow through that block for

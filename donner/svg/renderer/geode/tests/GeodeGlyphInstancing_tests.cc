@@ -17,6 +17,7 @@
 /// key, so resolving fonts from the host would make every count here a
 /// property of the machine that ran the test.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -123,6 +124,29 @@ protected:
     return frame;
   }
 };
+
+TEST_F(GeodeGlyphInstancingTest, ZoomRefinesGlyphEncodesAndReusesTheScaleBucket) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="2">
+        <text id="t" x="0" y="2" fill="black">ee</text>
+      </svg>)svg");
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_THAT(first.counters.glyphResidencyUploads, testing::Eq(1u));
+  auto text = document.querySelector("#t");
+  ASSERT_THAT(text, testing::Optional(testing::_));
+  text->setAttribute("transform", "scale(32)");
+  const Frame zoomed = render(renderer, document);
+  EXPECT_THAT(zoomed.counters.glyphResidencyUploads, testing::Eq(1u));
+  EXPECT_THAT(zoomed.counters.pathEncodes, testing::Eq(1u));
+  EXPECT_THAT(nonTransparentPixels(zoomed.bitmap), testing::Gt(0u));
+  text->setAttribute("transform", "scale(25)");
+  const Frame sameBucket = render(renderer, document);
+  EXPECT_THAT(sameBucket.counters.glyphResidencyUploads, testing::Eq(0u));
+  EXPECT_THAT(sameBucket.counters.pathEncodes, testing::Eq(0u));
+  EXPECT_THAT(nonTransparentPixels(sameBucket.bitmap), testing::Gt(0u));
+}
 
 /// A run repeats a handful of outlines across many occurrences. The first frame
 /// pays one upload per DISTINCT outline; every later occurrence, in that frame

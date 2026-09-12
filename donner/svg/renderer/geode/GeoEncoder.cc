@@ -10,6 +10,7 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
@@ -1055,7 +1056,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       return nullptr;
     }
     device->countPathEncode();
-    ownedEncoded = GeodePathEncoder::encode(*path, rule);
+    ownedEncoded = GeodePathEncoder::encode(*path, rule, FillCubicToleranceFor(transform));
     return &ownedEncoded;
   }
 

@@ -45,6 +45,7 @@
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -3138,7 +3139,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return std::nullopt;
     }
     device->countPathEncode();
-    geode::EncodedPath encoded = geode::GeodePathEncoder::encode(path, rule);
+    geode::EncodedPath encoded = geode::GeodePathEncoder::encode(
+        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform));
     if (encoded.rejected()) {
       geometryBudget->reject();
       return std::nullopt;
@@ -3165,7 +3167,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
         documentGeometryBudget(*source.registry());
     auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
-    if (cache.fillEncode) {
+    const double tolerance = geode::FillCubicToleranceFor(deviceFromLocalTransform);
+    if (cache.fillEncode && cache.fillTolerance <= tolerance) {
       return {&*cache.fillEncode, true};
     }
 
@@ -3176,6 +3179,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const std::size_t retainedBytes = encoded->retainedBytes();
     if (retainedBytes != std::numeric_limits<std::size_t>::max() &&
         cache.fillReservation.replace(documentBudget, retainedBytes)) {
+      if (cache.fillEncode && pendingBatchReferences(&*cache.fillEncode)) {
+        flushPendingBatch();
+      }
+      if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
+        resident->fillSlot.reset();
+        resident->gradientFillSlot.reset();
+      }
+      cache.fillTolerance = std::any_of(path.commands().begin(), path.commands().end(),
+                                        [](const Path::Command& command) {
+                                          return command.verb == Path::Verb::CurveTo;
+                                        })
+                                ? tolerance
+                                : 0.0;
       cache.fillEncode = std::move(*encoded);
       return {&*cache.fillEncode, true};
     }
@@ -6833,6 +6849,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       key.stretchScaleX = glyph.stretchScaleX;
       key.stretchScaleY = glyph.stretchScaleY;
       key.rotateDegrees = glyph.rotateDegrees;
+      key.fillTolerance = geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform);
 
       geode::GeodeGlyphResidentEntry* entry = impl_->residentGlyphEntry(
           registry, fontManager, run.font, glyph.glyphIndex, key, [&]() -> Path {

@@ -162,6 +162,23 @@ donner_cc_test(
     ],
 )
 
+donner_cc_library(
+    name = "geode_fill_tolerance",
+    hdrs = ["GeodeFillTolerance.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [":geode_stroke_tolerance"],
+)
+
+donner_cc_test(
+    name = "geode_fill_tolerance_tests",
+    srcs = ["tests/GeodeFillTolerance_tests.cc"],
+    deps = [
+        ":geode_fill_tolerance",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
 # Header-only ECS component for wave-2 GPU residence: persistent per-entity
 # GPU buffers for cached encoded paths. See design doc 0030 (wave 2).
 donner_cc_library(
@@ -801,6 +818,7 @@ donner_cc_library(
     ],
     deps = [
         ":geode_device",
+        ":geode_fill_tolerance",
         ":geode_path_encoder",
         ":geode_resident_path_component",
         ":geode_texture_encoder",
