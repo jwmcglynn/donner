@@ -14,7 +14,7 @@ namespace donner::gpu::shader::programs {
  * Latches the first builder error so a program can be transliterated linearly. On error every
  * subsequent expression receives a dummy `0.0f`; the resulting cascade errors are ignored because
  * only the first is reported. The inputs are static, so any latched error is a Donner bug
- * surfaced by the golden test, never a runtime condition.
+ * surfaced by program construction and compiler tests, never a runtime condition.
  */
 struct ErrorLatch {
   std::optional<ShaderError> error;  //!< First error, if any.

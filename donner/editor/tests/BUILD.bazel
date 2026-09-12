@@ -19,6 +19,7 @@ donner_cc_library(
     # blessed pixelmatch comparator for their frozen-baseline comparisons.
     visibility = [
         "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer/tests:__pkg__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [
@@ -192,6 +193,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    opens_gpu_device = True,
+    variants = ["geode"],
     deps = [
         "//donner/editor/gui:editor_window",
         "@com_google_gtest//:gtest_main",
@@ -248,6 +251,13 @@ donner_cc_test(
 donner_cc_test(
     name = "document_save_tests",
     srcs = ["DocumentSave_tests.cc"],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the symlink-destination fail-closed rule can never see one and the case keeps skipping into
+    # a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     deps = [
         ":bitmap_golden_compare",
         "//donner/base",
@@ -305,6 +315,7 @@ donner_cc_test(
     srcs = ["SourceSelection_tests.cc"],
     data = ["//:donner_splash.svg"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/base/xml",
         "//donner/editor:editor_app",
         "//donner/editor:source_selection",
@@ -483,6 +494,7 @@ donner_perf_cc_test(
     wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:editor_app",
@@ -503,10 +515,13 @@ donner_cc_test(
     data = [
         "//:donner_splash.svg",
     ],
+    opens_gpu_device = True,
     # 75 independent gtest cases (wall-clock-sensitive cases live in the
     # separate async_renderer_wallclock_tests target); shard for parallelism.
     shard_count = 4,
+    variants = ["geode"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
@@ -553,6 +568,7 @@ donner_cc_test(
         "perf",
     ],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
@@ -716,6 +732,7 @@ donner_perf_cc_test(
     ],
     wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/svg/compositor",
@@ -729,6 +746,7 @@ donner_cc_test(
     srcs = ["EditorApp_tests.cc"],
     data = ["//:donner_splash.svg"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:viewport_geometry",
         "//donner/svg",
@@ -982,6 +1000,7 @@ donner_cc_test(
         "//conditions:default": [],
     }),
     env = {"DONNER_TEST_TIMEOUT_SECONDS": "180"},
+    opens_gpu_device = True,
     # Six shards produced the shortest measured target critical path on the
     # software-Vulkan CI lane. Reducing this to two doubled target wall time;
     # per-case latency is controlled by compact deterministic fixtures.
@@ -991,6 +1010,7 @@ donner_cc_test(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    variants = ["geode"],
     deps = [
         ":bitmap_golden_compare",
         "//donner/base:gtest_timeout_main",
@@ -1030,8 +1050,11 @@ donner_cc_test(
         ":rnr_replay_testdata",
         "//:donner_splash.svg",
     ],
+    opens_gpu_device = True,
+    remote_parallel_ci = True,
     # One shard per scenario caps the target at its slowest single replay.
     shard_count = 4,
+    variants = ["geode"],
     deps = [
         ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
@@ -1196,6 +1219,8 @@ donner_cc_test(
         ["testdata/layer_thumbnails/*.png"],
         allow_empty = True,
     ),
+    opens_gpu_device = True,
+    variants = ["geode"],
     deps = [
         ":bitmap_golden_compare",
         "//donner/base:base_test_utils",

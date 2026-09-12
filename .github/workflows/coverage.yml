@@ -19,8 +19,11 @@ name: Coverage
 # the reason resolves to a FULL //... target set: running that on a PR is exactly
 # the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
 # the main-push baseline already covers those lines. Only the affected subset
-# (fallback_reason == bazel_diff), the cheap smoke subset (coverage_smoke), and
-# the explicit ci:full-test opt-in still produce PR coverage.
+# (fallback_reason == bazel_diff), the cheap smoke subset for coverage/reporting
+# tooling changes (coverage_smoke), and the explicit ci:full-test opt-in still
+# produce PR coverage. A documentation-only PR uses the established
+# no-instrumentable route because no changed file can contribute executable
+# lines to an LCOV report.
 #
 # Two more skips, both about a genuine incremental subset that has nothing a
 # coverage run could measure. Running anyway builds an empty or absent LCOV
@@ -37,16 +40,19 @@ name: Coverage
 #     target_compatible_with a platform this lane does not run, which
 #     `coverage --skip_incompatible_explicit_targets` silently drops.
 #
-# Both are decided from Bazel's own answers (target KINDS from a query, host
-# compatibility from a cquery), never from file extensions, and both fail
+# Documentation-only changes are identified before graph analysis from the
+# repository's docs tree and Markdown files. Mixed documentation/tooling
+# changes retain smoke coverage, and any source change proceeds to bazel-diff.
+# Every other no-test/no-instrumentable decision comes from Bazel's own answers
+# (target KINDS from a query, host compatibility from a cquery) and fails
 # closed: any query, filtering, or classifier error runs coverage with the
-# guard intact. The instrumentability decision is taken exactly once, on the
-# FINAL target list after every narrowing step, because three separate
-# production failures came from guards that each judged a different,
+# guard intact. The graph-based instrumentability decision is taken exactly
+# once, on the FINAL target list after every narrowing step, because three
+# separate production failures came from guards that each judged a different,
 # wider set than the one coverage actually ran; see the block in
 # determine-targets for that history. Future readers: do not silently re-add a
-# full instrumented PR coverage run, and do not add a fourth guard at a fourth
-# pipeline stage -- extend the single decision instead.
+# full instrumented PR coverage run, and do not add a fourth graph guard at a
+# fourth pipeline stage -- extend the single decision instead.
 on:
   push:
     branches: [main]
@@ -82,7 +88,7 @@ jobs:
     env:
       BAZEL_DIFF_TAG: "v18.1.0"
       BAZEL_DIFF_SHA256: "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6f58e0"
-      FULL_COVERAGE_TARGETS: "//donner/base/... //donner/css/... //donner/svg/... //donner/editor/..."
+      FULL_COVERAGE_TARGETS: "//donner/..."
       SMOKE_COVERAGE_TARGETS: "//donner/base/..."
     outputs:
       fallback: ${{ steps.determine.outputs.fallback }}
@@ -359,6 +365,7 @@ jobs:
 
           should_fallback=false
           fallback_reason=""
+          docs_only=true
           smoke_only=true
           while IFS= read -r path; do
             [[ -z "$path" ]] && continue
@@ -393,6 +400,14 @@ jobs:
             esac
 
             case "$path" in
+              docs/*|*.md)
+                ;;
+              *)
+                docs_only=false
+                ;;
+            esac
+
+            case "$path" in
               .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py|tools/coverage_variant_trim.py|tools/coverage_variant_trim_tests.py|tools/coverage_selection_decision_tests.py)
                 ;;
               *)
@@ -403,6 +418,12 @@ jobs:
 
           if [[ "$should_fallback" == "true" ]]; then
             emit_targets true "$fallback_reason" "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if [[ "$docs_only" == "true" ]]; then
+            echo "Documentation-only change; skipping coverage because no changed file is instrumentable."
+            emit_targets true no_instrumentable_targets ""
             exit 0
           fi
 
@@ -585,7 +606,8 @@ jobs:
           # tests, so test_suite expansion and rule kinds this workflow does not
           # enumerate are handled by definition rather than by a name heuristic,
           # and subtract the tags the coverage command filters out
-          # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf in .bazelrc),
+          # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf,-ci-remote-gpu
+          # in .bazelrc),
           # because a subset whose only tests carry those tags leaves the
           # coverage run with the very empty test set this narrowing exists to
           # keep it out of. `attr` matches its pattern against the string form
@@ -595,7 +617,7 @@ jobs:
           # and the coverage run.
           if [[ "$kind_query_ok" == "true" ]]; then
             test_query_file="$work_dir/affected-tests-query.txt"
-            printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf)[,\]]", tests(%s))\n' \
+            printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf|ci-remote-gpu)[,\]]", tests(%s))\n' \
               "$resolved_expr" "$resolved_expr" > "$test_query_file"
             affected_tests_file="$work_dir/affected-tests.txt"
             if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
@@ -933,13 +955,13 @@ jobs:
       # >5s to accept large coverage uploads under a multi-job burst (observed
       # 2026-07-02 as DEADLINE_EXCEEDED upload failures); 60s fails fast enough
       # on a dead endpoint while tolerating a loaded one.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # The runner-owned Bazel rc already maps the `coverage` command to
       # `--config=ci`. Do not repeat that config here: a repeated expansion
       # duplicates its remote execution properties and Bazel rejects the
       # command before analysis. The `fetch` command below still needs its
       # explicit config because it does not inherit `coverage` options.
-      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
+      DONNER_COVERAGE_BAZEL_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters=-fuzz_target,-lint,-manual,-perf,-local-gpu-isolated"
 
     steps:
       - uses: actions/checkout@v7
@@ -1005,6 +1027,15 @@ jobs:
           export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
           read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
+          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}")"; then
+            echo "::error::Failed to select remote GPU coverage targets."
+            exit 1
+          fi
+          if [[ -z "${mapped_targets// /}" ]]; then
+            echo "::error::Remote GPU coverage target selection is empty."
+            exit 1
+          fi
+          read -r -a TARGETS <<< "$mapped_targets"
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 

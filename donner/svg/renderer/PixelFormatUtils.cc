@@ -1,11 +1,27 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <optional>
 
 namespace donner::svg {
 namespace {
+
+constexpr unsigned kUnpremultiplyFractionBits = 24;
+constexpr std::uint64_t kUnpremultiplyHalf = std::uint64_t{1} << (kUnpremultiplyFractionBits - 1);
+
+/// Ceiling reciprocals including the 255 normalization, with 24 fractional bits.
+/// The channel error is less than 255/2^24, below the 1/(2*255) distance of a non-tie from a
+/// rounding boundary. Ceiling sends exact ties upward; the zero-alpha entry is unused.
+constexpr std::array<std::uint32_t, 256> kUnpremultiplyScales = [] {
+  std::array<std::uint32_t, 256> scales{};
+  constexpr std::uint64_t numerator = std::uint64_t{255} << kUnpremultiplyFractionBits;
+  for (std::uint32_t alpha = 1; alpha < scales.size(); ++alpha) {
+    scales[alpha] = static_cast<std::uint32_t>((numerator + alpha - 1) / alpha);
+  }
+  return scales;
+}();
 
 std::optional<std::size_t> TightRowBytesForWidth(int width) {
   if (width <= 0) {
@@ -136,19 +152,12 @@ void UnpremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
       rgba[i + 1] = 0;
       rgba[i + 2] = 0;
     } else if (a != 255) {
-      // Integer (r * 255 * 256 / a + 128) >> 8 - carried forward
-      // verbatim from `CompositorController::UnpremultiplyPixels`
-      // (the pre-shared-helper origin), which has been validated
-      // against the full compositor golden suite. Preserve this
-      // exact math to keep `BuildImageResource` output bit-identical
-      // across the helper relocation.
-      const std::uint32_t scale = (255u * 256u) / a;  // inverse alpha * 256
-      rgba[i + 0] = static_cast<std::uint8_t>(
-          std::min<std::uint32_t>(255u, (rgba[i + 0] * scale + 128u) >> 8u));
-      rgba[i + 1] = static_cast<std::uint8_t>(
-          std::min<std::uint32_t>(255u, (rgba[i + 1] * scale + 128u) >> 8u));
-      rgba[i + 2] = static_cast<std::uint8_t>(
-          std::min<std::uint32_t>(255u, (rgba[i + 2] * scale + 128u) >> 8u));
+      const std::uint64_t scale = kUnpremultiplyScales[a];
+      for (std::size_t channel = 0; channel < 3; ++channel) {
+        const std::uint32_t rounded = static_cast<std::uint32_t>(
+            (rgba[i + channel] * scale + kUnpremultiplyHalf) >> kUnpremultiplyFractionBits);
+        rgba[i + channel] = static_cast<std::uint8_t>(std::min(255u, rounded));
+      }
     }
     // a == 255 → channels unchanged (already straight alpha).
   }

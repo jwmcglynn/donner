@@ -121,6 +121,18 @@ struct RendererReadbackStats {
   /// Wall time that wait spent before giving up, in milliseconds. Zero while
   /// \ref timedOutWaitSite is \ref GpuWaitTimeoutSite::None.
   int timedOutWaitMs = 0;
+  /// Capture cancellation and total-budget expiry, independent of device loss.
+  std::uint64_t captureCancellations = 0;
+  std::uint64_t captureTimeouts = 0;
+  /// Readback-only contexts and the allocation/submission work they performed.
+  std::uint64_t contextCreates = 0;
+  std::uint64_t bufferCreates = 0;
+  std::uint64_t textureCreates = 0;
+  std::uint64_t bindgroupCreates = 0;
+  std::uint64_t submits = 0;
+  /// Idle pooled readback sets and their logical backing bytes.
+  std::uint64_t poolEntries = 0;
+  std::uint64_t poolBytes = 0;
 };
 
 /** Aggregate budget for render targets, layers, masks, clips, and pattern tiles. */
@@ -168,6 +180,13 @@ public:
     bytes_ += byteCount;
     surfaces_ += surfaceCount;
     return true;
+  }
+
+  /// Tests additional capacity without changing counters or latching a rejection.
+  /// @param bytes Additional allocation bytes. @param surfaces Additional texture count.
+  [[nodiscard]] bool canReserveBytes(std::uint64_t bytes, std::size_t surfaces) const {
+    return !rejected_ && bytes_ <= limits_.bytes && bytes <= limits_.bytes - bytes_ &&
+           surfaces_ <= limits_.surfaces && surfaces <= limits_.surfaces - surfaces_;
   }
 
   /// Releases surfaces after their last submitted GPU use, restoring active-capacity accounting.

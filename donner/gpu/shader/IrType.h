@@ -35,11 +35,10 @@ enum class ScalarKind : uint8_t {
  */
 std::ostream& operator<<(std::ostream& os, ScalarKind value);
 
-/// Texel format of a write-only storage texture. Only the format the filter pipelines write is
-/// modeled; every backend supports it as a storage-image format without an extended-format
-/// capability.
+/// Storage formats for float filter intermediates and their normalized layer boundary.
 enum class StorageTextureFormat : uint8_t {
-  Rgba8Unorm,  //!< 8-bit RGBA, unsigned normalized.
+  Rgba8Unorm,   //!< 8-bit RGBA, unsigned normalized.
+  Rgba32Float,  //!< 32-bit float RGBA.
 };
 
 /**

@@ -1,7 +1,8 @@
 /// @file
 /// Out-of-process MSL validation: every emitted MSL module must compile cleanly with the platform
 /// Metal compiler (`xcrun -sdk macosx metal`). Platform compilers run as external verification
-/// tools rather than build dependencies.
+/// tools rather than build dependencies, so a developer machine without the offline compiler skips
+/// these cases and an automated lane without it fails them.
 ///
 /// A negative control proves the detection mechanism: deliberately invalid MSL must be rejected,
 /// so an acceptance result here means the compiler actually inspected the source rather than the
@@ -15,14 +16,33 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <string_view>
 
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/ComponentTransfer.h"
+#include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Lighting.h"
+#include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
+#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
+#include "donner/gpu/shader/tests/ExternalToolGate.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -48,10 +68,14 @@ int RunCommand(const std::string& command, std::string* output) {
   return pclose(pipe);
 }
 
-/// Probes for a usable offline Metal compiler, returning a skip reason when one is unavailable.
+/// How the gate names this compiler, spelled the way a person would install it.
+constexpr std::string_view kMetalCompilerToolName =
+    "the offline Metal compiler (xcodebuild -downloadComponent MetalToolchain)";
+
+/// Probes for a usable offline Metal compiler, returning what it found when there is none.
 /// Recent Xcode versions ship it as a downloadable component, so `xcrun --find metal` can succeed
 /// while the tool itself is absent; the probe compiles a trivial kernel to detect that case.
-std::string FindMetalCompilerSkipReason() {
+std::string FindMetalCompilerUnavailableReason() {
   // Note: recent Xcode versions ship the offline Metal compiler as a downloadable component
   // (xcodebuild -downloadComponent MetalToolchain); `xcrun --find metal` can succeed while the
   // tool itself is absent, so probe-compile a trivial kernel to detect that case.
@@ -147,40 +171,52 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
   return output;
 }
 
+TEST(MslXcrunValidation, EmittedCheckerboardCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildCheckerboardModule(), "checkerboard");
+}
+
+TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildFilterResolveModule(), "filter_resolve");
+}
+TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");
+}
+
+TEST(MslXcrunValidation, EmittedConvolveMatrixCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildConvolveMatrixModule(), "convolve_matrix");
+}
+
+TEST(MslXcrunValidation, EmittedMergeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildMergeModule(), "merge");
+}
+
 TEST(MslXcrunValidation, APositionOnlyFragmentEntryCompilesWithMetalCompiler) {
   // The emitter omits the [[stage_in]] struct when nothing would go in it, because Metal rejects
   // an empty one. A fragment entry whose only input is the position builtin declares no location,
   // but position has no direct-parameter spelling in this emitter, so omitting the struct would
   // leave the body referencing an input that no parameter carries. The compiler is the check that
   // catches that; a string-shape assertion would not.
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(BuildPositionOnlyFragmentModule(), "position_only_fragment");
 }
 
 TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildSolidFillModule(), "solid_fill");
 }
 
 TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildColorMatrixModule(), "color_matrix");
 }
 
 TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // This program is the first to emit a componentwise comparison, a bool-vector reduction, and a
   // shift, so it is also the first to have the compiler confirm those spellings are real MSL.
   ExpectCompilesWithMetalCompiler(programs::BuildSnapshotUnpremultiplyModule(),
@@ -188,47 +224,111 @@ TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCom
 }
 
 TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // `all` reaches no shipping program, so without this the compiler would never see it and a
   // wrong spelling would only ever be checked against the emitter's own idea of it.
   ExpectCompilesWithMetalCompiler(BuildVectorReductionModule(), "vector_reductions");
 }
 
+TEST(MslXcrunValidation, EmittedMathPrimitivesCompileWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // This fixture also exercises vector sign and floor, which scalar offset does not reach.
+  ExpectCompilesWithMetalCompiler(BuildMathPrimitiveModule(), "math_primitives");
+}
+
 TEST(MslXcrunValidation, EmittedFloodComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFloodModule(), "flood");
 }
 
 TEST(MslXcrunValidation, EmittedSubregionClipComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildSubregionClipModule(), "subregion_clip");
 }
 
 TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
+}
+
+TEST(MslXcrunValidation, EmittedFilterImageCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildFilterImageModule(), "filter_image");
+}
+
+TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildOffsetModule(), "offset");
+}
+
+TEST(MslXcrunValidation, EmittedTileComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildTileModule(), "tile");
+}
+
+TEST(MslXcrunValidation, EmittedComponentTransferComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildComponentTransferModule(), "component_transfer");
+}
+
+TEST(MslXcrunValidation, EmittedTurbulenceComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildTurbulenceModule(), "turbulence");
+}
+
+TEST(MslXcrunValidation, EmittedDropShadowComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildDropShadowModule(), "drop_shadow");
+}
+
+TEST(MslXcrunValidation, EmittedDisplacementMapComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildDisplacementMapModule(), "displacement_map");
+}
+
+TEST(MslXcrunValidation, EmittedGaussianBlurComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildGaussianBlurModule(), "gaussian_blur");
+}
+
+TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildMorphologyModule(), "morphology");
+}
+
+TEST(MslXcrunValidation, EmittedLightingComputesCompileWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildDiffuseLightingModule(), "diffuse_lighting");
+  ExpectCompilesWithMetalCompiler(programs::BuildSpecularLightingModule(), "specular_lighting");
+}
+
+TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(BuildFloatStorageModule(), "float_storage");
+}
+
+TEST(MslXcrunValidation, EmittedColorSpaceConvertCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildColorSpaceConvertModule(), "color_space_convert");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
   // Proves the detection mechanism: MSL the compiler must reject has to come back as a nonzero
   // status with a diagnostic. Without this, a harness that silently reported success would make
   // the positive results above meaningless.
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
 
   int status = 0;
   const std::string output = CompileMslForStatus(

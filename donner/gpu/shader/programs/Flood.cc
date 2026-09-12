@@ -19,7 +19,7 @@ uint32_t BindingIndex(FloodBinding binding) {
 ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
   if (ShaderStatus status =
           builder.addWriteOnlyStorageTexture2d(0, BindingIndex(FloodBinding::OutputTexture),
-                                               "outputTexture", StorageTextureFormat::Rgba8Unorm);
+                                               "outputTexture", StorageTextureFormat::Rgba32Float);
       status.hasError()) {
     return status;
   }
@@ -37,7 +37,7 @@ ShaderResult<IrModule> BuildFloodModule() {
   e.ok(AddBindings(builder, paramsType));
 
   auto entryResult =
-      builder.createComputeEntryPoint("cs_main",
+      builder.createComputeEntryPoint(RcString(kFloodEntryPoint),
                                       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                                                BuiltinInput::GlobalInvocationId}},
                                       WorkgroupSize{kFloodWorkgroupSize, kFloodWorkgroupSize, 1});

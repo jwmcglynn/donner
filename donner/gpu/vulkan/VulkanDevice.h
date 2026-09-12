@@ -11,6 +11,8 @@
 
 namespace donner::gpu::vulkan {
 
+struct VulkanApi;
+
 /**
  * Vulkan backend of the Donner GPU runtime.
  *
@@ -26,29 +28,38 @@ namespace donner::gpu::vulkan {
  * SPIR-V binding decorations (the SPIR-V emitter uses DescriptorSet 0 / Binding b).
  *
  * Targets Vulkan 1.1 core only: classic VkRenderPass + VkFramebuffer (no dynamic rendering),
- * per-submission VkFence completion tracking (no timeline semaphores), and the core
- * negative-viewport-height feature (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU
- * clip-space semantics - identical SPIR-V positions land on identical pixels as the wgpu
- * baseline.
+ * per-submission VkFence completion tracking, and the core negative-viewport-height feature
+ * (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU clip-space semantics - identical
+ * SPIR-V positions land on identical pixels as the wgpu baseline. No device extension is
+ * enabled on any production path; the sole exception is VK_KHR_timeline_semaphore, which
+ * \ref CreateWithTimelineSemaphoreForTest requests so a test can hold a submission open.
  *
  * Memory model (documented simplification for this slice): every buffer lives in
- * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped, so queue writes are a
- * `memcpy` and readback needs no staging. Which allocation a buffer is bound into is the
- * allocator's decision, behind the seam in VulkanBufferAllocator.h: one dedicated allocation per
- * buffer today, with a suballocating implementation replaceable there rather than at every call
- * site, once measurement says the driver's allocation-count cap is the constraint worth spending
- * complexity on. Such a memory type is guaranteed by the Vulkan
- * specification ("Device Memory": at least one memory type has both HOST_VISIBLE and
- * HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it. Textures are
- * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and
- * explicit image layout transitions.
+ * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped. Queue writes wait up to
+ * five seconds for that buffer's prior submission before copying; timeout refuses the write and
+ * leaves its bytes unchanged. Idle buffers copy directly.
  *
- * Synchronization is tracked per resource rather than assumed: every image barrier and both of
- * every render pass's external dependencies are derived from the state model in
- * VulkanResourceState.h, which records the stage and access that last touched each texture and
- * names both ends of the transition to whatever uses it next. A pattern the model does not
- * describe falls back to the maximal ALL_COMMANDS barrier, so an unrecognised usage costs
- * precision and never correctness. Readback copies still end in a HOST-domain buffer barrier.
+ * Two consequences of that simplification are worth stating, because callers cannot see them:
+ * this backend refuses a write to a busy buffer where MetalDevice queues an equivalent aligned
+ * write and returns success, so \ref donner::gpu::Device::writeBuffer can fail here and succeed
+ * there for the same call; and \ref readBackBuffer copies the mapping without consulting the
+ * buffer's last use, so a caller reading a buffer an unfinished submission still writes must
+ * wait for that submission itself. Both are tracked follow-ups, not intended end states.
+ *
+ * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
+ * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
+ * implementation replaceable there rather than at every call site, once measurement says the
+ * driver's allocation-count cap is the constraint worth spending complexity on. Such a memory type
+ * is guaranteed by the Vulkan specification ("Device Memory": at least one memory type has both
+ * HOST_VISIBLE and HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it.
+ * Textures are DEVICE_LOCAL (when available) with staged uploads through a transient host-visible
+ * buffer and explicit image layout transitions.
+ *
+ * Synchronization is tracked per image: barriers before and after render passes, dispatches,
+ * and copies come from VulkanResourceState.h. Render-pass attachment layouts stay fixed, so
+ * explicit image barriers provide the dependencies without varying render-pass compatibility.
+ * Unknown usage falls back to an ALL_COMMANDS barrier. Readback copies also end in a HOST-domain
+ * buffer barrier.
  *
  * Barrier elision - dropping a barrier the model says is needed - is still not attempted; that
  * would need counter and timing evidence naming the bottleneck it removes.
@@ -64,6 +75,18 @@ namespace donner::gpu::vulkan {
  */
 class VulkanDevice final : public Device {
 public:
+  /// Native shader representation accepted by this device.
+  ShaderSourceKind shaderSourceKind() const override { return ShaderSourceKind::Spirv; }
+
+  /// True for Uint16 always; for Uint32 only when the physical device offered
+  /// `fullDrawIndexUint32` and \ref Create enabled it, since without that feature index values
+  /// above `maxDrawIndexedIndexValue` are undefined.
+  bool supportsFullIndexRange(IndexFormat format) const override;
+
+  /// Reports Uint32 as lacking its full range from now on, whatever the device enabled, so the
+  /// refusal path runs on a device that has the feature. Only ever narrows the capability.
+  void disableFullUint32IndexRangeForTest();
+
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device
@@ -71,6 +94,10 @@ public:
    * Vulkan 1.1 instance or graphics-capable physical device is available.
    */
   static std::unique_ptr<VulkanDevice> Create();
+
+  /// Creates a device with VK_KHR_timeline_semaphore enabled solely for test-owned host gates.
+  /// Returns nullptr if the test extension/feature is unavailable; ordinary Create needs neither.
+  static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest();
 
   /// Destructor; waits for in-flight submissions (vkDeviceWaitIdle), drains deferred
   /// destructions, then destroys all remaining Vulkan objects in dependency-safe order.
@@ -141,21 +168,13 @@ public:
     int32_t newLayout = 0;     //!< Layout the image moved to.
   };
 
-  /// Every image barrier recorded since the device was created, oldest first. Test accessor.
+  /// Enables an empty barrier history or disables recording and releases the history.
+  /// Recording is disabled by default.
+  /// @param enabled Whether subsequent image barriers should be retained for inspection.
+  void setImageBarrierRecordingForTest(bool enabled);
+
+  /// Image barriers since recording was last enabled, oldest first; empty while disabled.
   [[nodiscard]] std::vector<RecordedImageBarrierForTest> recordedImageBarriersForTest() const;
-
-  /// The two halves of a render pass external dependency, as plain numbers. Test accessor.
-  struct RecordedSubpassDependencyForTest {
-    uint32_t srcStage = 0;   //!< Source pipeline stage mask.
-    uint32_t dstStage = 0;   //!< Destination pipeline stage mask.
-    uint32_t srcAccess = 0;  //!< Access made available.
-    uint32_t dstAccess = 0;  //!< Access made visible.
-  };
-
-  /// The entry-side external dependency of the most recently created render pass. Fails closed
-  /// when no render pass has been created. Test accessor.
-  [[nodiscard]] Result<RecordedSubpassDependencyForTest> lastRenderPassEntryDependencyForTest()
-      const;
 
   /// Where an injected upload failure happens, which is what decides whether the transitions it
   /// recorded describe anything the GPU will run.
@@ -173,6 +192,26 @@ public:
   ///
   /// @param mode Where the injected failure happens.
   void failNextTextureUploadForTest(UploadFailureModeForTest mode);
+
+  /// Returns the number of timed-out uploads still owned by the device, without polling.
+  size_t pendingTextureUploadCountForTest() const;
+
+  /// Defers upload fence polling to exercise ownership before device teardown.
+  /// @param defer Whether to postpone upload completion observations.
+  void deferTextureUploadPollingForTest(bool defer);
+
+  /// Borrowed native objects for tests that submit their own synchronization gate. Valid only
+  /// until this device is destroyed; callers must use the owning thread, release every gate, and
+  /// finish their native work before destroying any of these objects or the device.
+  struct NativeContextForTest {
+    const VulkanApi* api;       //!< Device entry points, owned by this device.
+    void* device;               //!< Borrowed VkDevice.
+    void* queue;                //!< Borrowed VkQueue.
+    uint32_t queueFamilyIndex;  //!< Family of the borrowed queue.
+  };
+
+  /// Returns borrowed native objects solely for deterministic backend synchronization tests.
+  NativeContextForTest nativeContextForTest() const;
 
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
@@ -206,6 +245,9 @@ protected:
                   std::span<const Command> commands) override;
 
 private:
+  /// Creates the common backend, optionally enabling the extension used by native test gates.
+  static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest);
+
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();
 

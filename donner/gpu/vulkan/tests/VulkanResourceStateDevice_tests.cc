@@ -1,6 +1,5 @@
 /// @file
-/// Device-level regressions for the resource-state wiring: the barriers and render pass
-/// dependencies the backend actually emits, and what it leaves in the tracker when work fails.
+/// Device-level regressions for the barriers the backend emits and the state left after failure.
 ///
 /// The model's own suite covers the table. These cover the code that feeds it, which is where
 /// both of the defects this file exists for lived. They need a real device, so unlike the model
@@ -40,6 +39,13 @@ protected:
         FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available";
       }
       GTEST_SKIP() << "No Vulkan 1.1 device available";
+    }
+    device_->setImageBarrierRecordingForTest(true);
+  }
+
+  void TearDown() override {
+    if (device_) {
+      EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
     }
   }
 
@@ -83,6 +89,42 @@ protected:
   std::unique_ptr<VulkanDevice> device_;
 };
 
+TEST_F(VulkanResourceStateDeviceTest, BarrierHistoryIsDisabledByDefault) {
+  device_ = VulkanDevice::Create();
+  ASSERT_NE(device_, nullptr);
+  Texture texture = makeTexture("uploaded", TextureUsage::CopyDst);
+  for (int upload = 0; upload < 2; ++upload) {
+    Status status =
+        device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+    ASSERT_FALSE(status.hasError()) << status.error();
+  }
+  EXPECT_EQ(unwrap(device_->trackedTextureLayoutForTest(texture), "uploaded layout"),
+            VulkanDevice::TrackedTextureLayout::TransferDst);
+  EXPECT_THAT(device_->recordedImageBarriersForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanResourceStateDeviceTest, BarrierRecordingCanBeRestartedAndDisabled) {
+  Texture texture = makeTexture("uploaded", TextureUsage::CopyDst);
+  Status status =
+      device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+  ASSERT_FALSE(status.hasError()) << status.error();
+  ASSERT_THAT(device_->recordedImageBarriersForTest(), testing::SizeIs(1));
+
+  device_->setImageBarrierRecordingForTest(true);
+  EXPECT_THAT(device_->recordedImageBarriersForTest(), testing::IsEmpty());
+  status =
+      device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+  ASSERT_FALSE(status.hasError()) << status.error();
+  EXPECT_THAT(device_->recordedImageBarriersForTest(), testing::SizeIs(1));
+
+  device_->setImageBarrierRecordingForTest(false);
+  EXPECT_THAT(device_->recordedImageBarriersForTest(), testing::IsEmpty());
+  status =
+      device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+  ASSERT_FALSE(status.hasError()) << status.error();
+  EXPECT_THAT(device_->recordedImageBarriersForTest(), testing::IsEmpty());
+}
+
 TEST_F(VulkanResourceStateDeviceTest, AFailedUploadLeavesNoStateForALaterSubmitToPromote) {
   // Not Sampled, so a completed upload would leave this texture in the transfer-destination
   // layout and a failed one must leave it untouched - a difference the tracker can show.
@@ -122,6 +164,8 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
           .hasError())
       << "the seam must report the wait over an accepted submission as having timed out";
 
+  EXPECT_EQ(device_->pendingTextureUploadCountForTest(), 1u);
+
   const size_t before = barriersFor(written.slotIndex()).size();
 
   // A later submission reading that image. The queue is in order, so this meets the layout the
@@ -138,6 +182,8 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
   ASSERT_FALSE(serial.hasError()) << serial.error();
   ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0));
 
+  EXPECT_EQ(device_->pendingTextureUploadCountForTest(), 0u);
+
   const std::vector<VulkanDevice::RecordedImageBarrierForTest> barriers =
       barriersFor(written.slotIndex());
   ASSERT_GT(barriers.size(), before);
@@ -149,11 +195,22 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
   EXPECT_EQ(next.srcStage, uint32_t{VK_PIPELINE_STAGE_TRANSFER_BIT});
 }
 
-TEST_F(VulkanResourceStateDeviceTest, ThePassEntryEdgeCoversAnAttachmentThatIsNotTheLast) {
-  // One attachment carries a prior write, the other is untouched, and the written one is not
-  // last: deriving the edge from a single attachment picks up the untouched one and orders
-  // nothing. A transfer stands in for the producing write here; which stage and access a given
-  // producer contributes is what the model suite covers.
+TEST_F(VulkanResourceStateDeviceTest, TimedOutUploadsRetainReleasedTexturesUntilTeardown) {
+  device_->deferTextureUploadPollingForTest(true);
+  for (int upload = 0; upload < 3; ++upload) {
+    Texture texture = makeTexture("retired upload", TextureUsage::CopyDst);
+    device_->failNextTextureUploadForTest(VulkanDevice::UploadFailureModeForTest::AfterSubmit);
+    Status status =
+        device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+    ASSERT_TRUE(status.hasError());
+    EXPECT_EQ(device_->pendingTextureUploadCountForTest(), size_t(upload + 1));
+  }
+  // Device teardown must reclaim the fences and staging allocations with leak detection enabled.
+  device_.reset();
+}
+
+TEST_F(VulkanResourceStateDeviceTest, AttachmentTransitionsCoverEveryAttachment) {
+  // The written attachment is not last, so handling only the final attachment loses its write.
   Texture producedFirst =
       makeTexture("producedFirst", TextureUsage::RenderAttachment | TextureUsage::CopyDst);
   Texture freshSecond = makeTexture("freshSecond", TextureUsage::RenderAttachment);
@@ -184,15 +241,28 @@ TEST_F(VulkanResourceStateDeviceTest, ThePassEntryEdgeCoversAnAttachmentThatIsNo
   ASSERT_FALSE(commands.hasError()) << commands.error();
   Result<uint64_t> serial = device_->submit(std::move(commands).result());
   ASSERT_FALSE(serial.hasError()) << serial.error();
-  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0));
+  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
 
-  const VulkanDevice::RecordedSubpassDependencyForTest entry =
-      unwrap(device_->lastRenderPassEntryDependencyForTest(), "entry dependency");
-  EXPECT_TRUE((entry.srcStage & VK_PIPELINE_STAGE_TRANSFER_BIT) != 0)
-      << "the load of the written attachment must be ordered after the write that produced it";
-  EXPECT_TRUE((entry.srcAccess & VK_ACCESS_TRANSFER_WRITE_BIT) != 0)
-      << "that write must be made available to the load";
-  EXPECT_EQ(entry.dstStage, uint32_t{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
+  const auto writtenBarriers = barriersFor(producedFirst.slotIndex());
+  ASSERT_THAT(writtenBarriers, testing::SizeIs(2));
+  const VulkanDevice::RecordedImageBarrierForTest& writtenBarrier = writtenBarriers.back();
+  EXPECT_EQ(writtenBarrier.oldLayout, int32_t{VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL});
+  EXPECT_EQ(writtenBarrier.newLayout, int32_t{VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+  EXPECT_EQ(writtenBarrier.srcStage, uint32_t{VK_PIPELINE_STAGE_TRANSFER_BIT});
+  EXPECT_EQ(writtenBarrier.srcAccess, uint32_t{VK_ACCESS_TRANSFER_WRITE_BIT});
+  EXPECT_EQ(writtenBarrier.dstStage, uint32_t{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
+  EXPECT_EQ(writtenBarrier.dstAccess,
+            uint32_t{VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT});
+
+  const auto freshBarriers = barriersFor(freshSecond.slotIndex());
+  ASSERT_THAT(freshBarriers, testing::SizeIs(1));
+  EXPECT_EQ(freshBarriers[0].oldLayout, int32_t{VK_IMAGE_LAYOUT_UNDEFINED});
+  EXPECT_EQ(freshBarriers[0].newLayout, int32_t{VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+  EXPECT_EQ(freshBarriers[0].srcAccess, 0u);
+  EXPECT_EQ(freshBarriers[0].dstStage, uint32_t{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
+  EXPECT_EQ(freshBarriers[0].dstAccess,
+            uint32_t{VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT});
 }
 
 TEST_F(VulkanResourceStateDeviceTest, WritingOneTextureTwiceInALayoutThatDoesNotChangeStillWaits) {

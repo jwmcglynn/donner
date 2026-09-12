@@ -24,7 +24,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType) {
   }
   if (ShaderStatus status = builder.addWriteOnlyStorageTexture2d(
           0, BindingIndex(FilterColorMatrixBinding::OutputTexture), "outputTexture",
-          StorageTextureFormat::Rgba8Unorm);
+          StorageTextureFormat::Rgba32Float);
       status.hasError()) {
     return status;
   }
@@ -52,7 +52,7 @@ ShaderResult<IrModule> BuildFilterColorMatrixModule() {
   e.ok(AddBindings(builder, paramsType));
 
   auto entryResult = builder.createComputeEntryPoint(
-      "cs_main",
+      RcString(kFilterColorMatrixEntryPoint),
       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                BuiltinInput::GlobalInvocationId}},
       WorkgroupSize{kFilterColorMatrixWorkgroupSize, kFilterColorMatrixWorkgroupSize, 1});
