@@ -116,3 +116,20 @@ if [[ ${#complexity_sources[@]} -gt 0 ]]; then
     --complexity-baseline-ref "${complexity_base_ref}" \
     "${complexity_sources[@]}"
 fi
+
+# Mirror the Python XML and complexity failures before the external review gate.
+python_sources=()
+while IFS= read -r path; do
+  if [[ -f "${path}" ]]; then
+    python_sources+=("${path}")
+  fi
+done < <(
+  {
+    git diff --name-only --diff-filter=ACMR "${complexity_base_ref}"...HEAD -- '*.py'
+    git diff --name-only --diff-filter=ACMR HEAD -- '*.py'
+    git ls-files --others --exclude-standard -- '*.py'
+  } | sort -u
+)
+if [[ ${#python_sources[@]} -gt 0 ]]; then
+  python3 tools/check_python_quality.py --base-ref "${complexity_base_ref}" "${python_sources[@]}"
+fi

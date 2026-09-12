@@ -273,6 +273,8 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 - Missing capability, missing or stale evidence, skipped cases, or any failed gate blocks merging. A new PR head invalidates the previous local receipt. A CI lane counts as equivalent only when it runs the strict capability gate and complete full-validation Metal suite for that candidate.
 - Keep receipts and raw build evidence local. Never infer full texture-check coverage from hosted green checks, disable all shader validation, weaken pixel assertions, or broaden the recognized runtime exception without causal evidence and review.
 
+- Python verifier/parser changes must pass the changed-code guards in `tools/lint.sh`, their security regression tests, and a security scan before pushing; the verifier itself is part of the CI surface. See `docs/metal_validation.md`.
+
 ## Pixel Diff & Threshold Philosophy
 
 - **Root-cause pixel diffs, always** — even in vendored libraries like tiny-skia-cpp. Don't bump thresholds or inflate max-diff pixels to mask failures; investigate *why* pixels differ. Threshold changes are a last resort requiring explicit human approval.

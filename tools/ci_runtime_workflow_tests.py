@@ -77,6 +77,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
         hosted = self._job_body("macos")
+        fetching = self._step_body(hosted, "Fetch Metal validation dependencies")
+        self.assertIn("nick-fields/retry@v4", fetching)
+        self.assertIn("bazelisk fetch --config=ci", fetching)
+        self.assertIn("max_attempts: 3", fetching)
+        self.assertNotIn("bazelisk test", fetching)
+        self.assertLess(hosted.index("Fetch Metal validation dependencies"),
+                        hosted.index("Select Metal validation profile"))
         selection = self._step_body(hosted, "Select Metal validation profile")
         self.assertIn("//donner/gpu/metal/tests:metal_validation_profile", selection)
         self.assertIn("tools/metal_validation_profile.py", selection)

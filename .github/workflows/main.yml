@@ -1050,6 +1050,16 @@ jobs:
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Fetch Metal validation dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: >-
+            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
+            //donner/gpu/metal/tests:all
+
       - name: Select Metal validation profile
         id: metal_profile
         shell: bash
