@@ -21,9 +21,7 @@ namespace {
 TEST(FilterDragReproWallclockTest, DragFramesStayUnderNightlyWallclockBudget) {
   FilterDragReproResult r;
   RunFilterDragReproScenario(&r);
-  if (r.skipped) {
-    GTEST_SKIP() << "Required data files not available in runfiles";
-  }
+  ASSERT_FALSE(HasFatalFailure());
 
   // Budgets tuned for the nightly lane where we can assume roughly
   // dev-machine-class runners. The numbers here are intentionally

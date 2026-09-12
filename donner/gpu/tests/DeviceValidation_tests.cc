@@ -93,6 +93,20 @@ TEST_F(DeviceValidationTests, CreateTextureRejectsMultisample) {
               IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("sampleCount 4")));
 }
 
+TEST_F(DeviceValidationTests, FloatTexturesSupportComputeAndCopiesButNotRenderAttachments) {
+  EXPECT_THAT(device_.createTexture({"float",
+                                     {16, 16},
+                                     TextureFormat::RGBA32Float,
+                                     TextureUsage::Sampled | TextureUsage::StorageBinding |
+                                         TextureUsage::CopySrc | TextureUsage::CopyDst}),
+              HasResult());
+  EXPECT_THAT(device_.createTexture({"float",
+                                     {16, 16},
+                                     TextureFormat::RGBA32Float,
+                                     TextureUsage::RenderAttachment | TextureUsage::Sampled}),
+              IsGpuError(GpuErrorType::Unsupported));
+}
+
 TEST_F(DeviceValidationTests, CreateTextureRejectsUnknownFormat) {
   // An out-of-range format enum must fail closed instead of flowing into copy-size math
   // (TextureFormatBytesPerTexel returns 0 for unknown formats).
@@ -192,6 +206,32 @@ TEST_F(DeviceValidationTests, CreateBindGroupLayoutRejectsOutOfRangeBindingIndex
           "outOfRange",
           {BindGroupLayoutEntry{kMaxBindings, ShaderStage::Fragment, BindingType::UniformBuffer}}}),
       IsGpuError(GpuErrorType::LimitExceeded));
+}
+
+TEST_F(DeviceValidationTests, StorageTextureWritesAreComputeOnly) {
+  for (const ShaderStage visibility :
+       {ShaderStage::Vertex, ShaderStage::Fragment, ShaderStage::Vertex | ShaderStage::Compute,
+        ShaderStage::Fragment | ShaderStage::Compute}) {
+    SCOPED_TRACE(visibility);
+    EXPECT_THAT(device_.createBindGroupLayout(
+                    {"storage", {{0, visibility, BindingType::WriteOnlyStorageTexture2d}}}),
+                IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("compute-only")));
+  }
+  EXPECT_THAT(device_.createBindGroupLayout(
+                  {"storage", {{0, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d}}}),
+              HasResult());
+}
+
+TEST_F(DeviceValidationTests, SampledTexturesRemainAvailableInEveryShaderStage) {
+  for (const BindingType type :
+       {BindingType::SampledTexture2dFloat, BindingType::SampledTexture2dUnfilterableFloat}) {
+    for (const ShaderStage visibility :
+         {ShaderStage::Vertex, ShaderStage::Fragment, ShaderStage::Compute}) {
+      SCOPED_TRACE(type);
+      SCOPED_TRACE(visibility);
+      EXPECT_THAT(device_.createBindGroupLayout({"sampled", {{0, visibility, type}}}), HasResult());
+    }
+  }
 }
 
 TEST_F(DeviceValidationTests, CreateBindGroupLayoutRejectsEmptyVisibility) {
@@ -394,6 +434,78 @@ TEST_F(BindGroupValidationTests, RejectsTextureViewWithoutSampledUsage) {
 
 // == createRenderPipeline =====================================================================
 
+class SampledTextureFormatTests : public DeviceValidationTests {
+protected:
+  BindGroupLayout makeLayout(BindingType type) {
+    return GetResultOrFail(
+        device_.createBindGroupLayout({"sampled", {{0, ShaderStage::Compute, type}}}));
+  }
+
+  Texture makeTexture(TextureFormat format, TextureUsage usage = TextureUsage::Sampled) {
+    return GetResultOrFail(device_.createTexture({"sampled", {4, 4}, format, usage}));
+  }
+};
+
+TEST_F(SampledTextureFormatTests, UnfilterableBindingAcceptsFloatAndNormalizedFormats) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dUnfilterableFloat);
+  for (const TextureFormat format : {TextureFormat::RGBA32Float, TextureFormat::RGBA8Unorm,
+                                     TextureFormat::BGRA8Unorm, TextureFormat::R8Unorm}) {
+    SCOPED_TRACE(format);
+    const Texture texture = makeTexture(format);
+    const TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+    EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{view}}}}),
+                HasResult());
+  }
+}
+
+TEST_F(SampledTextureFormatTests, FilteringFloatBindingRejectsFloat32Textures) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dFloat);
+  const Texture texture = makeTexture(TextureFormat::RGBA32Float);
+  const TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{view}}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("unfilterable")));
+}
+
+TEST_F(SampledTextureFormatTests, UnfilterableBindingStillValidatesResourceKindAndUsage) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dUnfilterableFloat);
+  const Buffer buffer = createUniformBuffer();
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, BufferBinding{buffer, 0, 16}}}}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  const Texture texture = makeTexture(TextureFormat::RGBA32Float, TextureUsage::StorageBinding);
+  const TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{view}}}}),
+              IsGpuError(GpuErrorType::UsageMismatch));
+}
+
+TEST_F(SampledTextureFormatTests, UnfilterableBindingRejectsADestroyedTextureView) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dUnfilterableFloat);
+  const Texture texture = makeTexture(TextureFormat::RGBA32Float);
+  TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+  const TextureViewRef stale = view;
+  ASSERT_THAT(device_.destroyTextureView(std::move(view)), IsOk());
+  const TextureView replacement = GetResultOrFail(device_.createTextureView(texture, {}));
+  ASSERT_EQ(replacement.slotIndex(), stale.slotIndex());
+  ASSERT_NE(replacement.generation(), stale.generation());
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{stale}}}}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(SampledTextureFormatTests, UnfilterableAndStorageBindingsCannotAliasOneTexture) {
+  const BindGroupLayout layout = GetResultOrFail(device_.createBindGroupLayout(
+      {"alias",
+       {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
+        {1, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
+         TextureFormat::RGBA32Float}}}));
+  const Texture texture =
+      makeTexture(TextureFormat::RGBA32Float, TextureUsage::Sampled | TextureUsage::StorageBinding);
+  const TextureView sampled = GetResultOrFail(device_.createTextureView(texture, {}));
+  const TextureView storage = GetResultOrFail(device_.createTextureView(texture, {}));
+  EXPECT_THAT(
+      device_.createBindGroup(
+          {"alias", layout, {{0, TextureViewBinding{sampled}}, {1, TextureViewBinding{storage}}}}),
+      IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
 class RenderPipelineValidationTests : public DeviceValidationTests {
 protected:
   void SetUp() override {
@@ -419,6 +531,12 @@ protected:
 
 TEST_F(RenderPipelineValidationTests, AcceptsValidDescriptor) {
   EXPECT_THAT(device_.createRenderPipeline(validDescriptor()), HasResult());
+}
+
+TEST_F(RenderPipelineValidationTests, FloatRenderTargetsAreUnsupported) {
+  RenderPipelineDescriptor descriptor = validDescriptor();
+  descriptor.fragment.targets[0].format = TextureFormat::RGBA32Float;
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::Unsupported));
 }
 
 TEST_F(RenderPipelineValidationTests, RejectsAttributeBeyondStride) {
@@ -581,6 +699,27 @@ TEST_F(WriteTextureTests, AcceptsAlignedFullWrite) {
               IsOk());
 }
 
+TEST_F(WriteTextureTests, FloatTexelsUseTheirFullRowWidthAndAlignment) {
+  const Texture texture = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "float", Extent2d{17, 2}, TextureFormat::RGBA32Float, TextureUsage::CopyDst}));
+  // Two rows contain 272 bytes each, separated by a 512-byte aligned pitch.
+  constexpr size_t kBytes = 512 + 272;
+  EXPECT_THAT(device_.writeTexture(texture, MakeBytes(kBytes), TexelCopyBufferLayout{0, 512, 2},
+                                   Extent2d{17, 2}),
+              IsOk());
+  EXPECT_THAT(
+      device_.writeTexture(texture, MakeBytes(kBytes), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{17, 2}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("does not cover one row")));
+  EXPECT_THAT(device_.writeTexture(texture, MakeBytes(kBytes - 1), TexelCopyBufferLayout{0, 512, 2},
+                                   Extent2d{17, 2}),
+              IsGpuError(GpuErrorType::OutOfBounds));
+  EXPECT_THAT(device_.writeTexture(texture, MakeBytes(kBytes + 4), TexelCopyBufferLayout{4, 512, 2},
+                                   Extent2d{17, 2}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("not aligned to the 16-byte texel size")));
+}
+
 TEST_F(WriteTextureTests, RejectsMisalignedBytesPerRow) {
   EXPECT_THAT(
       device_.writeTexture(texture_, MakeBytes(kPaddedByteCount), TexelCopyBufferLayout{0, 128, 4},
@@ -660,6 +799,12 @@ public:
   SurfaceStatus presentStatus = SurfaceStatus::Success;
   /// Number of times the runtime abandoned an acquired texture.
   int abandonCalls = 0;
+  /// Inject failures after entering the backend, without granting ownership of a frame.
+  bool failAcquire = false;
+  /// Present consumes backend ownership even when it reports an error.
+  bool failPresent = false;
+  /// Slots proposed by acquisition attempts, to verify failed attempts are recycled.
+  std::vector<uint32_t> acquireSlots;
 
 protected:
   // The operations this fake does not model are accepted and ignored: the tests below are about
@@ -705,7 +850,11 @@ protected:
 
   Status onConfigureSurface(uint32_t, const SurfaceConfiguration&) override { return OkStatus(); }
 
-  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t textureSlot) override {
+    acquireSlots.push_back(textureSlot);
+    if (failAcquire) {
+      return GpuError{GpuErrorType::InvalidState, "scripted acquire failure"};
+    }
     // The platform holds its own frame, and it holds exactly one: a backend tracks the frame it
     // handed out and refuses another until that one is presented or handed back. The wgpu
     // backend does this with its own per-surface flag, so a runtime that only cleaned up its own
@@ -722,6 +871,9 @@ protected:
 
   Result<SurfaceStatus> onPresentSurface(uint32_t) override {
     backendHasFrame = false;
+    if (failPresent) {
+      return GpuError{GpuErrorType::InvalidState, "scripted present failure"};
+    }
     return presentStatus;
   }
 
@@ -1145,12 +1297,118 @@ TEST_F(SurfaceTests, CapabilitiesComeFromTheSurface) {
   EXPECT_THAT(caps.presentModes, testing::ElementsAre(PresentMode::Fifo));
 }
 
+TEST_F(SurfaceTests, FloatFormatDoesNotBecomeAPresentationFormat) {
+  const Surface surface = metalSurface();
+  SurfaceConfiguration config = configuration();
+  config.format = TextureFormat::RGBA32Float;
+  EXPECT_THAT(device_.configureSurface(surface, config), IsGpuError(GpuErrorType::Unsupported));
+}
+
 TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {
   RecordingDevice plainDevice;
   SurfaceDescriptor descriptor;
   descriptor.native.kind = NativeSurfaceKind::MetalLayer;
   descriptor.native.display = &layer_;
   EXPECT_THAT(plainDevice.createSurface(descriptor), IsGpuError(GpuErrorType::Unsupported));
+}
+
+TEST_F(RenderPipelineValidationTests, VertexLayoutsRequireStrideAndAttributesTogether) {
+  for (bool emptyAttributes : {false, true}) {
+    auto descriptor = validDescriptor();
+    if (emptyAttributes)
+      descriptor.vertex.buffers[0].attributes.clear();
+    else
+      descriptor.vertex.buffers[0].strideBytes = 0;
+    const auto before = device_.serialize();
+    EXPECT_THAT(
+        device_.createRenderPipeline(descriptor),
+        IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                              HasSubstr(emptyAttributes ? "no attributes" : "strideBytes 0")));
+    EXPECT_EQ(device_.serialize(), before)
+        << "Invalid layouts must never allocate a native pipeline";
+  }
+  auto generatedVertices = validDescriptor();
+  generatedVertices.vertex.buffers.clear();
+  EXPECT_THAT(device_.createRenderPipeline(generatedVertices), HasResult())
+      << "A shader-generated vertex stream needs no vertex buffer layout";
+}
+
+TEST_F(RenderPipelineValidationTests, ResourceCountsAcceptTheCapAndRejectCapPlusOne) {
+  auto descriptor = validDescriptor();
+  descriptor.fragment.targets.resize(kMaxColorAttachments, descriptor.fragment.targets.front());
+  ASSERT_THAT(device_.createRenderPipeline(descriptor), HasResult());
+  descriptor.fragment.targets.push_back(descriptor.fragment.targets.front());
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::LimitExceeded));
+
+  descriptor = validDescriptor();
+  descriptor.vertex.buffers.clear();
+  for (uint32_t i = 0; i < kMaxVertexBuffers; ++i) {
+    descriptor.vertex.buffers.push_back(
+        {4, VertexStepMode::Vertex, {{VertexFormat::Uint32, 0, i}}});
+  }
+  ASSERT_THAT(device_.createRenderPipeline(descriptor), HasResult());
+  descriptor.vertex.buffers.push_back(
+      {4, VertexStepMode::Instance, {{VertexFormat::Uint32, 0, kMaxVertexBuffers}}});
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::LimitExceeded));
+}
+
+TEST_F(RenderPipelineValidationTests, FragmentEntryAndShaderLifetimeAreCheckedBeforeAllocation) {
+  auto descriptor = validDescriptor();
+  descriptor.fragment.entryPoint = "";
+  EXPECT_THAT(
+      device_.createRenderPipeline(descriptor),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("fragment.entryPoint")));
+  descriptor = validDescriptor();
+  ASSERT_THAT(device_.destroyShaderModule(std::move(shader_)), IsOk());
+  const auto before = device_.serialize();
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_EQ(device_.serialize(), before);
+}
+
+TEST_F(SurfaceTests, FailedAcquireDoesNotLeakAFrameOrPreventRetry) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  device_.failAcquire = true;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    EXPECT_THAT(
+        device_.acquireCurrentTexture(surface),
+        IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("scripted acquire failure")));
+    EXPECT_FALSE(device_.backendHasFrame);
+    EXPECT_THAT(device_.abandonCurrentTexture(surface), IsGpuError(GpuErrorType::InvalidState));
+  }
+  device_.failAcquire = false;
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  ASSERT_TRUE(frame.texture.isValid());
+  ASSERT_EQ(device_.acquireSlots.size(), 4u);
+  for (uint32_t slot : device_.acquireSlots) EXPECT_EQ(slot, frame.texture.slotIndex());
+  EXPECT_THAT(device_.abandonCurrentTexture(surface), IsOk());
+  EXPECT_FALSE(device_.backendHasFrame);
+}
+
+TEST_F(SurfaceTests, PresentFailureInvalidatesTheFrameAndAllowsTheNextAcquire) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  device_.failPresent = true;
+  EXPECT_THAT(
+      device_.presentSurface(surface),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("scripted present failure")));
+  EXPECT_THAT(device_.createTextureView(frame.texture, {}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_FALSE(device_.backendHasFrame);
+  device_.failPresent = false;
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), HasResult());
+}
+
+TEST_F(SurfaceTests, ExplicitSurfaceDestructionInvalidatesOutstandingTexture) {
+  Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  EXPECT_THAT(device_.destroySurface(std::move(surface)), IsOk());
+  EXPECT_FALSE(surface.isValid());
+  EXPECT_THAT(device_.createTextureView(frame.texture, {}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.surfaceCapabilities(surface), IsGpuError(GpuErrorType::InvalidHandle));
 }
 
 }  // namespace

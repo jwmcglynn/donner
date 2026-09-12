@@ -14,6 +14,7 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/tests/SubRectangleCopyScene.h"
 
 namespace donner::gpu::metal::tests {
@@ -35,9 +36,7 @@ class MetalSubRectangleCopyTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    if (!device_) {
-      GTEST_SKIP() << "No Metal device available";
-    }
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal sub-rectangle-copy slice");
   }
 
   /// Unwraps an RHI result, failing the test on error.

@@ -80,9 +80,10 @@ constexpr bool HasAllFlags(T value, T flags) {
 
 /// Texture formats used by Donner render targets, masks, and image uploads.
 enum class TextureFormat : uint8_t {
-  RGBA8Unorm,  //!< 8-bit RGBA, unsigned normalized. Default render target format.
-  BGRA8Unorm,  //!< 8-bit BGRA, unsigned normalized. Editor surface format.
-  R8Unorm,     //!< 8-bit single channel. Coverage / clip-mask textures.
+  RGBA8Unorm,   //!< 8-bit RGBA, unsigned normalized. Default render target format.
+  BGRA8Unorm,   //!< 8-bit BGRA, unsigned normalized. Editor surface format.
+  R8Unorm,      //!< 8-bit single channel. Coverage / clip-mask textures.
+  RGBA32Float,  //!< 32-bit float RGBA. Filter intermediates.
 };
 
 /// Texture usage flags. Combinable with `|`.
@@ -258,6 +259,24 @@ enum class VertexStepMode : uint8_t {
   Instance,  //!< Advance per instance.
 };
 
+/// Element width of an index buffer bound with `RenderPassEncoder::setIndexBuffer`. Every backend
+/// honors the full unsigned range of the width; a device that cannot is reported through
+/// `Device::supportsFullIndexRange` and refuses the binding.
+enum class IndexFormat : uint8_t {
+  Uint16,  //!< 16-bit unsigned indices, two bytes each.
+  Uint32,  //!< 32-bit unsigned indices, four bytes each.
+};
+
+/// Bytes occupied by one index of \p format, or 0 for an unknown enumerator so callers fail
+/// closed instead of dividing by a guess. @param format Index format.
+constexpr uint32_t IndexFormatByteSize(IndexFormat format) {
+  switch (format) {
+    case IndexFormat::Uint16: return 2;
+    case IndexFormat::Uint32: return 4;
+  }
+  return 0;
+}
+
 /// Primitive topology for render pipelines.
 enum class PrimitiveTopology : uint8_t {
   TriangleList,   //!< Separate triangles.
@@ -292,6 +311,7 @@ enum class BindingType : uint8_t {
   SampledTexture2dFloat,      //!< Sampled 2D float texture binding.
   FilteringSampler,           //!< Filtering sampler binding.
   WriteOnlyStorageTexture2d,  //!< Write-only 2D storage texture binding (compute stage only).
+  SampledTexture2dUnfilterableFloat,  //!< Float texture read with texel loads, without filtering.
 };
 
 /// Load operation for a render pass color attachment.
@@ -336,6 +356,8 @@ std::ostream& operator<<(std::ostream& os, VertexFormat value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, VertexStepMode value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, IndexFormat value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, PrimitiveTopology value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, CullMode value);
@@ -371,6 +393,8 @@ bool IsKnownEnumValue(AddressMode value);
 bool IsKnownEnumValue(VertexFormat value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
 bool IsKnownEnumValue(VertexStepMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(IndexFormat value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
 bool IsKnownEnumValue(PrimitiveTopology value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
@@ -574,6 +598,21 @@ struct ComputeEntryPointInfo {
   WorkgroupSize workgroupSize;  //!< Workgroup size compiled into that entry point.
 };
 
+/// One buffer statically used by an entry point, including uses through helper functions.
+/// Generated from the same IR as shader source; the runtime never parses shader source.
+struct ShaderBufferBindingInfo {
+  RcString entryPoint;                            //!< Entry point using this binding.
+  ShaderStage stage = ShaderStage::None;          //!< Single shader stage of that entry point.
+  uint32_t group = 0;                             //!< Bind group index.
+  uint32_t binding = 0;                           //!< Binding index within the group.
+  BindingType type = BindingType::UniformBuffer;  //!< Uniform or read-only storage buffer.
+  uint64_t minSizeBytes = 0;             //!< Fixed layout size, or one runtime-array element.
+  uint32_t runtimeArrayStrideBytes = 0;  //!< Runtime-array stride; zero for a fixed-size binding.
+
+  /// Equality comparison. @param other Facts to compare.
+  bool operator==(const ShaderBufferBindingInfo& other) const = default;
+};
+
 /// Descriptor for `Device::createShaderModule`. Source is trusted generated build output, never
 /// runtime input from documents. Exactly one source representation must be populated: text kinds
 /// (\ref ShaderSourceKind::Wgsl, \ref ShaderSourceKind::Msl) require nonempty `sourceText` and
@@ -589,6 +628,10 @@ struct ShaderModuleDescriptor {
   /// empty. \ref donner::gpu::shader::ComputeEntryPointsOf fills it from the IR module the
   /// source was emitted from, so the size is never transcribed by hand.
   std::vector<ComputeEntryPointInfo> computeEntryPoints;
+  /// Buffer requirements derived from shader IR. An engaged empty list means no entry point
+  /// uses a buffer; absence means requirements were not supplied. Native Metal requires these
+  /// facts because its buffer arguments do not retain a declared binding range.
+  std::optional<std::vector<ShaderBufferBindingInfo>> bufferBindings;
 };
 
 /// One vertex attribute within a \ref VertexBufferLayout.

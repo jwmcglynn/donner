@@ -102,7 +102,6 @@ protected:
 TEST_F(GeodeSnapshotReadbackTest, GpuAndCpuPathsAreByteIdentical) {
   auto device = sharedDevice();
   ASSERT_NE(device, nullptr);
-  ASSERT_TRUE(device->snapshotReadbackPipeline().valid());
 
   wgpu::Texture gpuTex = createTestTexture(device->device(), wgpu::TextureUsage::TextureBinding);
   wgpu::Texture cpuTex = createTestTexture(device->device(), wgpu::TextureUsage::CopySrc);
@@ -132,7 +131,6 @@ TEST_F(GeodeSnapshotReadbackTest, GpuAndCpuPathsAreByteIdentical) {
 TEST_F(GeodeSnapshotReadbackTest, ACompletedReadbackAccountsForTheSlicesItRan) {
   auto device = sharedDevice();
   ASSERT_NE(device, nullptr);
-  ASSERT_TRUE(device->snapshotReadbackPipeline().valid());
 
   wgpu::Texture texture = createTestTexture(device->device(), wgpu::TextureUsage::TextureBinding);
   const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));

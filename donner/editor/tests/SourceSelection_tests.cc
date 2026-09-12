@@ -2,14 +2,13 @@
 
 #include <gtest/gtest.h>
 
-#include <fstream>
 #include <optional>
 #include <span>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextEditor.h"
@@ -401,14 +400,10 @@ TEST(SourceSelectionTest, CursorImmediatelyAfterGroupClosingTagSelectsGroup) {
 }
 
 TEST(SourceSelectionTest, HighlightsEachDonnerSplashLetterNode) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-
-  std::ostringstream splashBuffer;
-  splashBuffer << splashStream.rdbuf();
-  const std::string source = splashBuffer.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& source = splashFile.contents;
 
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(source));

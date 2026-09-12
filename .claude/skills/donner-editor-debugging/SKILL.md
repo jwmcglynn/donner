@@ -263,9 +263,9 @@ Traps:
   wait with a deadline.
 - Content-only capture is a readback-only presenter mode — it must not clear overlay textures or
   skip overlay rasterization, or the next non-capture frame is perturbed.
-- `GlRnrReplay_tests.cc` is timing-sensitive; under `--config=geode` on a
-  remote-exec-by-default setup run it with `--strategy=TestRunner=local` (see the comment in
-  `donner/editor/tests/BUILD.bazel`).
+- `GlRnrReplay_tests.cc` is timing-sensitive. Run it only in the designated test environment and
+  use that environment's prescribed execution strategy; commands in this skill do not authorize a
+  different venue or local browser execution.
 - Mirror the exact request-posting sequence the real editor fires — do not fabricate a prewarm
   phase that production never runs, or the test verifies a fictional pipeline.
 
