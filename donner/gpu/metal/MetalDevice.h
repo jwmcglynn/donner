@@ -170,7 +170,7 @@ public:
    */
   Result<std::vector<uint8_t>> readBackBuffer(const Buffer& buffer);
 
-  /// Native texture access declared to Metal, exposed for allocation-contract tests.
+  /// Native texture access reported by Metal, exposed for allocation-contract tests.
   struct NativeTextureUsage {
     bool shaderRead = false;    //!< Native shader-read usage.
     bool shaderWrite = false;   //!< Native shader-write usage.

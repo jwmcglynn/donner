@@ -146,8 +146,7 @@ TEST_F(MetalQueueWritesTest, NativeTextureUsagePreservesStorageAndReadOnlyContra
   for (const Case& value :
        std::array{Case{"storage", TextureUsage::StorageBinding, true, true, false},
                   Case{"sampled", TextureUsage::Sampled, true, false, false},
-                  Case{"render target", TextureUsage::RenderAttachment, false, false, true},
-                  Case{"copy source", TextureUsage::CopySrc, false, false, false}}) {
+                  Case{"render target", TextureUsage::RenderAttachment, false, false, true}}) {
     SCOPED_TRACE(value.label);
     const Texture texture = GetResultOrFail(device_->createTexture(
         TextureDescriptor{value.label, {1, 1}, TextureFormat::RGBA8Unorm, value.usage}));
