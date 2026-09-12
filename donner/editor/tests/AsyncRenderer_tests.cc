@@ -232,15 +232,41 @@ std::string DescribeCompositeSegments(
 }
 
 EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = Vector2d(302.0,
-                                                                                        390.0)) {
+                                                                                        390.0),
+                                                        double devicePixelRatio = 2.0) {
   ViewportState viewport;
   viewport.paneSize = Vector2d(892.0, 512.0);
   viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
-  viewport.devicePixelRatio = 2.0;
+  viewport.devicePixelRatio = devicePixelRatio;
   viewport.zoom = 8.0;
   viewport.panDocPoint = panDocPoint;
   viewport.panScreenPoint = Vector2d(446.0, 256.0);
   return viewport.rasterViewport();
+}
+
+TEST(AsyncRendererPresentationPolicyTest, LayerPanelFixtureDownsamplesTheSameHighZoomCrop) {
+  for (const Vector2d panDocPoint : {Vector2d(302.0, 390.0), Vector2d(435.0, 350.0)}) {
+    SCOPED_TRACE(::testing::PrintToString(panDocPoint));
+    const EditorRasterViewport full = SplashDonnerHighZoomRasterViewport(panDocPoint, 2.0);
+    const EditorRasterViewport reduced = SplashDonnerHighZoomRasterViewport(panDocPoint);
+
+    EXPECT_THAT(full.viewportBounded, ::testing::IsTrue());
+    EXPECT_THAT(reduced.viewportBounded, ::testing::IsTrue());
+    EXPECT_THAT(full.semanticCanvasSizePx, ::testing::Eq(Vector2i(ViewportState::kMaxCanvasDim,
+                                                                  ViewportState::kMaxCanvasDim)));
+    EXPECT_THAT(reduced.semanticCanvasSizePx, ::testing::Eq(Vector2i(1784, 1024)));
+    EXPECT_THAT(full.outputSizePx, ::testing::Eq(Vector2i(2296, 1536)));
+    EXPECT_THAT(reduced.outputSizePx, ::testing::Eq(Vector2i(287, 192)));
+    EXPECT_THAT(full.documentRect, ::testing::Eq(Box2d::FromXYWH(
+                                       panDocPoint.x - 71.75, panDocPoint.y - 48.0, 143.5, 96.0)));
+    EXPECT_THAT(reduced.documentRect, ::testing::Eq(full.documentRect));
+    const Transform2d reducedOutputFromDocument =
+        full.outputFromDocument * Transform2d::Scale(0.125);
+    EXPECT_THAT(reduced.outputFromDocument.data,
+                ::testing::ElementsAreArray(reducedOutputFromDocument.data));
+    EXPECT_THAT(reduced.outputFromDocument.transformPosition(panDocPoint),
+                ::testing::Eq(Vector2d(143.5, 96.0)));
+  }
 }
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
@@ -1423,6 +1449,7 @@ TEST(AsyncRendererE2ETest, SplashDonnerSelectionExposesEligibleStaticSpansForLay
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(splashFile.contents));
   const EditorRasterViewport rasterViewport = SplashDonnerHighZoomRasterViewport();
+  ASSERT_THAT(rasterViewport.viewportBounded, ::testing::IsTrue());
   app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
                                           rasterViewport.semanticCanvasSizePx.y);
   auto target = app.document().document().querySelector("#Donner_D");
@@ -1444,7 +1471,8 @@ TEST(AsyncRendererE2ETest, SplashDonnerSelectionExposesEligibleStaticSpansForLay
   asyncRenderer.requestRender(request);
 
   const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
-  ASSERT_TRUE(result.has_value());
+  ASSERT_THAT(result, ::testing::Optional(::testing::_))
+      << "No layer preview at output size " << rasterViewport.outputSizePx;
   ASSERT_TRUE(result->compositedPreview.has_value());
 
   const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
@@ -1485,6 +1513,7 @@ TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel
   ASSERT_TRUE(app.loadFromString(splashFile.contents));
   const EditorRasterViewport rasterViewport =
       SplashDonnerHighZoomRasterViewport(Vector2d(435.0, 350.0));
+  ASSERT_THAT(rasterViewport.viewportBounded, ::testing::IsTrue());
   app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
                                           rasterViewport.semanticCanvasSizePx.y);
   auto target = app.document().document().querySelector("#Donner_N_1");
@@ -1506,7 +1535,8 @@ TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel
   asyncRenderer.requestRender(request);
 
   const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
-  ASSERT_TRUE(result.has_value());
+  ASSERT_THAT(result, ::testing::Optional(::testing::_))
+      << "No layer preview at output size " << rasterViewport.outputSizePx;
   ASSERT_TRUE(result->compositedPreview.has_value());
   const auto resources = renderer.resourceStats();
   EXPECT_FALSE(resources.filterBudgetRejected);
