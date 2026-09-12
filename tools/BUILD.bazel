@@ -162,6 +162,17 @@ py_test(
 )
 
 py_test(
+    name = "verify_metal_validation_tests",
+    size = "small",
+    imports = ["."],
+    srcs = [
+        "metal_validation_profile.py",
+        "verify_metal_validation.py",
+        "verify_metal_validation_tests.py",
+    ],
+)
+
+py_test(
     name = "ci_runtime_workflow_tests",
     size = "small",
     srcs = ["ci_runtime_workflow_tests.py"],
