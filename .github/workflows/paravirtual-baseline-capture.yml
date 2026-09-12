@@ -1,0 +1,283 @@
+name: Canonical paravirtual baseline capture
+
+on:
+  push:
+    branches: [renovate-paravirtual-baseline-capture]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paravirtual-baseline-capture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      CAPTURE_SOURCE_SHA: "26a16375a37c83c4a137b55fd8adc2d0e64cd936"
+      CAPTURE_ROOT: ${{ runner.temp }}/donner-paravirtual-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+      CAPTURE_EVIDENCE: ${{ runner.temp }}/donner-paravirtual-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
+      MTL_DEBUG_LAYER: "1"
+      MTL_SHADER_VALIDATION: "1"
+      MTL_SHADER_VALIDATION_ABORT_ON_FAULT: "1"
+      MTL_SHADER_VALIDATION_DEFAULT_STATE: "all"
+      MTL_SHADER_VALIDATION_DISABLE_PIPELINES: ""
+      MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING: "1"
+      MTL_SHADER_VALIDATION_ENABLE_PIPELINES: ""
+      MTL_SHADER_VALIDATION_GLOBAL_MEMORY: "1"
+      MTL_SHADER_VALIDATION_REPORT_TO_STDERR: "1"
+      MTL_SHADER_VALIDATION_TEXTURE_USAGE: "1"
+      MTL_SHADER_VALIDATION_THREADGROUP_MEMORY: "1"
+    steps:
+      - name: Checkout the fixed capture source
+        uses: actions/checkout@v7
+        with:
+          ref: "26a16375a37c83c4a137b55fd8adc2d0e64cd936"
+          persist-credentials: false
+
+      - name: Verify the source and initialize bounded evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_revision=$(git rev-parse HEAD)
+          source_status=$(git status --porcelain --untracked-files=all)
+          if [[ "$actual_revision" != "$CAPTURE_SOURCE_SHA" || -n "$source_status" ]]; then
+            echo "::error::Capture requires the exact clean source revision."
+            exit 1
+          fi
+          if [[ -e "$CAPTURE_ROOT" || -e "$CAPTURE_EVIDENCE" ]]; then
+            echo "::error::Capture output locations must be fresh."
+            exit 1
+          fi
+          mkdir -p "$CAPTURE_EVIDENCE"
+          source_tree=$(git rev-parse 'HEAD^{tree}')
+          printf 'source_revision=%s\nsource_tree=%s\nsource_tree_clean=clean\n' \
+            "$actual_revision" "$source_tree" > "$CAPTURE_EVIDENCE/checkout-initial.txt"
+
+      - name: Install clang-tidy
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            brew install --quiet llvm@19
+            echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Fetch capture and validation dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: >-
+            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
+            //donner/gpu/metal/tests:metal_validation_profile
+            //donner/gpu/metal/tests:metal_shader_memory_validation_tests
+            //donner/gpu/baseline:capture_baselines
+            >> "$CAPTURE_EVIDENCE/fetch.log" 2>&1
+
+      - name: Require the recognized paravirtual validation profile
+        id: profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci $BAZEL_MACOS_BUILD_FLAGS \
+            --jobs=4 --local_cpu_resources=2 \
+            --nocache_test_results --runs_per_test=1 --flaky_test_attempts=1 \
+            --test_filter= --test_tag_filters= --test_output=errors \
+            --test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 \
+            //donner/gpu/metal/tests:metal_validation_profile \
+            > "$CAPTURE_EVIDENCE/profile-bazel.log" 2>&1
+          cp bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log \
+            "$CAPTURE_EVIDENCE/profile-test.log"
+          profile=$(python3 tools/metal_validation_profile.py "$CAPTURE_EVIDENCE/profile-test.log")
+          if [[ "$profile" != "paravirtual-texture-usage-off" ]]; then
+            echo "::error::This experiment requires the exact recognized paravirtual profile."
+            exit 1
+          fi
+          printf '%s\n' "$profile" > "$CAPTURE_EVIDENCE/selected-profile.txt"
+          echo "MTL_SHADER_VALIDATION_TEXTURE_USAGE=0" >> "$GITHUB_ENV"
+
+      - name: Require the shader-memory error canary
+        id: canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci $BAZEL_MACOS_BUILD_FLAGS \
+            --jobs=4 --local_cpu_resources=2 \
+            --nocache_test_results --runs_per_test=1 --flaky_test_attempts=1 \
+            --test_filter= --test_tag_filters= --test_output=errors \
+            --test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 \
+            --test_arg=--gtest_filter='*' --test_arg=--gtest_repeat=1 \
+            //donner/gpu/metal/tests:metal_shader_memory_validation_tests \
+            > "$CAPTURE_EVIDENCE/canary-bazel.log" 2>&1
+          cp bazel-testlogs/donner/gpu/metal/tests/metal_shader_memory_validation_tests/test.log \
+            "$CAPTURE_EVIDENCE/canary-test.log"
+          cp bazel-testlogs/donner/gpu/metal/tests/metal_shader_memory_validation_tests/test.xml \
+            "$CAPTURE_EVIDENCE/canary-test.xml"
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          log = Path(os.environ["CAPTURE_EVIDENCE"]) / "canary-test.log"
+          with log.open("rb") as stream:
+              data = stream.read(1024 * 1024 + 1)
+          if len(data) > 1024 * 1024:
+              raise SystemExit("Memory canary log exceeded its bound")
+          lines = data.decode("utf-8").splitlines()
+          required = "[ RUN      ] MetalShaderMemoryValidationDeathTest.OutOfBoundsReadAborts"
+          if lines.count(required) != 1 or lines.count("[  PASSED  ] 1 test.") != 1:
+              raise SystemExit("Memory canary did not execute exactly once")
+          PYTHON
+
+      - name: Capture the canonical production corpus
+        id: capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import os
+
+          expected = {
+              "MTL_DEBUG_LAYER": "1",
+              "MTL_SHADER_VALIDATION": "1",
+              "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+              "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+              "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+              "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+              "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
+              "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+              "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+              "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "0",
+              "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+          }
+          if any(os.environ.get(name) != value for name, value in expected.items()):
+              raise SystemExit("Canonical capture validation configuration is invalid")
+          PYTHON
+          actual_revision=$(git rev-parse HEAD)
+          source_status=$(git status --porcelain --untracked-files=all)
+          if [[ "$actual_revision" != "$CAPTURE_SOURCE_SHA" || -n "$source_status" ]]; then
+            echo "::error::Capture source changed before execution."
+            exit 1
+          fi
+          source_tree=$(git rev-parse 'HEAD^{tree}')
+          printf 'source_revision=%s\nsource_tree=%s\nsource_tree_clean=clean\n' \
+            "$actual_revision" "$source_tree" > "$CAPTURE_EVIDENCE/checkout-before-capture.txt"
+          bazelisk run --config=ci $BAZEL_MACOS_BUILD_FLAGS \
+            --jobs=4 --local_cpu_resources=2 \
+            //donner/gpu/baseline:capture_baselines -- \
+            "$CAPTURE_ROOT" "$CAPTURE_SOURCE_SHA" clean \
+            > "$CAPTURE_EVIDENCE/capture-bazel.log" 2>&1
+          actual_revision=$(git rev-parse HEAD)
+          source_status=$(git status --porcelain --untracked-files=all)
+          if [[ "$actual_revision" != "$CAPTURE_SOURCE_SHA" || -n "$source_status" ]]; then
+            echo "::error::Capture source changed during execution."
+            exit 1
+          fi
+          source_tree=$(git rev-parse 'HEAD^{tree}')
+          printf 'source_revision=%s\nsource_tree=%s\nsource_tree_clean=clean\n' \
+            "$actual_revision" "$source_tree" > "$CAPTURE_EVIDENCE/checkout-after-capture.txt"
+          python3 - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import struct
+
+          root = Path(os.environ["CAPTURE_ROOT"])
+          slug = "apple_paravirtual_device_metal"
+          scenes = (
+              "solid_fill_baseline", "fill_rule_pair", "alpha_stack",
+              "cubic_extrema", "band_grid_stress", "degenerate_paths",
+          )
+          expected_files = {name + ".png" for name in scenes} | {"capture_provenance.txt"}
+          if root.is_symlink() or {path.name for path in root.iterdir()} != {slug}:
+              raise SystemExit("Canonical capture did not produce the required adapter directory")
+          capture = root / slug
+          if capture.is_symlink() or not capture.is_dir():
+              raise SystemExit("Canonical capture directory is invalid")
+          if {path.name for path in capture.iterdir()} != expected_files:
+              raise SystemExit("Canonical capture did not produce the complete expected corpus")
+          manifest = {}
+          provenance = None
+          for name in sorted(expected_files):
+              path = capture / name
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit("Canonical capture contains an invalid file")
+              limit = 16 * 1024 if name.endswith(".txt") else 1024 * 1024
+              with path.open("rb") as stream:
+                  data = stream.read(limit + 1)
+              if not data or len(data) > limit:
+                  raise SystemExit("Canonical capture file is empty or exceeds its bound")
+              if name.endswith(".png"):
+                  if (data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR" or
+                          len(data) < 24 or struct.unpack(">II", data[16:24]) != (256, 256)):
+                      raise SystemExit("Canonical capture PNG header is invalid")
+              else:
+                  provenance = {}
+                  for line in data.decode("utf-8").splitlines():
+                      if not line or line.startswith("#"):
+                          continue
+                      key, separator, value = line.partition(": ")
+                      if not separator or key in provenance:
+                          raise SystemExit("Canonical capture provenance is malformed")
+                      provenance[key] = value
+              manifest[name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+          expected_provenance = {
+              "schemaVersion": "1",
+              "sourceRevision": os.environ["CAPTURE_SOURCE_SHA"],
+              "sourceTreeClean": "clean",
+              "rendererPath": "wgpu-native Geode production path (GeodeDevice+GeoEncoder)",
+              "rendererBackend": "geode",
+              "adapterName": "Apple Paravirtual device",
+              "adapterBackend": "Metal",
+              "adapterType": "IntegratedGPU",
+              "targetFormat": "RGBA8Unorm premultiplied, transparent background",
+              "targetSize": "256x256",
+              "capturedScenes": ",".join(scenes),
+          }
+          if provenance != expected_provenance:
+              raise SystemExit("Canonical capture provenance does not match the verified experiment")
+          evidence = {
+              "schema": 1,
+              "source_revision": os.environ["CAPTURE_SOURCE_SHA"],
+              "source_tree_clean": "clean",
+              "profile": "paravirtual-texture-usage-off",
+              "adapter_directory": slug,
+              "files": manifest,
+          }
+          output = Path(os.environ["CAPTURE_EVIDENCE"]) / "capture-manifest.json"
+          output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+          PYTHON
+          echo "Canonical paravirtual captures completed; review the captured images before updating baselines." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload validated canonical captures
+        if: steps.capture.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: paravirtual-baseline-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CAPTURE_ROOT }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload capture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: paravirtual-baseline-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CAPTURE_EVIDENCE }}
+          if-no-files-found: error
+          retention-days: 7
