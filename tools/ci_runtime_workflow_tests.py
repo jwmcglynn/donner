@@ -126,6 +126,30 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("//donner/gpu/metal/tests:metal_full_validation_required", required)
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
 
+    def test_bazel_version_change_selects_full_suite_before_graph_hashing(self):
+        """A Bazel upgrade changes the query graph, not just two version files."""
+        job = self._job_body("determine-targets")
+        start = job.index("          should_fallback=false\n")
+        end = job.index('          work_dir="$(mktemp -d)"', start)
+        script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        script += textwrap.dedent(job[start:end])
+        script += 'echo "incremental=true" >> "$GITHUB_OUTPUT"\n'
+        for changed_files, expected in (
+            (".bazelversion\nexamples/.bazelversion", "fallback=true\naffected=\n"),
+            ("MODULE.bazel", "fallback=true\naffected=\n"),
+            ("donner/base/Utils.h", "incremental=true\n"),
+        ):
+            with self.subTest(changed_files=changed_files):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output = Path(temp_dir) / "outputs"
+                    result = self._run_script(
+                        script, [],
+                        env={**os.environ, "changed_files": changed_files,
+                             "GITHUB_OUTPUT": str(output)},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(expected, output.read_text())
+
     def test_coverage_does_not_expand_ci_config_twice(self):
         """The coverage command inherits its CI config from the runner rc."""
         flag_line = re.search(
