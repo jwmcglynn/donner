@@ -46,6 +46,9 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
@@ -87,6 +90,9 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
@@ -138,6 +144,9 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
@@ -163,6 +172,9 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
     },
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
@@ -188,6 +200,9 @@ donner_cc_test(
     env = {
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
     },
     env_inherit = ["GITHUB_ACTIONS"],
     target_compatible_with = ["@platforms//os:macos"],
