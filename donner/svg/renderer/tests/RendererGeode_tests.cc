@@ -1796,6 +1796,125 @@ TEST_F(RendererGeodeTest, DrawEntityRangeInvalidatesCachedFillEncodeAfterPathMut
          "attribute changed.";
 }
 
+TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
+  ParseWarningSink warningSink;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <path id="p" d="M0 0 C.3333333333333333 0 .6666666666666666 0 1 1 L1 0 Z"/>
+      </svg>)svg",
+      warningSink);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  const auto path = document.querySelector("#p");
+  ASSERT_THAT(path, testing::Optional(testing::_));
+  const EntityHandle source = path->unsafeEntityHandle();
+  RendererUtils::prepareDocumentForRendering(document, false, warningSink);
+
+  RendererGeode renderer = createRenderer();
+  const auto renderAtScale = [&](double scale) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(64.0, 64.0);
+    viewport.devicePixelRatio = 1.0;
+    RendererDriver(renderer).drawEntityRange(document.registry(), source.entity(), source.entity(),
+                                             viewport, Transform2d::Scale(scale));
+  };
+  renderAtScale(1.0);
+  const auto* cache = source.try_get<geode::GeodePathCacheComponent>();
+  ASSERT_THAT(cache, testing::NotNull());
+  ASSERT_THAT(cache->fillEncode, testing::Optional(testing::_));
+  const size_t initialCurveCount = cache->fillEncode->curves.size();
+
+  renderAtScale(32.0);
+  ASSERT_THAT(cache->fillEncode, testing::Optional(testing::_));
+  EXPECT_THAT(cache->fillEncode->curves.size(), testing::Gt(initialCurveCount));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(1u));
+
+  // This cubic has x(t) = t and y(t) = t^3, so its shape has an exact reference.
+  double maximumDeviceError = 0.0;
+  for (const auto& curve : cache->fillEncode->curves) {
+    if (curve.p2x <= curve.p0x) {
+      continue;
+    }
+    for (int sample = 0; sample <= 32; ++sample) {
+      const double t = static_cast<double>(sample) / 32.0;
+      const double u = 1.0 - t;
+      const double x = u * u * curve.p0x + 2.0 * u * t * curve.p1x + t * t * curve.p2x;
+      const double y = u * u * curve.p0y + 2.0 * u * t * curve.p1y + t * t * curve.p2y;
+      maximumDeviceError = std::max(maximumDeviceError, 32.0 * std::abs(y - x * x * x));
+    }
+  }
+  EXPECT_THAT(maximumDeviceError, testing::Le(0.1))
+      << "The cached quadratic fill must remain within 0.1 device pixels of the cubic after zoom.";
+
+  renderAtScale(25.0);
+  EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+      << "Zoom inside the same scale bucket must reuse the fill encode.";
+}
+
+TEST_F(RendererGeodeTest, CubicFillRefinementPreservesPendingInstances) {
+  Registry registry;
+  const EntityHandle source(registry, registry.create());
+  const Path cubic = PathBuilder()
+                         .moveTo({0.0, 0.0})
+                         .curveTo({1.0 / 3.0, 0.0}, {2.0 / 3.0, 0.0}, {1.0, 1.0})
+                         .lineTo({1.0, 0.0})
+                         .closePath()
+                         .build();
+  const auto render = [&](EntityHandle entity) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawPath(PathShape{.path = &cubic, .sourceEntity = entity}, StrokeParams{});
+    renderer.setTransform(Transform2d::Scale(32.0) * Transform2d::Translate(16.0, 16.0));
+    renderer.drawPath(PathShape{.path = &cubic, .sourceEntity = entity}, StrokeParams{});
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+  editor::tests::CompareBitmapToBitmap(render(source), render(EntityHandle()),
+                                       "cubic_fill_scale_batch",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, CubicFillRefinementReuploadsSolidAndGradientResidency) {
+  for (bool gradient : {false, true}) {
+    SCOPED_TRACE(gradient);
+    ParseWarningSink warningSink;
+    constexpr const char* source = R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <defs><linearGradient id="g"><stop stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+        <path id="p" d="M0 0 C.3333333333333333 0 .6666666666666666 0 1 1 L1 0 Z"/>
+      </svg>)svg";
+    const auto makeDocument = [&]() {
+      auto parsed = parser::SVGParser::ParseSVG(source, warningSink);
+      EXPECT_THAT(parsed.hasError(), testing::IsFalse());
+      SVGDocument document = std::move(parsed).result();
+      document.querySelector("#p")->setAttribute("fill", gradient ? "url(#g)" : "red");
+      RendererUtils::prepareDocumentForRendering(document, false, warningSink);
+      return document;
+    };
+    SVGDocument warmedDocument = makeDocument();
+    SVGDocument freshDocument = makeDocument();
+    const auto render = [&](RendererGeode& renderer, SVGDocument& document, double scale) {
+      const Entity entity = document.querySelector("#p")->unsafeEntityHandle().entity();
+      RenderViewport viewport;
+      viewport.size = Vector2d(64.0, 64.0);
+      viewport.devicePixelRatio = 1.0;
+      RendererDriver(renderer).drawEntityRange(document.registry(), entity, entity, viewport,
+                                               Transform2d::Scale(scale));
+      return renderer.takeSnapshot();
+    };
+    RendererGeode warmed = createRenderer();
+    RendererGeode fresh = createRenderer();
+    (void)render(warmed, warmedDocument, 1.0);
+    const RendererBitmap actual = render(warmed, warmedDocument, 32.0);
+    const RendererBitmap expected = render(fresh, freshDocument, 32.0);
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         gradient ? "cubic_gradient_zoom" : "cubic_solid_zoom",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 /// The resident gradient draw skips its uniform rewrite when the
 /// GradientUniforms block is byte-identical to the previous frame, so every
 /// gradient property the shader consumes must flow through that block for
