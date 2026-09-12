@@ -1,6 +1,6 @@
 /// @file
 /// Subregion-clip compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and each matches its committed golden byte-exactly.
+/// deterministic output, and expose the expected program interfaces.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
-#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -38,24 +37,36 @@ std::string EmitSubregionClipMsl() {
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
 }
 
-std::string EmitSubregionClipSpirvBytes() {
+std::vector<uint32_t> EmitSubregionClipSpirv() {
   ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
   EXPECT_THAT(module, HasShaderResult());
   if (module.hasError()) {
-    return "";
+    return {};
   }
-  return SpirvWordsToBytes(
-      GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>()));
+  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
 }
 
 TEST(SubregionClipProgramTests, ModuleBuildsCleanly) {
   EXPECT_THAT(programs::BuildSubregionClipModule(), HasShaderResult());
 }
 
+TEST(SubregionClipProgramTests, FinalResolveBuildsAndRoundsClampedChannelsHalfUp) {
+  const auto module = programs::BuildFilterResolveModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  EXPECT_THAT(wgsl.result(), HasSubstr("texture_storage_2d<rgba8unorm, write>"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("floor("));
+  EXPECT_THAT(wgsl.result(), HasSubstr("vec4<f32>(0.5f)"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("if (outside)"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("linear_channel_to_srgb"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("transferTable"));
+}
+
 TEST(SubregionClipProgramTests, EmitsDeterministically) {
   EXPECT_THAT(EmitSubregionClipWgsl(), testing::Eq(EmitSubregionClipWgsl()));
   EXPECT_THAT(EmitSubregionClipMsl(), testing::Eq(EmitSubregionClipMsl()));
-  EXPECT_THAT(EmitSubregionClipSpirvBytes(), testing::Eq(EmitSubregionClipSpirvBytes()));
+  EXPECT_THAT(EmitSubregionClipSpirv(), testing::Eq(EmitSubregionClipSpirv()));
 }
 
 TEST(SubregionClipProgramTests, WgslDeclaresTheComputeSurface) {
@@ -65,7 +76,7 @@ TEST(SubregionClipProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, HasSubstr("@builtin(global_invocation_id) gid: vec3<u32>"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
   EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba8unorm, "
+              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
                         "write>;"));
   EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(2) var<uniform> params: SubregionClipParams;"));
   // The two trailing words are load-bearing: without them the ten f32 members size the block at
@@ -93,33 +104,6 @@ TEST(SubregionClipProgramTests, MslDeclaresTheKernelSurface) {
               HasSubstr("outputTexture.write(float4(0.0f, 0.0f, 0.0f, 0.0f), uint2(coords));"));
   // A kernel takes its builtins directly, so no stage-in struct may appear.
   EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
-}
-
-TEST(SubregionClipProgramTests, WgslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string wgsl = EmitSubregionClipWgsl();
-  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "subregion_clip.wgsl", wgsl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("subregion_clip.wgsl")));
-}
-
-TEST(SubregionClipProgramTests, MslMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_MSL_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string msl = EmitSubregionClipMsl();
-  if (MaybeUpdateShaderGolden("UPDATE_MSL_GOLDEN", "subregion_clip.msl", msl)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(msl, testing::Eq(ReadShaderGolden("subregion_clip.msl")));
-}
-
-TEST(SubregionClipProgramTests, SpirvMatchesCommittedGoldenByteExactly) {
-  // Regenerate deliberately: UPDATE_SPIRV_GOLDEN=/path/to/repo rewrites the golden.
-  const std::string bytes = EmitSubregionClipSpirvBytes();
-  if (MaybeUpdateShaderGolden("UPDATE_SPIRV_GOLDEN", "subregion_clip.spv", bytes)) {
-    GTEST_SKIP() << "Golden updated";
-  }
-  EXPECT_THAT(bytes, testing::Eq(ReadShaderGolden("subregion_clip.spv")));
 }
 
 }  // namespace

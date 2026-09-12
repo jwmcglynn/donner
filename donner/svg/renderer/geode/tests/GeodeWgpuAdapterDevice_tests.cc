@@ -11,13 +11,19 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/ModuleInterface.h"
+#include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SubRectangleCopyScene.h"
+#include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -30,6 +36,12 @@ using testing::Lt;
 using testing::Not;
 
 namespace donner::geode {
+
+/// Exposes only the real completion state for deterministic callback-order tests.
+struct GeodeWgpuAdapterDeviceTestAccess {
+  using CompletionState = GeodeWgpuAdapterDevice::CompletionState;
+};
+
 namespace {
 
 /// Minimal compute WGSL writing a constant color into a write-only storage texture, matching the
@@ -191,6 +203,27 @@ ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label
   return scene;
 }
 
+/// Replays a real clear into a selected host; its resources retire through the returned serial.
+/// @param adapter Device recording the clear.
+/// @param host Encoder receiving the clear.
+uint64_t ReplayHostClear(GeodeWgpuAdapterDevice& adapter, wgpu::CommandEncoder host) {
+  adapter.setHostCommandEncoder(host);
+  const gpu::Texture target = gpu::GetResultOrFail(adapter.createTexture(
+      gpu::TextureDescriptor{"hostClear", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment}));
+  const gpu::TextureView view = gpu::GetResultOrFail(
+      adapter.createTextureView(target, gpu::TextureViewDescriptor{"hostClearView"}));
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter.createCommandEncoder());
+  gpu::RenderPassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "hostClear",
+          {gpu::RenderPassColorAttachment{
+              view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 1, 1}}}}));
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+  return gpu::GetResultOrFail(adapter.submit(gpu::GetResultOrFail(encoder->finish())));
+}
+
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
 protected:
   void SetUp() override {
@@ -203,6 +236,73 @@ protected:
   std::unique_ptr<GeodeDevice> geodeDevice_;
   std::unique_ptr<GeodeWgpuAdapterDevice> adapter_;
 };
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadDoesNotReadBeyondCallerSpan) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"minimalUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  const std::array<uint8_t, 4> pixel{17, 34, 51, 68};
+  ASSERT_THAT(adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, 256, 1},
+                                     gpu::Extent2d{1, 1}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(17, 34, 51, 68));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadPreservesOffsetAndMultipleRows) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"offsetUpload", gpu::Extent2d{2, 2}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  std::vector<uint8_t> pixels(4 + 256 + 8, 0);
+  pixels[4] = 1;
+  pixels[5] = 2;
+  pixels[6] = 3;
+  pixels[7] = 4;
+  pixels[8] = 5;
+  pixels[9] = 6;
+  pixels[10] = 7;
+  pixels[11] = 8;
+  pixels[260] = 9;
+  pixels[261] = 10;
+  pixels[262] = 11;
+  pixels[263] = 12;
+  pixels[264] = 13;
+  pixels[265] = 14;
+  pixels[266] = 15;
+  pixels[267] = 16;
+  ASSERT_THAT(adapter_->writeTexture(texture, pixels, gpu::TexelCopyBufferLayout{4, 256, 2},
+                                     gpu::Extent2d{2, 2}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 2);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(1, 2, 3, 4));
+  EXPECT_THAT(PixelAt(readback, 1, 0), ElementsAre(5, 6, 7, 8));
+  EXPECT_THAT(PixelAt(readback, 0, 1), ElementsAre(9, 10, 11, 12));
+  EXPECT_THAT(PixelAt(readback, 1, 1), ElementsAre(13, 14, 15, 16));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadIgnoresUnusedGiganticStride) {
+  const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(gpu::TextureDescriptor{
+      "hugeStrideUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+  const std::array<uint8_t, 4> pixel{21, 42, 63, 84};
+  constexpr uint32_t kHugeAlignedStride =
+      std::numeric_limits<uint32_t>::max() & ~(gpu::kTexelRowPitchAlignment - 1);
+  ASSERT_THAT(
+      adapter_->writeTexture(texture, pixel, gpu::TexelCopyBufferLayout{0, kHugeAlignedStride, 1},
+                             gpu::Extent2d{1, 1}),
+      gpu::IsOk());
+
+  const std::vector<uint8_t> readback =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(texture), 1);
+  ASSERT_THAT(readback, Not(testing::IsEmpty()));
+  EXPECT_THAT(PixelAt(readback, 0, 0), ElementsAre(21, 42, 63, 84));
+}
 
 TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
   // ----- Every resource kind the pipeline family uses, created through the adapter -----
@@ -416,7 +516,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplayInterleavesInOneBufferAndDe
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
@@ -537,7 +637,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, SubRectangleCopyHonorsBothOriginsWhenReplaye
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
@@ -585,6 +685,111 @@ TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitResumesAfterClearingTheHostEncode
   EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
 
   geodeDevice_->setCounters(nullptr);
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, FloatTextureDispatchPreservesSubBytePrecision) {
+  const auto module = gpu::shader::BuildFloatStorageModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"float",
+                                  RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl,
+                                  {},
+                                  gpu::shader::ComputeEntryPointsOf(module.result())},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      });
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests,
+       IndexedQuadsWithOffsetsInstancingAndScissorMatchTheExpectedImage) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckIndexedDrawScene(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"attributes", RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        constexpr uint64_t kReadbackBytes = 256 * 12;
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, kReadbackBytes);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      });
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, VectorCeilAndExpRunThroughWebGpu) {
+  const auto module = gpu::shader::BuildVectorCeilExpModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = gpu::shader::EmitWgsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *adapter_,
+      gpu::ShaderModuleDescriptor{"float",
+                                  RcString(emitted.result()),
+                                  gpu::ShaderSourceKind::Wgsl,
+                                  {},
+                                  gpu::shader::ComputeEntryPointsOf(module.result())},
+      [this](const gpu::Buffer& buffer) -> gpu::Result<std::vector<uint8_t>> {
+        auto mapping = adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256);
+        if (mapping.hasError()) {
+          return std::move(mapping).error();
+        }
+        const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
+        EXPECT_THAT(wait, gpu::HasResult());
+        if (!wait.hasError()) {
+          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+        }
+        const auto bytes = adapter_->mappedBytes(mapping.result());
+        std::vector<uint8_t> result;
+        if (!bytes.hasError()) {
+          result.assign(bytes.result().begin(), bytes.result().end());
+        }
+        EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping).result()), gpu::IsOk());
+        if (bytes.hasError()) {
+          return bytes.error();
+        }
+        return result;
+      },
+      {-0.5f, 0.5f, 0.0f, 1.0f}, {0.0f, 1.0f, 16.0f, 43.0f});
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitEncodesAComputePassThatWritesItsStorageTexture) {
@@ -668,7 +873,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplaysAComputePassAheadOfHostRec
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
@@ -967,13 +1172,124 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AStandaloneSubmitDoesNotCompleteTheOpenFrame
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(standaloneSerial, /*timeoutSeconds=*/30.0))
       << "after the frame's submit everything must complete; completedSerial="
       << adapter_->completedSerial();
   EXPECT_THAT(adapter_->completedSerial(), Ge(standaloneSerial));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, SubmittingOneHostCannotCompleteAnotherUnsubmittedHost) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  const uint64_t parentSerial = ReplayHostClear(*adapter_, parent.get());
+  const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
+  ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
+  geodeDevice_->queue().submit(1, &siblingCommands.get());
+  adapter_->notifyHostSubmitted(sibling.get());
+  ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
+              testing::Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(adapter_->completedSerial(), Lt(parentSerial));
+
+  adapter_->setHostCommandEncoder(parent.get());
+  ScopedWgpuHandle<wgpu::CommandBuffer> parentCommands(parent.get().finish());
+  geodeDevice_->queue().submit(1, &parentCommands.get());
+  adapter_->notifyHostSubmitted(parent.get());
+  adapter_->clearHostCommandEncoder();
+  EXPECT_THAT(adapter_->waitForSerial(siblingSerial, 2.0), testing::IsTrue());
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, InterleavedHostSerialsCompleteOnlyThroughTheFirstGap) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  const uint64_t parentFirst = ReplayHostClear(*adapter_, parent.get());
+  const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
+  const uint64_t parentLast = ReplayHostClear(*adapter_, parent.get());
+  ASSERT_THAT(siblingSerial, testing::Eq(parentFirst + 1));
+  ASSERT_THAT(parentLast, testing::Eq(siblingSerial + 1));
+  ScopedWgpuHandle<wgpu::CommandBuffer> parentCommands(parent.get().finish());
+  geodeDevice_->queue().submit(1, &parentCommands.get());
+  adapter_->notifyHostSubmitted(parent.get());
+  ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
+              testing::Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(adapter_->completedSerial(), testing::Eq(parentFirst));
+
+  adapter_->setHostCommandEncoder(sibling.get());
+  ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
+  geodeDevice_->queue().submit(1, &siblingCommands.get());
+  adapter_->notifyHostSubmitted(sibling.get());
+  adapter_->clearHostCommandEncoder();
+  EXPECT_THAT(adapter_->waitForSerial(parentLast, 2.0), testing::IsTrue());
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, ACallbackCannotPassAnEarlierSerialAlreadyQueuedByAnotherHost) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  GeodeWgpuAdapterDeviceTestAccess::CompletionState completion;
+  completion.record(parent.get(), 1);
+  completion.record(sibling.get(), 2);
+  completion.record(parent.get(), 3);
+  const uint64_t parentTicket = completion.closeHost(parent.get());
+  const uint64_t siblingTicket = completion.closeHost(sibling.get());
+  ASSERT_THAT(parentTicket, testing::Eq(1u));
+  ASSERT_THAT(siblingTicket, testing::Eq(2u));
+
+  completion.complete(parentTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(siblingTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(3u));
+  EXPECT_THAT(completion.pending.size(), testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, ReusedHostIdentityDoesNotRetargetAnOlderCallbackTicket) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> host(geodeDevice_->device().createCommandEncoder());
+  GeodeWgpuAdapterDeviceTestAccess::CompletionState completion;
+  completion.record(host.get(), 1);
+  const uint64_t oldTicket = completion.closeHost(host.get());
+  completion.record(host.get(), 2);
+  const uint64_t newTicket = completion.closeHost(host.get());
+  ASSERT_THAT(oldTicket, testing::Ne(newTicket));
+  completion.complete(oldTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(oldTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(newTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(2u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, CompletedHighWaterWaitsForQueuedStandaloneCallbacks) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> host(geodeDevice_->device().createCommandEncoder());
+  GeodeWgpuAdapterDeviceTestAccess::CompletionState completion;
+  completion.record(host.get(), 1);
+  completion.record(nullptr, 2);
+  completion.record(nullptr, 3);
+  completion.complete(3);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(0u));
+  completion.complete(completion.closeHost(host.get()));
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(2);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(3u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, DiscardingOneHostCannotCompleteAnotherPendingHost) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  const uint64_t parentSerial = ReplayHostClear(*adapter_, parent.get());
+  const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
+  adapter_->notifyHostDiscarded(parent.get());
+  parent.reset();
+  ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
+              testing::Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(adapter_->completedSerial(), testing::Eq(parentSerial));
+  EXPECT_THAT(adapter_->hostCommandEncoderIs(sibling.get()), testing::IsTrue());
+
+  ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
+  geodeDevice_->queue().submit(1, &siblingCommands.get());
+  adapter_->notifyHostSubmitted(sibling.get());
+  adapter_->clearHostCommandEncoder();
+  EXPECT_THAT(adapter_->waitForSerial(siblingSerial, 2.0), testing::IsTrue());
 }
 
 /// The adapter presents to a Metal layer; the other platform surfaces are still created by the

@@ -51,6 +51,13 @@ struct SetVertexBufferCommand {
   uint64_t offsetBytes = 0;   //!< Byte offset of the first element.
 };
 
+/// Recorded `setIndexBuffer`. The bound range runs from \ref offsetBytes to the end of the buffer.
+struct SetIndexBufferCommand {
+  ResourceIdentity bufferId;                 //!< Buffer identity.
+  IndexFormat format = IndexFormat::Uint16;  //!< Width of each index.
+  uint64_t offsetBytes = 0;                  //!< Byte offset of the first index.
+};
+
 /// Recorded `setScissorRect`.
 struct SetScissorRectCommand {
   uint32_t x = 0;       //!< Left edge in pixels.
@@ -74,6 +81,16 @@ struct DrawCommand {
   uint32_t vertexCount = 0;    //!< Number of vertices.
   uint32_t instanceCount = 1;  //!< Number of instances.
   uint32_t firstVertex = 0;    //!< First vertex index.
+  uint32_t firstInstance = 0;  //!< First instance index.
+};
+
+/// Recorded `drawIndexed`. Vertex-stepped attributes fetch element `baseVertex + index value`;
+/// instance-stepped attributes fetch element `firstInstance + instance`.
+struct DrawIndexedCommand {
+  uint32_t indexCount = 0;     //!< Number of indices read.
+  uint32_t instanceCount = 1;  //!< Number of instances.
+  uint32_t firstIndex = 0;     //!< First index read, relative to the bound offset.
+  int32_t baseVertex = 0;      //!< Signed value added to every index before the vertex fetch.
   uint32_t firstInstance = 0;  //!< First instance index.
 };
 
@@ -111,9 +128,9 @@ struct CopyTextureToTextureCommand {
 /// One recorded command.
 using Command =
     std::variant<BeginRenderPassCommand, SetPipelineCommand, SetBindGroupCommand,
-                 SetVertexBufferCommand, SetScissorRectCommand, SetViewportCommand, DrawCommand,
-                 EndRenderPassCommand, BeginComputePassCommand, SetComputePipelineCommand,
-                 DispatchWorkgroupsCommand, EndComputePassCommand, CopyTextureToBufferCommand,
-                 CopyTextureToTextureCommand>;
+                 SetVertexBufferCommand, SetIndexBufferCommand, SetScissorRectCommand,
+                 SetViewportCommand, DrawCommand, DrawIndexedCommand, EndRenderPassCommand,
+                 BeginComputePassCommand, SetComputePipelineCommand, DispatchWorkgroupsCommand,
+                 EndComputePassCommand, CopyTextureToBufferCommand, CopyTextureToTextureCommand>;
 
 }  // namespace donner::gpu

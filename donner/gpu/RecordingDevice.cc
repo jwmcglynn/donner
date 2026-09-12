@@ -59,6 +59,26 @@ std::string RefId(std::string_view resourceName, uint32_t slotIndex) {
   return std::format("{}#{}", resourceName, slotIndex);
 }
 
+/// Includes supplied shader facts while retaining the distinction between absent and empty.
+void AppendShaderBufferBindings(
+    std::ostringstream& os, const std::optional<std::vector<ShaderBufferBindingInfo>>& bindings) {
+  if (!bindings) {
+    return;
+  }
+  os << " bufferBindings=[";
+  for (size_t index = 0; index < bindings->size(); ++index) {
+    if (index > 0) {
+      os << " ";
+    }
+    const ShaderBufferBindingInfo& info = (*bindings)[index];
+    os << "{entryPoint=" << QuoteLabel(info.entryPoint) << " stage=" << info.stage
+       << " group=" << info.group << " binding=" << info.binding << " type=" << info.type
+       << " minSizeBytes=" << info.minSizeBytes
+       << " runtimeArrayStrideBytes=" << info.runtimeArrayStrideBytes << "}";
+  }
+  os << "]";
+}
+
 /// Serializes the vertex buffer layout list of a pipeline descriptor.
 void AppendVertexBufferLayouts(std::ostringstream& os,
                                const std::vector<VertexBufferLayout>& buffers) {
@@ -132,6 +152,10 @@ struct CommandSerializer {
        << " buffer=" << RefId(BufferTag::kName, command.bufferId.slotIndex)
        << " offsetBytes=" << command.offsetBytes;
   }
+  void operator()(const SetIndexBufferCommand& command) {
+    os << "setIndexBuffer buffer=" << RefId(BufferTag::kName, command.bufferId.slotIndex)
+       << " format=" << command.format << " offsetBytes=" << command.offsetBytes;
+  }
   void operator()(const SetScissorRectCommand& command) {
     os << "setScissorRect x=" << command.x << " y=" << command.y << " width=" << command.width
        << " height=" << command.height;
@@ -145,6 +169,11 @@ struct CommandSerializer {
   void operator()(const DrawCommand& command) {
     os << "draw vertexCount=" << command.vertexCount << " instanceCount=" << command.instanceCount
        << " firstVertex=" << command.firstVertex << " firstInstance=" << command.firstInstance;
+  }
+  void operator()(const DrawIndexedCommand& command) {
+    os << "drawIndexed indexCount=" << command.indexCount
+       << " instanceCount=" << command.instanceCount << " firstIndex=" << command.firstIndex
+       << " baseVertex=" << command.baseVertex << " firstInstance=" << command.firstInstance;
   }
   void operator()(const EndRenderPassCommand&) { os << "endRenderPass"; }
   void operator()(const CopyTextureToBufferCommand& command) {
@@ -313,6 +342,7 @@ Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
     }
     os << "]";
   }
+  AppendShaderBufferBindings(os, descriptor.bufferBindings);
   lines_.push_back(os.str());
   return OkStatus();
 }

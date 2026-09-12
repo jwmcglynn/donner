@@ -21,7 +21,8 @@
 //   BYTES=<total>
 // Any failure prints a line beginning with "ERROR:" and exits non-zero.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 function fail(message) {
@@ -127,6 +128,12 @@ const total = width * height * 4;
 const pixels = Module.HEAPU8.subarray(ptr, ptr + total);
 if (pixels.length !== total) {
   fail("pixel view has wrong length: " + pixels.length + " != " + total);
+}
+
+const outputDirectory = process.env["TEST_UNDECLARED_OUTPUTS_DIR"];
+if (outputDirectory) {
+  writeFileSync(join(outputDirectory, "actual.rgba"), pixels);
+  writeFileSync(join(outputDirectory, "reference.svg"), SVG);
 }
 
 let hash = 0x811c9dc5;

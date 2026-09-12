@@ -12,7 +12,7 @@ load("//build_defs:package.bzl", "donner_package")
 # build needs no Vulkan library present and a machine without one reports it
 # at device creation. Execution is gated to Linux in tests/BUILD.bazel.
 
-# The tracked resource-state model every barrier and subpass dependency is derived from.
+# The tracked resource-state model every image barrier is derived from.
 # Deliberately its own target: it is pure state machinery over Vulkan enums that opens no device
 # and calls no entry point, so it builds and its tests run on every platform, not only where a
 # Vulkan loader exists.
@@ -22,7 +22,6 @@ donner_cc_library(
     hdrs = ["VulkanResourceState.h"],
     visibility = donner_internal_visibility(),
     deps = [
-        "//donner/gpu",
         "@vulkan_headers",
     ],
 )

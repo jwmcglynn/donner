@@ -360,10 +360,20 @@ py_test(
         # layer that finishes that move: wasm 13,315,197 raw / 5,237,419 gzip,
         # js 175,205 raw / 49,318 gzip, and package 13,531,958 raw. Budgets
         # retain about 1 percent headroom over that measurement.
+        #
+        # GPU binding-validation retune: shader buffer facts, use-time bind
+        # group revalidation, and active buffer range checks run on the path
+        # the renderer records through, so they are shipped code. Measured at
+        # this layer: wasm 13,452,374 raw / 5,279,367 gzip, js 175,446 raw /
+        # 49,395 gzip, and package 13,669,376 raw. The wasm gzip gate had
+        # fallen to 0.20 percent headroom, so it is retuned alongside the two
+        # raw gates it would otherwise have flipped red before; the js gates
+        # are untouched because this layer adds no JavaScript. Budgets retain
+        # about 1 percent headroom over that measurement.
         "--max-wasm-raw-bytes",
-        "13449000",
+        "13586000",
         "--max-wasm-gzip-bytes",
-        "5290000",
+        "5332000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
@@ -373,7 +383,7 @@ py_test(
         "--max-js-gzip-bytes",
         "49710",
         "--max-total-raw-bytes",
-        "13668000",
+        "13806000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic

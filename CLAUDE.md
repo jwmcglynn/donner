@@ -9,6 +9,15 @@
   summary, so start directly with the summary content.
 - **Do not publish draft diffs.** Agents must not open draft PRs. Keep unfinished work local; once
   the change is validated and ready for review, open a normal reviewable PR.
+- **Requested early delivery.** When the operator requests parallel or early delivery, a coherent
+  unit may open as a normal reviewable PR after affected tests, applicable format/generator checks,
+  independent non-implementing exact-diff review, and a full security/privacy review bound to the
+  exact candidate pass. Mark an irrelevant review surface not applicable only with a reviewable
+  rationale; the focused code review does not replace this gate.
+  Full `bazel test //...`, the existing applicable Geode editor integration matrix, and every
+  required and advisory CI/review/conflict gate remain mandatory before merge readiness. Schedule
+  that qualification and drive failures green; new source changes invalidate affected evidence.
+  The ordinary default remains the full pre-push gate.
 
 ## AI Comment Convention
 
@@ -30,11 +39,19 @@
 ## Always-Green Main
 
 - **`main` is always green.** There is no such thing as a "preexisting test failure" — any red test blocks merge, full stop. If something on `main` breaks, the next PR is fixing it, not routing around it.
-- **No preexisting issues, ever. We fix every issue we encounter.** "This test was already red at the base commit / before my change / on another branch" is NOT an exemption — it is the next thing to fix, not a footnote to route around. Discovering a base-red test, a latent crash, a segfault, or any other defect while doing other work means that defect is now in scope: root-cause and fix it (or, if it is genuinely too large for the current change, open a tracking issue, link it, and say so explicitly — never silently leave it red or label it "preexisting, not mine"). A branch is allowed to carry red tests *transiently while actively being driven to green*, but the bar for "done" is always a fully-green `bazel test //...` with real fixes and zero disabled/skipped tests. Agents must not downgrade a red test to "preexisting" to declare success.
-- **Run `bazel test //...` before pushing any PR.** This is the single source of truth for local validation. Our goal is that `bazel test //...` catches every regression that CI would — if CI catches something local didn't, that's a gap to fix in the test surface, not a reason to skip the local check.
+- **No preexisting-failure exemption.** A base-red test, latent crash, segfault, or other defect
+  remains blocking. Fix failures within the unit's scope. In coordinated delivery, report an
+  unrelated failure to the coordinator, who assigns one repair owner and links that repair; do not
+  silently leave it red or expand every worker's scope into the same fix. A branch may carry red
+  tests transiently while being driven green, but merge readiness always requires a fully green
+  `bazel test //...` with real fixes and zero disabled or skipped tests.
+- **Run `bazel test //...` before pushing by default.** This is the single source of truth for full local validation. The requested early-delivery exception above changes when full qualification completes, not whether it completes. If CI catches something the full local gate did not, fix the test-surface gap.
 - **If `main.yml`'s bazel-diff target determinator looks wrong on a PR, add the `ci:full-test` label** to force the workflow back to full `bazel test //...` coverage for that PR.
 - **When touching the CMake mirror or `gen_cmakelists.py`, also run `python3 tools/cmake/gen_cmakelists.py --check --build`.** Plain `--check` is intentionally fast and static; `--build` is the opt-in local compile gate that catches real CMake drift before CI does.
-- The `tiny`, `text-full`, and `geode` variant lanes now run as `*_tiny` / `*_text_full` / `*_geode` wrappers under default `bazel test //...` (see `donner_cc_test(variants=…)` in `build_defs/rules.bzl`). The transitional `tools/presubmit.sh` wrapper has been retired — `bazel test //...` is the single command that gates a PR.
+- The `tiny`, `text-full`, and `geode` variant lanes run as `*_tiny` / `*_text_full` / `*_geode`
+  wrappers under default `bazel test //...` (see `donner_cc_test(variants=…)` in
+  `build_defs/rules.bzl`). The transitional `tools/presubmit.sh` wrapper has been retired;
+  `bazel test //...` is the full qualification command required before merge readiness.
 
 ## Transform Naming
 

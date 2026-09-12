@@ -1,6 +1,6 @@
+load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
-load("//build_defs:package.bzl", "donner_package")
 
 # donner::gpu - the Donner-owned GPU runtime.
 #
@@ -11,28 +11,48 @@ load("//build_defs:package.bzl", "donner_package")
 # Geode path until each family is migrated.
 
 donner_cc_library(
+    name = "descriptors",
+    srcs = ["Descriptors.cc"],
+    hdrs = [
+        "Descriptors.h",
+        "Handles.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/base"],
+)
+
+donner_cc_library(
     name = "gpu",
     srcs = [
         "CommandEncoder.cc",
-        "Descriptors.cc",
         "Device.cc",
         "GpuError.cc",
-        "RecordingDevice.cc",
     ],
     hdrs = [
         "CheckedArithmetic.h",
         "CommandEncoder.h",
         "Commands.h",
-        "Descriptors.h",
         "Device.h",
         "GpuError.h",
         "GpuLimits.h",
         "GpuResult.h",
-        "Handles.h",
-        "RecordingDevice.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
+        ":descriptors",
+        "//donner/base",
+    ],
+)
+
+# Device-free command recording used by the runtime model tests.
+donner_cc_library(
+    name = "recording_device",
+    testonly = 1,
+    srcs = ["RecordingDevice.cc"],
+    hdrs = ["RecordingDevice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
         "//donner/base",
     ],
 )
@@ -61,6 +81,21 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
 )
 
+donner_cc_library(
+    name = "convolve_matrix_slice",
+    testonly = 1,
+    hdrs = ["tests/ConvolveMatrixSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:program_bindings",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
 # The sub-rectangle texture-copy scene shared by the backend copy slices: the
 # same source pattern, destination fill, copy rectangle, origins, and expected
 # image.
@@ -84,9 +119,162 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "float_texture_slice",
+    testonly = 1,
+    hdrs = ["tests/FloatTextureSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "tile_slice",
+    testonly = 1,
+    hdrs = ["tests/TileSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "drop_shadow_slice",
+    testonly = 1,
+    hdrs = ["tests/DropShadowSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "blur_slice",
+    testonly = 1,
+    hdrs = ["tests/BlurSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_image_slice",
+    testonly = 1,
+    hdrs = ["tests/FilterImageSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:program_bindings",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "morphology_slice",
+    testonly = 1,
+    hdrs = ["tests/MorphologySlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "component_transfer_slice",
+    testonly = 1,
+    hdrs = ["tests/ComponentTransferSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "displacement_map_slice",
+    testonly = 1,
+    hdrs = ["tests/DisplacementMapSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:program_bindings",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "turbulence_slice",
+    testonly = 1,
+    hdrs = ["tests/TurbulenceSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:program_bindings",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "lighting_slice",
+    testonly = 1,
+    hdrs = ["tests/LightingSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:program_bindings",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "vertex_input_slice",
+    testonly = 1,
+    hdrs = ["tests/VertexInputSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:programs",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_test(
     name = "gpu_tests",
     srcs = [
+        "tests/BufferBindingBounds_tests.cc",
         "tests/CommandEncoder_tests.cc",
         "tests/ComputePass_tests.cc",
         "tests/DeviceValidation_tests.cc",
@@ -98,10 +286,43 @@ donner_cc_test(
     ],
     deps = [
         ":gpu",
+        ":recording_device",
         ":gpu_test_utils",
         # For the static_assert tying the runtime's compute caps to the shader IR's copy.
         "//donner/gpu/shader",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Separate binary because AllocationTracker.h defines global replacement operator new/delete,
+# which take precedence over the sanitizers' interceptors. Linking it into gpu_tests would weaken
+# the ASan and UBSan lanes for every other test in that binary, so this target is excluded from
+# them instead (.github/workflows/sanitizers.yml).
+donner_cc_test(
+    name = "gpu_allocation_tests",
+    srcs = [
+        "tests/EncoderAllocation_tests.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_pixel_tests",
+    testonly = 1,
+    hdrs = ["tests/CheckerboardPixelTests.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer/geode:checkerboard_pipeline",
+        "@com_google_gtest//:gtest",
     ],
 )
 

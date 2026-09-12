@@ -2,22 +2,30 @@
 
 #include <algorithm>
 #include <format>
+#include <limits>
 
 namespace donner::gpu::shader {
 
 namespace {
 
+constexpr uint64_t kMaxLayoutBytes = std::numeric_limits<uint32_t>::max();
+
 /// Rounds \p value up to the next multiple of \p alignment.
-uint32_t RoundUp(uint32_t alignment, uint32_t value) {
+uint64_t RoundUp(uint32_t alignment, uint64_t value) {
   return ((value + alignment - 1) / alignment) * alignment;
 }
 
 /// Alignment of \p type as a member or array element in \p addressSpace: in uniform space,
 /// structs and arrays round their alignment up to 16 (WGSL uniform layout constraints).
+///
+/// std::max rather than RoundUp: every alignment here is a power of two and IrType::Struct
+/// rejects empty structs, so baseAlign is at least 4 and rounding 16 up to it is exactly the
+/// larger of the two. Saying max directly keeps this out of the overflow-checked arithmetic
+/// below, where RoundUp's operands now have to be proven not to wrap.
 uint32_t EffectiveAlign(const IrType& type, AddressSpace addressSpace, uint32_t baseAlign) {
   if (addressSpace == AddressSpace::Uniform &&
       (type.kind() == IrType::Kind::Struct || type.kind() == IrType::Kind::SizedArray)) {
-    return RoundUp(16, baseAlign);
+    return std::max(16u, baseAlign);
   }
   return baseAlign;
 }
@@ -68,11 +76,12 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
         return std::move(stride).error();
       }
       // WGSL: in the uniform address space, arrays align to roundUp(16, AlignOf(element)).
-      uint32_t align = elementLayout.result().alignBytes;
-      if (addressSpace == AddressSpace::Uniform) {
-        align = RoundUp(16, align);
+      const uint32_t align = EffectiveAlign(type, addressSpace, elementLayout.result().alignBytes);
+      const uint64_t size = uint64_t{type.arrayCount()} * stride.result();
+      if (size > kMaxLayoutBytes) {
+        return ShaderError{"array size exceeds the 32-bit byte layout limit", "layout"};
       }
-      return TypeLayout{align, type.arrayCount() * stride.result()};
+      return TypeLayout{align, static_cast<uint32_t>(size)};
     }
 
     case IrType::Kind::RuntimeArray:
@@ -89,6 +98,7 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
 
     case IrType::Kind::Texture2dF32:
     case IrType::Kind::Sampler:
+    case IrType::Kind::WriteOnlyStorageTexture2d:
       return ShaderError{
           std::format("{} is a resource type and has no host-shareable layout", type.toString()),
           "layout"};
@@ -117,16 +127,19 @@ ShaderResult<ArrayStrideInfo> ComputeArrayStrideInfo(const IrType& arrayType,
     return std::move(elementLayout).error();
   }
 
-  const uint32_t naturalStride =
+  const uint64_t naturalStride =
       RoundUp(elementLayout.result().alignBytes, elementLayout.result().sizeBytes);
-  uint32_t stride = naturalStride;
+  uint64_t stride = naturalStride;
   if (addressSpace == AddressSpace::Uniform) {
     // WGSL uniform address space requires array element strides to be multiples of 16. Rounding
     // (instead of rejecting) keeps natural-stride-16 arrays like slug_fill's clipPolygonPlanes
     // array<vec4f, 4> simple; emitters must wrap padded elements when paddedFromNatural is set.
     stride = RoundUp(16, stride);
   }
-  return ArrayStrideInfo{stride, stride != naturalStride};
+  if (stride > kMaxLayoutBytes) {
+    return ShaderError{"array stride exceeds the 32-bit byte layout limit", "arrayStride"};
+  }
+  return ArrayStrideInfo{static_cast<uint32_t>(stride), stride != naturalStride};
 }
 
 ShaderResult<StructLayout> ComputeStructLayout(const IrType& structType,
@@ -137,7 +150,7 @@ ShaderResult<StructLayout> ComputeStructLayout(const IrType& structType,
   }
 
   StructLayout layout;
-  uint32_t offset = 0;
+  uint64_t offset = 0;
   for (const IrType::Member& member : structType.structMembers()) {
     ShaderResult<TypeLayout> memberLayout = ComputeTypeLayout(member.type, addressSpace);
     if (memberLayout.hasError()) {
@@ -150,8 +163,12 @@ ShaderResult<StructLayout> ComputeStructLayout(const IrType& structType,
     const uint32_t memberAlign =
         EffectiveAlign(member.type, addressSpace, memberLayout.result().alignBytes);
     offset = RoundUp(memberAlign, offset);
-    layout.members.push_back(
-        StructMemberLayout{offset, TypeLayout{memberAlign, memberLayout.result().sizeBytes}});
+    if (offset > kMaxLayoutBytes) {
+      return ShaderError{"struct member offset exceeds the 32-bit byte layout limit",
+                         "structLayout"};
+    }
+    layout.members.push_back(StructMemberLayout{
+        static_cast<uint32_t>(offset), TypeLayout{memberAlign, memberLayout.result().sizeBytes}});
     layout.alignBytes = std::max(layout.alignBytes, memberAlign);
 
     // WGSL uniform constraint: the member following a struct-typed member S must start at least
@@ -162,9 +179,17 @@ ShaderResult<StructLayout> ComputeStructLayout(const IrType& structType,
     } else {
       offset += memberLayout.result().sizeBytes;
     }
+    if (offset > kMaxLayoutBytes) {
+      return ShaderError{"struct member extent exceeds the 32-bit byte layout limit",
+                         "structLayout"};
+    }
   }
 
-  layout.sizeBytes = RoundUp(layout.alignBytes, offset);
+  const uint64_t size = RoundUp(layout.alignBytes, offset);
+  if (size > kMaxLayoutBytes) {
+    return ShaderError{"struct size exceeds the 32-bit byte layout limit", "structLayout"};
+  }
+  layout.sizeBytes = static_cast<uint32_t>(size);
   return layout;
 }
 

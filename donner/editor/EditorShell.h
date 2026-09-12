@@ -407,6 +407,7 @@ private:
   /// input and presentation passes.
   [[nodiscard]] bool formatBarShouldShow() const;
   void handleGlobalShortcuts();
+  void handleFileShortcuts(bool anyPopupOpen, bool cmd, bool shift);
   /// True when the document has at least one selectable element (the canonical marquee/Select-All
   /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.
   [[nodiscard]] bool canvasHasSelectableElements();
