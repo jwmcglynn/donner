@@ -145,6 +145,11 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+py_binary(
+    name = "ci_remote_gpu_targets",
+    srcs = ["ci_remote_gpu_targets.py"],
+)
+
 py_test(
     name = "ci_remote_gpu_targets_tests",
     size = "small",
@@ -152,6 +157,8 @@ py_test(
         "ci_remote_gpu_targets.py",
         "ci_remote_gpu_targets_tests.py",
     ],
+    data = [":ci_remote_gpu_targets"],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_test(

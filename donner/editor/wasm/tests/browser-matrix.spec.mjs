@@ -55,7 +55,7 @@ test("Playwright version stays synchronized across package locks and browser met
   );
 });
 
-test("Bazel owns a hermetic no-window Chromium browser lane", () => {
+test("Bazel owns hermetic browser regression and manual performance lanes", () => {
   const moduleFile = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
   assert.match(
     moduleFile,
@@ -96,16 +96,38 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   // runfiles tree that is missing them.
   const lanes = [...buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)]
     .map(([, body]) => body);
-  assert.equal(
-    lanes.length,
-    2,
-    "every playwright_test lane must be checkable; update this contract when one is added",
+  assert.deepEqual(
+    lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
+    [
+      "boot_presentation_test",
+      "browser_presentation_regression_test",
+      "browser_responsiveness_perf_test",
+      "chromium_remote_smoke",
+    ],
+    "every playwright_test lane must be named and checked; update this contract when one is added",
   );
   for (const lane of lanes) {
     const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
     assert.ok(laneName, "every browser lane must be named");
-    const specFile = /\$\(rootpath :([^)]+\.spec\.ts)\)/.exec(lane)?.[1];
+    const performanceLane = laneName === "browser_responsiveness_perf_test";
+    const tags = [...(/tags = \[([\s\S]*?)\]/.exec(lane)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
+      .map(([, tag]) => tag);
+    if (performanceLane) {
+      assert.deepEqual(tags.sort(), ["manual", "perf"], "responsiveness timing must remain opt-in");
+      assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
+      assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+    } else {
+      assert.ok(
+        !tags.includes("manual") && !tags.includes("perf"),
+        `${laneName} must remain a regression gate`,
+      );
+    }
+    const specPattern = performanceLane
+      ? /\$\(rootpath :([^)]+\.perf\.ts)\)/
+      : /\$\(rootpath :([^)]+\.spec\.ts)\)/;
+    const specFile = specPattern.exec(lane)?.[1];
     assert.ok(specFile, `${laneName} must run a named spec`);
+    if (performanceLane) assert.equal(specFile, "browser-responsiveness.perf.ts");
     assert.ok(
       lane.includes(`"${specFile}"`),
       `${laneName} must list ${specFile} in its data`,
@@ -138,7 +160,7 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
     assert.match(
       lane,
       /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
-      "every headless browser lane must allow only macOS ARM64 execution",
+      "every browser lane must allow only macOS ARM64 execution",
     );
   }
   // Linux is excluded deliberately, not by omission: headless Chromium there

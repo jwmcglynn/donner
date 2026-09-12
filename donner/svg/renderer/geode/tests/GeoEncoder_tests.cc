@@ -222,6 +222,34 @@ TEST_F(GeoEncoderTest, FillRect) {
   EXPECT_THAT(corner, RgbaEq(0, 0, 0, 255)) << "Corner should be clear black";
 }
 
+TEST_F(GeoEncoderTest, InlineCubicFillRefinesAtDeviceScale) {
+  class CurveAdmission final : public GeometryAdmission {
+  public:
+    bool admitGeometry(const EncodedPath& encoded, std::size_t) override {
+      curveCount = encoded.curves.size();
+      return true;
+    }
+    bool canEncodeGeometry() const override { return true; }
+    void releaseGeometry(const EncodedPath&, std::size_t) override {}
+    size_t curveCount = 0;
+  } admission;
+  const Path cubic = PathBuilder()
+                         .moveTo({0.0, 0.0})
+                         .curveTo({1.0 / 3.0, 0.0}, {2.0 / 3.0, 0.0}, {1.0, 1.0})
+                         .lineTo({1.0, 0.0})
+                         .closePath()
+                         .build();
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  encoder.setGeometryAdmission(&admission);
+  encoder.fillPath(cubic, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  const size_t initialCurveCount = admission.curveCount;
+  encoder.setTransform(Transform2d::Scale(32.0));
+  encoder.fillPath(cubic, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  EXPECT_THAT(admission.curveCount, testing::Gt(initialCurveCount));
+  encoder.finish();
+}
+
 TEST_F(GeoEncoderTest, RejectedPatternGeometryAllocatesNoPatternGpuState) {
   const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
