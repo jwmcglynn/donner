@@ -26,7 +26,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
 # Build dependencies
-bazel_dep(name = "apple_support", version = "2.8.0", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
+bazel_dep(name = "apple_support", version = "2.8.2", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
 bazel_dep(name = "rules_cc", version = "0.2.22")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "platforms", version = "1.1.0")
@@ -145,15 +145,15 @@ single_version_override(
 )
 
 # brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
-bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
+bazel_dep(name = "brotli", version = "1.2.0.bcr.3")
 
 ##
 ## Test dependencies
 ##
 # re2 is not used directly, but is selected by googletest and transitive test dependencies.
 bazel_dep(name = "re2", version = "2025-11-05.bcr.1", dev_dependency = True)
-bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True, repo_name = "com_google_gtest")
-bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.1", dev_dependency = True)
+bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True, repo_name = "com_google_gtest")
+bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.2", dev_dependency = True)
 bazel_dep(name = "google_benchmark", version = "1.9.5", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.8.0", dev_dependency = True)
 bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3", dev_dependency = True)
@@ -174,7 +174,7 @@ single_version_override(
     version = "2026.1",
 )
 
-bazel_dep(name = "aspect_rules_js", version = "2.1.2", dev_dependency = True)
+bazel_dep(name = "aspect_rules_js", version = "2.9.3", dev_dependency = True)
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(
@@ -233,7 +233,7 @@ new_local_repository(
 # resvg-test-suite goldens are now vendored in-tree under
 # third_party/resvg-test-suite/ so they ship in the source archive.
 
-bazel_dep(name = "rules_python", version = "2.2.0", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "2.3.3", dev_dependency = True)
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local
