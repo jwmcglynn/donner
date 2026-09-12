@@ -1,0 +1,91 @@
+name: Metal hosted qualification
+
+on:
+  push:
+    branches: [renovate-metal-hosted-qualification]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metal-hosted-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metal:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install clang-tidy
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            brew install --quiet llvm@19
+            echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Select Metal validation profile
+        id: metal_profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --nocache_test_results --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //donner/gpu/metal/tests:metal_validation_profile
+          profile=$(python3 tools/metal_validation_profile.py \
+            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
+          case "$profile" in
+            full)
+              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            paravirtual-texture-usage-off)
+              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0" >> "$GITHUB_ENV"
+              echo "Metal: verified virtual-GPU texture-check exception; API, buffer, threadgroup, and pixel checks remain active. A full-validation receipt for the PR head is required before merge. See docs/metal_validation.md." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::Unsupported Metal validation profile."
+              exit 1
+              ;;
+          esac
+
+      - name: Metal validation preflight
+        id: metal_preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //donner/gpu/metal/tests:metal_buffer_bounds_tests \
+            //donner/gpu/metal/tests:metal_color_matrix_tests \
+            //donner/gpu/metal/tests:metal_queue_writes_tests \
+            //donner/gpu/metal/tests:metal_solid_fill_tests \
+            //donner/gpu/metal/tests:metal_sub_rectangle_copy_tests \
+            //donner/gpu/metal/tests:metal_shader_memory_validation_tests
+
+      - name: Preserve Metal qualification logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: metal-hosted-qualification-${{ github.run_id }}
+          path: bazel-testlogs/donner/gpu/metal/tests
+          if-no-files-found: ignore
+          retention-days: 7
