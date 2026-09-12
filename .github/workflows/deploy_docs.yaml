@@ -51,6 +51,8 @@ jobs:
           # Upload build folder
           path: "./generated-doxygen/html"
   deploy:
+    # Main pushes build documentation; publication requires a manual request.
+    if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       pages: write
