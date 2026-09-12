@@ -1,5 +1,5 @@
-load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
 load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -94,6 +94,45 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+playwright_bin.playwright_test(
+    name = "browser_responsiveness_perf_test",
+    size = "large",
+    timeout = "long",
+    args = [
+        "test",
+        "$(rootpath :browser-responsiveness.perf.ts)",
+        "--config=$(rootpath :playwright.responsiveness.bazel.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "browser-responsiveness.perf.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "playwright.responsiveness.bazel.config.js",
+        "remote-webserver.mjs",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+        "@playwright//:firefox",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    tags = [
+        "manual",
+        "perf",
+    ],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
