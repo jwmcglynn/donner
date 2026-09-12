@@ -242,6 +242,10 @@ test(
           }).toEqual(
             expect.objectContaining({ pending: false, active: false, resultReady: false }),
           );
+          await expect.poll(async () => (await snapshot(page)).layerThumbnails?.deferredCount, {
+            timeout: 15000,
+            message: "warm input must start after layer previews settle",
+          }).toBe(0);
         }
         const before = await snapshot(page);
         const latencies: number[] = [];

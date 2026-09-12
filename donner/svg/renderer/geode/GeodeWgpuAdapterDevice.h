@@ -519,7 +519,12 @@ private:
   bool waitOnMapFutureSlice(uint32_t mappingSlotIndex, std::chrono::microseconds slice);
 
   /// Applies a completed event-wait slice through the same path on browsers and in tests.
-  bool finishMapWaitSlice(uint32_t mappingSlotIndex, wgpu::WaitStatus status);
+  bool finishMapWaitSlice(uint32_t mappingSlotIndex, const MappingSlot::Completion* completion,
+                          wgpu::Future future, wgpu::WaitStatus status);
+
+  /// Revalidates a slot after a backend wait may have yielded to other work.
+  bool mappingStillMatches(uint32_t mappingSlotIndex, const MappingSlot::Completion* completion,
+                           wgpu::Future future) const;
 
   /// Test-only replacement for the suspending backend wait; may exercise reentrant slot changes.
   std::function<wgpu::WaitStatus()> timedMapWaitForTest_;

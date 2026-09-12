@@ -733,8 +733,14 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
     (void)slice;
     return true;
   }
+  const MappingSlot::Completion* completion = slotMappings_[mappingSlotIndex].completion;
+  const wgpu::Future future = slotMappings_[mappingSlotIndex].mapFuture;
+  if (!future.id) {
+    return false;
+  }
   if (timedMapWaitForTest_) {
-    return finishMapWaitSlice(mappingSlotIndex, timedMapWaitForTest_());
+    const wgpu::WaitStatus status = timedMapWaitForTest_();
+    return finishMapWaitSlice(mappingSlotIndex, completion, future, status);
   }
 #ifdef __EMSCRIPTEN__
   // The browser instance is created asking for TimedWaitAny (see GeodeDevice::CreateHeadless)
@@ -748,14 +754,12 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
   // thread's relationship to the instance, not of one mapping: once a status other than
   // Success or TimedOut says this future cannot be time-waited here, every later wait polls.
   static std::atomic<bool> instanceWaitUsable{true};
-  MappingSlot& slot = slotMappings_[mappingSlotIndex];
-  if (!geodeDevice_.instance() || !slot.mapFuture.id ||
-      !instanceWaitUsable.load(std::memory_order_relaxed)) {
+  if (!geodeDevice_.instance() || !instanceWaitUsable.load(std::memory_order_relaxed)) {
     return false;
   }
 
   wgpu::FutureWaitInfo waitInfo{};
-  waitInfo.future = slot.mapFuture;
+  waitInfo.future = future;
   // The browser's timed wait keeps its own cadence rather than the caller's slice. Every wait
   // here is an asyncify suspend and rewind of the whole call stack, so slicing at the native
   // poll cadence would spend fifty of those per millisecond to learn the same thing; five
@@ -770,7 +774,7 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
     instanceWaitUsable.store(false, std::memory_order_relaxed);
     return false;
   }
-  return finishMapWaitSlice(mappingSlotIndex, waitStatus);
+  return finishMapWaitSlice(mappingSlotIndex, completion, future, waitStatus);
 #else
   (void)mappingSlotIndex;
   (void)slice;
@@ -778,12 +782,31 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
 #endif
 }
 
+bool GeodeWgpuAdapterDevice::mappingStillMatches(uint32_t mappingSlotIndex,
+                                                 const MappingSlot::Completion* completion,
+                                                 wgpu::Future future) const {
+  return mappingSlotIndex < slotMappings_.size() &&
+         slotMappings_[mappingSlotIndex].completion == completion &&
+         slotMappings_[mappingSlotIndex].mapFuture.id == future.id &&
+         !completion->abandoned.load(std::memory_order_acquire);
+}
+
 bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
-                                                wgpu::WaitStatus status) {
+                                                const MappingSlot::Completion* completion,
+                                                wgpu::Future future, wgpu::WaitStatus status) {
   if (status != wgpu::WaitStatus::Success && status != wgpu::WaitStatus::TimedOut) {
     return false;
   }
+  if (!mappingStillMatches(mappingSlotIndex, completion, future)) {
+    return true;
+  }
   slotMappings_[mappingSlotIndex].usedTimedWaitAny = true;
+  if (status == wgpu::WaitStatus::TimedOut && !completion->done.load(std::memory_order_acquire) &&
+      !geodeDevice_.isDeviceLost()) {
+    // A browser can defer pending map completion until another queue submission arrives.
+    geodeDevice_.queue().submit(0, nullptr);
+    geodeDevice_.countSubmit();
+  }
   return true;
 }
 
@@ -798,6 +821,13 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
     return sliceStateOf(completion);
   }
 
+  // Asyncify may run completion or abandonment callbacks before this stack resumes.
+  completion.references.fetch_add(1, std::memory_order_relaxed);
+  const auto releaseCompletion = [](MappingSlot::Completion* value) { value->release(); };
+  const std::unique_ptr<MappingSlot::Completion, decltype(releaseCompletion)> retainedCompletion(
+      &completion, releaseCompletion);
+  const wgpu::Future future = slotMappings_[mappingSlotIndex].mapFuture;
+
   // Wait out the slice the caller allowed rather than returning the moment one poll finds
   // nothing: the waiter's budget is wall time, so a slice that returns immediately turns a map
   // that is merely not ready yet into a burst of fast calls against that budget.
@@ -807,18 +837,24 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
   const auto slice = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::duration<double>(sliceSeconds));
 
-  if (waitOnMapFutureSlice(mappingSlotIndex, slice)) {
+  const bool usedEventWait = waitOnMapFutureSlice(mappingSlotIndex, slice);
+  if (!mappingStillMatches(mappingSlotIndex, &completion, future)) {
+    return gpu::MapSliceState::Failed;
+  }
+  if (usedEventWait) {
     return sliceStateOf(completion);
   }
 
   (void)BoundedGpuWait(
       [&] {
         (void)geodeDevice_.pollSuspending(false);
-        return completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost();
+        return !mappingStillMatches(mappingSlotIndex, &completion, future) ||
+               completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost();
       },
       std::max(slice, std::chrono::microseconds(1)));
 
-  return sliceStateOf(completion);
+  return mappingStillMatches(mappingSlotIndex, &completion, future) ? sliceStateOf(completion)
+                                                                    : gpu::MapSliceState::Failed;
 }
 
 bool GeodeWgpuAdapterDevice::mappingUsedTimedWaitAny(const gpu::BufferMapping& mapping) const {

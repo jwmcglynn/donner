@@ -59,6 +59,18 @@ struct GeodeWgpuAdapterDeviceTestAccess {
     return adapter.onWaitMappingSlice(0, 0.000001);
   }
 
+  static void completeMap(GeodeWgpuAdapterDevice& adapter) {
+    auto* completion = adapter.slotMappings_[0].completion;
+    completion->ok.store(true, std::memory_order_relaxed);
+    completion->done.store(true, std::memory_order_release);
+  }
+
+  static void abandonMap(GeodeWgpuAdapterDevice& adapter) { adapter.onUnmapBuffer(0); }
+
+  static void setMapFuture(GeodeWgpuAdapterDevice& adapter, uint64_t id) {
+    adapter.slotMappings_[0].mapFuture.id = id;
+  }
+
   static void clearMaps(GeodeWgpuAdapterDevice& adapter) {
     adapter.timedMapWaitForTest_ = {};
     for (uint32_t index = 0; index < adapter.slotMappings_.size(); ++index) {
@@ -1030,6 +1042,103 @@ TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapTimeoutSubmitsQueueProgressWithoutAR
               testing::Eq(gpu::MapSliceState::Pending));
   EXPECT_THAT(probe.counters.submits, testing::Eq(1u));
   EXPECT_THAT(adapter_->lastSubmittedSerial(), testing::Eq(beforeSerial));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapCompletionDuringTimeoutNeedsNoQueueProgress) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_, [&] {
+    GeodeWgpuAdapterDeviceTestAccess::completeMap(*adapter_);
+    return wgpu::WaitStatus::TimedOut;
+  });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Ready));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapReadyOrMissingFutureDoesNotRequestQueueProgress) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  int waitCalls = 0;
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_, [&] {
+    ++waitCalls;
+    return wgpu::WaitStatus::TimedOut;
+  });
+  GeodeWgpuAdapterDeviceTestAccess::setMapFuture(*adapter_, 0);
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Pending));
+  GeodeWgpuAdapterDeviceTestAccess::completeMap(*adapter_);
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Ready));
+  EXPECT_THAT(waitCalls, testing::Eq(0));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapSuccessfulWaitDoesNotRequestQueueProgress) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_,
+                                                 [] { return wgpu::WaitStatus::Success; });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Pending));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapDeviceLossDuringWaitDoesNotSubmit) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_, [&] {
+    geodeDevice_->markDeviceLost("map-wait test");
+    return wgpu::WaitStatus::TimedOut;
+  });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::DeviceLost));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapAbandonmentDuringWaitRetainsCompletionUntilReturn) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_, [&] {
+    GeodeWgpuAdapterDeviceTestAccess::abandonMap(*adapter_);
+    return wgpu::WaitStatus::TimedOut;
+  });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Failed));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapSlotReuseDoesNotSubmitForTheReplacement) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_, [&] {
+    GeodeWgpuAdapterDeviceTestAccess::abandonMap(*adapter_);
+    GeodeWgpuAdapterDeviceTestAccess::installPendingMap(*adapter_);
+    GeodeWgpuAdapterDeviceTestAccess::setMapFuture(*adapter_, 2);
+    return wgpu::WaitStatus::TimedOut;
+  });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Failed));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapSlotGrowthReacquiresTheLiveMapping) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_, [&] {
+    GeodeWgpuAdapterDeviceTestAccess::installPendingMap(*adapter_, 1024);
+    return wgpu::WaitStatus::TimedOut;
+  });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Pending));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(1u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapProgressDoesNotCompleteUnsubmittedHostWork) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> host(geodeDevice_->device().createCommandEncoder());
+  const uint64_t pending = ReplayHostClear(*adapter_, host.get());
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_,
+                                                 [] { return wgpu::WaitStatus::TimedOut; });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSlice(*adapter_),
+              testing::Eq(gpu::MapSliceState::Pending));
+  EXPECT_THAT(probe.counters.submits, testing::Eq(1u));
+  EXPECT_THAT(adapter_->lastSubmittedSerial(), testing::Eq(pending));
+  EXPECT_THAT(adapter_->completedSerial(), testing::Lt(pending));
+  adapter_->notifyHostDiscarded(host.get());
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, AMappingReleasedBeforeItsCallbackStillUnmapsTheBuffer) {
