@@ -7726,6 +7726,12 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
       impl_->textureFormat, AlphaType::Premultiplied, shouldCancel);
 }
 
+void RendererGeode::injectDeviceLossForTesting() {
+  if (impl_->device) {
+    impl_->device->markDeviceLost("test-injected device loss");
+  }
+}
+
 bool RendererGeode::deviceLost() const {
   return impl_->device && impl_->device->isDeviceLost();
 }
