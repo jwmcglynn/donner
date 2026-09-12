@@ -135,6 +135,40 @@ kernel void cs_main(constant float4& color [[buffer(1)]],
   std::unique_ptr<MetalDevice> device_;
 };
 
+TEST_F(MetalQueueWritesTest, NativeTextureUsagePreservesStorageAndReadOnlyContracts) {
+  struct Case {
+    const char* label;
+    TextureUsage usage;
+    bool shaderRead;
+    bool shaderWrite;
+    bool renderTarget;
+  };
+  for (const Case& value :
+       std::array{Case{"storage", TextureUsage::StorageBinding, true, true, false},
+                  Case{"sampled", TextureUsage::Sampled, true, false, false},
+                  Case{"render target", TextureUsage::RenderAttachment, false, false, true}}) {
+    SCOPED_TRACE(value.label);
+    const Texture texture = GetResultOrFail(device_->createTexture(
+        TextureDescriptor{value.label, {1, 1}, TextureFormat::RGBA8Unorm, value.usage}));
+    EXPECT_THAT(GetResultOrFail(device_->textureUsageForTest(texture)),
+                testing::FieldsAre(value.shaderRead, value.shaderWrite, value.renderTarget));
+  }
+}
+
+TEST_F(MetalQueueWritesTest, NativeStorageAccessDoesNotPermitSampledBindings) {
+  const Texture texture = GetResultOrFail(device_->createTexture(TextureDescriptor{
+      "storage", {1, 1}, TextureFormat::RGBA8Unorm, TextureUsage::StorageBinding}));
+  const TextureView view =
+      GetResultOrFail(device_->createTextureView(texture, TextureViewDescriptor{"storage view"}));
+  const BindGroupLayout layout =
+      GetResultOrFail(device_->createBindGroupLayout(BindGroupLayoutDescriptor{
+          "sampled", {{0, ShaderStage::Compute, BindingType::SampledTexture2dFloat}}}));
+  EXPECT_THAT(device_->createBindGroup(BindGroupDescriptor{
+                  "invalid sampled binding", layout, {{0, TextureViewBinding{view}}}}),
+              IsGpuError(GpuErrorType::UsageMismatch));
+  EXPECT_THAT(device_->textureUsageForTest(Texture{}), IsGpuError(GpuErrorType::InvalidHandle));
+}
+
 TEST_F(MetalQueueWritesTest, UniformUpdateDoesNotChangeAnEarlierSubmission) {
   const Buffer uniform = GetResultOrFail(device_->createBuffer(
       BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
