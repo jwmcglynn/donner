@@ -5,7 +5,9 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -71,6 +73,18 @@ TEST(GeodeShaders, ImageBlitCompiles) {
 namespace {
 
 enum class EndpointShader { TypedFill, Fill, Gradient, Mask };
+enum class CoverageProbe {
+  Endpoint,
+  SingleCrossing,
+  NearLinear,
+  LargeQuadratic,
+  SmallQuadratic,
+  BelowStart,
+  AtMaximum,
+  InvalidControl,
+  InvalidSample,
+  FlatEndpoint
+};
 
 /// Dispatches the production coverage function at an exact shared endpoint, bypassing only
 /// the rasterizer's interpolation of the sample position.
@@ -137,13 +151,37 @@ protected:
   }
 
   static svg::RendererBitmap coverage(EndpointShader shader, bool transpose, bool reverse,
-                                      bool singleCrossing = false) {
+                                      CoverageProbe probe = CoverageProbe::Endpoint) {
     // These are the independently rounded control points of the two line segments meeting at
     // the lightning tip in donner_splash.svg, with a horizontal closing edge between them.
     std::array<float, 12> curves = {623.76f, 226.98f, 625.67f,  225.365f, 627.58f, 223.75f,
                                     627.56f, 223.75f, 625.095f, 224.725f, 622.63f, 225.7f};
+    std::array<float, 2> sample = {540.0f, 223.75f};
+    const bool singleCrossing =
+        probe != CoverageProbe::Endpoint && probe != CoverageProbe::FlatEndpoint;
     if (singleCrossing) {
       curves = {627.0f, 223.0f, 627.0f, 224.0f, 627.0f, 225.0f};
+    }
+    if (probe == CoverageProbe::FlatEndpoint) {
+      curves = {627.0f, 4.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 0.0f, 627.0f, 4.0f};
+      sample[1] = 0.0f;
+    }
+    if (probe == CoverageProbe::NearLinear || probe == CoverageProbe::LargeQuadratic ||
+        probe == CoverageProbe::SmallQuadratic) {
+      const float scale = probe == CoverageProbe::LargeQuadratic   ? 1e30f
+                          : probe == CoverageProbe::SmallQuadratic ? 1e-25f
+                                                                   : 1e-6f;
+      curves = {627.0f, 0.0f, 627.0f, scale, 627.0f, 4.0f * scale};
+      sample[1] = 3.0f * scale;
+    } else if (probe == CoverageProbe::BelowStart) {
+      sample[1] = std::nextafter(223.0f, -std::numeric_limits<float>::infinity());
+    } else if (probe == CoverageProbe::AtMaximum) {
+      sample[1] = 225.0f;
+    } else if (probe == CoverageProbe::InvalidControl) {
+      curves[3] = std::numeric_limits<float>::infinity();
+      sample[1] = 223.0f;
+    } else if (probe == CoverageProbe::InvalidSample) {
+      sample[1] = std::numeric_limits<float>::quiet_NaN();
     }
     if (reverse) {
       for (size_t first : {0u, 6u}) {
@@ -152,24 +190,25 @@ protected:
       }
     }
     if (transpose) {
+      std::swap(sample[0], sample[1]);
       for (size_t i = 0; i < curves.size(); i += 2) {
         std::swap(curves[i], curves[i + 1]);
       }
     }
 
     std::string wgsl = source(shader);
-    const std::string sample = transpose ? "vec2f(223.75, 540.0)" : "vec2f(540.0, 223.75)";
     const std::string function = transpose ? "accumulateVert" : "accumulateHoriz";
     const std::string paint = shader == EndpointShader::Fill ? "paint, " : "";
     wgsl += R"(
 @group(1) @binding(0) var endpointResult: texture_storage_2d<rgba8unorm, write>;
+@group(1) @binding(1) var<storage, read> endpointSamples: array<vec2f>;
 @compute @workgroup_size(1)
 fn endpoint_coverage() {
 )";
     if (shader == EndpointShader::Fill) {
       wgsl += "  var paint: PaintParams;\n";
     }
-    wgsl += "  let ray = " + function + "(" + paint + "0u, " + sample + ", 2.0);\n";
+    wgsl += "  let ray = " + function + "(" + paint + "0u, endpointSamples[0], 2.0);\n";
     wgsl += R"(  textureStore(endpointResult, vec2i(0), vec4f(abs(ray.cov), 0.0, 0.0, 1.0));
 }
 )";
@@ -232,14 +271,18 @@ fn endpoint_coverage() {
     textureDesc.sampleCount = 1;
     textureDesc.dimension = wgpu::TextureDimension::_2D;
     const wgpu::Texture texture = resources.retain(runtime.createTexture(textureDesc));
-    wgpu::BindGroupEntry outputEntry{};
-    outputEntry.binding = 0;
-    outputEntry.textureView = resources.retain(texture.createView());
+    const wgpu::Buffer sampleBuffer = storage(sample.data(), sizeof(sample));
+    std::array<wgpu::BindGroupEntry, 2> outputEntries{};
+    outputEntries[0].binding = 0;
+    outputEntries[0].textureView = resources.retain(texture.createView());
+    outputEntries[1].binding = 1;
+    outputEntries[1].buffer = sampleBuffer;
+    outputEntries[1].size = sizeof(sample);
     const ScopedWgpuHandle<wgpu::BindGroupLayout> outputLayout(
         pipeline.get().getBindGroupLayout(1));
     groupDesc.layout = outputLayout.get();
-    groupDesc.entries = &outputEntry;
-    groupDesc.entryCount = 1;
+    groupDesc.entries = outputEntries.data();
+    groupDesc.entryCount = outputEntries.size();
     const wgpu::BindGroup output = resources.retain(runtime.createBindGroup(groupDesc));
     wgpu::BufferDescriptor readbackDesc{};
     readbackDesc.size = 256;
@@ -265,12 +308,59 @@ fn endpoint_coverage() {
     return svg::RendererBitmap{Vector2i(1, 1), readback(buffer), 4};
   }
 
+  static void expectFlatTangentCancellation(EndpointShader shader) {
+    for (bool transpose : {false, true}) {
+      for (bool reverse : {false, true}) {
+        SCOPED_TRACE(transpose);
+        SCOPED_TRACE(reverse);
+        const svg::RendererBitmap actual =
+            coverage(shader, transpose, reverse, CoverageProbe::FlatEndpoint);
+        ASSERT_THAT(actual.pixels, testing::SizeIs(4));
+        const svg::RendererBitmap expected{Vector2i(1, 1), {0, 0, 0, 255}, 4};
+        editor::tests::CompareBitmapToBitmap(
+            actual, expected,
+            "slug_flat_endpoint_" + std::to_string(static_cast<int>(shader)) + "_" +
+                (transpose ? "vertical_" : "horizontal_") + (reverse ? "reversed" : "forward"),
+            editor::tests::PixelmatchIdentityParams());
+      }
+    }
+  }
+
+  static void expectBoundaryCoverage(EndpointShader shader) {
+    for (CoverageProbe probe :
+         {CoverageProbe::NearLinear, CoverageProbe::LargeQuadratic, CoverageProbe::SmallQuadratic,
+          CoverageProbe::BelowStart, CoverageProbe::AtMaximum, CoverageProbe::InvalidControl,
+          CoverageProbe::InvalidSample}) {
+      SCOPED_TRACE(static_cast<int>(probe));
+      const bool crosses = probe == CoverageProbe::NearLinear ||
+                           probe == CoverageProbe::LargeQuadratic ||
+                           probe == CoverageProbe::SmallQuadratic;
+      for (bool transpose : {false, true}) {
+        for (bool reverse : {false, true}) {
+          SCOPED_TRACE(transpose);
+          SCOPED_TRACE(reverse);
+          const svg::RendererBitmap actual = coverage(shader, transpose, reverse, probe);
+          ASSERT_THAT(actual.pixels, testing::SizeIs(4));
+          const svg::RendererBitmap expected{
+              Vector2i(1, 1), {static_cast<uint8_t>(crosses ? 255 : 0), 0, 0, 255}, 4};
+          const std::string label = "slug_boundary_" + std::to_string(static_cast<int>(shader)) +
+                                    "_" + std::to_string(static_cast<int>(probe)) + "_" +
+                                    (transpose ? "vertical_" : "horizontal_") +
+                                    (reverse ? "reversed" : "forward");
+          editor::tests::CompareBitmapToBitmap(actual, expected, label,
+                                               editor::tests::PixelmatchIdentityParams());
+        }
+      }
+    }
+  }
+
   static void expectCancellingEndpoints(EndpointShader shader) {
     for (bool transpose : {false, true}) {
       for (bool reverse : {false, true}) {
         SCOPED_TRACE(transpose);
         SCOPED_TRACE(reverse);
-        const svg::RendererBitmap control = coverage(shader, transpose, reverse, true);
+        const svg::RendererBitmap control =
+            coverage(shader, transpose, reverse, CoverageProbe::SingleCrossing);
         ASSERT_THAT(control.pixels, testing::SizeIs(4));
         const svg::RendererBitmap controlExpected{Vector2i(1, 1), {255, 0, 0, 255}, 4};
         editor::tests::CompareBitmapToBitmap(control, controlExpected, "slug_endpoint_control",
@@ -302,6 +392,38 @@ TEST_F(SlugEndpointTest, GradientRetainsSharedEndpointCrossings) {
 
 TEST_F(SlugEndpointTest, MaskRetainsSharedEndpointCrossings) {
   expectCancellingEndpoints(EndpointShader::Mask);
+}
+
+TEST_F(SlugEndpointTest, TypedFillPreservesInteriorAndRejectsOutsideOrInvalidSamples) {
+  expectBoundaryCoverage(EndpointShader::TypedFill);
+}
+
+TEST_F(SlugEndpointTest, FillPreservesInteriorAndRejectsOutsideOrInvalidSamples) {
+  expectBoundaryCoverage(EndpointShader::Fill);
+}
+
+TEST_F(SlugEndpointTest, GradientPreservesInteriorAndRejectsOutsideOrInvalidSamples) {
+  expectBoundaryCoverage(EndpointShader::Gradient);
+}
+
+TEST_F(SlugEndpointTest, MaskPreservesInteriorAndRejectsOutsideOrInvalidSamples) {
+  expectBoundaryCoverage(EndpointShader::Mask);
+}
+
+TEST_F(SlugEndpointTest, TypedFillRetainsFlatTangentCrossings) {
+  expectFlatTangentCancellation(EndpointShader::TypedFill);
+}
+
+TEST_F(SlugEndpointTest, FillRetainsFlatTangentCrossings) {
+  expectFlatTangentCancellation(EndpointShader::Fill);
+}
+
+TEST_F(SlugEndpointTest, GradientRetainsFlatTangentCrossings) {
+  expectFlatTangentCancellation(EndpointShader::Gradient);
+}
+
+TEST_F(SlugEndpointTest, MaskRetainsFlatTangentCrossings) {
+  expectFlatTangentCancellation(EndpointShader::Mask);
 }
 
 }  // namespace
