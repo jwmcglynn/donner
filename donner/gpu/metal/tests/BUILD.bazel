@@ -239,13 +239,17 @@ cc_test(
     size = "small",
     env = {
         "DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION": "1",
+        "DONNER_METAL_CONTROL_EXPECT_TEXTURE_USAGE": "1",
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
-    shard_count = 8,
+    shard_count = 9,
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_native_compute_validation_impl",
@@ -260,13 +264,42 @@ cc_test(
     args = ["--gtest_filter=StorageAndFactories/MetalNativeComputeValidationTest.ConstantColorWriteAtTextureSlotOne/Shared_Function"],
     env = {
         "DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION": "0",
+        "DONNER_METAL_CONTROL_EXPECT_TEXTURE_USAGE": "1",
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "0",
         "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
         "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
         "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     shard_count = 1,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_native_compute_validation_impl",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Retains buffer-memory instrumentation while isolating texture member-function checks.
+cc_test(
+    name = "metal_native_compute_texture_usage_off_tests",
+    size = "small",
+    args = ["--gtest_filter=MetalNativeGlobalMemoryDeathTest.OutOfBoundsReadAborts:StorageAndFactories/MetalNativeComputeValidationTest.ConstantColorWriteAtTextureSlotOne/Shared_Function"],
+    env = {
+        "DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION": "1",
+        "DONNER_METAL_CONTROL_EXPECT_TEXTURE_USAGE": "0",
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "0",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+    },
+    shard_count = 2,
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_native_compute_validation_impl",

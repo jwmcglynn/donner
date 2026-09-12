@@ -37,7 +37,8 @@ jobs:
           bazelisk test --config=ci --macos_minimum_os=13.3 \
             --test_env=HOME --test_output=all --nocache_test_results --keep_going \
             //donner/gpu/metal/tests:metal_native_compute_validation_tests \
-            //donner/gpu/metal/tests:metal_native_compute_api_only_tests
+            //donner/gpu/metal/tests:metal_native_compute_api_only_tests \
+            //donner/gpu/metal/tests:metal_native_compute_texture_usage_off_tests
 
       - name: Upload native validation evidence
         if: always()
@@ -47,5 +48,6 @@ jobs:
           path: |
             bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_validation_tests
             bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_api_only_tests
+            bazel-testlogs/donner/gpu/metal/tests/metal_native_compute_texture_usage_off_tests
           if-no-files-found: ignore
           retention-days: 7

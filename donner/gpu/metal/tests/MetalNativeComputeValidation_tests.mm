@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -72,23 +73,102 @@ void PrintTo(const NativeComputeCase& value, std::ostream* os) {
       << " resource_declaration=" << value.resourceDeclaration;
 }
 
+void AssertDiagnosticEnvironment() {
+  const char* expectedShaderValidation =
+      std::getenv("DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION");
+  ASSERT_THAT(expectedShaderValidation, testing::AnyOf(testing::StrEq("0"), testing::StrEq("1")))
+      << "The diagnostic target must specify its shader-validation control";
+  ASSERT_STREQ(std::getenv("MTL_SHADER_VALIDATION"), expectedShaderValidation);
+  const char* expectedTextureUsage = std::getenv("DONNER_METAL_CONTROL_EXPECT_TEXTURE_USAGE");
+  ASSERT_THAT(expectedTextureUsage, testing::AnyOf(testing::StrEq("0"), testing::StrEq("1")))
+      << "The diagnostic target must specify its texture-usage control";
+  ASSERT_STREQ(std::getenv("MTL_SHADER_VALIDATION_TEXTURE_USAGE"), expectedTextureUsage);
+  for (const char* name :
+       {"MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION_ABORT_ON_FAULT",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING", "MTL_SHADER_VALIDATION_REPORT_TO_STDERR",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY", "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY"}) {
+    ASSERT_STREQ(std::getenv(name), "1") << name;
+  }
+  std::cerr << "Native Metal control: requested_shader_validation=" << expectedShaderValidation
+            << " requested_texture_usage=" << expectedTextureUsage << std::endl;
+}
+
+void RunOutOfBoundsBufferRead() {
+  @autoreleasepool {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    ASSERT_THAT(device != nil, testing::IsTrue()) << "MTLCreateSystemDefaultDevice returned nil";
+    std::cerr << "Native Metal memory control: os="
+              << NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String
+              << " device=" << device.name.UTF8String << std::endl;
+
+    NSString* source = [NSString stringWithUTF8String:R"msl(#include <metal_stdlib>
+using namespace metal;
+kernel void read_past_buffer_end(device const uint* input [[buffer(0)]],
+                                device uint* output [[buffer(1)]]) {
+  output[0] = input[2];
+}
+)msl"];
+    NSError* error = nil;
+    MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:options error:&error];
+    ASSERT_THAT(library != nil, testing::IsTrue()) << DescribeError(error);
+    id<MTLFunction> function = [library newFunctionWithName:@"read_past_buffer_end"];
+    ASSERT_THAT(function != nil, testing::IsTrue()) << "Native compute function was not found";
+    error = nil;
+    id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function
+                                                                                 error:&error];
+    ASSERT_THAT(pipeline != nil, testing::IsTrue()) << DescribeError(error);
+
+    const MTLResourceOptions bufferOptions =
+        device.hasUnifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
+    const std::uint32_t inputValue = 7;
+    id<MTLBuffer> input = [device newBufferWithBytes:&inputValue
+                                              length:sizeof(inputValue)
+                                             options:bufferOptions];
+    id<MTLBuffer> output = [device newBufferWithLength:sizeof(inputValue) options:bufferOptions];
+    ASSERT_THAT(input != nil, testing::IsTrue()) << "Native input buffer allocation failed";
+    ASSERT_THAT(output != nil, testing::IsTrue()) << "Native output buffer allocation failed";
+    ASSERT_EQ(input.length, 4u);
+    ASSERT_EQ(output.length, 4u);
+    input.label = @"four_byte_input";
+    output.label = @"valid_output";
+    std::cerr << "Native Metal memory control: input_bytes=" << input.length
+              << " output_bytes=" << output.length << std::endl;
+
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    ASSERT_THAT(queue != nil, testing::IsTrue()) << "Native command queue creation failed";
+    id<MTLCommandBuffer> commands = [queue commandBuffer];
+    ASSERT_THAT(commands != nil, testing::IsTrue()) << "Native command buffer creation failed";
+    id<MTLComputeCommandEncoder> compute = [commands computeCommandEncoder];
+    ASSERT_THAT(compute != nil, testing::IsTrue()) << "Native compute encoder creation failed";
+    [compute setComputePipelineState:pipeline];
+    [compute setBuffer:input offset:0 atIndex:0];
+    [compute setBuffer:output offset:0 atIndex:1];
+    [compute dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [compute endEncoding];
+    [commands commit];
+    [commands waitUntilCompleted];
+  }
+}
+
+TEST(MetalNativeGlobalMemoryDeathTest, OutOfBoundsReadAborts) {
+  ASSERT_NO_FATAL_FAILURE(AssertDiagnosticEnvironment());
+  ASSERT_STREQ(std::getenv("MTL_SHADER_VALIDATION"), "1");
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        RunOutOfBoundsBufferRead();
+        std::_Exit(EXIT_FAILURE);
+      },
+      testing::KilledBySignal(SIGABRT), "Invalid device (load|memory read)");
+}
+
 class MetalNativeComputeValidationTest : public testing::TestWithParam<NativeComputeCase> {};
 
 TEST_P(MetalNativeComputeValidationTest, ConstantColorWriteAtTextureSlotOne) {
   @autoreleasepool {
     const NativeComputeCase testCase = GetParam();
-    const char* expectedShaderValidation =
-        std::getenv("DONNER_METAL_CONTROL_EXPECT_SHADER_VALIDATION");
-    ASSERT_THAT(expectedShaderValidation, testing::AnyOf(testing::StrEq("0"), testing::StrEq("1")))
-        << "The diagnostic target must specify its shader-validation control";
-    ASSERT_STREQ(std::getenv("MTL_SHADER_VALIDATION"), expectedShaderValidation);
-    for (const char* name : {"MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION_ABORT_ON_FAULT",
-                             "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING",
-                             "MTL_SHADER_VALIDATION_REPORT_TO_STDERR"}) {
-      ASSERT_STREQ(std::getenv(name), "1") << name;
-    }
-    std::cerr << "Native Metal control: requested_shader_validation=" << expectedShaderValidation
-              << std::endl;
+    ASSERT_NO_FATAL_FAILURE(AssertDiagnosticEnvironment());
 
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     ASSERT_THAT(device != nil, testing::IsTrue()) << "MTLCreateSystemDefaultDevice returned nil";
