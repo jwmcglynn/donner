@@ -30,10 +30,35 @@ std::string DescribeError(NSError* error) {
   return description != nullptr ? description : "no Metal error description";
 }
 
-class MetalNativeComputeValidationTest : public testing::TestWithParam<MTLStorageMode> {};
+enum class PipelineFactory { Function, DescriptorDefault, DescriptorEnabled };
+
+std::string PipelineFactoryName(PipelineFactory factory) {
+  switch (factory) {
+    case PipelineFactory::Function: return "Function";
+    case PipelineFactory::DescriptorDefault: return "DescriptorDefault";
+    case PipelineFactory::DescriptorEnabled: return "DescriptorEnabled";
+  }
+  return "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, PipelineFactory factory) {
+  return os << PipelineFactoryName(factory);
+}
+
+struct NativeComputeCase {
+  MTLStorageMode storageMode;
+  PipelineFactory factory;
+};
+
+void PrintTo(const NativeComputeCase& value, std::ostream* os) {
+  *os << "storage=" << StorageModeName(value.storageMode) << " factory=" << value.factory;
+}
+
+class MetalNativeComputeValidationTest : public testing::TestWithParam<NativeComputeCase> {};
 
 TEST_P(MetalNativeComputeValidationTest, ConstantColorWriteAtTextureSlotOne) {
   @autoreleasepool {
+    const NativeComputeCase testCase = GetParam();
     for (const char* name :
          {"MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION", "MTL_SHADER_VALIDATION_ABORT_ON_FAULT",
           "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING",
@@ -47,7 +72,8 @@ TEST_P(MetalNativeComputeValidationTest, ConstantColorWriteAtTextureSlotOne) {
               << NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String
               << " device=" << device.name.UTF8String
               << " unified_memory=" << static_cast<bool>(device.hasUnifiedMemory)
-              << " requested_storage=" << StorageModeName(GetParam()) << std::endl;
+              << " requested_storage=" << StorageModeName(testCase.storageMode)
+              << " requested_factory=" << testCase.factory << std::endl;
 
     MTLTextureDescriptor* descriptor =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -55,14 +81,14 @@ TEST_P(MetalNativeComputeValidationTest, ConstantColorWriteAtTextureSlotOne) {
                                                           height:1
                                                        mipmapped:NO];
     descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    descriptor.storageMode = GetParam();
+    descriptor.storageMode = testCase.storageMode;
     id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
     ASSERT_THAT(texture != nil, testing::IsTrue()) << "Native texture allocation failed";
     std::cerr << "Native Metal control: texture_usage=" << texture.usage
               << " texture_storage=" << StorageModeName(texture.storageMode)
               << " texture_format=" << texture.pixelFormat << std::endl;
     ASSERT_EQ(texture.usage, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
-    ASSERT_EQ(texture.storageMode, GetParam());
+    ASSERT_EQ(texture.storageMode, testCase.storageMode);
     ASSERT_EQ(texture.pixelFormat, MTLPixelFormatRGBA8Unorm);
 
     NSString* source = [NSString stringWithUTF8String:R"msl(#include <metal_stdlib>
@@ -78,13 +104,40 @@ kernel void write_constant_red(texture2d<float, access::write> output [[texture(
     id<MTLFunction> function = [library newFunctionWithName:@"write_constant_red"];
     ASSERT_THAT(function != nil, testing::IsTrue()) << "Native compute function was not found";
     error = nil;
-    id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function
-                                                                                 error:&error];
+    id<MTLComputePipelineState> pipeline = nil;
+    if (testCase.factory == PipelineFactory::Function) {
+      pipeline = [device newComputePipelineStateWithFunction:function error:&error];
+    } else {
+      MTLComputePipelineDescriptor* pipelineDescriptor =
+          [[MTLComputePipelineDescriptor alloc] init];
+      pipelineDescriptor.computeFunction = function;
+      if (testCase.factory == PipelineFactory::DescriptorEnabled) {
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+        if (@available(macOS 15.0, *)) {
+          pipelineDescriptor.shaderValidation = MTLShaderValidationEnabled;
+        } else
+#endif
+        {
+          FAIL() << "Explicit pipeline shader validation requires the macOS 15 SDK and runtime";
+        }
+      }
+      pipeline = [device newComputePipelineStateWithDescriptor:pipelineDescriptor
+                                                       options:MTLPipelineOptionNone
+                                                    reflection:nil
+                                                         error:&error];
+    }
     ASSERT_THAT(pipeline != nil, testing::IsTrue()) << DescribeError(error);
     std::cerr << "Native Metal control: pipeline_shader_validation=";
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
     if (@available(macOS 15.0, *)) {
-      std::cerr << pipeline.shaderValidation;
+      const MTLShaderValidation validation = pipeline.shaderValidation;
+      const char* validationName = "Unknown";
+      switch (validation) {
+        case MTLShaderValidationDefault: validationName = "Default"; break;
+        case MTLShaderValidationEnabled: validationName = "Enabled"; break;
+        case MTLShaderValidationDisabled: validationName = "Disabled"; break;
+      }
+      std::cerr << validationName << "(" << validation << ")";
     } else
 #endif
     {
@@ -136,12 +189,17 @@ kernel void write_constant_red(texture2d<float, access::write> output [[texture(
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(StorageModes, MetalNativeComputeValidationTest,
-                         testing::Values(MTLStorageModeShared, MTLStorageModeManaged,
-                                         MTLStorageModePrivate),
-                         [](const testing::TestParamInfo<MTLStorageMode>& info) {
-                           return StorageModeName(info.param);
-                         });
+INSTANTIATE_TEST_SUITE_P(
+    StorageAndFactories, MetalNativeComputeValidationTest,
+    testing::Values(NativeComputeCase{MTLStorageModeShared, PipelineFactory::Function},
+                    NativeComputeCase{MTLStorageModeManaged, PipelineFactory::Function},
+                    NativeComputeCase{MTLStorageModePrivate, PipelineFactory::Function},
+                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::DescriptorDefault},
+                    NativeComputeCase{MTLStorageModeShared, PipelineFactory::DescriptorEnabled}),
+    [](const testing::TestParamInfo<NativeComputeCase>& info) {
+      return StorageModeName(info.param.storageMode) + "_" +
+             PipelineFactoryName(info.param.factory);
+    });
 
 }  // namespace
 }  // namespace donner::gpu::metal::tests

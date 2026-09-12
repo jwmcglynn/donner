@@ -30,7 +30,7 @@ jobs:
           external-cache: true
           cache-save: false
 
-      - name: Compare native compute texture storage modes
+      - name: Compare native compute storage and pipeline controls
         shell: bash
         run: |
           set -euo pipefail
