@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <unordered_map>
 
 #include "donner/base/Utils.h"
@@ -62,6 +63,77 @@ TEST(RcString, ConstructEmptyVector) {
   EXPECT_TRUE(str.empty());
   EXPECT_EQ(str.size(), 0u);
   EXPECT_EQ(str, "");
+}
+
+TEST(RcString, InlineBoundaryPreservesLayoutAndCopyOwnership) {
+  static_assert(sizeof(RcString) == 4 * sizeof(void*));
+  constexpr size_t kCapacity = sizeof(RcString) - 1;
+  for (size_t size : {size_t{0}, size_t{1}, kCapacity - 1, kCapacity, kCapacity + 1}) {
+    SCOPED_TRACE(size);
+    const std::string text(size, 'x');
+    const RcString original(text);
+    const RcString copy(original);  // NOLINT(performance-unnecessary-copy-initialization)
+    EXPECT_EQ(copy, text);
+    EXPECT_EQ(original, text);
+    if (size <= kCapacity) {
+      EXPECT_NE(copy.data(), original.data());
+    } else {
+      EXPECT_EQ(copy.data(), original.data());
+    }
+  }
+}
+
+TEST(RcString, AssignmentTransitionsAndMovedFromReuse) {
+  constexpr size_t kCapacity = sizeof(RcString) - 1;
+  const std::array<std::string, 4> values = {"", "x", std::string(kCapacity, 's'),
+                                             std::string(kCapacity + 1, 'l')};
+  for (const std::string& before : values) {
+    for (const std::string& after : values) {
+      SCOPED_TRACE("before=" + std::to_string(before.size()) +
+                   " after=" + std::to_string(after.size()));
+      RcString source(after);
+      RcString destination(before);
+      destination = source;
+      EXPECT_EQ(destination, after);
+      EXPECT_EQ(source, after);
+
+      destination = before;
+      destination = std::move(source);
+      EXPECT_EQ(destination, after);
+      EXPECT_EQ(source, "");
+      source = before;
+      EXPECT_EQ(source, before);
+
+      RcString moved(std::move(destination));
+      EXPECT_EQ(moved, after);
+      EXPECT_EQ(destination, "");
+      destination = before;
+      EXPECT_EQ(destination, before);
+    }
+  }
+}
+
+TEST(RcString, AdoptedVectorAndSubstringKeepSharedOwnershipAcrossTransitions) {
+  const size_t length = 2 * sizeof(RcString);
+  std::vector<char> bytes(length, 'v');
+  bytes.reserve(length + 1);
+  const char* originalData = bytes.data();
+  RcString original = RcString::fromVector(std::move(bytes));
+  ASSERT_EQ(original.data(), originalData);
+  RcString copy = original;
+  RcString slice = original.substr(1);
+  EXPECT_EQ(copy.data(), originalData);
+  EXPECT_EQ(slice.data(), originalData + 1);
+
+  original = "short";
+  copy = "";
+  EXPECT_EQ(slice, std::string(length - 1, 'v'));
+  EXPECT_EQ(slice.data(), originalData + 1);
+  RcString moved(std::move(slice));
+  EXPECT_EQ(moved.data(), originalData + 1);
+  EXPECT_EQ(slice, "");
+  slice = "reused";
+  EXPECT_EQ(slice, "reused");
 }
 
 TEST(RcString, FromFormat) {

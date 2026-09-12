@@ -318,7 +318,7 @@ protected:
     std::uint64_t frameIndex = 0;
     std::size_t mouseUpCount = 0;
     bool stoppedForBisection = false;
-    std::uint64_t filterBudgetChunks = 0;
+    svg::RendererResourceStats resources;
     std::filesystem::path diagnosticPath;
     std::uint64_t compositorReconstructCount = 0;
     bool usesTexturePresentation = false;
@@ -468,7 +468,7 @@ protected:
     }
 
     out->compositorReconstructCount = asyncRenderer.compositorReconstructCountForTesting();
-    out->filterBudgetChunks = renderer.filterBudgetChunksForTesting();
+    out->resources = renderer.resourceStats();
 
     if (out->stoppedForBisection) {
       out->diagnosticPath = DiagnosticOutputDir() /
@@ -494,8 +494,9 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
       << "Replay ended before the second mouse-up checkpoint";
   ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
   if (snapshot.usesTexturePresentation) {
-    EXPECT_GT(snapshot.filterBudgetChunks, 0u)
-        << "Large valid Geode filter frames must chunk instead of rejecting";
+    EXPECT_TRUE(snapshot.resources.filterBudgetSupported);
+    EXPECT_FALSE(snapshot.resources.filterBudgetRejected);
+    EXPECT_LE(snapshot.resources.filterRetainedBytes, svg::components::kMaximumFilterFrameBytes);
   }
 
   // Both backends have a bounded rounding difference in this filtered image, but of different

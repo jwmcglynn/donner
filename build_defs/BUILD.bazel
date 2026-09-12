@@ -1,10 +1,12 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
     [
+        "fuzzer_soak.py",
         "check_banned_patterns.py",
         "rules.bzl",
     ],
@@ -30,6 +32,8 @@ py_test(
     data = [
         ":rules.bzl",
         "//:.bazelrc",
+        "//:.github/workflows/coverage.yml",
+        "//:.github/workflows/main.yml",
     ],
 )
 
@@ -156,3 +160,31 @@ donner_package(gpu_inventory_globs = [
     "**/*.bzl",
     "BUILD.bazel",
 ])
+
+donner_cc_fuzzer(
+    name = "soak_probe_fuzzer",
+    srcs = ["SoakProbe.cc"],
+    corpus = "soak_probe_corpus",
+)
+
+test_suite(
+    name = "fuzzer_soak_integration_tests",
+    tests = [":soak_probe_fuzzer_soak"],
+)
+
+py_test(
+    name = "fuzzer_soak_tests",
+    size = "small",
+    srcs = [
+        "fuzzer_soak.py",
+        "fuzzer_soak_tests.py",
+    ],
+    imports = ["."],
+)
+
+py_binary(
+    name = "fuzzer_soak_runner",
+    srcs = ["fuzzer_soak.py"],
+    main = "fuzzer_soak.py",
+    visibility = ["//visibility:public"],
+)

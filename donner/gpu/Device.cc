@@ -86,6 +86,15 @@ Status ValidateSamplerDescriptor(const SamplerDescriptor& descriptor) {
   return OkStatus();
 }
 
+/// Keeps floating-point filter intermediates out of rendering and presentation.
+Status ValidateRenderTargetFormat(TextureFormat format) {
+  if (format == TextureFormat::RGBA32Float) {
+    return Err(GpuErrorType::Unsupported,
+               "RGBA32Float supports sampled/storage textures and copies, not render targets");
+  }
+  return OkStatus();
+}
+
 /// Validates a \ref TextureDescriptor.
 Status ValidateTextureDescriptor(const TextureDescriptor& descriptor) {
   if (Status status = CheckEnum(descriptor.format, "TextureDescriptor.format"); status.hasError()) {
@@ -94,6 +103,11 @@ Status ValidateTextureDescriptor(const TextureDescriptor& descriptor) {
   if (Status status = CheckBitmask(descriptor.usage, "TextureDescriptor.usage");
       status.hasError()) {
     return status;
+  }
+  if (HasAllFlags(descriptor.usage, TextureUsage::RenderAttachment)) {
+    if (Status status = ValidateRenderTargetFormat(descriptor.format); status.hasError()) {
+      return status;
+    }
   }
   if (descriptor.size.width == 0 || descriptor.size.height == 0) {
     return Err(GpuErrorType::InvalidDescriptor,
@@ -155,11 +169,71 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
           GpuErrorType::InvalidDescriptor,
           std::format("BindGroupLayoutEntry binding {} has empty visibility", entry.binding));
     }
+    if (entry.type == BindingType::WriteOnlyStorageTexture2d &&
+        entry.visibility != ShaderStage::Compute) {
+      return Err(GpuErrorType::Unsupported,
+                 std::format("BindGroupLayoutEntry binding {}: storage texture writes are "
+                             "compute-only",
+                             entry.binding));
+    }
     for (size_t j = i + 1; j < descriptor.entries.size(); ++j) {
       if (descriptor.entries[j].binding == entry.binding) {
         return Err(
             GpuErrorType::InvalidDescriptor,
             std::format("BindGroupLayoutDescriptor has duplicate binding index {}", entry.binding));
+      }
+    }
+  }
+  return OkStatus();
+}
+
+/// Validates one color target's blend state.
+/// @param blend Blend state to check.
+Status ValidateBlendState(const BlendState& blend) {
+  for (const BlendComponent& component : {blend.color, blend.alpha}) {
+    if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+  }
+  return OkStatus();
+}
+
+/// Validates the color targets of a \ref RenderPipelineDescriptor's fragment state.
+/// @param targets Color targets to check.
+Status ValidateColorTargets(const std::vector<ColorTargetState>& targets) {
+  if (targets.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.fragment.targets is empty");
+  }
+  if (targets.size() > kMaxColorAttachments) {
+    return Err(GpuErrorType::LimitExceeded,
+               std::format("RenderPipelineDescriptor has {} color targets, exceeding "
+                           "kMaxColorAttachments {}",
+                           targets.size(), kMaxColorAttachments));
+  }
+  for (const ColorTargetState& target : targets) {
+    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
+      return std::move(status).error();
+    }
+    if (Status status = ValidateRenderTargetFormat(target.format); status.hasError()) {
+      return status;
+    }
+    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
+        status.hasError()) {
+      return std::move(status).error();
+    }
+    if (target.blend) {
+      if (Status status = ValidateBlendState(*target.blend); status.hasError()) {
+        return std::move(status).error();
       }
     }
   }
@@ -234,6 +308,88 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
           }
         }
       }
+    }
+  }
+  return OkStatus();
+}
+
+/// Validates the parts of a \ref RenderPipelineDescriptor that depend only on the descriptor
+/// itself, not on any resolved layout or module record.
+/// @param descriptor Descriptor to check.
+Status ValidateRenderPipelineDescriptor(const RenderPipelineDescriptor& descriptor) {
+  if (descriptor.vertex.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.vertex.entryPoint is empty");
+  }
+  if (descriptor.fragment.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "RenderPipelineDescriptor.fragment.entryPoint is empty");
+  }
+  if (Status status = ValidateVertexBufferLayouts(descriptor.vertex.buffers); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = ValidateColorTargets(descriptor.fragment.targets); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (descriptor.multisampleCount != 1) {
+    return Err(GpuErrorType::Unsupported,
+               std::format("RenderPipelineDescriptor.multisampleCount {} is not supported; only "
+                           "1 sample per pixel is available",
+                           descriptor.multisampleCount));
+  }
+  return OkStatus();
+}
+
+Status ValidateShaderBufferLocation(const ShaderBufferBindingInfo& info) {
+  if (info.entryPoint.empty() || info.group >= kMaxBindGroups || info.binding >= kMaxBindings) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has an invalid entry point or binding location");
+  }
+  switch (info.stage) {
+    case ShaderStage::Vertex:
+    case ShaderStage::Fragment:
+    case ShaderStage::Compute: return OkStatus();
+    default:
+      return Err(GpuErrorType::InvalidDescriptor,
+                 "Shader buffer metadata requires one shader stage");
+  }
+}
+
+Status ValidateShaderBufferRange(const ShaderBufferBindingInfo& info) {
+  if (info.type != BindingType::UniformBuffer && info.type != BindingType::ReadOnlyStorageBuffer) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has a non-buffer binding type");
+  }
+  if (info.minSizeBytes == 0 || info.minSizeBytes > kMaxBufferByteSize) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has an invalid minimum size");
+  }
+  if (info.runtimeArrayStrideBytes != 0 && (info.type != BindingType::ReadOnlyStorageBuffer ||
+                                            info.minSizeBytes != info.runtimeArrayStrideBytes)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader runtime-array metadata requires one storage element as its minimum");
+  }
+  return OkStatus();
+}
+
+Status ValidateShaderBufferMetadata(const ShaderModuleDescriptor& descriptor) {
+  if (!descriptor.bufferBindings) {
+    return OkStatus();
+  }
+  for (const ShaderBufferBindingInfo& info : *descriptor.bufferBindings) {
+    if (Status status = ValidateShaderBufferLocation(info); status.hasError()) {
+      return status;
+    }
+    if (Status status = ValidateShaderBufferRange(info); status.hasError()) {
+      return status;
     }
   }
   return OkStatus();
@@ -423,7 +579,16 @@ void Device::recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex) {
   }
 }
 
+void Device::onRetireBuffer(uint32_t) {}
+
+void Device::onRetireTexture(uint32_t) {}
+
 void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial) {
+  if (kind == ResourceKind::Buffer) {
+    onRetireBuffer(slotIndex);
+  } else if (kind == ResourceKind::Texture) {
+    onRetireTexture(slotIndex);
+  }
   if (lastUseSerial <= completedSerial()) {
     recycleRetiredSlot(kind, slotIndex);
   } else {
@@ -696,12 +861,13 @@ Status Device::validateBufferBindingEntry(const BindGroupLayoutEntry& layoutEntr
                                     bufferRecord.result()->descriptor.byteSize);
 }
 
-Status Device::validateSampledTextureBindingEntry(const BindGroupEntry& entry) const {
+Status Device::validateSampledTextureBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                                  const BindGroupEntry& entry) const {
   const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry.resource);
   if (viewBinding == nullptr) {
     return Err(GpuErrorType::InvalidDescriptor,
                std::format("BindGroupEntry binding {} must bind a texture view to match "
-                           "the layout type SampledTexture2dFloat",
+                           "the sampled-texture layout type",
                            entry.binding));
   }
   auto viewRecord = resolve(textureViews_, viewBinding->view, TextureViewTag::kName);
@@ -717,6 +883,13 @@ Status Device::validateSampledTextureBindingEntry(const BindGroupEntry& entry) c
                std::format("BindGroupEntry binding {}: texture view \"{}\" lacks the "
                            "Sampled usage",
                            entry.binding, viewRecord.result()->descriptor.label.str()));
+  }
+  if (viewedTexture.result()->descriptor.format == TextureFormat::RGBA32Float &&
+      layoutEntry.type != BindingType::SampledTexture2dUnfilterableFloat) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {}: RGBA32Float requires an unfilterable "
+                           "sampled-texture binding",
+                           entry.binding));
   }
   return OkStatus();
 }
@@ -778,7 +951,9 @@ Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layou
   switch (layoutEntry.type) {
     case BindingType::UniformBuffer:
     case BindingType::ReadOnlyStorageBuffer: return validateBufferBindingEntry(layoutEntry, entry);
-    case BindingType::SampledTexture2dFloat: return validateSampledTextureBindingEntry(entry);
+    case BindingType::SampledTexture2dFloat:
+    case BindingType::SampledTexture2dUnfilterableFloat:
+      return validateSampledTextureBindingEntry(layoutEntry, entry);
     case BindingType::WriteOnlyStorageTexture2d:
       return validateStorageTextureBindingEntry(layoutEntry, entry);
     case BindingType::FilteringSampler: return validateSamplerBindingEntry(entry);
@@ -786,12 +961,15 @@ Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layou
   return OkStatus();
 }
 
-std::vector<Device::BoundTextureBinding> Device::collectBoundTextures(
+void Device::collectBoundTextures(
     const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
-    BindingType type) const {
-  std::vector<BoundTextureBinding> bound;
+    SmallVector<BoundTextureBinding, kMaxBindings>& sampledOut,
+    SmallVector<BoundTextureBinding, kMaxBindings>& storageOut) const {
   for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
-    if (layoutEntry.type != type) {
+    const bool sampled = layoutEntry.type == BindingType::SampledTexture2dFloat ||
+                         layoutEntry.type == BindingType::SampledTexture2dUnfilterableFloat;
+    const bool storage = layoutEntry.type == BindingType::WriteOnlyStorageTexture2d;
+    if (!sampled && !storage) {
       continue;
     }
     const BindGroupEntry* entry = nullptr;
@@ -804,11 +982,12 @@ std::vector<Device::BoundTextureBinding> Device::collectBoundTextures(
     }
     const TextureViewRecord* view =
         textureViews_.find(viewBinding->view.slotIndex(), viewBinding->view.generation());
-    if (view != nullptr) {
-      bound.push_back(BoundTextureBinding{layoutEntry.binding, view->textureIdentity});
+    if (view == nullptr) {
+      continue;
     }
+    (sampled ? sampledOut : storageOut)
+        .push_back(BoundTextureBinding{layoutEntry.binding, view->textureIdentity});
   }
-  return bound;
 }
 
 Status Device::validateNoTextureAliasing(
@@ -818,10 +997,9 @@ Status Device::validateNoTextureAliasing(
   // layout at a time, so a texture named by both a sampled and a storage-write binding is in the
   // wrong layout for one of them however the backend transitions it. Nothing this runtime serves
   // aliases a texture both ways inside one group, so the shape is rejected rather than modeled.
-  const std::vector<BoundTextureBinding> sampled =
-      collectBoundTextures(descriptor, layoutEntries, BindingType::SampledTexture2dFloat);
-  const std::vector<BoundTextureBinding> storage =
-      collectBoundTextures(descriptor, layoutEntries, BindingType::WriteOnlyStorageTexture2d);
+  SmallVector<BoundTextureBinding, kMaxBindings> sampled;
+  SmallVector<BoundTextureBinding, kMaxBindings> storage;
+  collectBoundTextures(descriptor, layoutEntries, sampled, storage);
 
   for (const BoundTextureBinding& sampledBinding : sampled) {
     for (const BoundTextureBinding& storageBinding : storage) {
@@ -935,6 +1113,10 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
     }
   }
 
+  if (Status status = ValidateShaderBufferMetadata(descriptor); status.hasError()) {
+    return std::move(status).error();
+  }
+
   ShaderModule handle =
       allocateHandle<ShaderModuleTag>(shaderModules_, ShaderModuleRecord{descriptor});
   if (Status status = onCreateShaderModule(handle.slotIndex(), descriptor); status.hasError()) {
@@ -942,6 +1124,56 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
     return std::move(status).error();
   }
   return handle;
+}
+
+Status Device::validatePipelineBufferBinding(const PipelineLayoutRecord& layout,
+                                             const ShaderBufferBindingInfo& info) const {
+  if (info.group >= layout.bindGroupLayoutIds.size()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata requires a missing pipeline bind group");
+  }
+  const ResourceIdentity identity = layout.bindGroupLayoutIds[info.group];
+  const auto* group = bindGroupLayouts_.find(identity.slotIndex, identity.generation);
+  if (group == nullptr) {
+    return Err(GpuErrorType::InvalidHandle,
+               "Shader buffer metadata references a destroyed bind group layout");
+  }
+  const auto entry =
+      std::ranges::find(group->descriptor.entries, info.binding, &BindGroupLayoutEntry::binding);
+  if (entry == group->descriptor.entries.end() || entry->type != info.type ||
+      !HasAllFlags(entry->visibility, info.stage)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("Shader buffer group {} binding {} does not match the pipeline layout's "
+                           "type and stage visibility",
+                           info.group, info.binding));
+  }
+  return OkStatus();
+}
+
+Status Device::appendPipelineBufferRequirements(
+    const PipelineLayoutRecord& layout, const ShaderModuleDescriptor& module,
+    std::string_view entryPoint, ShaderStage stage,
+    std::vector<PipelineBufferRequirement>& requirements) const {
+  if (!module.bufferBindings) {
+    return OkStatus();
+  }
+  for (const ShaderBufferBindingInfo& info : *module.bufferBindings) {
+    if (info.entryPoint != entryPoint || info.stage != stage) {
+      continue;
+    }
+    if (Status status = validatePipelineBufferBinding(layout, info); status.hasError()) {
+      return status;
+    }
+    const auto previous = std::ranges::find_if(requirements, [&](const auto& requirement) {
+      return requirement.group == info.group && requirement.binding == info.binding;
+    });
+    if (previous == requirements.end()) {
+      requirements.push_back({info.group, info.binding, info.minSizeBytes});
+    } else {
+      previous->minSizeBytes = std::max(previous->minSizeBytes, info.minSizeBytes);
+    }
+  }
+  return OkStatus();
 }
 
 Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescriptor& descriptor) {
@@ -957,68 +1189,23 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
   if (fragmentModule.hasError()) {
     return std::move(fragmentModule).error();
   }
-  if (descriptor.vertex.entryPoint.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.vertex.entryPoint is empty");
-  }
-  if (descriptor.fragment.entryPoint.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.fragment.entryPoint is empty");
-  }
-  if (Status status = ValidateVertexBufferLayouts(descriptor.vertex.buffers); status.hasError()) {
+  if (Status status = ValidateRenderPipelineDescriptor(descriptor); status.hasError()) {
     return std::move(status).error();
-  }
-  if (descriptor.fragment.targets.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "RenderPipelineDescriptor.fragment.targets is empty");
-  }
-  if (descriptor.fragment.targets.size() > kMaxColorAttachments) {
-    return Err(GpuErrorType::LimitExceeded,
-               std::format("RenderPipelineDescriptor has {} color targets, exceeding "
-                           "kMaxColorAttachments {}",
-                           descriptor.fragment.targets.size(), kMaxColorAttachments));
-  }
-  for (const ColorTargetState& target : descriptor.fragment.targets) {
-    if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
-      return std::move(status).error();
-    }
-    if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
-        status.hasError()) {
-      return std::move(status).error();
-    }
-    if (target.blend) {
-      for (const BlendComponent& component : {target.blend->color, target.blend->alpha}) {
-        if (Status status = CheckEnum(component.srcFactor, "BlendComponent.srcFactor");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-        if (Status status = CheckEnum(component.dstFactor, "BlendComponent.dstFactor");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-        if (Status status = CheckEnum(component.operation, "BlendComponent.operation");
-            status.hasError()) {
-          return std::move(status).error();
-        }
-      }
-    }
-  }
-  if (Status status = CheckEnum(descriptor.topology, "RenderPipelineDescriptor.topology");
-      status.hasError()) {
-    return std::move(status).error();
-  }
-  if (Status status = CheckEnum(descriptor.cullMode, "RenderPipelineDescriptor.cullMode");
-      status.hasError()) {
-    return std::move(status).error();
-  }
-  if (descriptor.multisampleCount != 1) {
-    return Err(GpuErrorType::Unsupported,
-               std::format("RenderPipelineDescriptor.multisampleCount {} is not supported; only "
-                           "1 sample per pixel is available",
-                           descriptor.multisampleCount));
   }
 
   RenderPipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), vertexModule.result()->descriptor, descriptor.vertex.entryPoint,
+          ShaderStage::Vertex, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), fragmentModule.result()->descriptor,
+          descriptor.fragment.entryPoint, ShaderStage::Fragment, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
   RenderPipeline handle = allocateHandle<RenderPipelineTag>(renderPipelines_, std::move(record));
   if (Status status = onCreateRenderPipeline(handle.slotIndex(), descriptor); status.hasError()) {
     renderPipelines_.release(handle.slotIndex());
@@ -1050,6 +1237,12 @@ Result<ComputePipeline> Device::createComputePipeline(const ComputePipelineDescr
   }
 
   ComputePipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), computeModule.result()->descriptor, descriptor.compute.entryPoint,
+          ShaderStage::Compute, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
   ComputePipeline handle = allocateHandle<ComputePipelineTag>(computePipelines_, std::move(record));
   if (Status status = onCreateComputePipeline(handle.slotIndex(), descriptor); status.hasError()) {
     computePipelines_.release(handle.slotIndex());
@@ -1320,6 +1513,9 @@ Status ValidateNativeSurfaceHandle(const NativeSurfaceHandle& native) {
 Status ValidateSurfaceConfiguration(const SurfaceConfiguration& configuration) {
   if (Status status = CheckEnum(configuration.format, "SurfaceConfiguration.format");
       status.hasError()) {
+    return status;
+  }
+  if (Status status = ValidateRenderTargetFormat(configuration.format); status.hasError()) {
     return status;
   }
   if (Status status = CheckBitmask(configuration.usage, "SurfaceConfiguration.usage");
@@ -1787,6 +1983,14 @@ Status Device::checkSubmissionCommand(const Command& command,
             return std::move(bufferRecord).error();
           }
           return OkStatus();
+        } else if constexpr (std::is_same_v<CommandType, SetIndexBufferCommand>) {
+          auto bufferRecord =
+              checkSubmissionResource(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
+                                      BufferTag::kName, "recorded setIndexBuffer", uses);
+          if (bufferRecord.hasError()) {
+            return std::move(bufferRecord).error();
+          }
+          return OkStatus();
         } else if constexpr (std::is_same_v<CommandType, CopyTextureToBufferCommand>) {
           return checkSubmissionCopyToBuffer(typedCommand, uses);
         } else if constexpr (std::is_same_v<CommandType, CopyTextureToTextureCommand>) {
@@ -1838,6 +2042,14 @@ void Device::markSubmissionUses(std::span<const SubmissionUse> uses, uint64_t su
   for (const SubmissionUse& use : uses) {
     markResourceUsed(use.kind, use.slotIndex, submissionSerial);
   }
+}
+
+uint64_t Device::bufferLastUseSerial(uint32_t slotIndex) const {
+  return buffers_.lastUseOf(slotIndex);
+}
+
+uint64_t Device::textureLastUseSerial(uint32_t slotIndex) const {
+  return textures_.lastUseOf(slotIndex);
 }
 
 Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {

@@ -1,7 +1,7 @@
 /// @file
 /// Out-of-process SPIR-V validation: every emitted module must pass
-/// `spirv-val --target-env vulkan1.1`. Platform validators run as external verification tools
-/// rather than build dependencies, so the test skips cleanly when spirv-val is not installed.
+/// `spirv-val --target-env vulkan1.1`. The validator is built from source by Bazel and reached
+/// through runfiles, so every machine runs the same one and a machine without it cannot exist.
 ///
 /// A negative control proves the detection mechanism: a deliberately malformed module must be
 /// rejected, so an acceptance result here means the validator actually inspected the words rather
@@ -17,14 +17,32 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/ComponentTransfer.h"
+#include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Lighting.h"
+#include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
+#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -50,18 +68,10 @@ int RunCommand(const std::string& command, std::string* output) {
   return pclose(pipe);
 }
 
-/// Locates spirv-val: PATH first, then the common Homebrew and /usr/local install locations.
-/// Returns an empty string when unavailable.
-std::string FindSpirvVal() {
-  const std::array<const char*, 3> candidates = {"spirv-val", "/opt/homebrew/bin/spirv-val",
-                                                 "/usr/local/bin/spirv-val"};
-  for (const char* candidate : candidates) {
-    std::string output;
-    if (RunCommand(std::string(candidate) + " --version", &output) == 0) {
-      return candidate;
-    }
-  }
-  return "";
+/// The Bazel-built validator, from this test's runfiles. Never a host install: which validator ran
+/// would otherwise vary by machine, and a machine without one validated nothing.
+std::string SpirvVal() {
+  return Runfiles::instance().RlocationExternal("spirv_tools", "spirv-val");
 }
 
 /// Writes \p words under TEST_TMPDIR as \p fileName and returns spirv-val's combined output,
@@ -184,55 +194,134 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
   return builder.build();
 }
 
+TEST(SpirvValValidation, EmittedCheckerboardPassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCheckerboardModule(), "checkerboard.spv");
+}
+
+TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildFilterResolveModule(),
+                             "filter_resolve.spv");
+}
+TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
+}
+
+TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildConvolveMatrixModule(),
+                             "convolve_matrix.spv");
+}
+
+TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildMergeModule(), "merge.spv");
+}
+
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSolidFillModule(), "solid_fill.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedFloodComputePassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFloodModule(), "flood.spv");
 }
 
 TEST(SpirvValValidation, EmittedSubregionClipComputePassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSubregionClipModule(), "subregion_clip.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
                              "filter_color_matrix.spv");
+}
+
+TEST(SpirvValValidation, EmittedFilterImagePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterImageModule(), "filter_image.spv");
+}
+
+TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
+}
+
+TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildTileModule(), "tile.spv");
+}
+
+TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildComponentTransferModule(),
+                             "component_transfer.spv");
+}
+
+TEST(SpirvValValidation, EmittedTurbulenceComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildTurbulenceModule(), "turbulence.spv");
+}
+
+TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDropShadowModule(), "drop_shadow.spv");
+}
+
+TEST(SpirvValValidation, EmittedDisplacementMapComputePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDisplacementMapModule(),
+                             "displacement_map.spv");
+}
+
+TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildGaussianBlurModule(), "gaussian_blur.spv");
+}
+
+TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildMorphologyModule(), "morphology.spv");
+}
+
+TEST(SpirvValValidation, EmittedLightingComputesPassVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildDiffuseLightingModule(),
+                             "diffuse_lighting.spv");
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildSpecularLightingModule(),
+                             "specular_lighting.spv");
+}
+
+TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
+  // The first shipping program to reach the Pow extended instruction, and one whose functions
+  // return out of a structured branch, so the validator is what confirms the merge blocks the
+  // emitter writes around those returns are well formed.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildColorSpaceConvertModule(),
+                             "color_space_convert.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {
   // The MatrixStride decoration is per member, and a validator checks it against the member's
   // own layout: one hardcoded stride would decorate mat2x2f's 8-byte columns as 16 and be
   // rejected here.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildMatrixBlockModule(), "matrix_block.spv");
 }
 
@@ -240,20 +329,14 @@ TEST(SpirvValValidation, APositionOnlyFragmentEntryPassesVulkan11Validation) {
   // Position is location-less in every emitter, so each decides on its own how such an input
   // reaches the stage. SPIR-V declares it as its own Input variable, decorated FragCoord rather
   // than the vertex stage's Position; the validator is what says so out of process.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildPositionOnlyFragmentModule(), "position_only.spv");
 }
 
 TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Validation) {
   // The first module to emit OpUGreaterThanEqual over a vector, OpAny, and OpShiftRightLogical,
   // so this is where the validator confirms those encodings and their result types.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSnapshotUnpremultiplyModule(),
                              "snapshot_unpremultiply.spv");
 }
@@ -261,11 +344,19 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
 TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
   // OpAll reaches no shipping program, so this is the only place the validator confirms its
   // encoding and that its result type is a scalar bool rather than the vector it reduced.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildVectorReductionModule(), "vector_reductions.spv");
+}
+
+TEST(SpirvValValidation, EmittedMathPrimitivesPassVulkan11Validation) {
+  // The validator is what confirms FSign, Floor, and Pow were given operand counts and result
+  // types the extended instruction set actually declares for them.
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, BuildMathPrimitiveModule(), "math_primitives.spv");
+}
+
+TEST(SpirvValValidation, FloatStorageTexturePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), BuildFloatStorageModule(), "float_storage.spv");
 }
 
 TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
@@ -273,10 +364,7 @@ TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
   // a single word, which is not a decodable instruction stream; spirv-val must reject it. Without
   // this, a harness that silently reported success would make the acceptance results above
   // meaningless.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
 
   ShaderResult<IrModule> module = programs::BuildSolidFillModule();
   ASSERT_THAT(module, HasShaderResult());

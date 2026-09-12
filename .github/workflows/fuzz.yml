@@ -95,6 +95,12 @@ jobs:
             --build_tag_filters=fuzz_geode \
             //...
 
+      - name: Retain failed test evidence
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: fuzz-${{ github.job }}-${{ runner.os }}
+
   macos:
     runs-on: macos-26
     timeout-minutes: 60
@@ -135,3 +141,9 @@ jobs:
             --test_tag_filters=fuzz_text_full \
             --build_tag_filters=fuzz_text_full \
             //...
+
+      - name: Retain failed test evidence
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: fuzz-${{ github.job }}-${{ runner.os }}

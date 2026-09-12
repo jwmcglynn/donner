@@ -3,16 +3,15 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <fstream>
 #include <iostream>
 #include <optional>
 #include <ratio>
-#include <sstream>
 #include <string>
 #include <thread>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -48,14 +47,10 @@ std::optional<RenderResult> WaitForResult(AsyncRenderer* asyncRenderer) {
 void RunFilterGroupSubtreeDragPerfScenario(FilterGroupSubtreeDragPerfResult* result) {
   ASSERT_NE(result, nullptr);
 
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;

@@ -86,26 +86,62 @@ Stages transform components through the ECS:
 
 **NEVER merge a PR without explicit operator approval.** Agents open, update, monitor, and review PRs — but `gh pr merge` (any flavor) is operator-gated: the operator must approve merging that specific PR in the current conversation. Green CI, passing reviews, or "obviously safe" changes do not substitute for approval.
 
+### Coordinated delivery
+
+When parallel delivery is requested, the controller divides the project into independent,
+outcome-oriented units that can become coherent pull requests, and assigns explicit file, branch,
+and integration ownership. Specialist profiles describe expertise; they do not grant exclusive
+editing rights. Overlapping files have one writer, shared Git operations have one owner, and an
+occupied checkout is preserved unless its owner releases it. A user-designated existing checkout
+may be used as a staging lane only after verifying its path, base, branch, dirty state, and owner;
+that designation does not authorize cleanup.
+
+Pipeline reviewable units through independent review and CI repair as soon as each qualifies. When
+reviewable work remains unpublished, prioritize publishing or repairing it before starting another
+unit. Each unit remains independently understandable and testable; coordination must not weaken
+quality gates or cause every worker to repair the same unrelated failure.
+
 When creating a pull request:
 
-1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
-2. **Run `bazel test //...`** before opening the PR. This is the single source of truth for local validation — it covers:
+1. **Update against the actual PR base** before pushing. Independent PRs normally target
+   `origin/main`; genuine dependent PRs use the supported stacked-PR workflow and retain their
+   reviewed parent base. Rebase only a branch you own, and never run Git commands in another
+   worker's checkout.
+2. **Run `bazel test //...`** before opening the PR by default. This is the single source of truth for full local validation — it covers:
    - Unit tests across the default config AND the `tiny` / `text_full` / `geode` variant lanes (auto-emitted as `*_tiny` / `*_text_full` / `*_geode` wrappers by `donner_cc_test(variants=…)`).
      On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
      Also run, separately:
+   - **Geode editor integration:** for renderer changes, also run `bazel test --config=geode`
+     with `//donner/editor/tests:editor_window_tests_geode`, `//donner/editor/tests:layer_thumbnail_golden_tests_geode`,
+     `//donner/editor/tests:async_renderer_tests_geode`, `//donner/editor/tests:rnr_replay_tests_geode`, and
+     `//donner/editor/tests:gl_rnr_replay_tests_geode`. This matches the separate CI editor lane;
+     run it explicitly in addition to the Geode variants covered by the default `//...` gate.
    - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
 4. **Do not publish draft diffs** — agents must not open draft pull requests. Keep unfinished
-   work local; once the change is validated and ready for review, open a normal reviewable PR.
-5. **Monitor CI and code review by default for every created PR** — whenever you create or open a PR, automatically keep monitoring CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed; do not wait for a separate user prompt. For PR monitoring, the policy is to check both comments and CI/status checks on each ~7-minute pass until the PR has stabilized. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments` when `gh` is authenticated, or the GitHub connector equivalents when `gh` is unavailable.
-6. **No agent branding in PR titles** — do not prefix pull request titles with `[codex]`, agent names, or other tool branding. Use a plain project-style title that describes the change.
-7. **Omit `## Summary` in PR descriptions** — the first paragraph or bullet list is implicitly the
+   work local; once the change is coherent and reviewable, open a normal PR.
+5. **Requested early-delivery mode:** a coherent unit may be pushed and opened as a normal PR
+   after its affected tests, applicable formatting and generator checks, an independent
+   non-implementing review of the exact diff, and a full security/privacy review bound to the exact
+   candidate pass. Mark an irrelevant review surface not applicable only with a reviewable
+   rationale. Schedule full qualification immediately and drive the PR green; do not skip it. New
+   source changes invalidate affected evidence. Before declaring merge readiness, require a green
+   `bazel test //...`, the existing Geode editor integration matrix where applicable, every required
+   and advisory CI check, no unaddressed actionable review comments or unresolved review threads,
+   and no merge conflict. Outside requested early-delivery mode, the full pre-push gate remains the
+   default.
+6. **Monitor CI and code review by default for every created PR** — use supported event waits when
+   available; otherwise use bounded polling only while the owning task is active. Confirm all wake
+   data against GitHub. Do not use a persistent loop, background shell sleep, or fixed polling
+   interval.
+7. **No agent branding in PR titles** — do not prefix pull request titles with agent names or other tool branding. Use a plain project-style title that describes the change.
+8. **Omit `## Summary` in PR descriptions** — the first paragraph or bullet list is implicitly the
    summary, so start with the summary content directly instead of adding a redundant heading.
-8. **Expect a Codex code review** within the first few minutes after the PR is opened — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
-9. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
-10. **Fix CI diagnosability gaps** — if a CI failure cannot be diagnosed because logs, test output,
+9. **Expect an automated code review** within the first few minutes after the PR is opened — address feedback promptly by pushing follow-up commits. An automated approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
+10. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
+11. **Fix CI diagnosability gaps** — if a CI failure cannot be diagnosed because logs, test output,
    screenshots, undeclared outputs, pixel diffs, artifacts, or job summaries are missing or
    inaccessible, treat that as a CI bug and fix the workflow/test harness to expose the missing
    evidence. Do not leave failures opaque or rely on blind reruns when better GitHub Actions

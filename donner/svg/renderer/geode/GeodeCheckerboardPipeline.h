@@ -131,7 +131,7 @@ public:
    *   will draw into. Must match the target texture's format at draw time.
    * @param blendMode How the emitted checkerboard combines with the target.
    */
-  GeodeCheckerboardPipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat,
+  GeodeCheckerboardPipeline(gpu::Device& adapterDevice, gpu::TextureFormat colorFormat,
                             BlendMode blendMode = BlendMode::Replace);
 
   ~GeodeCheckerboardPipeline() = default;

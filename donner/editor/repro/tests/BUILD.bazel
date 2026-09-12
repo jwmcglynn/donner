@@ -9,6 +9,7 @@ donner_cc_test(
     ],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:repro_file",

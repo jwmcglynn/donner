@@ -2,7 +2,7 @@
 name: donner-pr-ci
 description: >
   PR lifecycle and CI triage playbook for Donner: the pre-push gate, PR hygiene rules
-  (🤖 comment convention, no agent branding), the ~7-minute monitoring loop, merge rules,
+  (🤖 comment convention, no agent branding), bounded monitoring, merge rules,
   main.yml anatomy, and the transient-vs-real failure decision tree with artifact-driven
   diagnosis. Use when opening, updating, rebasing, or monitoring any PR; when responding to
   review comments; when a GitHub Actions check is red, hanging, or selected the wrong Bazel
@@ -11,11 +11,13 @@ description: >
 
 # Donner PR & CI Playbook
 
-## 1. Pre-push gate (run in this order, every time)
+## 1. Pre-push gate
 
-1. `git fetch origin main && git rebase origin/main` — stale bases hide merge conflicts and let
-   bazel-diff pick the wrong targets.
-2. `bazel test //...` — the single source of truth for local validation. It already includes the
+1. Update against the actual PR base. Independent PRs normally target `origin/main`; genuine
+   dependent PRs retain their reviewed parent through the supported stacked-PR workflow. Rebase
+   only a branch you own, and never run Git commands in another worker's checkout. Stale bases hide
+   merge conflicts and let bazel-diff pick the wrong targets.
+2. `bazel test //...` — the default single source of truth for full local validation. It includes the
    `*_tiny` / `*_text_full` / `*_geode` variant wrappers and the `*_lint` banned-pattern tests.
    See the `donner-build-test` skill for flags and variant details.
 3. `python3 tools/cmake/gen_cmakelists.py --check` — validates the generated CMake mirror. If your
@@ -31,18 +33,28 @@ description: >
    config is mandatory for fuzzers — Apple Clang lacks `libclang_rt.fuzzer_osx.a`, so without it
    fuzzers silently never link/run locally and the bug escapes to Linux CI. See `donner-fuzzing`.
 
-There is no "preexisting failure" escape hatch: any red test found during this gate is now in
-scope to fix (see the Always-Green Main policy in `CLAUDE.md`).
+There is no "preexisting failure" escape hatch: every red remains blocking. Fix failures within the
+unit's scope. Route an unrelated base failure to the coordinator for one assigned repair owner and
+linked repair; do not silently dismiss it or duplicate the fix across workers.
+
+When the operator requests early delivery, a coherent unit may be pushed and opened as a normal PR
+after affected tests, applicable formatting/generator checks, independent non-implementing review
+of the exact diff, and a full security/privacy review bound to the exact candidate pass. Mark an
+irrelevant review surface not applicable only with a reviewable rationale; the focused code review
+does not replace this gate. Schedule the full gate and existing
+applicable Geode editor integration matrix, then drive every required and advisory CI/review/conflict
+gate green before merge readiness. New source changes invalidate affected evidence. Outside that
+mode, complete the full gate before pushing.
 
 ## 2. Opening the PR
 
 ```sh
 git push -u origin <branch>
-gh pr create --title "..." --body "..."   # add --draft if you expect more CI-iteration commits
+gh pr create --title "..." --body "..."
 ```
 
-Use `--draft` when you still expect to iterate before review (Codex review fires when the PR
-leaves draft); publish with `gh pr ready <N>` once the pre-push gate is green.
+Do not use draft PRs. Open a normal PR only when the unit is coherent and reviewable under the
+default gate or the requested early-delivery gate above.
 
 - **Title**: plain project-style description of the change. No agent branding — `[codex]`,
   `[claude]`, or tool-name prefixes are banned.
@@ -62,11 +74,11 @@ leaves draft); publish with `gh pr ready <N>` once the pre-push gate is green.
   `full_test` output — which also fans the run out to the GitHub-hosted lanes even when the
   self-hosted runners are active (see §5).
 
-## 3. Monitoring loop (default for every PR you create)
+## 3. Monitoring (default for every PR you create)
 
-Poll every ~7 minutes until the PR is green AND reviewed — do not wait for a user prompt.
-Long foreground sleeps are blocked in the harness: implement the wait with the `loop` skill
-(e.g. `/loop 7m <check the PR>`) or a background command that sleeps between passes. Each pass:
+Use supported event waits when available. Otherwise poll at a bounded cadence only while the owning
+task is active. Do not use a persistent loop, background shell sleep, or fixed polling interval.
+Treat wake data as a prompt to confirm the real state through GitHub. Each pass:
 
 ```sh
 gh pr checks <N>                                      # CI status
@@ -79,11 +91,10 @@ gh api repos/jwmcglynn/donner/pulls/<N>/reviews       # review state + top-level
 - The `/comments` endpoint only shows inline diff comments. Approval state (`APPROVED` vs
   `COMMENTED`) and top-level review summaries (e.g. the Codex review body) live in `/reviews` —
   that is where you check whether `jwmcglynn` has actually approved.
-- Expect an automated Codex review within minutes of the PR leaving draft. Address feedback with
+- Expect an automated code review within minutes of the PR opening. Address feedback with
   follow-up commits; reply to comments with a leading 🤖 (every AI-posted GitHub comment starts
   with 🤖 so humans can tell AI activity apart on the shared account).
 - A Codex approval is NEVER sufficient — a `jwmcglynn` review is always required.
-- Draft PRs: monitor CI and mergeability only; review comments arrive after publishing.
 
 ## 4. Merge gate (hard rules)
 
@@ -160,8 +171,9 @@ network failure that exhausted its automatic retries — or that never had any (
 installs).
 
 **Test, compile, linker, and pixel-diff failures are NEVER transient.** Root-cause them; never
-blind-rerun. There is no "preexisting failure" category — a red test found on the branch is now
-your job (open a tracking issue and link it if genuinely out of scope, never silently reroute).
+blind-rerun. An unrelated base failure remains blocking: route it to the coordinator, who assigns
+one repair owner and links the repair. Do not silently dismiss it or expand every parallel worker's
+scope into the same fix.
 
 Failure signatures and what they mean:
 

@@ -32,10 +32,14 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/tests/CheckerboardPixelTests.h"
+#include "donner/gpu/tests/VertexInputSlice.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
 using testing::HasSubstr;
@@ -90,18 +94,9 @@ class MetalSolidFillTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    if (!device_) {
-      // Same rule the frozen pixel gate uses: a lane that selected this target and then created
-      // no device has disabled the comparison, and reporting that as a pass hides it.
-      const baseline::MissingComparisonDisposition disposition =
-          baseline::DispositionForMissingAdapter(baseline::RunningUnderContinuousIntegration());
-      const std::string message =
-          baseline::NoAdapterMessage("the Metal solid-fill slice", disposition);
-      if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
-        FAIL() << message;
-      }
-      GTEST_SKIP() << message;
-    }
+    // Same rule the frozen pixel gate uses: a lane that selected this target and then created no
+    // device has disabled the comparison, and reporting that as a pass hides it.
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal solid-fill slice");
   }
 
   /**
@@ -164,6 +159,20 @@ protected:
 
   std::unique_ptr<MetalDevice> device_;
 };
+
+TEST_F(MetalSolidFillTest, CheckerboardMatchesAnchoredAndCompositedPixels) {
+  const Device& runtime = *device_;
+  EXPECT_EQ(runtime.shaderSourceKind(), ShaderSourceKind::Msl);
+  gpu::tests::ExpectCheckerboardPixels(*device_);
+}
+
+TEST_F(MetalSolidFillTest, CheckerboardPipelineUsesSelectedNativeDevice) {
+  for (const auto blendMode : {geode::GeodeCheckerboardPipeline::BlendMode::Replace,
+                               geode::GeodeCheckerboardPipeline::BlendMode::DestinationOver}) {
+    geode::GeodeCheckerboardPipeline pipeline(*device_, TextureFormat::RGBA8Unorm, blendMode);
+    EXPECT_TRUE(pipeline.valid()) << "Checkerboard must compile on the selected Metal device";
+  }
+}
 
 TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   // This case must run on any adapter, including one the corpus has no baseline for: it compares
@@ -461,6 +470,42 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   // mismatched pixels, anti-aliased pixels included).
   editor::tests::CompareBitmapToGolden(bitmap, goldenPath, "metal_solid_fill",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(MetalSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckVertexInputScene(
+      *device_,
+      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, false);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalSolidFillTest, IndexedQuadsWithOffsetsInstancingAndScissorMatchTheExpectedImage) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckIndexedDrawScene(
+      *device_,
+      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
+  const auto module = gpu::tests::BuildVertexInputModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckVertexInputScene(
+      *device_,
+      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 }  // namespace

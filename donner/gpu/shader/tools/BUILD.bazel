@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_binary")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary")
 
 # Build-time WGSL emission for shader IR programs.
 #
@@ -18,7 +18,10 @@ donner_cc_binary(
     deps = [
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:msl_emitter",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:spirv_emitter",
+        "//donner/gpu/shader:wgsl_emitter",
     ],
 )
 

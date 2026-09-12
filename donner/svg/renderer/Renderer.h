@@ -336,6 +336,9 @@ public:
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
 
+  /// Forwards bounded-resource diagnostics to the active backend.
+  [[nodiscard]] RendererResourceStats resourceStats() const override;
+
   [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
 
   /// Creates an offscreen renderer of the active backend type.

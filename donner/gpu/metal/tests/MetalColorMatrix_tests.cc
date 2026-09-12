@@ -16,10 +16,34 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/generated/ComponentTransferShader.h"
+#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
+#include "donner/gpu/shader/generated/DiffuseLightingShader.h"
+#include "donner/gpu/shader/generated/DisplacementMapShader.h"
+#include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/generated/FilterImageShader.h"
+#include "donner/gpu/shader/generated/SpecularLightingShader.h"
+#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Morphology.h"
+#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
+#include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
+#include "donner/gpu/tests/ComponentTransferSlice.h"
+#include "donner/gpu/tests/ConvolveMatrixSlice.h"
+#include "donner/gpu/tests/DisplacementMapSlice.h"
+#include "donner/gpu/tests/DropShadowSlice.h"
+#include "donner/gpu/tests/FilterImageSlice.h"
+#include "donner/gpu/tests/FloatTextureSlice.h"
+#include "donner/gpu/tests/LightingSlice.h"
+#include "donner/gpu/tests/MorphologySlice.h"
+#include "donner/gpu/tests/TileSlice.h"
+#include "donner/gpu/tests/TurbulenceSlice.h"
 
 namespace donner::gpu::metal::tests {
 namespace {
@@ -51,9 +75,7 @@ class MetalColorMatrixTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    if (!device_) {
-      GTEST_SKIP() << "No Metal device available";
-    }
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal color-matrix slice");
   }
 
   /// Unwraps an RHI result, failing the test on error.
@@ -223,6 +245,193 @@ void MetalColorMatrixTest::runColorMatrixSlice(MetalDevice::MemoryModel memoryMo
           << "texel (" << x << ", " << y << ")";
     }
   }
+}
+
+TEST_F(MetalColorMatrixTest, FloatTextureDispatchPreservesSubBytePrecision) {
+  const auto module = shader::BuildFloatStorageModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+class MetalFilterImageTest : public MetalColorMatrixTest,
+                             public testing::WithParamInterface<uint32_t> {};
+
+TEST_P(MetalFilterImageTest, GeneratedDescriptorMatchesIndependentReference) {
+  const ShaderModuleDescriptor descriptor =
+      gpu::generated::filter_image::BuildDescriptor(ShaderSourceKind::Msl);
+  ASSERT_THAT(descriptor.sourceText, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1u));
+  for (size_t sceneIndex = 0; sceneIndex < 3; ++sceneIndex) {
+    SCOPED_TRACE(testing::Message() << "sceneIndex=" << sceneIndex);
+    gpu::tests::CheckFilterImageStorage(
+        *device_, descriptor,
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, GetParam(),
+        sceneIndex);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(SmoothNearestAndPixelated, MetalFilterImageTest,
+                         testing::Values(0u, 1u, 2u));
+
+TEST_F(MetalColorMatrixTest, VectorCeilAndExpRunThroughNativeCompiler) {
+  const auto module = shader::BuildVectorCeilExpModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      {-0.5f, 0.5f, 0.0f, 1.0f}, {0.0f, 1.0f, 16.0f, 43.0f});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
+  const auto module = shader::programs::BuildTileModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  gpu::tests::CheckTileStorage(
+      *device_,
+      ShaderModuleDescriptor{"float",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             shader::ComputeEntryPointsOf(module.result()),
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
+  gpu::tests::CheckDropShadowStorage(
+      *device_, gpu::generated::drop_shadow::BuildDescriptor(ShaderSourceKind::Msl),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, DisplacementUsesGeneratedArtifactAndIndependentPixelOracle) {
+  gpu::tests::CheckDisplacementMapStorage(
+      *device_, gpu::generated::displacement_map::BuildDescriptor(ShaderSourceKind::Msl),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
+  const auto module = shader::programs::BuildGaussianBlurModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (uint32_t axis : {0u, 1u}) {
+    for (uint32_t kind : {0u, 1u, 2u}) {
+      for (uint32_t edgeMode : {0u, 1u, 2u}) {
+        SCOPED_TRACE(testing::Message()
+                     << "axis=" << axis << " kind=" << kind << " edge=" << edgeMode);
+        gpu::tests::CheckBlurStorage(
+            *device_,
+            ShaderModuleDescriptor{"float",
+                                   RcString(emitted.result()),
+                                   ShaderSourceKind::Msl,
+                                   {},
+                                   shader::ComputeEntryPointsOf(module.result()),
+                                   bindings.result()},
+            [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+            kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode);
+      }
+    }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, MorphologyPreservesErosionDilationAndFloatStorage) {
+  const auto module = shader::programs::BuildMorphologyModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  for (bool erode : {false, true}) {
+    gpu::tests::CheckMorphologyStorage(
+        *device_,
+        ShaderModuleDescriptor{"float",
+                               RcString(emitted.result()),
+                               ShaderSourceKind::Msl,
+                               {},
+                               shader::ComputeEntryPointsOf(module.result()),
+                               bindings.result()},
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, erode);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBoundaries) {
+  gpu::tests::CheckComponentTransferStorage(
+      *device_, gpu::generated::component_transfer::BuildDescriptor(ShaderSourceKind::Msl),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, TurbulencePreservesSeedsOctavesTransformsAndStitching) {
+  gpu::tests::CheckTurbulenceStorage(
+      *device_, gpu::generated::turbulence::BuildDescriptor(ShaderSourceKind::Msl),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatStorage) {
+  for (bool specular : {false, true}) {
+    const ShaderModuleDescriptor descriptor =
+        specular ? generated::specular_lighting::BuildDescriptor(device_->shaderSourceKind())
+                 : generated::diffuse_lighting::BuildDescriptor(device_->shaderSourceKind());
+    for (uint32_t lightType : {0u, 1u, 2u}) {
+      SCOPED_TRACE(testing::Message() << "specular=" << specular << " light=" << lightType);
+      gpu::tests::CheckLightingStorage(
+          *device_, descriptor,
+          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, specular,
+          lightType);
+    }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantics) {
+  const ShaderModuleDescriptor descriptor =
+      gpu::generated::convolve_matrix::BuildDescriptor(ShaderSourceKind::Msl);
+  for (uint32_t edgeMode : {0u, 1u, 2u}) {
+    for (bool preserveAlpha : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "edgeMode=" << edgeMode << " preserveAlpha=" << preserveAlpha);
+      gpu::tests::CheckConvolveMatrixStorage(
+          *device_, descriptor,
+          [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, edgeMode,
+          preserveAlpha);
+    }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {

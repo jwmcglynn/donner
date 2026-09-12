@@ -8,6 +8,7 @@
 /// struct size rounded up to the struct alignment. In the uniform address space, arrays round
 /// their element stride up to a multiple of 16, and members whose type is a struct or array
 /// round their alignment up to 16.
+/// Layouts that cannot represent a size, stride, or member offset in 32 bits fail before narrowing.
 ///
 /// The C++ mirror structs the GPU runtime uploads (e.g. the Geode encoder's Uniforms/Band/
 /// InstanceTransform) must byte-match these computed layouts; the shader tests anchor that.

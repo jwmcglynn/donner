@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/SmallVector.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/GpuLimits.h"
@@ -63,6 +64,24 @@ public:
   Status setVertexBuffer(uint32_t slot, const Buffer& buffer, uint64_t offsetBytes = 0);
 
   /**
+   * Binds \p buffer as the index buffer for subsequent \ref drawIndexed calls. The bound range
+   * runs from \p offsetBytes to the end of the buffer; binding exactly at the end is allowed and
+   * yields an empty range. Rebinding replaces the format and range for later draws only, and the
+   * binding does not survive \ref end.
+   *
+   * Fails closed with \ref GpuErrorType::Unsupported when the device cannot honor the full
+   * unsigned range of \p format (see `Device::supportsFullIndexRange`), so a 32-bit index that a
+   * driver would silently truncate is refused before any GPU work is recorded.
+   *
+   * @param buffer Buffer to bind; needs \ref BufferUsage::Index and must be a live handle of the
+   *   encoder's device.
+   * @param format Width of each index.
+   * @param offsetBytes Byte offset of the first index; must be a multiple of the index width and
+   *   within the buffer.
+   */
+  Status setIndexBuffer(const Buffer& buffer, IndexFormat format, uint64_t offsetBytes = 0);
+
+  /**
    * Sets the scissor rectangle. The rectangle must fit inside the pass attachment extent.
    *
    * @param x Left edge in pixels.
@@ -97,6 +116,37 @@ public:
    */
   Status draw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0,
               uint32_t firstInstance = 0);
+
+  /**
+   * Records an indexed draw. For each of the \p indexCount indices starting at \p firstIndex in
+   * the bound index range, vertex-stepped attributes fetch element `baseVertex + index value` and
+   * instance-stepped attributes fetch element `firstInstance + instance`; the vertex stage sees
+   * the same sums as `vertex_index` and `instance_index`.
+   *
+   * Fails closed unless a \ref PrimitiveTopology::TriangleList pipeline is set (strips would
+   * need primitive-restart semantics the backends do not share, so they are refused with
+   * \ref GpuErrorType::Unsupported), an index buffer is bound, the index range
+   * `(firstIndex + indexCount) * indexWidth` fits the bound range (checked 64-bit arithmetic),
+   * every declared vertex slot is bound, every instance-stepped slot covers
+   * `firstInstance + instanceCount` elements, and every bind group index the pipeline layout
+   * declares holds a group created against that layout.
+   *
+   * Vertex-stepped ranges are NOT validated here: the element reached is `baseVertex + index
+   * value`, and index values live in GPU memory. Keeping every `baseVertex + value` inside the
+   * bound vertex buffers is the caller's responsibility; what an out-of-range vertex fetch
+   * returns, and whether the backend reports it, is backend-dependent and outside this contract.
+   *
+   * A zero \p indexCount or \p instanceCount is recorded like `draw` records zero counts; the
+   * range checks still apply and backends issue no native draw for it.
+   *
+   * @param indexCount Number of indices read.
+   * @param instanceCount Number of instances.
+   * @param firstIndex First index read, relative to the bound offset.
+   * @param baseVertex Signed value added to every index value before the vertex fetch.
+   * @param firstInstance First instance index.
+   */
+  Status drawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0,
+                     int32_t baseVertex = 0, uint32_t firstInstance = 0);
 
   /// Ends the render pass. Further pass operations fail with
   /// \ref GpuErrorType::InvalidState until a new pass begins.
@@ -265,17 +315,28 @@ private:
 
   /// Draw-time validation state for the active pipeline.
   struct BoundPipeline {
-    std::vector<VertexBufferLayout> vertexBuffers;     //!< Declared vertex layouts.
-    std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Required group layouts.
+    std::vector<VertexBufferLayout> vertexBuffers;                 //!< Declared vertex layouts.
+    std::vector<ResourceIdentity> bindGroupLayoutIds;              //!< Required group layouts.
+    PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Declared topology.
+    /// Inline range requirements retained when a pipeline is selected. Sized for one group's
+    /// worth of bindings, which covers every pipeline this runtime accepts today; a pipeline
+    /// that declared bindings across more groups spills to the heap once at setPipeline rather
+    /// than carrying kMaxBindGroups * kMaxBindings inline in every encoder.
+    SmallVector<Device::PipelineBufferRequirement, kMaxBindings> bufferRequirements;
   };
   /// Draw-time validation state for one bound vertex buffer slot.
   struct BoundVertexBuffer {
     uint32_t bufferSlot = 0;      //!< Buffer slot index.
     uint64_t bytesAvailable = 0;  //!< Bytes from the bound offset to the end of the buffer.
   };
+  /// Draw-time validation state for the bound index buffer.
+  struct BoundIndexBuffer {
+    IndexFormat format = IndexFormat::Uint16;  //!< Width of each index.
+    uint64_t bytesAvailable = 0;  //!< Bytes from the bound offset to the end of the buffer.
+  };
   /// Draw-time validation state for one bound bind group index.
   struct BoundBindGroup {
-    uint32_t bindGroupSlot = 0;       //!< Bind group slot index.
+    ResourceIdentity identity;        //!< Bound group slot and generation.
     ResourceIdentity layoutIdentity;  //!< Layout the group was created against.
   };
 
@@ -288,18 +349,55 @@ private:
   ///   operation only requires a usable encoder.
   std::optional<GpuError> checkRecordable(PassKind requiredPass);
 
-  /// Verifies that every bind group index the bound pipeline layout declares holds a group
-  /// created against the same layout. Shared by draw and dispatch.
+  /// Revalidates the bound groups at use time, shared by draw and dispatch. Verifies that every
+  /// bind group index the bound pipeline layout declares holds a live group created against that
+  /// layout, re-resolves every entry of those groups so a destroyed or recycled resource fails
+  /// here rather than during backend encoding, and rejects one texture reached as both a sampled
+  /// and a storage-write binding across the groups the active pipeline uses.
+  ///
+  /// Then validates that every buffer range the active pipeline declared a minimum size for is
+  /// at least that large at the moment it is used.
+  ///
+  /// This runs per draw rather than only at setBindGroup because a resource can be destroyed
+  /// between binding and use without changing any group's identity, which is the case the
+  /// generation check exists to catch. It therefore cannot be cached across draws.
   /// @param operation Operation name for diagnostics, e.g. `"draw"`.
   Status validateBoundBindGroups(std::string_view operation);
+
+  /// One bound group and the layout it was created against, both resolved and revalidated.
+  struct ResolvedBindGroup {
+    const Device::BindGroupRecord* group = nullptr;         //!< Live bind group record.
+    const Device::BindGroupLayoutRecord* layout = nullptr;  //!< Layout it was created against.
+  };
+
+  /// Revalidates one required group for this draw or dispatch: the group and its layout are still
+  /// live, the layout is the one the pipeline expects, and every entry still resolves. Returns
+  /// both records so the caller does not look the layout up a second time. They remain live for
+  /// the rest of the validation under the device's thread affinity.
+  /// @param index Required group index. @param operation Operation name for diagnostics.
+  Result<ResolvedBindGroup> validateBoundBindGroup(uint32_t index, std::string_view operation);
+
+  /// Checks active declared buffer ranges after group and resource lifetime validation.
+  /// @param operation Draw or dispatch name for the diagnostic.
+  Status validateBoundBufferRanges(std::string_view operation);
 
   /// Resets the per-pass binding state a begin or end transitions through.
   void resetPassBindings();
 
+  /// Whether a re-resolution also rejects a texture that aliases an active color attachment.
+  /// Only an operation that uses the group applies the check; binding one does not.
+  enum class AttachmentAliasPolicy {
+    Ignore,  //!< Re-resolve only. Used when a group is bound.
+    Reject,  //!< Also reject an alias with an active color attachment. Used at draw and dispatch.
+  };
+
   /// Re-resolves the resource one bind group entry references, failing closed when it was
   /// destroyed after the group was created.
   /// @param entry Entry to re-resolve.
-  Status revalidateBindGroupEntry(const BindGroupEntry& entry);
+  /// @param operation Operation name for diagnostics, e.g. `"draw"` or `"setBindGroup"`.
+  /// @param attachmentAlias Whether to also reject an active color-attachment alias.
+  Status revalidateBindGroupEntry(const BindGroupEntry& entry, std::string_view operation,
+                                  AttachmentAliasPolicy attachmentAlias);
 
   /// Validates that a texture-to-texture copy's operands are distinct, share a format, and carry
   /// the CopySrc / CopyDst usages.
@@ -336,12 +434,28 @@ private:
   Status passSetPipeline(const RenderPipeline& pipeline);
   Status passSetBindGroup(uint32_t index, const BindGroup& bindGroup);
   Status passSetVertexBuffer(uint32_t slot, const Buffer& buffer, uint64_t offsetBytes);
+  Status passSetIndexBuffer(const Buffer& buffer, IndexFormat format, uint64_t offsetBytes);
   Status passSetScissorRect(uint32_t x, uint32_t y, uint32_t width, uint32_t height);
   Status passSetViewport(float x, float y, float width, float height, float minDepth,
                          float maxDepth);
   Status passDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex,
                   uint32_t firstInstance);
+  Status passDrawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex,
+                         int32_t baseVertex, uint32_t firstInstance);
   Status passEnd();
+
+  /// Shared by draw and drawIndexed: every declared vertex slot is bound, and each slot whose
+  /// range is knowable from the call alone covers `[first, first + count)` elements. For
+  /// \p checkVertexSlots false only instance-stepped slots are ranged, because an indexed draw's
+  /// vertex range depends on index values the host never reads.
+  /// @param operation Operation name for diagnostics.
+  /// @param firstVertex First vertex, used for vertex-stepped slots.
+  /// @param vertexCount Vertex count, used for vertex-stepped slots.
+  /// @param firstInstance First instance, used for instance-stepped slots.
+  /// @param instanceCount Instance count, used for instance-stepped slots.
+  /// @param checkVertexSlots Whether vertex-stepped slots are range-checked.
+  Status validateVertexSlots(std::string_view operation, uint64_t firstVertex, uint64_t vertexCount,
+                             uint64_t firstInstance, uint64_t instanceCount, bool checkVertexSlots);
 
   // ComputePassEncoder forwards to these.
   Status computePassSetPipeline(const ComputePipeline& pipeline);
@@ -359,9 +473,16 @@ private:
 
   Extent2d passExtent_;
   std::vector<TextureFormat> passAttachmentFormats_;
+  std::vector<ResourceIdentity> passAttachmentTextures_;
   std::optional<BoundPipeline> currentPipeline_;
   std::array<std::optional<BoundVertexBuffer>, kMaxVertexBuffers> boundVertexBuffers_;
+  std::optional<BoundIndexBuffer> boundIndexBuffer_;
   std::array<std::optional<BoundBindGroup>, kMaxBindGroups> boundBindGroups_;
+
+  /// Reused across draws so the per-draw texture-role check does not allocate. Cleared at the
+  /// start of every validation; capacity is retained for the rest of the encoder's life.
+  SmallVector<Device::BoundTextureBinding, kMaxBindings> sampledTextureScratch_;
+  SmallVector<Device::BoundTextureBinding, kMaxBindings> storageTextureScratch_;
 };
 
 }  // namespace donner::gpu

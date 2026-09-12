@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -29,6 +28,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -118,20 +118,32 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
                c.bufferWriteBytes, c.textureWriteBytes);
 }
 
-/// Read a file from disk. Returns the empty string on any I/O error -
-/// callers treat that as "fixture not available" and skip.
-std::string readFile(const std::string& path) {
-  std::ifstream f(path);
-  if (!f) {
-    return {};
-  }
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  return ss.str();
+/// Render one frame and include its isolated snapshot cost in the returned test sample.
+geode::GeodeCounters renderAndCaptureCounters(RendererGeode& renderer, SVGDocument& document) {
+  (void)renderer.consumeReadbackStats();
+  renderer.draw(document);
+
+  // Capture has its own context and counters. Include its work in these
+  // aggregate ceilings without attributing it to the producer's frame.
+  EXPECT_FALSE(renderer.takeSnapshot().empty());
+  const RendererReadbackStats readback = renderer.consumeReadbackStats();
+  EXPECT_EQ(readback.count, 1);
+  EXPECT_EQ(readback.captureCancellations, 0u);
+  EXPECT_EQ(readback.captureTimeouts, 0u);
+  EXPECT_FALSE(readback.deviceLost);
+  EXPECT_EQ(readback.submits, 1u);
+  EXPECT_EQ(readback.bindgroupCreates, 1u);
+
+  geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+  counters.bufferCreates += readback.bufferCreates;
+  counters.textureCreates += readback.textureCreates;
+  counters.bindgroupCreates += readback.bindgroupCreates;
+  counters.submits += readback.submits;
+  return counters;
 }
 
 /// Fully render `svgSource` through a RendererGeode backed by a shared
-/// device, then return the per-frame counters.
+/// device, then return the combined frame and snapshot-readback counters.
 ///
 /// `RendererGeode::draw()` internally drives its own `beginFrame` →
 /// traversal → `endFrame` cycle using the SVG's own viewBox dimensions,
@@ -148,13 +160,7 @@ geode::GeodeCounters renderAndGetCounters(std::string_view svgSource,
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);
-  renderer.draw(document);
-
-  // `takeSnapshot()` allocates a readback buffer + issues its own submit.
-  // Include it so steady-state cost isn't hidden.
-  (void)renderer.takeSnapshot();
-
-  return renderer.lastFrameTimings().counters;
+  return renderAndCaptureCounters(renderer, document);
 }
 
 class GeodePerfTest : public ::testing::Test {
@@ -358,6 +364,95 @@ TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   EXPECT_LE(c.submits, 3u);
 }
 
+/// Inline fixtures: the same document with one and with three `feFlood` primitives, so the
+/// per-flood cost can be read off as a difference and the rest of the scene cancels.
+constexpr std::string_view kOneFloodSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feFlood flood-color="red"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="green" filter="url(#f)"/>
+</svg>
+)SVG";
+
+constexpr std::string_view kThreeFloodSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feFlood flood-color="red"/><feFlood flood-color="blue"/><feFlood flood-color="lime"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="green" filter="url(#f)"/>
+</svg>
+)SVG";
+
+/// A filter pass recorded through the GPU runtime must report its bind group once.
+///
+/// The runtime counts the bind group it creates, so the arena counting the same one again reports
+/// every migrated pass as building two and walks the steady-state ceilings up by the number of
+/// migrated passes in the scene.
+TEST_F(GeodePerfTest, MigratedFilterPassesCountTheirBindGroupsOnce) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // One for the flood pass itself and one for the subregion clip that follows it.
+  constexpr uint64_t kBindGroupsPerFloodNode = 2;
+  constexpr uint64_t kAddedFloodNodes = 2;
+
+  const geode::GeodeCounters one = renderAndGetCounters(kOneFloodSvg, device);
+  const geode::GeodeCounters three = renderAndGetCounters(kThreeFloodSvg, device);
+  printCounters("OneFlood", one);
+  printCounters("ThreeFlood", three);
+
+  EXPECT_EQ(three.bindgroupCreates - one.bindgroupCreates,
+            kAddedFloodNodes * kBindGroupsPerFloodNode)
+      << "two more feFlood nodes must report two more bind groups each, not three";
+}
+
+/// Inline fixtures: the same document with one and with eight `feColorMatrix` primitives. Every
+/// one of them is a pass recorded through the GPU runtime, so the difference between the two is
+/// what a migrated pass costs per frame.
+constexpr std::string_view kOneColorMatrixSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feColorMatrix type="saturate" values="0.3"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG";
+
+constexpr std::string_view kEightColorMatrixSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feColorMatrix type="saturate" values="0.3"/><feColorMatrix type="saturate" values="0.4"/>
+    <feColorMatrix type="saturate" values="0.5"/><feColorMatrix type="saturate" values="0.6"/>
+    <feColorMatrix type="saturate" values="0.7"/><feColorMatrix type="saturate" values="0.8"/>
+    <feColorMatrix type="saturate" values="0.9"/><feColorMatrix type="saturate" values="0.2"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG";
+
+/// Buffer creations on a repeat render of \p svgSource, on a device of its own so the first frame
+/// absorbs everything the pools allocate once.
+/// @param svgSource Document to render twice.
+uint64_t steadyStateBufferCreates(std::string_view svgSource) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  if (!device) {
+    ADD_FAILURE() << "GeodeDevice::CreateHeadless failed";
+    return 0;
+  }
+  (void)renderAndGetCounters(svgSource, device);
+  return renderAndGetCounters(svgSource, device).bufferCreates;
+}
+
+/// A frame's cost in buffer allocations must not scale with the number of migrated filter passes.
+///
+/// The passes recorded through the GPU runtime cannot bind the backend uniform scratch the
+/// unmigrated ones bump-allocate from. Bringing a buffer per pass instead puts an allocation on
+/// every filter primitive of every frame, which is the cost the scratch exists to avoid.
+TEST_F(GeodePerfTest, MigratedFilterPassesShareOneUniformScratch) {
+  const uint64_t one = steadyStateBufferCreates(kOneColorMatrixSvg);
+  const uint64_t eight = steadyStateBufferCreates(kEightColorMatrixSvg);
+
+  EXPECT_EQ(eight, one) << "seven more feColorMatrix primitives must not cost a buffer each on a "
+                           "repeat render";
+}
+
 TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device);
@@ -384,20 +479,16 @@ TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
 
 // ---------------------------------------------------------------------------
 // Fixture: lion.svg - the workhorse SVG used across Donner test suites.
-// Skipped gracefully if the file is not bundled (e.g. unit test run without
-// testdata deps).
 // ---------------------------------------------------------------------------
 
 TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable - ensure the test target "
-                 << "has testdata as a data dep.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/lion.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   geode::GeodeCounters c = renderAndGetCounters(svg, device);
 
@@ -523,20 +614,14 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 
   // First frame. `draw()` internally manages beginFrame/endFrame using
   // the document's viewBox dimensions (200×200 for kSimpleShapesSvg).
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
-
-  const auto firstCounters = renderer.lastFrameTimings().counters;
+  const auto firstCounters = renderAndCaptureCounters(renderer, document);
   EXPECT_GT(firstCounters.pathEncodes, 0u);  // Sanity: something happened.
 
   // Second frame: same document, same size. Counters reset in beginFrame
   // and should accumulate only this frame's work. Render targets are
   // reused across same-size frames, so the second
   // frame's textureCreates should be strictly smaller.
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
-
-  const auto secondCounters = renderer.lastFrameTimings().counters;
+  const auto secondCounters = renderAndCaptureCounters(renderer, document);
 
   // Second-frame counters are strictly this-frame only (beginFrame
   // resets). With `GeodePathCacheComponent` in place, an unchanged
@@ -566,7 +651,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 // ---------------------------------------------------------------------------
 
 /// Helper: two consecutive renders of the same document, returning only
-/// the SECOND frame's counters. Used by the zero-encode assertions.
+/// the SECOND frame's combined render/capture counters. Used by the zero-encode assertions.
 geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
                                              const std::shared_ptr<geode::GeodeDevice>& device) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
@@ -578,14 +663,11 @@ geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
+  (void)renderAndCaptureCounters(renderer, document);
   // First-frame counters intentionally discarded - we only care about the
   // steady-state second frame.
 
-  renderer.draw(document);
-  (void)renderer.takeSnapshot();
-  return renderer.lastFrameTimings().counters;
+  return renderAndCaptureCounters(renderer, document);
 }
 
 TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
@@ -644,12 +726,10 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable - ensure the test target "
-                 << "has testdata as a data dep.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/lion.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("Lion_NoDirtyPath_ZeroEncodes (frame2)", c);
@@ -684,12 +764,10 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable - ensure the "
-                 << "test target has testdata as a data dep.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("GhostscriptTiger_NoDirtyPath_ZeroEncodes (frame2)", c);
@@ -817,11 +895,10 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/lion.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("Lion_NoDirtyPath_ZeroTextures (frame2)", c);
@@ -833,11 +910,10 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("GhostscriptTiger_NoDirtyPath_ZeroTextures (frame2)", c);

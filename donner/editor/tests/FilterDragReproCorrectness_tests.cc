@@ -55,9 +55,7 @@ MATCHER(SingleTargetDragUsedFastPath, "") {
 TEST(FilterDragReproCorrectnessTest, ReplayReSelectsAndHitsFastPathWhenEligible) {
   FilterDragReproResult r;
   RunFilterDragReproScenario(&r, FilterDragReproReplayMode::CompactCorrectness);
-  if (r.skipped) {
-    GTEST_SKIP() << "Required data files not available in runfiles";
-  }
+  ASSERT_FALSE(HasFatalFailure());
 
   // Selection invariant: after the first mouse-up, ONE element must be
   // selected (the first drag's target). The second mouse-down in the
