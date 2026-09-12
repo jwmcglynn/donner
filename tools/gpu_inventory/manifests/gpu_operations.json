@@ -1100,6 +1100,66 @@
         "Texture"
       ]
     },
+    "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc": {
+      "operations": [
+        "beginComputePass",
+        "copyTextureToBuffer",
+        "createBindGroup",
+        "createBuffer",
+        "createCommandEncoder",
+        "createComputePipeline",
+        "createShaderModule",
+        "createTexture",
+        "createView",
+        "dispatchWorkgroups",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "setBindGroup",
+        "setPipeline",
+        "submit",
+        "unmap",
+        "writeBuffer"
+      ],
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "BindGroup",
+        "BindGroupDescriptor",
+        "BindGroupEntry",
+        "BindGroupLayout",
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CallbackMode",
+        "CommandBuffer",
+        "CommandEncoder",
+        "ComputePassEncoder",
+        "ComputePipeline",
+        "ComputePipelineDescriptor",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "ShaderModule",
+        "ShaderModuleDescriptor",
+        "ShaderSourceWGSL",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
+      ]
+    },
     "donner/svg/renderer/geode/tests/GeodeSnapshotReadback_tests.cc": {
       "operations": [
         "createTexture",

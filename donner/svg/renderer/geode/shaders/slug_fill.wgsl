@@ -665,15 +665,35 @@ fn load_v_curve(paint: PaintParams, index: u32) -> Quadratic {
   return q;
 }
 
-// Solve at² + bt + c = 0 for roots in [0, 1]. Returns two t values; invalid
-// roots are set to -1. Numerically-stable Citardauq form (matches the Slug
-// reference): dividing by the larger-magnitude root avoids catastrophic
-// cancellation when |4ac| << b².
-fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
+// Solve a monotone quadratic axis at an owned sample. Endpoint identity must survive
+// coefficient rounding, and only an exactly linear polynomial may use a linear solve.
+fn solve_quadratic(start: f32, control: f32, end: f32, sample: f32) -> vec2f {
   var roots = vec2f(-1.0, -1.0);
+  if (!all(abs(vec4f(start, control, end, sample)) <= vec4f(3.402823466e38))) {
+    return roots;
+  }
+  if (sample == start) {
+    return vec2f(0.0, -1.0);
+  }
+  if (sample == end) {
+    return vec2f(1.0, -1.0);
+  }
 
-  if (abs(a) < 1e-4) {
-    if (abs(b) > 1e-6) {
+  var a = (start - control) + (end - control);
+  var b = 2.0 * (control - start);
+  var c = start - sample;
+  if (!all(abs(vec3f(a, b, c)) <= vec3f(3.402823466e38))) {
+    return roots;
+  }
+  let coefficient_scale = max(max(abs(a), abs(b)), abs(c));
+  // Rescale extreme coefficients before squaring to avoid overflow and underflow.
+  if (coefficient_scale > 1e15 || (coefficient_scale > 0.0 && coefficient_scale < 1e-15)) {
+    a = a / coefficient_scale;
+    b = b / coefficient_scale;
+    c = c / coefficient_scale;
+  }
+  if (a == 0.0) {
+    if (b != 0.0) {
       let t = -c / b;
       if (t >= 0.0 && t <= 1.0) {
         roots.x = t;
@@ -683,15 +703,20 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
   }
 
   let disc = b * b - 4.0 * a * c;
-  if (disc < 0.0) {
+  if (!(disc >= 0.0)) {
     return roots;
   }
-
   let sqrt_disc = sqrt(disc);
   let q = -0.5 * (b + select(-sqrt_disc, sqrt_disc, b >= 0.0));
+  if (q == 0.0) {
+    let t = -b * (0.5 / a);
+    if (t >= 0.0 && t <= 1.0) {
+      roots.x = t;
+    }
+    return roots;
+  }
   let t0 = q / a;
-  let t1 = select(c / q, (-b + sqrt_disc) * (0.5 / a), abs(q) < 1e-30);
-
+  let t1 = c / q;
   if (t0 >= 0.0 && t0 <= 1.0) {
     roots.x = t0;
   }
@@ -708,7 +733,7 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
 // curve in the band we solve for the t where the curve's Y equals sample.y,
 // evaluate the X distance from the pixel center, scale to pixels, and
 // accumulate `saturate(r + 0.5)` signed by the crossing direction (sign of
-// dy/dt - a downward crossing winds +1, upward −1, matching the integer
+// end.y - start.y - a downward crossing winds +1, upward −1, matching the integer
 // `curve_winding` convention). The weight is `saturate(1 - 2|r|)`, reduced
 // over the band via `max`.
 //
@@ -755,10 +780,7 @@ fn accumulateHoriz(paint: PaintParams, slot: u32, sample: vec2f, ppemX: f32) -> 
     if (!owns_axis_sample(curve.p0.y, curve.p2.y, sample.y)) {
       continue;
     }
-    let a = curve.p0.y - 2.0 * curve.p1.y + curve.p2.y;
-    let b = 2.0 * (curve.p1.y - curve.p0.y);
-    let c = curve.p0.y - sample.y;
-    let roots = solve_quadratic(a, b, c);
+    let roots = solve_quadratic(curve.p0.y, curve.p1.y, curve.p2.y, sample.y);
     for (var k = 0; k < 2; k = k + 1) {
       let t = select(roots.y, roots.x, k == 0);
       if (t < 0.0) {
@@ -768,9 +790,8 @@ fn accumulateHoriz(paint: PaintParams, slot: u32, sample: vec2f, ppemX: f32) -> 
       let x = omt * omt * curve.p0.x + 2.0 * omt * t * curve.p1.x + t * t * curve.p2.x;
       // Signed pixel distance of the crossing from the pixel center along +X.
       let r = (x - sample.x) * ppemX;
-      let dy_dt = 2.0 * omt * (curve.p1.y - curve.p0.y) + 2.0 * t * (curve.p2.y - curve.p1.y);
-      // Winding sign: +1 for a downward (increasing-Y) crossing.
-      let s = select(-1.0, 1.0, dy_dt >= 0.0);
+      // Endpoint order preserves winding when the tangent derivative is zero.
+      let s = select(-1.0, 1.0, curve.p2.y > curve.p0.y);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
       result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
@@ -798,10 +819,7 @@ fn accumulateVert(paint: PaintParams, slot: u32, sample: vec2f, ppemY: f32) -> R
       continue;
     }
     // Solve for the t where the curve's X equals sample.x.
-    let a = curve.p0.x - 2.0 * curve.p1.x + curve.p2.x;
-    let b = 2.0 * (curve.p1.x - curve.p0.x);
-    let c = curve.p0.x - sample.x;
-    let roots = solve_quadratic(a, b, c);
+    let roots = solve_quadratic(curve.p0.x, curve.p1.x, curve.p2.x, sample.x);
     for (var k = 0; k < 2; k = k + 1) {
       let t = select(roots.y, roots.x, k == 0);
       if (t < 0.0) {
@@ -811,13 +829,8 @@ fn accumulateVert(paint: PaintParams, slot: u32, sample: vec2f, ppemY: f32) -> R
       let y = omt * omt * curve.p0.y + 2.0 * omt * t * curve.p1.y + t * t * curve.p2.y;
       // Signed pixel distance of the crossing from the pixel center along +Y.
       let r = (y - sample.y) * ppemY;
-      let dx_dt = 2.0 * omt * (curve.p1.x - curve.p0.x) + 2.0 * t * (curve.p2.x - curve.p1.x);
-      // Winding sign: +1 for a rightward (increasing-X) crossing. The vertical
-      // ray's winding must agree with the horizontal ray's so the combine
-      // blends like-signed coverage. A +X crossing at increasing X corresponds
-      // to a +Y boundary on the perpendicular ray, so we negate to match the
-      // horizontal convention (downward = positive).
-      let s = select(1.0, -1.0, dx_dt >= 0.0);
+      // Endpoint order preserves winding when the tangent derivative is zero.
+      let s = select(1.0, -1.0, curve.p2.x > curve.p0.x);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
       result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);

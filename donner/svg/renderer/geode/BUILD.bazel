@@ -769,6 +769,15 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_shaders",
+        ":geode_gpu_wait",
+        ":geode_wgpu_util",
+        ":slug_fill_wgsl",
+        ":slug_gradient_wgsl",
+        ":slug_mask_wgsl",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:wgsl_emitter",
+        "//third_party/webgpu-cpp:webgpu_cpp",
         "//donner/base:gtest_timeout_main",
     ],
 )
