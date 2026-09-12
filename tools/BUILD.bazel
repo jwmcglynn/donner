@@ -155,6 +155,16 @@ py_test(
 )
 
 py_test(
+    name = "check_python_quality_tests",
+    size = "small",
+    srcs = [
+        "check_python_quality.py",
+        "check_python_quality_tests.py",
+    ],
+    imports = ["."],
+)
+
+py_test(
     name = "verify_metal_validation_tests",
     size = "small",
     imports = ["."],
