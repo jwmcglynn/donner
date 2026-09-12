@@ -387,7 +387,7 @@ jobs:
           while IFS= read -r path; do
             [[ -z "$path" ]] && continue
             case "$path" in
-              MODULE.bazel|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*)
+              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*)
                 echo "Infra change requires full //... coverage: $path"
                 should_fallback=true
                 break
