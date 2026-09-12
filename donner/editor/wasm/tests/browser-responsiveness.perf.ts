@@ -205,7 +205,7 @@ test(
       await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
       await expect.poll(async () => {
         const state = await snapshot(page);
-        return state.worker?.completedResults! > (beforeSample.worker?.completedResults ?? 0)
+        return (state.worker?.completedResults ?? 0) > (beforeSample.worker?.completedResults ?? 0)
           && state.worker?.presentedAtMs !== undefined;
       }, { timeout: 20000, message: "the clicked sample must reach a presenting frame" }).toBe(
         true,
