@@ -17,8 +17,6 @@ jobs:
     timeout-minutes: 45
     env:
       CAPTURE_SOURCE_SHA: "26a16375a37c83c4a137b55fd8adc2d0e64cd936"
-      CAPTURE_ROOT: ${{ runner.temp }}/donner-paravirtual-baseline-${{ github.run_id }}-${{ github.run_attempt }}
-      CAPTURE_EVIDENCE: ${{ runner.temp }}/donner-paravirtual-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
       MTL_DEBUG_LAYER: "1"
       MTL_SHADER_VALIDATION: "1"
@@ -39,9 +37,12 @@ jobs:
           persist-credentials: false
 
       - name: Verify the source and initialize bounded evidence
+        id: paths
         shell: bash
         run: |
           set -euo pipefail
+          CAPTURE_ROOT="$RUNNER_TEMP/donner-paravirtual-baseline-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          CAPTURE_EVIDENCE="$RUNNER_TEMP/donner-paravirtual-evidence-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           actual_revision=$(git rev-parse HEAD)
           source_status=$(git status --porcelain --untracked-files=all)
           if [[ "$actual_revision" != "$CAPTURE_SOURCE_SHA" || -n "$source_status" ]]; then
@@ -56,6 +57,8 @@ jobs:
           source_tree=$(git rev-parse 'HEAD^{tree}')
           printf 'source_revision=%s\nsource_tree=%s\nsource_tree_clean=clean\n' \
             "$actual_revision" "$source_tree" > "$CAPTURE_EVIDENCE/checkout-initial.txt"
+          printf 'CAPTURE_ROOT=%s\nCAPTURE_EVIDENCE=%s\n' \
+            "$CAPTURE_ROOT" "$CAPTURE_EVIDENCE" >> "$GITHUB_ENV"
 
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
@@ -265,7 +268,7 @@ jobs:
           echo "Canonical paravirtual captures completed; review the captured images before updating baselines." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload validated canonical captures
-        if: steps.capture.outcome == 'success'
+        if: steps.paths.outcome == 'success' && steps.capture.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: paravirtual-baseline-capture-${{ github.run_id }}-${{ github.run_attempt }}
@@ -274,7 +277,7 @@ jobs:
           retention-days: 7
 
       - name: Upload capture evidence
-        if: always()
+        if: always() && steps.paths.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: paravirtual-baseline-evidence-${{ github.run_id }}-${{ github.run_attempt }}
