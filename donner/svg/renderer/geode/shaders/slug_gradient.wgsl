@@ -1,7 +1,7 @@
 // Slug gradient-fill: analytic dual-ray coverage at 1 sample/pixel.
 //
 // Parallel to slug_fill.wgsl (see that file for the full analytic-AA
-// commentary, 0041 §1/§8) but the fragment evaluates a linear/radial gradient
+// commentary) but the fragment evaluates a linear/radial gradient
 // at the pixel center instead of a solid color, then folds the analytic
 // coverage into the premultiplied output. Single convex bounding fan + dense H/V
 // band grids → no band-seam double-count.
@@ -37,7 +37,7 @@ struct GradientUniforms {
   hasClipMask: u32,
   antialias: u32,
   _clipPad2: u32,
-  // Band-grid parameters (0041 §8.1). Two vec4-aligned rows.
+  // Band-grid parameters occupy two vec4-aligned rows.
   yBase: f32,
   hStride: f32,
   hBandCount: u32,
@@ -65,7 +65,7 @@ struct Band {
 @group(0) @binding(2) var<storage, read> curveData: array<f32>;
 @group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(4) var clipMaskSampler: sampler;
-// Vertical bands/curves + dense band grids (analytic dual-ray, 0041 §8).
+// Vertical bands, curves, and dense grids support the second analytic ray.
 @group(0) @binding(5) var<storage, read> vBands: array<Band>;
 @group(0) @binding(6) var<storage, read> vCurveData: array<f32>;
 @group(0) @binding(7) var<storage, read> hBandGrid: array<u32>;

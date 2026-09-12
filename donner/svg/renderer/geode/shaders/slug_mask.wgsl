@@ -19,7 +19,7 @@ struct Uniforms {
   viewport: vec2f,
   fillRule: u32,
   hasClipMask: u32,
-  // Band-grid parameters (0041 §8.1). Two vec4-aligned rows.
+  // Band-grid parameters occupy two vec4-aligned rows.
   yBase: f32,
   hStride: f32,
   hBandCount: u32,
@@ -489,7 +489,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   }
 
   // Write the scalar coverage to all four channels; BlendOperation::Max unions
-  // overlapping clip-path draws (0041 §8.3).
+  // overlapping clip-path draws.
   var out: FragOutput;
   out.color = vec4f(coverage, coverage, coverage, coverage);
   return out;
