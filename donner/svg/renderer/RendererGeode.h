@@ -498,6 +498,9 @@ public:
   void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits,
                                               std::size_t maximumGlyphOccurrences);
 
+  /// Inject a sticky device loss so tests can verify renderer recovery and pooled-device disposal.
+  void injectDeviceLossForTesting();
+
   /// Fail one scene preparation after the requested number of successful preparations.
   void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
 
