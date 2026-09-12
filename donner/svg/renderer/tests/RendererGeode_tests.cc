@@ -449,10 +449,34 @@ TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
   }
 }
 
+TEST_F(RendererGeodeTest, LostHeadlessDeviceIsNotReused) {
+  const auto render = [this](RendererGeode& renderer) {
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+  RendererGeode reference = createRenderer();
+  const auto expected = render(reference);
+  ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(64, 64)));
+  {
+    RendererGeode failed;
+    editor::tests::CompareBitmapToBitmap(render(failed), expected, "pool_before_device_loss",
+                                         editor::tests::PixelmatchIdentityParams());
+    failed.injectDeviceLossForTesting();
+    ASSERT_THAT(failed.deviceLost(), testing::IsTrue());
+  }
+  RendererGeode recovered;
+  EXPECT_THAT(recovered.deviceLost(), testing::IsFalse());
+  editor::tests::CompareBitmapToBitmap(render(recovered), expected, "pool_after_device_loss",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
   using namespace components;
   constexpr uint32_t kWidth = 1024;
-  constexpr uint32_t kHeight = 768;
+  constexpr uint32_t kHeight = 64;
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_TRUE(device);
   RendererGeode renderer(device);
@@ -479,6 +503,10 @@ TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
   const Box2d region({0, 0}, {kWidth, kHeight});
   const auto admitted = device->filterEngine().executionPlan(outer, kWidth, kHeight, Transform2d());
   ASSERT_GT(admitted.tiles, 1u);
+  ASSERT_EQ(admitted.tileHeight, kHeight);
+  ASSERT_EQ(admitted.coreHeight, kHeight);
+  ASSERT_LT(admitted.coreWidth, kWidth);
+  ASSERT_GT(admitted.tileWidth, admitted.coreWidth);
   renderer.pushFilterLayer(outer, region);
   const uint64_t before = device->filterEngine().retainedBufferBytes();
   renderer.pushFilterLayer(inner, region);
@@ -506,12 +534,12 @@ TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
 }
 
 TEST_F(RendererGeodeTest, LargeBlurStripTilesMatchUntiledPixels) {
-  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="768" height="640">
-    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="768" height="640">
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="768" height="64">
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="768" height="64">
       <feGaussianBlur stdDeviation="96"/>
     </filter></defs><g filter="url(#f)">
-      <rect width="317" height="640" fill="#3973ad" opacity="0.7"/>
-      <rect x="280" y="132" width="450" height="265" fill="#b75d23" opacity="0.4"/>
+      <rect width="317" height="64" fill="#3973ad" opacity="0.7"/>
+      <rect x="280" y="13.2" width="450" height="26.5" fill="#b75d23" opacity="0.4"/>
     </g></svg>)svg";
   std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
   std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
@@ -528,6 +556,17 @@ TEST_F(RendererGeodeTest, LargeBlurStripTilesMatchUntiledPixels) {
   RendererGeode tiled(tiledDevice);
   reference.draw(referenceDocument.result());
   tiled.draw(tiledDocument.result());
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = 96, .stdDeviationY = 96};
+  graph.nodes.push_back(blur);
+  const auto plan = tiledDevice->filterEngine().executionPlan(graph, 768, 64, Transform2d());
+  ASSERT_EQ(plan.tileHeight, 64u);
+  ASSERT_EQ(plan.coreHeight, 64u);
+  ASSERT_LT(plan.coreWidth, 768u);
+  ASSERT_GT(plan.tileWidth, plan.coreWidth);
+  ASSERT_GT(plan.tiles, 1u);
   EXPECT_FALSE(reference.resourceStats().filterBudgetRejected);
   EXPECT_FALSE(tiled.resourceStats().filterBudgetRejected);
   ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
