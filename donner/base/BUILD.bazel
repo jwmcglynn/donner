@@ -124,14 +124,19 @@ donner_cc_library(
     testonly = 1,
     hdrs = [
         "tests/BaseTestUtils.h",
+        "tests/ContinuousIntegrationMarkers.h",
+        "tests/EnvironmentCapabilityGate.h",
         "tests/ParseResultTestUtils.h",
+        "tests/RunfileGate.h",
         "tests/Runfiles.h",
+        "tests/ScopedEnvironmentVariable.h",
         "tests/TestTempDir.h",
     ],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene
     # helpers (TestTempDir) as //donner tests.
     visibility = donner_internal_visibility() + ["//tools:__subpackages__"],
     deps = [
+        ":base",
         "@com_google_gtest//:gtest",
         "@rules_cc//cc/runfiles",
     ],
@@ -183,7 +188,9 @@ donner_cc_test(
         "tests/Box_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
+        "tests/ContinuousIntegrationMarkers_tests.cc",
         "tests/DiagnosticRenderer_tests.cc",
+        "tests/EnvironmentCapabilityGate_tests.cc",
         "tests/FileUtils_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
@@ -196,6 +203,7 @@ donner_cc_test(
         "tests/Path_tests.cc",
         "tests/RcStringOrRef_tests.cc",
         "tests/RcString_tests.cc",
+        "tests/RunfileGate_tests.cc",
         "tests/Runfiles_tests.cc",
         "tests/SmallVector_tests.cc",
         "tests/StringUtils_tests.cc",
@@ -251,6 +259,25 @@ donner_cc_test(
     copts = [
         "-fexceptions",
     ],
+    deps = [
+        ":base",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+config_setting(
+    name = "gcc_compiler",
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "gcc"},
+)
+
+# GCC's uninitialized-storage analysis needs optimization to see through the inline moves.
+donner_cc_test(
+    name = "rcstring_compile_tests",
+    srcs = ["tests/RcStringCompile_tests.cc"],
+    copts = ["-O2"] + select({
+        ":gcc_compiler": ["-Werror=maybe-uninitialized"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":base",
         "@com_google_gtest//:gtest_main",

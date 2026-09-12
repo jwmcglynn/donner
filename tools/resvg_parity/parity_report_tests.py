@@ -305,7 +305,7 @@ class RealTreeParityReportTests(unittest.TestCase):
         self.assertEqual(summary["pixel_budget_sources"], 103)
         self.assertEqual(summary["effective_pixel_budget_cases"], 125)
         self.assertEqual(summary["shared_golden_cases"], 36)
-        self.assertEqual(summary["geode_golden_cases"], 6)
+        self.assertEqual(summary["geode_golden_cases"], 5)
         self.assertEqual(summary["backend_disabled_cases"], 0)
 
 

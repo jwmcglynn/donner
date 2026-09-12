@@ -19,7 +19,7 @@ beyond this how-to: `docs/building.md` (setup + FAQ), `build_defs/rules.bzl` (ma
 ## 1. TL;DR command card
 
 ```sh
-bazel test //...                      # THE single local gate before any push — nothing else
+bazel test //...                      # full local qualification gate
 bazel test //donner/base/...         # scope while iterating (renderer tests are slow)
 bazel build //donner/...             # build everything
 bazel test --test_tag_filters=lint //...           # just the banned-pattern lint tests
@@ -44,16 +44,20 @@ terminal previews. Missing diagnostics means quiet mode, not a broken harness �
 
 ## 2. Presubmit ritual (exact order)
 
-1. `git fetch origin main && git rebase origin/main`
+1. Update the owned branch against its actual PR base. Independent PRs normally use `origin/main`;
+   genuine dependencies use the supported stacked-PR workflow and retain the reviewed parent base.
+   Do not rebase another worker's branch or run Git commands in another worker's checkout.
 2. Format changed files (clang-format 18 and 19 produce identical output under the project
    `.clang-format`; bare `git clang-format` only covers uncommitted changes, so pass the branch
    base for already-committed work):
    ```sh
-   git-clang-format origin/main                                        # C/C++, whole branch
-   git diff --name-only origin/main | grep -E '(BUILD|\.bzl)$' | xargs -r buildifier
+   git-clang-format <base-ref>                                        # C/C++, whole branch
+   git diff --name-only <base-ref> | grep -E '(BUILD|\.bzl)$' | xargs -r buildifier
    ```
-3. `bazel test //...` — must be fully green. There is no "preexisting failure": any red test is
-   now in scope to fix (CLAUDE.md §"Always-Green Main").
+3. `bazel test //...` — must be fully green before merge readiness. It remains the default pre-push
+   gate; the requested early-delivery policy in `AGENTS.md` permits earlier publication only after
+   its narrower review and affected-check gates, with full qualification scheduled and completed.
+   Commands here describe test scope and do not authorize execution in an undesignated venue.
 4. If you touched `tools/cmake/` or the dependency graph:
    `python3 tools/cmake/gen_cmakelists.py --check --build` — plain `--check` is static-only and
    misses real compile breaks; `--build` is the local compile gate (`--build` requires `--check`).
@@ -277,7 +281,8 @@ standalone consumer project for the exported `donner` target.
 
 ## 11. Hard rules
 
-- Any red in `bazel test //...` is in scope to fix now (§2 step 3).
+- Any red in `bazel test //...` remains blocking. In coordinated delivery, route an unrelated base
+  failure to the coordinator for one assigned repair owner rather than duplicating the repair.
 - Never add `--jobs` / `--local_test_jobs` to the `ci` config in `.bazelrc`: self-hosted runners
   cap concurrency in `/etc/bazel.bazelrc`, and overriding it flooded the remote-execution worker
   (2026-06-30 hang; see the comment above `build:ci`).

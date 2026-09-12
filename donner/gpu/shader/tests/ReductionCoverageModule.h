@@ -5,7 +5,7 @@
 ///
 /// It exists because `any` and `all` are the two IR builtins whose emitted form no shipping
 /// program uses in both directions: the snapshot-unpremultiply kernel reduces with `any` only,
-/// so `all` would otherwise reach neither a golden nor a real toolchain, and a mistake in its
+/// so `all` would otherwise reach no real toolchain, and a mistake in its
 /// branch, its spelling, or its operand order would ship silently.
 
 #include <utility>

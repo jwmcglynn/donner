@@ -22,4 +22,13 @@ namespace donner::gpu::shader {
  */
 std::vector<ComputeEntryPointInfo> ComputeEntryPointsOf(const IrModule& module);
 
+/**
+ * Computes buffer requirements for each entry point from its reachable resource references and
+ * the IR memory layout. Runtime arrays require at least one element and report their stride.
+ * Unused bindings are omitted. The result is generated alongside source, never at draw time.
+ *
+ * @param module Built IR module the shader source was emitted from.
+ */
+ShaderResult<std::vector<ShaderBufferBindingInfo>> BufferBindingsOf(const IrModule& module);
+
 }  // namespace donner::gpu::shader

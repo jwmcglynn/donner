@@ -134,7 +134,14 @@ constexpr uint32_t kOpUnreachable = 255;
 constexpr uint32_t kGlslRoundEven = 2;
 constexpr uint32_t kGlslFAbs = 4;
 constexpr uint32_t kGlslSAbs = 5;
+constexpr uint32_t kGlslFSign = 6;
+constexpr uint32_t kGlslFloor = 8;
+constexpr uint32_t kGlslCeil = 9;
 constexpr uint32_t kGlslFract = 10;
+constexpr uint32_t kGlslSin = 13;
+constexpr uint32_t kGlslCos = 14;
+constexpr uint32_t kGlslPow = 26;
+constexpr uint32_t kGlslExp = 27;
 constexpr uint32_t kGlslSqrt = 31;
 constexpr uint32_t kGlslFMin = 37;
 constexpr uint32_t kGlslUMin = 38;
@@ -190,8 +197,8 @@ constexpr uint32_t kCapabilityImageQuery = 50;
 constexpr uint32_t kImageOperandsLodMask = 0x2;
 constexpr uint32_t kDim2D = 1;
 constexpr uint32_t kImageFormatUnknown = 0;
-// Rgba8 is one of the storage-image formats every Vulkan implementation must support without
-// the StorageImageExtendedFormats capability.
+// These storage-image formats do not require StorageImageExtendedFormats.
+constexpr uint32_t kImageFormatRgba32f = 1;
 constexpr uint32_t kImageFormatRgba8 = 4;
 constexpr uint32_t kFunctionControlNone = 0;
 constexpr uint32_t kSelectionControlNone = 0;
@@ -731,6 +738,7 @@ uint32_t Emitter::typeStorageImage2d(StorageTextureFormat format) {
   uint32_t imageFormat = kImageFormatRgba8;
   switch (format) {
     case StorageTextureFormat::Rgba8Unorm: imageFormat = kImageFormatRgba8; break;
+    case StorageTextureFormat::Rgba32Float: imageFormat = kImageFormatRgba32f; break;
   }
   const std::string key = std::format("storageimage2d|{}", imageFormat);
   if (const uint32_t id = cached(key)) return id;
@@ -1991,7 +1999,15 @@ uint32_t Emitter::emitSaturateBuiltin(const IrExpr::Node& node, uint32_t typeId)
 std::optional<uint32_t> SingleArgumentGlslInstruction(BuiltinFn fn) {
   switch (fn) {
     case BuiltinFn::Fract: return kGlslFract;
+    // FSign, not SSign: the IR admits only f32 operands here, and the two are different
+    // instructions rather than one polymorphic one.
+    case BuiltinFn::Sign: return kGlslFSign;
+    case BuiltinFn::Floor: return kGlslFloor;
+    case BuiltinFn::Ceil: return kGlslCeil;
+    case BuiltinFn::Exp: return kGlslExp;
     case BuiltinFn::Sqrt: return kGlslSqrt;
+    case BuiltinFn::Sin: return kGlslSin;
+    case BuiltinFn::Cos: return kGlslCos;
     case BuiltinFn::Length: return kGlslLength;
     case BuiltinFn::Normalize: return kGlslNormalize;
     // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
@@ -2011,6 +2027,11 @@ uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
     case BuiltinFn::Max: return emitMinMaxBuiltin(node, typeId);
     case BuiltinFn::Clamp: return emitClampBuiltin(node, typeId);
     case BuiltinFn::Saturate: return emitSaturateBuiltin(node, typeId);
+    case BuiltinFn::Pow: {
+      const uint32_t baseId = emitValue(node.children[0]);
+      const uint32_t exponentId = emitValue(node.children[1]);
+      return emitExtInst(typeId, kGlslPow, {baseId, exponentId});
+    }
     case BuiltinFn::Dot: {
       const uint32_t lhsId = emitValue(node.children[0]);
       const uint32_t rhsId = emitValue(node.children[1]);

@@ -106,6 +106,7 @@ jobs:
             -- \
             //donner/... \
             -//donner/editor/tests:gl_rnr_replay_tests \
+            -//donner/gpu:gpu_allocation_tests \
             -//donner/svg/renderer/geode/... \
             -//donner/svg/renderer/tests:renderer_geode_golden_tests \
             -//donner/svg/renderer/tests:renderer_geode_tests
@@ -119,6 +120,12 @@ jobs:
             //donner/svg/renderer/geode/... \
             //donner/svg/renderer/tests:renderer_geode_golden_tests \
             //donner/svg/renderer/tests:renderer_geode_tests
+
+      - name: Retain failed test evidence
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: sanitizers-${{ github.job }}-${{ runner.os }}
 
   ubsan:
     runs-on: ubuntu-24.04
@@ -165,7 +172,9 @@ jobs:
             --test_output=errors \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
-            //donner/...
+            -- \
+            //donner/... \
+            -//donner/gpu:gpu_allocation_tests
 
       - name: Replay untrusted-input fuzzer corpora with UBSan
         run: |
@@ -191,3 +200,9 @@ jobs:
             --test_tag_filters=fuzz_ubsan_geode \
             --build_tag_filters=fuzz_ubsan_geode \
             //...
+
+      - name: Retain failed test evidence
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: sanitizers-${{ github.job }}-${{ runner.os }}

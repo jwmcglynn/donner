@@ -4,11 +4,15 @@
 #include <cassert>
 #include <chrono>
 #include <format>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/CheckedArithmetic.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -20,6 +24,66 @@ namespace {
 using gpu::GpuError;
 using gpu::GpuErrorType;
 using gpu::OkStatus;
+
+/// Makes a caller's minimally-sized final row safe for wgpu-native implementations that read a
+/// complete final row pitch. Keeps already-complete spans zero-copy and otherwise repacks into the
+/// smallest aligned row pitch, independent of unused stride in the caller's layout.
+gpu::Status PrepareWgpuTextureUpload(wgpu::TextureFormat textureFormat,
+                                     std::span<const uint8_t> callerData,
+                                     const gpu::TexelCopyBufferLayout& callerLayout,
+                                     const gpu::Extent2d& writeSize,
+                                     SmallVector<uint8_t, gpu::kTexelRowPitchAlignment>& ownedData,
+                                     std::span<const uint8_t>& uploadData,
+                                     gpu::TexelCopyBufferLayout& uploadLayout) {
+  uploadData = callerData;
+  uploadLayout = callerLayout;
+  const std::optional<uint64_t> fullRows =
+      gpu::CheckedMul(writeSize.height, callerLayout.bytesPerRow);
+  const std::optional<uint64_t> fullEnd =
+      fullRows ? gpu::CheckedAdd(callerLayout.offsetBytes, *fullRows) : std::nullopt;
+  if (fullEnd && *fullEnd <= callerData.size()) {
+    return OkStatus();
+  }
+
+  const uint32_t texelBytes =
+      gpu::TextureFormatBytesPerTexel(GpuTextureFormatFromWgpu(textureFormat));
+  const std::optional<uint64_t> rowBytes = gpu::CheckedMul(writeSize.width, texelBytes);
+  const std::optional<uint64_t> roundedRowBytes =
+      rowBytes ? gpu::CheckedAdd(*rowBytes, gpu::kTexelRowPitchAlignment - 1) : std::nullopt;
+  if (!roundedRowBytes) {
+    return GpuError{GpuErrorType::OutOfBounds,
+                    "writeTexture: compact wgpu row byte size overflows"};
+  }
+  const uint64_t compactBytesPerRow =
+      (*roundedRowBytes / gpu::kTexelRowPitchAlignment) * gpu::kTexelRowPitchAlignment;
+  const std::optional<uint64_t> compactBytes =
+      gpu::CheckedMul(compactBytesPerRow, writeSize.height);
+  if (!compactBytes || *compactBytes > std::numeric_limits<size_t>::max()) {
+    return GpuError{GpuErrorType::OutOfBounds,
+                    "writeTexture: compact wgpu upload byte size overflows"};
+  }
+
+  ownedData.resize(static_cast<size_t>(*compactBytes));
+  for (uint32_t row = 0; row < writeSize.height; ++row) {
+    const std::optional<uint64_t> sourceRowOffset =
+        gpu::CheckedMul(static_cast<uint64_t>(row), callerLayout.bytesPerRow);
+    const std::optional<uint64_t> sourceRow =
+        sourceRowOffset ? gpu::CheckedAdd(callerLayout.offsetBytes, *sourceRowOffset)
+                        : std::nullopt;
+    const std::optional<uint64_t> sourceEnd =
+        sourceRow ? gpu::CheckedAdd(*sourceRow, *rowBytes) : std::nullopt;
+    if (!sourceEnd || *sourceEnd > callerData.size()) {
+      return GpuError{GpuErrorType::OutOfBounds,
+                      "writeTexture: validated caller row range became invalid"};
+    }
+    std::copy_n(
+        callerData.begin() + static_cast<size_t>(*sourceRow), static_cast<size_t>(*rowBytes),
+        ownedData.begin() + static_cast<size_t>(row) * static_cast<size_t>(compactBytesPerRow));
+  }
+  uploadData = std::span<const uint8_t>(ownedData.data(), ownedData.size());
+  uploadLayout = {0, static_cast<uint32_t>(compactBytesPerRow), writeSize.height};
+  return OkStatus();
+}
 
 /// Ensures \p table covers \p slotIndex and stores \p value there. Slots are value-initialized
 /// (null handles) until written.
@@ -52,6 +116,7 @@ wgpu::TextureFormat ToWgpuTextureFormat(gpu::TextureFormat format) {
     case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
     case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
     case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
+    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
   return wgpu::TextureFormat::RGBA8Unorm;
@@ -171,6 +236,10 @@ wgpu::VertexStepMode ToWgpuVertexStepMode(gpu::VertexStepMode mode) {
   return wgpu::VertexStepMode::Vertex;
 }
 
+wgpu::IndexFormat ToWgpuIndexFormat(gpu::IndexFormat format) {
+  return format == gpu::IndexFormat::Uint16 ? wgpu::IndexFormat::Uint16 : wgpu::IndexFormat::Uint32;
+}
+
 wgpu::PrimitiveTopology ToWgpuPrimitiveTopology(gpu::PrimitiveTopology topology) {
   switch (topology) {
     case gpu::PrimitiveTopology::TriangleList: return wgpu::PrimitiveTopology::TriangleList;
@@ -245,6 +314,11 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
       entry.texture.viewDimension = wgpu::TextureViewDimension::_2D;
       entry.texture.multisampled = false;
       return;
+    case gpu::BindingType::SampledTexture2dUnfilterableFloat:
+      entry.texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
+      entry.texture.viewDimension = wgpu::TextureViewDimension::_2D;
+      entry.texture.multisampled = false;
+      return;
     case gpu::BindingType::FilteringSampler:
       entry.sampler.type = wgpu::SamplerBindingType::Filtering;
       return;
@@ -292,6 +366,12 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
     geodeDevice_.device().poll(true, nullptr);
   }
   return completedSerial() >= serial;
+}
+
+bool GeodeWgpuAdapterDevice::ownsTextureBacking(const gpu::Texture& texture) const {
+  return !validateTextureHandleForBackend(texture).hasError() &&
+         texture.slotIndex() < slotTextures_.size() &&
+         static_cast<bool>(slotTextures_[texture.slotIndex()].ownedTexture);
 }
 
 gpu::Status GeodeWgpuAdapterDevice::destroyTextureBacking(gpu::Texture&& texture) {
@@ -359,11 +439,12 @@ gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
     case WGPUTextureFormat_RGBA8Unorm: return gpu::TextureFormat::RGBA8Unorm;
     case WGPUTextureFormat_BGRA8Unorm: return gpu::TextureFormat::BGRA8Unorm;
     case WGPUTextureFormat_R8Unorm: return gpu::TextureFormat::R8Unorm;
+    case WGPUTextureFormat_RGBA32Float: return gpu::TextureFormat::RGBA32Float;
     default: break;
   }
   UTILS_RELEASE_ASSERT_MSG(false,
                            "wgpu texture format is outside the donner::gpu supported set "
-                           "(RGBA8Unorm / BGRA8Unorm / R8Unorm)");
+                           "(RGBA8Unorm / BGRA8Unorm / R8Unorm / RGBA32Float)");
   return gpu::TextureFormat::RGBA8Unorm;
 }
 
@@ -1219,15 +1300,25 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
                     std::format("texture slot {} has no wgpu texture", slotIndex)};
   }
 
+  SmallVector<uint8_t, gpu::kTexelRowPitchAlignment> ownedData;
+  std::span<const uint8_t> uploadData;
+  gpu::TexelCopyBufferLayout uploadLayout;
+  if (gpu::Status status = PrepareWgpuTextureUpload(texture.getFormat(), data, dataLayout,
+                                                    writeSize, ownedData, uploadData, uploadLayout);
+      status.hasError()) {
+    return status;
+  }
+
   wgpu::TexelCopyTextureInfo destination = {};
   destination.texture = texture;
   wgpu::TexelCopyBufferLayout layout = {};
-  layout.offset = dataLayout.offsetBytes;
-  layout.bytesPerRow = dataLayout.bytesPerRow;
-  layout.rowsPerImage = dataLayout.rowsPerImage;
+  layout.offset = uploadLayout.offsetBytes;
+  layout.bytesPerRow = uploadLayout.bytesPerRow;
+  layout.rowsPerImage = uploadLayout.rowsPerImage;
   const wgpu::Extent3D extent = {writeSize.width, writeSize.height, 1u};
-  geodeDevice_.queue().writeTexture(destination, data.data(), data.size(), layout, extent);
-  geodeDevice_.countTextureWrite(data.size());
+  geodeDevice_.queue().writeTexture(destination, uploadData.data(), uploadData.size(), layout,
+                                    extent);
+  geodeDevice_.countTextureWrite(uploadData.size());
   return OkStatus();
 }
 
@@ -1305,6 +1396,19 @@ gpu::Status GeodeWgpuAdapterDevice::encodeSetVertexBuffer(
   return OkStatus();
 }
 
+gpu::Status GeodeWgpuAdapterDevice::encodeSetIndexBuffer(
+    EncodingState& state, const gpu::SetIndexBufferCommand& setIndexBuffer) {
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, setIndexBuffer.bufferId.slotIndex);
+  if (!state.pass || !buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setIndexBuffer: buffer slot {} is not encodable",
+                                setIndexBuffer.bufferId.slotIndex)};
+  }
+  state.pass.get().setIndexBuffer(buffer, ToWgpuIndexFormat(setIndexBuffer.format),
+                                  setIndexBuffer.offsetBytes, WGPU_WHOLE_SIZE);
+  return OkStatus();
+}
+
 gpu::Status GeodeWgpuAdapterDevice::encodeSetScissorRect(
     EncodingState& state, const gpu::SetScissorRectCommand& setScissor) {
   if (!state.pass) {
@@ -1329,6 +1433,21 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDraw(EncodingState& state, const gpu::
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
   state.pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+  geodeDevice_.countDraw();
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeDrawIndexed(EncodingState& state,
+                                                      const gpu::DrawIndexedCommand& draw) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
+  }
+  // The encoder records zero-count draws; no backend issues a native draw for them.
+  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+    return OkStatus();
+  }
+  state.pass.get().drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex,
+                               draw.baseVertex, draw.firstInstance);
   geodeDevice_.countDraw();
   return OkStatus();
 }
@@ -1455,6 +1574,9 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
           [&](const gpu::SetVertexBufferCommand& setVertexBuffer) -> gpu::Status {
             return encodeSetVertexBuffer(state, setVertexBuffer);
           },
+          [&](const gpu::SetIndexBufferCommand& setIndexBuffer) -> gpu::Status {
+            return encodeSetIndexBuffer(state, setIndexBuffer);
+          },
           [&](const gpu::SetScissorRectCommand& setScissor) -> gpu::Status {
             return encodeSetScissorRect(state, setScissor);
           },
@@ -1462,6 +1584,9 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
             return encodeSetViewport(state, setViewport);
           },
           [&](const gpu::DrawCommand& draw) -> gpu::Status { return encodeDraw(state, draw); },
+          [&](const gpu::DrawIndexedCommand& draw) -> gpu::Status {
+            return encodeDrawIndexed(state, draw);
+          },
           [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
             return encodeEndRenderPass(state);
           },
@@ -1491,6 +1616,11 @@ void GeodeWgpuAdapterDevice::setHostCommandEncoder(wgpu::CommandEncoder encoder)
   hostCommandEncoder_ = std::move(encoder);
 }
 
+bool GeodeWgpuAdapterDevice::hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const {
+  return static_cast<WGPUCommandEncoder>(hostCommandEncoder_) ==
+         static_cast<WGPUCommandEncoder>(encoder);
+}
+
 void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
   hostCommandEncoder_ = wgpu::CommandEncoder();
 }
@@ -1499,73 +1629,76 @@ bool GeodeWgpuAdapterDevice::hasHostCommandEncoder() const {
   return static_cast<bool>(hostCommandEncoder_);
 }
 
-void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
-  if (hostPendingSerial_ == 0) {
-    return;
+void GeodeWgpuAdapterDevice::CompletionState::record(WGPUCommandEncoder host, uint64_t serial) {
+  std::scoped_lock lock(mutex);
+  if (host != nullptr) {
+    for (Pending& range : pending) {
+      if (range.host == host) {
+        range.lastSerial = serial;
+        return;
+      }
+    }
   }
-  // Anything a standalone submit queued while this frame was pending is older than the frame's
-  // own submit on the same queue, so it has certainly finished by the time this one does. Its
-  // completion was capped below the frame's unqueued serials and reported less than its own
-  // serial - possibly nothing at all - so the flush is what finally covers it.
-  const uint64_t serial = std::max(hostPendingSerial_, standaloneWhilePendingSerial_);
-  hostPendingSerial_ = 0;
-  hostFirstPendingSerial_ = 0;
-  standaloneWhilePendingSerial_ = 0;
-  advanceCompletedSerialWhenQueueDrains(serial);
+  pending.push_back(Pending{host, serial, serial});
 }
 
-void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t serial) {
-  // A serial may be reported complete only once it has actually reached the queue, and while a
-  // host encoder is installed the serials replayed into it are recorded but not submitted. A
-  // standalone submit skips that encoder, so it takes a HIGHER serial than those and completes
-  // first; reporting its own serial would declare the unqueued ones complete along with it.
-  //
-  // That is not a cosmetic lie. `completedSerial` is what the deferred-destroy sweep and every
-  // wait read, so the open frame's still-recording resources would be retired underneath it and
-  // their slots handed to something else, invalidating handles the frame is still using, and
-  // waits on those serials - including the destructor's - would return early.
-  //
-  // So the advance is capped below the oldest serial still waiting on the host's submit. The cap
-  // is computed here rather than in the callback because the callback may land after the frame
-  // has flushed, and a merely conservative cap costs nothing: the flush advances the serial past
-  // all of this on its own, and the standalone submit's own resources then retire at that
-  // frame boundary like any others. The readback that motivates the standalone path waits on its
-  // buffer's map signal rather than on a serial, so capping does not delay it.
-  const uint64_t cappedSerial =
-      hostFirstPendingSerial_ == 0 ? serial : std::min(serial, hostFirstPendingSerial_ - 1);
-  if (cappedSerial == 0) {
-    // Everything queued so far is older than nothing: there is no serial this completion may
-    // report, so it reports none rather than an unqueued one.
+uint64_t GeodeWgpuAdapterDevice::CompletionState::closeHost(WGPUCommandEncoder host) {
+  std::scoped_lock lock(mutex);
+  if (host != nullptr) {
+    for (Pending& range : pending) {
+      if (range.host == host) {
+        range.host = nullptr;
+        return range.firstSerial;
+      }
+    }
+  }
+  return 0;
+}
+
+void GeodeWgpuAdapterDevice::CompletionState::complete(uint64_t ticket) {
+  std::scoped_lock lock(mutex);
+  const auto range = std::find_if(pending.begin(), pending.end(), [ticket](const Pending& entry) {
+    return entry.firstSerial == ticket && entry.host == nullptr;
+  });
+  if (range == pending.end()) {
     return;
   }
+  completedHighWater = std::max(completedHighWater, range->lastSerial);
+  *range = pending.back();
+  pending.pop_back();
+  uint64_t prefix = completedHighWater;
+  for (const Pending& unfinished : pending) {
+    prefix = std::min(prefix, unfinished.firstSerial - 1);
+  }
+  completedSerial.store(prefix, std::memory_order_release);
+}
 
-  // Callback-mode handling (wgpu-native vs emdawnwebgpu) is centralized in
-  // notifyWhenSubmittedWorkDone; waitForSerial's poll loop drives delivery.
+void GeodeWgpuAdapterDevice::notifyHostSubmitted(wgpu::CommandEncoder encoder) {
+  const uint64_t ticket = completionState_->closeHost(static_cast<WGPUCommandEncoder>(encoder));
+  if (ticket != 0) {
+    completeWhenQueueDrains(ticket);
+  }
+}
+
+void GeodeWgpuAdapterDevice::notifyHostDiscarded(wgpu::CommandEncoder encoder) {
+  // A discarded range still waits for older queue work before its resources may retire.
+  notifyHostSubmitted(encoder);
+  if (hostCommandEncoderIs(encoder)) {
+    clearHostCommandEncoder();
+  }
+}
+
+void GeodeWgpuAdapterDevice::completeWhenQueueDrains(uint64_t ticket) {
   struct WorkDoneState {
-    std::shared_ptr<CompletionState> completion;  //!< Shared completion counter.
-    uint64_t serial = 0;                          //!< Serial this callback completes.
+    std::shared_ptr<CompletionState> completion;  //!< State independent of adapter lifetime.
+    uint64_t ticket = 0;                          //!< Unique range completed by this callback.
 
-    /// Monotonic max: callbacks may complete out of order across submissions.
-    void onWorkDone() {
-      uint64_t previous = completion->completedSerial.load(std::memory_order_relaxed);
-      while (previous < serial &&
-             !completion->completedSerial.compare_exchange_weak(
-                 previous, serial, std::memory_order_release, std::memory_order_relaxed)) {}
-    }
+    void onWorkDone() { completion->complete(ticket); }
   };
   auto workDoneState = std::make_shared<WorkDoneState>();
   workDoneState->completion = completionState_;
-  workDoneState->serial = cappedSerial;
+  workDoneState->ticket = ticket;
   notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
-}
-
-void GeodeWgpuAdapterDevice::recordPendingHostSerial(uint64_t submissionSerial) {
-  // The oldest of these is the cap every completion respects, so it is remembered separately
-  // from the newest, which is what the eventual flush reports.
-  if (hostFirstPendingSerial_ == 0) {
-    hostFirstPendingSerial_ = submissionSerial;
-  }
-  hostPendingSerial_ = std::max(hostPendingSerial_, submissionSerial);
 }
 
 bool GeodeWgpuAdapterDevice::replaysIntoHostEncoder() const {
@@ -1580,11 +1713,6 @@ gpu::Result<uint64_t> GeodeWgpuAdapterDevice::submitStandalone(gpu::CommandBuffe
   gpu::Result<uint64_t> serial = submit(std::move(commands));
   bypassHostEncoderForSubmit_ = previous;
 
-  // Remember it so the host's eventual flush reports it. Its own completion cannot: it is capped
-  // below the frame's unqueued serials, which are lower than this one.
-  if (serial.hasResult() && hostPendingSerial_ != 0) {
-    standaloneWhilePendingSerial_ = std::max(standaloneWhilePendingSerial_, serial.result());
-  }
   return serial;
 }
 
@@ -1639,7 +1767,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     // The host owns finish + submit for its encoder. Hold the serial back until it reports that
     // submit: reporting completion before the work is even submitted would be a lie the deferred
     // destruction and wait paths both act on.
-    recordPendingHostSerial(submissionSerial);
+    completionState_->record(static_cast<WGPUCommandEncoder>(state.encoder), submissionSerial);
     return OkStatus();
   }
 
@@ -1647,10 +1775,11 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
   if (!commandBuffer) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
   }
+  completionState_->record(nullptr, submissionSerial);
   geodeDevice_.queue().submit(1, &commandBuffer.get());
   geodeDevice_.countSubmit();
 
-  advanceCompletedSerialWhenQueueDrains(submissionSerial);
+  completeWhenQueueDrains(submissionSerial);
   return OkStatus();
 }
 

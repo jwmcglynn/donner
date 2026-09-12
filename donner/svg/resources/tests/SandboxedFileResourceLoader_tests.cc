@@ -5,6 +5,8 @@
 
 #include <fstream>
 
+#include "donner/base/tests/EnvironmentCapabilityGate.h"
+
 #ifndef _WIN32
 #include <sys/stat.h>
 #endif
@@ -138,9 +140,8 @@ TEST_F(SandboxedFileResourceLoaderTests, RejectsSymlinkThatEscapesRoot) {
   createTestFileUnder(secondaryDir_, "secret.txt");
   std::error_code error;
   std::filesystem::create_directory_symlink(secondaryDir_, root_ / "escape", error);
-  if (error) {
-    GTEST_SKIP() << "Could not create test symlink: " << error.message();
-  }
+  DONNER_REQUIRE_ENVIRONMENT_CAPABILITY(error ? error.message() : std::string(),
+                                        "the ability to create filesystem symlinks");
 
   SandboxedFileResourceLoader loader(root_, root_ / "doc.svg");
   EXPECT_THAT(loader.fetchExternalResource("escape/secret.txt"),

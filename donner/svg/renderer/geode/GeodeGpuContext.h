@@ -19,6 +19,14 @@ namespace donner::geode {
 class GeodeDevice;
 class GeodeMaskPipeline;
 
+/// Uniform-buffer binding offset alignment every Geode uniform arena honors. 256 is the WebGPU
+/// default minUniformBufferOffsetAlignment; a path that ever queries the device limit instead must
+/// keep this in sync, or its bindings fail validation on a device with a larger one.
+///
+/// Defined here rather than beside any one arena because four of them need it, and a per-arena
+/// copy is how they drift apart.
+inline constexpr uint64_t kUniformOffsetAlignment = 256u;
+
 /**
  * Everything Geode's encoders need to record a frame through the \c donner::gpu runtime.
  *

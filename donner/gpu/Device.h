@@ -13,8 +13,10 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/SmallVector.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
 
@@ -232,6 +234,19 @@ public:
   /// Process-unique identity of this device (starts at 1, never reused). Baked into every handle
   /// for cross-device validation.
   uint64_t deviceId() const { return deviceId_; }
+
+  /// Shader representation accepted by this device. Recording and WebGPU devices use WGSL;
+  /// native backends override this so callers select the matching build-time artifact.
+  virtual ShaderSourceKind shaderSourceKind() const { return ShaderSourceKind::Wgsl; }
+
+  /// Whether indexed draws through this device honor every value of \p format. Metal and WebGPU
+  /// always do; a Vulkan device without `fullDrawIndexUint32` caps 32-bit indices below the full
+  /// range, and `RenderPassEncoder::setIndexBuffer` refuses that format on it rather than let a
+  /// driver truncate index values. @param format Index format to query.
+  virtual bool supportsFullIndexRange(IndexFormat format) const {
+    (void)format;
+    return true;
+  }
 
   /**
    * Creates a buffer. Fails closed on zero or oversized `byteSize` or empty usage.
@@ -479,6 +494,13 @@ public:
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
+   * A write never changes bytes an already submitted command still reads, but backends reach
+   * that guarantee differently and the difference is visible to callers. MetalDevice queues an
+   * aligned write to a busy buffer behind the outstanding submission and returns success;
+   * VulkanDevice waits for that buffer's submission and returns a GpuErrorType::InvalidState
+   * error if the wait times out. Portable callers should either write buffers no in-flight
+   * submission references, or handle the busy-buffer failure.
+   *
    * @param buffer Destination buffer.
    * @param offsetBytes Destination byte offset.
    * @param data Payload bytes.
@@ -534,6 +556,14 @@ protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
 
+  /// Last accepted submission referencing a buffer slot already validated by the caller.
+  /// @param slotIndex A validated live buffer slot.
+  uint64_t bufferLastUseSerial(uint32_t slotIndex) const;
+
+  /// Last accepted submission referencing a texture slot already validated by the caller.
+  /// @param slotIndex A validated live texture slot.
+  uint64_t textureLastUseSerial(uint32_t slotIndex) const;
+
   /// Backend hook: a buffer passed validation and occupies \p slotIndex.
   /// @param slotIndex Slot index of the new resource. @param descriptor Validated descriptor.
   virtual Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) = 0;
@@ -573,7 +603,15 @@ protected:
   virtual Status onCreateComputePipeline(uint32_t slotIndex,
                                          const ComputePipelineDescriptor& descriptor) = 0;
 
-  /// Backend hook: a validated resource was destroyed.
+  /// Backend hook: a buffer handle was retired. Discard unsubmitted work, but keep native
+  /// resources alive until \ref onDestroyResource. @param slotIndex Retired buffer slot.
+  virtual void onRetireBuffer(uint32_t slotIndex);
+
+  /// Backend hook: a texture handle was retired. Discard unsubmitted work, but keep native
+  /// resources alive until \ref onDestroyResource. @param slotIndex Retired texture slot.
+  virtual void onRetireTexture(uint32_t slotIndex);
+
+  /// Backend hook: a retired resource is no longer used by submitted work and can be released.
   /// @param resourceName Resource type name, e.g. `"buffer"`.
   /// @param slotIndex Slot index of the destroyed resource.
   virtual void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) = 0;
@@ -748,15 +786,24 @@ private:
   struct ShaderModuleRecord {
     ShaderModuleDescriptor descriptor;  //!< Creation descriptor.
   };
+  /// Buffer range required by the selected stages, independent of shader-module lifetime.
+  struct PipelineBufferRequirement {
+    uint32_t group = 0;         //!< Required bind group.
+    uint32_t binding = 0;       //!< Buffer binding within the group.
+    uint64_t minSizeBytes = 0;  //!< Largest requirement across the selected stages.
+  };
+
   /// Validated per-pipeline state used for draw-time compatibility checks.
   struct RenderPipelineRecord {
     RenderPipelineDescriptor descriptor;               //!< Creation descriptor.
     std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
+    std::vector<PipelineBufferRequirement> bufferRequirements;  //!< Validated buffer ranges.
   };
   /// Validated per-pipeline state used for dispatch-time compatibility checks.
   struct ComputePipelineRecord {
     ComputePipelineDescriptor descriptor;              //!< Creation descriptor.
     std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
+    std::vector<PipelineBufferRequirement> bufferRequirements;  //!< Validated buffer ranges.
   };
   /// A finished, not-yet-submitted command buffer.
   struct CommandBufferRecord {
@@ -916,6 +963,20 @@ private:
   Status checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
                                   std::vector<SubmissionUse>& uses) const;
 
+  /// Validates one generated shader requirement against the pipeline's declared group layout.
+  /// @param layout Pipeline layout being used. @param info Generated shader binding facts.
+  Status validatePipelineBufferBinding(const PipelineLayoutRecord& layout,
+                                       const ShaderBufferBindingInfo& info) const;
+
+  /// Merges one selected entry point's buffer requirements into the pipeline's retained facts.
+  /// @param layout Pipeline layout. @param module Shader descriptor carrying generated facts.
+  /// @param entryPoint Selected entry point. @param stage Selected shader stage.
+  /// @param requirements Destination list, merging shared bindings by their largest minimum.
+  Status appendPipelineBufferRequirements(
+      const PipelineLayoutRecord& layout, const ShaderModuleDescriptor& module,
+      std::string_view entryPoint, ShaderStage stage,
+      std::vector<PipelineBufferRequirement>& requirements) const;
+
   /// Finds the bind group entry matching \p layoutEntry's binding number, failing closed on a
   /// duplicate or missing entry.
   /// @param descriptor Bind group descriptor being validated.
@@ -940,9 +1001,11 @@ private:
   Status validateBufferBindingEntry(const BindGroupLayoutEntry& layoutEntry,
                                     const BindGroupEntry& entry) const;
 
-  /// Validates a sampled-texture bind group entry: resource kind, live view and texture, usage.
+  /// Validates a sampled-texture entry: resource kind, live view and texture, usage, and format.
+  /// @param layoutEntry Layout entry declaring the sample type.
   /// @param entry Bind group entry being validated.
-  Status validateSampledTextureBindingEntry(const BindGroupEntry& entry) const;
+  Status validateSampledTextureBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                            const BindGroupEntry& entry) const;
 
   /// Validates a storage-texture bind group entry: resource kind, live view and texture, the
   /// StorageBinding usage, and that the texture's format matches the one the layout declares.
@@ -961,13 +1024,19 @@ private:
     ResourceIdentity textureIdentity;  //!< Identity of the texture behind the bound view.
   };
 
-  /// Collects every binding of \p type that resolves to a live texture view.
+  /// Collects sampled and storage-write texture bindings in one walk of \p layoutEntries,
+  /// appending to caller-owned storage. The draw and dispatch path calls this once per bound
+  /// group, so it allocates nothing while the outputs stay inside their inline capacity, which
+  /// bounds the total across every bound group rather than the largest single one. Two passes
+  /// over the layout and two returned vectors showed up as avoidable per-draw work.
   /// @param descriptor Bind group descriptor being validated.
-  /// @param layoutEntries Entries of the layout it was created against.
-  /// @param type Binding type to collect.
-  std::vector<BoundTextureBinding> collectBoundTextures(
-      const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
-      BindingType type) const;
+  /// @param layoutEntries Layout the group was created against.
+  /// @param sampledOut Receives every sampled-texture binding that resolves to a live view.
+  /// @param storageOut Receives every storage-write binding that resolves to a live view.
+  void collectBoundTextures(const BindGroupDescriptor& descriptor,
+                            const std::vector<BindGroupLayoutEntry>& layoutEntries,
+                            SmallVector<BoundTextureBinding, kMaxBindings>& sampledOut,
+                            SmallVector<BoundTextureBinding, kMaxBindings>& storageOut) const;
 
   /// Rejects a bind group that names one texture through both a sampled and a storage-write
   /// binding: the two declare different layouts for one image, so neither backend transition can

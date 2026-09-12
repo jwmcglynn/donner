@@ -164,7 +164,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         self.assertEqual(
-            {"-fuzz_target", "-lint", "-manual", "-perf"},
+            {"-fuzz_target", "-lint", "-manual", "-perf", "-ci-remote-gpu"},
             set(match.group(1).split(",")),
         )
         query_match = re.search(
