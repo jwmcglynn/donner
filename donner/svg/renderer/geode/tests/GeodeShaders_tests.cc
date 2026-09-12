@@ -51,12 +51,4 @@ TEST(GeodeShaders, ImageBlitCompiles) {
   ASSERT_FALSE(module.hasError()) << "Image blit shader failed to compile: " << module.error();
 }
 
-TEST(GeodeShaders, FilterImageCompiles) {
-  auto geodeDevice = GeodeDevice::CreateHeadless();
-  ASSERT_NE(geodeDevice, nullptr);
-
-  wgpu::ShaderModule module = createFilterImageShader(geodeDevice->device());
-  ASSERT_TRUE(static_cast<bool>(module)) << "feImage shader failed to compile";
-}
-
 }  // namespace donner::geode

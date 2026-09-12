@@ -34,6 +34,7 @@
 #include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
@@ -60,6 +61,7 @@ constexpr ProgramEntry kPrograms[] = {
     {"checkerboard", 0, &programs::BuildCheckerboardModule},
     {"color_space_convert", 1, &programs::BuildColorSpaceConvertModule},
     {"filter_color_matrix", 1, &programs::BuildFilterColorMatrixModule},
+    {"filter_image", 1, &programs::BuildFilterImageModule},
     {"flood", 1, &programs::BuildFloodModule},
     {"gaussian_blur", 1, &programs::BuildGaussianBlurModule},
     {"diffuse_lighting", 1, &programs::BuildDiffuseLightingModule},

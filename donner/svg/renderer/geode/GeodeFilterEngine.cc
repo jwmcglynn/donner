@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <limits>
@@ -20,6 +21,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
+#include "donner/gpu/shader/generated/FilterImageShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
@@ -28,6 +30,7 @@
 #include "donner/gpu/shader/programs/DisplacementMapBindings.h"
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
+#include "donner/gpu/shader/programs/FilterImageBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/GaussianBlurBindings.h"
 #include "donner/gpu/shader/programs/LightingBindings.h"
@@ -951,6 +954,8 @@ struct ImageParams {
   uint32_t pad1;
 };
 
+static_assert(sizeof(ImageParams) == 40);
+
 uint32_t ImageSamplingMode(svg::ImageRendering imageRendering) {
   switch (imageRendering) {
     case svg::ImageRendering::CrispEdges:
@@ -1049,63 +1054,6 @@ wgpu::Texture createTransparentIntermediateTexture(FilterResourceArena& arena, u
   pass.get().end();
 
   return texture;
-}
-
-/// Helper to create a pipeline with a standard (input, output, uniform) bind group layout.
-/// Used by blur, offset, and color-matrix pipelines.
-struct InputOutputUniformPipeline {
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout;
-  ScopedWgpuHandle<wgpu::ComputePipeline> pipeline;
-};
-
-InputOutputUniformPipeline createInputOutputUniformPipeline(const wgpu::Device& dev,
-                                                            const char* label,
-                                                            wgpu::ShaderModule shaderModule,
-                                                            size_t uniformSize) {
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(shaderModule);
-  wgpu::BindGroupLayoutEntry entries[3]{};
-
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
-  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[0].texture.multisampled = false;
-
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Compute;
-  entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-  entries[1].storageTexture.format = kFormat;
-  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-  entries[2].binding = 2;
-  entries[2].visibility = wgpu::ShaderStage::Compute;
-  entries[2].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[2].buffer.minBindingSize = uniformSize;
-
-  std::string bglLabel = std::string(label) + "BGL";
-  wgpu::BindGroupLayoutDescriptor bglDesc{};
-  bglDesc.label = wgpuLabel(bglLabel.c_str());
-  bglDesc.entryCount = 3;
-  bglDesc.entries = entries;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bgl(dev.createBindGroupLayout(bglDesc));
-
-  std::string plLabel = std::string(label) + "PipelineLayout";
-  wgpu::PipelineLayoutDescriptor plDesc{};
-  plDesc.label = wgpuLabel(plLabel.c_str());
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bgl.get()};
-  plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-
-  std::string cpLabel = std::string(label) + "Pipeline";
-  wgpu::ComputePipelineDescriptor cpDesc{};
-  cpDesc.label = wgpuLabel(cpLabel.c_str());
-  cpDesc.layout = pipelineLayout.get();
-  cpDesc.compute.module = shader.get();
-  cpDesc.compute.entryPoint = wgpuLabel("main");
-  ScopedWgpuHandle<wgpu::ComputePipeline> pipeline(dev.createComputePipeline(cpDesc));
-
-  return {std::move(bgl), std::move(pipeline)};
 }
 
 /// Helper to create a pipeline with a two-input (in1, in2, output, uniform) bind group layout.
@@ -1330,10 +1278,13 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param input Source texture, borrowed. @param output Destination texture, borrowed.
 /// @param uniforms Parameter block to upload. @param label Debug label stem for the pass.
 /// @param workgroupSize Size the entry point declares, along x and y.
+/// @param transferTable Optional read-only storage table bound at index three.
+/// @param destinationExtent Optional dispatch extent; defaults to the source dimensions.
 [[nodiscard]] bool dispatchRuntimeInputOutputParameters(
     FilterResourceArena& arena, const RuntimeComputeProgram& program, const wgpu::Texture& input,
     const gpu::Texture& output, std::span<const uint8_t> uniforms, const char* label,
-    uint32_t workgroupSize, const gpu::Buffer* transferTable = nullptr) {
+    uint32_t workgroupSize, const gpu::Buffer* transferTable = nullptr,
+    std::optional<gpu::Extent2d> destinationExtent = std::nullopt) {
   if (!program.pipeline.isValid()) {
     return false;
   }
@@ -1364,11 +1315,11 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const gpu::Extent2d extent = destinationExtent.value_or(
+      gpu::Extent2d{.width = input.getWidth(), .height = input.getHeight()});
   return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
-                                   (width + workgroupSize - 1) / workgroupSize,
-                                   (height + workgroupSize - 1) / workgroupSize);
+                                   (extent.width + workgroupSize - 1) / workgroupSize,
+                                   (extent.height + workgroupSize - 1) / workgroupSize);
 }
 
 /// Records a two-input pass, with an optional uniform block, through the runtime.
@@ -1413,50 +1364,6 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
          arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
                                    (extent.width + workgroupSize - 1) / workgroupSize,
                                    (extent.height + workgroupSize - 1) / workgroupSize);
-}
-
-/// Dispatch a compute shader with a standard (input, output, uniform) bind group.
-void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
-                                const wgpu::BindGroupLayout& bgl,
-                                const wgpu::ComputePipeline& pipeline, const wgpu::Texture& input,
-                                const wgpu::Texture& output, const wgpu::Buffer& uniformBuffer,
-                                uint64_t uniformOffset, size_t uniformSize, const char* label) {
-  const uint32_t width = output.getWidth();
-  const uint32_t height = output.getHeight();
-
-  ScopedWgpuHandle<wgpu::TextureView> inputView(input.createView());
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
-
-  wgpu::BindGroupEntry bgEntries[3]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = outputView.get();
-  bgEntries[2].binding = 2;
-  bgEntries[2].buffer = uniformBuffer;
-  bgEntries[2].offset = uniformOffset;
-  bgEntries[2].size = uniformSize;
-
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel(label);
-  bgDesc.layout = bgl;
-  bgDesc.entryCount = 3;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(device.device().createBindGroup(bgDesc));
-  device.countBindGroup();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel(label);
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(
-      arena.commandEncoder().beginComputePass(passDesc));
-  pass.get().setPipeline(pipeline);
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
 }
 
 /// Bump-allocate a uniform slot from the engine's persistent per-frame
@@ -1927,10 +1834,14 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
   // --- feImage placement pipeline (input + output + uniform) ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterImage", createFilterImageShader(dev), sizeof(ImageParams));
-    imageBindGroupLayout_ = std::move(bgl);
-    imagePipeline_ = std::move(pipeline);
+    using gpu::shader::programs::FilterImageBinding;
+    const gpu::ShaderModuleDescriptor descriptor =
+        gpu::generated::filter_image::BuildDescriptor(device_.adapterDevice().shaderSourceKind());
+    imageProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), descriptor,
+        {SampledInputEntry(static_cast<uint32_t>(FilterImageBinding::ImageTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(FilterImageBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(FilterImageBinding::Params))});
   }
 
   // The tile program records through the shared GPU command stream.
@@ -4055,14 +3966,32 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
-bool HasSafeFilterImageSource(const svg::components::filter_primitive::Image& primitive,
-                              uint32_t maximumTextureDimension) {
-  return primitive.imageData &&
-         svg::HasExactRgbaPayload(*primitive.imageData, primitive.imageWidth,
-                                  primitive.imageHeight) &&
-         static_cast<uint32_t>(primitive.imageWidth) <= maximumTextureDimension &&
-         static_cast<uint32_t>(primitive.imageHeight) <= maximumTextureDimension &&
-         static_cast<uint32_t>(primitive.imageWidth) <= std::numeric_limits<uint32_t>::max() / 4u;
+constexpr std::optional<uint32_t> FilterImageRowPitch(uint32_t width, uint32_t height) {
+  if (width == 0 || height == 0) {
+    return std::nullopt;
+  }
+  const uint64_t rowBytes = uint64_t{width} * 4u;
+  const uint64_t rowPitch = (rowBytes + 255u) & ~uint64_t{255u};
+  if (rowPitch > std::numeric_limits<uint32_t>::max() ||
+      rowPitch > std::numeric_limits<size_t>::max() / height) {
+    return std::nullopt;
+  }
+  return static_cast<uint32_t>(rowPitch);
+}
+
+static_assert(!FilterImageRowPitch(std::numeric_limits<int>::max(), 1).has_value());
+
+std::optional<uint32_t> FilterImageUploadRowPitch(
+    const svg::components::filter_primitive::Image& primitive, uint32_t maximumTextureDimension) {
+  if (!primitive.imageData ||
+      !svg::HasExactRgbaPayload(*primitive.imageData, primitive.imageWidth,
+                                primitive.imageHeight) ||
+      static_cast<uint32_t>(primitive.imageWidth) > maximumTextureDimension ||
+      static_cast<uint32_t>(primitive.imageHeight) > maximumTextureDimension) {
+    return std::nullopt;
+  }
+  return FilterImageRowPitch(static_cast<uint32_t>(primitive.imageWidth),
+                             static_cast<uint32_t>(primitive.imageHeight));
 }
 
 std::optional<ImageParams> CreateFragmentImageParams(
@@ -4108,34 +4037,29 @@ std::optional<ImageParams> CreateFragmentImageParams(
 }
 
 wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
-                                                        const wgpu::Texture& output) {
-  wgpu::Texture emptyTex = arena.createTexture(gpu::TextureDescriptor{
-      "FilterImageEmptySource", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!emptyTex) {
+                                                        const gpu::Texture& output,
+                                                        gpu::Extent2d destinationExtent) {
+  const gpu::Texture* empty = arena.createRuntimeTexture(
+      gpu::TextureDescriptor{"FilterImageEmptySource",
+                             {1, 1},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  const std::array<uint8_t, 4> zero{};
+  if (empty == nullptr ||
+      device_.adapterDevice().writeTexture(*empty, zero, {0, 256, 1}, {1, 1}).hasError()) {
     return {};
   }
-  const uint8_t zero[4] = {0, 0, 0, 0};
-  wgpu::TexelCopyTextureInfo dstInfo{};
-  dstInfo.texture = emptyTex;
-  wgpu::TexelCopyBufferLayout layout{};
-  layout.bytesPerRow = 4;
-  layout.rowsPerImage = 1;
-  wgpu::Extent3D extent = {1, 1, 1};
-  device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
-  device_.countTextureWrite(4);
 
   ImageParams params{};
   params.m02 = -1000.0f;
   params.m12 = -1000.0f;
-  auto ub = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!ub.buffer) {
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*empty), output,
+          UniformBytes(params), "FilterImageEmptyPass",
+          gpu::shader::programs::kFilterImageWorkgroupSize, nullptr, destinationExtent)) {
     return {};
   }
-  dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                             emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams),
-                             "FilterImageEmptyPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(output);
 }
 
 namespace {
@@ -4246,18 +4170,20 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
     const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
     const Box2d& placementRegionUser) {
-  const wgpu::Device& dev = device_.device();
-
-  const bool hasSafeTextureExtent =
-      HasSafeFilterImageSource(primitive, device_.maxTextureDimension2D());
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
-  if (!output) {
+  const std::optional<uint32_t> uploadRowPitch =
+      FilterImageUploadRowPitch(primitive, device_.maxTextureDimension2D());
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterImageOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
     return {};
   }
 
   // Empty, malformed, degenerate, or device-oversized sources remain transparent.
-  if (!hasSafeTextureExtent) {
-    return renderTransparentImage(arena, output);
+  if (!uploadRowPitch) {
+    return renderTransparentImage(arena, *output, {width, height});
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
@@ -4265,39 +4191,43 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   // (consistent with feFlood / feMerge).
   const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
   const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
-  const std::vector<uint8_t> premul = svg::PremultiplyRgba(*primitive.imageData);
-
-  wgpu::Texture imgTex = arena.createTexture(gpu::TextureDescriptor{
-      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!imgTex) {
-    return {};
+  std::vector<uint8_t> premultiplied = svg::PremultiplyRgba(*primitive.imageData);
+  const uint32_t rowBytes = imgW * 4u;
+  if (*uploadRowPitch != rowBytes) {
+    premultiplied.resize(size_t{*uploadRowPitch} * imgH);
+    for (uint32_t row = imgH; row > 0; --row) {
+      std::memmove(premultiplied.data() + size_t{row - 1} * *uploadRowPitch,
+                   premultiplied.data() + size_t{row - 1} * rowBytes, rowBytes);
+      std::fill_n(premultiplied.data() + size_t{row - 1} * *uploadRowPitch + rowBytes,
+                  *uploadRowPitch - rowBytes, 0);
+    }
   }
 
-  wgpu::TexelCopyTextureInfo dstInfo{};
-  dstInfo.texture = imgTex;
-  wgpu::TexelCopyBufferLayout layout{};
-  layout.bytesPerRow = imgW * 4u;
-  layout.rowsPerImage = imgH;
-  wgpu::Extent3D extent = {imgW, imgH, 1};
-  device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
-  device_.countTextureWrite(premul.size());
+  const gpu::Texture* image = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (image == nullptr) {
+    return {};
+  }
+  if (device_.adapterDevice()
+          .writeTexture(*image, premultiplied, {0, *uploadRowPitch, imgH}, {imgW, imgH})
+          .hasError()) {
+    return {};
+  }
 
   const std::optional<ImageParams> fragmentParams =
       CreateFragmentImageParams(primitive, graph, deviceFromFilter);
   const ImageParams params =
       fragmentParams ? *fragmentParams
                      : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-  if (!uniformBuffer.buffer) {
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*image), *output,
+          UniformBytes(params), fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass",
+          gpu::shader::programs::kFilterImageWorkgroupSize, nullptr,
+          gpu::Extent2d{width, height})) {
     return {};
   }
-
-  dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                             imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
-                             sizeof(ImageParams),
-                             fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgpu::Texture& input,

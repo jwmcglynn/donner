@@ -120,25 +120,4 @@ wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device);
  */
 wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device);
 
-/**
- * Compile the feImage compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_image.wgsl` via the `embed_resources()` Bazel rule.
- * The shader bilinearly samples a premultiplied-alpha image through a 2×3
- * image-from-output transform, producing transparent black outside the
- * image bounds. Covers the external-raster and simple in-document fragment
- * reference cases where the caller supplies the image pixels and the
- * placement transform.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var image_tex: texture_2d<f32>;`
- * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(2) var<uniform> params: ImageParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device);
-
 }  // namespace donner::geode

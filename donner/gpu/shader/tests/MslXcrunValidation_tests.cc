@@ -27,6 +27,7 @@
 #include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
@@ -242,6 +243,11 @@ TEST(MslXcrunValidation, EmittedSubregionClipComputeCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
+}
+
+TEST(MslXcrunValidation, EmittedFilterImageCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(programs::BuildFilterImageModule(), "filter_image");
 }
 
 TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {

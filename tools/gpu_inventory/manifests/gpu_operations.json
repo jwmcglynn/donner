@@ -712,7 +712,6 @@
         "ComputePipeline",
         "ComputePipelineDescriptor",
         "Device",
-        "Extent3D",
         "LoadOp",
         "PipelineLayout",
         "PipelineLayoutDescriptor",
@@ -723,8 +722,6 @@
         "ShaderStage",
         "StorageTextureAccess",
         "StoreOp",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
         "Texture",
         "TextureFormat",
         "TextureSampleType",
@@ -1098,11 +1095,6 @@
       ],
       "wgpuCppTokens": [
         "Texture"
-      ]
-    },
-    "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc": {
-      "wgpuCppTokens": [
-        "ShaderModule"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeSnapshotReadback_tests.cc": {

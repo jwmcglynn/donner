@@ -28,6 +28,7 @@
 #include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
@@ -232,6 +233,11 @@ TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
                              "filter_color_matrix.spv");
+}
+
+TEST(SpirvValValidation, EmittedFilterImagePassesVulkan11Validation) {
+  const std::string spirvVal = SpirvVal();
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterImageModule(), "filter_image.spv");
 }
 
 TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {

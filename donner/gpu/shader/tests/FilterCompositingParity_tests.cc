@@ -2,6 +2,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -417,6 +419,78 @@ TEST(FilterChainPrecision, ImageUploadsRemainDistinctBeforeSubmission) {
         images, transparentSecond ? "image_upload_then_transparent" : "distinct_image_uploads");
   }
 }
+
+TEST(FilterChainPrecision, NarrowMultirowImageUsesDestinationExtentAcrossWorkgroups) {
+  constexpr const char* kImage =
+      "data:image/"
+      "png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAFklEQVR4nGP4z8DwHwyBNBCAGBD6PwCxaQ7youvxUQAA"
+      "AABJRU5ErkJggg==";
+  const auto document = [&](bool empty) {
+    return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11">
+      <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="13" height="11"
+        color-interpolation-filters="sRGB"><feImage x="0" y="0" width="13" height="11"
+        preserveAspectRatio="none" image-rendering="crisp-edges")svg") +
+           (empty ? "" : std::string(" href=\"") + kImage + "\"") +
+           R"svg(/></filter></defs><rect width="13" height="11" fill="red"
+             filter="url(#f)"/></svg>)svg";
+  };
+  const std::array<std::array<uint8_t, 4>, 6> colors{{{255, 0, 0, 255},
+                                                      {0, 255, 0, 255},
+                                                      {0, 0, 255, 255},
+                                                      {255, 255, 0, 255},
+                                                      {0, 255, 255, 255},
+                                                      {255, 0, 255, 255}}};
+  svg::RendererGeode renderer;
+  for (bool empty : {false, true}) {
+    SCOPED_TRACE(empty);
+    ParseWarningSink warnings;
+    auto parsed = svg::parser::SVGParser::ParseSVG(document(empty), warnings);
+    ASSERT_THAT(parsed.hasResult(), testing::IsTrue());
+    ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+    renderer.draw(parsed.result());
+    const svg::RendererBitmap actual = renderer.takeSnapshot();
+    ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(13, 11)));
+    svg::RendererBitmap expected;
+    expected.dimensions = actual.dimensions;
+    expected.rowBytes = actual.rowBytes;
+    expected.alphaType = actual.alphaType;
+    expected.pixels.resize(expected.rowBytes * 11);
+    for (size_t y = 0; y < 11; ++y) {
+      for (size_t x = 0; x < 13; ++x) {
+        const size_t sourceX = (x * 2 + 1) / 13;
+        const size_t sourceY = (y * 3 + 1) / 11;
+        const std::array<uint8_t, 4> color =
+            empty ? std::array<uint8_t, 4>{} : colors[sourceY * 2 + sourceX];
+        std::copy(color.begin(), color.end(),
+                  expected.pixels.begin() + y * expected.rowBytes + x * 4);
+      }
+    }
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, empty ? "image_empty_output" : "image_narrow_multirow_upload",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+class FilterImageParity : public testing::TestWithParam<const char*> {};
+
+TEST_P(FilterImageParity, FractionalSubregionPreservesSamplingAlphaAndTransparentBorders) {
+  constexpr const char* kImage =
+      "data:image/"
+      "png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP4z8DwHwgbGEA0EB8AADifBjx6irrtAAAA"
+      "AElFTkSuQmCC";
+  const std::string primitive =
+      std::string(R"svg(<feImage href=")svg") + kImage +
+      R"svg(" x="1.25" y="1.75" width="8.5" height="6.25" preserveAspectRatio="none"
+        image-rendering=")svg" +
+      GetParam() + R"svg("/>)svg";
+  const std::string caseName = std::string("image_sampling_alpha_and_subregion_") + GetParam();
+  ExpectFilterChainMatches(primitive, caseName.c_str());
+}
+
+INSTANTIATE_TEST_SUITE_P(SamplingModes, FilterImageParity,
+                         testing::Values("auto", "crisp-edges", "pixelated"));
 
 TEST(FilterChainPrecision, RecycledStorageCannotReuseAnEarlierValuesColorConversion) {
   ExpectFilterChainMatches(R"svg(
