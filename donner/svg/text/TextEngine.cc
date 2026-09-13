@@ -453,6 +453,7 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
 struct TextPathLengthAdjustment {
   double letterSpacingPx = 0.0;
   double extraSpacingPx = 0.0;
+  bool applied = false;
 };
 
 TextPathLengthAdjustment applyTextPathLength(
@@ -485,6 +486,7 @@ TextPathLengthAdjustment applyTextPathLength(
   if (targetLength < 0.0) {
     return result;
   }
+  result.applied = true;
 
   if (span.lengthAdjust == LengthAdjust::Spacing) {
     const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
@@ -527,10 +529,12 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       auto& run = runs[i];
       const auto& span = text.spans[i];
 
-      if (run.onPath && span.pathSpline.has_value()) {
+      if (run.onPath) {
         carryActive = false;
         carriedAdvanceDelta = 0.0;
-        continue;
+        if (run.textLengthAppliedOnPath) {
+          continue;
+        }
       } else if (carryActive) {
         const auto& inlinePositions = vertical ? span.yList : span.xList;
         std::optional<size_t> resetCharIndex;
@@ -1555,6 +1559,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
       const TextPathLengthAdjustment pathLengthAdjustment = applyTextPathLength(run, span, params);
+      run.textLengthAppliedOnPath = pathLengthAdjustment.applied;
 
       // Compute total text advance (including kerning and inter-glyph letter-spacing) for
       // text-anchor. For the simple backend, xKern holds per-glyph kerning that was applied to
