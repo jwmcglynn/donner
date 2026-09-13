@@ -1,12 +1,10 @@
 name: CI
 
-# Controls when the action will run. Triggers the workflow on pushes to any
-# branch and PRs targeting the mainline branches we actively use.
+# Validate PRs targeting main or a dependency branch in a stack.
 on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}

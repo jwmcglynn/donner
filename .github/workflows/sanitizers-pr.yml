@@ -2,7 +2,6 @@ name: Sanitizers PR
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - "tools/ci/**"
       - "donner/svg/renderer/geode/**"
