@@ -336,7 +336,99 @@ struct RayCoverage {
   cov: f32,
   wgt: f32,
   winding: f32,
+  legacyCov: f32,
+  legacyWgt: f32,
+  complete: bool,
 };
+
+// Fixed capacity bounds per-fragment sorting without truncating the fallback winding scan.
+const kMaxRayEvents: u32 = 32u;
+
+struct RayEvents {
+  values: array<vec2f, kMaxRayEvents>,
+  count: u32,
+  farWinding: i32,
+  complete: bool,
+};
+
+fn empty_ray() -> RayCoverage {
+  return RayCoverage(0.0, 0.0, 0.0, 0.0, 0.0, true);
+}
+
+fn add_ray_event(events: ptr<function, RayEvents>, r: f32, direction: f32) {
+  if (!(*events).complete) {
+    return;
+  }
+  if (!(abs(r) <= 3.402823466e38)) {
+    (*events).complete = false;
+    return;
+  }
+  if (r >= 0.5) {
+    (*events).farWinding += i32(direction);
+    return;
+  }
+  if (r <= -0.5) {
+    return;
+  }
+  if ((*events).count == kMaxRayEvents) {
+    (*events).complete = false;
+    return;
+  }
+
+  var j = (*events).count;
+  loop {
+    if (j == 0u) {
+      break;
+    }
+    if ((*events).values[j - 1u].x >= r) {
+      break;
+    }
+    (*events).values[j] = (*events).values[j - 1u];
+    j -= 1u;
+  }
+  (*events).values[j] = vec2f(r, direction);
+  (*events).count += 1u;
+}
+
+// Integrate the NonZero predicate; internal winding changes are not boundary edges.
+fn finish_ray(legacy: RayCoverage, events: ptr<function, RayEvents>) -> RayCoverage {
+  var result = legacy;
+  result.legacyCov = legacy.cov;
+  result.legacyWgt = legacy.wgt;
+  result.complete = (*events).complete;
+  if (!result.complete) {
+    return result;
+  }
+
+  result.cov = 0.0;
+  result.wgt = 0.0;
+  var cursor = 0.5;
+  var winding = (*events).farWinding;
+  var i = 0u;
+  while (i < (*events).count) {
+    let r = (*events).values[i].x;
+    let wasInside = winding != 0;
+    result.cov += (cursor - r) * select(0.0, 1.0, wasInside);
+    var delta = 0;
+    loop {
+      delta += i32((*events).values[i].y);
+      i += 1u;
+      if (i == (*events).count) {
+        break;
+      }
+      if ((*events).values[i].x != r) {
+        break;
+      }
+    }
+    winding += delta;
+    if (wasInside != (winding != 0)) {
+      result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+    }
+    cursor = r;
+  }
+  result.cov += (cursor + 0.5) * select(0.0, 1.0, winding != 0);
+  return result;
+}
 
 // Ownership of a shared vertex on the monotone axis, as a direction-independent
 // half-open interval [min, max): min-inclusive, max-exclusive. This is the standard
@@ -352,17 +444,21 @@ fn owns_axis_sample(start: f32, end: f32, sample: f32) -> bool {
   return sample >= lo && sample < hi;
 }
 
-fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
-  var result: RayCoverage;
-  result.cov = 0.0;
-  result.wgt = 0.0;
-  result.winding = 0.0;
+fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32, collectNonzero: bool) -> RayCoverage {
+  var result = empty_ray();
+  var events: RayEvents;
+  events.complete = collectNonzero && all(abs(sample) <= vec2f(3.402823466e38)) &&
+                    ppemX > 0.0 && ppemX <= 3.402823466e38;
   if (slot == kNoBand) {
     return result;
   }
   let band = bands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_h_curve(hCurveIndices[band.curveStart + i]);
+    if (!all(abs(vec4f(curve.p0, curve.p1)) <= vec4f(3.402823466e38)) ||
+        !all(abs(curve.p2) <= vec2f(3.402823466e38))) {
+      events.complete = false;
+    }
     let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
     if ((curve_max_x - sample.x) * ppemX <= -0.5) {
       break;
@@ -381,25 +477,30 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
       let r = (x - sample.x) * ppemX;
       // Endpoint order preserves winding when the tangent derivative is zero.
       let s = select(-1.0, 1.0, curve.p2.y > curve.p0.y);
+      add_ray_event(&events, r, s);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
       result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
     }
   }
-  return result;
+  return finish_ray(result, &events);
 }
 
-fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
-  var result: RayCoverage;
-  result.cov = 0.0;
-  result.wgt = 0.0;
-  result.winding = 0.0;
+fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32, collectNonzero: bool) -> RayCoverage {
+  var result = empty_ray();
+  var events: RayEvents;
+  events.complete = collectNonzero && all(abs(sample) <= vec2f(3.402823466e38)) &&
+                    ppemY > 0.0 && ppemY <= 3.402823466e38;
   if (slot == kNoBand) {
     return result;
   }
   let band = vBands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_v_curve(vCurveIndices[band.curveStart + i]);
+    if (!all(abs(vec4f(curve.p0, curve.p1)) <= vec4f(3.402823466e38)) ||
+        !all(abs(curve.p2) <= vec2f(3.402823466e38))) {
+      events.complete = false;
+    }
     let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
     if ((curve_max_y - sample.y) * ppemY <= -0.5) {
       break;
@@ -418,18 +519,44 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
       let r = (y - sample.y) * ppemY;
       // Endpoint order preserves winding when the tangent derivative is zero.
       let s = select(1.0, -1.0, curve.p2.x > curve.p0.x);
+      add_ray_event(&events, r, s);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
       result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
     }
   }
-  return result;
+  return finish_ray(result, &events);
 }
 
 fn calc_coverage(h: RayCoverage, v: RayCoverage) -> f32 {
   let blended = abs(h.cov * h.wgt + v.cov * v.wgt) / max(h.wgt + v.wgt, 1.0 / 65536.0);
   let floor_cov = min(abs(h.cov), abs(v.cov));
   return max(blended, floor_cov);
+}
+
+// Dense local intersections retain the complete legacy result for both rays.
+fn fill_coverage(horizontal: RayCoverage, vertical: RayCoverage,
+                 fillRule: u32, antialias: u32) -> f32 {
+  if (antialias == 0u) {
+    let winding = u32(abs(horizontal.winding));
+    if (fillRule == 0u) {
+      return select(0.0, 1.0, winding != 0u);
+    }
+    return f32(winding & 1u);
+  }
+  var h = horizontal;
+  var v = vertical;
+  if (fillRule != 0u || !h.complete || !v.complete) {
+    h.cov = h.legacyCov;
+    h.wgt = h.legacyWgt;
+    v.cov = v.legacyCov;
+    v.wgt = v.legacyWgt;
+  }
+  let coverage = calc_coverage(h, v);
+  if (fillRule == 0u) {
+    return saturate(coverage);
+  }
+  return 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
 }
 
 // ============================================================================
@@ -445,39 +572,23 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   let pixel_center = in.clip_pos.xy;
   let ppem = 1.0 / fwidth(in.sample_pos);
 
-  var hCov: RayCoverage;
-  hCov.cov = 0.0;
-  hCov.wgt = 0.0;
-  hCov.winding = 0.0;
+  var hCov = empty_ray();
   if (uniforms.hBandCount > 0u) {
     let hi = clamp(i32((in.sample_pos.y - uniforms.yBase) / uniforms.hStride),
                    0, i32(uniforms.hBandCount) - 1);
-    hCov = accumulateHoriz(hBandGrid[hi], in.sample_pos, ppem.x);
+    hCov = accumulateHoriz(hBandGrid[hi], in.sample_pos, ppem.x,
+                           uniforms.fillRule == 0u && uniforms.antialias != 0u);
   }
 
-  var vCov: RayCoverage;
-  vCov.cov = 0.0;
-  vCov.wgt = 0.0;
-  vCov.winding = 0.0;
+  var vCov = empty_ray();
   if (uniforms.vBandCount > 0u) {
     let vj = clamp(i32((in.sample_pos.x - uniforms.xBase) / uniforms.vStride),
                    0, i32(uniforms.vBandCount) - 1);
-    vCov = accumulateVert(vBandGrid[vj], in.sample_pos, ppem.y);
+    vCov = accumulateVert(vBandGrid[vj], in.sample_pos, ppem.y,
+                           uniforms.fillRule == 0u && uniforms.antialias != 0u);
   }
 
-  var coverage = calc_coverage(hCov, vCov);
-  if (uniforms.antialias == 0u) {
-    let winding = u32(abs(hCov.winding));
-    if (uniforms.fillRule == 0u) {
-      coverage = select(0.0, 1.0, winding != 0u);
-    } else {
-      coverage = f32(winding & 1u);
-    }
-  } else if (uniforms.fillRule == 0u) {
-    coverage = saturate(coverage);
-  } else {
-    coverage = 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
-  }
+  var coverage = fill_coverage(hCov, vCov, uniforms.fillRule, uniforms.antialias);
 
   // Intersect with a nested clip mask (nested <clipPath> references).
   if (uniforms.hasClipMask != 0u) {
