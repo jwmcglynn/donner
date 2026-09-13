@@ -116,8 +116,18 @@
           "type": "Outer"
         }
       ],
-      "builtins": [],
-      "entryPoints": [],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1"
+          ]
+        }
+      ],
       "features": [
         "var"
       ],
