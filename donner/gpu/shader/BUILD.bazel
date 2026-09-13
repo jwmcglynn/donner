@@ -694,17 +694,11 @@ donner_cc_library(
     deps = ["//donner/gpu:descriptors"],
 )
 
-donner_cc_test(
-    name = "generated_program_descriptor_tests",
-    srcs = [
-        "tests/GeneratedProgramDescriptor_tests.cc",
-        "tests/ShaderTestUtils.h",
-        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
-    ],
+donner_cc_library(
+    name = "generated_program_descriptor_test_cases",
+    testonly = 1,
+    hdrs = ["tests/GeneratedProgramDescriptorTestCases.h"],
     deps = [
-        "//donner/gpu",
-        "//donner/gpu:gpu_test_utils",
-        "//donner/gpu:recording_device",
         ":color_space_convert_artifact",
         ":component_transfer_artifact",
         ":composite_artifact",
@@ -718,16 +712,47 @@ donner_cc_test(
         ":gaussian_blur_artifact",
         ":lighting_artifacts",
         ":merge_artifact",
-        ":module_interface",
         ":morphology_artifact",
         ":offset_artifact",
-        ":programs",
-        ":shader",
         ":snapshot_unpremultiply_artifact",
         ":subregion_clip_artifact",
         ":tile_artifact",
         ":turbulence_artifact",
+        ":programs",
+        ":shader",
+    ],
+)
+
+donner_cc_test(
+    name = "generated_program_descriptor_tests",
+    srcs = [
+        "tests/GeneratedProgramDescriptor_tests.cc",
+        "tests/ShaderTestUtils.h",
+    ],
+    deps = [
+        ":generated_program_descriptor_test_cases",
+        ":module_interface",
         ":wgsl_emitter",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# This target replaces global allocation operators and must remain opt-in.
+donner_cc_test(
+    name = "generated_program_descriptor_bench",
+    srcs = [
+        "tests/GeneratedProgramDescriptor_bench.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    tags = ["manual", "perf"],
+    deps = [
+        ":generated_program_descriptor_test_cases",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
     ],
 )

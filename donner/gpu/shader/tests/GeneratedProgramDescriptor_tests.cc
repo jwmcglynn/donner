@@ -4,8 +4,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <chrono>
-#include <cstdio>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,96 +12,15 @@
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/WgslEmitter.h"
-#include "donner/gpu/shader/generated/ColorSpaceConvertShader.h"
-#include "donner/gpu/shader/generated/ComponentTransferShader.h"
-#include "donner/gpu/shader/generated/CompositeShader.h"
-#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
-#include "donner/gpu/shader/generated/DiffuseLightingShader.h"
-#include "donner/gpu/shader/generated/DisplacementMapShader.h"
-#include "donner/gpu/shader/generated/DropShadowShader.h"
-#include "donner/gpu/shader/generated/FilterColorMatrixShader.h"
-#include "donner/gpu/shader/generated/FilterImageShader.h"
-#include "donner/gpu/shader/generated/FilterResolveShader.h"
-#include "donner/gpu/shader/generated/FloodShader.h"
-#include "donner/gpu/shader/generated/GaussianBlurShader.h"
-#include "donner/gpu/shader/generated/MergeShader.h"
-#include "donner/gpu/shader/generated/MorphologyShader.h"
-#include "donner/gpu/shader/generated/OffsetShader.h"
-#include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
-#include "donner/gpu/shader/generated/SpecularLightingShader.h"
-#include "donner/gpu/shader/generated/SubregionClipShader.h"
-#include "donner/gpu/shader/generated/TileShader.h"
-#include "donner/gpu/shader/generated/TurbulenceShader.h"
-#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
-#include "donner/gpu/shader/programs/ComponentTransfer.h"
-#include "donner/gpu/shader/programs/Composite.h"
-#include "donner/gpu/shader/programs/ConvolveMatrix.h"
-#include "donner/gpu/shader/programs/DisplacementMap.h"
-#include "donner/gpu/shader/programs/DropShadow.h"
-#include "donner/gpu/shader/programs/FilterColorMatrix.h"
-#include "donner/gpu/shader/programs/FilterImage.h"
-#include "donner/gpu/shader/programs/Flood.h"
-#include "donner/gpu/shader/programs/GaussianBlur.h"
-#include "donner/gpu/shader/programs/Lighting.h"
-#include "donner/gpu/shader/programs/Merge.h"
-#include "donner/gpu/shader/programs/Morphology.h"
-#include "donner/gpu/shader/programs/Offset.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
-#include "donner/gpu/shader/programs/SubregionClip.h"
-#include "donner/gpu/shader/programs/Tile.h"
-#include "donner/gpu/shader/programs/Turbulence.h"
+#include "donner/gpu/shader/tests/GeneratedProgramDescriptorTestCases.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/svg/renderer/benchmarks/AllocationTracker.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-struct Program {
-  const char* name;
-  ShaderResult<IrModule> (*buildModule)();
-  ShaderModuleDescriptor (*buildDescriptor)(ShaderSourceKind);
-  bool nativeSources;
-};
-
-const Program kPrograms[] = {
-    {"snapshot_unpremultiply", programs::BuildSnapshotUnpremultiplyModule,
-     generated::snapshot_unpremultiply::BuildDescriptor, false},
-    {"flood", programs::BuildFloodModule, generated::flood::BuildDescriptor, false},
-    {"subregion_clip", programs::BuildSubregionClipModule,
-     generated::subregion_clip::BuildDescriptor, false},
-    {"offset", programs::BuildOffsetModule, generated::offset::BuildDescriptor, false},
-    {"color_space_convert", programs::BuildColorSpaceConvertModule,
-     generated::color_space_convert::BuildDescriptor, false},
-    {"filter_color_matrix", programs::BuildFilterColorMatrixModule,
-     generated::filter_color_matrix::BuildDescriptor, false},
-    {"gaussian_blur", programs::BuildGaussianBlurModule, generated::gaussian_blur::BuildDescriptor,
-     false},
-    {"merge", programs::BuildMergeModule, generated::merge::BuildDescriptor, false},
-    {"composite", programs::BuildCompositeModule, generated::composite::BuildDescriptor, false},
-    {"morphology", programs::BuildMorphologyModule, generated::morphology::BuildDescriptor, false},
-    {"tile", programs::BuildTileModule, generated::tile::BuildDescriptor, false},
-    {"filter_resolve", programs::BuildFilterResolveModule,
-     generated::filter_resolve::BuildDescriptor, false},
-    {"component_transfer", programs::BuildComponentTransferModule,
-     generated::component_transfer::BuildDescriptor, true},
-    {"displacement_map", programs::BuildDisplacementMapModule,
-     generated::displacement_map::BuildDescriptor, true},
-    {"drop_shadow", programs::BuildDropShadowModule, generated::drop_shadow::BuildDescriptor, true},
-    {"convolve_matrix", programs::BuildConvolveMatrixModule,
-     generated::convolve_matrix::BuildDescriptor, true},
-    {"filter_image", programs::BuildFilterImageModule, generated::filter_image::BuildDescriptor,
-     true},
-    {"turbulence", programs::BuildTurbulenceModule, generated::turbulence::BuildDescriptor, true},
-    {"diffuse_lighting", programs::BuildDiffuseLightingModule,
-     generated::diffuse_lighting::BuildDescriptor, true},
-    {"specular_lighting", programs::BuildSpecularLightingModule,
-     generated::specular_lighting::BuildDescriptor, true},
-};
-
-void PrintTo(const Program& program, std::ostream* stream) {
-  *stream << program.name;
-}
+using tests::kPrograms;
+using tests::Program;
 
 class GeneratedProgramDescriptorTests : public testing::TestWithParam<Program> {};
 
@@ -204,50 +121,6 @@ TEST_P(GeneratedProgramDescriptorTests, ValidatesProductionDescriptorBufferLayou
         EXPECT_THAT(pass->end(), IsOk());
       }
     }
-  }
-}
-
-TEST_P(GeneratedProgramDescriptorTests, ReportsPerPipelineMetadataValidationCost) {
-  const auto descriptor = GetParam().buildDescriptor(ShaderSourceKind::Wgsl);
-  ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
-  ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
-  std::vector<BindGroupLayoutEntry> entries;
-  for (const auto& binding : *descriptor.bufferBindings) {
-    ASSERT_THAT(binding.group, testing::Eq(0));
-    entries.push_back({binding.binding, binding.stage, binding.type});
-  }
-  for (bool metadata : {false, true}) {
-    RecordingDevice device;
-    auto candidate = descriptor;
-    if (!metadata) {
-      candidate.bufferBindings.reset();
-    }
-    const auto module = GetResultOrFail(device.createShaderModule(candidate));
-    BindGroupLayout group;
-    PipelineLayoutDescriptor layoutDescriptor{"layout", {}};
-    if (!entries.empty()) {
-      group = GetResultOrFail(device.createBindGroupLayout({"layout", entries}));
-      layoutDescriptor.bindGroupLayouts.push_back(group);
-    }
-    const auto layout = GetResultOrFail(device.createPipelineLayout(layoutDescriptor));
-    const auto& entry = candidate.computeEntryPoints.front();
-    const ComputePipelineDescriptor pipelineDescriptor{
-        "pipeline", layout, {module, entry.name}, entry.workgroupSize};
-    const auto warmup = GetResultOrFail(device.createComputePipeline(pipelineDescriptor));
-    constexpr size_t kPipelines = 128;
-    benchmarks::allocations::Scope allocations;
-    const auto start = std::chrono::steady_clock::now();
-    for (size_t index = 0; index < kPipelines; ++index) {
-      const auto pipeline = GetResultOrFail(device.createComputePipeline(pipelineDescriptor));
-    }
-    const auto elapsed = std::chrono::steady_clock::now() - start;
-    const auto measured = allocations.stop();
-    std::fprintf(stderr,
-                 "pipeline_metadata program=%s enabled=%d ns=%.3f allocations=%.3f bytes=%.3f\n",
-                 GetParam().name, metadata,
-                 std::chrono::duration<double, std::nano>(elapsed).count() / kPipelines,
-                 double(measured.allocationCalls) / kPipelines,
-                 double(measured.allocationBytes) / kPipelines);
   }
 }
 
