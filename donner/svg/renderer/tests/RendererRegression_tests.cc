@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
@@ -200,6 +201,42 @@ TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
   ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(500, 500)));
   ExpectVisibleBitmap(actual, "font_shorthand_visible");
   ExpectBitmapsIdentical(actual, expected, "font_shorthand_expansion");
+}
+
+TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
+  const Path path = PathBuilder()
+                        .moveTo({30, 10})
+                        .lineTo({34, 10})
+                        .lineTo({34, 24})
+                        .lineTo({46, 24})
+                        .lineTo({46, 28})
+                        .lineTo({34, 28})
+                        .lineTo({34, 55})
+                        .lineTo({30, 55})
+                        .lineTo({30, 28})
+                        .lineTo({22, 28})
+                        .lineTo({22, 24})
+                        .lineTo({30, 24})
+                        .closePath()
+                        .build();
+  const std::string header = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\">";
+  const std::string source = header + "<path d=\"" + std::string(path.toSVGPathData()) +
+                             "\" fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"6\"/></svg>";
+  const Path expanded = path.strokeToFill({.width = 6.0}, 0.1);
+  const std::string outlineSource = header + "<path d=\"" + std::string(expanded.toSVGPathData()) +
+                                    "\" fill=\"#ff00ff\" fill-rule=\"evenodd\"/></svg>";
+  SVGDocument expectedDocument = instantiateSubtree(source, {}, {80, 80});
+  SVGDocument actualDocument = instantiateSubtree(outlineSource, {}, {80, 80});
+  const RendererBitmap expected =
+      RenderDocumentWithBackend(expectedDocument, RendererBackend::TinySkia);
+  const RendererBitmap actual =
+      RenderDocumentWithBackend(actualDocument, RendererBackend::TinySkia);
+  ExpectBitmapsIdentical(actual, expected, "expanded_thin_crossbar");
+  if (IsRendererBackendAvailable(RendererBackend::Geode)) {
+    const RendererBitmap geode =
+        RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode);
+    ExpectBitmapsIdentical(geode, expected, "geode_thin_crossbar");
+  }
 }
 
 TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport) {
