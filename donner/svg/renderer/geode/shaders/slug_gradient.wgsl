@@ -497,7 +497,10 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32, collectNonzero: bool) -
       let r = (x - sample.x) * ppemX;
       // Endpoint order preserves winding when the tangent derivative is zero.
       let s = select(-1.0, 1.0, curve.p2.y > curve.p0.y);
-      add_ray_event(&events, r, s);
+      // Preserve coincident constant-coordinate edges before grouping local crossings.
+      let eventCoordinate = select(x, curve.p0.x,
+          curve.p0.x == curve.p1.x && curve.p1.x == curve.p2.x);
+      add_ray_event(&events, (eventCoordinate - sample.x) * ppemX, s);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
       result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
@@ -539,7 +542,10 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32, collectNonzero: bool) ->
       let r = (y - sample.y) * ppemY;
       // Endpoint order preserves winding when the tangent derivative is zero.
       let s = select(1.0, -1.0, curve.p2.x > curve.p0.x);
-      add_ray_event(&events, r, s);
+      // Preserve coincident constant-coordinate edges before grouping local crossings.
+      let eventCoordinate = select(y, curve.p0.y,
+          curve.p0.y == curve.p1.y && curve.p1.y == curve.p2.y);
+      add_ray_event(&events, (eventCoordinate - sample.y) * ppemY, s);
       result.cov = result.cov + s * saturate(r + 0.5);
       result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
       result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
