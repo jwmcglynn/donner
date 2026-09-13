@@ -1546,6 +1546,34 @@ ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue>
   return err;
 }
 
+ParseResult<Lengthd> ParseFontSizeValue(std::span<const css::ComponentValue> components,
+                                        bool allowUserUnits) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("larger")) return Lengthd(120, Lengthd::Unit::Percent);
+      if (ident->value.equalsLowercase("smaller")) {
+        return Lengthd(100.0 / 1.2, Lengthd::Unit::Percent);
+      }
+      constexpr double kMediumFontSize = 12.0;
+      if (ident->value.equalsLowercase("xx-small"))
+        return Lengthd(kMediumFontSize * 3.0 / 5.0, Lengthd::Unit::Px);
+      if (ident->value.equalsLowercase("x-small"))
+        return Lengthd(kMediumFontSize * 3.0 / 4.0, Lengthd::Unit::Px);
+      if (ident->value.equalsLowercase("small"))
+        return Lengthd(kMediumFontSize * 8.0 / 9.0, Lengthd::Unit::Px);
+      if (ident->value.equalsLowercase("medium"))
+        return Lengthd(kMediumFontSize, Lengthd::Unit::Px);
+      if (ident->value.equalsLowercase("large"))
+        return Lengthd(kMediumFontSize * 6.0 / 5.0, Lengthd::Unit::Px);
+      if (ident->value.equalsLowercase("x-large"))
+        return Lengthd(kMediumFontSize * 3.0 / 2.0, Lengthd::Unit::Px);
+      if (ident->value.equalsLowercase("xx-large"))
+        return Lengthd(kMediumFontSize * 2.0, Lengthd::Unit::Px);
+    }
+  }
+  return parser::ParseLengthPercentage(components, allowUserUnits);
+}
+
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
 constexpr std::array<std::pair<std::string_view, bool>, 74> kValidPresentationAttributeEntries{{
@@ -1840,14 +1868,37 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          skipWhitespace();
                          continue;
                        }
-                       if (ident->value.equalsLowercase("condensed")) {
+                       if (ident->value.equalsLowercase("ultra-condensed") ||
+                           ident->value.equalsLowercase("extra-condensed") ||
+                           ident->value.equalsLowercase("condensed") ||
+                           ident->value.equalsLowercase("semi-condensed") ||
+                           ident->value.equalsLowercase("semi-expanded") ||
+                           ident->value.equalsLowercase("expanded") ||
+                           ident->value.equalsLowercase("extra-expanded") ||
+                           ident->value.equalsLowercase("ultra-expanded")) {
                          if (sawStretch) {
                            ParseDiagnostic error;
                            error.reason = "Duplicate font-stretch in font shorthand";
                            error.range.start = component.sourceOffset();
                            return std::optional<ParseDiagnostic>(std::move(error));
                          }
-                         fontStretch = static_cast<int>(FontStretch::Condensed);
+                         if (ident->value.equalsLowercase("ultra-condensed")) {
+                           fontStretch = static_cast<int>(FontStretch::UltraCondensed);
+                         } else if (ident->value.equalsLowercase("extra-condensed")) {
+                           fontStretch = static_cast<int>(FontStretch::ExtraCondensed);
+                         } else if (ident->value.equalsLowercase("condensed")) {
+                           fontStretch = static_cast<int>(FontStretch::Condensed);
+                         } else if (ident->value.equalsLowercase("semi-condensed")) {
+                           fontStretch = static_cast<int>(FontStretch::SemiCondensed);
+                         } else if (ident->value.equalsLowercase("semi-expanded")) {
+                           fontStretch = static_cast<int>(FontStretch::SemiExpanded);
+                         } else if (ident->value.equalsLowercase("expanded")) {
+                           fontStretch = static_cast<int>(FontStretch::Expanded);
+                         } else if (ident->value.equalsLowercase("extra-expanded")) {
+                           fontStretch = static_cast<int>(FontStretch::ExtraExpanded);
+                         } else {
+                           fontStretch = static_cast<int>(FontStretch::UltraExpanded);
+                         }
                          sawStretch = true;
                          ++i;
                          skipWhitespace();
@@ -1884,7 +1935,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                      }
 
                      auto sizeResult =
-                         parser::ParseLengthPercentage(component, params.allowUserUnits());
+                         ParseFontSizeValue(std::span(&component, 1), params.allowUserUnits());
                      if (sizeResult.hasError()) {
                        ParseDiagnostic error;
                        error.reason = "Invalid font shorthand";
@@ -1903,6 +1954,35 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    }
 
                    skipWhitespace();
+                   if (i < components.size() && components[i].isToken<css::Token::Delim>() &&
+                       components[i].get<css::Token>().get<css::Token::Delim>().value == '/') {
+                     ++i;
+                     skipWhitespace();
+                     if (i == components.size()) {
+                       ParseDiagnostic error;
+                       error.reason = "Missing line-height in font shorthand";
+                       return std::optional<ParseDiagnostic>(std::move(error));
+                     }
+                     const css::ComponentValue& lineHeight = components[i];
+                     bool validLineHeight = false;
+                     if (const auto* ident = lineHeight.tryGetToken<css::Token::Ident>()) {
+                       validLineHeight = ident->value.equalsLowercase("normal");
+                     } else if (const auto* number = lineHeight.tryGetToken<css::Token::Number>()) {
+                       validLineHeight = number->value >= 0.0;
+                     } else {
+                       validLineHeight =
+                           !parser::ParseLengthPercentage(lineHeight, params.allowUserUnits())
+                                .hasError();
+                     }
+                     if (!validLineHeight) {
+                       ParseDiagnostic error;
+                       error.reason = "Invalid line-height in font shorthand";
+                       error.range.start = lineHeight.sourceOffset();
+                       return std::optional<ParseDiagnostic>(std::move(error));
+                     }
+                     ++i;
+                     skipWhitespace();
+                   }
                    SmallVector<RcString, 1> fontFamilies;
                    bool needsFamily = true;
                    while (i < components.size()) {

@@ -724,6 +724,18 @@ TEST(PropertyRegistry, FontShorthandPresentationAttributeAcceptsUserUnitSize) {
   EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
 }
 
+TEST(PropertyRegistry, FontShorthandAcceptsSizeKeywordsStretchAndLineHeight) {
+  PropertyRegistry registry;
+  registry.parseStyle("font: italic small-caps bold expanded large/1.2 Noto Sans");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+  EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Expanded)));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(12.0 * 6.0 / 5.0, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+}
+
 TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
