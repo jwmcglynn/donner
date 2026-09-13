@@ -125,6 +125,38 @@ public:
   FontManager(FontManager&&) = delete;
   FontManager& operator=(FontManager&&) = delete;
 
+  /// Record every catalog face consulted in a layout, including memoized and pending faces.
+  /// The output survives this manager and can be attached to a stable preview/document task.
+  class DependencyCapture {
+  public:
+    DependencyCapture(FontManager& manager, std::vector<FontFaceDependency>& output);
+    ~DependencyCapture();
+    DependencyCapture(const DependencyCapture&) = delete;
+    DependencyCapture& operator=(const DependencyCapture&) = delete;
+
+  private:
+    FontManager& manager_;
+    std::vector<FontFaceDependency>* previous_;
+  };
+
+  DependencyCapture captureDependencies(std::vector<FontFaceDependency>& output) {
+    return DependencyCapture(*this, output);
+  }
+
+  /// Attribute an already-prepared resource to the enclosing dependency capture.
+  void recordDependencies(std::span<const FontFaceDependency> dependencies);
+
+  /// Latest bounded consumer states. No provider/store callbacks access the registry.
+  std::vector<FontFaceDependency> faceDependencies() const;
+
+  /// Retry pending faces from the normal serialized text/frame preparation path. Returns true
+  /// when a successful resolution changed fontResourceRevision(), even if asset identity did not.
+  bool refreshPendingFonts();
+  bool needsResourceRefresh() const;
+  bool hasUnresolvedDependencies() const;
+  uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+  bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
+
   /**
    * Register a `@font-face` declaration. Sources are resolved lazily on first `findFont()` call
    * for the corresponding family name.
@@ -192,7 +224,7 @@ public:
   FontHandle findFont(std::string_view family, int weight, int style, int stretch);
 
   /**
-   * Load a font from raw TTF/OTF/WOFF data.
+   * Load encoded TTF/OTF/WOFF data (including WOFF2 in full-text builds).
    *
    * The data is copied internally. The font is not associated with any family name; callers
    * should use `findFont()` for name-based lookup.
@@ -201,7 +233,7 @@ public:
    * bytes to stb_truetype because that parser does not accept a buffer length. Use @ref
    * FontDataTrust::Trusted only for application-controlled embedded or local-system fonts.
    *
-   * @param data Raw font file bytes (TTF, OTF, or WOFF 1.0).
+   * @param data Encoded font-file bytes supported by this build's text feature tier.
    * @param trust Whether the source is trusted enough for length-unaware font backends.
    * @return A valid FontHandle on success, or an invalid handle on failure.
    */
@@ -283,7 +315,7 @@ public:
    *
    * Resolution order for `findFont(family)`:
    *   1. Matching `@font-face` rule registered via `addFontFace()` (document-provided fonts win).
-   *   2. The attached provider (a `FontCatalog` tries Embedded families, then System families).
+   *   2. The attached provider (a `FontCatalog` tries Bundled families, then System families).
    *   3. Embedded Public Sans fallback.
    */
   void setFontProvider(const FontFamilyProvider* provider) {
@@ -292,6 +324,10 @@ public:
       // through the previous one carries over.
       provider_ = provider;
       providerFonts_.clear();
+      providerFailures_.clear();
+      providerDependencies_.clear();
+      fontDependenciesOverflowed_ = false;
+      ++fontResourceRevision_;
       cache_.clear();
     }
   }
@@ -325,7 +361,8 @@ private:
    * @return True on success.
    */
   bool setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust,
-                      bool* validationWorkLimitExceeded = nullptr);
+                      bool* validationWorkLimitExceeded = nullptr,
+                      bool* retainedBudgetExceeded = nullptr);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData,
                       FontDataTrust trust, bool* validationWorkLimitExceeded = nullptr);
 
@@ -379,7 +416,9 @@ private:
    * @return True on success.
    */
   bool loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
-                 bool* validationWorkLimitExceeded = nullptr);
+                 bool* validationWorkLimitExceeded = nullptr,
+                 const FontFaceAvailability* catalog = nullptr,
+                 bool* retainedBudgetExceeded = nullptr);
 #endif
 
   /**
@@ -389,7 +428,9 @@ private:
    * @param data Raw font file bytes.
    * @return True on success.
    */
-  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
+  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+                              const FontFaceAvailability* catalog = nullptr,
+                              bool* retainedBudgetExceeded = nullptr);
 
   /// Number of immutable @font-face sources memoized after permanent validation rejection.
   size_t numValidationRejectedSources() const;
@@ -407,10 +448,12 @@ private:
    * loaded first.
    */
   struct ProviderFontKey {
-    std::string family;  ///< Family name, ASCII-lowercased.
-    int weight = 400;    ///< CSS font-weight, 100-900.
-    int style = 0;       ///< CSS font-style, matching \ref FontStyle.
-    int stretch = 5;     ///< CSS font-stretch, matching \ref FontStretch.
+    std::string family;     ///< Family name, ASCII-lowercased.
+    int weight = 400;       ///< CSS font-weight, 100-900.
+    int style = 0;          ///< CSS font-style, matching \ref FontStyle.
+    int stretch = 5;        ///< CSS font-stretch, matching \ref FontStretch.
+    std::string contentId;  ///< Empty for a legacy synchronous provider.
+    uint64_t contentGeneration = 0;
 
     /// Equality comparison; the fields are the identity, so this is total over them.
     bool operator==(const ProviderFontKey& other) const = default;
@@ -422,6 +465,42 @@ private:
     /// Returns a hash value combining every field of \p key.
     size_t operator()(const ProviderFontKey& key) const noexcept;
   };
+
+  /// One synchronous provider lookup; the encoded vector and admission remain scoped by its caller.
+  struct ProviderLookup {
+    std::string_view family;
+    ProviderFontKey dependencyKey;
+    ProviderFontKey contentKey;
+    FontFaceRequest request;
+    FontFaceAvailability availability;
+
+    bool isCatalog() const { return !availability.contentId.empty(); }
+  };
+
+  bool dependencyNeedsResourceRefresh(const ProviderFontKey& key,
+                                      const FontFaceDependency& dependency) const;
+  bool admissionCanProgress(const FontFaceDependency& dependency,
+                            const FontFaceAvailability& current) const;
+  void invalidateChangedProviderAnswer(std::string_view family, const ProviderFontKey& key,
+                                       const std::string& cacheKey);
+  void rememberProviderDependency(const ProviderLookup& lookup, FontFaceLoadState state,
+                                  FontFaceWaitReason waitReason = FontFaceWaitReason::None);
+  FontHandle cachedProviderFont(const ProviderLookup& lookup);
+  bool awaitsExplicitResourceRefresh(const ProviderFontKey& key) const;
+  bool shouldDeferCatalogLookup(const ProviderLookup& lookup);
+  bool catalogFaceFitsConsumer(const ProviderLookup& lookup);
+  bool acceptProviderAdmission(const ProviderLookup& lookup, const FontFaceAdmission& admission);
+  bool providerBytesMatch(const ProviderLookup& lookup, std::span<const uint8_t> data) const;
+  FontHandle loadProviderFont(const ProviderLookup& lookup, std::span<const uint8_t> data);
+  FontHandle cacheProviderFont(const std::string& cacheKey, FontHandle font,
+                               bool documentSourceFailed);
+  FontHandle findProviderFont(std::string_view family, const ProviderFontKey& dependencyKey,
+                              const std::string& cacheKey, bool documentSourceFailed);
+
+  void recordDependency(const ProviderFontKey& key);
+  void rememberDependency(const ProviderFontKey& key, const FontFaceRequest& request,
+                          const FontFaceAvailability& availability, FontFaceLoadState state,
+                          FontFaceWaitReason waitReason = FontFaceWaitReason::None);
 
   /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
@@ -454,6 +533,15 @@ private:
    * them.
    */
   std::unordered_map<ProviderFontKey, FontHandle, ProviderFontKeyHash> providerFonts_;
+
+  /// Terminal decode failures are memoized only for immutable catalog content identities.
+  std::unordered_map<ProviderFontKey, FontFaceWaitReason, ProviderFontKeyHash> providerFailures_;
+  std::unordered_map<ProviderFontKey, FontFaceDependency, ProviderFontKeyHash>
+      providerDependencies_;
+  std::vector<FontFaceDependency>* dependencyCapture_ = nullptr;
+  uint64_t fontResourceRevision_ = 0;
+  bool fontDependenciesOverflowed_ = false;
+  bool refreshingFonts_ = false;
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;

@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
     name = "svg_document_handle",
@@ -175,12 +175,14 @@ donner_cc_library(
     deps = [
         ":svg_document_handle",
         "//donner/svg/components",
+        "//donner/svg/components:font_resource_graph",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/text:text_invalidation",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",
         "//donner/svg/properties",
         "//donner/svg/renderer:rendering_context",
+        "//donner/svg/resources:font_catalog_types",
         "//donner/svg/resources:sandboxed_file_resource_loader",
         # SVGTextContentElement.cc unconditionally uses TextEngine for
         # getComputedTextLength/getSubStringLength, so this dep is not

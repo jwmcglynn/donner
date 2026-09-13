@@ -66,6 +66,7 @@
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/ViewportSvgExport.h"
+#include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #ifndef __EMSCRIPTEN__
@@ -1185,6 +1186,23 @@ void PrewarmEditorIcons() {
   PrewarmEmbeddedSvgIcons(requests);
 }
 
+void EditorShell::installCatalogFonts() {
+  svg::FontManager::SetDefaultFontProvider(&fontCatalog_);
+  if (const auto store = fontCatalog_.encodedStore()) {
+    catalogFontWakeTarget_ = std::make_shared<CatalogFontWakeTarget>();
+    catalogFontWakeTarget_->window = &window_;
+    store->setWakeCallback([weakTarget = std::weak_ptr(catalogFontWakeTarget_)] {
+      if (const auto target = weakTarget.lock()) {
+        std::lock_guard lock(target->mutex);
+        if (target->window) target->window->wakeEventLoop();
+      }
+    });
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    catalogFontSession_ = whole_app_worker::InstallCatalogFonts(store);
+#endif
+  }
+}
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1227,10 +1245,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       SampleThumbnailRendererCreationRequestForTesting(),
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
 #endif
-  // Install the embedded + system font catalog as the process-wide default provider, so every
-  // document FontManager created by the render paths resolves font-family names against embedded
-  // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).
-  svg::FontManager::SetDefaultFontProvider(&fontCatalog_);
+  installCatalogFonts();
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
     initialSource = LoadFile(options_.svgPath);
@@ -1408,6 +1423,14 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+  if (catalogFontWakeTarget_) {
+    std::lock_guard lock(catalogFontWakeTarget_->mutex);
+    catalogFontWakeTarget_->window = nullptr;
+  }
+  if (const auto store = fontCatalog_.encodedStore()) store->setWakeCallback({});
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+  whole_app_worker::UninstallCatalogFonts(catalogFontSession_);
+#endif
 #ifdef DONNER_EDITOR_WGPU
   if (directOverlayRenderer_ != nullptr) {
     ResetEmbeddedSvgIconRenderer(*directOverlayRenderer_);
@@ -2109,6 +2132,7 @@ bool EditorShell::tryApplyGroupOperation(bool ungroup) {
 }
 
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
+  cancelSampleThumbnailGeneration();
   documentSyncController_.resetForLoadedDocument(std::string(canonicalSource));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.clear();
@@ -2239,6 +2263,11 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
     return false;
   }
   if (!synchronizeSourceBeforeSave(error)) {
+    return false;
+  }
+
+  if (pendingViewportExportOverlay_ &&
+      !requireCatalogFontsForElement(app_.document().document().svgElement(), error)) {
     return false;
   }
 
@@ -3013,11 +3042,27 @@ FormatBarState EditorShell::computeFormatBarState() {
   state.families = BuildFormatBarFamilies(
       fontCatalog().families(),
       [&](const svg::FontFamilyInfo& info) { return fontPreviewForFamily(info.family); });
+  for (auto& family : state.families) {
+    family.availability = fontCatalog_.availability(family.name, {}).state;
+    if (const auto cached = fontPreviewBitmaps_.find(family.name);
+        cached != fontPreviewBitmaps_.end() && !cached->second) {
+      family.previewFailed = true;
+    }
+    if (const auto waiting = waitingFontPreviews_.find(family.name);
+        waiting != waitingFontPreviews_.end() &&
+        std::ranges::any_of(waiting->second.dependencies, [](const auto& dependency) {
+          return dependency.state == svg::FontFaceLoadState::Failed &&
+                 dependency.availability.state != svg::FontAssetState::Failed;
+        })) {
+      family.previewFailed = true;
+    }
+  }
   return state;
 }
 
 void EditorShell::applyFormatBarActions(const FormatBarState& state,
                                         const FormatBarActions& actions) {
+  for (const auto& family : actions.retryFontFamilies) retryCatalogFont(family);
   const bool editing = activeTool_ == ActiveTool::Text && textTool_.isEditing();
 
   bool changed = false;
@@ -3049,6 +3094,22 @@ void EditorShell::applyFormatBarActions(const FormatBarState& state,
   }
 }
 
+bool EditorShell::requireCatalogFontsForSelection() {
+  if (!renderCoordinator_.asyncRenderer().isFontResourceAdoptionSafe()) {
+    lastConvertTextError_ = "Fonts or rendering are still being prepared. Try outlining again.";
+    return false;
+  }
+  bool fontsReady = true;
+  for (const auto& element : app_.selectedElements()) {
+    std::string error;
+    if (!requireCatalogFontsForElement(element, &error)) {
+      if (fontsReady) lastConvertTextError_ = std::move(error);
+      fontsReady = false;
+    }
+  }
+  return fontsReady;
+}
+
 void EditorShell::convertSelectedTextToOutlines() {
   if (!app_.hasDocument() || !selectionIsAllText()) {
     return;
@@ -3058,6 +3119,7 @@ void EditorShell::convertSelectedTextToOutlines() {
   if (!document.hasSourceStore()) {
     return;
   }
+  if (!requireCatalogFontsForSelection()) return;
   const std::string sourceBefore(document.source());
 
   // Build every conversion first (detached DOM elements, no mutation) so any
@@ -4563,6 +4625,8 @@ void EditorShell::renderRenderPanePresentation(
                                                 static_cast<float>(formatBarRect->topLeft.y)),
                                          static_cast<float>(formatBarRect->width()));
       applyFormatBarActions(formatBarState, actions);
+      visibleFontPreviewFamilies_.insert(actions.visibleFontFamilies.begin(),
+                                         actions.visibleFontFamilies.end());
       requestFontPreviews(actions.requestFontPreviews);
     }
     renderCanvasZoomControl();
@@ -4591,96 +4655,364 @@ void EditorShell::publishSampleThumbnailStats() const {
 #endif
 }
 
-void EditorShell::ensureSampleThumbnails() {
-  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
-  constexpr int kThumbnailWidthPx = 192;
-  constexpr int kThumbnailHeightPx = 120;
-  if (sampleThumbnailBitmaps_.empty()) {
-    sampleThumbnailBitmaps_.resize(samples.size());
+void EditorShell::requestCatalogFonts(std::span<const svg::FontFaceDependency> dependencies,
+                                      int priority, bool explicitRetry) {
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+  const auto store = fontCatalog_.encodedStore();
+  if (!store || catalogFontSession_ == 0) return;
+  for (const auto& dependency : dependencies) {
+    const auto& id = dependency.availability.contentId;
+    if (id.empty() || dependency.state == svg::FontFaceLoadState::Loaded) continue;
+    if (explicitRetry) {
+      if (store->retry(id)) explicitFontRetries_.insert(id);
+    }
+    store->queue(id);
+    if (const auto token = store->beginFetch(id)) {
+      const bool retry = explicitFontRetries_.erase(id) != 0;
+      whole_app_worker::RequestCatalogFont(catalogFontSession_, id, token, priority, retry);
+    }
   }
+#else
+  (void)dependencies;
+  (void)priority;
+  (void)explicitRetry;
+#endif
+}
 
-  AsyncRenderer& asyncRenderer = renderCoordinator_.asyncRenderer();
-
-  // The first picker frame is presentation-only. Posting even a worker task here can contend with
-  // Wasm startup and delay the carousel itself, so arm one explicit follow-up frame and return.
-  if (!samplePickerHasPresentedFrame_) {
-    samplePickerHasPresentedFrame_ = true;
-    publishSampleThumbnailStats();
+bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element,
+                                                std::string* error) {
+  if (!renderCoordinator_.asyncRenderer().isFontResourceAdoptionSafe()) {
+    *error = "Rendering is still being prepared. Try again when it finishes.";
+    return false;
+  }
+  const auto preflight = app_.document().document().preflightFontResourcesForElement(element);
+  using Status = svg::FontResourcePreflight::Status;
+  const auto& dependencies = preflight.dependencies;
+  rememberOutputFontDemand(dependencies);
+  requestCatalogFonts(dependencies, 0);
+  if (preflight.status == Status::InvalidTarget || preflight.status == Status::ResourceLimit ||
+      preflight.status == Status::NeedsRender) {
+    switch (preflight.status) {
+      case Status::InvalidTarget:
+        *error = "The output target is no longer in this document.";
+        break;
+      case Status::ResourceLimit: *error = "The document exceeds its font resource limit."; break;
+      default:
+        *error = "Rendering is still being prepared. Try again when it finishes.";
+        requestRenderAtEndOfFrame_ = true;
+        break;
+    }
     window_.wakeEventLoop();
+    return false;
+  }
+  for (const auto& dependency : dependencies) {
+    if (dependency.availability.contentId.empty() ||
+        dependency.state == svg::FontFaceLoadState::Loaded)
+      continue;
+    *error = dependency.state == svg::FontFaceLoadState::Failed
+                 ? "Font unavailable: " + dependency.family + ". Retry the font, then try again."
+                 : "Loading font: " + dependency.family + ". Try again when it finishes.";
+    window_.wakeEventLoop();
+    return false;
+  }
+  return preflight.status == Status::Ready;
+}
+
+void EditorShell::retryCatalogFont(std::string_view family) {
+  const svg::FontFaceDependency dependency{.family = std::string(family),
+                                           .availability = fontCatalog_.availability(family, {})};
+  rememberOutputFontDemand(std::span(&dependency, 1));
+  requestCatalogFonts(std::span(&dependency, 1), 0, true);
+  fontPreviewBitmaps_.erase(std::string(family));
+  fontPreviewIdentities_.erase(std::string(family));
+  window_.wakeEventLoop();
+}
+
+void EditorShell::rememberOutputFontDemand(std::span<const svg::FontFaceDependency> dependencies) {
+  if (!app_.hasDocument()) return;
+  const auto& document = app_.document();
+  const auto authoredVersion = document.currentFrameVersion() - document.fontResourceRevision();
+  if (outputFontDocumentGeneration_ != document.documentGeneration() ||
+      outputFontSourceVersion_ != document.document().sourceVersion() ||
+      outputFontAuthoredFrameVersion_ != authoredVersion) {
+    outputFontDemand_.clear();
+    explicitFontRetries_.clear();
+  }
+  outputFontDocumentGeneration_ = document.documentGeneration();
+  outputFontSourceVersion_ = document.document().sourceVersion();
+  outputFontAuthoredFrameVersion_ = authoredVersion;
+  for (const auto& dependency : dependencies) {
+    const auto& id = dependency.availability.contentId;
+    if (!id.empty() && dependency.state != svg::FontFaceLoadState::Loaded &&
+        std::ranges::any_of(svg::CatalogFontAssets(),
+                            [&](const auto& asset) { return asset.contentId == id; })) {
+      outputFontDemand_.insert_or_assign(id, dependency);
+    }
+  }
+}
+
+void EditorShell::drainOutputFontDemand() {
+  if (!app_.hasDocument()) {
+    outputFontDemand_.clear();
+    explicitFontRetries_.clear();
     return;
   }
+  const auto& document = app_.document();
+  // Resource adoption increments both counters; an authored mutation changes their difference.
+  if (outputFontDocumentGeneration_ != document.documentGeneration() ||
+      outputFontSourceVersion_ != document.document().sourceVersion() ||
+      outputFontAuthoredFrameVersion_ !=
+          document.currentFrameVersion() - document.fontResourceRevision()) {
+    outputFontDemand_.clear();
+    explicitFontRetries_.clear();
+    return;
+  }
+  const auto store = fontCatalog_.encodedStore();
+  if (!store) return;
+  std::erase_if(outputFontDemand_, [&](const auto& entry) {
+    const auto state = store->availability(entry.first).state;
+    if (state == svg::FontAssetState::Ready || state == svg::FontAssetState::Failed) {
+      explicitFontRetries_.erase(entry.first);
+      return true;
+    }
+    requestCatalogFonts(std::span(&entry.second, 1), 0);
+    return false;
+  });
+}
 
-  if (std::optional<SampleThumbnailRenderResult> result =
-          asyncRenderer.pollSampleThumbnailResult()) {
-    if (result->kind == AuxiliaryPreviewKind::FontFamily && fontPreviewInFlight_.has_value() &&
-        result->key == FontPreviewKey(*fontPreviewInFlight_)) {
-      if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
-        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::move(result->bitmap));
-      } else if (result->outcome != SampleThumbnailRenderOutcome::Cancelled) {
-        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::nullopt);
-      }
-      fontPreviewInFlight_.reset();
-    } else if (result->kind == AuxiliaryPreviewKind::Sample) {
-      const std::size_t index = static_cast<std::size_t>(result->key);
-      if (index < samples.size()) {
-        if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
-          sampleThumbnailBitmaps_[index] = std::move(result->bitmap);
-        }
-        if (result->outcome != SampleThumbnailRenderOutcome::Cancelled &&
-            index == sampleThumbnailGenerationCursor_) {
-          ++sampleThumbnailGenerationCursor_;
-        }
-      }
-      if (sampleThumbnailInFlightIndex_ == index) {
-        sampleThumbnailInFlightIndex_.reset();
+void EditorShell::adoptCatalogFontResources() {
+  const auto store = fontCatalog_.encodedStore();
+  if (!store || !renderCoordinator_.asyncRenderer().isFontResourceAdoptionSafe()) return;
+  store->adoptReadyAssets();
+  // DOM changes may free a consumer's retained-font budget without a transport wake.
+  if (app_.hasDocument() && app_.document().refreshFontResources()) {
+    requestRenderAtEndOfFrame_ = !showSamplePicker_ || samplePresentationPending_;
+    window_.wakeEventLoop();
+  }
+  drainOutputFontDemand();
+  if (app_.hasDocument() && (!showSamplePicker_ || samplePresentationPending_)) {
+    if (app_.document().document().hasUnresolvedFontResources()) {
+      requestCatalogFonts(app_.document().document().renderedFontDependencies(), 0);
+      for (const auto& element : app_.selectedElements()) {
+        const auto preflight = app_.document().document().preflightFontResourcesForElement(element);
+        requestCatalogFonts(preflight.dependencies, 0);
       }
     }
   }
+}
 
-  if (sampleThumbnailGenerationCursor_ >= samples.size()) {
+void EditorShell::pollAuxiliaryPreviewResult() {
+  if (auto result = renderCoordinator_.asyncRenderer().pollSampleThumbnailResult()) {
+    handleAuxiliaryPreviewResult(std::move(*result));
+  }
+}
+
+void EditorShell::handleAuxiliaryPreviewResult(SampleThumbnailRenderResult result) {
+  if (result.taskGeneration != previewTaskGeneration_) return;
+  const auto fontOutcome = ClassifyTemporaryFontResources(
+      result.fontDependencies, svg::FontResourcePreflight::Status::Ready);
+  const bool pending = (result.outcome == SampleThumbnailRenderOutcome::FontsPending ||
+                        result.outcome == SampleThumbnailRenderOutcome::Rendered) &&
+                       fontOutcome == SampleThumbnailRenderOutcome::FontsPending;
+  const bool rendered = result.outcome == SampleThumbnailRenderOutcome::Rendered &&
+                        fontOutcome == SampleThumbnailRenderOutcome::Rendered &&
+                        !result.bitmap.empty();
+  if (result.kind == AuxiliaryPreviewKind::FontFamily) {
+    handleFontPreviewResult(std::move(result), pending, rendered);
+  } else {
+    handleSamplePreviewResult(std::move(result), pending, rendered);
+  }
+}
+
+void EditorShell::handleFontPreviewResult(SampleThumbnailRenderResult result, bool pending,
+                                          bool rendered) {
+  if (!fontPreviewInFlight_ || result.key != FontPreviewKey(*fontPreviewInFlight_)) return;
+  const std::string family = std::move(*fontPreviewInFlight_);
+  fontPreviewInFlight_.reset();
+  if (!visibleFontPreviewFamilies_.contains(family)) return;
+  if (pending) {
+    waitingFontPreviews_.insert_or_assign(
+        family, PendingPreviewFonts{.dependencies = std::move(result.fontDependencies),
+                                    .wakeRevision = result.fontWakeRevision,
+                                    .taskGeneration = result.taskGeneration});
+  } else if (rendered) {
+    fontPreviewBitmaps_.insert_or_assign(family, std::move(result.bitmap));
+    fontPreviewIdentities_.insert_or_assign(
+        family, PreviewFontIdentity{.resourceRevision = result.fontResourceRevision,
+                                    .dependencies = std::move(result.fontDependencies)});
+  } else if (result.outcome != SampleThumbnailRenderOutcome::Cancelled) {
+    fontPreviewBitmaps_.insert_or_assign(family, std::nullopt);
+  }
+}
+
+void EditorShell::handleSamplePreviewResult(SampleThumbnailRenderResult result, bool pending,
+                                            bool rendered) {
+  const auto index = static_cast<std::size_t>(result.key);
+  if (sampleThumbnailInFlightIndex_ != index) return;
+  sampleThumbnailInFlightIndex_.reset();
+  if (!showSamplePicker_ || !visibleSamplePreviewIndices_.contains(index)) return;
+  if (pending) {
+    waitingSamplePreviews_.insert_or_assign(
+        index, PendingPreviewFonts{.dependencies = std::move(result.fontDependencies),
+                                   .wakeRevision = result.fontWakeRevision,
+                                   .taskGeneration = result.taskGeneration});
+  } else if (result.outcome != SampleThumbnailRenderOutcome::Cancelled) {
+    finishedSamplePreviewIndices_.insert(index);
+    if (rendered && index < sampleThumbnailBitmaps_.size()) {
+      sampleThumbnailBitmaps_[index] = std::move(result.bitmap);
+      samplePreviewIdentities_.insert_or_assign(
+          index, PreviewFontIdentity{.resourceRevision = result.fontResourceRevision,
+                                     .dependencies = std::move(result.fontDependencies)});
+    }
+  }
+  while (finishedSamplePreviewIndices_.contains(sampleThumbnailGenerationCursor_)) {
+    ++sampleThumbnailGenerationCursor_;
+  }
+}
+
+void EditorShell::retryPendingFontPreviews() {
+  const auto store = fontCatalog_.encodedStore();
+  if (!store) return;
+  const auto wakeRevision = store->wakeRevision();
+  const auto mayRetry = [&](const PendingPreviewFonts& task) {
+    if (task.wakeRevision == wakeRevision) return false;
+    return std::ranges::any_of(task.dependencies, [&](const auto& dependency) {
+      return dependency.state == svg::FontFaceLoadState::WaitingForAdmission ||
+             fontCatalog_.availability(dependency.family, dependency.request) !=
+                 dependency.availability;
+    });
+  };
+  for (auto it = waitingFontPreviews_.begin(); it != waitingFontPreviews_.end();) {
+    requestCatalogFonts(it->second.dependencies, 1);
+    if (mayRetry(it->second)) {
+      pendingFontPreviews_.push_back(it->first);
+      it = waitingFontPreviews_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = waitingSamplePreviews_.begin(); it != waitingSamplePreviews_.end();) {
+    requestCatalogFonts(it->second.dependencies, 1);
+    if (mayRetry(it->second)) {
+      it = waitingSamplePreviews_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void EditorShell::invalidateChangedFontPreviews() {
+  const auto identityChanged = [&](const PreviewFontIdentity& identity) {
+    return std::ranges::any_of(identity.dependencies, [&](const auto& dependency) {
+      const auto current = fontCatalog_.availability(dependency.family, dependency.request);
+      return current.contentId != dependency.availability.contentId ||
+             current.contentGeneration != dependency.availability.contentGeneration;
+    });
+  };
+  std::erase_if(fontPreviewIdentities_, [&](const auto& entry) {
+    if (!identityChanged(entry.second)) return false;
+    fontPreviewBitmaps_.erase(entry.first);
+    return true;
+  });
+  std::erase_if(samplePreviewIdentities_, [&](const auto& entry) {
+    if (!identityChanged(entry.second)) return false;
+    sampleThumbnailBitmaps_[entry.first].reset();
+    finishedSamplePreviewIndices_.erase(entry.first);
+    sampleThumbnailGenerationCursor_ = std::min(sampleThumbnailGenerationCursor_, entry.first);
+    return true;
+  });
+}
+
+void EditorShell::updateVisiblePreviewTasks() {
+  invalidateChangedFontPreviews();
+  std::erase_if(pendingFontPreviews_,
+                [&](const auto& family) { return !visibleFontPreviewFamilies_.contains(family); });
+  std::erase_if(waitingFontPreviews_, [&](const auto& entry) {
+    return !visibleFontPreviewFamilies_.contains(entry.first);
+  });
+  std::erase_if(waitingSamplePreviews_, [&](const auto& entry) {
+    return !showSamplePicker_ || !visibleSamplePreviewIndices_.contains(entry.first);
+  });
+  if ((fontPreviewInFlight_ && !visibleFontPreviewFamilies_.contains(*fontPreviewInFlight_)) ||
+      (sampleThumbnailInFlightIndex_ &&
+       (!showSamplePicker_ ||
+        !visibleSamplePreviewIndices_.contains(*sampleThumbnailInFlightIndex_)))) {
+    renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
+    ++previewTaskGeneration_;
+    fontPreviewInFlight_.reset();
+    sampleThumbnailInFlightIndex_.reset();
+    sampleThumbnailRetryPending_ = false;
+    // The stable waiting tasks have no worker result outstanding and remain current.
+    for (auto& [family, task] : waitingFontPreviews_) task.taskGeneration = previewTaskGeneration_;
+    for (auto& [index, task] : waitingSamplePreviews_) task.taskGeneration = previewTaskGeneration_;
+  }
+  retryPendingFontPreviews();
+}
+
+void EditorShell::advanceVisiblePreviews() {
+  if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
+    ensureSampleThumbnails();
+  } else if (!showSamplePicker_) {
+    advanceFontPreviewGeneration();
+  }
+}
+
+void EditorShell::ensureSampleThumbnails() {
+  const std::span<const EditorSample> samples = GetEditorSampleCatalog();
+  if (sampleThumbnailBitmaps_.empty()) sampleThumbnailBitmaps_.resize(samples.size());
+  pollAuxiliaryPreviewResult();
+  if (!samplePickerHasPresentedFrame_) {
+    samplePickerHasPresentedFrame_ = true;
+    window_.wakeEventLoop();
+    publishSampleThumbnailStats();
+    return;
+  }
+  auto& asyncRenderer = renderCoordinator_.asyncRenderer();
+  if (sampleThumbnailInFlightIndex_ || fontPreviewInFlight_ || asyncRenderer.isBusy()) {
     sampleThumbnailRetryPending_ = false;
     publishSampleThumbnailStats();
     return;
   }
-  if (sampleThumbnailInFlightIndex_.has_value() || asyncRenderer.isBusy()) {
-    // Work in flight ends in a completion callback, which wakes the loop.
+  std::optional<std::size_t> next;
+  for (std::size_t index = 0; index < samples.size(); ++index) {
+    if (visibleSamplePreviewIndices_.contains(index) &&
+        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
+      next = index;
+      break;
+    }
+  }
+  if (!next) {
     sampleThumbnailRetryPending_ = false;
     publishSampleThumbnailStats();
     return;
   }
-
-  const std::size_t index = sampleThumbnailGenerationCursor_;
+  const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
-      .key = index,
-      .source = std::string(samples[index].source),
-      .dimensions = Vector2i(kThumbnailWidthPx, kThumbnailHeightPx),
+      .key = *next,
+      .taskGeneration = previewTaskGeneration_,
+      .fontWakeRevision = store ? store->wakeRevision() : 0,
+      .source = std::string(samples[*next].source),
+      .dimensions = Vector2i(192, 120),
   };
 #ifndef __EMSCRIPTEN__
   request.nativeRenderer = &renderCoordinator_.renderer();
 #endif
-  if (asyncRenderer.requestSampleThumbnail(std::move(request))) {
-    sampleThumbnailInFlightIndex_ = index;
-    sampleThumbnailRetryPending_ = false;
-  } else {
-    // The worker runtime can still be initializing when the picker's first
-    // frames land - the two race, and which side wins moves with how fast the
-    // first frame gets presented. A refused request leaves nothing in flight,
-    // so no completion callback will ever wake the on-demand loop again and the
-    // carousel would keep its placeholders forever. Arm a short idle retry
-    // instead of blocking the frame on worker readiness.
-    sampleThumbnailRetryPending_ = true;
-  }
+  sampleThumbnailRetryPending_ = !asyncRenderer.requestSampleThumbnail(std::move(request));
+  if (!sampleThumbnailRetryPending_) sampleThumbnailInFlightIndex_ = *next;
   publishSampleThumbnailStats();
 }
 
 void EditorShell::cancelSampleThumbnailGeneration() {
   renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
+  ++previewTaskGeneration_;
   sampleThumbnailInFlightIndex_.reset();
   sampleThumbnailRetryPending_ = false;
-  if (fontPreviewInFlight_.has_value()) {
-    pendingFontPreviews_.push_front(std::move(*fontPreviewInFlight_));
-    fontPreviewInFlight_.reset();
-  }
+  fontPreviewInFlight_.reset();
+  pendingFontPreviews_.clear();
+  waitingFontPreviews_.clear();
+  waitingSamplePreviews_.clear();
+  visibleFontPreviewFamilies_.clear();
+  visibleSamplePreviewIndices_.clear();
   publishSampleThumbnailStats();
 }
 
@@ -4688,45 +5020,34 @@ void EditorShell::requestFontPreviews(const std::vector<std::string>& families) 
   bool queued = false;
   for (const std::string& family : families) {
     if (!fontCatalog_.hasFamily(family) || fontPreviewBitmaps_.contains(family) ||
-        fontPreviewInFlight_ == family ||
-        std::ranges::find(pendingFontPreviews_, family) != pendingFontPreviews_.end()) {
+        waitingFontPreviews_.contains(family) || fontPreviewInFlight_ == family ||
+        std::ranges::find(pendingFontPreviews_, family) != pendingFontPreviews_.end())
       continue;
-    }
     pendingFontPreviews_.push_back(family);
     queued = true;
   }
-  if (queued) {
-    window_.wakeEventLoop();
-  }
+  if (queued) window_.wakeEventLoop();
 }
 
 void EditorShell::advanceFontPreviewGeneration() {
-  AsyncRenderer& asyncRenderer = renderCoordinator_.asyncRenderer();
-  if (std::optional<SampleThumbnailRenderResult> result =
-          asyncRenderer.pollSampleThumbnailResult()) {
-    if (result->kind == AuxiliaryPreviewKind::FontFamily && fontPreviewInFlight_.has_value() &&
-        result->key == FontPreviewKey(*fontPreviewInFlight_)) {
-      if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
-        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::move(result->bitmap));
-      } else if (result->outcome != SampleThumbnailRenderOutcome::Cancelled) {
-        // Remember terminal failures so an unsupported face does not spin the
-        // event loop every time its row becomes visible.
-        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::nullopt);
-      }
-    }
-    fontPreviewInFlight_.reset();
-  }
-
-  if (fontPreviewInFlight_.has_value() || pendingFontPreviews_.empty() || asyncRenderer.isBusy()) {
+  pollAuxiliaryPreviewResult();
+  retryPendingFontPreviews();
+  auto& asyncRenderer = renderCoordinator_.asyncRenderer();
+  if (fontPreviewInFlight_ || sampleThumbnailInFlightIndex_ || pendingFontPreviews_.empty() ||
+      asyncRenderer.isBusy()) {
+    sampleThumbnailRetryPending_ = false;
     return;
   }
-
   std::string family = std::move(pendingFontPreviews_.front());
   pendingFontPreviews_.pop_front();
+  if (!visibleFontPreviewFamilies_.contains(family)) return;
   const double displayScale = window_.displayScale();
+  const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
       .kind = AuxiliaryPreviewKind::FontFamily,
       .key = FontPreviewKey(family),
+      .taskGeneration = previewTaskGeneration_,
+      .fontWakeRevision = store ? store->wakeRevision() : 0,
       .source = FontPreviewSvg(family),
       .dimensions =
           Vector2i(std::max(1, static_cast<int>(std::ceil(kFontPreviewWidth * displayScale))),
@@ -4737,14 +5058,24 @@ void EditorShell::advanceFontPreviewGeneration() {
 #endif
   if (asyncRenderer.requestSampleThumbnail(std::move(request))) {
     fontPreviewInFlight_ = std::move(family);
+    sampleThumbnailRetryPending_ = false;
   } else {
     pendingFontPreviews_.push_front(std::move(family));
+    sampleThumbnailRetryPending_ = true;
   }
 }
 
 FormatBarFontPreview EditorShell::fontPreviewForFamily(std::string_view family) {
   const auto it = fontPreviewBitmaps_.find(std::string(family));
   if (it == fontPreviewBitmaps_.end() || !it->second.has_value()) {
+    return {};
+  }
+  const Vector2i dimensions(
+      std::max(1, static_cast<int>(std::ceil(kFontPreviewWidth * window_.displayScale()))),
+      std::max(1, static_cast<int>(std::ceil(kFontPreviewHeight * window_.displayScale()))));
+  if (it->second->dimensions != dimensions) {
+    fontPreviewIdentities_.erase(it->first);
+    fontPreviewBitmaps_.erase(it);
     return {};
   }
   const GlTextureCache::ThumbnailTextureView uploaded =
@@ -4799,6 +5130,8 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   };
   const SamplePickerActions actions = samplePickerPresenter_.render(
       SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_}, thumbnailProvider);
+  visibleSamplePreviewIndices_.insert(actions.visibleSampleIndices.begin(),
+                                      actions.visibleSampleIndices.end());
   ImGui::EndChild();
 
   if (pendingSampleLoadNeedsConfirmation_) {
@@ -6850,12 +7183,8 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::prepareFrame() {
   const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
-  if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
-    ensureSampleThumbnails();
-  } else if (showSamplePicker_) {
-    // Keep browser failure diagnostics current without letting carousel work re-enter the worker.
-    publishSampleThumbnailStats();
-  }
+  pollAuxiliaryPreviewResult();
+  if (showSamplePicker_) publishSampleThumbnailStats();
 }
 
 #ifndef __EMSCRIPTEN__
@@ -7133,9 +7462,7 @@ void EditorShell::runFrame() {
 #endif
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
-  if (!showSamplePicker_) {
-    advanceFontPreviewGeneration();
-  }
+  pollAuxiliaryPreviewResult();
 #ifndef __EMSCRIPTEN__
   snapshotReproFrame();
 #endif
@@ -7164,6 +7491,7 @@ void EditorShell::runFrame() {
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
   applyPendingHistoryActions();
+  adoptCatalogFontResources();
   if (samplePresentationPending_ && viewportInitialized_ && app_.hasDocument() &&
       renderCoordinator_.displayedDocVersionForDiagnostics() ==
           app_.document().currentFrameVersion()) {
@@ -7322,6 +7650,8 @@ void EditorShell::runFrame() {
   handleGlobalShortcuts();
   markPhase(mainFrameCost.shortcutsMs);
 
+  visibleFontPreviewFamilies_.clear();
+  visibleSamplePreviewIndices_.clear();
   renderMenuBarAndDialogs(compactUi);
   markPhase(mainFrameCost.menusDialogsMs);
 
@@ -7355,7 +7685,10 @@ void EditorShell::runFrame() {
                        ImVec2(static_cast<float>(windowSize.x), paneHeight));
   }
   markPhase(mainFrameCost.splittersMs);
+  updateVisiblePreviewTasks();
+  adoptCatalogFontResources();
   applyDeferredRenderRequest();
+  advanceVisiblePreviews();
   penDragFlushedThisFrame_ = false;
   markPhase(mainFrameCost.endRenderRequestMs);
   recordFrameTelemetry(mainFrameCost, directPresentationCost);

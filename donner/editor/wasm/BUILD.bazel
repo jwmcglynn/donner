@@ -1,7 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//tools/http:serve_http.bzl", "serve_http")
@@ -226,12 +226,14 @@ wasm_cc_binary(
 web_package(
     name = "wasm_web_package",
     srcs = [
+        "catalog-fonts.js",
         "editor.css",
         "editor-bootstrap.js",
         "enable-threads.js",
         "index.html",
         "//:donner_icon.svg",
     ],
+    asset_trees = ["//third_party/google_fonts:google_fonts_woff2_assets"],
     tags = [
         "manual",
         "wasm",
@@ -258,6 +260,7 @@ configured_dependency_audit_test(
     size = "small",
     forbidden = [
         "//donner/svg/renderer:renderer_tiny_skia",
+        "//third_party/google_fonts:google_fonts_data",
         "@tracy//:tracy_client",
     ],
     forbidden_packages = [
@@ -267,8 +270,32 @@ configured_dependency_audit_test(
     required = [
         "//donner/editor/wasm:_editor_wasm_binary",
         "//donner/svg/renderer:renderer_geode",
+        "//third_party/google_fonts:google_fonts_catalog_inc",
+        "//third_party/public-sans:public-sans",
+        "//third_party/roboto:roboto",
+        "//third_party/fira-code:fira-code",
     ],
     target = ":_wasm_web_package_for_serve",
+)
+
+py_test(
+    name = "catalog_package_integrity_test",
+    srcs = ["catalog_package_integrity_test.py"],
+    args = [
+        "--package",
+        "$(rootpath :_wasm_web_package_for_serve)",
+        "--native-notices",
+        "$(rootpath //third_party/google_fonts:catalog_notices)",
+    ],
+    data = [
+        ":_wasm_web_package_for_serve",
+        "//third_party/google_fonts:catalog_notices",
+    ],
+)
+
+py_test(
+    name = "catalog_package_validation_tests",
+    srcs = ["catalog_package_integrity_test.py"],
 )
 
 serve_http(
@@ -392,7 +419,8 @@ py_test(
         "--max-wasm-raw-bytes",
         "13586000",
         "--max-wasm-gzip-bytes",
-        "5332000",
+        # The complete module must remain strictly below 3 MB gzip with the catalog deferred.
+        "2999999",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
@@ -459,3 +487,16 @@ py_test(
 )
 
 donner_package()
+
+py_binary(
+    name = "package_web_files",
+    srcs = ["package_web_files.py"],
+)
+
+py_test(
+    name = "package_web_files_test",
+    srcs = [
+        "package_web_files.py",
+        "package_web_files_test.py",
+    ],
+)

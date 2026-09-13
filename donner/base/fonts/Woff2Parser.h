@@ -24,6 +24,17 @@ public:
   struct Options {
     size_t maximumInputSize = 16 * 1024 * 1024;
     size_t maximumOutputSize = 64 * 1024 * 1024;
+    size_t maximumIntermediateSize = 16 * 1024 * 1024;
+    size_t maximumTransformedGlyfSize = 4 * 1024 * 1024;
+    size_t maximumTableCount = 4096;
+    /// Nonzero for a build-pinned font whose exact reconstructed length is known. Uses one fixed
+    /// output vector instead of a growing string followed by a copy; header and result must match.
+    size_t expectedOutputSize = 0;
+    /// Zero preserves generic decoder allocation behavior. Nonzero bounds all live Brotli
+    /// allocations for this decode, including state, buffers and aligned accounting headers.
+    size_t maximumBrotliMemory = 0;
+    /// Restrict a pinned TrueType-only catalog without weakening generic full-text format support.
+    bool requireTrueTypeOutlines = false;
   };
 
   /**

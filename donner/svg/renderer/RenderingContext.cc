@@ -14,6 +14,8 @@
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/FontMetricDependenciesComponent.h"
+#include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -570,7 +572,15 @@ public:
 
           RecursionGuard guard;
           guard.add(styleEntity);
+#ifdef DONNER_TEXT_ENABLED
+          std::optional<FontManager::DependencyCapture> capture;
+          auto* fontManager = registry_.ctx().find<FontManager>();
+          if (fontManager) capture.emplace(*fontManager, clipPaths.fontDependencies);
+#endif
           collectClipPaths(resolved.reference.handle, clipPaths.clipPaths, guard);
+#ifdef DONNER_TEXT_ENABLED
+          if (fontManager) clipPaths.fontResourceRevision = fontManager->fontResourceRevision();
+#endif
         }
       }
 
@@ -839,6 +849,13 @@ public:
       const Transform2d parentFromEntity = LayoutSystem().getEntityFromWorldTransform(entity);
       const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
       if (clipPathData) {
+#ifdef DONNER_TEXT_ENABLED
+        if (const auto* dependencies = dataEntity.try_get<FontMetricDependenciesComponent>()) {
+          if (auto* manager = registry_.ctx().find<FontManager>()) {
+            manager->recordDependencies(dependencies->fontDependencies);
+          }
+        }
+#endif
         clipPaths.emplace_back(clipPathData->spline, parentFromEntity, clipRule, layer);
       }
 #ifdef DONNER_TEXT_ENABLED
@@ -1381,6 +1398,7 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   registry_.clear<ComputedShadowTreeComponent>();
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
+  registry_.clear<FontPaintDependenciesComponent>();
 
   // Animated presentation attributes are written straight into the cached computed styles (see
   // applyAnimationOverrides above), which is only sound while every pass rebuilds those styles

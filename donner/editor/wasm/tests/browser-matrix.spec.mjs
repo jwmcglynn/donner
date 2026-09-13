@@ -103,6 +103,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "boot_presentation_test",
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
+      "catalog_font_loading_test",
       "chromium_remote_smoke",
       "firefox_composited_invariants_test",
     ],

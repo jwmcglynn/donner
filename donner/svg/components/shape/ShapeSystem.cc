@@ -24,7 +24,8 @@ namespace {
 
 /// Create a FontMetrics with viewport size and font-size context, so that CSS units
 /// (em/ex/ch/rem/vw/vh/vmin/vmax) resolve correctly.
-FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleComponent& style) {
+FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleComponent& style,
+                                  Entity entity) {
   FontMetrics metrics;
 
   if (auto* ctx = registry.ctx().find<SVGDocumentContext>()) {
@@ -57,7 +58,7 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     if (style.properties) {
       if (const auto chUnit =
-              textEngine->measureChUnitInEm(style.properties->fontFamily.get().value())) {
+              textEngine->measureChUnitInEm(style.properties->fontFamily.get().value(), entity)) {
         metrics.chUnitInEm = *chUnit;
       }
     }
@@ -262,7 +263,7 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
-      const FontMetrics metrics = fontMetricsForElement(registry, style);
+      const FontMetrics metrics = fontMetricsForElement(registry, style, entity);
       createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, metrics,
                                    warningSink);
     }

@@ -3,9 +3,11 @@
 #include <woff2/decode.h>
 #include <woff2/output.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace donner::fonts {
 namespace {
@@ -27,6 +29,8 @@ constexpr size_t kMaxCollectionTableReferences = 16384;
 constexpr uint32_t kWoff2Signature = 0x774F4632;  // "wOF2"
 constexpr uint32_t kTtcSignature = 0x74746366;    // "ttcf"
 constexpr uint32_t kGlyfTag = 0x676C7966;         // "glyf"
+constexpr uint32_t kCffTag = 0x43464620;          // "CFF "
+constexpr uint32_t kCff2Tag = 0x43464632;         // "CFF2"
 constexpr uint32_t kLocaTag = 0x6C6F6361;         // "loca"
 
 uint16_t ReadBigEndianU16(std::span<const uint8_t> data, size_t offset);
@@ -132,9 +136,29 @@ uint32_t ReadBigEndianU32(std::span<const uint8_t> data, size_t offset) {
          (static_cast<uint32_t>(data[offset + 2]) << 8) | static_cast<uint32_t>(data[offset + 3]);
 }
 
-std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const uint8_t> data) {
+bool ReadWoff2TableTag(Woff2Cursor& cursor, uint8_t flags, uint32_t* tag) {
+  const uint8_t knownTagIndex = flags & 0x3Fu;
+  if (knownTagIndex == 0x3F) return cursor.readU32(tag);
+  if (knownTagIndex == 10)
+    *tag = kGlyfTag;
+  else if (knownTagIndex == 11)
+    *tag = kLocaTag;
+  else if (knownTagIndex == 13)
+    *tag = kCffTag;
+  return true;
+}
+
+bool IsForbiddenCatalogTag(uint32_t tag, const Woff2Parser::Options& options) {
+  return options.requireTrueTypeOutlines && (tag == kCffTag || tag == kCff2Tag);
+}
+
+std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const uint8_t> data,
+                                                              const Woff2Parser::Options& options) {
+  if (options.requireTrueTypeOutlines && ReadBigEndianU32(data, 4) != 0x00010000) {
+    return "WOFF2: catalog requires standalone TrueType outlines";
+  }
   const uint16_t numTables = ReadBigEndianU16(data, 12);
-  if (numTables > kMaxWoff2Tables) {
+  if (numTables > std::min(kMaxWoff2Tables, options.maximumTableCount)) {
     return "WOFF2: table count exceeds limit";
   }
 
@@ -151,15 +175,11 @@ std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const ui
     }
 
     uint32_t tag = 0;
-    const uint8_t knownTagIndex = flags & 0x3Fu;
-    if (knownTagIndex == 0x3F) {
-      if (!cursor.readU32(&tag)) {
-        return "WOFF2: invalid table directory";
-      }
-    } else if (knownTagIndex == 10) {
-      tag = kGlyfTag;
-    } else if (knownTagIndex == 11) {
-      tag = kLocaTag;
+    if (!ReadWoff2TableTag(cursor, flags, &tag)) {
+      return "WOFF2: invalid table directory";
+    }
+    if (IsForbiddenCatalogTag(tag, options)) {
+      return "WOFF2: catalog requires TrueType outlines without CFF tables";
     }
 
     uint32_t originalLength = 0;
@@ -177,11 +197,13 @@ std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const ui
     if (tag == kLocaTag && transformed && transformLength != 0) {
       return "WOFF2: invalid table directory";
     }
-    if (tag == kGlyfTag && transformed && transformLength > kMaxTransformedGlyfSize) {
+    if (tag == kGlyfTag && transformed &&
+        transformLength > std::min(kMaxTransformedGlyfSize, options.maximumTransformedGlyfSize)) {
       return "WOFF2: transformed glyf size exceeds limit";
     }
 
-    if (transformLength > kMaxIntermediateSize - intermediateBytes) {
+    if (transformLength >
+        std::min(kMaxIntermediateSize, options.maximumIntermediateSize) - intermediateBytes) {
       return "WOFF2: intermediate decompressed size exceeds limit";
     }
     intermediateBytes += transformLength;
@@ -224,6 +246,60 @@ std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const ui
   return std::nullopt;
 }
 
+std::optional<std::string_view> ValidateWoff2Header(std::span<const uint8_t> woff2Data,
+                                                    const Woff2Parser::Options& options) {
+  if (woff2Data.size() > kMaxWoff2InputSize || woff2Data.size() > options.maximumInputSize) {
+    return "WOFF2 input exceeds limit";
+  }
+  if (woff2Data.size() < 4) {
+    return "WOFF2 data too short";
+  }
+
+  if (ReadBigEndianU32(woff2Data, 0) != kWoff2Signature) {
+    return "WOFF2: invalid signature";
+  }
+
+  if (woff2Data.size() < kWoff2HeaderSize) {
+    return "WOFF2: incomplete header";
+  }
+
+  if (ReadBigEndianU32(woff2Data, 8) != woff2Data.size()) {
+    return "WOFF2: declared input length does not match data";
+  }
+
+  if (ReadBigEndianU16(woff2Data, 12) == 0) {
+    return "WOFF2: header declares no tables";
+  }
+
+  if (ReadBigEndianU16(woff2Data, 14) != 0) {
+    return "WOFF2: reserved header field must be zero";
+  }
+
+  return std::nullopt;
+}
+
+ParseResult<std::vector<uint8_t>> DecompressFixedOutput(std::span<const uint8_t> woff2Data,
+                                                        size_t outSize,
+                                                        const Woff2Parser::Options& options) {
+  if (outSize != options.expectedOutputSize) {
+    ParseDiagnostic err;
+    err.reason = "WOFF2: declared size differs from expected output size";
+    return err;
+  }
+  // This path is opt-in for an exact, independently bounded size. Generic untrusted documents
+  // retain the grow-on-write path below and cannot force this allocation with a header alone.
+  std::vector<uint8_t> output(outSize);
+  woff2::WOFF2MemoryOut out(output.data(), output.size());
+  if (!woff2::ConvertWOFF2ToTTF(woff2Data.data(), woff2Data.size(), &out,
+                                options.maximumBrotliMemory) ||
+      out.Size() != outSize) {
+    ParseDiagnostic err;
+    err.reason = "WOFF2: bounded decompression failed";
+    return err;
+  }
+  return ParseResult<std::vector<uint8_t>>(std::move(output));
+}
+
 }  // namespace
 
 ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_t> woff2Data) {
@@ -232,44 +308,9 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
 
 ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_t> woff2Data,
                                                           const Options& options) {
-  if (woff2Data.size() > kMaxWoff2InputSize || woff2Data.size() > options.maximumInputSize) {
+  if (const auto headerError = ValidateWoff2Header(woff2Data, options)) {
     ParseDiagnostic err;
-    err.reason = "WOFF2 input exceeds limit";
-    return err;
-  }
-  if (woff2Data.size() < 4) {
-    ParseDiagnostic err;
-    err.reason = "WOFF2 data too short";
-    return err;
-  }
-
-  if (ReadBigEndianU32(woff2Data, 0) != kWoff2Signature) {
-    ParseDiagnostic err;
-    err.reason = "WOFF2: invalid signature";
-    return err;
-  }
-
-  if (woff2Data.size() < kWoff2HeaderSize) {
-    ParseDiagnostic err;
-    err.reason = "WOFF2: incomplete header";
-    return err;
-  }
-
-  if (ReadBigEndianU32(woff2Data, 8) != woff2Data.size()) {
-    ParseDiagnostic err;
-    err.reason = "WOFF2: declared input length does not match data";
-    return err;
-  }
-
-  if (ReadBigEndianU16(woff2Data, 12) == 0) {
-    ParseDiagnostic err;
-    err.reason = "WOFF2: header declares no tables";
-    return err;
-  }
-
-  if (ReadBigEndianU16(woff2Data, 14) != 0) {
-    ParseDiagnostic err;
-    err.reason = "WOFF2: reserved header field must be zero";
+    err.reason = *headerError;
     return err;
   }
 
@@ -291,10 +332,14 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
     return err;
   }
 
-  if (const auto preflightError = ValidateDecoderResourceBounds(woff2Data)) {
+  if (const auto preflightError = ValidateDecoderResourceBounds(woff2Data, options)) {
     ParseDiagnostic err;
     err.reason = *preflightError;
     return err;
+  }
+
+  if (options.expectedOutputSize != 0) {
+    return DecompressFixedOutput(woff2Data, outSize, options);
   }
 
   // Treat the declared size as a ceiling, not work that must happen before the stream is
@@ -304,7 +349,8 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
   woff2::WOFF2StringOut out(&output);
   out.SetMaxSize(outSize);
 
-  if (!woff2::ConvertWOFF2ToTTF(woff2Data.data(), woff2Data.size(), &out)) {
+  if (!woff2::ConvertWOFF2ToTTF(woff2Data.data(), woff2Data.size(), &out,
+                                options.maximumBrotliMemory)) {
     ParseDiagnostic err;
     err.reason = "WOFF2: decompression failed";
     return err;

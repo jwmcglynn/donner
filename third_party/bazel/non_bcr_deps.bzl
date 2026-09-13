@@ -42,6 +42,8 @@ def _non_bcr_deps_impl(_mctx):
         name = "woff2",
         build_file = "//third_party:BUILD.woff2",
         commit = "fb9c3379f2605b10f3e8f1d9636664ab5576775c",
+        patches = ["//third_party:woff2_bounded_decode.patch"],
+        patch_args = ["-p1"],
         remote = "https://github.com/google/woff2.git",
     )
 

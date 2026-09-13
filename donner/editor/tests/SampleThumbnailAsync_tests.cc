@@ -488,5 +488,47 @@ TEST(SampleThumbnailAsyncTest, CompletionWakesOnceThenWorkerRemainsQuiescent) {
   EXPECT_FALSE(stats.resultReady);
 }
 
+TEST(SampleThumbnailAsyncTest, FontAdoptionWaitsForHeldAuxiliaryResult) {
+  svg::Renderer thumbnailRoot;
+  AsyncRenderer renderer;
+  auto request = ThumbnailRequest(91u, kRedSvg, thumbnailRoot);
+  request.taskGeneration = 8;
+  request.fontWakeRevision = 12;
+  ASSERT_EQ(renderer.requestSampleThumbnail(std::move(request)), true);
+  EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
+  ASSERT_EQ(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().resultReady; }), true);
+  EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
+  const auto result = renderer.pollSampleThumbnailResult();
+  ASSERT_EQ(result.has_value(), true);
+  EXPECT_EQ(result->taskGeneration, 8u);
+  EXPECT_EQ(result->fontWakeRevision, 12u);
+  EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), true);
+}
+
+TEST(SampleThumbnailAsyncTest, FontAdoptionWaitsForHeldDocumentResultAndPreservesItsEpoch) {
+  svg::Renderer root;
+  AsyncRenderer renderer;
+  renderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  ParseWarningSink warnings;
+  auto parsed = svg::parser::SVGParser::ParseSVG(kRedSvg, warnings);
+  ASSERT_EQ(parsed.hasResult(), true);
+  auto document = std::move(parsed.result());
+  document.setCanvasSize(32, 24);
+  RenderRequest request(root, document);
+  request.version = 7;
+  request.documentGeneration = 2;
+  request.fontResourceRevision = 3;
+  renderer.requestRender(request);
+  ASSERT_EQ(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() + 5s),
+            true);
+  EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
+  const auto result = renderer.pollResult();
+  ASSERT_EQ(result.has_value(), true);
+  EXPECT_EQ(result->version, 7u);
+  EXPECT_EQ(result->documentGeneration, 2u);
+  EXPECT_EQ(result->fontResourceRevision, 3u);
+  EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), true);
+}
+
 }  // namespace
 }  // namespace donner::editor

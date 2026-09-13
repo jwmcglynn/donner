@@ -12,6 +12,10 @@ import { waitForAppliedPointer } from "./gesture-streams";
 
 declare global {
   interface Window {
+    __catalogFontTest?: {
+      requests: { url: string; afterFirstFrame: boolean }[];
+      requestsAtFirstFrame: number | null;
+    };
     __donnerBackend?: string;
     __donnerWholeAppWorker?: boolean;
     __donnerCanStartWasm?: boolean;
@@ -29,6 +33,12 @@ declare global {
     // landed, and loosening them would push a null check into each one.
     __donnerWorkerStats?: {
       completedResults: number;
+      acceptedForPresentation: boolean;
+      documentGeneration: number;
+      frameVersion: number;
+      fontResourceRevision: number;
+      sourceVersion: number;
+      undoEntryCount: number;
       publishedAtMs: number;
       presentedAtMs?: number;
       workerMs: number;
@@ -1066,64 +1076,150 @@ for (
   });
 }
 
-test("Text and Style renders embedded glyphs without font requests", async ({ page }) => {
-  const fontNetworkRequests: string[] = [];
-  page.on("request", (request) => {
-    const pathname = new URL(request.url()).pathname.toLowerCase();
-    if (
-      request.resourceType() === "font"
-      || /\.(?:ttf|otf|woff2?)(?:$|\/)/i.test(pathname)
-    ) {
-      fontNetworkRequests.push(request.url());
-    }
-  });
-  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
-  const fontRequests = () =>
-    page.evaluate(() =>
-      performance
-        .getEntriesByType("resource")
-        .map((entry) => entry.name)
-        .filter((name) => {
-          const pathname = new URL(name).pathname.toLowerCase();
-          return pathname.includes("/fonts/") || /\.(?:ttf|otf|woff2?)$/.test(pathname);
-        })
-    );
-  expect(await fontRequests()).toEqual([]);
-  expect(fontNetworkRequests).toEqual([]);
+test(
+  "catalog font loading adopts deferred WOFF2 without authored edits",
+  async ({ page }, testInfo) => {
+    const baseUrl = new URL(process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000");
+    const manifestResponse = await page.request.get(new URL("catalog-fonts.json", baseUrl).href);
+    expect(manifestResponse.ok()).toBe(true);
+    const manifest = await manifestResponse.json() as {
+      fonts: { family: string; sha256: string; path: string }[];
+    };
+    expect(manifest.fonts).toHaveLength(12);
+    const inter = manifest.fonts.find((font) => font.family === "Inter");
+    expect(inter).toBeDefined();
+    if (!inter) throw new Error("The packaged catalog must contain Inter");
+    expect(inter.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(inter.path).toBe(`fonts/${inter.sha256}.woff2`);
+    const interUrl = new URL(inter.path, baseUrl).href;
 
-  const canvas = page.locator("canvas#canvas");
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  if (bounds === null) {
-    return;
-  }
-  const beforeSample = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
-  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
-  await expect(canvas).toHaveAttribute("data-active-sample-id", "text-style", { timeout: 1000 });
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected the Text and Style sample to finish presenting",
-      timeout: scaledMs(2000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeSample);
-  // Glyph evidence comes from the render pane's own pixels in the single
-  // canvas: the document background and the antialiased glyph coverage on top
-  // of it must both be present, which is what a missing embedded font breaks.
-  const textStats = await readTextStyleGlyphStats(page, {
-    x: kSourcePaneWidth + 20,
-    y: 80,
-    width: 1600 - kSourcePaneWidth - kRightPaneWidth - 40,
-    height: 680,
-  });
-  expect(textStats.backgroundPixels).toBeGreaterThan(10_000);
-  expect(textStats.glyphPixels).toBeGreaterThan(200);
-  expect(await fontRequests()).toEqual([]);
-  expect(fontNetworkRequests).toEqual([]);
-  expect(fatalMessages).toEqual([]);
-});
+    await page.addInitScript(() => {
+      const probe = {
+        requests: [] as { url: string; afterFirstFrame: boolean }[],
+        requestsAtFirstFrame: null as number | null,
+      };
+      window.__catalogFontTest = probe;
+      window.addEventListener("donner:first-frame-presented", () => {
+        probe.requestsAtFirstFrame = probe.requests.length;
+      }, { once: true });
+      const fetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        if (url.pathname.includes("/fonts/")) {
+          probe.requests.push({
+            url: url.href,
+            afterFirstFrame: window.__donnerFirstFramePresented === true,
+          });
+        }
+        return fetch(input, init);
+      };
+    });
+
+    const networkRequests: string[] = [];
+    page.on("request", (request) => {
+      if (/\.(?:ttf|otf|woff2?)$/.test(new URL(request.url()).pathname)) {
+        networkRequests.push(request.url());
+      }
+    });
+    let releaseFont!: () => void;
+    const fontGate = new Promise<void>((resolve) => {
+      releaseFont = resolve;
+    });
+    await page.route("**/fonts/*.woff2", async (route) => {
+      await fontGate;
+      await route.continue();
+    });
+
+    try {
+      const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+      expect(await page.evaluate(() => window.__catalogFontTest?.requestsAtFirstFrame)).toBe(0);
+      // The visible Text and Style card requests Inter before its document is opened.
+      await expect.poll(() => networkRequests, { timeout: scaledMs(2000) }).toEqual([interUrl]);
+      const canvas = page.locator("canvas#canvas");
+      const bounds = await canvas.boundingBox();
+      if (!bounds) throw new Error("The presented editor canvas must have bounds");
+      const priorDocumentGeneration = await page.evaluate(() =>
+        window.__donnerWorkerStats?.documentGeneration ?? 0
+      );
+      await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+      await expect(canvas).toHaveAttribute("data-active-sample-id", "text-style", {
+        timeout: 1000,
+      });
+      await expect.poll(async () =>
+        page.evaluate((priorGeneration) => ({
+          newDocument: (window.__donnerWorkerStats?.documentGeneration ?? 0) > priorGeneration,
+          revision: window.__donnerWorkerStats?.fontResourceRevision,
+          accepted: window.__donnerWorkerStats?.acceptedForPresentation,
+          presented: window.__donnerWorkerStats?.presentedAtMs !== undefined,
+        }), priorDocumentGeneration), {
+        message: "the sample must present fallback text while its WOFF2 response is held",
+        timeout: scaledMs(2000),
+        intervals: [16, 25, 50, 100],
+      }).toEqual({ newDocument: true, revision: 0, accepted: true, presented: true });
+      const region = {
+        x: kSourcePaneWidth + 20,
+        y: 80,
+        width: 1600 - kSourcePaneWidth - kRightPaneWidth - 40,
+        height: 680,
+      };
+      const fallbackGlyphs = await readTextStyleGlyphStats(page, region);
+      expect(fallbackGlyphs.backgroundPixels).toBeGreaterThan(10_000);
+      expect(fallbackGlyphs.glyphPixels).toBeGreaterThan(200);
+      const fallback = await page.evaluate(() => window.__donnerWorkerStats!);
+      expect(fallback.undoEntryCount).toBe(0);
+      expect(networkRequests).toEqual([interUrl]);
+      expect(await page.evaluate(() => window.__catalogFontTest?.requests)).toEqual([
+        { url: interUrl, afterFirstFrame: true },
+      ]);
+      await testInfo.attach("fallback.png", {
+        body: await canvas.screenshot(),
+        contentType: "image/png",
+      });
+
+      const responsePromise = page.waitForResponse(interUrl);
+      releaseFont();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toBe("font/woff2");
+      expect(await response.finished()).toBeNull();
+      await expect.poll(async () =>
+        page.evaluate((previous) => {
+          const current = window.__donnerWorkerStats;
+          return current !== undefined && current.completedResults > previous.completedResults
+            && current.fontResourceRevision > previous.fontResourceRevision
+            && current.acceptedForPresentation && current.publishReason === "render-result"
+            && current.presentedAtMs !== undefined;
+        }, fallback), {
+        message: "verified WOFF2 must reach an accepted and presented font-resource revision",
+        timeout: scaledMs(2000),
+        intervals: [16, 25, 50, 100],
+      }).toBe(true);
+      const adopted = await page.evaluate(() => window.__donnerWorkerStats!);
+      expect(adopted.documentGeneration).toBe(fallback.documentGeneration);
+      expect(adopted.frameVersion).toBeGreaterThan(fallback.frameVersion);
+      expect(adopted.sourceVersion).toBe(fallback.sourceVersion);
+      expect(adopted.undoEntryCount).toBe(fallback.undoEntryCount);
+      const loadedGlyphs = await readTextStyleGlyphStats(page, region);
+      expect(loadedGlyphs.backgroundPixels).toBeGreaterThan(10_000);
+      expect(loadedGlyphs.glyphPixels).toBeGreaterThan(200);
+      expect(networkRequests).toEqual([interUrl]);
+      expect(await page.evaluate(() => window.__catalogFontTest?.requests)).toEqual([
+        { url: interUrl, afterFirstFrame: true },
+      ]);
+      await testInfo.attach("loaded.png", {
+        body: await canvas.screenshot(),
+        contentType: "image/png",
+      });
+      await testInfo.attach("font-adoption.json", {
+        body: JSON.stringify({ fallback, adopted, fallbackGlyphs, loadedGlyphs }, null, 2),
+        contentType: "application/json",
+      });
+      expect(fatalMessages).toEqual([]);
+    } finally {
+      releaseFont();
+    }
+  },
+);
 
 test("browser presents the first Basic Shapes drag frame within the interaction budget", async ({ page }) => {
   const fatalMessages = await openEditor(page, {

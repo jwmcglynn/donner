@@ -145,7 +145,10 @@ def parse_bazel_query_output(
 def discover_targets(repo_root: Path, name_filter: Optional[str] = None) -> list[FuzzerTarget]:
     """Discover fuzzer targets via Bazel query."""
     print("Discovering fuzzer targets...")
-    query = 'attr(tags, "fuzz_target", //...) intersect kind("cc_binary", //...)'
+    query = (
+        'attr(tags, "fuzz_target", //...) intersect '
+        'kind("^(cc_binary|donner_multi_transitioned_binary) rule$", //...)'
+    )
     result = subprocess.run(
         ["bazel", "query", query],
         cwd=repo_root,

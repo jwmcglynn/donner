@@ -1,5 +1,8 @@
-load("//build_defs:rules.bzl", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load(
+    "//donner/editor:editor_product_config.bzl",
+    donner_cc_test = "editor_cc_test",
+)
 
 donner_cc_test(
     name = "repro_decode_clicks_test",

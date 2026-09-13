@@ -86,15 +86,15 @@ ResolvedPaint resolvePaint(const svg::SVGElement& element) {
 
   ResolvedPaint paint;
   paint.fill = serializePaint(
-      style.fill.getOr(svg::PaintServer(svg::PaintServer::Solid(css::Color(kBlack)))), currentColor);
-  paint.fillRule = style.fillRule.getOr(FillRule::NonZero) == FillRule::EvenOdd ? "evenodd"
-                                                                                : "nonzero";
+      style.fill.getOr(svg::PaintServer(svg::PaintServer::Solid(css::Color(kBlack)))),
+      currentColor);
+  paint.fillRule =
+      style.fillRule.getOr(FillRule::NonZero) == FillRule::EvenOdd ? "evenodd" : "nonzero";
   paint.fillOpacity = detail::FormatNumberForSVG(style.fillOpacity.getOr(1.0));
   paint.stroke =
       serializePaint(style.stroke.getOr(svg::PaintServer(svg::PaintServer::None())), currentColor);
-  paint.strokeWidth =
-      std::string(std::string_view(style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None))
-                                       .toRcString()));
+  paint.strokeWidth = std::string(
+      std::string_view(style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None)).toRcString()));
   paint.strokeOpacity = detail::FormatNumberForSVG(style.strokeOpacity.getOr(1.0));
   return paint;
 }
@@ -104,6 +104,29 @@ ResolvedPaint resolvePaint(const svg::SVGElement& element) {
 ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
                                                   const svg::SVGElement& textElement) {
   ConvertTextToOutlinesResult result;
+
+  const auto preflight = document.preflightFontResourcesForElement(textElement);
+  using Status = svg::FontResourcePreflight::Status;
+  if (preflight.status != Status::Ready) {
+    switch (preflight.status) {
+      case Status::InvalidTarget:
+        result.error = "Convert to outlines failed: target is not attached to this document.";
+        break;
+      case Status::ResourceLimit:
+        result.error = "Convert to outlines failed: the font resource limit was exceeded.";
+        break;
+      case Status::NeedsRender:
+        result.error =
+            "Convert to outlines is waiting for render preparation. Try again after the next "
+            "frame.";
+        break;
+      default:
+        result.error =
+            "The selected text's font is not ready. Load or retry the font, then try again.";
+        break;
+    }
+    return result;
+  }
 
   // The conversion only applies to `<text>` elements.
   if (textElement.tagName().name != svg::SVGTextElement::Tag) {
@@ -119,6 +142,19 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
   // of the value-type element handle.
   svg::SVGTextElement text = textElement.cast<svg::SVGTextElement>();
   const std::vector<svg::TextGlyphOutline> glyphs = text.convertToOutlineGlyphs();
+
+  if (document.fontResourcesExceeded()) {
+    result.error = "Convert to outlines failed: the font resource limit was exceeded.";
+    return result;
+  }
+
+  for (const auto& face : document.fontDependenciesForElement(textElement)) {
+    if (face.state != svg::FontFaceLoadState::Loaded) {
+      result.error =
+          "The selected text's font is not ready. Load or retry the font, then try again.";
+      return result;
+    }
+  }
 
   // Empty outlines (missing font, layout failure, empty text) fail the whole conversion without
   // mutating.

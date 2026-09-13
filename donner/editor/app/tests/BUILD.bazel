@@ -1,7 +1,11 @@
 """Tests for the headless render session + REPL."""
 
-load("//build_defs:rules.bzl", "donner_cc_test", "renderer_backend_compatible_with")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "renderer_backend_compatible_with")
+load(
+    "//donner/editor:editor_product_config.bzl",
+    donner_cc_test = "editor_cc_test",
+)
 
 donner_cc_test(
     name = "render_session_tests",
@@ -10,6 +14,7 @@ donner_cc_test(
         "tiny_skia",
         "geode",
     ]),
+    visibility = ["//donner/editor/tests:__pkg__"],
     deps = [
         "//donner/editor/app:render_session",
         "//donner/editor/app:render_session_repl",

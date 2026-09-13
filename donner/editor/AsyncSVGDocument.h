@@ -150,6 +150,13 @@ public:
     return frameVersion_.load(std::memory_order_acquire);
   }
 
+  /// Adopt font resolutions while the renderer and preview worker are idle. The frame version
+  /// advances, but document generation, authored source, and undo history do not change.
+  bool refreshFontResources();
+
+  /// Frame-boundary font adoption identity, distinct from the manager's individual face counter.
+  [[nodiscard]] std::uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+
   // Test hook: re-parse a string into a fresh document via `SVGParser`.
   // Returns true on success. On failure, the existing document is left
   // intact and `lastParseError()` returns the diagnostic from the parser
@@ -173,6 +180,7 @@ public:
   [[nodiscard]] std::uint64_t parseDiagnosticsRevision() const { return parseDiagnosticsRevision_; }
 
 private:
+  std::uint64_t fontResourceRevision_ = 0;
   // Apply a single (already-coalesced) command. SetTransform finds the
   // target element via the document's Registry and calls
   // LayoutSystem::setRawEntityFromParentTransform; ReplaceDocument

@@ -191,6 +191,63 @@ test("worker stats carry the GPU wait outcome that ended the frame", () => {
   assert.doesNotMatch(renderCoordinatorSource, /!\s*=\s+=/);
 });
 
+test("formatted worker diagnostics remain valid JavaScript", () => {
+  const bodies = [...renderCoordinatorSource.matchAll(
+    /MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/g,
+  )];
+  assert.ok(bodies.length >= 3, "expected the completion, acceptance, and GPU-failure publishers");
+  for (const [, body] of bodies) {
+    assert.doesNotThrow(
+      () => new Function(body),
+      "formatted EM_ASM must still parse as JavaScript",
+    );
+  }
+});
+
+test("worker acceptance requires the fresh render identity and no old presentation timestamp", () => {
+  const timingPublisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  );
+  const acceptedPublisher = renderCoordinatorSource.match(
+    /void PublishAcceptedWorkerResult\([\s\S]*?\n\}/,
+  );
+  assert.ok(timingPublisher);
+  assert.ok(acceptedPublisher);
+  const body = (method) => method.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publishTiming = new Function(
+    "window",
+    "$0",
+    "$1",
+    "HEAPF64",
+    "UTF8ToString",
+    "performance",
+    body(timingPublisher[0]),
+  );
+  const publishAccepted = new Function("window", "$0", "$1", "$2", body(acceptedPublisher[0]));
+  const heap = new Float64Array(31);
+  heap.set([11, 22, 33, 44, 0], 26);
+  const window = { __donnerWorkerStats: { completedResults: 8, presentedAtMs: 100 } };
+  publishTiming(window, 0, 0, heap, () => "none", { now: () => 200 });
+  const stats = window.__donnerWorkerStats;
+  assert.equal(stats.completedResults, 9);
+  assert.equal(stats.acceptedForPresentation, false);
+  assert.equal(stats.presentedAtMs, undefined);
+  assert.deepEqual([
+    stats.documentGeneration,
+    stats.frameVersion,
+    stats.fontResourceRevision,
+    stats.sourceVersion,
+    stats.undoEntryCount,
+  ], [11, 22, 33, 44, 0]);
+  for (const stale of [[0, 22, 33], [11, 0, 33], [11, 22, 0]]) {
+    publishAccepted(window, ...stale);
+    assert.equal(stats.acceptedForPresentation, false, `stale result ${stale} must be ignored`);
+  }
+  publishAccepted(window, 11, 22, 33);
+  assert.equal(stats.acceptedForPresentation, true);
+  assert.equal(stats.presentedAtMs, undefined, "admission must not manufacture a presentation");
+});
+
 test("a GPU wait failure publishes worker stats even though no frame completed", () => {
   const failurePublisher = renderCoordinatorSource.match(
     /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
@@ -224,7 +281,7 @@ test("a GPU wait failure publishes worker stats even though no frame completed",
   );
   assert.ok(poll, "expected the UI-thread result poll");
   const failureCall = poll[0].indexOf("PublishWorkerGpuWaitFailure(");
-  const earlyReturn = poll[0].indexOf("if (!resultOpt.has_value()) {\n    return;");
+  const earlyReturn = poll[0].indexOf("if (!IsCurrentRenderResult(resultOpt, app)) {\n    return;");
   assert.ok(failureCall >= 0, "the poll must report a GPU wait failure");
   assert.ok(
     failureCall < earlyReturn,

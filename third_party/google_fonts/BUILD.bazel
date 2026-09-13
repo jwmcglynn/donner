@@ -1,21 +1,12 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
-load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//build_defs:embed_resources.bzl", "embed_resources")
-load(
-    ":fonts.bzl",
-    "embedded_resources_dict",
-    "google_fonts_catalog_inc",
-    "google_fonts_manifest",
-)
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load(":catalog.bzl", "catalog_asset_tests", "catalog_font_labels", "catalog_license_labels", "google_fonts_woff2_catalog")
+load(":fonts.bzl", "google_fonts_manifest")
 
 package(default_visibility = ["//visibility:private"])
 
-# The gfont_* repos are fetched by a dev_dependency module extension, so BCR
-# consumers never see them. Per the non-BCR dep rule (third_party/bazel/
-# non_bcr_deps.bzl), every target referencing them must be incompatible unless
-# this flag is on. The root module flips it on in .bazelrc; incompatibility
-# propagates to dependents (font_catalog and the editor), which wildcard
-# builds then skip.
+# The source-font repos and WOFF2 encoder are dev dependencies. Core BCR consumers
+# must never resolve them; root development builds enable this catalog explicitly.
 bool_flag(
     name = "google_fonts_available",
     build_setting_default = False,
@@ -28,46 +19,177 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
-# Embeds the fetched font bytes as C arrays, exposing
-# `donner::embedded::kGF<Family>Ttf` spans (see fonts.bzl `var` fields).
-embed_resources(
-    name = "google_fonts_data",
-    header_output = "embed_resources/GoogleFontsData.h",
-    resources = embedded_resources_dict(),
-    target_compatible_with = select({
-        ":google_fonts_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    visibility = ["//donner:__subpackages__"],
+CATALOG_COMPATIBILITY = select({
+    ":google_fonts_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+cc_binary(
+    name = "catalog_woff2_tool",
+    srcs = ["CatalogWoff2Tool.cc"],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    deps = [
+        "@woff2//:woff2_decode",
+        "@woff2//:woff2_encode",
+    ],
 )
 
-# Generated DONNER_GF_ENTRY(family, category, span) x-macro table, kept in sync
-# with GOOGLE_FONTS. Consumed by donner/svg/resources/EmbeddedFontProvider.cc.
-google_fonts_catalog_inc(
+py_binary(
+    name = "catalog_generator",
+    srcs = ["catalog_generate.py"],
+    main = "catalog_generate.py",
+)
+
+cc_binary(
+    name = "catalog_font_compare",
+    testonly = True,
+    srcs = ["CatalogFontCompare.cc"],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    deps = ["//third_party:freetype"],
+)
+
+google_fonts_manifest(
+    name = "manifest_json_gen",
+    out = "fonts_manifest.json",
+)
+
+google_fonts_woff2_catalog(
+    name = "catalog_gen",
+    codec_sources = ["@woff2//:codec_provenance_sources"],
+    encoder = ":catalog_woff2_tool",
+    encoder_source = "CatalogWoff2Tool.cc",
+    fonts = catalog_font_labels(),
+    licenses = catalog_license_labels(),
+    pins = ":manifest_json_gen",
+    target_compatible_with = CATALOG_COMPATIBILITY,
+)
+
+filegroup(
+    name = "google_fonts_woff2_assets",
+    srcs = [":catalog_gen"],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "catalog_inc_gen",
-    out = "embed_resources/GoogleFontsCatalog.inc",
+    srcs = [":catalog_gen"],
+    output_group = "metadata",
+    target_compatible_with = CATALOG_COMPATIBILITY,
 )
 
 cc_library(
     name = "google_fonts_catalog_inc",
     includes = ["."],
-    textual_hdrs = ["embed_resources/GoogleFontsCatalog.inc"],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    textual_hdrs = [":catalog_inc_gen"],
     visibility = ["//donner:__subpackages__"],
 )
 
-# JSON dump of the pin table for the integrity test.
-google_fonts_manifest(
-    name = "manifest_json_gen",
-    out = "fonts_manifest.json",
+filegroup(
+    name = "native_header",
+    srcs = [":catalog_gen"],
+    output_group = "native_header",
+    target_compatible_with = CATALOG_COMPATIBILITY,
+)
+
+filegroup(
+    name = "native_sources",
+    srcs = [":catalog_gen"],
+    output_group = "native_sources",
+    target_compatible_with = CATALOG_COMPATIBILITY,
+)
+
+cc_library(
+    name = "google_fonts_data",
+    srcs = [":native_sources"],
+    hdrs = [":native_header"],
+    includes = ["."],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    visibility = ["//donner:__subpackages__"],
+)
+
+filegroup(
+    name = "catalog_manifest",
+    srcs = [":catalog_gen"],
+    output_group = "manifest",
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "catalog_notices",
+    srcs = [":catalog_gen"],
+    output_group = "notices",
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "catalog_test_inputs",
+    testonly = True,
+    srcs = catalog_font_labels() + [
+        ":catalog_manifest",
+        ":google_fonts_woff2_assets",
+    ],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    visibility = ["//donner:__subpackages__"],
 )
 
 py_test(
     name = "integrity_test",
     size = "small",
     srcs = ["integrity_test.py"],
-    args = ["$(location :manifest_json_gen)"],
-    data = [":manifest_json_gen"],
+    args = [
+        "$(location :manifest_json_gen)",
+        "$(location :fonts_manifest_reference.json)",
+    ],
+    data = [
+        "fonts_manifest_reference.json",
+        ":manifest_json_gen",
+    ],
 )
+
+py_test(
+    name = "catalog_generator_test",
+    size = "small",
+    srcs = [
+        "catalog_generate.py",
+        "catalog_generate_test.py",
+    ],
+    main = "catalog_generate_test.py",
+)
+
+py_test(
+    name = "catalog_metadata_test",
+    size = "small",
+    srcs = ["catalog_metadata_test.py"],
+    args = [
+        "--manifest",
+        "$(rootpath :catalog_manifest)",
+        "--pins",
+        "$(rootpath :manifest_json_gen)",
+        "--assets",
+        "$(rootpath :google_fonts_woff2_assets)",
+        "--metadata",
+        "$(rootpath :catalog_inc_gen)",
+        "--header",
+        "$(rootpath :native_header)",
+        "--notices",
+        "$(rootpath :catalog_notices)",
+    ],
+    data = [
+        ":catalog_inc_gen",
+        ":catalog_manifest",
+        ":catalog_notices",
+        ":google_fonts_woff2_assets",
+        ":manifest_json_gen",
+        ":native_header",
+    ],
+    target_compatible_with = CATALOG_COMPATIBILITY,
+)
+
+catalog_asset_tests(target_compatible_with = CATALOG_COMPATIBILITY)
 
 exports_files([
     "LICENSES.md",

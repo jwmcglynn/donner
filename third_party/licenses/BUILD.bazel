@@ -168,6 +168,14 @@ license(
     package_version = "905f2607f0af16a54a82be8d150788092e3dad93",
 )
 
+license(
+    name = "google_fonts",
+    package_name = "Curated Google Fonts catalog",
+    license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
+    license_text = "//third_party/google_fonts:catalog_notices",
+    package_url = "https://fonts.google.com/",
+)
+
 # Canonical per-variant license lists. These match the build-report
 # variants in `tools/generate_build_report.py` so a Python script can
 # correlate cquery results with the aggregated manifest.
@@ -204,6 +212,7 @@ ALL_KNOWN_LICENSES = [
     ":roboto",
     ":fira-code",
     ":bootstrap-icons",
+    ":google_fonts",
     "@libpng//:license",
     "@zlib//:license",
 ]

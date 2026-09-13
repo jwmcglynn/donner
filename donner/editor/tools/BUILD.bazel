@@ -1,6 +1,10 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library")
+load(
+    "//donner/editor:editor_product_config.bzl",
+    donner_cc_binary = "editor_cc_binary",
+)
 
 # Tools for producing release assets through the editor's merged code paths.
 #
