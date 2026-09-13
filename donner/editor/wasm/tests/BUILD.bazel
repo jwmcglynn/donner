@@ -306,3 +306,30 @@ js_test(
     entry_point = "catalog-fonts.spec.mjs",
     node_options = ["--test"],
 )
+
+# Manual native-browser reference evidence for font-property investigations.
+playwright_bin.playwright_test(
+    name = "font_reference_probe",
+    size = "small",
+    args = [
+        "test",
+        "$(rootpath :font-reference.spec.ts)",
+        "--config=$(rootpath :playwright.font-reference.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "font-reference.spec.ts",
+        "package.json",
+        "playwright.font-reference.config.js",
+        ":node_modules/@playwright/test",
+        "//third_party/resvg-test-suite:fonts",
+        "@playwright//:chromium",
+        "@playwright//:firefox",
+    ],
+    env = {
+        "DONNER_REFERENCE_FONT": "third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    tags = ["manual"],
+)
