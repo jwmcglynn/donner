@@ -274,6 +274,69 @@ TEST_F(RendererRegressionTests, ThickCrossbarStrokeMatchesItsUnionAtFractionalOf
   }
 }
 
+TEST_F(RendererRegressionTests, FractionalStrokeUnionPreservesGradientCoverage) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  for (const std::string_view offset : {"0.25", "-0.25"}) {
+    const std::string header =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\">"
+        "<defs><linearGradient id=\"paint\" gradientUnits=\"userSpaceOnUse\" x2=\"80\">"
+        "<stop stop-color=\"red\"/><stop offset=\"1\" stop-color=\"blue\" stop-opacity=\"0.5\"/>"
+        "</linearGradient></defs><g transform=\"translate(" +
+        std::string(offset) + " " + std::string(offset) + ")\">";
+    const std::string stroke =
+        header +
+        "<path d=\"M30 10H34V24H46V28H34V55H30V28H22V24H30Z\" "
+        "fill=\"none\" stroke=\"url(#paint)\" stroke-width=\"6\"/></g></svg>";
+    const std::string boundary = header +
+                                 "<path d=\"M27 7H37V21H49V31H37V58H27V31H19V21H27Z\" "
+                                 "fill=\"url(#paint)\"/></g></svg>";
+    SVGDocument actualDocument = instantiateSubtree(stroke, {}, {80, 80});
+    SVGDocument expectedDocument = instantiateSubtree(boundary, {}, {80, 80});
+    ExpectBitmapsIdentical(RenderDocumentWithBackend(actualDocument, RendererBackend::Geode),
+                           RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode),
+                           "gradient_stroke_union_" + std::string(offset));
+  }
+}
+
+TEST_F(RendererRegressionTests, FractionalStrokeUnionPreservesClipMaskCoverage) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  const Path centerline = PathBuilder()
+                              .moveTo({30, 10})
+                              .lineTo({34, 10})
+                              .lineTo({34, 24})
+                              .lineTo({46, 24})
+                              .lineTo({46, 28})
+                              .lineTo({34, 28})
+                              .lineTo({34, 55})
+                              .lineTo({30, 55})
+                              .lineTo({30, 28})
+                              .lineTo({22, 28})
+                              .lineTo({22, 24})
+                              .lineTo({30, 24})
+                              .closePath()
+                              .build();
+  const Path pieces = centerline.strokeToFill({.width = 6.0}, 0.1);
+  for (const std::string_view offset : {"0.25", "-0.25"}) {
+    const auto source = [&](std::string_view path) {
+      return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\">"
+             "<defs><clipPath id=\"clip\"><path transform=\"translate(" +
+             std::string(offset) + " " + std::string(offset) + ")\" d=\"" + std::string(path) +
+             "\"/></clipPath></defs><rect width=\"80\" height=\"80\" fill=\"#ff00ff\" "
+             "fill-opacity=\"0.5\" clip-path=\"url(#clip)\"/></svg>";
+    };
+    SVGDocument actualDocument = instantiateSubtree(source(pieces.toSVGPathData()), {}, {80, 80});
+    SVGDocument expectedDocument =
+        instantiateSubtree(source("M27 7H37V21H49V31H37V58H27V31H19V21H27Z"), {}, {80, 80});
+    ExpectBitmapsIdentical(RenderDocumentWithBackend(actualDocument, RendererBackend::Geode),
+                           RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode),
+                           "clip_stroke_union_" + std::string(offset));
+  }
+}
+
 TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport) {
   const char* svg = "donner/svg/renderer/testdata/marker_percent_nested_viewport.svg";
   const char* golden = "donner/svg/renderer/testdata/golden/marker_percent_nested_viewport.png";
