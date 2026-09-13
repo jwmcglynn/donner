@@ -223,6 +223,7 @@ public:
     uint64_t stagingAllocations = 0;  //!< Successful staging allocations, including failed submits.
     uint64_t submittedBatches = 0;    //!< Accepted submissions containing queued writes.
     size_t retainedDestinations = 0;  //!< Retired destinations retained by outstanding uploads.
+    uint64_t lostDeviceDrains = 0;    //!< Lost-device submission drains completed before cleanup.
   };
 
   /// Returns the current queued-write counters without waiting or changing state.
@@ -233,7 +234,8 @@ public:
   void setBufferWriteByteBudgetForTest(uint64_t byteBudget);
 
   /// Makes the next native submission fail before it reaches the queue, after encoding finishes.
-  void failNextSubmissionForTest();
+  /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
+  void failNextSubmissionForTest(bool deviceLost = false);
 
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.

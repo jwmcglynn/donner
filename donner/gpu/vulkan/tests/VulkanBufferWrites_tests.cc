@@ -220,7 +220,12 @@ protected:
   }
 
   void TearDown() override {
-    if (device_) EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+    if (!device_) return;
+    if (expectDeviceLoss_) {
+      EXPECT_THAT(device_->lastErrorForTest(), testing::HasSubstr("VK_ERROR_DEVICE_LOST"));
+    } else {
+      EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+    }
   }
 
   uint64_t submitRead(const Buffer& input) {
@@ -263,6 +268,7 @@ protected:
                                          editor::tests::PixelmatchIdentityParams());
   }
 
+  bool expectDeviceLoss_ = false;
   std::unique_ptr<VulkanDevice> device_;
   ShaderModule module_;
   BindGroupLayout groupLayout_;
@@ -469,6 +475,39 @@ TEST_F(VulkanBufferWritesTests, FailedSubmissionPreservesPendingWritesAndSerial)
   ASSERT_EQ(gate.release(), VK_SUCCESS);
   ASSERT_THAT(device_->waitForSerial(nextReaderSerial, 5.0), testing::IsTrue());
   expectPixel({0, 0, 255, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, DeviceLossDrainsAndRejectsIdleHostAccessAndSubmission) {
+  const Buffer idle = GetResultOrFail(
+      device_->createBuffer({"idle", sizeof(kRed), BufferUsage::CopyDst | BufferUsage::MapRead}));
+  ASSERT_THAT(device_->writeBuffer(idle, 0, AsBytes(kRed)), IsOk());
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  const uint64_t serial = submitRead(input_);
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  ASSERT_EQ(device_->bufferWriteStatsForTest().pendingBytes, sizeof(kBlue));
+  // The injected loss leaves the real device healthy, so its queue must be allowed to drain.
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  expectDeviceLoss_ = true;
+  device_->failNextSubmissionForTest(/*deviceLost=*/true);
+  auto encoder = GetResultOrFail(device_->createCommandEncoder());
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_THAT(device_->submit(GetResultOrFail(encoder->finish())),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(device_->lastSubmittedSerial(), serial);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().lostDeviceDrains, 1u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 0u);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::HasSubstr("VK_ERROR_DEVICE_LOST"));
+  EXPECT_THAT(device_->readBackBuffer(idle), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(device_->writeBuffer(idle, 0, AsBytes(kBlue)),
+              IsGpuError(GpuErrorType::InvalidState));
+
+  auto nextEncoder = GetResultOrFail(device_->createCommandEncoder());
+  ASSERT_NE(nextEncoder, nullptr);
+  EXPECT_THAT(device_->submit(GetResultOrFail(nextEncoder->finish())),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(device_->lastSubmittedSerial(), serial);
 }
 
 TEST_F(VulkanBufferWritesTests, UnalignedWriteTimesOutWithoutDiscardingPendingWrites) {

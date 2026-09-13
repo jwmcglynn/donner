@@ -820,7 +820,8 @@ struct VulkanDevice::Impl {
   uint64_t bufferWriteByteBudget = kMaxBufferByteSize;  //!< Combined pending/in-flight limit.
   uint64_t bufferWriteStagingAllocations = 0;           //!< Successful packed staging allocations.
   uint64_t submittedBufferWriteBatches = 0;             //!< Submitted batches with queued writes.
-  bool failNextSubmission = false;  //!< Test-only failure before queue submission.
+  VkResult nextSubmissionFailure = VK_SUCCESS;  //!< Test-only failure before queue submission.
+  uint64_t lostDeviceDrains = 0;  //!< Terminal submission failures drained before cleanup.
 
   /// Whether this destination has older unsent writes that a host copy must not overtake.
   bool hasPendingBufferWrite(uint32_t slotIndex) const {
@@ -1587,17 +1588,21 @@ VulkanDevice::BufferWriteStats VulkanDevice::bufferWriteStatsForTest() const {
   for (const Impl::InFlightSubmission& submission : impl_->inFlight) {
     retiredBuffers += submission.retiredBuffers.size();
   }
-  return {impl_->pendingBufferWrites.size(),  impl_->pendingBufferWriteBytes,
-          impl_->inFlightBufferWriteBytes,    impl_->bufferWriteStagingAllocations,
-          impl_->submittedBufferWriteBatches, retiredBuffers};
+  return {impl_->pendingBufferWrites.size(),
+          impl_->pendingBufferWriteBytes,
+          impl_->inFlightBufferWriteBytes,
+          impl_->bufferWriteStagingAllocations,
+          impl_->submittedBufferWriteBatches,
+          retiredBuffers,
+          impl_->lostDeviceDrains};
 }
 
 void VulkanDevice::setBufferWriteByteBudgetForTest(uint64_t byteBudget) {
   impl_->bufferWriteByteBudget = std::min(byteBudget, kMaxBufferByteSize);
 }
 
-void VulkanDevice::failNextSubmissionForTest() {
-  impl_->failNextSubmission = true;
+void VulkanDevice::failNextSubmissionForTest(bool deviceLost) {
+  impl_->nextSubmissionFailure = deviceLost ? VK_ERROR_DEVICE_LOST : VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
 VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
@@ -3338,8 +3343,9 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &state.commandBuffer;
-  const VkResult submitResult = std::exchange(impl.failNextSubmission, false)
-                                    ? VK_ERROR_OUT_OF_HOST_MEMORY
+  const VkResult injectedFailure = std::exchange(impl.nextSubmissionFailure, VK_SUCCESS);
+  const VkResult submitResult = injectedFailure != VK_SUCCESS
+                                    ? injectedFailure
                                     : impl_->api->vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
   if (submitResult != VK_SUCCESS) {
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
