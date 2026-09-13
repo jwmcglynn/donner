@@ -328,3 +328,11 @@ py_test(
         "check_design_doc_provenance_tests.py",
     ],
 )
+
+py_test(
+    name = "ci_workflow_targets_tests",
+    size = "small",
+    srcs = ["ci_workflow_targets_tests.py"],
+    data = ["//:github_action_definitions"],
+    deps = ["@rules_python//python/runfiles"],
+)
