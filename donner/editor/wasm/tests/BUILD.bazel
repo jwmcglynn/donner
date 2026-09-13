@@ -230,3 +230,25 @@ js_test(
     entry_point = "playwright-bazel-config.spec.mjs",
     node_options = ["--test"],
 )
+
+js_test(
+    name = "browser_matrix_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = glob([
+        "*.js",
+        "*.json",
+        "*.mjs",
+        "*.ts",
+        "*.yaml",
+    ]) + [
+        "BUILD.bazel",
+        ":node_modules/@playwright/test",
+        "//:.github/workflows/editor_wasm.yml",
+        "//:MODULE.bazel",
+        "//donner/editor/wasm:BUILD.bazel",
+        "//tools:run-browser-ci.sh",
+    ],
+    entry_point = "browser-matrix.spec.mjs",
+    node_options = ["--test"],
+)
