@@ -471,7 +471,7 @@ struct TextPathStagingState {
 };
 
 /// Resolves a per-character displacement, returning zero when it is absent.
-double textPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
+double TextPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
                             unsigned int charIndex, const TextLayoutParams& params,
                             Lengthd::Extent extent) {
   return charIndex < positions.size() && positions[charIndex]
@@ -480,7 +480,7 @@ double textPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positi
 }
 
 /// Returns whether this glyph ends its run-local typographic cluster.
-bool endsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int charIndex,
+bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int charIndex,
                          const ByteIndexMappings& mappings) {
   if (glyphIndex + 1 == run.glyphs.size()) {
     return true;
@@ -490,7 +490,7 @@ bool endsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int cha
 }
 
 /// Preserves glyph-local offsets while advancing one run's logical path clusters.
-void stageTextPathRun(TextRun& run, size_t runIndex,
+void StageTextPathRun(TextRun& run, size_t runIndex,
                       const components::ComputedTextComponent::TextSpan& span,
                       const ByteIndexMappings& mappings, const TextLayoutParams& params,
                       const TextBackend& backend, double defaultY, TextPathStagingState& state) {
@@ -504,8 +504,8 @@ void stageTextPathRun(TextRun& run, size_t runIndex,
       state.advance += glyph.xKern;
     }
     if (gi == 0 || charIndex != state.clusters.back().charIndex) {
-      state.advance += textPathDisplacement(span.dxList, charIndex, params, Lengthd::Extent::X);
-      state.dy += textPathDisplacement(span.dyList, charIndex, params, Lengthd::Extent::Y);
+      state.advance += TextPathDisplacement(span.dxList, charIndex, params, Lengthd::Extent::X);
+      state.dy += TextPathDisplacement(span.dyList, charIndex, params, Lengthd::Extent::Y);
       state.clusters.push_back(
           {runIndex, gi, gi + 1, charIndex, state.advance, defaultY + state.dy});
     }
@@ -515,7 +515,7 @@ void stageTextPathRun(TextRun& run, size_t runIndex,
     state.advance += glyph.xAdvance;
     cluster.glyphEnd = gi + 1;
     cluster.advance = state.advance - cluster.pathOffset;
-    if (endsTextPathCluster(run, gi, charIndex, mappings)) {
+    if (EndsTextPathCluster(run, gi, charIndex, mappings)) {
       size_t byteIndex = run.glyphs[cluster.glyphStart].cluster;
       const uint32_t codepoint = decodeUtf8(spanText, byteIndex);
       if (!backend.isCursive(codepoint)) {
@@ -695,22 +695,22 @@ void applyTextPathLengths(Registry& registry, const components::ComputedTextComp
 }
 
 /// Returns whether a cluster starts a new horizontal path chunk.
-bool hasAbsoluteTextPathX(const components::ComputedTextComponent& text,
+bool HasAbsoluteTextPathX(const components::ComputedTextComponent& text,
                           const TextPathCluster& cluster) {
   const auto& positions = text.spans[cluster.runIndex].xList;
   return cluster.charIndex < positions.size() && positions[cluster.charIndex].has_value();
 }
 
 /// Applies absolute path coordinates without discarding the same cluster's relative displacement.
-void resetTextPathCoordinates(const components::ComputedTextComponent& text,
+void ResetTextPathCoordinates(const components::ComputedTextComponent& text,
                               const TextLayoutParams& params,
                               std::vector<TextPathCluster>& clusters) {
   double xShift = 0.0;
   for (TextPathCluster& cluster : clusters) {
     const auto& span = text.spans[cluster.runIndex];
-    if (hasAbsoluteTextPathX(text, cluster)) {
+    if (HasAbsoluteTextPathX(text, cluster)) {
       const double dx =
-          textPathDisplacement(span.dxList, cluster.charIndex, params, Lengthd::Extent::X);
+          TextPathDisplacement(span.dxList, cluster.charIndex, params, Lengthd::Extent::X);
       xShift = span.xList[cluster.charIndex]->toPixels(params.viewBox, params.fontMetrics,
                                                        Lengthd::Extent::X) +
                dx - cluster.pathOffset;
@@ -720,11 +720,11 @@ void resetTextPathCoordinates(const components::ComputedTextComponent& text,
 }
 
 /// Anchors each horizontal path chunk against all of its typographic extents.
-void anchorTextPathClusters(const components::ComputedTextComponent& text,
+void AnchorTextPathClusters(const components::ComputedTextComponent& text,
                             std::vector<TextPathCluster>& clusters) {
   for (size_t first = 0; first < clusters.size();) {
     size_t end = first + 1;
-    while (end < clusters.size() && !hasAbsoluteTextPathX(text, clusters[end])) {
+    while (end < clusters.size() && !HasAbsoluteTextPathX(text, clusters[end])) {
       ++end;
     }
     double minimum = std::numeric_limits<double>::infinity();
@@ -747,7 +747,7 @@ void anchorTextPathClusters(const components::ComputedTextComponent& text,
 }
 
 /// Samples each cluster once and places all of its glyphs with their shaped offsets.
-std::optional<Vector2d> placeTextPathClusters(const Path::MeasuredPath& path, double startOffset,
+std::optional<Vector2d> PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset,
                                               std::vector<TextRun>& runs,
                                               const std::vector<TextPathCluster>& clusters) {
   std::optional<Vector2d> lastPosition;
@@ -785,12 +785,12 @@ Vector2d placeTextPath(Registry& registry, const components::ComputedTextCompone
                        const TextLayoutParams& params, size_t firstRun, std::vector<TextRun>& runs,
                        std::vector<TextPathCluster>& clusters) {
   applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
-  resetTextPathCoordinates(text, params, clusters);
-  anchorTextPathClusters(text, clusters);
+  ResetTextPathCoordinates(text, params, clusters);
+  AnchorTextPathClusters(text, clusters);
   const auto& firstSpan = text.spans[firstRun];
   const Path::MeasuredPath path = firstSpan.pathSpline->measure();
   const std::optional<Vector2d> lastPosition =
-      placeTextPathClusters(path, firstSpan.pathStartOffset, runs, clusters);
+      PlaceTextPathClusters(path, firstSpan.pathStartOffset, runs, clusters);
   for (size_t ri = firstRun; ri < runs.size(); ++ri) {
     if (text.spans[ri].visibility != Visibility::Visible) {
       runs[ri].glyphs.clear();
@@ -1882,7 +1882,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         firstPathRun = runs.size();
         prevTextPathSource = span.textPathSourceEntity;
       }
-      stageTextPathRun(run, runs.size(), span, indexMappings, params, *backend_, defaultY,
+      StageTextPathRun(run, runs.size(), span, indexMappings, params, *backend_, defaultY,
                        pathStaging);
       run.onPath = true;
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
