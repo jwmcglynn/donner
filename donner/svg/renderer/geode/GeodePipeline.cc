@@ -182,7 +182,8 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
 // ============================================================================
 
 GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
-  const auto entries = gpu::shader::MakeBindingLayout(gpu::shader::programs::SlugMaskShader());
+  const auto& shader = gpu::shader::programs::SlugMaskShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                                        gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
                                    "GeodeSlugMaskBGL createBindGroupLayout");
@@ -200,9 +201,10 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 
   pipeline_ = UnwrapOrAbort(
       adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "GeodeSlugMask", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          "GeodeSlugMask", pipelineLayout_,
+          gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,
-                             "fs_main",
+                             RcString(shader.entryPoints[1].name.view()),
                              {gpu::ColorTargetState{gpu::TextureFormat::RGBA8Unorm, maxBlend}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugMask createRenderPipeline");

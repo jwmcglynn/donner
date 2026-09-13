@@ -621,6 +621,7 @@ private:
   constexpr uint32_t emitExpression(ArenaId index);
   constexpr uint32_t indexedPointer(const Expression& node, uint32_t& storage);
   constexpr uint32_t emitValue(const Expression& node);
+  constexpr uint32_t emitAccess(ArenaId index, const Expression& node);
   constexpr uint32_t emitSymbol(const Expression& node);
   constexpr uint32_t emitSwizzle(const Expression& node);
   constexpr uint32_t emitConstruct(const Expression& node);
@@ -636,6 +637,13 @@ private:
   constexpr uint32_t convert(Type from, Type to, uint32_t operand);
   constexpr uint32_t emitBinary(const Expression& expression);
   constexpr uint32_t emitBuiltin(const Expression& expression);
+  constexpr uint32_t emitMatrixProduct(const Expression& node, Type leftType, Type rightType,
+                                       uint32_t lhs, uint32_t rhs);
+  constexpr uint32_t emitNumericBinary(const Expression& node, Type leftType, Type rightType,
+                                       uint32_t lhs, uint32_t rhs);
+  static constexpr uint32_t UnaryBuiltinOpcode(Builtin builtin);
+  constexpr uint32_t emitCoreBuiltin(const Expression& node, const std::array<uint32_t, 4>& args);
+  constexpr void emitLoopExit(const Statement& node);
   constexpr uint32_t robustLoad(uint32_t image, uint32_t coord, uint32_t level);
   constexpr void robustStore(uint32_t image, uint32_t coord, uint32_t value);
   constexpr void emitBlock(ArenaId index);
@@ -749,39 +757,33 @@ constexpr uint32_t Emitter::emitExpression(ArenaId index) {
     case ExpressionKind::Literal: value = constant(node.type, node.payload); break;
     case ExpressionKind::Symbol: value = emitSymbol(node); break;
     case ExpressionKind::Member:
-      if (!addressable(index)) {
-        const Type base = module_.expressions[node.operands[0]].type;
-        if (base.structId >= module_.structCount) {
-          fail(SpirvEmitError::InvalidNode);
-          break;
-        }
-        const uint32_t member = node.payload - module_.structs[base.structId].firstMember;
-        value = operation(81, node.type, emitExpression(node.operands[0]), member);
-        break;
-      }
-      [[fallthrough]];
-    case ExpressionKind::Index: {
-      const Type base = module_.expressions[node.operands[0]].type;
-      if (base.kind == TypeKind::Matrix) {
-        if (node.payload >= base.columns) {
-          fail(SpirvEmitError::InvalidNode);
-          break;
-        }
-        value = operation(81, node.type, emitExpression(node.operands[0]), node.payload);
-        break;
-      }
-      if (base.kind == TypeKind::Array && base.arrayCount == 0) {
-        value = emitRuntimeArrayIndex(node);
-        break;
-      }
-      uint32_t storage = 0;
-      value = operation(61, node.type, lvalue(index, storage));
-      break;
-    }
+    case ExpressionKind::Index: value = emitAccess(index, node); break;
     default: value = emitValue(node); break;
   }
   --expressionDepth_;
   return value;
+}
+
+constexpr uint32_t Emitter::emitAccess(ArenaId index, const Expression& node) {
+  const Type base = module_.expressions[node.operands[0]].type;
+  if (node.kind == ExpressionKind::Member && !addressable(index)) {
+    if (base.structId >= module_.structCount) {
+      fail(SpirvEmitError::InvalidNode);
+      return 0;
+    }
+    const uint32_t member = node.payload - module_.structs[base.structId].firstMember;
+    return operation(81, node.type, emitExpression(node.operands[0]), member);
+  }
+  if (base.kind == TypeKind::Matrix) {
+    if (node.payload >= base.columns) {
+      fail(SpirvEmitError::InvalidNode);
+      return 0;
+    }
+    return operation(81, node.type, emitExpression(node.operands[0]), node.payload);
+  }
+  if (base.kind == TypeKind::Array && base.arrayCount == 0) return emitRuntimeArrayIndex(node);
+  uint32_t storage = 0;
+  return operation(61, node.type, lvalue(index, storage));
 }
 
 constexpr uint32_t Emitter::emitValue(const Expression& node) {
@@ -974,18 +976,28 @@ constexpr uint32_t Emitter::emitBinary(const Expression& node) {
   if (op == BinaryOp::BitAnd) return operation(199, node.type, lhs, rhs);
   const Type leftType = module_.expressions[node.operands[0]].type;
   const Type rightType = module_.expressions[node.operands[1]].type;
-  if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix) {
-    if (op != BinaryOp::Mul) {
-      fail(SpirvEmitError::InvalidNode);
-      return 0;
-    }
-    if (leftType.kind == TypeKind::Matrix && rightType.kind == TypeKind::Matrix)
-      return operation(146, node.type, lhs, rhs);
-    if (leftType.kind == TypeKind::Matrix)
-      return operation(rightType.lanes == 1 ? 143 : 145, node.type, lhs, rhs);
-    return leftType.lanes == 1 ? operation(143, node.type, rhs, lhs)
-                               : operation(144, node.type, lhs, rhs);
+  if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix)
+    return emitMatrixProduct(node, leftType, rightType, lhs, rhs);
+  return emitNumericBinary(node, leftType, rightType, lhs, rhs);
+}
+
+constexpr uint32_t Emitter::emitMatrixProduct(const Expression& node, Type leftType, Type rightType,
+                                              uint32_t lhs, uint32_t rhs) {
+  if (static_cast<BinaryOp>(node.payload) != BinaryOp::Mul) {
+    fail(SpirvEmitError::InvalidNode);
+    return 0;
   }
+  if (leftType.kind == TypeKind::Matrix && rightType.kind == TypeKind::Matrix)
+    return operation(146, node.type, lhs, rhs);
+  if (leftType.kind == TypeKind::Matrix)
+    return operation(rightType.lanes == 1 ? 143 : 145, node.type, lhs, rhs);
+  return leftType.lanes == 1 ? operation(143, node.type, rhs, lhs)
+                             : operation(144, node.type, lhs, rhs);
+}
+
+constexpr uint32_t Emitter::emitNumericBinary(const Expression& node, Type leftType, Type rightType,
+                                              uint32_t lhs, uint32_t rhs) {
+  const BinaryOp op = static_cast<BinaryOp>(node.payload);
   const TypeKind kind = leftType.kind;
   Type operandType = leftType;
   operandType.lanes = leftType.lanes > rightType.lanes ? leftType.lanes : rightType.lanes;
@@ -1001,38 +1013,54 @@ constexpr uint32_t Emitter::emitBinary(const Expression& node) {
   return operation(opcode, node.type, lhs, rhs);
 }
 
+constexpr uint32_t Emitter::UnaryBuiltinOpcode(Builtin builtin) {
+  switch (builtin) {
+    case Builtin::Abs: return 4;
+    case Builtin::Round: return 2;
+    case Builtin::Sqrt: return 31;
+    case Builtin::Length: return 66;
+    case Builtin::Normalize: return 69;
+    case Builtin::Fract: return 10;
+    case Builtin::Ceil: return 9;
+    case Builtin::Exp: return 27;
+    default: return 0;
+  }
+}
+
 constexpr uint32_t Emitter::emitBuiltin(const Expression& node) {
   std::array<uint32_t, 4> args{};
   for (uint8_t i = 0; i < node.operandCount; ++i) args[i] = emitExpression(node.operands[i]);
-  switch (static_cast<Builtin>(node.payload)) {
-    case Builtin::All: return operation(155, node.type, args[0]);
-    case Builtin::Abs: return extended(4, node.type, args[0]);
+  const Builtin builtin = static_cast<Builtin>(node.payload);
+  if (const uint32_t opcode = UnaryBuiltinOpcode(builtin))
+    return extended(opcode, node.type, args[0]);
+  switch (builtin) {
     case Builtin::Max:
       return extended(NumericOpcode(node.type.kind, 40, 42, 41), node.type, args[0], args[1]);
-    case Builtin::Round: return extended(2, node.type, args[0]);
-    case Builtin::Sqrt: return extended(31, node.type, args[0]);
-    case Builtin::Dot: return operation(148, node.type, args[0], args[1]);
-    case Builtin::Length: return extended(66, node.type, args[0]);
-    case Builtin::Normalize: return extended(69, node.type, args[0]);
-    case Builtin::Saturate:
-      return extended(43, node.type, args[0], constant(node.type, 0),
-                      constant(node.type, 0x3f800000u));
-    case Builtin::Fract: return extended(10, node.type, args[0]);
-    case Builtin::Fwidth: return operation(209, node.type, args[0]);
-    case Builtin::Any: return operation(154, node.type, args[0]);
-    case Builtin::Ceil: return extended(9, node.type, args[0]);
-    case Builtin::Exp: return extended(27, node.type, args[0]);
     case Builtin::Min:
       return extended(NumericOpcode(node.type.kind, 37, 39, 38), node.type, args[0], args[1]);
     case Builtin::Clamp:
       return extended(NumericOpcode(node.type.kind, 43, 45, 44), node.type, args[0], args[1],
                       args[2]);
+    case Builtin::Saturate:
+      return extended(43, node.type, args[0], constant(node.type, 0),
+                      constant(node.type, 0x3f800000u));
+    default: return emitCoreBuiltin(node, args);
+  }
+}
+
+constexpr uint32_t Emitter::emitCoreBuiltin(const Expression& node,
+                                            const std::array<uint32_t, 4>& args) {
+  switch (static_cast<Builtin>(node.payload)) {
+    case Builtin::All: return operation(155, node.type, args[0]);
+    case Builtin::Any: return operation(154, node.type, args[0]);
+    case Builtin::Dot: return operation(148, node.type, args[0], args[1]);
+    case Builtin::Fwidth: return operation(209, node.type, args[0]);
     case Builtin::Select:
       return select(node.type, module_.expressions[node.operands[2]].type, args[2], args[1],
                     args[0]);
     case Builtin::TextureLoad: return robustLoad(args[0], args[1], args[2]);
     case Builtin::TextureDimensions: return textureDimensions(node, args[0]);
-    case Builtin::TextureStore: break;
+    default: break;
   }
   fail(SpirvEmitError::InvalidNode, node.span);
   return 0;
@@ -1170,6 +1198,14 @@ constexpr void Emitter::emitFor(const Statement& node) {
   label(merge);
 }
 
+constexpr void Emitter::emitLoopExit(const Statement& node) {
+  const uint32_t target = node.kind == StatementKind::Break ? breakTarget_ : continueTarget_;
+  if (target == 0)
+    fail(SpirvEmitError::InvalidNode, node.span);
+  else
+    branch(target);
+}
+
 constexpr void Emitter::emitStatement(const Statement& node) {
   switch (node.kind) {
     case StatementKind::Declaration: emitDeclaration(node); break;
@@ -1177,14 +1213,7 @@ constexpr void Emitter::emitStatement(const Statement& node) {
     case StatementKind::If: emitIf(node); break;
     case StatementKind::For: emitFor(node); break;
     case StatementKind::Break:
-    case StatementKind::Continue: {
-      const uint32_t target = node.kind == StatementKind::Break ? breakTarget_ : continueTarget_;
-      if (target == 0)
-        fail(SpirvEmitError::InvalidNode, node.span);
-      else
-        branch(target);
-      break;
-    }
+    case StatementKind::Continue: emitLoopExit(node); break;
     case StatementKind::Discard:
       functions_.instruction(252);
       terminated_ = true;

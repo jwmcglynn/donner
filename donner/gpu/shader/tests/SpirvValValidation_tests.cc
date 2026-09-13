@@ -42,6 +42,7 @@
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -225,6 +226,7 @@ TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::StorageArrayShader().spirv,
                                  "storage_arrays.spv");
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::ControlShader().spirv, "numeric_control");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugMaskAllProjections().spirv, "slug_mask");
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixShader().spirv,
                                  "compiled_matrices.spv");
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixOperationsShader().spirv,

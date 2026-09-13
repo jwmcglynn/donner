@@ -40,6 +40,7 @@
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -195,6 +196,7 @@ TEST(MslXcrunValidation, CompiledGraphicsEntriesPassMetalCompilation) {
   ExpectCompilesWithMetalCompiler(wgsl::tests::MatrixShader().msl, "compiled_matrices");
   ExpectCompilesWithMetalCompiler(wgsl::tests::StorageArrayShader().msl, "storage_arrays");
   ExpectCompilesWithMetalCompiler(wgsl::tests::ControlShader().msl, "numeric_control");
+  ExpectCompilesWithMetalCompiler(tests::SlugMaskAllProjections().msl, "slug_mask");
   ExpectCompilesWithMetalCompiler(wgsl::tests::MatrixOperationsShader().msl, "matrix_operations");
 }
 

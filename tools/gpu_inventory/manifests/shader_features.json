@@ -111,6 +111,182 @@
         "BlurParams"
       ]
     },
+    "donner/gpu/shader/programs/SlugMaskSource.h#inline0": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "uniforms",
+          "type": "Uniforms"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 1,
+          "group": 0,
+          "name": "bands",
+          "type": "array<Band>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 2,
+          "group": 0,
+          "name": "curveData",
+          "type": "array<f32>"
+        },
+        {
+          "binding": 3,
+          "group": 0,
+          "name": "clipMaskTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 5,
+          "group": 0,
+          "name": "vBands",
+          "type": "array<Band>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 6,
+          "group": 0,
+          "name": "vCurveData",
+          "type": "array<f32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 7,
+          "group": 0,
+          "name": "hBandGrid",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 8,
+          "group": 0,
+          "name": "vBandGrid",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 9,
+          "group": 0,
+          "name": "hCurveIndices",
+          "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 10,
+          "group": 0,
+          "name": "vCurveIndices",
+          "type": "array<u32>"
+        }
+      ],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "abs",
+        "all",
+        "array",
+        "break",
+        "clamp",
+        "const",
+        "continue",
+        "discard",
+        "dot",
+        "for",
+        "fract",
+        "fwidth",
+        "if",
+        "length",
+        "let",
+        "mat2x2f",
+        "mat4x4f",
+        "max",
+        "min",
+        "normalize",
+        "return",
+        "round",
+        "saturate",
+        "select",
+        "sqrt",
+        "textureDimensions",
+        "textureLoad",
+        "var"
+      ],
+      "structs": [
+        "Band",
+        "FragOutput",
+        "Quadratic",
+        "RayCoverage",
+        "Uniforms",
+        "VertexOutput"
+      ]
+    },
+    "donner/gpu/shader/wgsl/tests/ControlSource.h#inline0": {
+      "bindings": [
+        {
+          "addressSpace": "storage,read",
+          "binding": 3,
+          "group": 0,
+          "name": "values",
+          "type": "array<Item>"
+        },
+        {
+          "binding": 4,
+          "group": 0,
+          "name": "unusedSampler",
+          "type": "sampler"
+        }
+      ],
+      "builtins": [
+        "position"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        }
+      ],
+      "features": [
+        "abs",
+        "array",
+        "break",
+        "const",
+        "continue",
+        "discard",
+        "dot",
+        "for",
+        "fract",
+        "fwidth",
+        "if",
+        "length",
+        "let",
+        "max",
+        "normalize",
+        "return",
+        "round",
+        "saturate",
+        "sqrt",
+        "var"
+      ],
+      "structs": [
+        "Item"
+      ]
+    },
     "donner/gpu/shader/wgsl/tests/GraphicsSource.h#inline0": {
       "bindings": [],
       "builtins": [
@@ -987,137 +1163,6 @@
         "GradientUniforms",
         "Quadratic",
         "RayCoverage",
-        "VertexOutput"
-      ]
-    },
-    "donner/svg/renderer/geode/shaders/slug_mask.wgsl": {
-      "bindings": [
-        {
-          "addressSpace": "uniform",
-          "binding": 0,
-          "group": 0,
-          "name": "uniforms",
-          "type": "Uniforms"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 1,
-          "group": 0,
-          "name": "bands",
-          "type": "array<Band>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 2,
-          "group": 0,
-          "name": "curveData",
-          "type": "array<f32>"
-        },
-        {
-          "binding": 3,
-          "group": 0,
-          "name": "clipMaskTexture",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 4,
-          "group": 0,
-          "name": "clipMaskSampler",
-          "type": "sampler"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 5,
-          "group": 0,
-          "name": "vBands",
-          "type": "array<Band>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 6,
-          "group": 0,
-          "name": "vCurveData",
-          "type": "array<f32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 7,
-          "group": 0,
-          "name": "hBandGrid",
-          "type": "array<u32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 8,
-          "group": 0,
-          "name": "vBandGrid",
-          "type": "array<u32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 9,
-          "group": 0,
-          "name": "hCurveIndices",
-          "type": "array<u32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 10,
-          "group": 0,
-          "name": "vCurveIndices",
-          "type": "array<u32>"
-        }
-      ],
-      "builtins": [
-        "position",
-        "vertex_index"
-      ],
-      "entryPoints": [
-        {
-          "name": "fs_main",
-          "stage": "fragment"
-        },
-        {
-          "name": "vs_main",
-          "stage": "vertex"
-        }
-      ],
-      "features": [
-        "abs",
-        "all",
-        "array",
-        "break",
-        "clamp",
-        "const",
-        "continue",
-        "discard",
-        "dot",
-        "for",
-        "fract",
-        "fwidth",
-        "if",
-        "length",
-        "let",
-        "mat2x2f",
-        "mat4x4f",
-        "max",
-        "min",
-        "normalize",
-        "return",
-        "round",
-        "saturate",
-        "select",
-        "sqrt",
-        "textureDimensions",
-        "textureLoad",
-        "var"
-      ],
-      "structs": [
-        "Band",
-        "FragOutput",
-        "Quadratic",
-        "RayCoverage",
-        "Uniforms",
         "VertexOutput"
       ]
     }

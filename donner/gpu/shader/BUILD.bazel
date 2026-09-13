@@ -187,6 +187,21 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "slug_mask_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledSlugMask.cc"],
+    hdrs = ["tests/CompiledSlugMask.h"],
+    copts = ["-fconstexpr-steps=2097152"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":slug_mask_api",
+        ":slug_mask_source",
+        ":slug_mask_validation",
+    ],
+)
+
 # The typed shader IR and each emitter have independent compilation dependencies.
 #
 # A typed immutable IR with a validating builder, host-shareable layout
@@ -502,6 +517,7 @@ donner_cc_test(
         ":msl_emitter",
         ":programs",
         ":shader",
+        ":slug_mask_test_artifact",
         ":stage_io_test_modules",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
@@ -528,6 +544,7 @@ donner_cc_test(
         ":gaussian_blur_test_artifact",
         ":programs",
         ":shader",
+        ":slug_mask_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
         "//donner/base:base_test_utils",

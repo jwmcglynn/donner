@@ -82,6 +82,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "slug_mask_slice",
+    testonly = 1,
+    hdrs = ["tests/SlugMaskSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:slug_mask_api",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "convolve_matrix_slice",
     testonly = 1,
     hdrs = ["tests/ConvolveMatrixSlice.h"],

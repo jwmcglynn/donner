@@ -167,3 +167,12 @@ WGSL `discard` retains the source-level Next behavior, so it does not satisfy a 
 function's authored return requirement. The accepted profile disallows derivatives after discard
 and has no observable fragment-side resource writes; native lowering can end the discarded
 invocation early. See the [WGSL discard and behavior rules](https://www.w3.org/TR/WGSL/#discard-statement).
+
+The full mask is registered in the offline MSL/SPIR-V validator suites. Native Metal and Vulkan
+acceptance cases use the platform-only artifact to render a rectangle with fractional horizontal
+edges, binary coverage, nested clip values, both winding rules, and deliberately shorter declared
+buffer ranges than the underlying allocations. They use the existing strict bitmap comparator.
+These cases are the execution gate for the mask, not a claim that every supported platform has
+already passed. The adapter pipeline reads entry names and binding slots from the frozen interface.
+The Slug target's positive Clang evaluator budget is emitted in CMake only for Clang/AppleClang;
+other compilers retain their own evaluator defaults.

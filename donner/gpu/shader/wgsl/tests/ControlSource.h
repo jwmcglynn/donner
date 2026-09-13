@@ -6,7 +6,7 @@
 
 namespace donner::gpu::shader::wgsl::tests {
 
-inline constexpr SourceText kControlSource{R"WGSL(
+inline constexpr SourceText kControlSource{R"wgsl(
 const kNoBand: u32 = 0xFFFFFFFFu;
 struct Item { value: f32, };
 @group(0) @binding(3) var<storage,read> values: array<Item>;
@@ -35,6 +35,6 @@ fn accumulate(index: u32) -> f32 {
   let out=round(root)+length(v)+fract(p.x)+width;
   return vec4f(saturate(accumulate(u32(p.x))+out+d*scale));
 }
-)WGSL"};
+)wgsl"};
 
 }  // namespace donner::gpu::shader::wgsl::tests

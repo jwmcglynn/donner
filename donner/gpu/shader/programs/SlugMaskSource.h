@@ -7,7 +7,7 @@
 namespace donner::gpu::shader::programs {
 
 inline constexpr wgsl::SourceText kSlugMaskSource{
-    R"WGSL(// Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
+    R"wgsl(// Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
 // into an RGBA8Unorm mask texture for use as a clip source by the main fill /
 // gradient pipelines (path clipping).
 //
@@ -502,6 +502,6 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   out.color = vec4f(coverage, coverage, coverage, coverage);
   return out;
 }
-)WGSL"};
+)wgsl"};
 
 }  // namespace donner::gpu::shader::programs

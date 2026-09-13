@@ -43,6 +43,7 @@
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/LightingSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
+#include "donner/gpu/tests/SlugMaskSlice.h"
 #include "donner/gpu/tests/TileSlice.h"
 #include "donner/gpu/tests/TurbulenceSlice.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
@@ -258,7 +259,9 @@ TEST_F(VulkanColorMatrixTest, GaussianBlurUsesReflectedBindingAndWorkgroupMetada
   const shader::CompiledShaderView& gaussian = shader::tests::GaussianBlurMutatedAllProjections();
   ASSERT_NE(gaussian.resource("params"), nullptr);
   EXPECT_EQ(gaussian.resource("params")->binding, 7u);
-  EXPECT_EQ(gaussian.workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  ASSERT_THAT(gaussian.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(gaussian.entryPoints.front().stage, ShaderStage::Compute);
+  EXPECT_EQ(gaussian.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
 
   gpu::tests::CheckBlurStorage(
       *device_,
@@ -340,7 +343,9 @@ TEST_F(VulkanColorMatrixTest, ConvolveMatrixUsesReflectedBindingAndWorkgroupMeta
   const shader::CompiledShaderView& convolve = shader::tests::ConvolveMatrixMutatedAllProjections();
   ASSERT_NE(convolve.resource("params"), nullptr);
   EXPECT_EQ(convolve.resource("params")->binding, 7u);
-  EXPECT_EQ(convolve.workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  ASSERT_THAT(convolve.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(convolve.entryPoints.front().stage, ShaderStage::Compute);
+  EXPECT_EQ(convolve.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
   gpu::tests::CheckConvolveMatrixStorage(
       *device_,
       shader::MakeShaderDescriptor(convolve, ShaderSourceKind::Spirv, "ConvolveMatrixMutated"),
@@ -722,6 +727,54 @@ TEST_F(VulkanColorMatrixTest, DispatchMatchesTheHostComputedResult) {
           << "texel (" << x << ", " << y << ")";
     }
   }
+}
+
+TEST_F(VulkanColorMatrixTest, SlugMaskAnalyticRectangle) {
+  gpu::tests::CheckSlugMask(
+      *device_, shader::programs::SlugMaskNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_mask_slice::Case::Analytic);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, SlugMaskBinaryRectangle) {
+  gpu::tests::CheckSlugMask(
+      *device_, shader::programs::SlugMaskNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_mask_slice::Case::Binary);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, SlugMaskNestedClipCoverage) {
+  gpu::tests::CheckSlugMask(
+      *device_, shader::programs::SlugMaskNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_mask_slice::Case::NestedClip);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, SlugMaskDoubleNonzeroWinding) {
+  gpu::tests::CheckSlugMask(
+      *device_, shader::programs::SlugMaskNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_mask_slice::Case::DoubleNonzero);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, SlugMaskDoubleEvenOddWinding) {
+  gpu::tests::CheckSlugMask(
+      *device_, shader::programs::SlugMaskNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_mask_slice::Case::DoubleEvenOdd);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, SlugMaskStorageReadsRespectDeclaredRange) {
+  gpu::tests::CheckSlugMask(
+      *device_, shader::programs::SlugMaskNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_mask_slice::Case::DeclaredRange);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 }  // namespace
