@@ -2214,7 +2214,18 @@ private:
       Fail(ErrorCode::ExpressionLimit, expression.span);
       return {};
     }
+    uint16_t depth = 1;
+    for (uint8_t i = 0; i < expression.operandCount; ++i) {
+      const ArenaId operand = expression.operands[i];
+      if (operand < module_.expressionCount && expressionTreeDepths_[operand] >= depth)
+        depth = expressionTreeDepths_[operand] + 1;
+    }
+    if (depth > ModuleLimits::kMaxNesting) {
+      Fail(ErrorCode::NestingLimit, expression.span);
+      return {};
+    }
     const ArenaId id = module_.expressionCount++;
+    expressionTreeDepths_[id] = depth;
     module_.expressions[id] = expression;
     expressionRoots_[id] = root;
     expressionUpperBounds_[id] = upperBound;
@@ -2373,6 +2384,7 @@ private:
   std::array<uint16_t, ModuleLimits::kMaxNesting> scopeStarts_ = {};
   std::array<int32_t, ModuleLimits::kMaxSymbols> symbolUpperBounds_ = {};
   std::array<ArenaId, ModuleLimits::kMaxExpressions> expressionRoots_ = {};
+  std::array<uint16_t, ModuleLimits::kMaxExpressions> expressionTreeDepths_ = {};
   std::array<int32_t, ModuleLimits::kMaxExpressions> expressionUpperBounds_ = {};
   uint16_t activeCount_ = 0;
   uint16_t scopeDepth_ = 0;
