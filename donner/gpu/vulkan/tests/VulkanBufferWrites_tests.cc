@@ -242,6 +242,12 @@ protected:
     return GetResultOrFail(device_->submit(GetResultOrFail(encoder->finish())));
   }
 
+  uint64_t submitEmpty() {
+    auto encoder = GetResultOrFail(device_->createCommandEncoder());
+    if (!encoder) return 0;
+    return GetResultOrFail(device_->submit(GetResultOrFail(encoder->finish())));
+  }
+
   void expectPixel(const std::array<uint8_t, 4>& expected) {
     auto data = device_->readBackBuffer(readback_);
     ASSERT_THAT(data, HasResult());
@@ -268,23 +274,109 @@ protected:
   Buffer readback_;
 };
 
-TEST_F(VulkanBufferWritesTests, InFlightWriteRefusesWithoutChangingSubmittedBytes) {
+TEST_F(VulkanBufferWritesTests, InFlightWriteQueuesCopiedBytesBeforeNextSubmission) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  const uint64_t firstSerial = submitRead(input_);
+  ASSERT_NE(firstSerial, 0u);
+  ASSERT_LT(device_->completedSerial(), firstSerial);
+  Buffer firstReadback = std::move(readback_);
+  std::array<float, 4> payload = kBlue;
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(payload)), IsOk());
+  payload = kRed;
+  readback_ = GetResultOrFail(
+      device_->createBuffer({"second readback", 256, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  const uint64_t secondSerial = submitRead(input_);
+  ASSERT_GT(secondSerial, firstSerial);
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(secondSerial, 5.0), testing::IsTrue());
+  expectPixel({0, 0, 255, 255});
+  readback_ = std::move(firstReadback);
+  expectPixel({255, 0, 0, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, WritesAfterUploadOnlySubmissionStayOrdered) {
+  NativeQueueGate readerGate(device_->nativeContextForTest());
+  readerGate.start();
+  ASSERT_THAT(readerGate.submitted(), testing::IsTrue());
+  const uint64_t readerSerial = submitRead(input_);
+  NativeQueueGate uploadGate(device_->nativeContextForTest());
+  uploadGate.start();
+  ASSERT_THAT(uploadGate.submitted(), testing::IsTrue());
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  const uint64_t uploadSerial = submitEmpty();
+  ASSERT_EQ(readerGate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(readerSerial, 5.0), testing::IsTrue());
+  ASSERT_LT(device_->completedSerial(), uploadSerial);
+
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kRed)), IsOk());
+  const uint64_t nextReaderSerial = submitRead(input_);
+  ASSERT_EQ(uploadGate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(nextReaderSerial, 5.0), testing::IsTrue());
+  expectPixel({255, 0, 0, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, ReadbackWaitsForUploadOnlySubmission) {
+  NativeQueueGate readerGate(device_->nativeContextForTest());
+  readerGate.start();
+  ASSERT_THAT(readerGate.submitted(), testing::IsTrue());
+  const uint64_t readerSerial = submitRead(input_);
+  NativeQueueGate uploadGate(device_->nativeContextForTest());
+  uploadGate.start();
+  ASSERT_THAT(uploadGate.submitted(), testing::IsTrue());
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  const uint64_t uploadSerial = submitEmpty();
+  ASSERT_EQ(readerGate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(readerSerial, 5.0), testing::IsTrue());
+  ASSERT_LT(device_->completedSerial(), uploadSerial);
+
+  EXPECT_THAT(device_->readBackBuffer(input_), IsGpuError(GpuErrorType::InvalidState));
+  ASSERT_EQ(uploadGate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(uploadSerial, 5.0), testing::IsTrue());
+  const auto bytes = device_->readBackBuffer(input_);
+  ASSERT_THAT(bytes, HasResult());
+  EXPECT_THAT(bytes.result(), testing::ElementsAreArray(AsBytes(kBlue)));
+}
+
+TEST_F(VulkanBufferWritesTests, RetiringBufferDiscardsUnsentWrites) {
   NativeQueueGate gate(device_->nativeContextForTest());
   gate.start();
   ASSERT_THAT(gate.submitted(), testing::IsTrue());
   const uint64_t serial = submitRead(input_);
-  ASSERT_NE(serial, 0u);
-  ASSERT_LT(device_->completedSerial(), serial);
-  const Status write = device_->writeBuffer(input_, 0, AsBytes(kBlue));
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  ASSERT_THAT(device_->destroyBuffer(std::move(input_)), IsOk());
   ASSERT_EQ(gate.release(), VK_SUCCESS);
   ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
-  EXPECT_THAT(write, IsGpuError(GpuErrorType::InvalidState));
+  device_->poll();
+  ASSERT_GT(submitEmpty(), serial);
   expectPixel({255, 0, 0, 255});
+}
 
-  // A timeout is recoverable, and the same write can succeed after the reader completes.
+TEST_F(VulkanBufferWritesTests, UploadOnlyDestinationSurvivesSlotRecycling) {
+  NativeQueueGate readerGate(device_->nativeContextForTest());
+  readerGate.start();
+  ASSERT_THAT(readerGate.submitted(), testing::IsTrue());
+  const uint64_t readerSerial = submitRead(input_);
+  NativeQueueGate uploadGate(device_->nativeContextForTest());
+  uploadGate.start();
+  ASSERT_THAT(uploadGate.submitted(), testing::IsTrue());
   ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
-  ASSERT_THAT(device_->waitForSerial(submitRead(input_), 5.0), testing::IsTrue());
-  expectPixel({0, 0, 255, 255});
+  const uint64_t uploadSerial = submitEmpty();
+  ASSERT_EQ(readerGate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(readerSerial, 5.0), testing::IsTrue());
+  ASSERT_LT(device_->completedSerial(), uploadSerial);
+
+  const uint32_t oldSlot = input_.slotIndex();
+  ASSERT_THAT(device_->destroyBuffer(std::move(input_)), IsOk());
+  input_ = GetResultOrFail(device_->createBuffer(
+      {"replacement", sizeof(kRed), BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_EQ(input_.slotIndex(), oldSlot);
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kRed)), IsOk());
+  const uint64_t nextReaderSerial = submitRead(input_);
+  ASSERT_EQ(uploadGate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(nextReaderSerial, 5.0), testing::IsTrue());
+  expectPixel({255, 0, 0, 255});
 }
 
 TEST_F(VulkanBufferWritesTests, FreshAndCompletedBuffersDoNotWaitForUnrelatedWork) {
