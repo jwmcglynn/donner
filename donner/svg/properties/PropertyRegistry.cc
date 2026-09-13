@@ -495,13 +495,7 @@ ParseResult<Lengthd> ParseBaselineShift(std::span<const css::ComponentValue> com
       return Lengthd(pct->value / 100.0, Lengthd::Unit::Em);
     }
   }
-  auto result = parser::ParseLengthPercentage(components, allowUserUnits);
-  if (!result.hasError() && (!std::isfinite(result.result().value) || result.result().value < 0)) {
-    ParseDiagnostic error;
-    error.reason = "Invalid font size";
-    return error;
-  }
-  return result;
+  return parser::ParseLengthPercentage(components, allowUserUnits);
 }
 
 /// Parse "normal | <length>" for letter-spacing and word-spacing.
@@ -515,13 +509,7 @@ ParseResult<Lengthd> ParseSpacingValue(std::span<const css::ComponentValue> comp
       }
     }
   }
-  auto result = parser::ParseLengthPercentage(components, allowUserUnits);
-  if (!result.hasError() && (!std::isfinite(result.result().value) || result.result().value < 0)) {
-    ParseDiagnostic error;
-    error.reason = "Invalid font size";
-    return error;
-  }
-  return result;
+  return parser::ParseLengthPercentage(components, allowUserUnits);
 }
 
 /// Parse the SVG2 `inline-size` value: a `<length-percentage>`. The `auto` keyword is treated as
@@ -1760,10 +1748,39 @@ bool IsFontLineHeight(const css::ComponentValue& component, bool allowUserUnits)
   return !length.hasError() && std::isfinite(length.result().value) && length.result().value >= 0;
 }
 
-/// Parses the unordered optional values followed by size, optional line-height, and family.
+/// Parses the mandatory size/family suffix, sharing the longhand value parsers.
+ParseResult<FontShorthandValues> ParseFontShorthandSuffix(
+    std::span<const css::ComponentValue> components, const FontShorthandValues& prefix,
+    bool allowUserUnits) {
+  if (components.empty()) return FontParseError(components, "Missing font size");
+  auto size = ParseFontSizeValue(components.first(1), allowUserUnits);
+  if (size.hasError()) return size.error();
+  components = components.subspan(1);
+  SkipWhitespace(components);
+  if (!components.empty() && components.front().isToken<css::Token::Delim>() &&
+      components.front().get<css::Token>().get<css::Token::Delim>().value == '/') {
+    components = components.subspan(1);
+    SkipWhitespace(components);
+    if (components.empty() || !IsFontLineHeight(components.front(), allowUserUnits)) {
+      return FontParseError(components, "Invalid line-height in font shorthand");
+    }
+    components = components.subspan(1);
+    SkipWhitespace(components);
+  }
+  auto families = ParseFontFamily(components);
+  if (families.hasError()) return families.error();
+  FontShorthandValues result = prefix;
+  result.size = size.result();
+  result.families = std::move(families.result());
+  return result;
+}
+
+/// Tries at most five suffix positions, preferring a complete optional-prefix parse over an
+/// ambiguous bare-number size. Both CSS declarations and presentation attributes allow user units.
 ParseResult<FontShorthandValues> ParseFontShorthandValues(
     std::span<const css::ComponentValue> components, bool allowUserUnits) {
-  FontShorthandValues result;
+  FontShorthandValues prefix;
+  std::optional<FontShorthandValues> candidate;
   bool sawStyle = false;
   bool sawVariant = false;
   bool sawWeight = false;
@@ -1771,64 +1788,39 @@ ParseResult<FontShorthandValues> ParseFontShorthandValues(
   size_t optionalCount = 0;
   SkipWhitespace(components);
   while (!components.empty()) {
+    auto suffix = ParseFontShorthandSuffix(components, prefix, allowUserUnits);
+    if (!suffix.hasError()) candidate = std::move(suffix.result());
+    if (optionalCount++ == 4) break;
     const auto current = components.first(1);
-    auto remaining = components.subspan(1);
-    SkipWhitespace(remaining);
-    const auto size = ParseFontSizeValue(current, allowUserUnits);
-    // Presentation attributes also permit a bare number as the size. A number followed by
-    // another size is a weight; otherwise the number starts the mandatory size/family pair.
-    const bool bareSize =
-        current.front().isToken<css::Token::Number>() && allowUserUnits &&
-        (remaining.empty() || ParseFontSizeValue(remaining.first(1), allowUserUnits).hasError());
-    if (!size.hasError() &&
-        (!current.front().isToken<css::Token::Number>() || bareSize ||
-         current.front().get<css::Token>().get<css::Token::Number>().value == 0)) {
-      result.size = size.result();
-      components = remaining;
-      if (!components.empty() && components.front().isToken<css::Token::Delim>() &&
-          components.front().get<css::Token>().get<css::Token::Delim>().value == '/') {
-        components = components.subspan(1);
-        SkipWhitespace(components);
-        if (components.empty() || !IsFontLineHeight(components.front(), allowUserUnits)) {
-          return FontParseError(components, "Invalid line-height in font shorthand");
-        }
-        components = components.subspan(1);
-        SkipWhitespace(components);
-      }
-      auto families = ParseFontFamily(components);
-      if (families.hasError()) return families.error();
-      result.families = std::move(families.result());
-      return result;
-    }
-    if (++optionalCount > 4) return FontParseError(current, "Too many font shorthand values");
     const auto* ident = current.front().tryGetToken<css::Token::Ident>();
-    if (ident && ident->value.equalsLowercase("normal")) {
-      components = remaining;
-      continue;
+    if (!(ident && ident->value.equalsLowercase("normal"))) {
+      const auto style = ParseFontStyle(current);
+      const auto variant = ParseFontVariant(current);
+      const auto weight = ParseFontWeight(current);
+      const auto stretch = ParseFontStretch(current);
+      if (!style.hasError() && !sawStyle) {
+        prefix.style = style.result();
+        sawStyle = true;
+      } else if (!variant.hasError() && !sawVariant) {
+        prefix.variant = variant.result();
+        sawVariant = true;
+      } else if (!weight.hasError() && !sawWeight) {
+        prefix.weight = weight.result();
+        sawWeight = true;
+      } else if (!stretch.hasError() && !sawStretch &&
+                 stretch.result() >= static_cast<int>(FontStretch::UltraCondensed) &&
+                 stretch.result() <= static_cast<int>(FontStretch::UltraExpanded)) {
+        prefix.stretch = stretch.result();
+        sawStretch = true;
+      } else {
+        break;
+      }
     }
-    const auto style = ParseFontStyle(current);
-    const auto variant = ParseFontVariant(current);
-    const auto weight = ParseFontWeight(current);
-    const auto stretch = ParseFontStretch(current);
-    if (!style.hasError() && !sawStyle) {
-      result.style = style.result();
-      sawStyle = true;
-    } else if (!variant.hasError() && !sawVariant) {
-      result.variant = variant.result();
-      sawVariant = true;
-    } else if (!weight.hasError() && !sawWeight) {
-      result.weight = weight.result();
-      sawWeight = true;
-    } else if (!stretch.hasError() && !sawStretch && stretch.result() >= 1 &&
-               stretch.result() <= 9) {
-      result.stretch = stretch.result();
-      sawStretch = true;
-    } else {
-      return FontParseError(current, "Invalid or duplicate font shorthand value");
-    }
-    components = remaining;
+    components = components.subspan(1);
+    SkipWhitespace(components);
   }
-  return FontParseError(components, "Missing size in font shorthand");
+  if (candidate) return std::move(*candidate);
+  return FontParseError(components, "Invalid or incomplete font shorthand");
 }
 
 /// Expands a valid font shorthand while respecting each longhand's cascade priority.

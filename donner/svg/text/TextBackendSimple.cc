@@ -1,5 +1,7 @@
 #include "donner/svg/text/TextBackendSimple.h"
 
+#include <cmath>
+
 #include "donner/base/Utf8.h"
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
@@ -307,6 +309,7 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
                                                        size_t byteLength, bool isVertical,
                                                        FontVariant fontVariant, bool enableKerning,
                                                        bool /*forceLogicalOrder*/) const {
+  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f) return {};
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
@@ -363,6 +366,7 @@ double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx,
                                         FontHandle /*curFont*/, float /*curSizePx*/,
                                         uint32_t prevCodepoint, uint32_t curCodepoint,
                                         bool isVertical) const {
+  if (!std::isfinite(prevSizePx) || prevSizePx <= 0.0f) return 0.0;
   const stbtt_fontinfo* info = getFontInfo(prevFont);
   if (!info) {
     return 0.0;

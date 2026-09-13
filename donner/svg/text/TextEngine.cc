@@ -35,6 +35,21 @@ namespace donner::svg {
 
 namespace {
 
+/// Converts a computed font size only when the result is representable by the shaping API.
+float CheckedFontSizePx(double sizePx) {
+  if (!std::isfinite(sizePx) || sizePx <= 0.0 ||
+      sizePx > static_cast<double>(std::numeric_limits<float>::max())) {
+    return 0.0f;
+  }
+  const float result = static_cast<float>(sizePx);
+  return std::isfinite(result) ? result : 0.0f;
+}
+
+/// Zero or unrepresentable used sizes consume positioning without producing glyphs.
+bool HasRenderableSpanText(std::string_view text, float usedSizePx) {
+  return !text.empty() && usedSizePx > 0.0f && std::isfinite(usedSizePx);
+}
+
 /// Decode a single UTF-8 codepoint, advancing \p i past the consumed bytes.
 uint32_t decodeUtf8(const std::string_view str, size_t& i) {
   const auto [cp, length] = Utf8::NextCodepoint(str.substr(i));
@@ -1104,9 +1119,9 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
 
   FontMetrics spanFontMetrics = params.fontMetrics;
   const float spanFontSizePx =
-      span.fontSize.value != 0.0 ? static_cast<float>(span.fontSize.toPixels(
+      span.fontSize.value != 0.0 ? CheckedFontSizePx(span.fontSize.toPixels(
                                        params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
-                                 : static_cast<float>(params.fontSize.toPixels(
+                                 : CheckedFontSizePx(params.fontSize.toPixels(
                                        params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
   spanFontMetrics.fontSize = spanFontSizePx;
 
@@ -1134,11 +1149,11 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
     for (const auto& ancestor : span.ancestorBaselineShifts) {
       if (subSuper.has_value() && ancestor.keyword == BSK::Sub) {
         const float ancestorScale =
-            backend.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+            backend.scaleForEmToPixels(spanFont, CheckedFontSizePx(ancestor.fontSizePx));
         spanBaselineShiftPx += -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
       } else if (subSuper.has_value() && ancestor.keyword == BSK::Super) {
         const float ancestorScale =
-            backend.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+            backend.scaleForEmToPixels(spanFont, CheckedFontSizePx(ancestor.fontSizePx));
         spanBaselineShiftPx += static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
       } else {
         FontMetrics ancestorFm = params.fontMetrics;
@@ -1509,18 +1524,17 @@ FontHandle ResolveSpanFace(FontManager& fontManager,
 /// Applies the requested x-height ratio after the final face has been selected.
 float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
                      const std::optional<double>& fontSizeAdjust) {
-  if (fontSizeAdjust.has_value()) {
-    const FontVMetrics metrics = backend.fontVMetrics(font);
-    const double xHeight = metrics.xHeight > 0
-                               ? static_cast<double>(metrics.xHeight)
-                               : static_cast<double>(metrics.ascent - metrics.descent) * 0.45;
-    const float scale = backend.scaleForEmToPixels(font, sizePx);
-    const double actualAspect = sizePx > 0.0f ? xHeight * scale / sizePx : 0.0;
-    if (actualAspect > 0.0) {
-      sizePx = static_cast<float>(sizePx * *fontSizeAdjust / actualAspect);
-    }
-  }
-  return sizePx;
+  sizePx = CheckedFontSizePx(sizePx);
+  if (sizePx == 0.0f || !fontSizeAdjust) return sizePx;
+  if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust < 0.0) return 0.0f;
+  const FontVMetrics metrics = backend.fontVMetrics(font);
+  const double xHeight = metrics.xHeight > 0
+                             ? static_cast<double>(metrics.xHeight)
+                             : static_cast<double>(metrics.ascent - metrics.descent) * 0.45;
+  const float scale = backend.scaleForEmToPixels(font, sizePx);
+  const double aspect = xHeight * scale / sizePx;
+  if (!std::isfinite(aspect) || aspect <= 0.0) return sizePx;
+  return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
 }
 
 }  // namespace
@@ -1539,7 +1553,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     font = fontManager_.fallbackFont();
   }
 
-  const float fontSizePx = static_cast<float>(
+  const float fontSizePx = CheckedFontSizePx(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
   // ── Layout state ──────────────────────────────────────────────────────────────
@@ -1599,7 +1613,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
     float spanFontSizePx = span.fontSize.value != 0.0
-                               ? static_cast<float>(span.fontSize.toPixels(
+                               ? CheckedFontSizePx(span.fontSize.toPixels(
                                      params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
                                : fontSizePx;
 
@@ -1681,7 +1695,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     }
 
     // For empty spans, span-start already applied positioning - just propagate.
-    if (spanText.empty()) {
+    if (!HasRenderableSpanText(spanText, spanFontSizePx)) {
       currentPenX = penX;
       currentPenY = penY;
       prevDefaultY = defaultY;

@@ -81,13 +81,46 @@ bool CanDecodeGlyphOutline(const FontManager& fontManager, FontHandle font, int 
           fontManager.glyphOutlineComplexity(font, glyphIndex).has_value());
 }
 
+/// Checks the exclusive fixed-point bound before converting to FreeType's signed integer type.
+std::optional<FT_F26Dot6> CheckedCharacterSize(float sizePx) {
+  const double fixedSize = static_cast<double>(sizePx) * 64.0;
+  // The integer maximum can round upward to an out-of-range power of two in floating point.
+  const double exclusiveLimit = std::ldexp(1.0, std::numeric_limits<FT_F26Dot6>::digits);
+  if (!std::isfinite(fixedSize) || sizePx <= 0.0f || fixedSize >= exclusiveLimit) {
+    return std::nullopt;
+  }
+  return static_cast<FT_F26Dot6>(fixedSize);
+}
+
+/// Sets a scalable face's checked size and refreshes HarfBuzz only after FreeType accepts it.
+bool SetScalableFaceSize(hb_font_t* font, FT_Face face, float sizePx) {
+  const auto characterSize = CheckedCharacterSize(sizePx);
+  if (!face || !characterSize) return false;
+  if (FT_IS_SCALABLE(face)) {
+    if (FT_Set_Char_Size(face, 0, *characterSize, 72, 72) != 0) return false;
+    hb_ft_font_changed(font);
+  }
+  return true;
+}
+
+/// Prepares either a scalable size or the existing bitmap strike for a shaping operation.
+bool PrepareShapingSize(hb_font_t* font, FT_Face face, float sizePx) {
+  if (!SetScalableFaceSize(font, face, sizePx)) return false;
+  if (!FT_IS_SCALABLE(face)) {
+    if (face->num_fixed_sizes <= 0 || FT_Select_Size(face, 0) != 0) return false;
+    hb_ft_font_changed(font);
+  }
+  return true;
+}
+
 std::optional<float> CheckedFontSizePx(float scale, unsigned int unitsPerEm) {
-  const float fontSizePx = scale * static_cast<float>(unitsPerEm);
-  constexpr float kMaximumFontSizePx =
-      static_cast<float>(std::numeric_limits<FT_F26Dot6>::max() / 64);
-  return std::isfinite(fontSizePx) && fontSizePx <= kMaximumFontSizePx
-             ? std::optional<float>(fontSizePx)
-             : std::nullopt;
+  const double fontSizePx = static_cast<double>(scale) * unitsPerEm;
+  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0 ||
+      fontSizePx > static_cast<double>(std::numeric_limits<float>::max())) {
+    return std::nullopt;
+  }
+  const float result = static_cast<float>(fontSizePx);
+  return CheckedCharacterSize(result) ? std::optional<float>(result) : std::nullopt;
 }
 
 /// Small-caps synthesis scale factor.
@@ -410,10 +443,7 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
 
   // Get the FreeType face and set it to the correct size.
   FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
-  if (!ftFace) {
-    return {};
-  }
-  FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(*fontSizePx * 64.0f), 72, 72);
+  if (!SetScalableFaceSize(hbFont, ftFace, *fontSizePx)) return {};
 
   // Use NO_HINTING to match the HarfBuzz font configuration (set in getOrCreateHbFont).
   // Hinted outlines differ from unhinted metrics, causing shape/position mismatches
@@ -858,7 +888,7 @@ size_t NextShapingByte(const char* text, size_t offset) {
 
 /// Shapes native small caps or the existing synthesized subranges at their original sizes.
 template <typename ShapeRange>
-void ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, const char* chunkData,
+bool ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, const char* chunkData,
                         size_t byteLength, const SmallCapsPreparation& smallCaps,
                         hb_feature_t* features, unsigned int numFeatures, ShapeRange&& shapeRange) {
   const bool useSmcpFeature = smallCaps.useFeature;
@@ -879,19 +909,12 @@ void ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
 
       if (sc) {
         // Shape small-cap sub-run at reduced font size.
-        if (FT_IS_SCALABLE(ftFace)) {
-          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * kSmallCapScale * 64.0f),
-                           72, 72);
-          hb_ft_font_changed(hbFont);
-        }
+        if (!SetScalableFaceSize(hbFont, ftFace, fontSizePx * kSmallCapScale)) return false;
 
         shapeRange(shapeText, subStart, bi, true, features, numFeatures);
 
         // Restore full font size.
-        if (FT_IS_SCALABLE(ftFace)) {
-          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
-          hb_ft_font_changed(hbFont);
-        }
+        if (!SetScalableFaceSize(hbFont, ftFace, fontSizePx)) return false;
       } else {
         shapeRange(shapeText, subStart, bi, false, features, numFeatures);
       }
@@ -899,6 +922,7 @@ void ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
   } else {
     shapeRange(chunkData, 0, byteLength, false, features, numFeatures);
   }
+  return true;
 }
 
 }  // namespace
@@ -914,17 +938,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
   }
 
   FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
-  if (!ftFace) {
-    return {};
-  }
-
-  // Set the FreeType face size for correct metrics at this pixel size.
-  if (FT_IS_SCALABLE(ftFace)) {
-    FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
-  } else if (ftFace->num_fixed_sizes > 0) {
-    FT_Select_Size(ftFace, 0);
-  }
-  hb_ft_font_changed(hbFont);
+  if (!PrepareShapingSize(hbFont, ftFace, fontSizePx)) return {};
 
   // With FreeType-backed fonts, HarfBuzz returns positions in 26.6 fixed-point pixels
   // at the face's current size. For scalable fonts that's fontSizePx; for bitmap fonts
@@ -984,8 +998,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
     features[numFeatures++] = {HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
   }
 
-  ShapeVariantRanges(ftFace, hbFont, fontSizePx, chunkData, byteLength, smallCaps, features.data(),
-                     numFeatures, shapeRange);
+  if (!ShapeVariantRanges(ftFace, hbFont, fontSizePx, chunkData, byteLength, smallCaps,
+                          features.data(), numFeatures, shapeRange))
+    return {};
 
   return ConvertShapedRun(allGlyphs, hbFont, fontSizePx, pixelScaleX, pixelScaleY, spanText,
                           byteOffset, isVertical, useVerticalShaping, forceLogicalOrder);
@@ -1004,15 +1019,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   }
 
   FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
-  if (!ftFace) {
-    return 0.0;
-  }
-
-  // Set the previous span's font size for correct GPOS kerning.
-  if (FT_IS_SCALABLE(ftFace)) {
-    FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(prevSizePx * 64.0f), 72, 72);
-    hb_ft_font_changed(hbFont);
-  }
+  if (!PrepareShapingSize(hbFont, ftFace, prevSizePx)) return 0.0;
 
   const double pixelScaleX = pixelScaleForPpem(ftFace, prevSizePx, true);
 
