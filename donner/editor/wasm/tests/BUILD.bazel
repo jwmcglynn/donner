@@ -190,6 +190,7 @@ playwright_bin.playwright_test(
         "composited-drag-invariants.spec.ts",
         "composited-invariants.spec.ts",
         "composited-probe.ts",
+        "composited-probe-evidence.mjs",
         "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",

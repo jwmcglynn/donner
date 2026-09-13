@@ -366,7 +366,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
 });
 
 test("composited probe evidence survives lane archival and the next lane", async () => {
-  const { stopCompositedProbe } = await import("./composited-probe.ts");
+  const { stopCompositedProbe } = await import("./composited-probe-evidence.mjs");
   const temporary = mkdtempSync(path.join(tmpdir(), "donner-probe-evidence-"));
   const outputDirectory = path.join(temporary, "test-results", "failed-drag");
   const archiveDirectory = path.join(temporary, "archived-lane");
