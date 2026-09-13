@@ -258,10 +258,12 @@ configured_dependency_audit_test(
     size = "small",
     forbidden = [
         "//donner/svg/renderer:renderer_tiny_skia",
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
         "@tracy//:tracy_client",
     ],
-    forbidden_packages = ["//donner/editor/repro"],
+    forbidden_packages = [
+        "//donner/editor/repro",
+        "@tiny-skia-cpp//src",
+    ],
     required = [
         "//donner/editor/wasm:_editor_wasm_binary",
         "//donner/svg/renderer:renderer_geode",

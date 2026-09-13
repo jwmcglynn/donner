@@ -1,4 +1,7 @@
-"""Rule for asserting a target does NOT transitively depend on another target.
+"""Dependency audits for unconfigured backend and configured product graphs.
+
+`configured_dependency_audit_test` follows selected binary/library dependencies
+through build transitions, so it also audits product dispatchers and Wasm packages.
 
 Companion to `banned_deps.bzl`. Where `banned_deps_test` checks *direct*
 (depth-1) dependencies on external libraries, `forbidden_transitive_dep_test`
@@ -139,9 +142,9 @@ def _configured_dependency_audit_impl(ctx):
     )
     return [DefaultInfo(executable = output)]
 
-configured_dependency_audit_test = rule(
+_configured_dependency_audit = rule(
     implementation = _configured_dependency_audit_impl,
-    test = True,
+    executable = True,
     attrs = {
         "target": attr.label(mandatory = True, aspects = [_configured_deps]),
         "forbidden": attr.string_list(),
@@ -150,3 +153,29 @@ configured_dependency_audit_test = rule(
     },
     doc = "Audits selected dependency edges after select() and platform transitions, without compiling.",
 )
+
+def configured_dependency_audit_test(name, target, forbidden = [], forbidden_packages = [], required = [], **kwargs):
+    """Audit the configured binary graph using an ordinary shell test.
+
+    Args:
+      name: Test name.
+      target: Product root, including any platform-transition wrappers.
+      forbidden: Labels that must not be reachable through binary dependencies.
+      forbidden_packages: Packages (and subpackages) that must not be reachable.
+      required: Labels that must be visited, guarding traversal through wrappers.
+      **kwargs: Standard sh_test attributes.
+    """
+    checker = name + "_checker"
+    _configured_dependency_audit(
+        name = checker,
+        target = target,
+        forbidden = forbidden,
+        forbidden_packages = forbidden_packages,
+        required = required,
+        testonly = True,
+    )
+    native.sh_test(
+        name = name,
+        srcs = [":" + checker],
+        **kwargs
+    )
