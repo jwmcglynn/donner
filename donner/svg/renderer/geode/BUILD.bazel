@@ -358,7 +358,6 @@ donner_cc_library(
         ":filter_resolve_wgsl",
         ":filter_tile_wgsl",
         ":flood_wgsl",
-        ":gaussian_blur_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
         ":geode_shaders",
@@ -369,9 +368,10 @@ donner_cc_library(
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
-        "//donner/gpu/shader:filter_image_artifact",
-        "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:convolve_matrix_artifact",
+        "//donner/gpu/shader:filter_image_artifact",
+        "//donner/gpu/shader:gaussian_blur_artifact",
+        "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:program_bindings",
         "//donner/gpu/shader:turbulence_artifact",
         "//donner/svg/components/filter:components",
@@ -591,24 +591,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Gaussian blur compute shader (two-pass separable).
-genrule(
-    name = "gaussian_blur_generated",
-    outs = ["generated/gaussian_blur.wgsl"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) gaussian_blur " +
-          "$(location generated/gaussian_blur.wgsl)",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-embed_resources(
-    name = "gaussian_blur_wgsl",
-    header_output = "embed_resources/GaussianBlurWgsl.h",
-    resources = {
-        "kGaussianBlurWgsl": "generated/gaussian_blur.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 genrule(
     name = "emit_filter_merge",
     outs = ["generated/filter_merge.wgsl"],
@@ -768,17 +750,17 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_shaders",
         ":geode_gpu_wait",
+        ":geode_shaders",
         ":geode_wgpu_util",
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
+        "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:wgsl_emitter",
         "//third_party/webgpu-cpp:webgpu_cpp",
-        "//donner/base:gtest_timeout_main",
     ],
 )
 

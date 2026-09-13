@@ -2,6 +2,47 @@ load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
+donner_cc_library(
+    name = "compiled_shader",
+    srcs = ["CompiledShader.cc"],
+    hdrs = ["CompiledShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/gpu:descriptors",
+    ],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_source",
+    hdrs = ["programs/GaussianBlurSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_artifact",
+    srcs = ["programs/GaussianBlur.cc"],
+    hdrs = ["programs/GaussianBlur.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":gaussian_blur_source",
+    ],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledGaussian.cc"],
+    hdrs = ["tests/CompiledGaussian.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":gaussian_blur_source",
+    ],
+)
+
 # The typed shader IR and each emitter have independent compilation dependencies.
 #
 # A typed immutable IR with a validating builder, host-shareable layout
@@ -110,13 +151,12 @@ donner_cc_library(
         "programs/ColorSpaceConvertBindings.h",
         "programs/ComponentTransferBindings.h",
         "programs/CompositeBindings.h",
-        "programs/DisplacementMapBindings.h",
         "programs/ConvolveMatrixBindings.h",
+        "programs/DisplacementMapBindings.h",
         "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
         "programs/FilterImageBindings.h",
         "programs/FloodBindings.h",
-        "programs/GaussianBlurBindings.h",
         "programs/LightingBindings.h",
         "programs/MergeBindings.h",
         "programs/MorphologyBindings.h",
@@ -137,13 +177,12 @@ donner_cc_library(
         "programs/ColorSpaceConvert.cc",
         "programs/ComponentTransfer.cc",
         "programs/Composite.cc",
-        "programs/DisplacementMap.cc",
         "programs/ConvolveMatrix.cc",
+        "programs/DisplacementMap.cc",
         "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
         "programs/FilterImage.cc",
         "programs/Flood.cc",
-        "programs/GaussianBlur.cc",
         "programs/Lighting.cc",
         "programs/Merge.cc",
         "programs/Morphology.cc",
@@ -161,14 +200,13 @@ donner_cc_library(
         "programs/ColorSpaceConvert.h",
         "programs/ComponentTransfer.h",
         "programs/Composite.h",
-        "programs/DisplacementMap.h",
         "programs/ConvolveMatrix.h",
+        "programs/DisplacementMap.h",
         "programs/DropShadow.h",
         "programs/ErrorLatch.h",
         "programs/FilterColorMatrix.h",
         "programs/FilterImage.h",
         "programs/Flood.h",
-        "programs/GaussianBlur.h",
         "programs/Lighting.h",
         "programs/Merge.h",
         "programs/Morphology.h",
@@ -207,8 +245,8 @@ donner_cc_test(
         "tests/ColorSpaceConvertProgram_tests.cc",
         "tests/ComponentTransferProgram_tests.cc",
         "tests/CompositeProgram_tests.cc",
-        "tests/DisplacementMapProgram_tests.cc",
         "tests/ConvolveMatrixProgram_tests.cc",
+        "tests/DisplacementMapProgram_tests.cc",
         "tests/DropShadowProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
         "tests/FilterImageProgram_tests.cc",
@@ -238,11 +276,13 @@ donner_cc_test(
     deps = [
         ":checkerboard_artifact",
         ":component_transfer_artifact",
-        ":displacement_map_artifact",
         ":convolve_matrix_artifact",
+        ":displacement_map_artifact",
         ":drop_shadow_artifact",
         ":filter_image_artifact",
         ":float_storage_test_module",
+        ":gaussian_blur_artifact",
+        ":gaussian_blur_test_artifact",
         ":lighting_artifacts",
         ":module_interface",
         ":msl_emitter",
@@ -311,6 +351,7 @@ donner_cc_test(
     deps = [
         ":external_tool_gate",
         ":float_storage_test_module",
+        ":gaussian_blur_test_artifact",
         ":msl_emitter",
         ":programs",
         ":shader",
@@ -335,6 +376,7 @@ donner_cc_test(
     data = ["@spirv_tools//:spirv-val"],
     deps = [
         ":float_storage_test_module",
+        ":gaussian_blur_test_artifact",
         ":programs",
         ":shader",
         ":spirv_emitter",
@@ -361,6 +403,7 @@ donner_cc_test(
     }),
     deps = [
         ":float_storage_test_module",
+        ":gaussian_blur_artifact",
         ":programs",
         ":shader",
         ":wgsl_emitter",

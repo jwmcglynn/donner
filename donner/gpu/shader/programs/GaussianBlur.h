@@ -1,14 +1,33 @@
 #pragma once
 /// @file
-/// SVG Gaussian blur compute program expressed in the shader IR.
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/GaussianBlurBindings.h"
+#include <array>
+#include <cstdint>
+
+#include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
 /**
- * Runs one Gaussian or box-blur pass with transparent, duplicate, or wrap sampling.
- * The host bounds finite sigma to [0,256] and each box extent to [0,240] through filter admission,
- * and supplies equally sized source/destination textures. Gaussian support is capped at 127 pixels.
- * The optional output clip is applied after sampling, before the shared [0,1] output clamp.
+ * Host layout for the `params` uniform resource of the Gaussian blur program.
  */
-ShaderResult<IrModule> BuildGaussianBlurModule();
+struct alignas(8) GaussianBlurParams {
+  float stdDeviation = 0.0f;         //!< Gaussian standard deviation in pixels.
+  uint32_t axis = 0;                 //!< Zero for horizontal and one for vertical sampling.
+  uint32_t edgeMode = 0;             //!< Transparent, duplicate, or wrap edge behavior.
+  uint32_t kernelType = 0;           //!< Gaussian or box kernel selection.
+  int32_t boxLeft = 0;               //!< Inclusive box-kernel extent below zero.
+  int32_t boxRight = 0;              //!< Inclusive box-kernel extent above zero.
+  std::array<int32_t, 2> clipMin{};  //!< Inclusive output clip origin.
+  std::array<int32_t, 2> clipMax{};  //!< Exclusive output clip limit.
+  uint32_t clipActive = 0;           //!< Enables output clipping when one.
+  uint32_t pad = 0;                  //!< Explicit trailing uniform word.
+};
+
+/**
+ * Returns the frozen source projections and reflected interface of the Gaussian blur shader.
+ * The filter admission path bounds finite sigma to [0,256], box extents to [0,240], and
+ * supplies equally sized nonempty source and destination textures. The shader caps Gaussian
+ * support at 127 pixels and applies its optional output clip before the [0,1] output clamp.
+ *
+ * @return Stable view into a process-lifetime compiled artifact.
+ */
+const CompiledShaderView& GaussianBlurShader();
 }  // namespace donner::gpu::shader::programs

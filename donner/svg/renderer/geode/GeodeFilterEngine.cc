@@ -20,6 +20,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
@@ -34,7 +35,7 @@
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FilterImageBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
-#include "donner/gpu/shader/programs/GaussianBlurBindings.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/LightingBindings.h"
 #include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/MorphologyBindings.h"
@@ -60,7 +61,6 @@
 #include "embed_resources/FilterResolveWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FloodWgsl.h"
-#include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SubregionClipWgsl.h"
 
@@ -662,27 +662,6 @@ int32_t boundedCeilInt32(double value, int32_t minimum, int32_t maximum) {
   return static_cast<int32_t>(std::ceil(value));
 }
 
-/// Uniform buffer layout matching the WGSL `BlurParams` struct.
-struct BlurParams {
-  float stdDeviation;
-  uint32_t axis;        // 0 = horizontal, 1 = vertical.
-  uint32_t edgeMode;    // 0 = None, 1 = Duplicate, 2 = Wrap.
-  uint32_t kernelType;  // 0 = Gaussian, 1 = Box.
-  int32_t boxLeft;      // Box mode: samples on the negative side.
-  int32_t boxRight;     // Box mode: samples on the positive side.
-  // Optional output-space clip rectangle, applied on the final blur pass
-  // so the per-primitive subregion clip pass can be folded into the blur.
-  // `clipActive == 0` disables the check. Semantics match the identity
-  // subregion-clip shader: pixels with coord < clipMin or coord >= clipMax
-  // are zeroed.
-  int32_t clipMinX;
-  int32_t clipMinY;
-  int32_t clipMaxX;
-  int32_t clipMaxY;
-  uint32_t clipActive;
-  uint32_t pad1;
-};
-
 /// Uniform buffer layout mirroring the shader program's `OffsetParams` struct. Host offsets
 /// are rounded in double precision before narrowing to these exactly representable float pixels.
 struct OffsetParams {
@@ -1201,6 +1180,7 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   program.bindGroupLayout = std::move(bindGroupLayout).result();
   program.pipelineLayout = std::move(pipelineLayout).result();
   program.pipeline = std::move(pipeline).result();
+  program.workgroupSize = entryPoint.workgroupSize;
   return program;
 }
 
@@ -1289,10 +1269,14 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
+  const auto bindings = program.inputOutputParameterBindings;
   std::vector<gpu::BindGroupEntry> entries(transferTable == nullptr ? 3 : 4);
-  entries[0] = {0, gpu::TextureViewBinding{*sourceView}};
-  entries[1] = {1, gpu::TextureViewBinding{*destinationView}};
-  entries[2] = {2, gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}};
+  entries[0] = {program.useReflectedInputOutputMetadata ? bindings[0] : 0,
+                gpu::TextureViewBinding{*sourceView}};
+  entries[1] = {program.useReflectedInputOutputMetadata ? bindings[1] : 1,
+                gpu::TextureViewBinding{*destinationView}};
+  entries[2] = {program.useReflectedInputOutputMetadata ? bindings[2] : 2,
+                gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}};
   if (transferTable != nullptr) {
     entries[3] = {3, gpu::BufferBinding{*transferTable, 0,
                                         sizeof(gpu::shader::programs::ColorTransferSamples())}};
@@ -1305,9 +1289,13 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 
   const gpu::Extent2d extent = destinationExtent.value_or(
       gpu::Extent2d{.width = input.getWidth(), .height = input.getHeight()});
+  const uint32_t dispatchWorkgroupX =
+      program.useReflectedInputOutputMetadata ? program.workgroupSize.x : workgroupSize;
+  const uint32_t dispatchWorkgroupY =
+      program.useReflectedInputOutputMetadata ? program.workgroupSize.y : workgroupSize;
   return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
-                                   (extent.width + workgroupSize - 1) / workgroupSize,
-                                   (extent.height + workgroupSize - 1) / workgroupSize);
+                                   (extent.width + dispatchWorkgroupX - 1) / dispatchWorkgroupX,
+                                   (extent.height + dispatchWorkgroupY - 1) / dispatchWorkgroupY);
 }
 
 /// Records a two-input pass, with an optional uniform block, through the runtime.
@@ -1598,14 +1586,22 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
   // Gaussian and box passes record into the shared GPU command stream.
   {
-    using gpu::shader::programs::GaussianBlurBinding;
+    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::GaussianBlurShader();
     blurProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "GaussianBlur", EmbeddedWgsl(donner::embedded::kGaussianBlurWgsl),
-        gpu::shader::programs::kGaussianBlurEntryPoint,
-        {SampledInputEntry(static_cast<uint32_t>(GaussianBlurBinding::InputTexture)),
-         StorageOutputEntry(static_cast<uint32_t>(GaussianBlurBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(GaussianBlurBinding::Params))},
-        gpu::shader::programs::kGaussianBlurWorkgroupSize);
+        device_.adapterDevice(),
+        gpu::shader::MakeShaderDescriptor(shader, device_.adapterDevice().shaderSourceKind(),
+                                          "GaussianBlur"),
+        gpu::shader::MakeComputeBindingLayout(shader));
+    const gpu::shader::ShaderResource* input = shader.resource("inputTexture");
+    const gpu::shader::ShaderResource* output = shader.resource("outputTexture");
+    const gpu::shader::ShaderResource* params = shader.resource("params");
+    if (input == nullptr || output == nullptr || params == nullptr) {
+      blurProgram_ = {};
+    } else {
+      blurProgram_.inputOutputParameterBindings = {input->binding, output->binding,
+                                                   params->binding};
+      blurProgram_.useReflectedInputOutputMetadata = true;
+    }
   }
 
   // --- feOffset pipeline, through the GPU runtime ---
@@ -2967,7 +2963,7 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
     return {};
   }
 
-  BlurParams params{};
+  gpu::shader::programs::GaussianBlurParams params{};
   params.stdDeviation = stdDeviation;
   params.axis = axis;
   params.edgeMode = edgeMode;
@@ -2976,19 +2972,18 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   params.boxRight = 0;
   if (clip != nullptr) {
     // Corners arrive pre-rounded (floor/ceil), so the integer casts are exact.
-    params.clipMinX = static_cast<int32_t>(clip->topLeft.x);
-    params.clipMinY = static_cast<int32_t>(clip->topLeft.y);
-    params.clipMaxX = static_cast<int32_t>(clip->bottomRight.x);
-    params.clipMaxY = static_cast<int32_t>(clip->bottomRight.y);
+    params.clipMin = {static_cast<int32_t>(clip->topLeft.x), static_cast<int32_t>(clip->topLeft.y)};
+    params.clipMax = {static_cast<int32_t>(clip->bottomRight.x),
+                      static_cast<int32_t>(clip->bottomRight.y)};
     params.clipActive = 1;
   }
-  params.pad1 = 0;
+  params.pad = 0;
 
   const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
   if (runtimeOutput == nullptr ||
       !dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, *runtimeOutput,
                                             UniformBytes(params), "GaussianBlurPass",
-                                            gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
+                                            blurProgram_.workgroupSize.x)) {
     return {};
   }
   return output;
@@ -3004,7 +2999,7 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
     return {};
   }
 
-  BlurParams params{};
+  gpu::shader::programs::GaussianBlurParams params{};
   params.stdDeviation = 0.0f;
   params.axis = axis;
   params.edgeMode = edgeMode;
@@ -3012,19 +3007,18 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   params.boxLeft = boxLeft;
   params.boxRight = boxRight;
   if (clip != nullptr) {
-    params.clipMinX = static_cast<int32_t>(clip->topLeft.x);
-    params.clipMinY = static_cast<int32_t>(clip->topLeft.y);
-    params.clipMaxX = static_cast<int32_t>(clip->bottomRight.x);
-    params.clipMaxY = static_cast<int32_t>(clip->bottomRight.y);
+    params.clipMin = {static_cast<int32_t>(clip->topLeft.x), static_cast<int32_t>(clip->topLeft.y)};
+    params.clipMax = {static_cast<int32_t>(clip->bottomRight.x),
+                      static_cast<int32_t>(clip->bottomRight.y)};
     params.clipActive = 1;
   }
-  params.pad1 = 0;
+  params.pad = 0;
 
   const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
   if (runtimeOutput == nullptr ||
       !dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, *runtimeOutput,
                                             UniformBytes(params), "BoxBlurPass",
-                                            gpu::shader::programs::kGaussianBlurWorkgroupSize)) {
+                                            blurProgram_.workgroupSize.x)) {
     return {};
   }
   return output;

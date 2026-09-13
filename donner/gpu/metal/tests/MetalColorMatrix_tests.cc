@@ -31,6 +31,7 @@
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
@@ -340,30 +341,35 @@ TEST_F(MetalColorMatrixTest, DisplacementUsesGeneratedArtifactAndIndependentPixe
 }
 
 TEST_F(MetalColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
-  const auto module = shader::programs::BuildGaussianBlurModule();
-  ASSERT_FALSE(module.hasError()) << module.error();
-  const auto emitted = shader::EmitMsl(module.result());
-  ASSERT_FALSE(emitted.hasError()) << emitted.error();
-  const auto bindings = shader::BufferBindingsOf(module.result());
-  ASSERT_FALSE(bindings.hasError()) << bindings.error();
+  const shader::CompiledShaderView& gaussian = shader::programs::GaussianBlurShader();
+  const ShaderModuleDescriptor descriptor =
+      shader::MakeShaderDescriptor(gaussian, ShaderSourceKind::Msl, "GaussianBlur");
   for (uint32_t axis : {0u, 1u}) {
     for (uint32_t kind : {0u, 1u, 2u}) {
       for (uint32_t edgeMode : {0u, 1u, 2u}) {
         SCOPED_TRACE(testing::Message()
                      << "axis=" << axis << " kind=" << kind << " edge=" << edgeMode);
         gpu::tests::CheckBlurStorage(
-            *device_,
-            ShaderModuleDescriptor{"float",
-                                   RcString(emitted.result()),
-                                   ShaderSourceKind::Msl,
-                                   {},
-                                   shader::ComputeEntryPointsOf(module.result()),
-                                   bindings.result()},
+            *device_, descriptor,
             [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-            kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode);
+            kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode, &gaussian);
       }
     }
   }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, GaussianBlurUsesReflectedBindingAndWorkgroupMetadata) {
+  const shader::CompiledShaderView& gaussian = shader::tests::GaussianBlurMutatedAllProjections();
+  ASSERT_NE(gaussian.resource("params"), nullptr);
+  EXPECT_EQ(gaussian.resource("params")->binding, 7u);
+  EXPECT_EQ(gaussian.workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+
+  gpu::tests::CheckBlurStorage(
+      *device_,
+      shader::MakeShaderDescriptor(gaussian, ShaderSourceKind::Msl, "GaussianBlurMutated"),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, 0.5f, 0u, 0u, 1u,
+      &gaussian);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

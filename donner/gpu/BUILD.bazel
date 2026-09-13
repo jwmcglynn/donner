@@ -166,6 +166,7 @@ donner_cc_library(
         ":gpu",
         ":gpu_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:compiled_shader",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],

@@ -1,0 +1,70 @@
+load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+donner_cc_library(
+    name = "frontend",
+    hdrs = [
+        "Module.h",
+        "Parser.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/base"],
+)
+
+donner_cc_library(
+    name = "text_emitter",
+    hdrs = ["TextEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":frontend",
+        "//donner/gpu/shader:msl_binding_map",
+    ],
+)
+
+donner_cc_library(
+    name = "spirv_emitter",
+    hdrs = ["SpirvEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":frontend"],
+)
+
+donner_cc_library(
+    name = "compiler",
+    hdrs = ["Compiler.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":frontend",
+        ":spirv_emitter",
+        ":text_emitter",
+        "//donner/gpu/shader:compiled_shader",
+    ],
+)
+
+donner_cc_test(
+    name = "wgsl_tests",
+    srcs = [
+        "tests/Compiler_tests.cc",
+        "tests/Parser_tests.cc",
+        "tests/TextEmitter_tests.cc",
+    ],
+    deps = [
+        ":compiler",
+        "//donner/gpu/shader:gaussian_blur_artifact",
+        "//donner/gpu/shader:gaussian_blur_source",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "parser_fuzzer",
+    srcs = ["tests/Parser_fuzzer.cc"],
+    corpus = "tests/corpus",
+    deps = [
+        ":frontend",
+        ":spirv_emitter",
+        ":text_emitter",
+    ],
+)
+
+donner_package()

@@ -12,6 +12,7 @@
 /// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`,
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <webgpu/webgpu.hpp>
@@ -66,6 +67,10 @@ struct RuntimeComputeProgram {
   gpu::BindGroupLayout bindGroupLayout;  //!< Layout of group 0.
   gpu::PipelineLayout pipelineLayout;    //!< Pipeline layout over that one group.
   gpu::ComputePipeline pipeline;         //!< The pipeline itself.
+  gpu::WorkgroupSize workgroupSize;      //!< Dispatch dimensions declared by the entry point.
+  std::array<uint32_t, 3> inputOutputParameterBindings = {0, 1, 2};
+  //!< Input texture, output texture, and uniform resource bindings.
+  bool useReflectedInputOutputMetadata = false;  //!< Selects the reflected dispatch contract.
 };
 
 /**

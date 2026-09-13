@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,6 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
-#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -41,6 +41,7 @@
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
+#include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -106,6 +107,17 @@ std::string ValidateWordsForStatus(const std::string& spirvVal, const std::vecto
   std::string output;
   *status = RunCommand(spirvVal + " --target-env vulkan1.1 \"" + modulePath + "\"", &output);
   return output;
+}
+
+/// Validates frozen SPIR-V words through the same external validator path.
+void ExpectWordsValidateForVulkan11(const std::string& spirvVal, std::span<const uint32_t> words,
+                                    const std::string& fileName) {
+  std::vector<uint32_t> copied(words.begin(), words.end());
+  int validationStatus = -1;
+  const std::string validationOutput =
+      ValidateWordsForStatus(spirvVal, copied, fileName, &validationStatus);
+  EXPECT_EQ(validationStatus, 0) << "spirv-val rejected " << fileName << ":\n" << validationOutput;
+  EXPECT_THAT(validationOutput, Not(HasSubstr("error"))) << validationOutput;
 }
 
 /// Emits \p module, writes it under TEST_TMPDIR as \p fileName, and asserts spirv-val accepts it.
@@ -287,10 +299,9 @@ TEST(SpirvValValidation, EmittedDisplacementMapComputePassesVulkan11Validation) 
 }
 
 TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {
-  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
-  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildGaussianBlurModule(), "gaussian_blur.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::GaussianBlurAllProjections().spirv,
+                                 "gaussian_blur.spv");
 }
 
 TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {

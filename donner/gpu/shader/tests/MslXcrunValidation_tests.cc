@@ -30,7 +30,6 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
-#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -40,6 +39,7 @@
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
+#include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -108,15 +108,10 @@ std::string FindMetalCompilerUnavailableReason() {
   return "";
 }
 
-/// Emits \p module as MSL, writes it under TEST_TMPDIR as `<name>.metal`, and asserts the Metal
-/// compiler accepts it.
-/// @param module Built IR module to emit and compile.
+/// Writes \p msl under TEST_TMPDIR as `<name>.metal` and asserts the Metal compiler accepts it.
+/// @param msl MSL source to compile.
 /// @param name Base file name for the emitted source and its object output.
-void ExpectCompilesWithMetalCompiler(ShaderResult<IrModule>&& module, const std::string& name) {
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> msl = EmitMsl(module.result());
-  ASSERT_FALSE(msl.hasError()) << "EmitMsl failed: " << msl.error();
-
+void ExpectCompilesWithMetalCompiler(std::string_view msl, const std::string& name) {
   const char* testTmpdir = std::getenv("TEST_TMPDIR");
   ASSERT_NE(testTmpdir, nullptr);
   const std::string sourcePath = std::string(testTmpdir) + "/" + name + ".metal";
@@ -124,7 +119,7 @@ void ExpectCompilesWithMetalCompiler(ShaderResult<IrModule>&& module, const std:
   {
     std::ofstream out(sourcePath, std::ios::binary | std::ios::trunc);
     ASSERT_TRUE(out.good()) << "Failed to write " << sourcePath;
-    out << msl.result();
+    out.write(msl.data(), static_cast<std::streamsize>(msl.size()));
   }
 
   std::string compileOutput;
@@ -140,6 +135,14 @@ void ExpectCompilesWithMetalCompiler(ShaderResult<IrModule>&& module, const std:
     std::fprintf(stderr, "metal compiler output for %s:\n%s\n", name.c_str(),
                  compileOutput.c_str());
   }
+}
+
+/// Emits \p module and verifies the resulting MSL with the platform compiler.
+void ExpectCompilesWithMetalCompiler(ShaderResult<IrModule>&& module, const std::string& name) {
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> msl = EmitMsl(module.result());
+  ASSERT_FALSE(msl.hasError()) << "EmitMsl failed: " << msl.error();
+  ExpectCompilesWithMetalCompiler(msl.result(), name);
 }
 
 /// Compiles \p source and returns the compiler's combined output, setting \p status to its exit
@@ -296,9 +299,7 @@ TEST(MslXcrunValidation, EmittedDisplacementMapComputeCompilesWithMetalCompiler)
 
 TEST(MslXcrunValidation, EmittedGaussianBlurComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  // The first compute program to call a function of its own, so this is where the compiler
-  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
-  ExpectCompilesWithMetalCompiler(programs::BuildGaussianBlurModule(), "gaussian_blur");
+  ExpectCompilesWithMetalCompiler(tests::GaussianBlurAllProjections().msl, "gaussian_blur");
 }
 
 TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {

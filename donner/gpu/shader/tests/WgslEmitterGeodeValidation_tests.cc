@@ -1163,10 +1163,8 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
-  auto module = programs::BuildGaussianBlurModule();
-  ASSERT_THAT(module, HasShaderResult());
-  auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
+  const CompiledShaderView& shader = programs::GaussianBlurShader();
+  const std::string wgsl(shader.wgsl);
   const auto source = OffsetSourceTexels();
   size_t index = 0;
   for (uint32_t axis : {0u, 1u}) {
@@ -1189,10 +1187,9 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
                                      clip,
                                      0};
           auto actual = RunInputOutputUniformProgram(
-              device->device(), device->queue(), wgsl.result(), source, kOffsetExtent,
-              kOffsetExtent,
+              device->device(), device->queue(), wgsl, source, kOffsetExtent, kOffsetExtent,
               std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-              programs::kGaussianBlurWorkgroupSize);
+              shader.workgroupSize[0]);
           ASSERT_THAT(actual, testing::SizeIs(source.size()));
           auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kOffsetExtent, kOffsetExtent);
           ASSERT_THAT(pixels.has_value(), testing::IsTrue());

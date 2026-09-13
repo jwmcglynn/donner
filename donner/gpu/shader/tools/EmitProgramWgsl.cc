@@ -37,7 +37,6 @@
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
 #include "donner/gpu/shader/programs/Flood.h"
-#include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -64,7 +63,6 @@ constexpr ProgramEntry kPrograms[] = {
     {"filter_color_matrix", 1, &programs::BuildFilterColorMatrixModule},
     {"filter_image", 1, &programs::BuildFilterImageModule},
     {"flood", 1, &programs::BuildFloodModule},
-    {"gaussian_blur", 1, &programs::BuildGaussianBlurModule},
     {"diffuse_lighting", 1, &programs::BuildDiffuseLightingModule},
     {"specular_lighting", 1, &programs::BuildSpecularLightingModule},
     {"merge", 1, &programs::BuildMergeModule},
