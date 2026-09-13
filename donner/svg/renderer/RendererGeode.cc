@@ -6620,16 +6620,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
   impl_->admitTextRuns(runs);
 
-  const float textFontSizePx = static_cast<float>(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
   // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
   // has no bbox, so span gradient/pattern paint maps through this element-level
   // box - same computation as `RendererTinySkia::drawText` (shared helper). The
   // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
   // while the glyph outline is the *draw* path.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
-                                             params.fontMetrics, textFontSizePx);
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
   const Path textBoundsPath =
       textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();
 
@@ -6693,11 +6689,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       continue;
     }
 
-    float spanFontSizePx = textFontSizePx;
-    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
-      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
-          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float spanFontSizePx = run.usedFontSizePx;
 
     const float scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
     if (scale <= 0.0f) {

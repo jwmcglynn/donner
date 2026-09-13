@@ -1472,6 +1472,59 @@ void TextEngine::addFontFaces(std::span<const css::FontFace> faces) {
   registeredFontFaceCount_ = faces.size();
 }
 
+namespace {
+
+/// Resolves a span's inherited font family and face attributes.
+FontHandle ResolveSpanFace(FontManager& fontManager,
+                           const components::ComputedTextComponent::TextSpan& span,
+                           const SmallVector<RcString, 1>& families, FontHandle fallback) {
+  const SmallVector<RcString, 1>& spanFamilies =
+      span.fontFamilies.empty() ? families : span.fontFamilies;
+  FontHandle spanFont;
+  for (const auto& family : spanFamilies) {
+    spanFont = fontManager.findFont(family);
+    if (spanFont) {
+      break;
+    }
+  }
+  if (!spanFont) {
+    spanFont = fallback;
+  }
+  if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
+      span.fontStretch != FontStretch::Normal) {
+    for (const auto& family : spanFamilies) {
+      FontHandle candidate =
+          fontManager.findFont(family, span.fontWeight, static_cast<int>(span.fontStyle),
+                               static_cast<int>(span.fontStretch));
+      if (candidate) {
+        spanFont = candidate;
+        break;
+      }
+    }
+  }
+
+  return spanFont;
+}
+
+/// Applies the requested x-height ratio after the final face has been selected.
+float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
+                     const std::optional<double>& fontSizeAdjust) {
+  if (fontSizeAdjust.has_value()) {
+    const FontVMetrics metrics = backend.fontVMetrics(font);
+    const double xHeight = metrics.xHeight > 0
+                               ? static_cast<double>(metrics.xHeight)
+                               : static_cast<double>(metrics.ascent - metrics.descent) * 0.45;
+    const float scale = backend.scaleForEmToPixels(font, sizePx);
+    const double actualAspect = sizePx > 0.0f ? xHeight * scale / sizePx : 0.0;
+    if (actualAspect > 0.0) {
+      sizePx = static_cast<float>(sizePx * *fontSizeAdjust / actualAspect);
+    }
+  }
+  return sizePx;
+}
+
+}  // namespace
+
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
   // ── Resolve base font ─────────────────────────────────────────────────────────
@@ -1542,30 +1595,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // ── Per-span font resolution ────────────────────────────────────────────────
-    const SmallVector<RcString, 1>& spanFamilies =
-        span.fontFamilies.empty() ? params.fontFamilies : span.fontFamilies;
-    FontHandle spanFont;
-    for (const auto& family : spanFamilies) {
-      spanFont = fontManager_.findFont(family);
-      if (spanFont) {
-        break;
-      }
-    }
-    if (!spanFont) {
-      spanFont = font;
-    }
-    if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
-        span.fontStretch != FontStretch::Normal) {
-      for (const auto& family : spanFamilies) {
-        FontHandle candidate =
-            fontManager_.findFont(family, span.fontWeight, static_cast<int>(span.fontStyle),
-                                  static_cast<int>(span.fontStretch));
-        if (candidate) {
-          spanFont = candidate;
-          break;
-        }
-      }
-    }
+    FontHandle spanFont = ResolveSpanFace(fontManager_, span, params.fontFamilies, font);
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
     float spanFontSizePx = span.fontSize.value != 0.0
@@ -1575,22 +1605,13 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
     spanFont = selectBackendSafeFont(*backend_, fontManager_, spanFont);
-    const std::optional<double>& fontSizeAdjust =
-        span.fontSizeAdjust.has_value() ? *span.fontSizeAdjust : params.fontSizeAdjust;
-    if (fontSizeAdjust.has_value()) {
-      const FontVMetrics metrics = backend_->fontVMetrics(spanFont);
-      const double xHeight = metrics.xHeight > 0
-                                 ? static_cast<double>(metrics.xHeight)
-                                 : static_cast<double>(metrics.ascent - metrics.descent) * 0.45;
-      const float scale = backend_->scaleForEmToPixels(spanFont, spanFontSizePx);
-      const double actualAspect = spanFontSizePx > 0.0f ? xHeight * scale / spanFontSizePx : 0.0;
-      if (actualAspect > 0.0) {
-        spanFontSizePx = static_cast<float>(spanFontSizePx * *fontSizeAdjust / actualAspect);
-      }
-    }
     spanFont = findCoverageFallbackFont(*backend_, fontManager_, spanFont, spanFontSizePx,
                                         spanTestCodepoint);
+    const std::optional<double> fontSizeAdjust =
+        span.fontSizeAdjust.value_or(params.fontSizeAdjust);
+    spanFontSizePx = AdjustFontSize(*backend_, spanFont, spanFontSizePx, fontSizeAdjust);
     run.font = spanFont;
+    run.usedFontSizePx = spanFontSizePx;
 
     // Note: bitmap-only fonts (e.g., color emoji) are valid for the full backend.
     // The simple backend can't handle them but produces empty shapeRun results,
@@ -2170,9 +2191,6 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
 
-  const float fontSizePx = static_cast<float>(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
     const auto& run = runs[runIndex];
@@ -2183,11 +2201,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       continue;
     }
 
-    float runFontSizePx = fontSizePx;
-    if (span.fontSize.value != 0.0) {
-      runFontSizePx = static_cast<float>(
-          span.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float runFontSizePx = run.usedFontSizePx;
 
     const float runScale = run.font ? scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
     double emTop = static_cast<double>(runFontSizePx);

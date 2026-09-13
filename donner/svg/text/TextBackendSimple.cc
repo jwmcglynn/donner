@@ -261,6 +261,47 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunNoKerning(
                       false, forceLogicalOrder);
 }
 
+namespace {
+
+/// Returns the pair adjustment in horizontal or sideways-vertical text.
+Vector2d SimplePairKerning(const stbtt_fontinfo* info, int prevGlyph, int glyphIndex, float scale,
+                           bool isVertical, uint32_t codepoint, bool enableKerning) {
+  // Compute kerning from previous glyph to this one.
+  double kernX = 0;
+  double kernY = 0;
+  if (enableKerning && prevGlyph != 0 && glyphIndex != 0) {
+    const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
+    if (kern != 0) {
+      if (isVertical && codepoint < 0x2E80) {
+        kernY = static_cast<double>(kern) * scale;
+      } else if (!isVertical) {
+        kernX = static_cast<double>(kern) * scale;
+      }
+    }
+  }
+
+  return Vector2d(kernX, kernY);
+}
+
+/// Sets the advance axis for horizontal, sideways Latin, or upright CJK text.
+void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical, uint32_t codepoint,
+                           int advanceWidth, float glyphScale, float fontSizePx) {
+  if (isVertical && codepoint < 0x2E80) {
+    // Sideways Latin in vertical mode: horizontal advance becomes vertical.
+    glyph.xAdvance = 0;
+    glyph.yAdvance = static_cast<double>(advanceWidth) * glyphScale;
+  } else if (isVertical) {
+    // Upright CJK in vertical mode: advance = em height.
+    glyph.xAdvance = 0;
+    glyph.yAdvance = static_cast<double>(fontSizePx);
+  } else {
+    glyph.xAdvance = static_cast<double>(advanceWidth) * glyphScale;
+    glyph.yAdvance = 0;
+  }
+}
+
+}  // namespace
+
 TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fontSizePx,
                                                        std::string_view spanText, size_t byteOffset,
                                                        size_t byteLength, bool isVertical,
@@ -299,39 +340,17 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
 
     const float glyphScale = smallCap ? scale * kSmallCapScale : scale;
 
-    // Compute kerning from previous glyph to this one.
-    double kernX = 0;
-    double kernY = 0;
-    if (enableKerning && prevGlyph != 0 && glyphIndex != 0) {
-      const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
-      if (kern != 0) {
-        if (isVertical && codepoint < 0x2E80) {
-          kernY = static_cast<double>(kern) * scale;
-        } else if (!isVertical) {
-          kernX = static_cast<double>(kern) * scale;
-        }
-      }
-    }
+    const Vector2d kerning =
+        SimplePairKerning(info, prevGlyph, glyphIndex, scale, isVertical, codepoint, enableKerning);
 
     ShapedGlyph glyph;
     glyph.glyphIndex = glyphIndex;
     glyph.cluster = static_cast<uint32_t>(startPos);
     glyph.fontSizeScale = smallCap ? kSmallCapScale : 1.0f;
-    glyph.xKern = kernX;
-    glyph.yKern = kernY;
+    glyph.xKern = kerning.x;
+    glyph.yKern = kerning.y;
 
-    if (isVertical && codepoint < 0x2E80) {
-      // Sideways Latin in vertical mode: horizontal advance becomes vertical.
-      glyph.xAdvance = 0;
-      glyph.yAdvance = static_cast<double>(advanceWidth) * glyphScale;
-    } else if (isVertical) {
-      // Upright CJK in vertical mode: advance = em height.
-      glyph.xAdvance = 0;
-      glyph.yAdvance = static_cast<double>(fontSizePx);
-    } else {
-      glyph.xAdvance = static_cast<double>(advanceWidth) * glyphScale;
-      glyph.yAdvance = 0;
-    }
+    SetSimpleGlyphAdvance(glyph, isVertical, codepoint, advanceWidth, glyphScale, fontSizePx);
 
     result.glyphs.push_back(glyph);
     prevGlyph = glyphIndex;

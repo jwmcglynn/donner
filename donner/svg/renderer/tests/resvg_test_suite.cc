@@ -1247,10 +1247,15 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(TextFontKerning, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory("text/font-kerning", {})),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    TextFontKerning, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory(
+                "text/font-kerning",
+                {{"arabic-script.svg",
+                  Params().onlyTextFull().withReason("Arabic contextual joining requires HarfBuzz; "
+                                                     "disabling kerning must preserve joining")}})),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontSize, ImageComparisonTestFixture,

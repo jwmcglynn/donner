@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -37,6 +38,50 @@ ImageComparisonParams GoldenParams() {
 }
 
 class RendererRegressionTests : public ImageComparisonTestFixture {};
+
+TEST_F(RendererRegressionTests, FontSizeAdjustMatchesExplicitUsedSize) {
+  SVGDocument adjusted = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans" font-size="64">
+      <text x="100" y="100" text-anchor="middle" font-size-adjust="0.3">Text</text>
+    </svg>
+  )");
+  SVGDocument explicitSize = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans" font-size="35.82089552238806">
+      <text x="100" y="100" text-anchor="middle">Text</text>
+    </svg>
+  )");
+  RegisterFontsFromDirectoryForTesting(adjusted, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(explicitSize, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(adjusted, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(explicitSize, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  // Noto Sans has 1000 units per em and an OS/2 x-height of 536: 64 * 0.3 / 0.536.
+  ExpectBitmapsIdentical(actual, expected, "font_size_adjust_used_size");
+}
+
+TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
+  SVGDocument shorthand = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200">
+      <g style="font: italic bold 200px serif; font-kerning: none; font-size-adjust: 0.3">
+        <text x="55" y="100" style="font: 50px 'Noto Sans'">AVA</text>
+      </g>
+    </svg>
+  )");
+  SVGDocument expanded = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200">
+      <text x="55" y="100" style="font-size:50px; font-family:'Noto Sans';
+          font-style:normal; font-weight:400; font-kerning:auto; font-size-adjust:none">AVA</text>
+    </svg>
+  )");
+  RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(expanded, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ExpectBitmapsIdentical(actual, expected, "font_shorthand_expansion");
+}
 
 TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport) {
   const char* svg = "donner/svg/renderer/testdata/marker_percent_nested_viewport.svg";

@@ -2842,9 +2842,6 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   }
 
   float scale = 0.0f;
-  const float fontSizePx = static_cast<float>(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
   // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
@@ -2852,8 +2849,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // drift on the bbox. Per the SVG spec it uses
   // em-box cells from font v-metrics (ascent above baseline, |descent| below),
   // not the raw font size.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
-                                             params.fontMetrics, fontSizePx);
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
@@ -2884,11 +2880,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     const auto& run = runs[runIndex];
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    float spanFontSizePx = fontSizePx;
-    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
-      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
-          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float spanFontSizePx = run.usedFontSizePx;
 
     if (run.font != FontHandle()) {
       scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);

@@ -671,37 +671,17 @@ TextBackend::ShapedRun TextBackendFull::shapeRunNoKerning(FontHandle font, float
                       false, forceLogicalOrder);
 }
 
-TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float fontSizePx,
-                                                     std::string_view spanText, size_t byteOffset,
-                                                     size_t byteLength, bool isVertical,
-                                                     FontVariant fontVariant, bool enableKerning,
-                                                     bool forceLogicalOrder) const {
-  hb_font_t* hbFont = getOrCreateHbFont(font);
-  if (!hbFont) {
-    return {};
-  }
+namespace {
 
-  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
-  if (!ftFace) {
-    return {};
-  }
+struct RunScriptProperties {
+  bool vertical;
+  hb_direction_t direction;
+  hb_script_t script;
+  hb_language_t language;
+};
 
-  // Set the FreeType face size for correct metrics at this pixel size.
-  if (FT_IS_SCALABLE(ftFace)) {
-    FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
-  } else if (ftFace->num_fixed_sizes > 0) {
-    FT_Select_Size(ftFace, 0);
-  }
-  hb_ft_font_changed(hbFont);
-
-  // With FreeType-backed fonts, HarfBuzz returns positions in 26.6 fixed-point pixels
-  // at the face's current size. For scalable fonts that's fontSizePx; for bitmap fonts
-  // it's the strike's ppem. Scale accordingly to get document-pixel coordinates.
-  const double pixelScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
-  const double pixelScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
-
-  // Detect direction and script from the text chunk.
-  const char* chunkData = spanText.data() + byteOffset;
+/// Detects the direction, script, and language used by every subrange of one run.
+RunScriptProperties DetectRunScript(const char* chunkData, size_t byteLength, bool isVertical) {
   const int chunkLen = static_cast<int>(byteLength);
   bool useVerticalShaping = false;
   if (isVertical) {
@@ -736,6 +716,18 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
   const hb_language_t detectedLanguage = hb_buffer_get_language(detectBuf);
   hb_buffer_destroy(detectBuf);
 
+  return {useVerticalShaping, detectedDirection, detectedScript, detectedLanguage};
+}
+
+struct SmallCapsPreparation {
+  bool useFeature;
+  std::string text;
+  std::vector<bool> smallCapBytes;
+};
+
+/// Selects native small caps or prepares the existing ASCII synthesis and byte flags.
+SmallCapsPreparation PrepareSmallCaps(hb_font_t* hbFont, const char* chunkData, size_t byteLength,
+                                      FontVariant fontVariant) {
   // Small-caps handling.
   bool useSmcpFeature = false;
   std::string smallCapsText;
@@ -766,13 +758,193 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
     }
   }
 
+  return {useSmcpFeature, std::move(smallCapsText), std::move(isSmallCap)};
+}
+
+}  // namespace
+
+namespace {
+
+struct ShapedGlyphInfo {
+  hb_glyph_info_t info;
+  hb_glyph_position_t pos;
+  bool isSynthSmallCap;
+};
+/// Applies the existing sideways or upright vertical-origin adjustment to a shaped glyph.
+void AdjustVerticalGlyph(TextBackend::ShapedGlyph& glyph, const ShapedGlyphInfo& sg,
+                         hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
+                         std::string_view spanText) {
+  const uint32_t codepoint = decodeCodepointAt(spanText, glyph.cluster);
+  const bool sideways = (codepoint > 0 && codepoint < 0x2E80);
+  if (sideways) {
+    glyph.xAdvance =
+        static_cast<double>(hb_font_get_glyph_h_advance(hbFont, sg.info.codepoint)) * pixelScaleX;
+    glyph.yAdvance = 0.0;
+    glyph.xOffset = 0.0;
+    glyph.yOffset = 0.0;
+  } else {
+    FT_Face verticalFace = hb_ft_font_get_ft_face(hbFont);
+    if (verticalFace && verticalFace->units_per_EM > 0) {
+      double vertOriginY = glyph.yOffset;
+      const double emScale = fontSizePx / static_cast<double>(verticalFace->units_per_EM);
+      auto* vhea = static_cast<TT_VertHeader*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_VHEA));
+      if (vhea && vhea->Ascender > 0) {
+        vertOriginY = static_cast<double>(vhea->Ascender) * emScale;
+      } else {
+        auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_OS2));
+        if (os2 && os2->sTypoAscender > 0) {
+          vertOriginY = static_cast<double>(os2->sTypoAscender) * emScale;
+        }
+      }
+      glyph.yOffset = vertOriginY;
+    }
+  }
+}
+
+/// Converts font-scaled shaping output to document-pixel advances, offsets, and clusters.
+TextBackend::ShapedRun ConvertShapedRun(const std::vector<ShapedGlyphInfo>& allGlyphs,
+                                        hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
+                                        double pixelScaleY, std::string_view spanText,
+                                        size_t byteOffset, bool isVertical, bool useVerticalShaping,
+                                        bool forceLogicalOrder) {
+  // Convert shaped glyphs to ShapedRun output.
+  TextBackend::ShapedRun result;
+  result.glyphs.reserve(allGlyphs.size());
+
+  for (const auto& sg : allGlyphs) {
+    TextBackend::ShapedGlyph glyph;
+    glyph.glyphIndex = static_cast<int>(sg.info.codepoint);
+    glyph.xAdvance = static_cast<double>(sg.pos.x_advance) * pixelScaleX;
+    glyph.yAdvance = std::abs(static_cast<double>(sg.pos.y_advance) * pixelScaleY);
+    glyph.xOffset = static_cast<double>(sg.pos.x_offset) * pixelScaleX;
+    glyph.yOffset = -static_cast<double>(sg.pos.y_offset) * pixelScaleY;
+    glyph.xKern = 0;  // Kerning is baked into advances by GPOS.
+    glyph.yKern = 0;
+    glyph.cluster = sg.info.cluster + static_cast<uint32_t>(byteOffset);
+    glyph.fontSizeScale = sg.isSynthSmallCap ? kSmallCapScale : 1.0f;
+
+    if (isVertical && useVerticalShaping) {
+      AdjustVerticalGlyph(glyph, sg, hbFont, fontSizePx, pixelScaleX, spanText);
+    }
+
+    result.glyphs.push_back(glyph);
+  }
+
+  // When forceLogicalOrder is set, sort glyphs by cluster (DOM order).
+  // HarfBuzz outputs RTL glyphs in visual order (reversed). Sorting to DOM order
+  // allows the engine to process per-character positioning in source text order.
+  if (forceLogicalOrder && result.glyphs.size() > 1) {
+    std::sort(result.glyphs.begin(), result.glyphs.end(),
+              [](const TextBackend::ShapedGlyph& a, const TextBackend::ShapedGlyph& b) {
+                return a.cluster < b.cluster;
+              });
+  }
+
+  return result;
+}
+
+}  // namespace
+
+namespace {
+
+/// Advances over a single UTF-8 codepoint using the shaping loop's existing byte classification.
+size_t NextShapingByte(const char* text, size_t offset) {
+  const auto byte = static_cast<uint8_t>(text[offset]);
+  if (byte >= 0xF0) return offset + 4;
+  if (byte >= 0xE0) return offset + 3;
+  if (byte >= 0xC0) return offset + 2;
+  return offset + 1;
+}
+
+/// Shapes native small caps or the existing synthesized subranges at their original sizes.
+template <typename ShapeRange>
+void ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, const char* chunkData,
+                        size_t byteLength, const SmallCapsPreparation& smallCaps,
+                        hb_feature_t* features, unsigned int numFeatures, ShapeRange&& shapeRange) {
+  const bool useSmcpFeature = smallCaps.useFeature;
+  const auto& isSmallCap = smallCaps.smallCapBytes;
+  const char* shapeText = smallCaps.text.empty() ? chunkData : smallCaps.text.data();
+  if (useSmcpFeature) {
+    shapeRange(chunkData, 0, byteLength, false, features, numFeatures);
+  } else if (!isSmallCap.empty()) {
+    // Synthesized small-caps: split into sub-runs at small-cap boundaries
+    // and shape each at the appropriate font size.
+    size_t bi = 0;
+    while (bi < byteLength) {
+      const bool sc = bi < isSmallCap.size() && isSmallCap[bi];
+      const size_t subStart = bi;
+      while (bi < byteLength && (bi < isSmallCap.size() && isSmallCap[bi]) == sc) {
+        bi = NextShapingByte(shapeText, bi);
+      }
+
+      if (sc) {
+        // Shape small-cap sub-run at reduced font size.
+        if (FT_IS_SCALABLE(ftFace)) {
+          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * kSmallCapScale * 64.0f),
+                           72, 72);
+          hb_ft_font_changed(hbFont);
+        }
+
+        shapeRange(shapeText, subStart, bi, true, features, numFeatures);
+
+        // Restore full font size.
+        if (FT_IS_SCALABLE(ftFace)) {
+          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
+          hb_ft_font_changed(hbFont);
+        }
+      } else {
+        shapeRange(shapeText, subStart, bi, false, features, numFeatures);
+      }
+    }
+  } else {
+    shapeRange(chunkData, 0, byteLength, false, features, numFeatures);
+  }
+}
+
+}  // namespace
+
+TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float fontSizePx,
+                                                     std::string_view spanText, size_t byteOffset,
+                                                     size_t byteLength, bool isVertical,
+                                                     FontVariant fontVariant, bool enableKerning,
+                                                     bool forceLogicalOrder) const {
+  hb_font_t* hbFont = getOrCreateHbFont(font);
+  if (!hbFont) {
+    return {};
+  }
+
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
+  if (!ftFace) {
+    return {};
+  }
+
+  // Set the FreeType face size for correct metrics at this pixel size.
+  if (FT_IS_SCALABLE(ftFace)) {
+    FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
+  } else if (ftFace->num_fixed_sizes > 0) {
+    FT_Select_Size(ftFace, 0);
+  }
+  hb_ft_font_changed(hbFont);
+
+  // With FreeType-backed fonts, HarfBuzz returns positions in 26.6 fixed-point pixels
+  // at the face's current size. For scalable fonts that's fontSizePx; for bitmap fonts
+  // it's the strike's ppem. Scale accordingly to get document-pixel coordinates.
+  const double pixelScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
+  const double pixelScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
+
+  // Detect direction and script from the text chunk.
+  const char* chunkData = spanText.data() + byteOffset;
+  const auto scriptProperties = DetectRunScript(chunkData, byteLength, isVertical);
+  const bool useVerticalShaping = scriptProperties.vertical;
+  const auto detectedDirection = scriptProperties.direction;
+  const auto detectedScript = scriptProperties.script;
+  const auto detectedLanguage = scriptProperties.language;
+
+  const auto smallCaps = PrepareSmallCaps(hbFont, chunkData, byteLength, fontVariant);
+  const bool useSmcpFeature = smallCaps.useFeature;
+
   // Lambda to shape a byte range and collect results.
   // rangeStart/rangeEnd are byte offsets relative to the start of `text`.
-  struct ShapedGlyphInfo {
-    hb_glyph_info_t info;
-    hb_glyph_position_t pos;
-    bool isSynthSmallCap;
-  };
   std::vector<ShapedGlyphInfo> allGlyphs;
 
   auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd, bool isSmallCapRange,
@@ -803,7 +975,6 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
     hb_buffer_destroy(buf);
   };
 
-  const char* shapeText = smallCapsText.empty() ? chunkData : smallCapsText.data();
   std::array<hb_feature_t, 2> features;
   unsigned int numFeatures = 0;
   if (useSmcpFeature) {
@@ -813,108 +984,11 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
     features[numFeatures++] = {HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
   }
 
-  if (useSmcpFeature) {
-    shapeRange(chunkData, 0, byteLength, false, features.data(), numFeatures);
-  } else if (!isSmallCap.empty()) {
-    // Synthesized small-caps: split into sub-runs at small-cap boundaries
-    // and shape each at the appropriate font size.
-    size_t bi = 0;
-    while (bi < byteLength) {
-      const bool sc = bi < isSmallCap.size() && isSmallCap[bi];
-      const size_t subStart = bi;
-      while (bi < byteLength && (bi < isSmallCap.size() && isSmallCap[bi]) == sc) {
-        const auto byte = static_cast<uint8_t>(shapeText[bi]);
-        if (byte >= 0xF0) {
-          bi += 4;
-        } else if (byte >= 0xE0) {
-          bi += 3;
-        } else if (byte >= 0xC0) {
-          bi += 2;
-        } else {
-          bi += 1;
-        }
-      }
+  ShapeVariantRanges(ftFace, hbFont, fontSizePx, chunkData, byteLength, smallCaps, features.data(),
+                     numFeatures, shapeRange);
 
-      if (sc) {
-        // Shape small-cap sub-run at reduced font size.
-        if (FT_IS_SCALABLE(ftFace)) {
-          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * kSmallCapScale * 64.0f),
-                           72, 72);
-          hb_ft_font_changed(hbFont);
-        }
-
-        shapeRange(shapeText, subStart, bi, true, features.data(), numFeatures);
-
-        // Restore full font size.
-        if (FT_IS_SCALABLE(ftFace)) {
-          FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
-          hb_ft_font_changed(hbFont);
-        }
-      } else {
-        shapeRange(shapeText, subStart, bi, false, features.data(), numFeatures);
-      }
-    }
-  } else {
-    shapeRange(chunkData, 0, byteLength, false, features.data(), numFeatures);
-  }
-
-  // Convert shaped glyphs to ShapedRun output.
-  ShapedRun result;
-  result.glyphs.reserve(allGlyphs.size());
-
-  for (const auto& sg : allGlyphs) {
-    ShapedGlyph glyph;
-    glyph.glyphIndex = static_cast<int>(sg.info.codepoint);
-    glyph.xAdvance = static_cast<double>(sg.pos.x_advance) * pixelScaleX;
-    glyph.yAdvance = std::abs(static_cast<double>(sg.pos.y_advance) * pixelScaleY);
-    glyph.xOffset = static_cast<double>(sg.pos.x_offset) * pixelScaleX;
-    glyph.yOffset = -static_cast<double>(sg.pos.y_offset) * pixelScaleY;
-    glyph.xKern = 0;  // Kerning is baked into advances by GPOS.
-    glyph.yKern = 0;
-    glyph.cluster = sg.info.cluster + static_cast<uint32_t>(byteOffset);
-    glyph.fontSizeScale = sg.isSynthSmallCap ? kSmallCapScale : 1.0f;
-
-    if (isVertical && useVerticalShaping) {
-      const uint32_t codepoint = decodeCodepointAt(spanText, glyph.cluster);
-      const bool sideways = (codepoint > 0 && codepoint < 0x2E80);
-      if (sideways) {
-        glyph.xAdvance =
-            static_cast<double>(hb_font_get_glyph_h_advance(hbFont, sg.info.codepoint)) *
-            pixelScaleX;
-        glyph.yAdvance = 0.0;
-        glyph.xOffset = 0.0;
-        glyph.yOffset = 0.0;
-      } else {
-        FT_Face verticalFace = hb_ft_font_get_ft_face(hbFont);
-        if (verticalFace && verticalFace->units_per_EM > 0) {
-          double vertOriginY = glyph.yOffset;
-          const double emScale = fontSizePx / static_cast<double>(verticalFace->units_per_EM);
-          auto* vhea = static_cast<TT_VertHeader*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_VHEA));
-          if (vhea && vhea->Ascender > 0) {
-            vertOriginY = static_cast<double>(vhea->Ascender) * emScale;
-          } else {
-            auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_OS2));
-            if (os2 && os2->sTypoAscender > 0) {
-              vertOriginY = static_cast<double>(os2->sTypoAscender) * emScale;
-            }
-          }
-          glyph.yOffset = vertOriginY;
-        }
-      }
-    }
-
-    result.glyphs.push_back(glyph);
-  }
-
-  // When forceLogicalOrder is set, sort glyphs by cluster (DOM order).
-  // HarfBuzz outputs RTL glyphs in visual order (reversed). Sorting to DOM order
-  // allows the engine to process per-character positioning in source text order.
-  if (forceLogicalOrder && result.glyphs.size() > 1) {
-    std::sort(result.glyphs.begin(), result.glyphs.end(),
-              [](const ShapedGlyph& a, const ShapedGlyph& b) { return a.cluster < b.cluster; });
-  }
-
-  return result;
+  return ConvertShapedRun(allGlyphs, hbFont, fontSizePx, pixelScaleX, pixelScaleY, spanText,
+                          byteOffset, isVertical, useVerticalShaping, forceLogicalOrder);
 }
 
 // ---------------------------------------------------------------------------
