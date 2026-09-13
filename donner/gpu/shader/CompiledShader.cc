@@ -14,12 +14,14 @@ ShaderModuleDescriptor MakeShaderDescriptor(const CompiledShaderView& shader, Sh
       result.spirvWords.assign(shader.spirv.begin(), shader.spirv.end());
       break;
   }
+  if (result.sourceText.empty() && result.spirvWords.empty()) return result;
   result.computeEntryPoints.push_back(
       {RcString(shader.entryPoint.view()),
        {shader.workgroupSize[0], shader.workgroupSize[1], shader.workgroupSize[2]}});
   result.bufferBindings.emplace();
   for (const ShaderResource& resource : shader.resources) {
-    if (resource.type == BindingType::UniformBuffer)
+    if (resource.type == BindingType::UniformBuffer ||
+        resource.type == BindingType::ReadOnlyStorageBuffer)
       result.bufferBindings->push_back({RcString(shader.entryPoint.view()), ShaderStage::Compute,
                                         resource.group, resource.binding, resource.type,
                                         resource.minSizeBytes, 0});

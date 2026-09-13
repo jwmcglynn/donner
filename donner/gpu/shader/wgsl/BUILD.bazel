@@ -3,6 +3,12 @@ load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
+    name = "projection",
+    hdrs = ["Projection.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
     name = "frontend",
     hdrs = [
         "Module.h",
@@ -35,6 +41,7 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         ":frontend",
+        ":projection",
         ":spirv_emitter",
         ":text_emitter",
         "//donner/gpu/shader:compiled_shader",

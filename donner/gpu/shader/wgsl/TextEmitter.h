@@ -237,6 +237,7 @@ private:
         }
         prefixed("donner_msl_struct_", module_.structs[value.structId].name);
         return;
+      case TypeKind::Array: error_ = TextEmitError::UnsupportedType; return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d: text("texture2d<float, access::write>"); return;
     }
@@ -247,6 +248,11 @@ private:
   }
 
   constexpr uint32_t typeAlignment(const Type& value) const {
+    if (value.kind == TypeKind::Array) {
+      return value.elementKind == TypeKind::F32 && value.elementLanes == 1 && value.arrayCount != 0
+                 ? 4
+                 : 0;
+    }
     if (!value.isNumeric()) {
       return 0;
     }
@@ -254,6 +260,9 @@ private:
   }
 
   constexpr uint32_t typeSize(const Type& value) const {
+    if (value.kind == TypeKind::Array) {
+      return typeAlignment(value) == 0 ? 0 : 4 * value.arrayCount;
+    }
     if (!value.isNumeric()) {
       return 0;
     }
@@ -295,9 +304,21 @@ private:
         maximumAlignment = alignment;
       }
       indentation();
-      type(member.type);
-      character(' ');
-      prefixed("donner_msl_member_", member.name);
+      if (member.type.kind == TypeKind::Array) {
+        if (member.arrayStride != 4) {
+          error_ = TextEmitError::UniformLayoutMismatch;
+          return;
+        }
+        text("float ");
+        prefixed("donner_msl_member_", member.name);
+        character('[');
+        uintText(member.type.arrayCount);
+        character(']');
+      } else {
+        type(member.type);
+        character(' ');
+        prefixed("donner_msl_member_", member.name);
+      }
       text(";\n");
     }
     const uint32_t naturalSize =
@@ -324,17 +345,29 @@ private:
         text(", ");
       }
       const Binding& binding = module_.bindings[index];
-      if (binding.group != 0 ||
-          ((binding.kind == BindingKind::Uniform && binding.binding >= kMslBufferBindingCount) ||
-           ((binding.kind == BindingKind::SampledTexture ||
-             binding.kind == BindingKind::StorageTexture) &&
-            binding.binding >= kMslTextureBindingCount))) {
+      if (binding.group != 0 || (((binding.kind == BindingKind::Uniform ||
+                                   binding.kind == BindingKind::ReadOnlyStorage) &&
+                                  binding.binding >= kMslBufferBindingCount) ||
+                                 ((binding.kind == BindingKind::SampledTexture ||
+                                   binding.kind == BindingKind::StorageTexture) &&
+                                  binding.binding >= kMslTextureBindingCount))) {
         error_ = TextEmitError::UnsupportedBinding;
         return;
       }
       switch (binding.kind) {
         case BindingKind::Uniform:
           text("constant ");
+          type(binding.type);
+          text("& ");
+          bindingName(index);
+          if (attributes) {
+            text(" [[buffer(");
+            uintText(MslBufferIndex(binding.binding));
+            text(")]]");
+          }
+          break;
+        case BindingKind::ReadOnlyStorage:
+          text("const device ");
           type(binding.type);
           text("& ");
           bindingName(index);
@@ -459,21 +492,7 @@ private:
       }
     };
     switch (node.kind) {
-      case ExpressionKind::Literal:
-        switch (node.type.kind) {
-          case TypeKind::Bool: text(node.payload == 0 ? "false" : "true"); return;
-          case TypeKind::I32:
-            text("int(");
-            intText(std::bit_cast<int32_t>(node.payload));
-            character(')');
-            return;
-          case TypeKind::U32:
-            uintText(node.payload);
-            text("u");
-            return;
-          case TypeKind::F32: floatText(node.payload); return;
-          default: error_ = TextEmitError::UnsupportedType; return;
-        }
+      case ExpressionKind::Literal: emitLiteral(node); return;
       case ExpressionKind::Symbol: symbolName(static_cast<ArenaId>(node.payload)); return;
       case ExpressionKind::Unary:
         if (static_cast<UnaryOp>(node.payload) == UnaryOp::Negate &&
@@ -496,32 +515,7 @@ private:
         child(0);
         character(')');
         return;
-      case ExpressionKind::Binary: {
-        constexpr std::string_view kOperators[] = {
-            "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "||"};
-        const uint32_t op = node.payload;
-        if (op >= sizeof(kOperators) / sizeof(kOperators[0])) {
-          error_ = TextEmitError::InvalidModule;
-          return;
-        }
-        if ((node.type.kind == TypeKind::I32 || node.type.kind == TypeKind::U32) &&
-            (op == static_cast<uint32_t>(BinaryOp::Add) ||
-             op == static_cast<uint32_t>(BinaryOp::Sub) ||
-             op == static_cast<uint32_t>(BinaryOp::Mul) ||
-             op == static_cast<uint32_t>(BinaryOp::Div) ||
-             op == static_cast<uint32_t>(BinaryOp::Mod))) {
-          emitIntegerBinary(node, static_cast<BinaryOp>(op));
-          return;
-        }
-        character('(');
-        child(0);
-        character(' ');
-        text(kOperators[op]);
-        character(' ');
-        child(1);
-        character(')');
-        return;
-      }
+      case ExpressionKind::Binary: emitBinary(node); return;
       case ExpressionKind::Member:
         child(0);
         character('.');
@@ -565,7 +559,81 @@ private:
       case ExpressionKind::Convert: emitConversion(node); return;
       case ExpressionKind::BuiltinCall: emitBuiltin(node); return;
       case ExpressionKind::FunctionCall: emitFunctionCall(node); return;
+      case ExpressionKind::Index: emitIndex(node); return;
     }
+  }
+
+  constexpr void emitLiteral(const Expression& node) {
+    switch (node.type.kind) {
+      case TypeKind::Bool: text(node.payload == 0 ? "false" : "true"); return;
+      case TypeKind::I32:
+        text("int(");
+        intText(std::bit_cast<int32_t>(node.payload));
+        character(')');
+        return;
+      case TypeKind::U32:
+        uintText(node.payload);
+        text("u");
+        return;
+      case TypeKind::F32: floatText(node.payload); return;
+      default: error_ = TextEmitError::UnsupportedType; return;
+    }
+  }
+
+  constexpr void emitBinary(const Expression& node) {
+    constexpr std::string_view kOperators[] = {
+        "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "||"};
+    const uint32_t op = node.payload;
+    if (op >= sizeof(kOperators) / sizeof(kOperators[0])) {
+      error_ = TextEmitError::InvalidModule;
+      return;
+    }
+    if ((node.type.kind == TypeKind::I32 || node.type.kind == TypeKind::U32) &&
+        (op == static_cast<uint32_t>(BinaryOp::Add) || op == static_cast<uint32_t>(BinaryOp::Sub) ||
+         op == static_cast<uint32_t>(BinaryOp::Mul) || op == static_cast<uint32_t>(BinaryOp::Div) ||
+         op == static_cast<uint32_t>(BinaryOp::Mod))) {
+      emitIntegerBinary(node, static_cast<BinaryOp>(op));
+      return;
+    }
+    character('(');
+    expression(node.operands[0]);
+    character(' ');
+    text(kOperators[op]);
+    character(' ');
+    expression(node.operands[1]);
+    character(')');
+  }
+
+  constexpr void emitIndex(const Expression& node) {
+    if (node.operandCount != 2 || !validId(node.operands[0], module_.expressionCount) ||
+        !validId(node.operands[1], module_.expressionCount)) {
+      error_ = TextEmitError::InvalidArenaReference;
+      return;
+    }
+    const Type& array = module_.expressions[node.operands[0]].type;
+    const Type& index = module_.expressions[node.operands[1]].type;
+    if (array.kind != TypeKind::Array || array.elementKind != TypeKind::F32 ||
+        array.elementLanes != 1 || array.arrayCount == 0 ||
+        (index.kind != TypeKind::I32 && index.kind != TypeKind::U32) || index.lanes != 1) {
+      error_ = TextEmitError::UnsupportedType;
+      return;
+    }
+    expression(node.operands[0]);
+    text("[");
+    if (index.kind == TypeKind::I32) {
+      text("uint(clamp(");
+      expression(node.operands[1]);
+      text(", int(0), int(");
+      uintText(array.arrayCount - 1);
+      text(")))");
+    } else {
+      text("min(");
+      expression(node.operands[1]);
+      text(", ");
+      uintText(array.arrayCount - 1);
+      text("u)");
+    }
+    text("]");
   }
 
   constexpr void vectorConstant(const Type& valueType, std::string_view scalar) {
@@ -795,79 +863,90 @@ private:
     const Statement& node = module_.statements[id];
     if (!inlineStatement) indentation();
     switch (node.kind) {
-      case StatementKind::Declaration: {
-        if (!validId(node.symbolId, module_.symbolCount)) {
-          error_ = TextEmitError::InvalidArenaReference;
-          return;
-        }
-        const Symbol& symbol = module_.symbols[node.symbolId];
-        text(symbol.kind == SymbolKind::Var ? "" : "const ");
-        type(symbol.type);
-        character(' ');
-        symbolName(node.symbolId);
-        text(" = ");
-        expression(node.expression);
-        if (!inlineStatement) character(';');
-        break;
-      }
-      case StatementKind::Assign:
-        expression(node.expression);
-        text(" = ");
-        expression(node.secondExpression);
-        if (!inlineStatement) character(';');
-        break;
-      case StatementKind::If:
-        text("if (");
-        expression(node.expression);
-        text(") {\n");
-        ++indent_;
-        block(node.firstBody);
-        --indent_;
-        indentation();
-        character('}');
-        if (node.firstElseBody != kInvalidArenaId) {
-          text(" else {\n");
-          ++indent_;
-          block(node.firstElseBody);
-          --indent_;
-          indentation();
-          character('}');
-        }
-        break;
-      case StatementKind::For:
-        text("for (");
-        statement(node.init, true);
-        text("; ");
-        expression(node.expression);
-        text("; ");
-        statement(node.continuing, true);
-        text(") {\n");
-        ++indent_;
-        block(node.firstBody);
-        --indent_;
-        indentation();
-        character('}');
-        break;
-      case StatementKind::Return:
-        text("return");
-        if (node.expression != kInvalidArenaId) {
-          character(' ');
-          expression(node.expression);
-        }
-        if (!inlineStatement) character(';');
-        break;
-      case StatementKind::TextureStore:
-        text("donner_msl_texture_store(");
-        expression(node.expression);
-        text(", ");
-        expression(node.secondExpression);
-        text(", ");
-        expression(node.thirdExpression);
-        character(')');
-        if (!inlineStatement) character(';');
-        break;
+      case StatementKind::Declaration: emitDeclaration(node, inlineStatement); break;
+      case StatementKind::Assign: emitAssignment(node, inlineStatement); break;
+      case StatementKind::If: emitIf(node); break;
+      case StatementKind::For: emitFor(node); break;
+      case StatementKind::Return: emitReturn(node, inlineStatement); break;
+      case StatementKind::TextureStore: emitTextureStore(node, inlineStatement); break;
     }
     if (!inlineStatement) newline();
+  }
+
+  constexpr void emitDeclaration(const Statement& node, bool inlineStatement) {
+    if (!validId(node.symbolId, module_.symbolCount)) {
+      error_ = TextEmitError::InvalidArenaReference;
+      return;
+    }
+    const Symbol& symbol = module_.symbols[node.symbolId];
+    text(symbol.kind == SymbolKind::Var ? "" : "const ");
+    type(symbol.type);
+    character(' ');
+    symbolName(node.symbolId);
+    text(" = ");
+    expression(node.expression);
+    if (!inlineStatement) character(';');
+  }
+
+  constexpr void emitAssignment(const Statement& node, bool inlineStatement) {
+    expression(node.expression);
+    text(" = ");
+    expression(node.secondExpression);
+    if (!inlineStatement) character(';');
+  }
+
+  constexpr void emitIf(const Statement& node) {
+    text("if (");
+    expression(node.expression);
+    text(") {\n");
+    ++indent_;
+    block(node.firstBody);
+    --indent_;
+    indentation();
+    character('}');
+    if (node.firstElseBody != kInvalidArenaId) {
+      text(" else {\n");
+      ++indent_;
+      block(node.firstElseBody);
+      --indent_;
+      indentation();
+      character('}');
+    }
+  }
+
+  constexpr void emitFor(const Statement& node) {
+    text("for (");
+    statement(node.init, true);
+    text("; ");
+    expression(node.expression);
+    text("; ");
+    statement(node.continuing, true);
+    text(") {\n");
+    ++indent_;
+    block(node.firstBody);
+    --indent_;
+    indentation();
+    character('}');
+  }
+
+  constexpr void emitReturn(const Statement& node, bool inlineStatement) {
+    text("return");
+    if (node.expression != kInvalidArenaId) {
+      character(' ');
+      expression(node.expression);
+    }
+    if (!inlineStatement) character(';');
+  }
+
+  constexpr void emitTextureStore(const Statement& node, bool inlineStatement) {
+    text("donner_msl_texture_store(");
+    expression(node.expression);
+    text(", ");
+    expression(node.secondExpression);
+    text(", ");
+    expression(node.thirdExpression);
+    character(')');
+    if (!inlineStatement) character(';');
   }
 
   constexpr void block(ArenaId first) {
@@ -896,6 +975,17 @@ private:
       error_ = TextEmitError::InvalidModule;
       return;
     }
+    emitFunctionHead(function, entry);
+    resourceParameters(entry);
+    emitFunctionParameters(function, entry);
+    text(") {\n");
+    ++indent_;
+    block(function.firstStatement);
+    --indent_;
+    text("}\n");
+  }
+
+  constexpr void emitFunctionHead(const Function& function, bool entry) {
     if (entry) {
       const std::string_view name = module_.name(function.name);
       if (!validName(name) || reservedEntryName(name) || name.starts_with("donner_msl_")) {
@@ -905,13 +995,15 @@ private:
       text("kernel void ");
       text(name);
       text("(");
-    } else {
-      type(function.returnType);
-      character(' ');
-      prefixed("donner_msl_function_", function.name);
-      text("(");
+      return;
     }
-    resourceParameters(entry);
+    type(function.returnType);
+    character(' ');
+    prefixed("donner_msl_function_", function.name);
+    text("(");
+  }
+
+  constexpr void emitFunctionParameters(const Function& function, bool entry) {
     if (!validId(function.firstParameter, module_.symbolCount) && function.parameterCount != 0) {
       error_ = TextEmitError::InvalidArenaReference;
       return;
@@ -934,11 +1026,6 @@ private:
       symbolName(symbolId);
       if (entry) text(" [[thread_position_in_grid]]");
     }
-    text(") {\n");
-    ++indent_;
-    block(function.firstStatement);
-    --indent_;
-    text("}\n");
   }
 };
 

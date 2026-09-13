@@ -120,6 +120,7 @@ py_test(
         "//donner/gpu/metal:gpu_inventory_srcs",
         "//donner/gpu/metal/tests:gpu_inventory_srcs",
         "//donner/gpu/shader:gpu_inventory_srcs",
+        "//donner/gpu/shader/artifact_tests:gpu_inventory_srcs",
         "//donner/gpu/shader/wgsl:gpu_inventory_srcs",
         "//donner/gpu/vulkan:gpu_inventory_srcs",
         "//donner/gpu/vulkan/tests:gpu_inventory_srcs",

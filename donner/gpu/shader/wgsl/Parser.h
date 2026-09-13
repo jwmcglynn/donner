@@ -5,6 +5,7 @@
 #include <bit>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string_view>
 
 #include "donner/gpu/shader/wgsl/Module.h"
@@ -76,6 +77,8 @@ enum class TokenKind : uint8_t {
   RightParen,
   LeftBrace,
   RightBrace,
+  LeftBracket,
+  RightBracket,
   LeftAngle,
   RightAngle,
   Comma,
@@ -104,6 +107,19 @@ struct Token {
   TokenKind kind = TokenKind::End;
   SourceSpan span;
   std::string_view text;
+};
+
+struct PunctuationEntry {
+  char character;
+  TokenKind kind;
+};
+
+inline constexpr PunctuationEntry kSingleCharacterPunctuation[] = {
+    {'@', TokenKind::At},           {'(', TokenKind::LeftParen},  {')', TokenKind::RightParen},
+    {'{', TokenKind::LeftBrace},    {'}', TokenKind::RightBrace}, {'[', TokenKind::LeftBracket},
+    {']', TokenKind::RightBracket}, {',', TokenKind::Comma},      {':', TokenKind::Colon},
+    {';', TokenKind::Semicolon},    {'.', TokenKind::Dot},        {'+', TokenKind::Plus},
+    {'*', TokenKind::Star},         {'/', TokenKind::Slash},      {'%', TokenKind::Percent},
 };
 
 inline constexpr std::string_view kReservedDeclarationNames[] = {
@@ -340,61 +356,59 @@ private:
       return;
     }
     const char ch = source_[cursor_++];
-    if (IsIdentifierStart(ch)) {
-      while (cursor_ < source_.size() && IsIdentifierContinue(source_[cursor_])) {
-        ++cursor_;
-      }
-      token_ = MakeToken(TokenKind::Identifier, begin);
-      return;
-    }
-    if (ch >= '0' && ch <= '9') {
-      while (cursor_ < source_.size() && source_[cursor_] >= '0' && source_[cursor_] <= '9') {
-        ++cursor_;
-      }
-      if (cursor_ < source_.size() && source_[cursor_] == '.') {
-        ++cursor_;
-        while (cursor_ < source_.size() && source_[cursor_] >= '0' && source_[cursor_] <= '9') {
-          ++cursor_;
-        }
-      }
-      if (cursor_ < source_.size() && IsIdentifierStart(source_[cursor_])) {
-        ++cursor_;
-        while (cursor_ < source_.size() && IsIdentifierContinue(source_[cursor_])) {
-          ++cursor_;
-        }
-      }
-      token_ = MakeToken(TokenKind::Number, begin);
-      return;
-    }
-    TokenKind kind = TokenKind::End;
-    switch (ch) {
-      case '@': kind = TokenKind::At; break;
-      case '(': kind = TokenKind::LeftParen; break;
-      case ')': kind = TokenKind::RightParen; break;
-      case '{': kind = TokenKind::LeftBrace; break;
-      case '}': kind = TokenKind::RightBrace; break;
-      case '<': kind = Peek('=') ? TokenKind::LessEqual : TokenKind::Less; break;
-      case '>': kind = Peek('=') ? TokenKind::GreaterEqual : TokenKind::Greater; break;
-      case ',': kind = TokenKind::Comma; break;
-      case ':': kind = TokenKind::Colon; break;
-      case ';': kind = TokenKind::Semicolon; break;
-      case '.': kind = TokenKind::Dot; break;
-      case '+': kind = TokenKind::Plus; break;
-      case '-': kind = Peek('>') ? TokenKind::Arrow : TokenKind::Minus; break;
-      case '*': kind = TokenKind::Star; break;
-      case '/': kind = TokenKind::Slash; break;
-      case '%': kind = TokenKind::Percent; break;
-      case '=': kind = Peek('=') ? TokenKind::Equal : TokenKind::Assign; break;
-      case '!': kind = Peek('=') ? TokenKind::NotEqual : TokenKind::Not; break;
-      case '&': kind = Peek('&') ? TokenKind::And : TokenKind::End; break;
-      case '|': kind = Peek('|') ? TokenKind::Or : TokenKind::End; break;
-      default: break;
-    }
+    if (IsIdentifierStart(ch)) return ScanIdentifier(begin);
+    if (ch >= '0' && ch <= '9') return ScanNumber(begin);
+    const TokenKind kind = Punctuation(ch);
     if (kind == TokenKind::End) {
       Fail(ErrorCode::UnexpectedToken, SourceSpan{begin, static_cast<uint32_t>(cursor_)});
       return;
     }
     token_ = MakeToken(kind, begin);
+  }
+
+  constexpr void ScanIdentifier(uint32_t begin) {
+    while (cursor_ < source_.size() && IsIdentifierContinue(source_[cursor_])) ++cursor_;
+    token_ = MakeToken(TokenKind::Identifier, begin);
+  }
+
+  constexpr void ScanNumber(uint32_t begin) {
+    while (cursor_ < source_.size() && source_[cursor_] >= '0' && source_[cursor_] <= '9')
+      ++cursor_;
+    if (cursor_ < source_.size() && source_[cursor_] == '.') {
+      ++cursor_;
+      while (cursor_ < source_.size() && source_[cursor_] >= '0' && source_[cursor_] <= '9')
+        ++cursor_;
+    }
+    if (cursor_ < source_.size() && IsIdentifierStart(source_[cursor_])) {
+      ++cursor_;
+      while (cursor_ < source_.size() && IsIdentifierContinue(source_[cursor_])) ++cursor_;
+    }
+    token_ = MakeToken(TokenKind::Number, begin);
+  }
+
+  constexpr TokenKind Punctuation(char ch) {
+    if (TokenKind kind = SingleCharacterPunctuation(ch); kind != TokenKind::End) return kind;
+    return TwoCharacterPunctuation(ch);
+  }
+
+  constexpr TokenKind SingleCharacterPunctuation(char ch) const {
+    for (PunctuationEntry entry : kSingleCharacterPunctuation) {
+      if (entry.character == ch) return entry.kind;
+    }
+    return TokenKind::End;
+  }
+
+  constexpr TokenKind TwoCharacterPunctuation(char ch) {
+    switch (ch) {
+      case '<': return Peek('=') ? TokenKind::LessEqual : TokenKind::Less;
+      case '>': return Peek('=') ? TokenKind::GreaterEqual : TokenKind::Greater;
+      case '-': return Peek('>') ? TokenKind::Arrow : TokenKind::Minus;
+      case '=': return Peek('=') ? TokenKind::Equal : TokenKind::Assign;
+      case '!': return Peek('=') ? TokenKind::NotEqual : TokenKind::Not;
+      case '&': return Peek('&') ? TokenKind::And : TokenKind::End;
+      case '|': return Peek('|') ? TokenKind::Or : TokenKind::End;
+      default: return TokenKind::End;
+    }
   }
 
   constexpr bool Peek(char expected) {
@@ -481,96 +495,61 @@ private:
     return false;
   }
 
-  constexpr void ParseAttributes(Attributes* attributes) {
-    while (!failed() && Match(TokenKind::At)) {
-      const Token name = ExpectIdentifier();
-      if (failed()) return;
-      Expect(TokenKind::LeftParen);
-      if (name.text == "group" || name.text == "binding") {
-        const uint32_t value = ParseUnsignedNumber();
-        Expect(TokenKind::RightParen);
-        if (name.text == "group") {
-          if (attributes->hasGroup) Fail(ErrorCode::InvalidAttribute, name.span);
-          attributes->hasGroup = true;
-          attributes->group = value;
-        } else {
-          if (attributes->hasBinding) Fail(ErrorCode::InvalidAttribute, name.span);
-          attributes->hasBinding = true;
-          attributes->binding = value;
-        }
-      } else if (name.text == "compute") {
-        Expect(TokenKind::RightParen);
-        Fail(ErrorCode::InvalidAttribute, name.span);
-      } else if (name.text == "workgroup_size") {
-        attributes->workgroupX = ParseUnsignedNumber();
-        attributes->workgroupY = 1;
-        attributes->workgroupZ = 1;
-        if (Match(TokenKind::Comma)) attributes->workgroupY = ParseUnsignedNumber();
-        if (Match(TokenKind::Comma)) attributes->workgroupZ = ParseUnsignedNumber();
-        Expect(TokenKind::RightParen);
-        attributes->hasWorkgroupSize = true;
-      } else if (name.text == "builtin") {
-        const Token value = ExpectIdentifier();
-        Expect(TokenKind::RightParen);
-        if (value.text != "global_invocation_id" || attributes->globalInvocationId) {
-          Fail(ErrorCode::InvalidAttribute, value.span);
-        }
-        attributes->globalInvocationId = true;
-      } else {
-        Fail(ErrorCode::UnsupportedConstruct, name.span);
-      }
-    }
-  }
-
   constexpr void ParseLeadingAttributes(Attributes* attributes) {
     while (!failed() && token_.kind == TokenKind::At) {
       const SourceSpan atSpan = token_.span;
       Next();
       const Token name = ExpectIdentifier();
-      if (name.text == "compute") {
-        if (attributes->compute) Fail(ErrorCode::InvalidAttribute, atSpan);
-        attributes->compute = true;
-        continue;
-      }
-      if (name.text == "workgroup_size") {
-        if (attributes->hasWorkgroupSize) Fail(ErrorCode::InvalidAttribute, atSpan);
-        Expect(TokenKind::LeftParen);
-        attributes->workgroupX = ParseUnsignedNumber();
-        attributes->workgroupY = 1;
-        attributes->workgroupZ = 1;
-        if (Match(TokenKind::Comma)) attributes->workgroupY = ParseUnsignedNumber();
-        if (Match(TokenKind::Comma)) attributes->workgroupZ = ParseUnsignedNumber();
-        Expect(TokenKind::RightParen);
-        attributes->hasWorkgroupSize = true;
-        continue;
-      }
-      if (name.text == "group" || name.text == "binding" || name.text == "builtin") {
-        // Reparse the one attribute through the general path is unnecessary and would lose @.
-        Expect(TokenKind::LeftParen);
-        if (name.text == "builtin") {
-          const Token value = ExpectIdentifier();
-          Expect(TokenKind::RightParen);
-          if (value.text != "global_invocation_id" || attributes->globalInvocationId) {
-            Fail(ErrorCode::InvalidAttribute, value.span);
-          }
-          attributes->globalInvocationId = true;
-        } else {
-          const uint32_t value = ParseUnsignedNumber();
-          Expect(TokenKind::RightParen);
-          if (name.text == "group") {
-            if (attributes->hasGroup) Fail(ErrorCode::InvalidAttribute, atSpan);
-            attributes->hasGroup = true;
-            attributes->group = value;
-          } else {
-            if (attributes->hasBinding) Fail(ErrorCode::InvalidAttribute, atSpan);
-            attributes->hasBinding = true;
-            attributes->binding = value;
-          }
-        }
-        continue;
-      }
+      ParseLeadingAttribute(attributes, atSpan, name);
+    }
+  }
+
+  constexpr void ParseLeadingAttribute(Attributes* attributes, SourceSpan atSpan, Token name) {
+    if (name.text == "compute") {
+      if (attributes->compute) Fail(ErrorCode::InvalidAttribute, atSpan);
+      attributes->compute = true;
+    } else if (name.text == "workgroup_size") {
+      ParseWorkgroupSizeAttribute(attributes, atSpan);
+    } else if (name.text == "group" || name.text == "binding") {
+      ParseBindingAttribute(attributes, atSpan, name.text == "group");
+    } else if (name.text == "builtin") {
+      ParseBuiltinAttribute(attributes);
+    } else {
       Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
+  }
+
+  constexpr void ParseWorkgroupSizeAttribute(Attributes* attributes, SourceSpan span) {
+    if (attributes->hasWorkgroupSize) Fail(ErrorCode::InvalidAttribute, span);
+    Expect(TokenKind::LeftParen);
+    attributes->workgroupX = ParseUnsignedNumber();
+    attributes->workgroupY = 1;
+    attributes->workgroupZ = 1;
+    if (Match(TokenKind::Comma)) attributes->workgroupY = ParseUnsignedNumber();
+    if (Match(TokenKind::Comma)) attributes->workgroupZ = ParseUnsignedNumber();
+    Expect(TokenKind::RightParen);
+    attributes->hasWorkgroupSize = true;
+  }
+
+  constexpr void ParseBindingAttribute(Attributes* attributes, SourceSpan span, bool group) {
+    Expect(TokenKind::LeftParen);
+    const uint32_t value = ParseUnsignedNumber();
+    Expect(TokenKind::RightParen);
+    bool& present = group ? attributes->hasGroup : attributes->hasBinding;
+    uint32_t& destination = group ? attributes->group : attributes->binding;
+    if (present) Fail(ErrorCode::InvalidAttribute, span);
+    present = true;
+    destination = value;
+  }
+
+  constexpr void ParseBuiltinAttribute(Attributes* attributes) {
+    Expect(TokenKind::LeftParen);
+    const Token value = ExpectIdentifier();
+    Expect(TokenKind::RightParen);
+    if (value.text != "global_invocation_id" || attributes->globalInvocationId) {
+      Fail(ErrorCode::InvalidAttribute, value.span);
+    }
+    attributes->globalInvocationId = true;
   }
 
   constexpr uint32_t ParseUnsignedNumber() {
@@ -632,7 +611,13 @@ private:
       }
       cursor = RoundUp(cursor, alignment);
       module_.structMembers[module_.structMemberCount++] =
-          StructMember{AddName(memberName), memberName.span, memberType, cursor, alignment, size};
+          StructMember{AddName(memberName),
+                       memberName.span,
+                       memberType,
+                       cursor,
+                       alignment,
+                       size,
+                       memberType.kind == TypeKind::Array ? size / memberType.arrayCount : 0};
       cursor += size;
       if (alignment > maxAlignment) maxAlignment = alignment;
       ++structure.memberCount;
@@ -674,49 +659,92 @@ private:
         return true;
       }
     }
+    if (type.kind == TypeKind::Array && type.elementKind == TypeKind::F32 &&
+        type.elementLanes == 1 && type.arrayCount > 0) {
+      *alignment = 4;
+      *size = static_cast<uint32_t>(type.arrayCount) * 4;
+      return true;
+    }
     return false;
   }
 
   constexpr Type ParseType() {
     const Token name = ExpectIdentifier();
+    if (Type scalar = ScalarType(name); scalar.kind != TypeKind::Void) return scalar;
+    if (name.text == "array") return ParseArrayType(name);
+    if (name.text == "texture_2d") return ParseSampledTextureType();
+    if (name.text == "texture_storage_2d") return ParseStorageTextureType();
+    if (IsVectorTypeName(name)) return ParseVectorType(name);
+    if (Type structure = NamedStructType(name); structure.kind != TypeKind::Void) return structure;
+    Fail(ErrorCode::UnknownType, name.span);
+    return {};
+  }
+
+  constexpr Type ScalarType(Token name) const {
     if (name.text == "bool") return Type{TypeKind::Bool};
     if (name.text == "i32") return Type{TypeKind::I32};
     if (name.text == "u32") return Type{TypeKind::U32};
     if (name.text == "f32") return Type{TypeKind::F32};
-    if (name.text == "texture_2d") {
-      Expect(TokenKind::Less);
-      const Token scalar = ExpectIdentifier();
-      Expect(TokenKind::Greater);
-      if (scalar.text != "f32") Fail(ErrorCode::UnknownType, scalar.span);
-      return Type{TypeKind::SampledTexture2d};
+    return {};
+  }
+
+  constexpr Type ParseArrayType(Token name) {
+    Expect(TokenKind::Less);
+    const Token element = ExpectIdentifier();
+    Expect(TokenKind::Comma);
+    const uint32_t count = ParseUnsignedNumber();
+    Expect(TokenKind::Greater);
+    if (element.text != "f32" || count == 0 || count > ModuleLimits::kMaxArrayElements) {
+      Fail(ErrorCode::UnknownType, name.span);
+      return {};
     }
-    if (name.text == "texture_storage_2d") {
-      Expect(TokenKind::Less);
-      const Token format = ExpectIdentifier();
-      Expect(TokenKind::Comma);
-      const Token access = ExpectIdentifier();
-      Expect(TokenKind::Greater);
-      if (format.text != "rgba32float" || access.text != "write") {
-        Fail(ErrorCode::UnknownType, format.span);
-      }
-      return Type{TypeKind::StorageTexture2d};
+    Type array;
+    array.kind = TypeKind::Array;
+    array.elementKind = TypeKind::F32;
+    array.elementLanes = 1;
+    array.arrayCount = static_cast<uint16_t>(count);
+    return array;
+  }
+
+  constexpr Type ParseSampledTextureType() {
+    Expect(TokenKind::Less);
+    const Token scalar = ExpectIdentifier();
+    Expect(TokenKind::Greater);
+    if (scalar.text != "f32") Fail(ErrorCode::UnknownType, scalar.span);
+    return Type{TypeKind::SampledTexture2d};
+  }
+
+  constexpr Type ParseStorageTextureType() {
+    Expect(TokenKind::Less);
+    const Token format = ExpectIdentifier();
+    Expect(TokenKind::Comma);
+    const Token access = ExpectIdentifier();
+    Expect(TokenKind::Greater);
+    if (format.text != "rgba32float" || access.text != "write")
+      Fail(ErrorCode::UnknownType, format.span);
+    return Type{TypeKind::StorageTexture2d};
+  }
+
+  constexpr bool IsVectorTypeName(Token name) const {
+    return name.text.size() == 4 && name.text.substr(0, 3) == "vec" && name.text[3] >= '2' &&
+           name.text[3] <= '4';
+  }
+
+  constexpr Type ParseVectorType(Token name) {
+    Expect(TokenKind::Less);
+    Type scalar = ParseType();
+    Expect(TokenKind::Greater);
+    if (scalar.lanes != 1 || (scalar.kind != TypeKind::Bool && !scalar.isNumeric())) {
+      Fail(ErrorCode::UnknownType, name.span);
     }
-    if (name.text.size() == 4 && name.text.substr(0, 3) == "vec" && name.text[3] >= '2' &&
-        name.text[3] <= '4') {
-      const uint8_t lanes = static_cast<uint8_t>(name.text[3] - '0');
-      Expect(TokenKind::Less);
-      Type scalar = ParseType();
-      Expect(TokenKind::Greater);
-      if (scalar.lanes != 1 || (scalar.kind != TypeKind::Bool && !scalar.isNumeric())) {
-        Fail(ErrorCode::UnknownType, name.span);
-      }
-      scalar.lanes = lanes;
-      return scalar;
-    }
+    scalar.lanes = static_cast<uint8_t>(name.text[3] - '0');
+    return scalar;
+  }
+
+  constexpr Type NamedStructType(Token name) const {
     for (uint16_t i = 0; i < module_.structCount; ++i) {
       if (SameName(module_.structs[i].name, name)) return Type{TypeKind::Struct, 1, i};
     }
-    Fail(ErrorCode::UnknownType, name.span);
     return {};
   }
 
@@ -724,40 +752,68 @@ private:
     const SourceSpan begin = token_.span;
     ExpectIdentifier();
     Token addressSpace;
-    if (Match(TokenKind::Less)) {
-      addressSpace = ExpectIdentifier();
-      Expect(TokenKind::Greater);
-    }
+    Token accessMode;
+    ParseBindingAddressSpace(&addressSpace, &accessMode);
     const Token name = ExpectIdentifier();
     if (!IsValidDeclarationName(name)) Fail(ErrorCode::InvalidIdentifier, name.span);
     Expect(TokenKind::Colon);
     const Type type = ParseType();
     Expect(TokenKind::Semicolon);
-    if (!attributes.hasGroup || !attributes.hasBinding || attributes.compute ||
-        attributes.hasWorkgroupSize || attributes.globalInvocationId) {
+    if (!BindingAttributesValid(attributes)) {
       Fail(ErrorCode::InvalidAttribute, begin);
       return;
     }
-    BindingKind kind;
-    if (addressSpace.text == "uniform" && type.kind == TypeKind::Struct) {
-      kind = BindingKind::Uniform;
+    const BindingKind kind = ResolveBindingKind(addressSpace, accessMode, type, name);
+    if (failed()) return;
+    if (!BindingWithinLimits(attributes, kind, name)) return;
+    InsertBinding(attributes, kind, type, name);
+  }
+
+  constexpr void ParseBindingAddressSpace(Token* addressSpace, Token* accessMode) {
+    if (!Match(TokenKind::Less)) return;
+    *addressSpace = ExpectIdentifier();
+    if (Match(TokenKind::Comma)) *accessMode = ExpectIdentifier();
+    Expect(TokenKind::Greater);
+  }
+
+  constexpr bool BindingAttributesValid(const Attributes& attributes) const {
+    return attributes.hasGroup && attributes.hasBinding && !attributes.compute &&
+           !attributes.hasWorkgroupSize && !attributes.globalInvocationId;
+  }
+
+  constexpr BindingKind ResolveBindingKind(Token addressSpace, Token accessMode, Type type,
+                                           Token name) {
+    if (addressSpace.text == "uniform" && accessMode.text.empty() &&
+        type.kind == TypeKind::Struct && !StructHasArray(type.structId)) {
+      return BindingKind::Uniform;
+    } else if (addressSpace.text == "storage" && accessMode.text == "read" &&
+               type.kind == TypeKind::Struct) {
+      return BindingKind::ReadOnlyStorage;
     } else if (addressSpace.text.empty() && type.kind == TypeKind::SampledTexture2d) {
-      kind = BindingKind::SampledTexture;
+      return BindingKind::SampledTexture;
     } else if (addressSpace.text.empty() && type.kind == TypeKind::StorageTexture2d) {
-      kind = BindingKind::StorageTexture;
-    } else {
-      // Texture declarations have no address-space angle brackets in this profile.
-      Fail(ErrorCode::InvalidBinding, name.span);
-      return;
+      return BindingKind::StorageTexture;
     }
-    if (attributes.group != 0 || (kind == BindingKind::Uniform && attributes.binding >= 29) ||
-        (kind != BindingKind::Uniform && attributes.binding >= 128)) {
+    Fail(ErrorCode::InvalidBinding, name.span);
+    return BindingKind::Uniform;
+  }
+
+  constexpr bool BindingWithinLimits(const Attributes& attributes, BindingKind kind, Token name) {
+    const bool bufferBinding = kind == BindingKind::Uniform || kind == BindingKind::ReadOnlyStorage;
+    if (attributes.group != 0 || (bufferBinding && attributes.binding >= 29) ||
+        (!bufferBinding && attributes.binding >= 128)) {
       Fail(ErrorCode::InvalidBinding, name.span);
+      return false;
     }
     if (module_.bindingCount == ModuleLimits::kMaxBindings) {
       Fail(ErrorCode::BindingLimit, name.span);
-      return;
+      return false;
     }
+    return true;
+  }
+
+  constexpr void InsertBinding(const Attributes& attributes, BindingKind kind, Type type,
+                               Token name) {
     if (ModuleNameInUse(name)) Fail(ErrorCode::DuplicateName, name.span);
     for (uint16_t i = 0; i < module_.bindingCount; ++i) {
       const Binding& existing = module_.bindings[i];
@@ -773,6 +829,16 @@ private:
     if (symbolId != kInvalidArenaId) module_.symbols[symbolId].bindingId = bindingId;
   }
 
+  constexpr bool StructHasArray(ArenaId structId) const {
+    if (structId >= module_.structCount) return false;
+    const Struct& structure = module_.structs[structId];
+    for (uint16_t i = 0; i < structure.memberCount; ++i) {
+      if (module_.structMembers[structure.firstMember + i].type.kind == TypeKind::Array)
+        return true;
+    }
+    return false;
+  }
+
   constexpr void ParseFunction(const Attributes& attributes) {
     const SourceSpan fnSpan = token_.span;
     ExpectIdentifier();
@@ -783,83 +849,100 @@ private:
       return;
     }
     if (ModuleNameInUse(name)) Fail(ErrorCode::DuplicateName, name.span);
+    Function function = MakeFunction(name, attributes);
+    if (!FunctionAttributesValid(attributes)) Fail(ErrorCode::InvalidAttribute, fnSpan);
+    const ArenaId functionId = module_.functionCount++;
+    module_.functions[functionId] = function;
+    PushScope();
+    ParseFunctionParameters(&function);
+    ParseFunctionReturnType(&function, name);
+    const BlockInfo body = ParseFunctionBody(function.returnType, functionId);
+    function.firstStatement = body.first;
+    ValidateCompletedFunction(function, name, body.alwaysReturns);
+    module_.functions[functionId] = function;
+    PopScope();
+  }
+
+  constexpr Function MakeFunction(Token name, const Attributes& attributes) {
     Function function;
     function.name = AddName(name);
     function.nameSpan = name.span;
     function.stage = attributes.compute ? Stage::Compute : Stage::None;
     function.workgroupSize = {attributes.workgroupX, attributes.workgroupY, attributes.workgroupZ};
+    return function;
+  }
+
+  constexpr bool FunctionAttributesValid(const Attributes& attributes) const {
     if (attributes.compute != attributes.hasWorkgroupSize || attributes.hasGroup ||
-        attributes.hasBinding || attributes.globalInvocationId ||
-        (attributes.compute && (attributes.workgroupX == 0 || attributes.workgroupY == 0 ||
-                                attributes.workgroupZ == 0 || attributes.workgroupX > 256 ||
-                                attributes.workgroupY > 256 || attributes.workgroupZ > 256 ||
-                                static_cast<uint64_t>(attributes.workgroupX) *
-                                        attributes.workgroupY * attributes.workgroupZ >
-                                    256))) {
-      Fail(ErrorCode::InvalidAttribute, fnSpan);
-    }
-    const ArenaId functionId = module_.functionCount++;
-    module_.functions[functionId] = function;
-    PushScope();
+        attributes.hasBinding || attributes.globalInvocationId)
+      return false;
+    if (!attributes.compute) return true;
+    return attributes.workgroupX > 0 && attributes.workgroupY > 0 && attributes.workgroupZ > 0 &&
+           attributes.workgroupX <= 256 && attributes.workgroupY <= 256 &&
+           attributes.workgroupZ <= 256 &&
+           static_cast<uint64_t>(attributes.workgroupX) * attributes.workgroupY *
+                   attributes.workgroupZ <=
+               256;
+  }
+
+  constexpr void ParseFunctionParameters(Function* function) {
     Expect(TokenKind::LeftParen);
-    function.firstParameter = module_.symbolCount;
+    function->firstParameter = module_.symbolCount;
     while (!failed() && token_.kind != TokenKind::RightParen) {
-      Attributes parameterAttributes;
-      ParseLeadingAttributes(&parameterAttributes);
-      const Token parameterName = ExpectIdentifier();
-      if (!IsValidDeclarationName(parameterName)) {
-        Fail(ErrorCode::InvalidIdentifier, parameterName.span);
-      }
-      Expect(TokenKind::Colon);
-      const Type parameterType = ParseType();
-      if (parameterAttributes.hasGroup || parameterAttributes.hasBinding ||
-          parameterAttributes.compute || parameterAttributes.hasWorkgroupSize ||
-          parameterType.kind == TypeKind::Struct ||
-          (function.stage == Stage::None && !parameterType.isNumeric()) ||
-          (parameterAttributes.globalInvocationId &&
-           (function.stage != Stage::Compute || parameterType != Type{TypeKind::U32, 3}))) {
-        Fail(ErrorCode::InvalidAttribute, parameterName.span);
-      }
-      const ArenaId symbolId =
-          AddSymbol(SymbolKind::Parameter, parameterType, parameterName, false);
-      if (symbolId != kInvalidArenaId && parameterAttributes.globalInvocationId) {
-        module_.symbols[symbolId].builtin = BuiltinInput::GlobalInvocationId;
-      }
-      ++function.parameterCount;
+      ParseFunctionParameter(function);
       if (!Match(TokenKind::Comma)) break;
     }
     Expect(TokenKind::RightParen);
-    if (Match(TokenKind::Arrow)) {
-      function.returnType = ParseType();
-    }
-    if (function.returnType.kind == TypeKind::Struct) {
+  }
+
+  constexpr void ParseFunctionParameter(Function* function) {
+    Attributes attributes;
+    ParseLeadingAttributes(&attributes);
+    const Token name = ExpectIdentifier();
+    if (!IsValidDeclarationName(name)) Fail(ErrorCode::InvalidIdentifier, name.span);
+    Expect(TokenKind::Colon);
+    const Type type = ParseType();
+    const bool invalid = attributes.hasGroup || attributes.hasBinding || attributes.compute ||
+                         attributes.hasWorkgroupSize || type.kind == TypeKind::Struct ||
+                         (function->stage == Stage::None && !type.isNumeric()) ||
+                         (attributes.globalInvocationId &&
+                          (function->stage != Stage::Compute || type != Type{TypeKind::U32, 3}));
+    if (invalid) Fail(ErrorCode::InvalidAttribute, name.span);
+    const ArenaId symbol = AddSymbol(SymbolKind::Parameter, type, name, false);
+    if (symbol != kInvalidArenaId && attributes.globalInvocationId)
+      module_.symbols[symbol].builtin = BuiltinInput::GlobalInvocationId;
+    ++function->parameterCount;
+  }
+
+  constexpr void ParseFunctionReturnType(Function* function, Token name) {
+    if (Match(TokenKind::Arrow)) function->returnType = ParseType();
+    if (function->returnType.kind == TypeKind::Struct ||
+        (function->stage == Stage::None && function->returnType.kind != TypeKind::Void &&
+         !function->returnType.isNumeric()))
       Fail(ErrorCode::UnsupportedConstruct, name.span);
-    }
-    if (function.stage == Stage::None && function.returnType.kind != TypeKind::Void &&
-        !function.returnType.isNumeric()) {
-      Fail(ErrorCode::UnsupportedConstruct, name.span);
-    }
-    if (function.stage == Stage::Compute && function.returnType.kind != TypeKind::Void) {
+    if (function->stage == Stage::Compute && function->returnType.kind != TypeKind::Void)
       Fail(ErrorCode::InvalidReturn, name.span);
-    }
+  }
+
+  constexpr BlockInfo ParseFunctionBody(Type returnType, ArenaId functionId) {
     const Type previousReturnType = currentFunctionReturnType_;
     const ArenaId previousFunctionId = currentFunctionId_;
-    currentFunctionReturnType_ = function.returnType;
+    currentFunctionReturnType_ = returnType;
     currentFunctionId_ = functionId;
     const BlockInfo body = ParseBlock();
     currentFunctionReturnType_ = previousReturnType;
     currentFunctionId_ = previousFunctionId;
-    function.firstStatement = body.first;
-    if (function.returnType.kind != TypeKind::Void && !body.alwaysReturns) {
+    return body;
+  }
+
+  constexpr void ValidateCompletedFunction(const Function& function, Token name,
+                                           bool alwaysReturns) {
+    if (function.returnType.kind != TypeKind::Void && !alwaysReturns)
       Fail(ErrorCode::MissingReturn, name.span);
-    }
     if (function.stage == Stage::Compute &&
         (function.parameterCount != 1 ||
-         SymbolAt(function.firstParameter).builtin != BuiltinInput::GlobalInvocationId)) {
+         SymbolAt(function.firstParameter).builtin != BuiltinInput::GlobalInvocationId))
       Fail(ErrorCode::InvalidAttribute, name.span);
-    }
-    module_.functions[functionId] = function;
-    PopScope();
   }
 
   constexpr ArenaId AddSymbol(SymbolKind kind, Type type, Token name, bool mutableValue) {
@@ -987,6 +1070,7 @@ private:
     if (Match(TokenKind::Colon)) {
       declared = ParseType();
       hasDeclared = true;
+      if (declared.kind == TypeKind::Array) Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
     Expect(TokenKind::Assign);
     const ExpressionInfo initializer = ParseExpression();
@@ -1189,7 +1273,38 @@ private:
 
   constexpr ExpressionInfo ParsePostfix() {
     ExpressionInfo value = ParsePrimary();
-    while (!failed() && Match(TokenKind::Dot)) {
+    while (!failed() && (token_.kind == TokenKind::Dot || token_.kind == TokenKind::LeftBracket)) {
+      if (Match(TokenKind::LeftBracket)) {
+        const ExpressionInfo index = ParseExpression();
+        const SourceSpan end = token_.span;
+        Expect(TokenKind::RightBracket);
+        const Type base = ExpressionAt(value.id).type;
+        const Type indexType = ExpressionAt(index.id).type;
+        if (base.kind != TypeKind::Array || indexType.lanes != 1 ||
+            (indexType.kind != TypeKind::I32 && indexType.kind != TypeKind::U32)) {
+          Fail(ErrorCode::TypeMismatch, end);
+          return ErrorExpression(end);
+        }
+        int32_t signedIndex = 0;
+        uint32_t unsignedIndex = 0;
+        const bool hasSignedIndex = ConstI32Value(index.id, &signedIndex);
+        const bool hasUnsignedIndex = ConstU32Value(index.id, &unsignedIndex);
+        if ((IsConstantSyntax(index.id) && !hasSignedIndex && !hasUnsignedIndex) ||
+            (hasSignedIndex &&
+             (signedIndex < 0 || static_cast<uint32_t>(signedIndex) >= base.arrayCount)) ||
+            (hasUnsignedIndex && unsignedIndex >= base.arrayCount)) {
+          Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index.id).span);
+        }
+        value = AddExpression(Expression{ExpressionKind::Index,
+                                         Type{base.elementKind, base.elementLanes},
+                                         SourceSpan{ExpressionAt(value.id).span.begin, end.end},
+                                         {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
+                                         2,
+                                         0},
+                              false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+        continue;
+      }
+      Match(TokenKind::Dot);
       const Token member = ExpectIdentifier();
       const Type base = ExpressionAt(value.id).type;
       if (base.kind == TypeKind::Struct) {
@@ -1251,56 +1366,66 @@ private:
 
   constexpr ExpressionInfo ParsePrimary() {
     if (token_.kind == TokenKind::Number) return ParseLiteral();
-    if (Match(TokenKind::LeftParen)) {
-      ExpressionInfo result = ParseExpression();
-      Expect(TokenKind::RightParen);
-      return result;
-    }
+    if (Match(TokenKind::LeftParen)) return ParseParenthesizedExpression();
     const Token name = ExpectIdentifier();
     if (failed()) return ErrorExpression(name.span);
-    if (name.text == "true" || name.text == "false") {
-      return AddExpression(
-          Expression{ExpressionKind::Literal,
-                     Type{TypeKind::Bool},
-                     name.span,
-                     {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                     0,
-                     name.text == "true" ? 1u : 0u},
-          false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
-    }
-    if (IsVectorConstructor(name) && Match(TokenKind::Less)) {
-      Type type = ParseType();
-      if (type.lanes != 1 || !type.isNumeric()) Fail(ErrorCode::UnknownType, name.span);
-      type.lanes = static_cast<uint8_t>(name.text[3] - '0');
-      Expect(TokenKind::Greater);
-      Expect(TokenKind::LeftParen);
-      return ParseConstruction(name, type);
-    }
-    if (Match(TokenKind::LeftParen)) {
-      if (name.text == "i32" || name.text == "u32" || name.text == "f32") {
-        Type type = name.text == "i32"   ? Type{TypeKind::I32}
-                    : name.text == "u32" ? Type{TypeKind::U32}
-                                         : Type{TypeKind::F32};
-        const ExpressionInfo value = ParseExpression();
-        Expect(TokenKind::RightParen);
-        const Type valueType = ExpressionAt(value.id).type;
-        if (!valueType.isNumeric() || valueType.lanes != 1) {
-          Fail(ErrorCode::TypeMismatch, name.span);
-        }
-        if (IsConstantSyntax(value.id) && valueType.kind != type.kind) {
-          Fail(ErrorCode::InvalidConstantExpression, name.span);
-        }
-        return AddExpression(
-            Expression{ExpressionKind::Convert,
-                       type,
-                       SourceSpan{name.span.begin, ExpressionAt(value.id).span.end},
-                       {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                       1,
-                       0},
-            false, kInvalidArenaId, value.i32UpperBound);
-      }
-      return ParseCall(name);
-    }
+    return ParseNamedPrimary(name);
+  }
+
+  constexpr ExpressionInfo ParseParenthesizedExpression() {
+    ExpressionInfo result = ParseExpression();
+    Expect(TokenKind::RightParen);
+    return result;
+  }
+
+  constexpr ExpressionInfo ParseNamedPrimary(Token name) {
+    if (name.text == "true" || name.text == "false") return ParseBoolLiteral(name);
+    if (IsVectorConstructor(name) && Match(TokenKind::Less)) return ParseVectorConstruction(name);
+    if (Match(TokenKind::LeftParen)) return ParseCallOrConversion(name);
+    return ParseSymbolReference(name);
+  }
+
+  constexpr ExpressionInfo ParseBoolLiteral(Token name) {
+    return AddExpression(
+        Expression{ExpressionKind::Literal,
+                   Type{TypeKind::Bool},
+                   name.span,
+                   {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
+                   0,
+                   name.text == "true" ? 1u : 0u},
+        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+  }
+
+  constexpr ExpressionInfo ParseVectorConstruction(Token name) {
+    Type type = ParseType();
+    if (type.lanes != 1 || !type.isNumeric()) Fail(ErrorCode::UnknownType, name.span);
+    type.lanes = static_cast<uint8_t>(name.text[3] - '0');
+    Expect(TokenKind::Greater);
+    Expect(TokenKind::LeftParen);
+    return ParseConstruction(name, type);
+  }
+
+  constexpr ExpressionInfo ParseCallOrConversion(Token name) {
+    if (name.text != "i32" && name.text != "u32" && name.text != "f32") return ParseCall(name);
+    const Type type = name.text == "i32"   ? Type{TypeKind::I32}
+                      : name.text == "u32" ? Type{TypeKind::U32}
+                                           : Type{TypeKind::F32};
+    const ExpressionInfo value = ParseExpression();
+    Expect(TokenKind::RightParen);
+    const Type valueType = ExpressionAt(value.id).type;
+    if (!valueType.isNumeric() || valueType.lanes != 1) Fail(ErrorCode::TypeMismatch, name.span);
+    if (IsConstantSyntax(value.id) && valueType.kind != type.kind)
+      Fail(ErrorCode::InvalidConstantExpression, name.span);
+    return AddExpression(Expression{ExpressionKind::Convert,
+                                    type,
+                                    SourceSpan{name.span.begin, ExpressionAt(value.id).span.end},
+                                    {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
+                                    1,
+                                    0},
+                         false, kInvalidArenaId, value.i32UpperBound);
+  }
+
+  constexpr ExpressionInfo ParseSymbolReference(Token name) {
     const ArenaId symbol = ResolveSymbol(name);
     if (symbol == kInvalidArenaId) return ErrorExpression(name.span);
     const Symbol& resolved = SymbolAt(symbol);
@@ -1429,58 +1554,90 @@ private:
 
   constexpr bool ValidateBuiltin(Builtin builtin, const std::array<ExpressionInfo, 4>& arguments,
                                  uint8_t count, Type* result) const {
-    const auto type = [&](uint8_t index) { return ExpressionAt(arguments[index].id).type; };
     switch (builtin) {
-      case Builtin::Any:
-        if (count == 1 && type(0).kind == TypeKind::Bool && type(0).lanes >= 2) {
-          *result = Type{TypeKind::Bool};
-          return true;
-        }
-        return false;
-      case Builtin::Clamp:
-        if (count == 3 && type(0).isNumeric() && type(0) == type(1) && type(0) == type(2)) {
-          *result = type(0);
-          return true;
-        }
-        return false;
-      case Builtin::Select:
-        if (count == 3 && (type(0).kind == TypeKind::Bool || type(0).isNumeric()) &&
-            type(0) == type(1) && type(2).kind == TypeKind::Bool &&
-            (type(2).lanes == 1 || type(2).lanes == type(0).lanes)) {
-          *result = type(0);
-          return true;
-        }
-        return false;
-      case Builtin::Min:
-        if (count == 2 && type(0).isNumeric() && type(0) == type(1)) {
-          *result = type(0);
-          return true;
-        }
-        return false;
+      case Builtin::Any: return ValidateAnyBuiltin(arguments, count, result);
+      case Builtin::Clamp: return ValidateClampBuiltin(arguments, count, result);
+      case Builtin::Select: return ValidateSelectBuiltin(arguments, count, result);
+      case Builtin::Min: return ValidateMinBuiltin(arguments, count, result);
       case Builtin::Ceil:
-      case Builtin::Exp:
-        if (count == 1 && type(0).kind == TypeKind::F32) {
-          *result = type(0);
-          return true;
-        }
-        return false;
-      case Builtin::TextureLoad:
-        if (count == 3 && type(0) == Type{TypeKind::SampledTexture2d} &&
-            type(1) == Type{TypeKind::I32, 2} && type(2) == Type{TypeKind::I32}) {
-          *result = Type{TypeKind::F32, 4};
-          return true;
-        }
-        return false;
+      case Builtin::Exp: return ValidateFloatBuiltin(arguments, count, result);
+      case Builtin::TextureLoad: return ValidateTextureLoadBuiltin(arguments, count, result);
       case Builtin::TextureDimensions:
-        if (count == 1 && (type(0) == Type{TypeKind::SampledTexture2d} ||
-                           type(0) == Type{TypeKind::StorageTexture2d})) {
-          *result = Type{TypeKind::U32, 2};
-          return true;
-        }
-        return false;
+        return ValidateTextureDimensionsBuiltin(arguments, count, result);
       case Builtin::TextureStore: return false;
     }
     return false;
+  }
+
+  constexpr Type BuiltinArgumentType(const std::array<ExpressionInfo, 4>& arguments,
+                                     uint8_t index) const {
+    return ExpressionAt(arguments[index].id).type;
+  }
+
+  constexpr bool ValidateAnyBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
+                                    Type* result) const {
+    const Type value = BuiltinArgumentType(arguments, 0);
+    if (count != 1 || value.kind != TypeKind::Bool || value.lanes < 2) return false;
+    *result = Type{TypeKind::Bool};
+    return true;
+  }
+
+  constexpr bool ValidateClampBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
+                                      Type* result) const {
+    const Type value = BuiltinArgumentType(arguments, 0);
+    if (count != 3 || !value.isNumeric() || value != BuiltinArgumentType(arguments, 1) ||
+        value != BuiltinArgumentType(arguments, 2))
+      return false;
+    *result = value;
+    return true;
+  }
+
+  constexpr bool ValidateSelectBuiltin(const std::array<ExpressionInfo, 4>& arguments,
+                                       uint8_t count, Type* result) const {
+    const Type falseValue = BuiltinArgumentType(arguments, 0);
+    const Type condition = BuiltinArgumentType(arguments, 2);
+    if (count != 3 || (falseValue.kind != TypeKind::Bool && !falseValue.isNumeric()) ||
+        falseValue != BuiltinArgumentType(arguments, 1) || condition.kind != TypeKind::Bool ||
+        (condition.lanes != 1 && condition.lanes != falseValue.lanes))
+      return false;
+    *result = falseValue;
+    return true;
+  }
+
+  constexpr bool ValidateMinBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
+                                    Type* result) const {
+    const Type lhs = BuiltinArgumentType(arguments, 0);
+    if (count != 2 || !lhs.isNumeric() || lhs != BuiltinArgumentType(arguments, 1)) return false;
+    *result = lhs;
+    return true;
+  }
+
+  constexpr bool ValidateFloatBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
+                                      Type* result) const {
+    const Type value = BuiltinArgumentType(arguments, 0);
+    if (count != 1 || value.kind != TypeKind::F32) return false;
+    *result = value;
+    return true;
+  }
+
+  constexpr bool ValidateTextureLoadBuiltin(const std::array<ExpressionInfo, 4>& arguments,
+                                            uint8_t count, Type* result) const {
+    if (count != 3 || BuiltinArgumentType(arguments, 0) != Type{TypeKind::SampledTexture2d} ||
+        BuiltinArgumentType(arguments, 1) != Type{TypeKind::I32, 2} ||
+        BuiltinArgumentType(arguments, 2) != Type{TypeKind::I32})
+      return false;
+    *result = Type{TypeKind::F32, 4};
+    return true;
+  }
+
+  constexpr bool ValidateTextureDimensionsBuiltin(const std::array<ExpressionInfo, 4>& arguments,
+                                                  uint8_t count, Type* result) const {
+    const Type texture = BuiltinArgumentType(arguments, 0);
+    if (count != 1 || (texture != Type{TypeKind::SampledTexture2d} &&
+                       texture != Type{TypeKind::StorageTexture2d}))
+      return false;
+    *result = Type{TypeKind::U32, 2};
+    return true;
   }
 
   constexpr int32_t BuiltinUpperBound(Builtin builtin,
@@ -1510,6 +1667,18 @@ private:
     const bool highStatic = IsConstantSyntax(arguments[2].id);
     if (!lowStatic || !highStatic) return true;
     const Type type = ExpressionAt(arguments[1].id).type;
+    if (type.kind == TypeKind::I32 && type.lanes == 1) {
+      int32_t low = 0;
+      int32_t high = 0;
+      return ConstI32Value(arguments[1].id, &low) && ConstI32Value(arguments[2].id, &high) &&
+             low <= high;
+    }
+    if (type.kind == TypeKind::U32 && type.lanes == 1) {
+      uint32_t low = 0;
+      uint32_t high = 0;
+      return ConstU32Value(arguments[1].id, &low) && ConstU32Value(arguments[2].id, &high) &&
+             low <= high;
+    }
     if (type.kind != TypeKind::F32) return false;
     std::array<float, 4> low = {};
     std::array<float, 4> high = {};
@@ -1529,18 +1698,33 @@ private:
                                     uint8_t* lanes) const {
     const Expression& expression = ExpressionAt(expressionId);
     if (expression.type.kind != TypeKind::F32) return false;
-    if (expression.kind == ExpressionKind::Literal && expression.type.lanes == 1) {
-      (*values)[0] = std::bit_cast<float>(expression.payload);
-      *lanes = 1;
-      return true;
-    }
-    if (expression.kind == ExpressionKind::Unary &&
-        static_cast<UnaryOp>(expression.payload) == UnaryOp::Negate) {
-      if (!ConstF32Components(expression.operands[0], values, lanes)) return false;
-      for (uint8_t i = 0; i < *lanes; ++i) (*values)[i] = -(*values)[i];
-      return true;
-    }
+    if (expression.kind == ExpressionKind::Literal)
+      return ConstF32Literal(expression, values, lanes);
+    if (expression.kind == ExpressionKind::Unary)
+      return ConstF32Negation(expression, values, lanes);
     if (expression.kind != ExpressionKind::Construct) return false;
+    return ConstF32Construction(expression, values, lanes);
+  }
+
+  constexpr bool ConstF32Literal(const Expression& expression, std::array<float, 4>* values,
+                                 uint8_t* lanes) const {
+    if (expression.type.lanes != 1) return false;
+    (*values)[0] = std::bit_cast<float>(expression.payload);
+    *lanes = 1;
+    return true;
+  }
+
+  constexpr bool ConstF32Negation(const Expression& expression, std::array<float, 4>* values,
+                                  uint8_t* lanes) const {
+    if (static_cast<UnaryOp>(expression.payload) != UnaryOp::Negate ||
+        !ConstF32Components(expression.operands[0], values, lanes))
+      return false;
+    for (uint8_t i = 0; i < *lanes; ++i) (*values)[i] = -(*values)[i];
+    return true;
+  }
+
+  constexpr bool ConstF32Construction(const Expression& expression, std::array<float, 4>* values,
+                                      uint8_t* lanes) const {
     std::array<float, 4> assembled = {};
     uint8_t assembledLanes = 0;
     for (uint8_t argument = 0; argument < expression.operandCount; ++argument) {
@@ -1833,37 +2017,7 @@ private:
     if (expression.kind == ExpressionKind::Convert) {
       return ConstI32Value(expression.operands[0], value);
     }
-    if (expression.kind == ExpressionKind::Binary) {
-      int32_t left = 0;
-      int32_t right = 0;
-      if (!ConstI32Value(expression.operands[0], &left) ||
-          !ConstI32Value(expression.operands[1], &right)) {
-        return false;
-      }
-      int64_t result = 0;
-      switch (static_cast<BinaryOp>(expression.payload)) {
-        case BinaryOp::Add: result = static_cast<int64_t>(left) + right; break;
-        case BinaryOp::Sub: result = static_cast<int64_t>(left) - right; break;
-        case BinaryOp::Mul: result = static_cast<int64_t>(left) * right; break;
-        case BinaryOp::Div:
-          if (right == 0 || (left == std::numeric_limits<int32_t>::min() && right == -1))
-            return false;
-          result = left / right;
-          break;
-        case BinaryOp::Mod:
-          if (right == 0 || (left == std::numeric_limits<int32_t>::min() && right == -1))
-            return false;
-          result = left % right;
-          break;
-        default: return false;
-      }
-      if (result < std::numeric_limits<int32_t>::min() ||
-          result > std::numeric_limits<int32_t>::max()) {
-        return false;
-      }
-      *value = static_cast<int32_t>(result);
-      return true;
-    }
+    if (expression.kind == ExpressionKind::Binary) return EvaluateI32Binary(expression, value);
     return false;
   }
 
@@ -1878,42 +2032,65 @@ private:
     if (expression.kind == ExpressionKind::Convert) {
       return ConstU32Value(expression.operands[0], value);
     }
-    if (expression.kind == ExpressionKind::Binary) {
-      uint32_t left = 0;
-      uint32_t right = 0;
-      if (!ConstU32Value(expression.operands[0], &left) ||
-          !ConstU32Value(expression.operands[1], &right)) {
-        return false;
-      }
-      switch (static_cast<BinaryOp>(expression.payload)) {
-        case BinaryOp::Add:
-          if (left > std::numeric_limits<uint32_t>::max() - right) return false;
-          *value = left + right;
-          return true;
-        case BinaryOp::Sub:
-          if (left < right) return false;
-          *value = left - right;
-          return true;
-        case BinaryOp::Mul:
-          if (right != 0 && left > std::numeric_limits<uint32_t>::max() / right) return false;
-          *value = left * right;
-          return true;
-        case BinaryOp::Div:
-          if (right != 0) {
-            *value = left / right;
-            return true;
-          }
-          return false;
-        case BinaryOp::Mod:
-          if (right != 0) {
-            *value = left % right;
-            return true;
-          }
-          return false;
-        default: return false;
-      }
-    }
+    if (expression.kind == ExpressionKind::Binary) return EvaluateU32Binary(expression, value);
     return false;
+  }
+
+  constexpr bool EvaluateI32Binary(const Expression& expression, int32_t* value) const {
+    int32_t left = 0;
+    int32_t right = 0;
+    if (!ConstI32Value(expression.operands[0], &left) ||
+        !ConstI32Value(expression.operands[1], &right))
+      return false;
+    const BinaryOp op = static_cast<BinaryOp>(expression.payload);
+    int64_t result = 0;
+    if (op == BinaryOp::Add)
+      result = static_cast<int64_t>(left) + right;
+    else if (op == BinaryOp::Sub)
+      result = static_cast<int64_t>(left) - right;
+    else if (op == BinaryOp::Mul)
+      result = static_cast<int64_t>(left) * right;
+    else if (op == BinaryOp::Div || op == BinaryOp::Mod) {
+      if (right == 0 || (left == std::numeric_limits<int32_t>::min() && right == -1)) return false;
+      result = op == BinaryOp::Div ? left / right : left % right;
+    } else
+      return false;
+    if (result < std::numeric_limits<int32_t>::min() ||
+        result > std::numeric_limits<int32_t>::max())
+      return false;
+    *value = static_cast<int32_t>(result);
+    return true;
+  }
+
+  constexpr bool EvaluateU32Binary(const Expression& expression, uint32_t* value) const {
+    uint32_t left = 0;
+    uint32_t right = 0;
+    if (!ConstU32Value(expression.operands[0], &left) ||
+        !ConstU32Value(expression.operands[1], &right))
+      return false;
+    switch (static_cast<BinaryOp>(expression.payload)) {
+      case BinaryOp::Add:
+        if (left > std::numeric_limits<uint32_t>::max() - right) return false;
+        *value = left + right;
+        return true;
+      case BinaryOp::Sub:
+        if (left < right) return false;
+        *value = left - right;
+        return true;
+      case BinaryOp::Mul:
+        if (right != 0 && left > std::numeric_limits<uint32_t>::max() / right) return false;
+        *value = left * right;
+        return true;
+      case BinaryOp::Div:
+        if (right == 0) return false;
+        *value = left / right;
+        return true;
+      case BinaryOp::Mod:
+        if (right == 0) return false;
+        *value = left % right;
+        return true;
+      default: return false;
+    }
   }
 
   constexpr bool IsConstantSyntax(ArenaId expressionId) const {

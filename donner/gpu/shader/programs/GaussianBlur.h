@@ -22,7 +22,7 @@ struct alignas(8) GaussianBlurParams {
 };
 
 /**
- * Returns the frozen source projections and reflected interface of the Gaussian blur shader.
+ * Returns the WGSL projection and reflected interface used by the Geode backend.
  * The filter admission path bounds finite sigma to [0,256], box extents to [0,240], and
  * supplies equally sized nonempty source and destination textures. The shader caps Gaussian
  * support at 127 pixels and applies its optional output clip before the [0,1] output clamp.
@@ -30,4 +30,11 @@ struct alignas(8) GaussianBlurParams {
  * @return Stable view into a process-lifetime compiled artifact.
  */
 const CompiledShaderView& GaussianBlurShader();
+
+/**
+ * Returns the native projection and reflected interface used by Metal or Vulkan.
+ *
+ * @return Stable view into a process-lifetime compiled artifact.
+ */
+const CompiledShaderView& GaussianBlurNativeShader();
 }  // namespace donner::gpu::shader::programs

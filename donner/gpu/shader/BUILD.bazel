@@ -21,13 +21,48 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "gaussian_blur_artifact",
-    srcs = ["programs/GaussianBlur.cc"],
+    name = "gaussian_blur_api",
     hdrs = ["programs/GaussianBlur.h"],
     visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_validation",
+    hdrs = [
+        "programs/GaussianBlurArtifactValidation.h",
+        "programs/GaussianBlurProjection.h",
+    ],
     deps = [
-        ":compiled_shader",
+        ":gaussian_blur_api",
+        "//donner/gpu/shader/wgsl:projection",
+    ],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_artifact",
+    srcs = ["programs/GaussianBlur.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gaussian_blur_api",
         ":gaussian_blur_source",
+        ":gaussian_blur_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_native_artifact",
+    srcs = ["programs/GaussianBlurNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gaussian_blur_api",
+        ":gaussian_blur_source",
+        ":gaussian_blur_validation",
     ],
 )
 
@@ -40,6 +75,65 @@ donner_cc_library(
     deps = [
         ":compiled_shader",
         ":gaussian_blur_source",
+    ],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_api",
+    hdrs = ["programs/ConvolveMatrix.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_source",
+    hdrs = ["programs/ConvolveMatrixSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_validation",
+    hdrs = ["programs/ConvolveMatrixArtifactValidation.h"],
+    deps = [":convolve_matrix_api"],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_artifact",
+    srcs = ["programs/ConvolveMatrix.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":convolve_matrix_api",
+        ":convolve_matrix_source",
+        ":convolve_matrix_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_native_artifact",
+    srcs = ["programs/ConvolveMatrixNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":convolve_matrix_api",
+        ":convolve_matrix_source",
+        ":convolve_matrix_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "convolve_matrix_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledConvolve.cc"],
+    hdrs = ["tests/CompiledConvolve.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":convolve_matrix_source",
     ],
 )
 
@@ -151,7 +245,6 @@ donner_cc_library(
         "programs/ColorSpaceConvertBindings.h",
         "programs/ComponentTransferBindings.h",
         "programs/CompositeBindings.h",
-        "programs/ConvolveMatrixBindings.h",
         "programs/DisplacementMapBindings.h",
         "programs/DropShadowBindings.h",
         "programs/FilterColorMatrixBindings.h",
@@ -177,7 +270,6 @@ donner_cc_library(
         "programs/ColorSpaceConvert.cc",
         "programs/ComponentTransfer.cc",
         "programs/Composite.cc",
-        "programs/ConvolveMatrix.cc",
         "programs/DisplacementMap.cc",
         "programs/DropShadow.cc",
         "programs/FilterColorMatrix.cc",
@@ -200,7 +292,6 @@ donner_cc_library(
         "programs/ColorSpaceConvert.h",
         "programs/ComponentTransfer.h",
         "programs/Composite.h",
-        "programs/ConvolveMatrix.h",
         "programs/DisplacementMap.h",
         "programs/DropShadow.h",
         "programs/ErrorLatch.h",
@@ -276,11 +367,15 @@ donner_cc_test(
     deps = [
         ":checkerboard_artifact",
         ":component_transfer_artifact",
+        ":convolve_matrix_api",
         ":convolve_matrix_artifact",
+        ":convolve_matrix_source",
+        ":convolve_matrix_test_artifact",
         ":displacement_map_artifact",
         ":drop_shadow_artifact",
         ":filter_image_artifact",
         ":float_storage_test_module",
+        ":gaussian_blur_api",
         ":gaussian_blur_artifact",
         ":gaussian_blur_test_artifact",
         ":lighting_artifacts",
@@ -295,6 +390,7 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:recording_device",
+        "//donner/gpu/shader/wgsl:compiler",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
     ],
@@ -349,6 +445,7 @@ donner_cc_test(
     tags = ["requires_metal_toolchain"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":convolve_matrix_test_artifact",
         ":external_tool_gate",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
@@ -375,6 +472,7 @@ donner_cc_test(
     ],
     data = ["@spirv_tools//:spirv-val"],
     deps = [
+        ":convolve_matrix_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
         ":programs",
@@ -403,6 +501,7 @@ donner_cc_test(
     }),
     deps = [
         ":float_storage_test_module",
+        ":gaussian_blur_api",
         ":gaussian_blur_artifact",
         ":programs",
         ":shader",
@@ -450,27 +549,12 @@ genrule(
     tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
 )
 
-genrule(
-    name = "convolve_matrix_generated",
-    outs = ["generated/ConvolveMatrixShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) convolve_matrix " +
-          "$(location generated/ConvolveMatrixShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
 donner_cc_library(
     name = "lighting_artifacts",
     hdrs = [
         "generated/DiffuseLightingShader.h",
         "generated/SpecularLightingShader.h",
     ],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-donner_cc_library(
-    name = "convolve_matrix_artifact",
-    hdrs = ["generated/ConvolveMatrixShader.h"],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
 )
@@ -731,6 +815,7 @@ donner_cc_library(
         ":compiled_shader",
         ":component_transfer_artifact",
         ":composite_artifact",
+        ":convolve_matrix_api",
         ":convolve_matrix_artifact",
         ":displacement_map_artifact",
         ":drop_shadow_artifact",
@@ -738,6 +823,7 @@ donner_cc_library(
         ":filter_image_artifact",
         ":filter_resolve_artifact",
         ":flood_artifact",
+        ":gaussian_blur_api",
         ":gaussian_blur_artifact",
         ":lighting_artifacts",
         ":merge_artifact",

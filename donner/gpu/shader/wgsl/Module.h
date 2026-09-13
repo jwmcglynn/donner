@@ -45,6 +45,7 @@ enum class TypeKind : uint8_t {
   U32,               //!< `u32`.
   F32,               //!< `f32`.
   Struct,            //!< A declared structure.
+  Array,             //!< A fixed-size array.
   SampledTexture2d,  //!< `texture_2d<f32>`.
   StorageTexture2d,  //!< `texture_storage_2d<rgba32float, write>`.
 };
@@ -55,6 +56,9 @@ struct Type {
   uint8_t lanes = 1;                   //!< Vector lane count (1 through 4).
   ArenaId structId = kInvalidArenaId;  //!< Structure for TypeKind::Struct.
   StorageTextureFormat storageFormat = StorageTextureFormat::Rgba32Float;  //!< Storage format.
+  TypeKind elementKind = TypeKind::Void;  //!< Array element category.
+  uint8_t elementLanes = 1;               //!< Array element vector lane count.
+  uint16_t arrayCount = 0;                //!< Fixed array element count.
 
   /// Returns true for identical resolved types.
   constexpr bool operator==(const Type& other) const = default;
@@ -67,12 +71,13 @@ struct Type {
 
 /// Storage layout of one structure member.
 struct StructMember {
-  NameRef name;            //!< Module-owned member name.
-  SourceSpan nameSpan;     //!< Name location in the source.
-  Type type;               //!< Resolved member type.
-  uint32_t offset = 0;     //!< Uniform-buffer byte offset.
-  uint32_t alignment = 1;  //!< Uniform-buffer byte alignment.
-  uint32_t size = 0;       //!< Uniform-buffer byte size.
+  NameRef name;              //!< Module-owned member name.
+  SourceSpan nameSpan;       //!< Name location in the source.
+  Type type;                 //!< Resolved member type.
+  uint32_t offset = 0;       //!< Uniform-buffer byte offset.
+  uint32_t alignment = 1;    //!< Uniform-buffer byte alignment.
+  uint32_t size = 0;         //!< Uniform-buffer byte size.
+  uint32_t arrayStride = 0;  //!< Storage-array byte stride, zero for non-arrays.
 };
 
 /// One declared structure and its computed uniform layout.
@@ -87,9 +92,10 @@ struct Struct {
 
 /// Module-scope resource binding kind.
 enum class BindingKind : uint8_t {
-  Uniform,         //!< `var<uniform>`.
-  SampledTexture,  //!< `texture_2d<f32>`.
-  StorageTexture,  //!< Write-only storage texture.
+  Uniform,          //!< `var<uniform>`.
+  ReadOnlyStorage,  //!< `var<storage, read>`.
+  SampledTexture,   //!< `texture_2d<f32>`.
+  StorageTexture,   //!< Write-only storage texture.
 };
 
 /// One module-scope resource binding.
@@ -176,6 +182,7 @@ enum class ExpressionKind : uint8_t {
   Convert,       //!< Explicit scalar or vector conversion.
   BuiltinCall,   //!< A Builtin call.
   FunctionCall,  //!< A declared Function call; payload is its arena identifier.
+  Index,         //!< Fixed-array access with base and index operands.
 };
 
 /// One typed expression node. Operands are in source order.
@@ -239,6 +246,7 @@ struct ModuleLimits {
   static constexpr uint16_t kMaxIdentifierBytes = 2048;
   static constexpr uint16_t kMaxStructs = 8;
   static constexpr uint16_t kMaxStructMembers = 64;
+  static constexpr uint16_t kMaxArrayElements = 256;
   static constexpr uint16_t kMaxBindings = 16;
   static constexpr uint16_t kMaxSymbols = 192;
   static constexpr uint16_t kMaxExpressions = 768;

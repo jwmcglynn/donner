@@ -24,7 +24,6 @@
 #include "donner/gpu/shader/generated/ColorSpaceConvertShader.h"
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/CompositeShader.h"
-#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
@@ -42,7 +41,7 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
-#include "donner/gpu/shader/programs/ConvolveMatrixBindings.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/shader/programs/DisplacementMapBindings.h"
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
@@ -1184,6 +1183,24 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   return program;
 }
 
+/// Creates a source/output/parameter program using its compiled resource interface.
+/// @param runtime Device receiving the selected precompiled projection.
+/// @param shader Static compiled shader interface. @param label Diagnostic program label.
+RuntimeComputeProgram CreateReflectedFilterProgram(gpu::Device& runtime,
+                                                   const gpu::shader::CompiledShaderView& shader,
+                                                   std::string_view label) {
+  const auto* input = shader.resource("inputTexture");
+  const auto* output = shader.resource("outputTexture");
+  const auto* params = shader.resource("params");
+  if (!input || !output || !params || shader.workgroupSize[2] != 1) return {};
+  RuntimeComputeProgram result = CreateRuntimeComputeProgram(
+      runtime, gpu::shader::MakeShaderDescriptor(shader, runtime.shaderSourceKind(), label),
+      gpu::shader::MakeComputeBindingLayout(shader));
+  result.inputOutputParameterBindings = {input->binding, output->binding, params->binding};
+  result.useReflectedInputOutputMetadata = true;
+  return result;
+}
+
 /// The write-only storage-texture entry a filter program declares for its
 /// destination. @param binding Binding index.
 gpu::BindGroupLayoutEntry StorageOutputEntry(
@@ -1560,25 +1577,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     : device_(device), verbose_(verbose), resourceCache_(std::make_unique<FilterResourceCache>()) {
   const wgpu::Device& dev = device_.device();
 
-  // Gaussian and box passes record into the shared GPU command stream.
-  {
-    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::GaussianBlurShader();
-    blurProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(),
-        gpu::shader::MakeShaderDescriptor(shader, device_.adapterDevice().shaderSourceKind(),
-                                          "GaussianBlur"),
-        gpu::shader::MakeComputeBindingLayout(shader));
-    const gpu::shader::ShaderResource* input = shader.resource("inputTexture");
-    const gpu::shader::ShaderResource* output = shader.resource("outputTexture");
-    const gpu::shader::ShaderResource* params = shader.resource("params");
-    if (input == nullptr || output == nullptr || params == nullptr) {
-      blurProgram_ = {};
-    } else {
-      blurProgram_.inputOutputParameterBindings = {input->binding, output->binding,
-                                                   params->binding};
-      blurProgram_.useReflectedInputOutputMetadata = true;
-    }
-  }
+  blurProgram_ = CreateReflectedFilterProgram(
+      device_.adapterDevice(), gpu::shader::programs::GaussianBlurShader(), "GaussianBlur");
 
   // --- feOffset pipeline, through the GPU runtime ---
   {
@@ -1666,17 +1666,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
           gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
-  {
-    using gpu::shader::programs::ConvolveMatrixBinding;
-    convolveMatrixProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(),
-        gpu::generated::convolve_matrix::BuildDescriptor(
-            device_.adapterDevice().shaderSourceKind()),
-        {SampledInputEntry(static_cast<uint32_t>(ConvolveMatrixBinding::InputTexture)),
-         StorageOutputEntry(static_cast<uint32_t>(ConvolveMatrixBinding::OutputTexture)),
-         {static_cast<uint32_t>(ConvolveMatrixBinding::Params), gpu::ShaderStage::Compute,
-          gpu::BindingType::ReadOnlyStorageBuffer}});
-  }
+  convolveMatrixProgram_ = CreateReflectedFilterProgram(
+      device_.adapterDevice(), gpu::shader::programs::ConvolveMatrixShader(), "ConvolveMatrix");
 
   // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
@@ -3424,7 +3415,7 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   }
   if (!dispatchRuntimeInputOutputParameters(arena, convolveMatrixProgram_, input, *output,
                                             UniformBytes(*params), "FilterConvolveMatrixPass",
-                                            gpu::shader::programs::kConvolveMatrixWorkgroupSize)) {
+                                            convolveMatrixProgram_.workgroupSize.x)) {
     return {};
   }
   return device_.adapterDevice().wgpuTextureOf(*output);

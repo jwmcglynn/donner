@@ -68,6 +68,20 @@ fn divide_entry(@builtin(global_invocation_id) gid: vec3<u32>) {}
 constexpr ParseResult kLongDivisionParsed = Parse(kLongDivisionSource);
 static_assert(kLongDivisionParsed.hasResult());
 
+constexpr std::string_view kStorageArraySource = R"(
+struct storage_values {
+  weights: array<f32, 4>,
+}
+@group(0) @binding(5) var<storage, read> source_values: storage_values;
+fn read_signed(index: i32) -> f32 { return source_values.weights[index]; }
+fn read_unsigned(index: u32) -> f32 { return source_values.weights[index]; }
+@compute @workgroup_size(1)
+fn storage_entry(@builtin(global_invocation_id) gid: vec3<u32>) {}
+)";
+
+constexpr ParseResult kStorageArrayParsed = Parse(kStorageArraySource);
+static_assert(kStorageArrayParsed.hasResult());
+
 TEST(TextEmitter, ProjectsValidatedWgslBytesExactly) {
   std::array<char, 4096> output = {};
   TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
@@ -127,6 +141,19 @@ TEST(TextEmitter, BoundsCountOnlyLongSignedDivisionEmission) {
   EXPECT_EQ(result.error, TextEmitError::SinkTooSmall);
   EXPECT_EQ(sink.diagnostic, TextEmitError::SinkTooSmall);
   EXPECT_EQ(sink.size, 0u);
+}
+
+TEST(TextEmitter, EmitsReadOnlyStorageArraysWithClampedIndices) {
+  std::array<char, 16384> output = {};
+  TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
+
+  ASSERT_TRUE(EmitMsl(kStorageArrayParsed.module, sink).ok());
+  const std::string_view msl = sink.view();
+  EXPECT_THAT(msl, HasSubstr("float donner_msl_member_weights[4];"));
+  EXPECT_THAT(msl, HasSubstr("const device donner_msl_struct_storage_values&"));
+  EXPECT_THAT(msl, HasSubstr("[[buffer(6)]]"));
+  EXPECT_THAT(msl, HasSubstr("uint(clamp(donner_msl_symbol_index_1, int(0), int(3)))"));
+  EXPECT_THAT(msl, HasSubstr("min(donner_msl_symbol_index_2, 3u)"));
 }
 
 TEST(TextEmitter, CountOnlySinkReportsTheExactRequiredLength) {

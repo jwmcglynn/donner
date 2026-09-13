@@ -8,7 +8,6 @@
 #include "donner/gpu/shader/generated/ColorSpaceConvertShader.h"
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
 #include "donner/gpu/shader/generated/CompositeShader.h"
-#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
@@ -80,8 +79,11 @@ inline const Program kPrograms[] = {
     {"displacement_map", programs::BuildDisplacementMapModule,
      generated::displacement_map::BuildDescriptor, true},
     {"drop_shadow", programs::BuildDropShadowModule, generated::drop_shadow::BuildDescriptor, true},
-    {"convolve_matrix", programs::BuildConvolveMatrixModule,
-     generated::convolve_matrix::BuildDescriptor, true},
+    {"convolve_matrix", nullptr,
+     [](ShaderSourceKind kind) {
+       return MakeShaderDescriptor(programs::ConvolveMatrixShader(), kind, "ConvolveMatrix");
+     },
+     true, programs::ConvolveMatrixShader},
     {"filter_image", programs::BuildFilterImageModule, generated::filter_image::BuildDescriptor,
      true},
     {"turbulence", programs::BuildTurbulenceModule, generated::turbulence::BuildDescriptor, true},

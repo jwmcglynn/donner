@@ -9,13 +9,11 @@
 
 #include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/wgsl/Parser.h"
+#include "donner/gpu/shader/wgsl/Projection.h"
 #include "donner/gpu/shader/wgsl/SpirvEmitter.h"
 #include "donner/gpu/shader/wgsl/TextEmitter.h"
 
 namespace donner::gpu::shader::wgsl {
-
-/// Projections materialized in the final application artifact.
-enum class Projection : uint8_t { Wgsl = 1, Msl = 2, Spirv = 4, All = 7 };
 
 /// Owning structural string type for a shader source template argument.
 template <size_t N>
@@ -36,7 +34,7 @@ struct CompiledShader {
   std::array<char, MslBytes> msl{};
   std::array<uint32_t, SpirvWords> spirv{};
   std::array<ShaderResource, Resources> resources{};
-  std::array<ShaderUniformMember, Members> members{};
+  std::array<ShaderBufferMember, Members> members{};
   ShaderName entryPoint;
   std::array<uint32_t, 3> workgroupSize{};
 
@@ -116,7 +114,7 @@ constexpr uint16_t ComputeEntryCount(const Module& module) {
 
 /// Compiles authored source immediately, failing C++ compilation on validation/emission failure.
 /// @tparam Source Inline WGSL source. @tparam Target Projections retained in the artifact.
-template <SourceText Source, Projection Target = Projection::All>
+template <SourceText Source, Projection Target>
 consteval auto Compile() {
   static_assert(uint8_t(Target) != 0 && (uint8_t(Target) & ~uint8_t(Projection::All)) == 0,
                 "Unknown WGSL projection selection");
@@ -144,13 +142,17 @@ consteval auto Compile() {
   for (size_t i = 0; i < parsed.module.structMemberCount; ++i) {
     const StructMember& member = parsed.module.structMembers[i];
     result.members[i] = {compiler_detail::Name(parsed.module.name(member.name)),
-                         member.type.kind == TypeKind::F32   ? ShaderScalarType::F32
+                         (member.type.kind == TypeKind::Array ? member.type.elementKind
+                                                              : member.type.kind) == TypeKind::F32
+                             ? ShaderScalarType::F32
                          : member.type.kind == TypeKind::I32 ? ShaderScalarType::I32
                                                              : ShaderScalarType::U32,
                          member.type.lanes,
                          member.offset,
                          member.size,
-                         member.alignment};
+                         member.alignment,
+                         member.type.arrayCount,
+                         member.arrayStride};
   }
   for (size_t i = 0; i < parsed.module.bindingCount; ++i) {
     const Binding& binding = parsed.module.bindings[i];
@@ -159,10 +161,12 @@ consteval auto Compile() {
     resource.group = binding.group;
     resource.binding = binding.binding;
     resource.type = binding.kind == BindingKind::Uniform ? BindingType::UniformBuffer
+                    : binding.kind == BindingKind::ReadOnlyStorage
+                        ? BindingType::ReadOnlyStorageBuffer
                     : binding.kind == BindingKind::SampledTexture
                         ? BindingType::SampledTexture2dUnfilterableFloat
                         : BindingType::WriteOnlyStorageTexture2d;
-    if (binding.kind == BindingKind::Uniform) {
+    if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage) {
       const Struct& structure = parsed.module.structs[binding.type.structId];
       resource.minSizeBytes = structure.size;
       resource.alignmentBytes = structure.alignment;

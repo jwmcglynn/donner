@@ -1,0 +1,161 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary")
+
+_NATIVE = select({
+    "@platforms//os:macos": [],
+    "@platforms//os:linux": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+_FORMAT = select({
+    "@platforms//os:macos": ["--format=macho"],
+    "//conditions:default": ["--format=elf"],
+})
+
+_NATIVE_FLAGS = select({
+    "@platforms//os:macos": ["--msl"],
+    "//conditions:default": ["--spirv"],
+})
+
+donner_cc_binary(
+    name = "gaussian_wgsl_probe",
+    testonly = 1,
+    srcs = ["GaussianBlurWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:gaussian_blur_api",
+        "//donner/gpu/shader:gaussian_blur_artifact",
+    ],
+)
+
+py_test(
+    name = "gaussian_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=gaussian",
+        "--binary=$(rootpath :gaussian_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":gaussian_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "gaussian_native_probe",
+    testonly = 1,
+    srcs = ["GaussianBlurNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:gaussian_blur_api",
+        "//donner/gpu/shader:gaussian_blur_native_artifact",
+    ],
+)
+
+py_test(
+    name = "gaussian_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=gaussian",
+        "--binary=$(rootpath :gaussian_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":gaussian_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "gaussian_all_probe",
+    testonly = 1,
+    srcs = ["GaussianBlurAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:gaussian_blur_source"],
+)
+
+py_test(
+    name = "gaussian_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=gaussian",
+        "--binary=$(rootpath :gaussian_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":gaussian_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "convolve_wgsl_probe",
+    testonly = 1,
+    srcs = ["ConvolveMatrixWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:convolve_matrix_api",
+        "//donner/gpu/shader:convolve_matrix_artifact",
+    ],
+)
+
+py_test(
+    name = "convolve_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=convolve",
+        "--binary=$(rootpath :convolve_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":convolve_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "convolve_native_probe",
+    testonly = 1,
+    srcs = ["ConvolveMatrixNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:convolve_matrix_api",
+        "//donner/gpu/shader:convolve_matrix_native_artifact",
+    ],
+)
+
+py_test(
+    name = "convolve_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=convolve",
+        "--binary=$(rootpath :convolve_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":convolve_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "convolve_all_probe",
+    testonly = 1,
+    srcs = ["ConvolveMatrixAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:convolve_matrix_source"],
+)
+
+py_test(
+    name = "convolve_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=convolve",
+        "--binary=$(rootpath :convolve_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":convolve_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_package()

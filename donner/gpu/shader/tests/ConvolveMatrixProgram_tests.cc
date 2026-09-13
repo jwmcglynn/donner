@@ -4,125 +4,107 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
 
 #include "donner/gpu/RecordingDevice.h"
-#include "donner/gpu/shader/IrLayout.h"
-#include "donner/gpu/shader/ModuleInterface.h"
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
-#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/programs/ConvolveMatrix.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/programs/ConvolveMatrixSource.h"
+#include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/wgsl/Parser.h"
+#include "donner/gpu/shader/wgsl/SpirvEmitter.h"
+#include "donner/gpu/shader/wgsl/TextEmitter.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
 namespace donner::gpu::shader {
 namespace {
 
 std::string EmitConvolveMatrixWgsl() {
-  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
-}
-
-std::string EmitConvolveMatrixMsl() {
-  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
-}
-
-std::vector<uint32_t> EmitConvolveMatrixSpirv() {
-  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return {};
-  }
-  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
+  return std::string(tests::ConvolveMatrixAllProjections().wgsl);
 }
 
 TEST(ConvolveMatrixProgramTests, ModuleBuildsCleanly) {
-  EXPECT_THAT(programs::BuildConvolveMatrixModule(), HasShaderResult());
+  const CompiledShaderView& shader = tests::ConvolveMatrixAllProjections();
+  EXPECT_FALSE(shader.wgsl.empty());
+  EXPECT_FALSE(shader.msl.empty());
+  EXPECT_FALSE(shader.spirv.empty());
 }
 
 TEST(ConvolveMatrixProgramTests, EmitsDeterministically) {
-  EXPECT_THAT(EmitConvolveMatrixWgsl(), testing::Eq(EmitConvolveMatrixWgsl()));
-  EXPECT_THAT(EmitConvolveMatrixMsl(), testing::Eq(EmitConvolveMatrixMsl()));
-  EXPECT_THAT(EmitConvolveMatrixSpirv(), testing::Eq(EmitConvolveMatrixSpirv()));
+  const wgsl::ParseResult parsed = wgsl::Parse(programs::kConvolveMatrixSource.view());
+  ASSERT_TRUE(parsed.hasResult());
+  std::array<char, 32768> msl = {};
+  wgsl::TextSink mslSink{msl.data(), static_cast<uint32_t>(msl.size())};
+  ASSERT_TRUE(wgsl::EmitMsl(parsed.module, mslSink).ok());
+  std::array<uint32_t, 24576> spirv = {};
+  wgsl::SpirvSink spirvSink{spirv.data(), static_cast<uint32_t>(spirv.size())};
+  ASSERT_TRUE(wgsl::EmitSpirv(parsed.module, spirvSink).isSuccess());
+  const CompiledShaderView& frozen = tests::ConvolveMatrixAllProjections();
+  EXPECT_EQ(std::string_view(msl.data(), mslSink.size), frozen.msl);
+  EXPECT_TRUE(std::equal(spirv.begin(), spirv.begin() + spirvSink.size, frozen.spirv.begin(),
+                         frozen.spirv.end()));
+  EXPECT_EQ(EmitConvolveMatrixWgsl(), programs::kConvolveMatrixSource.view());
 }
 
 TEST(ConvolveMatrixProgramTests, NativeEmittersAcceptPortableParameterMemberNames) {
-  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
-  ASSERT_THAT(module, HasShaderResult());
-  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
-  EXPECT_THAT(EmitSpirv(module.result()), HasShaderResult());
+  const CompiledShaderView& shader = tests::ConvolveMatrixAllProjections();
+  EXPECT_FALSE(shader.msl.empty());
+  EXPECT_FALSE(shader.spirv.empty());
 }
 
 TEST(ConvolveMatrixProgramTests, GeneratedDescriptorsPreserveTheTypedInterface) {
-  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const std::vector<ComputeEntryPointInfo> entryPoints = ComputeEntryPointsOf(module.result());
-  ShaderResult<std::vector<ShaderBufferBindingInfo>> bindings = BufferBindingsOf(module.result());
-  ASSERT_THAT(bindings, HasShaderResult());
-
+  const CompiledShaderView& shader = tests::ConvolveMatrixAllProjections();
   for (ShaderSourceKind kind :
        {ShaderSourceKind::Wgsl, ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
-    ShaderModuleDescriptor descriptor = gpu::generated::convolve_matrix::BuildDescriptor(kind);
-    EXPECT_THAT(descriptor.sourceKind, testing::Eq(kind));
-    bool available = kind == ShaderSourceKind::Wgsl;
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-    available |= kind == ShaderSourceKind::Msl;
-#endif
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-    available |= kind == ShaderSourceKind::Spirv;
-#endif
-    if (!available) {
-      EXPECT_THAT(descriptor.sourceText.empty(), testing::IsTrue());
-      EXPECT_THAT(descriptor.spirvWords, testing::IsEmpty());
-      EXPECT_THAT(descriptor.bufferBindings.has_value(), testing::IsFalse());
-      RecordingDevice device;
-      EXPECT_THAT(device.createShaderModule(descriptor),
-                  IsGpuError(GpuErrorType::InvalidDescriptor));
-      continue;
-    }
-    ASSERT_THAT(descriptor.bufferBindings.has_value(), testing::IsTrue());
-    EXPECT_THAT(*descriptor.bufferBindings, testing::ElementsAreArray(bindings.result()));
-    EXPECT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1u));
-    ASSERT_THAT(entryPoints, testing::SizeIs(1u));
-    EXPECT_THAT(descriptor.computeEntryPoints[0].name, testing::Eq(entryPoints[0].name));
-    EXPECT_THAT(descriptor.computeEntryPoints[0].workgroupSize.x,
-                testing::Eq(entryPoints[0].workgroupSize.x));
-    EXPECT_THAT(descriptor.computeEntryPoints[0].workgroupSize.y,
-                testing::Eq(entryPoints[0].workgroupSize.y));
-    EXPECT_THAT(descriptor.computeEntryPoints[0].workgroupSize.z,
-                testing::Eq(entryPoints[0].workgroupSize.z));
-    EXPECT_THAT(descriptor.sourceText.empty(), testing::Eq(kind == ShaderSourceKind::Spirv));
-    EXPECT_THAT(descriptor.spirvWords.empty(), testing::Eq(kind != ShaderSourceKind::Spirv));
+    const ShaderModuleDescriptor descriptor = MakeShaderDescriptor(shader, kind, "ConvolveMatrix");
+    EXPECT_EQ(descriptor.sourceKind, kind);
+    ASSERT_TRUE(descriptor.bufferBindings.has_value());
+    ASSERT_EQ(descriptor.bufferBindings->size(), 1u);
+    const auto& binding = descriptor.bufferBindings->front();
+    EXPECT_EQ(binding.group, 0u);
+    EXPECT_EQ(binding.binding, 2u);
+    EXPECT_EQ(binding.stage, ShaderStage::Compute);
+    EXPECT_EQ(binding.type, BindingType::ReadOnlyStorageBuffer);
+    EXPECT_EQ(binding.minSizeBytes, 132u);
+    EXPECT_EQ(binding.runtimeArrayStrideBytes, 0u);
+    EXPECT_EQ(descriptor.sourceText.empty(), kind == ShaderSourceKind::Spirv);
+    EXPECT_EQ(descriptor.spirvWords.empty(), kind != ShaderSourceKind::Spirv);
+    ASSERT_EQ(descriptor.computeEntryPoints.size(), 1u);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().name, shader.entryPoint.view());
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.x, shader.workgroupSize[0]);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.y, shader.workgroupSize[1]);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.z, shader.workgroupSize[2]);
+  }
+}
+
+TEST(ConvolveMatrixProgramTests, BridgeRejectsUnretainedNativeProjections) {
+  const auto& shader = programs::ConvolveMatrixShader();
+  EXPECT_TRUE(shader.msl.empty());
+  EXPECT_TRUE(shader.spirv.empty());
+  for (ShaderSourceKind kind : {ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
+    const auto descriptor = MakeShaderDescriptor(shader, kind, "unretained");
+    EXPECT_TRUE(descriptor.sourceText.empty());
+    EXPECT_TRUE(descriptor.spirvWords.empty());
+    EXPECT_FALSE(descriptor.bufferBindings.has_value());
+    RecordingDevice device;
+    EXPECT_THAT(device.createShaderModule(descriptor), IsGpuError(GpuErrorType::InvalidDescriptor));
   }
 }
 
 TEST(ConvolveMatrixProgramTests, StorageLayoutMatchesTheUploadedParameterBlock) {
-  ShaderResult<IrModule> module = programs::BuildConvolveMatrixModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ASSERT_THAT(module.result().bindings(), testing::SizeIs(3u));
-  const IrBinding& params = module.result().bindings()[2];
-  EXPECT_THAT(params.kind, testing::Eq(BindingKind::ReadOnlyStorageBuffer));
-  ShaderResult<StructLayout> layout = ComputeStructLayout(params.type, AddressSpace::Storage);
-  ASSERT_THAT(layout, HasShaderResult());
-  EXPECT_THAT(layout.result().sizeBytes, testing::Eq(132u));
-  EXPECT_THAT(layout.result().members, testing::SizeIs(9u));
+  const CompiledShaderView& shader = tests::ConvolveMatrixAllProjections();
+  const ShaderResource* params = shader.resource("params");
+  ASSERT_NE(params, nullptr);
+  EXPECT_EQ(params->type, BindingType::ReadOnlyStorageBuffer);
+  EXPECT_EQ(params->minSizeBytes, sizeof(programs::ConvolveMatrixParams));
+  EXPECT_EQ(params->memberCount, 9u);
+  EXPECT_TRUE(
+      shader.matchesMember("params", "coefficients", 32, 100, ShaderScalarType::F32, 1, 25, 4));
   const std::array<uint32_t, 9> offsets{0, 4, 8, 12, 16, 20, 24, 28, 32};
   for (size_t index = 0; index < offsets.size(); ++index) {
-    EXPECT_THAT(layout.result().members[index].offsetBytes, testing::Eq(offsets[index]))
-        << "member index " << index;
+    EXPECT_EQ(shader.members[params->firstMember + index].offsetBytes, offsets[index]);
   }
 }
 

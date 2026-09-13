@@ -196,5 +196,80 @@ fn g() { let f = 1i; let value = f(2i); }
   EXPECT_EQ(Parse(kCalleeShadow).diagnostic.code, ErrorCode::DuplicateName);
 }
 
+TEST(Parser, ParsesFixedF32StorageArrays) {
+  constexpr std::string_view kStorageArray = R"(
+struct Params {
+  orderX: i32,
+  orderY: i32,
+  targetX: i32,
+  targetY: i32,
+  divisor: f32,
+  bias: f32,
+  edgeMode: u32,
+  preserveAlpha: u32,
+  coefficients: array<f32, 25>,
+}
+@group(0) @binding(2) var<storage, read> params: Params;
+fn coefficient(index: i32) -> f32 { return params.coefficients[index]; }
+)";
+  constexpr ParseResult parsed = Parse(kStorageArray);
+
+  static_assert(parsed.hasResult());
+  EXPECT_EQ(parsed.module.bindings[0].kind, BindingKind::ReadOnlyStorage);
+  EXPECT_EQ(parsed.module.structs[0].size, 132u);
+  EXPECT_EQ(parsed.module.structMembers[8].offset, 32u);
+  EXPECT_EQ(parsed.module.structMembers[8].arrayStride, 4u);
+  bool hasIndex = false;
+  for (uint16_t i = 0; i < parsed.module.expressionCount; ++i) {
+    hasIndex |= parsed.module.expressions[i].kind == ExpressionKind::Index;
+  }
+  EXPECT_TRUE(hasIndex);
+}
+
+TEST(Parser, AppliesBufferBindingLimitToReadOnlyStorage) {
+  constexpr std::string_view kBinding28 = R"(
+struct Params { coefficients: array<f32, 1>, }
+@group(0) @binding(28) var<storage, read> params: Params;
+)";
+  constexpr std::string_view kBinding29 = R"(
+struct Params { coefficients: array<f32, 1>, }
+@group(0) @binding(29) var<storage, read> params: Params;
+)";
+
+  EXPECT_TRUE(Parse(kBinding28).hasResult());
+  EXPECT_EQ(Parse(kBinding29).diagnostic.code, ErrorCode::InvalidBinding);
+}
+
+TEST(Parser, RejectsUnsupportedArrayUsesAndStaticOutOfBoundsIndices) {
+  constexpr std::string_view kUniformArray = R"(
+struct Params { coefficients: array<f32, 25>, }
+@group(0) @binding(0) var<uniform> params: Params;
+)";
+  constexpr std::string_view kStaticOutOfBounds = R"(
+struct Params { coefficients: array<f32, 25>, }
+@group(0) @binding(0) var<storage, read> params: Params;
+fn coefficient() -> f32 { return params.coefficients[25i]; }
+)";
+  constexpr std::string_view kNegativeStaticIndex = R"(
+struct Params { coefficients: array<f32, 25>, }
+@group(0) @binding(0) var<storage, read> params: Params;
+fn coefficient() -> f32 { return params.coefficients[-1i]; }
+)";
+  constexpr std::string_view kLocalArray = R"(
+fn f() { var values: array<f32, 25> = array<f32, 25>(); }
+)";
+  constexpr std::string_view kSwizzledStaticIndex = R"(
+struct Params { coefficients: array<f32, 25>, }
+@group(0) @binding(0) var<storage, read> params: Params;
+fn coefficient() -> f32 { return params.coefficients[vec2<i32>(25i).x]; }
+)";
+
+  EXPECT_EQ(Parse(kUniformArray).diagnostic.code, ErrorCode::InvalidBinding);
+  EXPECT_EQ(Parse(kStaticOutOfBounds).diagnostic.code, ErrorCode::InvalidConstantExpression);
+  EXPECT_EQ(Parse(kNegativeStaticIndex).diagnostic.code, ErrorCode::InvalidConstantExpression);
+  EXPECT_EQ(Parse(kLocalArray).diagnostic.code, ErrorCode::UnsupportedConstruct);
+  EXPECT_EQ(Parse(kSwizzledStaticIndex).diagnostic.code, ErrorCode::InvalidConstantExpression);
+}
+
 }  // namespace
 }  // namespace donner::gpu::shader::wgsl

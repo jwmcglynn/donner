@@ -113,9 +113,35 @@ public:
   constexpr SpirvEmitResult emit(SpirvSink& sink) {
     if (!module_.isValid()) return {SpirvEmitError::InvalidModule, {}};
     for (ArenaId i = 0; i < module_.functionCount; ++i) functionIds_[i] = id();
+    declareBindings();
+    declareBuiltinInputs();
+    for (ArenaId i = 0; i < module_.functionCount && result_.isSuccess(); ++i) emitFunction(i);
+    if (!declarations_.valid || !annotations_.valid || !functions_.valid)
+      fail(SpirvEmitError::Capacity);
+    if (!result_.isSuccess()) return result_;
+    writeModuleHeader(sink);
+    writeEntryPoints(sink);
+    if (!result_.isSuccess()) return result_;
+    append(sink, annotations_);
+    append(sink, declarations_);
+    append(sink, functions_);
+    if (sink.error != SpirvEmitError::None) return {sink.error, {}};
+    return result_;
+  }
+
+private:
+  static constexpr uint32_t resourceStorage(BindingKind kind) {
+    switch (kind) {
+      case BindingKind::Uniform: return 2;
+      case BindingKind::ReadOnlyStorage: return 12;
+      default: return 0;
+    }
+  }
+
+  constexpr void declareBindings() {
     for (ArenaId i = 0; i < module_.bindingCount; ++i) {
       const Binding& binding = module_.bindings[i];
-      const uint32_t storage = binding.kind == BindingKind::Uniform ? 2u : 0u;
+      const uint32_t storage = resourceStorage(binding.kind);
       const uint32_t pointer = pointerType(typeId(binding.type), storage);
       bindingIds_[i] = id();
       declarations_.instruction(59, pointer, bindingIds_[i], storage);
@@ -123,7 +149,12 @@ public:
       annotations_.instruction(71, bindingIds_[i], 34, binding.group);
       if (binding.kind == BindingKind::StorageTexture)
         annotations_.instruction(71, bindingIds_[i], 25);
+      if (binding.kind == BindingKind::ReadOnlyStorage)
+        annotations_.instruction(71, bindingIds_[i], 24);
     }
+  }
+
+  constexpr void declareBuiltinInputs() {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       if (module_.functions[i].stage != Stage::Compute) continue;
       inputIds_[i] = id();
@@ -131,10 +162,9 @@ public:
       declarations_.instruction(59, pointer, inputIds_[i], 1);
       annotations_.instruction(71, inputIds_[i], 11, 28);
     }
-    for (ArenaId i = 0; i < module_.functionCount && result_.isSuccess(); ++i) emitFunction(i);
-    if (!declarations_.valid || !annotations_.valid || !functions_.valid)
-      fail(SpirvEmitError::Capacity);
-    if (!result_.isSuccess()) return result_;
+  }
+
+  constexpr void writeModuleHeader(SpirvSink& sink) {
     sink.word(0x07230203u);
     sink.word(0x00010300u);
     sink.word(0);
@@ -148,6 +178,9 @@ public:
     extension.string("GLSL.std.450");
     for (uint32_t i = 0; i < extension.size; ++i) sink.word(extension.data[i]);
     writeInstruction(sink, 14, 0, 1);
+  }
+
+  constexpr void writeEntryPoints(SpirvSink& sink) {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       const Function& function = module_.functions[i];
       if (function.stage != Stage::Compute) continue;
@@ -157,19 +190,17 @@ public:
       sink.word(functionIds_[i]);
       Words<64> encoded;
       encoded.string(name);
+      if (!encoded.valid) {
+        fail(SpirvEmitError::Capacity);
+        return;
+      }
       for (uint32_t j = 0; j < encoded.size; ++j) sink.word(encoded.data[j]);
       sink.word(inputIds_[i]);
       writeInstruction(sink, 16, functionIds_[i], 17, function.workgroupSize[0],
                        function.workgroupSize[1], function.workgroupSize[2]);
     }
-    append(sink, annotations_);
-    append(sink, declarations_);
-    append(sink, functions_);
-    if (sink.error != SpirvEmitError::None) return {sink.error, {}};
-    return result_;
   }
 
-private:
   constexpr void fail(SpirvEmitError error, SourceSpan span = {}) {
     if (result_.isSuccess()) result_ = {error, span};
   }
@@ -188,49 +219,73 @@ private:
     }
     const uint32_t value = id();
     types_[typeCount_++] = {type, value};
-    if (type.lanes > 1) {
-      if (!type.isNumeric() && type.kind != TypeKind::Bool) {
-        fail(SpirvEmitError::UnsupportedType);
-        return 0;
-      }
-      Type scalar = type;
-      scalar.lanes = 1;
-      declarations_.instruction(23, value, typeId(scalar), type.lanes);
-    } else {
-      switch (type.kind) {
-        case TypeKind::Void: declarations_.instruction(19, value); break;
-        case TypeKind::Bool: declarations_.instruction(20, value); break;
-        case TypeKind::I32: declarations_.instruction(21, value, 32, 1); break;
-        case TypeKind::U32: declarations_.instruction(21, value, 32, 0); break;
-        case TypeKind::F32: declarations_.instruction(22, value, 32); break;
-        case TypeKind::SampledTexture2d:
-        case TypeKind::StorageTexture2d:
-          declarations_.instruction(25, value, typeId(Type{TypeKind::F32}), 1, 0, 0, 0,
-                                    type.kind == TypeKind::SampledTexture2d ? 1 : 2,
-                                    type.kind == TypeKind::SampledTexture2d ? 0 : 1);
-          break;
-        case TypeKind::Struct: {
-          if (type.structId >= module_.structCount) {
-            fail(SpirvEmitError::InvalidNode);
-            return 0;
-          }
-          const Struct& structure = module_.structs[type.structId];
-          std::array<uint32_t, ModuleLimits::kMaxStructMembers> members{};
-          for (uint16_t i = 0; i < structure.memberCount; ++i)
-            members[i] = typeId(module_.structMembers[structure.firstMember + i].type);
-          declarations_.word((uint32_t(structure.memberCount + 2) << 16) | 30u);
-          declarations_.word(value);
-          for (uint16_t i = 0; i < structure.memberCount; ++i) {
-            declarations_.word(members[i]);
-            annotations_.instruction(72, value, i, 35,
-                                     module_.structMembers[structure.firstMember + i].offset);
-          }
-          annotations_.instruction(71, value, 2);
-          break;
-        }
-      }
-    }
+    declareType(type, value);
     return value;
+  }
+
+  constexpr void declareVectorType(Type type, uint32_t value) {
+    if (!type.isNumeric() && type.kind != TypeKind::Bool) {
+      fail(SpirvEmitError::UnsupportedType);
+      return;
+    }
+    Type scalar = type;
+    scalar.lanes = 1;
+    declarations_.instruction(23, value, typeId(scalar), type.lanes);
+  }
+
+  constexpr void declareImageType(Type type, uint32_t value) {
+    declarations_.instruction(25, value, typeId(Type{TypeKind::F32}), 1, 0, 0, 0,
+                              type.kind == TypeKind::SampledTexture2d ? 1 : 2,
+                              type.kind == TypeKind::SampledTexture2d ? 0 : 1);
+  }
+
+  constexpr void declareArrayType(Type type, uint32_t value) {
+    if (type.elementKind != TypeKind::F32 || type.elementLanes != 1 || type.arrayCount == 0 ||
+        type.arrayCount > ModuleLimits::kMaxArrayElements) {
+      fail(SpirvEmitError::UnsupportedType);
+      return;
+    }
+    const uint32_t element = typeId(Type{type.elementKind, type.elementLanes});
+    const uint32_t count = constant(Type{TypeKind::U32}, type.arrayCount);
+    declarations_.instruction(28, value, element, count);
+    annotations_.instruction(71, value, 6, 4);
+  }
+
+  constexpr void declareStructType(Type type, uint32_t value) {
+    if (type.structId >= module_.structCount) {
+      fail(SpirvEmitError::InvalidNode);
+      return;
+    }
+    const Struct& structure = module_.structs[type.structId];
+    std::array<uint32_t, ModuleLimits::kMaxStructMembers> members{};
+    for (uint16_t i = 0; i < structure.memberCount; ++i)
+      members[i] = typeId(module_.structMembers[structure.firstMember + i].type);
+    declarations_.word((uint32_t(structure.memberCount + 2) << 16) | 30u);
+    declarations_.word(value);
+    for (uint16_t i = 0; i < structure.memberCount; ++i) {
+      declarations_.word(members[i]);
+      annotations_.instruction(72, value, i, 35,
+                               module_.structMembers[structure.firstMember + i].offset);
+    }
+    annotations_.instruction(71, value, 2);
+  }
+
+  constexpr void declareType(Type type, uint32_t value) {
+    if (type.lanes > 1) {
+      declareVectorType(type, value);
+      return;
+    }
+    switch (type.kind) {
+      case TypeKind::Void: declarations_.instruction(19, value); break;
+      case TypeKind::Bool: declarations_.instruction(20, value); break;
+      case TypeKind::I32: declarations_.instruction(21, value, 32, 1); break;
+      case TypeKind::U32: declarations_.instruction(21, value, 32, 0); break;
+      case TypeKind::F32: declarations_.instruction(22, value, 32); break;
+      case TypeKind::SampledTexture2d:
+      case TypeKind::StorageTexture2d: declareImageType(type, value); break;
+      case TypeKind::Struct: declareStructType(type, value); break;
+      case TypeKind::Array: declareArrayType(type, value); break;
+    }
   }
 
   constexpr uint32_t pointerType(uint32_t type, uint32_t storage) {
@@ -388,7 +443,7 @@ private:
     if (node.kind == ExpressionKind::Symbol && node.payload < module_.symbolCount) {
       const Symbol& symbol = module_.symbols[node.payload];
       if (symbol.kind == SymbolKind::Binding && symbol.bindingId < module_.bindingCount) {
-        storage = module_.bindings[symbol.bindingId].kind == BindingKind::Uniform ? 2u : 0u;
+        storage = resourceStorage(module_.bindings[symbol.bindingId].kind);
         return bindingIds_[symbol.bindingId];
       }
       if (symbol.kind == SymbolKind::Var) {
@@ -396,6 +451,7 @@ private:
         return symbolValues_[node.payload];
       }
     }
+    if (node.kind == ExpressionKind::Index) return indexedPointer(node, storage);
     if (node.kind == ExpressionKind::Member && node.operandCount == 1) {
       const auto& base = module_.expressions[node.operands[0]];
       if (base.type.structId >= module_.structCount) {
@@ -421,6 +477,7 @@ private:
   }
 
   constexpr uint32_t emitExpression(ArenaId index);
+  constexpr uint32_t indexedPointer(const Expression& node, uint32_t& storage);
   constexpr uint32_t emitValue(const Expression& node);
   constexpr uint32_t emitSymbol(const Expression& node);
   constexpr uint32_t emitSwizzle(const Expression& node);
@@ -464,6 +521,29 @@ private:
   std::array<uint32_t, ModuleLimits::kMaxSymbols> symbolValues_{};
 };
 
+constexpr uint32_t Emitter::indexedPointer(const Expression& node, uint32_t& storage) {
+  if (node.operandCount != 2 || node.operands[0] >= module_.expressionCount ||
+      node.operands[1] >= module_.expressionCount) {
+    fail(SpirvEmitError::InvalidNode, node.span);
+    return 0;
+  }
+  const Type array = module_.expressions[node.operands[0]].type;
+  const Type indexType = module_.expressions[node.operands[1]].type;
+  if (array.kind != TypeKind::Array || array.arrayCount == 0 || indexType.lanes != 1 ||
+      (indexType.kind != TypeKind::I32 && indexType.kind != TypeKind::U32)) {
+    fail(SpirvEmitError::InvalidNode, node.span);
+    return 0;
+  }
+  const uint32_t base = lvalue(node.operands[0], storage);
+  const uint32_t index = emitExpression(node.operands[1]);
+  const uint32_t bounded =
+      extended(indexType.kind == TypeKind::I32 ? 45 : 44, indexType, index, constant(indexType, 0),
+               constant(indexType, array.arrayCount - 1));
+  const uint32_t result = id();
+  functions_.instruction(65, pointerType(typeId(node.type), storage), result, base, bounded);
+  return result;
+}
+
 constexpr uint32_t Emitter::emitExpression(ArenaId index) {
   if (index >= module_.expressionCount) {
     fail(SpirvEmitError::InvalidNode);
@@ -479,7 +559,8 @@ constexpr uint32_t Emitter::emitExpression(ArenaId index) {
   switch (node.kind) {
     case ExpressionKind::Literal: value = constant(node.type, node.payload); break;
     case ExpressionKind::Symbol: value = emitSymbol(node); break;
-    case ExpressionKind::Member: {
+    case ExpressionKind::Member:
+    case ExpressionKind::Index: {
       uint32_t storage = 0;
       value = operation(61, node.type, lvalue(index, storage));
       break;

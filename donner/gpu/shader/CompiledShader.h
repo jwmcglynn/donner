@@ -22,17 +22,19 @@ struct ShaderName {
   constexpr std::string_view view() const UTILS_LIFETIME_BOUND { return {bytes.data(), size}; }
 };
 
-/// Numeric component format of a uniform member.
+/// Numeric component format of a buffer member.
 enum class ShaderScalarType : uint8_t { I32, U32, F32 };
 
-/// A reflected uniform member, including the layout required by the shader.
-struct ShaderUniformMember {
+/// A reflected buffer member, including the layout required by the shader.
+struct ShaderBufferMember {
   ShaderName name;
   ShaderScalarType scalarType = ShaderScalarType::F32;
   uint8_t lanes = 1;
   uint32_t offsetBytes = 0;
   uint32_t sizeBytes = 0;
   uint32_t alignmentBytes = 1;
+  uint32_t arrayCount = 0;        //!< Fixed array length, or zero for a scalar/vector member.
+  uint32_t arrayStrideBytes = 0;  //!< Byte stride for a fixed array member.
 };
 
 /// One resource and the layout of its parameter block, when applicable.
@@ -54,7 +56,7 @@ struct CompiledShaderView {
   std::string_view msl;
   std::span<const uint32_t> spirv;
   std::span<const ShaderResource> resources;
-  std::span<const ShaderUniformMember> members;
+  std::span<const ShaderBufferMember> members;
   ShaderName entryPoint;
   std::array<uint32_t, 3> workgroupSize = {1, 1, 1};
 
@@ -67,22 +69,26 @@ struct CompiledShaderView {
   }
 
   /// Checks one C++ field against the corresponding shader member.
-  /// @param resourceName Uniform resource name. @param memberName Member name.
+  /// @param resourceName Buffer resource name. @param memberName Member name.
   /// @param offsetBytes C++ field offset. @param sizeBytes C++ field size.
   /// @param scalarType C++ numeric component kind. @param lanes C++ component count.
+  /// @param arrayCount Fixed array length, or zero for a non-array member.
+  /// @param arrayStrideBytes Fixed array element stride, or zero for a non-array member.
   constexpr bool matchesMember(std::string_view resourceName, std::string_view memberName,
                                uint32_t offsetBytes, uint32_t sizeBytes,
-                               ShaderScalarType scalarType, uint8_t lanes = 1) const {
+                               ShaderScalarType scalarType, uint8_t lanes = 1,
+                               uint32_t arrayCount = 0, uint32_t arrayStrideBytes = 0) const {
     const ShaderResource* binding = resource(resourceName);
     if (!binding || binding->firstMember > members.size() ||
         binding->memberCount > members.size() - binding->firstMember)
       return false;
     for (uint32_t index = binding->firstMember; index < binding->firstMember + binding->memberCount;
          ++index) {
-      const ShaderUniformMember& member = members[index];
+      const ShaderBufferMember& member = members[index];
       if (member.name.view() == memberName)
         return member.offsetBytes == offsetBytes && member.sizeBytes == sizeBytes &&
-               member.scalarType == scalarType && member.lanes == lanes;
+               member.scalarType == scalarType && member.lanes == lanes &&
+               member.arrayCount == arrayCount && member.arrayStrideBytes == arrayStrideBytes;
     }
     return false;
   }

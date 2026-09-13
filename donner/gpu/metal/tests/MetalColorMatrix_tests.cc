@@ -20,7 +20,6 @@
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/generated/ComponentTransferShader.h"
-#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
@@ -31,6 +30,7 @@
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
@@ -344,7 +344,7 @@ TEST_F(MetalColorMatrixTest, DisplacementUsesGeneratedArtifactAndIndependentPixe
 }
 
 TEST_F(MetalColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
-  const shader::CompiledShaderView& gaussian = shader::programs::GaussianBlurShader();
+  const shader::CompiledShaderView& gaussian = shader::programs::GaussianBlurNativeShader();
   const ShaderModuleDescriptor descriptor =
       shader::MakeShaderDescriptor(gaussian, ShaderSourceKind::Msl, "GaussianBlur");
   for (uint32_t axis : {0u, 1u}) {
@@ -428,8 +428,9 @@ TEST_F(MetalColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatSto
 }
 
 TEST_F(MetalColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantics) {
+  const shader::CompiledShaderView& convolve = shader::programs::ConvolveMatrixNativeShader();
   const ShaderModuleDescriptor descriptor =
-      gpu::generated::convolve_matrix::BuildDescriptor(ShaderSourceKind::Msl);
+      shader::MakeShaderDescriptor(convolve, ShaderSourceKind::Msl, "ConvolveMatrix");
   for (uint32_t edgeMode : {0u, 1u, 2u}) {
     for (bool preserveAlpha : {false, true}) {
       SCOPED_TRACE(testing::Message()
@@ -437,8 +438,36 @@ TEST_F(MetalColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantics
       gpu::tests::CheckConvolveMatrixStorage(
           *device_, descriptor,
           [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, edgeMode,
-          preserveAlpha);
+          preserveAlpha, gpu::tests::convolve_matrix_slice::ArrayIndexMode::Authored, &convolve);
     }
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, ConvolveMatrixUsesReflectedBindingAndWorkgroupMetadata) {
+  const shader::CompiledShaderView& convolve = shader::tests::ConvolveMatrixMutatedAllProjections();
+  ASSERT_NE(convolve.resource("params"), nullptr);
+  EXPECT_EQ(convolve.resource("params")->binding, 7u);
+  EXPECT_EQ(convolve.workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  gpu::tests::CheckConvolveMatrixStorage(
+      *device_,
+      shader::MakeShaderDescriptor(convolve, ShaderSourceKind::Msl, "ConvolveMatrixMutated"),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, 1u, true,
+      gpu::tests::convolve_matrix_slice::ArrayIndexMode::Authored, &convolve);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, ConvolveMatrixClampsHighAndLowStorageIndices) {
+  for (const auto [convolve, mode] :
+       {std::pair{&shader::tests::ConvolveMatrixHighIndexAllProjections(),
+                  gpu::tests::convolve_matrix_slice::ArrayIndexMode::High},
+        std::pair{&shader::tests::ConvolveMatrixLowIndexAllProjections(),
+                  gpu::tests::convolve_matrix_slice::ArrayIndexMode::Low}}) {
+    gpu::tests::CheckConvolveMatrixStorage(
+        *device_,
+        shader::MakeShaderDescriptor(*convolve, ShaderSourceKind::Msl, "ConvolveMatrixIndex"),
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, 1u, true, mode,
+        convolve);
   }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }

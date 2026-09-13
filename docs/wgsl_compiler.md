@@ -1,7 +1,8 @@
 # WGSL compute shader compilation {#WgslCompiler}
 
-Gaussian and box blur are authored as inline WGSL in
-`donner/gpu/shader/programs/GaussianBlurSource.h`. The C++20 compiler validates that source,
+Gaussian/box blur and matrix convolution are authored as inline WGSL in
+`donner/gpu/shader/programs/GaussianBlurSource.h` and `ConvolveMatrixSource.h`. The C++20 compiler
+validates that source,
 produces immutable shader projections, and derives the resource interface during constant
 evaluation. `GaussianBlur.cc` holds the compiled artifact and checks the host uniform layout.
 Application code consumes its data through `CompiledShaderView`; it does not invoke a parser or
@@ -20,7 +21,7 @@ constexpr auto shader = donner::gpu::shader::wgsl::Compile<R"wgsl(
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   textureStore(outputImage, vec2<i32>(gid.xy), vec4<f32>(1f));
 }
-)wgsl">();
+)wgsl", donner::gpu::shader::wgsl::Projection::Wgsl>();
 ```
 
 The result owns exact-sized WGSL, MSL and SPIR-V arrays plus reflected resource/member data. Its
@@ -28,18 +29,23 @@ The result owns exact-sized WGSL, MSL and SPIR-V arrays plus reflected resource/
 implementation files, and keep the owning artifact alive while a view is used. Text views carry an
 explicit length and do not promise a trailing NUL.
 
-The `Projection` template argument selects retained outputs. The browser artifact retains WGSL.
-Desktop Gaussian artifacts retain WGSL for the transition adapter plus the native projection for
-that platform. Cross-projection tests compile the same source for all outputs. Platform GPU
-compilers still perform their normal final compilation; no ordinary-execution WGSL frontend is
-substituted when constant evaluation fails.
+The `Projection` template argument is required. Production code selects exactly the representation
+its consumer uses. The Geode adapter links WGSL-only artifacts. Native Metal and Vulkan consumers
+link separate artifact libraries with MSL-only and SPIR-V-only data respectively; their getters have
+distinct names so an application can intentionally use more than one backend without symbol
+collisions. Test controls spell `Projection::All` explicitly.
+
+Unused projection arrays have zero elements in the owning artifact. Neither a runtime selector nor
+linker dead stripping decides whether to retain them. The compiler frontend and emitters are used
+during constant evaluation; application descriptors consume only the frozen bytes and metadata.
+Native GPU tools still perform their normal final compilation.
 
 ## Reflected host interface
 
 `MakeShaderDescriptor` selects precompiled bytes for the device and supplies compute-entry and
 buffer-range metadata. `MakeComputeBindingLayout` derives layout entries from the same resource
-records. Gaussian dispatch resolves its input, output and parameter bindings by their authored
-names; changing a binding number changes the layout and resource entries together.
+records. Gaussian and convolution dispatch resolve their input, output and parameter bindings by
+their authored names; changing a binding number changes the layout and resource entries together.
 
 `GaussianBlurParams` is the host parameter type. Its implementation checks the resource's total
 size/alignment and every member's offset, size and numeric type against the compiled WGSL
@@ -47,15 +53,24 @@ interface. An incompatible shader member edit therefore fails compilation instea
 changing the bytes the shader reads. Gaussian dispatch requires a two-dimensional workgroup and
 derives its x/y sizes from reflected metadata.
 
+`ConvolveMatrixParams` is a read-only storage block. Its fixed coefficient array has 25 f32 elements,
+stride 4 and offset 32; the complete block is 132 bytes. Array length, stride, member types and host
+field offsets are checked against reflection independently for each retained projection.
+
 ## Supported profile and limits
 
-The frontend covers the constructs required by the Gaussian family, rather than claiming full
-WGSL conformance: flat numeric uniform structures, group-zero sampled/storage textures, typed
+The frontend covers the Gaussian and convolution families: flat numeric buffer structures,
+fixed `array<f32, N>` members of read-only storage structs, group-zero sampled/storage textures, typed
 numeric literals, scalar/vector expressions and conversions, local bindings, conditionals,
 incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
 textures; texture writes occur in the compute entry. Local declarations require initializers.
-Unsupported language constructs fail explicitly.
+Unsupported language constructs fail explicitly. Fixed arrays have 1 through 256 elements; uniform,
+local, parameter, return and nested arrays are outside this profile. Constant out-of-range indices
+fail compilation. Native dynamic indices are clamped before memory access; authored convolution
+also clamps its coefficient index explicitly for consistent WebGPU execution. Buffer layouts that
+MSL cannot represent, including unsupported vec3 packing, fail projection instead of changing
+member offsets.
 
 `ModuleLimits` bounds source bytes, tokens, identifier storage, structures, bindings, symbols,
 expressions, statements, functions and nesting. Projection sinks have independent output bounds.
@@ -71,7 +86,7 @@ frontend. Backend compilers retain responsibility for final target code generati
 
 ## Validation
 
-The focused compiler tests cover the real Gaussian module, exact artifact/interface construction,
+The focused compiler tests cover the real Gaussian and convolution modules, exact artifact/interface construction,
 binding/type edits, malformed source and text-emission regressions:
 
 ```sh
@@ -83,3 +98,16 @@ emission; `_bin` and `_soak` provide mutation testing. These targets use normal 
 The existing WGSL, offline MSL and SPIR-V validation suites consume the compiled Gaussian
 artifact. Native Metal/Vulkan blur acceptance and the Geode filter suites exercise its pixels,
 uniform metadata and clipping behavior.
+
+## Linked binary isolation
+
+`//donner/gpu/shader/artifact_tests:all` builds separate consumers for each family's WGSL and native
+artifact, plus explicit all-projection controls. The consumers read every retained payload through
+volatile pointers. Inspection verifies the executable container format and checks that selected
+payload markers are present and excluded payload markers are absent. Native Apple binaries exclude
+WGSL and SPIR-V; native Linux binaries exclude WGSL and MSL. The WebGPU consumers exclude both
+native formats. All-projection controls retain all three deliberately.
+
+Report section/payload sizes as well as file sizes: executable page alignment, symbol tables and
+metadata retention can hide or exaggerate a change in payload bytes. Cross-linked ELF inspection
+proves byte retention; native driver execution remains a separate validation step.

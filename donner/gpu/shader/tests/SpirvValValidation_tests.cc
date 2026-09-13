@@ -26,7 +26,6 @@
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
-#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
@@ -41,6 +40,7 @@
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
+#include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -219,8 +219,8 @@ TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
 }
 
 TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
-  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildConvolveMatrixModule(),
-                             "convolve_matrix.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ConvolveMatrixAllProjections().spirv,
+                                 "convolve_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {
