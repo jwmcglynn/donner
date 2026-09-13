@@ -694,32 +694,37 @@ void applyTextPathLengths(Registry& registry, const components::ComputedTextComp
   }
 }
 
-/// Places shaped clusters after length adjustments and absolute coordinate resets.
-Vector2d placeTextPath(Registry& registry, const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params, size_t firstRun, std::vector<TextRun>& runs,
-                       std::vector<TextPathCluster>& clusters) {
-  applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
-  const auto hasAbsoluteX = [&](const TextPathCluster& cluster) {
-    const auto& positions = text.spans[cluster.runIndex].xList;
-    return cluster.charIndex < positions.size() && positions[cluster.charIndex].has_value();
-  };
+/// Returns whether a cluster starts a new horizontal path chunk.
+bool hasAbsoluteTextPathX(const components::ComputedTextComponent& text,
+                          const TextPathCluster& cluster) {
+  const auto& positions = text.spans[cluster.runIndex].xList;
+  return cluster.charIndex < positions.size() && positions[cluster.charIndex].has_value();
+}
+
+/// Applies absolute path coordinates without discarding the same cluster's relative displacement.
+void resetTextPathCoordinates(const components::ComputedTextComponent& text,
+                              const TextLayoutParams& params,
+                              std::vector<TextPathCluster>& clusters) {
   double xShift = 0.0;
   for (TextPathCluster& cluster : clusters) {
     const auto& span = text.spans[cluster.runIndex];
-    if (hasAbsoluteX(cluster)) {
-      const double dx = cluster.charIndex < span.dxList.size() && span.dxList[cluster.charIndex]
-                            ? span.dxList[cluster.charIndex]->toPixels(
-                                  params.viewBox, params.fontMetrics, Lengthd::Extent::X)
-                            : 0.0;
+    if (hasAbsoluteTextPathX(text, cluster)) {
+      const double dx =
+          textPathDisplacement(span.dxList, cluster.charIndex, params, Lengthd::Extent::X);
       xShift = span.xList[cluster.charIndex]->toPixels(params.viewBox, params.fontMetrics,
                                                        Lengthd::Extent::X) +
                dx - cluster.pathOffset;
     }
     cluster.pathOffset += xShift;
   }
+}
+
+/// Anchors each horizontal path chunk against all of its typographic extents.
+void anchorTextPathClusters(const components::ComputedTextComponent& text,
+                            std::vector<TextPathCluster>& clusters) {
   for (size_t first = 0; first < clusters.size();) {
     size_t end = first + 1;
-    while (end < clusters.size() && !hasAbsoluteX(clusters[end])) {
+    while (end < clusters.size() && !hasAbsoluteTextPathX(text, clusters[end])) {
       ++end;
     }
     double minimum = std::numeric_limits<double>::infinity();
@@ -739,12 +744,16 @@ Vector2d placeTextPath(Registry& registry, const components::ComputedTextCompone
     }
     first = end;
   }
-  const auto& firstSpan = text.spans[firstRun];
-  const Path::MeasuredPath path = firstSpan.pathSpline->measure();
+}
+
+/// Samples each cluster once and places all of its glyphs with their shaped offsets.
+std::optional<Vector2d> placeTextPathClusters(const Path::MeasuredPath& path, double startOffset,
+                                              std::vector<TextRun>& runs,
+                                              const std::vector<TextPathCluster>& clusters) {
   std::optional<Vector2d> lastPosition;
   for (const TextPathCluster& cluster : clusters) {
     const double halfAdvance = cluster.advance * 0.5;
-    const double midpoint = firstSpan.pathStartOffset + cluster.pathOffset + halfAdvance;
+    const double midpoint = startOffset + cluster.pathOffset + halfAdvance;
     const auto sample = path.pointAtArcLength(midpoint);
     auto& run = runs[cluster.runIndex];
     if (sample.valid) {
@@ -768,6 +777,20 @@ Vector2d placeTextPath(Registry& registry, const components::ComputedTextCompone
       }
     }
   }
+  return lastPosition;
+}
+
+/// Places shaped clusters after length adjustments and absolute coordinate resets.
+Vector2d placeTextPath(Registry& registry, const components::ComputedTextComponent& text,
+                       const TextLayoutParams& params, size_t firstRun, std::vector<TextRun>& runs,
+                       std::vector<TextPathCluster>& clusters) {
+  applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
+  resetTextPathCoordinates(text, params, clusters);
+  anchorTextPathClusters(text, clusters);
+  const auto& firstSpan = text.spans[firstRun];
+  const Path::MeasuredPath path = firstSpan.pathSpline->measure();
+  const std::optional<Vector2d> lastPosition =
+      placeTextPathClusters(path, firstSpan.pathStartOffset, runs, clusters);
   for (size_t ri = firstRun; ri < runs.size(); ++ri) {
     if (text.spans[ri].visibility != Visibility::Visible) {
       runs[ri].glyphs.clear();
