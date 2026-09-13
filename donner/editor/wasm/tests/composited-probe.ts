@@ -1,4 +1,5 @@
 import type { Page, TestInfo } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 
 /**
  * Per-frame probe over the editor's COMPOSITED output.
@@ -527,8 +528,10 @@ export async function stopCompositedProbe(
       readbackRescues: probe.readbackRescues,
     };
   });
+  const evidencePath = testInfo.outputPath("composited-probe.json");
+  await writeFile(evidencePath, JSON.stringify({ gesture, result }), "utf8");
   await testInfo.attach("composited-probe", {
-    body: JSON.stringify({ gesture, result }),
+    path: evidencePath,
     contentType: "application/json",
   });
   return result;
