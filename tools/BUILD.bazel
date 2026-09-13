@@ -174,12 +174,12 @@ py_test(
 py_test(
     name = "verify_metal_validation_tests",
     size = "small",
-    imports = ["."],
     srcs = [
         "metal_validation_profile.py",
         "verify_metal_validation.py",
         "verify_metal_validation_tests.py",
     ],
+    imports = ["."],
 )
 
 py_test(
@@ -239,6 +239,14 @@ py_test(
     size = "small",
     srcs = ["coverage_lane_routing_tests.py"],
     data = ["//:.github/workflows/coverage.yml"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "sanitizer_allocator_isolation_tests",
+    size = "small",
+    srcs = ["sanitizer_allocator_isolation_tests.py"],
+    data = ["//:.github/workflows/sanitizers.yml"],
     deps = ["@rules_python//python/runfiles"],
 )
 

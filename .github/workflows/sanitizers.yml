@@ -96,6 +96,7 @@ jobs:
           # this job focused on unit and integration coverage without running each timed fuzzer twice.
           # The GL replay suite is a wall-clock race/performance harness whose far-zoom case exceeds
           # its 180 s per-case watchdog under ASan; normal and UBSan lanes retain that coverage.
+          # Allocation-tracker binaries replace the sanitizer allocator; keep them in normal lanes.
           # Native Geode tests use raw non-owning webgpu.hpp handles in their harnesses, so run that
           # package separately with leak detection disabled while retaining ASan memory-safety checks.
           bazelisk test \
@@ -106,6 +107,8 @@ jobs:
             -- \
             //donner/... \
             -//donner/editor/tests:gl_rnr_replay_tests \
+            -//donner/benchmarks:svg_parse_allocation_tests \
+            -//donner/gpu/metal/tests:metal_buffer_bounds_tests \
             -//donner/gpu:gpu_allocation_tests \
             -//donner/svg/renderer/geode/... \
             -//donner/svg/renderer/tests:renderer_geode_golden_tests \
@@ -167,6 +170,7 @@ jobs:
         run: |
           # The scheduled Fuzz workflow owns exploratory mutation under ASan. Keep the broad unit and
           # integration sweep here separate from deterministic corpus replay below.
+          # Allocation-tracker binaries replace the sanitizer allocator; keep them in normal lanes.
           bazelisk test \
             --config=ubsan \
             --test_output=errors \
@@ -174,6 +178,8 @@ jobs:
             --build_tag_filters=-fuzz_target \
             -- \
             //donner/... \
+            -//donner/benchmarks:svg_parse_allocation_tests \
+            -//donner/gpu/metal/tests:metal_buffer_bounds_tests \
             -//donner/gpu:gpu_allocation_tests
 
       - name: Replay untrusted-input fuzzer corpora with UBSan
