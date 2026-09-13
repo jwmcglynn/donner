@@ -463,6 +463,71 @@ struct TextPathCluster {
   double advance = 0.0;
 };
 
+/// Reusable path pen and cluster storage for the current textPath scope.
+struct TextPathStagingState {
+  double advance = 0.0;
+  double dy = 0.0;
+  std::vector<TextPathCluster> clusters;
+};
+
+/// Resolves a per-character displacement, returning zero when it is absent.
+double textPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
+                            unsigned int charIndex, const TextLayoutParams& params,
+                            Lengthd::Extent extent) {
+  return charIndex < positions.size() && positions[charIndex]
+             ? positions[charIndex]->toPixels(params.viewBox, params.fontMetrics, extent)
+             : 0.0;
+}
+
+/// Returns whether this glyph ends its run-local typographic cluster.
+bool endsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int charIndex,
+                         const ByteIndexMappings& mappings) {
+  if (glyphIndex + 1 == run.glyphs.size()) {
+    return true;
+  }
+  const size_t nextByte = run.glyphs[glyphIndex + 1].cluster;
+  return nextByte >= mappings.byteToCharIdx.size() || mappings.byteToCharIdx[nextByte] != charIndex;
+}
+
+/// Preserves glyph-local offsets while advancing one run's logical path clusters.
+void stageTextPathRun(TextRun& run, size_t runIndex,
+                      const components::ComputedTextComponent::TextSpan& span,
+                      const ByteIndexMappings& mappings, const TextLayoutParams& params,
+                      const TextBackend& backend, double defaultY, TextPathStagingState& state) {
+  const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+  const bool vertical = isVertical(params.writingMode);
+  for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+    TextGlyph& glyph = run.glyphs[gi];
+    const unsigned int charIndex =
+        glyph.cluster < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[glyph.cluster] : 0;
+    if (gi > 0) {
+      state.advance += glyph.xKern;
+    }
+    if (gi == 0 || charIndex != state.clusters.back().charIndex) {
+      state.advance += textPathDisplacement(span.dxList, charIndex, params, Lengthd::Extent::X);
+      state.dy += textPathDisplacement(span.dyList, charIndex, params, Lengthd::Extent::Y);
+      state.clusters.push_back(
+          {runIndex, gi, gi + 1, charIndex, state.advance, defaultY + state.dy});
+    }
+    TextPathCluster& cluster = state.clusters.back();
+    glyph.xPosition = state.advance - cluster.pathOffset + (vertical ? 0.0 : glyph.xPosition);
+    glyph.yPosition = vertical ? 0.0 : glyph.yPosition;
+    state.advance += glyph.xAdvance;
+    cluster.glyphEnd = gi + 1;
+    cluster.advance = state.advance - cluster.pathOffset;
+    if (endsTextPathCluster(run, gi, charIndex, mappings)) {
+      size_t byteIndex = run.glyphs[cluster.glyphStart].cluster;
+      const uint32_t codepoint = decodeUtf8(spanText, byteIndex);
+      if (!backend.isCursive(codepoint)) {
+        state.advance += span.letterSpacingPx;
+      }
+      if (codepoint == 0x20) {
+        state.advance += span.wordSpacingPx;
+      }
+    }
+  }
+}
+
 /// A textLength owner contains typographic clusters and nested owners in document order.
 struct PathLengthScope {
   struct Item {
@@ -1326,10 +1391,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   FontHandle prevSpanFont;
   float prevSpanFontSizePx = 0.0f;
   Entity prevTextPathSource = entt::null;
-  double pathAdvance = 0.0;
-  double pathDy = 0.0;
   std::optional<size_t> firstPathRun;
-  std::vector<TextPathCluster> pathClusters;
+  TextPathStagingState pathStaging;
 
   std::vector<ChunkBoundary> chunkBoundaries;
   std::vector<RunPenExtent> runExtents;
@@ -1337,16 +1400,16 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   auto finishTextPath = [&]() {
     if (firstPathRun) {
       const Vector2d end =
-          placeTextPath(registry_, text, params, *firstPathRun, runs, pathClusters);
-      pathClusters.clear();
+          placeTextPath(registry_, text, params, *firstPathRun, runs, pathStaging.clusters);
+      pathStaging.clusters.clear();
       currentPenX = end.x;
       currentPenY = end.y;
       prevDefaultY = 0.0;
       haveCurrentPosition = true;
       firstPathRun.reset();
       prevTextPathSource = entt::null;
-      pathAdvance = 0.0;
-      pathDy = 0.0;
+      pathStaging.advance = 0.0;
+      pathStaging.dy = 0.0;
     }
   };
 
@@ -1790,51 +1853,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       }
     }
 
-    // Keep glyphs in path-local coordinates until the entire textPath has been shaped.
+    // Stage glyph clusters before placement of the complete textPath.
     if (span.pathSpline) {
       if (!firstPathRun) {
         firstPathRun = runs.size();
         prevTextPathSource = span.textPathSourceEntity;
       }
-      for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-        TextGlyph& glyph = run.glyphs[gi];
-        const unsigned int charIndex =
-            glyph.cluster < byteToCharIdx.size() ? byteToCharIdx[glyph.cluster] : 0;
-        if (gi > 0) {
-          pathAdvance += glyph.xKern;
-        }
-        if (gi == 0 || charIndex != pathClusters.back().charIndex) {
-          if (charIndex < span.dxList.size() && span.dxList[charIndex]) {
-            pathAdvance += span.dxList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
-                                                            Lengthd::Extent::X);
-          }
-          if (charIndex < span.dyList.size() && span.dyList[charIndex]) {
-            pathDy += span.dyList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
-                                                       Lengthd::Extent::Y);
-          }
-          pathClusters.push_back(
-              {runs.size(), gi, gi + 1, charIndex, pathAdvance, defaultY + pathDy});
-        }
-        TextPathCluster& cluster = pathClusters.back();
-        glyph.xPosition = pathAdvance - cluster.pathOffset + (vertical ? 0.0 : glyph.xPosition);
-        glyph.yPosition = vertical ? 0.0 : glyph.yPosition;
-        pathAdvance += glyph.xAdvance;
-        cluster.glyphEnd = gi + 1;
-        cluster.advance = pathAdvance - cluster.pathOffset;
-        const size_t nextCluster =
-            gi + 1 < run.glyphs.size() ? run.glyphs[gi + 1].cluster : spanText.size();
-        if (gi + 1 == run.glyphs.size() || nextCluster >= byteToCharIdx.size() ||
-            byteToCharIdx[nextCluster] != charIndex) {
-          size_t byteIndex = run.glyphs[cluster.glyphStart].cluster;
-          const uint32_t codepoint = decodeUtf8(spanText, byteIndex);
-          if (!backend_->isCursive(codepoint)) {
-            pathAdvance += span.letterSpacingPx;
-          }
-          if (codepoint == 0x20) {
-            pathAdvance += span.wordSpacingPx;
-          }
-        }
-      }
+      stageTextPathRun(run, runs.size(), span, indexMappings, params, *backend_, defaultY,
+                       pathStaging);
       run.onPath = true;
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
       runs.push_back(std::move(run));
