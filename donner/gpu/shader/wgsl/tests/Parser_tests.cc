@@ -264,7 +264,7 @@ struct Params { coefficients: array<f32, 25>, }
 fn coefficient() -> f32 { return params.coefficients[vec2<i32>(25i).x]; }
 )";
 
-  EXPECT_EQ(Parse(kUniformArray).diagnostic.code, ErrorCode::InvalidBinding);
+  EXPECT_EQ(Parse(kUniformArray).diagnostic.code, ErrorCode::UnsupportedConstruct);
   EXPECT_EQ(Parse(kStaticOutOfBounds).diagnostic.code, ErrorCode::InvalidConstantExpression);
   EXPECT_EQ(Parse(kNegativeStaticIndex).diagnostic.code, ErrorCode::InvalidConstantExpression);
   EXPECT_EQ(Parse(kLocalArray).diagnostic.code, ErrorCode::UnsupportedConstruct);
