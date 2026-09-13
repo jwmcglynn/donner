@@ -679,9 +679,9 @@ jobs:
           #
           # "Instrumentable" means HOST-instrumentable. A wasm bridge shim is a
           # plain cc_binary by kind, a platform-gated backend test is a plain
-          # cc_test, and a playwright wrapper test is a `js_test` the classifier
-          # has never heard of - but any of them can be target_compatible_with a
-          # platform this lane does not run, and
+          # cc_test, and an unknown wrapper kind is conservatively retained.
+          # Any of them can be target_compatible_with a platform this lane does
+          # not run, and
           # `coverage --skip_incompatible_explicit_targets` (set in --config=ci)
           # then silently drops it from the build so the run produces an empty
           # report. So the cquery runs on the whole final list, always, and its
