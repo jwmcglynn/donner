@@ -1938,6 +1938,49 @@ TEST(Path, StrokeToFillRoundReversalExtendsOnlyTheRoundJoin) {
   EXPECT_FALSE(StrokeContains(bevel, {10.5, 0}));
 }
 
+TEST(Path, StrokeToFillNearStraightJoinsCoverOuterWedge) {
+  for (const double epsilon : {5e-11, -5e-11}) {
+    SCOPED_TRACE(epsilon);
+    const double outsideY = epsilon > 0.0 ? -1.0 : 1.0;
+    const Vector2d sample(std::abs(epsilon) / 4.0, outsideY / 2.0);
+    // All three joins contain this bevel triangle; the sample has weights 1/2, 1/4, 1/4.
+    const Path bevelWedge = PathBuilder()
+                                .moveTo({0, 0})
+                                .lineTo({0, outsideY})
+                                .lineTo({std::abs(epsilon), outsideY})
+                                .closePath()
+                                .build();
+    ASSERT_TRUE(StrokeContains(bevelWedge, sample));
+
+    const Vector2d first(-1, 0);
+    const Vector2d last(1, epsilon);
+    for (const bool reverse : {false, true}) {
+      SCOPED_TRACE(reverse);
+      const Path path = PathBuilder()
+                            .moveTo(reverse ? last : first)
+                            .lineTo({0, 0})
+                            .lineTo(reverse ? first : last)
+                            .build();
+      for (const LineJoin join : {LineJoin::Bevel, LineJoin::Miter, LineJoin::Round}) {
+        SCOPED_TRACE(join);
+        const Path filled =
+            path.strokeToFill({.width = 2.0, .cap = LineCap::Butt, .join = join, .miterLimit = 4.0},
+                              kFlattenTolerance);
+        EXPECT_TRUE(StrokeContains(filled, sample));
+      }
+    }
+  }
+}
+
+TEST(Path, StrokeToFillTinyRoundJoinDoesNotMakeFullCircle) {
+  // A nonzero turn can have equal rounded absolute endpoint angles.
+  const Path path = PathBuilder().moveTo({-0.25, 0}).lineTo({0, 0}).lineTo({0.25, 2.5e-18}).build();
+  const Path filled = path.strokeToFill(
+      {.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Round}, kFlattenTolerance);
+  EXPECT_TRUE(StrokeContains(filled, {0.125, 0}));
+  EXPECT_FALSE(StrokeContains(filled, {0.5, 0}));
+}
+
 TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
   // Regression for 2D: curved closed-subpath strokes used to emit spurious
   // line segments across the interior at each flattened vertex due to the
