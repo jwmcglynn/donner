@@ -1256,14 +1256,7 @@ Status MetalDevice::Impl::encodeBufferBinding(EncodingState& state, const BindGr
         GpuErrorType::InvalidState,
         std::format("setBindGroup: binding {} does not resolve to a Metal buffer", entry.binding)};
   }
-  // The buffer itself stays gated on the layout's declared visibility, unlike the length table
-  // above. That is a deliberate asymmetry with a known gap: the table is safe to over-bind, while
-  // binding a buffer to a stage its layout does not declare would silently accept a layout that
-  // disagrees with the shader. The gap is that a module with interface metadata omitted, which
-  // this backend still accepts, is not cross-checked against the layout, so a stage the IR reads
-  // but the layout does not declare leaves the generated code with a bounded index into a nil
-  // pointer. Closing it belongs with metadata admission, not here; supplying the facts makes
-  // pipeline creation reject the disagreement outright.
+  // Required shader metadata makes pipeline creation validate this stage visibility.
   if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Vertex)) {
     [state.renderEncoder setVertexBuffer:buffer
                                   offset:bufferBinding.offsetBytes
@@ -1357,14 +1350,8 @@ void MetalDevice::Impl::encodeBufferLengths(EncodingState& state, const BindGrou
   state.lengthTableGroup = groupId;
   const uint32_t* lengths = group.bufferLengths.data();
   constexpr size_t kLengthBytes = sizeof(group.bufferLengths);
-  // Bound to every stage the active encoder has, deliberately without consulting the layout.
-  // MslEmitter declares and dereferences donner_msl_lengths in every entry point of a module
-  // that holds any runtime-array binding, which is a fact about the IR; the bind-group layout's
-  // binding types and visibility are a different fact and can be narrower. Gating the upload on
-  // the layout leaves a shader dereferencing a nil constant uint* whenever the two disagree -
-  // for instance a buffer declared ReadOnlyStorageBuffer in the IR but UniformBuffer in the
-  // layout - which is exactly the unbounded read this table exists to prevent. Binding an
-  // argument index a pipeline does not read costs one setBytes of a fixed 116-byte table.
+  // The emitter passes this table to every entry point of a module containing runtime arrays,
+  // including entry points that do not statically use an array themselves.
   if (state.renderEncoder != nil) {
     [state.renderEncoder setVertexBytes:lengths
                                  length:kLengthBytes
