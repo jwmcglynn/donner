@@ -36,8 +36,9 @@ namespace donner::gpu::metal {
  * uploaded to every stage the active encoder has, deliberately without consulting the layout,
  * because the generated code's need for the table follows from the shader IR rather than from a
  * layout's binding types or visibility. Repeated draws and dispatches reuse that binding, and
- * each new pass binds it again. Raw MSL otherwise remains trusted caller code, and omitted
- * interface metadata retains the shared runtime's existing semantics.
+ * each new pass binds it again. MSL modules must supply buffer interface metadata before native
+ * compilation, including an explicitly empty list when no entry point uses buffers. Pipeline
+ * creation checks the supplied facts against the layout's binding types and stage visibility.
  *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary

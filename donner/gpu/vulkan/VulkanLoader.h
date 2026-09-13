@@ -116,6 +116,7 @@ struct VulkanApi {
   PFN_vkCmdDrawIndexed vkCmdDrawIndexed = nullptr;
   PFN_vkCmdDispatch vkCmdDispatch = nullptr;
   PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier = nullptr;
+  PFN_vkCmdCopyBuffer vkCmdCopyBuffer = nullptr;
   PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
   PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
   PFN_vkCmdCopyImage vkCmdCopyImage = nullptr;

@@ -1,5 +1,4 @@
 import { expect, type Page, test } from "@playwright/test";
-import { burstZoomStorm, panStream, pinchStream } from "./gesture-streams";
 import {
   backingSizeTransitions,
   blackFrameStats,
@@ -13,6 +12,7 @@ import {
   type ViewportStats,
   visibleDocumentRegion,
 } from "./composited-probe";
+import { burstZoomStorm, panStream, pinchStream } from "./gesture-streams";
 
 /**
  * Composited-output invariants for the editor's single-canvas presentation.
@@ -81,16 +81,20 @@ async function openEditor(page: Page): Promise<string[]> {
   page.on("pageerror", (error) => failures.push(`[pageerror] ${error.message}`));
 
   await page.goto(kBaseUrl, { waitUntil: "domcontentloaded" });
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        (window as unknown as { __donnerCanStartWasm?: boolean }).__donnerCanStartWasm
-      ), { timeout: scaledMs(30_000) })
-    .toBe(true);
-  // Playwright's bundled WebKit ships no WebGPU, so the Geode-only package
-  // cannot boot there; real-Safari validation covers that engine.
   const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+  if (process.env.DONNER_WASM_REQUIRE_WEBGPU === "1") {
+    expect(hasWebGpu, "the required browser lane must expose navigator.gpu").toBe(true);
+  }
   test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (window as unknown as { __donnerCanStartWasm?: boolean }).__donnerCanStartWasm
+        ),
+      { timeout: scaledMs(30_000) },
+    )
+    .toBe(true);
   await expect(page.locator("#status")).toBeHidden({ timeout: scaledMs(20_000) });
   return failures;
 }
@@ -270,19 +274,6 @@ function distinctPresentedDocumentWidths(result: CompositedProbeResult): number 
 
 test.describe("composited output invariants", () => {
   test("a: a zoom storm never shows an empty visible region", async ({ browserName, page }) => {
-    // Gecko carve-out (#927): on the single-canvas build the app presents
-    // every UI frame, and Gecko cannot sample that. The page rAF starves to a
-    // handful of probe samples per gesture window (each drawImage of the
-    // continuously-presented WebGPU canvas appears to synchronize against the
-    // presenter), and the samples that land intermittently read empty in runs
-    // the same-task retry cannot rescue. Chromium samples the same build
-    // cleanly and enforces every pixel invariant; manual Firefox validation
-    // shows the document presenting normally. Closing #927 means diagnosing
-    // the Gecko readback behavior, not adding another proxy observable.
-    test.skip(
-      browserName === "firefox",
-      "Gecko cannot sample a continuously-presented WebGPU canvas (#927)",
-    );
     // GUARDS: the backing-store-clear flicker. A per-epoch document-canvas
     // resize cleared the backing store while that canvas was still visible, so
     // ~18% of frames under a burst storm composited a fully transparent
@@ -303,7 +294,7 @@ test.describe("composited output invariants", () => {
       notchesPerBurst: 6,
       settleMs: scaledMs(200),
     });
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     assertProbeUsable(result, kMinimumProbeSamples);
     // An ignored storm proves nothing: require that the presented scale moved.
@@ -323,7 +314,8 @@ test.describe("composited output invariants", () => {
         index,
         meanAlpha: Number(sample.meanAlpha.toFixed(1)),
         contentWidth: sample.coloredWidth,
-        contentWidthChanged: previous !== undefined && previous.coloredWidth !== sample.coloredWidth,
+        contentWidthChanged: previous !== undefined
+          && previous.coloredWidth !== sample.coloredWidth,
         backing: `${sample.backingWidth}x${sample.backingHeight}`,
       };
     });
@@ -369,10 +361,7 @@ test.describe("composited output invariants", () => {
     expect(failures).toEqual([]);
   });
 
-  test("c: a zoom storm never resizes the canvas backing store", async ({
-    browserName,
-    page,
-  }) => {
+  test("c: a zoom storm never resizes the canvas backing store", async ({ browserName, page }) => {
     // GUARDS: resizes that clear the backing store. The black frames in (a) are
     // the symptom; this is the cause, and it is the cheaper, more stable
     // signal.
@@ -397,7 +386,7 @@ test.describe("composited output invariants", () => {
       notchesPerBurst: 6,
       settleMs: scaledMs(200),
     });
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     assertProbeUsable(result, kMinimumProbeSamples);
     const transitions = backingSizeTransitions(result.samples);
@@ -416,23 +405,7 @@ test.describe("composited output invariants", () => {
     expect(failures).toEqual([]);
   });
 
-  test("d: a pan stream moves the presented document on most frames", async ({
-    browserName,
-    page,
-  }) => {
-    // Gecko carve-out (#927): on the single-canvas build the app presents
-    // every UI frame, and Gecko cannot sample that. The page rAF starves to a
-    // handful of probe samples per gesture window (each drawImage of the
-    // continuously-presented WebGPU canvas appears to synchronize against the
-    // presenter), and the samples that land intermittently read empty in runs
-    // the same-task retry cannot rescue. Chromium samples the same build
-    // cleanly and enforces every pixel invariant; manual Firefox validation
-    // shows the document presenting normally. Closing #927 means diagnosing
-    // the Gecko readback behavior, not adding another proxy observable.
-    test.skip(
-      browserName === "firefox",
-      "Gecko cannot sample a continuously-presented WebGPU canvas (#927)",
-    );
+  test("d: a pan stream moves the presented document on most frames", async ({ browserName, page }) => {
     // GUARDS: pan shipped completely broken with a green board. It never
     // requested a worker epoch, and placement was pinned to the epoch viewport
     // so the document could not move between epochs. The old assertion polled
@@ -484,14 +457,8 @@ test.describe("composited output invariants", () => {
     // would turn the bound into a statement about how long the tail is. The
     // tail's own defect class (a resize committed once input goes quiet) is
     // covered by (a) and (c), which do include it.
-    // Playwright's Firefox services animation frames at roughly a tenth of
-    // Chromium's rate while the Wasm editor is running, so a 700 ms window
-    // yields under ten samples there: too few to say anything about a
-    // per-frame fraction. Lengthen the gesture rather than lowering the bar,
-    // and hold the total pan DISTANCE fixed while doing it, so the slow engine
-    // does not scroll the document out of the pane and turn "did not move"
-    // into "was not there".
-    const panDurationMs = scaledMs(browserName === "firefox" ? 2_800 : 700);
+    // A slower fixed-distance gesture falls below the probe's per-frame spatial resolution.
+    const panDurationMs = scaledMs(700);
     const kPanDistanceCssPx = 294;
     const stream = await panStream(page, at, {
       dxPerSec: 0,
@@ -500,7 +467,7 @@ test.describe("composited output invariants", () => {
       hz: 90,
       momentumMs: 0,
     });
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     // Motion is now read from the pixels, so the read-back path has to work for
     // this test to say anything at all.
@@ -530,10 +497,7 @@ test.describe("composited output invariants", () => {
     expect(failures).toEqual([]);
   });
 
-  test("e: a discriminated pinch to 1.25x scales the content by 1.25", async ({
-    browserName,
-    page,
-  }) => {
+  test("e: a discriminated pinch to 1.25x scales the content by 1.25", async ({ browserName, page }) => {
     // GUARDS: the pinch gain gap. A ctrl-flagged wheel with a fractional delta
     // is a synthesized trackpad pinch carrying `deltaY = -100 * ln(scale)`; the
     // input bridge has to discriminate it from a real ctrl+scroll and apply the

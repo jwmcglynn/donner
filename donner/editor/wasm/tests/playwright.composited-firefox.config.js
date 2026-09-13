@@ -31,6 +31,7 @@ module.exports = defineConfig({
       use: {
         ...devices["Desktop Firefox"],
         browserName: "firefox",
+        launchOptions: { firefoxUserPrefs: { "dom.webgpu.enabled": true } },
         ignoreHTTPSErrors: true,
         screenshot: "only-on-failure",
         viewport: { width: 1600, height: 900 },

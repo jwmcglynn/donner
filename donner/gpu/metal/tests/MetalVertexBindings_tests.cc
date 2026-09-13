@@ -466,8 +466,10 @@ TEST_F(MetalVertexBindingsTest, EverySupportedVertexSlotContributesToThePixels) 
   ASSERT_FALSE(module.hasError()) << module.error();
   const auto msl = shader::EmitMsl(module.result());
   ASSERT_FALSE(msl.hasError()) << msl.error();
-  auto shaderModule =
-      device_->createShaderModule({"maximum", RcString(msl.result()), ShaderSourceKind::Msl});
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasResult());
+  auto shaderModule = device_->createShaderModule(
+      {"maximum", RcString(msl.result()), ShaderSourceKind::Msl, {}, {}, bindings.result()});
   ASSERT_THAT(shaderModule, HasResult());
   auto layout = device_->createPipelineLayout({"maximum", {}});
   ASSERT_THAT(layout, HasResult());

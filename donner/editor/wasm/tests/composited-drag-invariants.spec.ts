@@ -73,6 +73,11 @@ async function openEditor(page: Page): Promise<string[]> {
   page.on("pageerror", (error) => failures.push(`[pageerror] ${error.message}`));
 
   await page.goto(kBaseUrl, { waitUntil: "domcontentloaded" });
+  const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
+  if (process.env.DONNER_WASM_REQUIRE_WEBGPU === "1") {
+    expect(hasWebGpu, "the required browser lane must expose navigator.gpu").toBe(true);
+  }
+  test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
   await expect
     .poll(
       () =>
@@ -82,8 +87,6 @@ async function openEditor(page: Page): Promise<string[]> {
       { timeout: scaledMs(30_000) },
     )
     .toBe(true);
-  const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
-  test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
   await expect(page.locator("#status")).toBeHidden({ timeout: scaledMs(20_000) });
   return failures;
 }
@@ -356,7 +359,7 @@ test.describe("composited drag invariants", () => {
       reversalAmplitudePx: 90,
     });
     await page.waitForTimeout(scaledMs(400));
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     assertProbeUsable(result, kMinimumProbeSamples);
 
@@ -393,38 +396,14 @@ test.describe("composited drag invariants", () => {
           stream.elapsedMs.toFixed(0)
         }}`,
     ).toBeGreaterThan(2);
-    // Gecko-at-CI carve-out, ordering assertion only (h and i skip whole
-    // tests; g keeps its liveness half everywhere). On a starved CI runner
-    // Playwright Firefox's presentation latency is effectively unbounded
-    // (measured mean input intervals 7x nominal), and a pointer-relative
-    // ordering observable degenerates there: lag beyond any bounded latency
-    // window is indistinguishable from reorder. Loaded burn-in: 2 of 10 runs
-    // reproduce a single-violation signature on Firefox; the same suite on
-    // Chromium has never produced one, and Chromium enforces this assertion
-    // on every PR. Tracked with the Gecko presentation diagnosis in the
-    // Design 0062 follow-ups; remove when it lands.
-    if (!(browserName === "firefox" && process.env.CI)) {
-      expect(
-        violations.slice(0, 5),
-        `${violations.length} samples presented an OLDER frame than one already shown`,
-      ).toEqual([]);
-    }
+    expect(
+      violations.slice(0, 5),
+      `${violations.length} samples presented an OLDER frame than one already shown`,
+    ).toEqual([]);
     expect(failures).toEqual([]);
   });
 
   test("h: a shape drag never blanks the document, including at drag start", async ({ browserName, page }) => {
-    // Gecko-at-CI carve-out, same as composited-invariants a/b/d: Playwright
-    // Firefox on shared CI runners shows a drawImage-readback artifact against
-    // worker-owned WebGPU canvases (long runs of empty samples while DOM
-    // observables prove the document is presenting). The readback-dependent
-    // assertions in this test are meaningless there; the DOM-based drag
-    // invariants (g, and h's surface-absence half via the enforced suites)
-    // keep Gecko coverage. Tracked: Gecko readback diagnosis in the Design
-    // 0062 follow-ups; remove when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis",
-    );
     // GUARDS: the first-drag black frame. Pressing down on a shape and starting
     // to move it flashes the editor background for one frame before the first
     // dragged frame arrives.
@@ -468,7 +447,7 @@ test.describe("composited drag invariants", () => {
       dy: -60,
       hz: 90,
     });
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     assertProbeUsable(result, kMinimumProbeSamples);
 
@@ -495,18 +474,6 @@ test.describe("composited drag invariants", () => {
   });
 
   test("i: the presented document follows a shape drag", async ({ browserName, page }) => {
-    // Gecko-at-CI carve-out, same as composited-invariants a/b/d: Playwright
-    // Firefox on shared CI runners shows a drawImage-readback artifact against
-    // worker-owned WebGPU canvases (long runs of empty samples while DOM
-    // observables prove the document is presenting). The readback-dependent
-    // assertions in this test are meaningless there; the DOM-based drag
-    // invariants (g, and h's surface-absence half via the enforced suites)
-    // keep Gecko coverage. Tracked: Gecko readback diagnosis in the Design
-    // 0062 follow-ups; remove when it lands.
-    test.skip(
-      browserName === "firefox" && Boolean(process.env.CI),
-      "Gecko CI readback artifact - see tracked diagnosis",
-    );
     // GUARDS: a drag that only updates the screen when the pipeline happens to
     // catch up. The dragged object's own motion is the observable, not the
     // surface's: a shape drag does not move the viewport, so every
@@ -557,7 +524,7 @@ test.describe("composited drag invariants", () => {
       dy: -80,
       hz: 90,
     });
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     assertProbeUsable(result, kMinimumProbeSamples);
     const motion = contentMotionFraction(result.samples);
@@ -637,7 +604,7 @@ test.describe("composited drag invariants", () => {
       reversals: 4,
       reversalAmplitudePx: 110,
     });
-    const result = await stopCompositedProbe(page);
+    const result = await stopCompositedProbe(page, test.info(), stream);
 
     assertProbeUsable(result, kMinimumProbeSamples);
     const motion = contentMotionFraction(result.samples);

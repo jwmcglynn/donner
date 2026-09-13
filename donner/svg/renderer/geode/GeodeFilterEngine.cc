@@ -21,10 +21,23 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/generated/ColorSpaceConvertShader.h"
+#include "donner/gpu/shader/generated/ComponentTransferShader.h"
+#include "donner/gpu/shader/generated/CompositeShader.h"
 #include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
 #include "donner/gpu/shader/generated/DiffuseLightingShader.h"
+#include "donner/gpu/shader/generated/DisplacementMapShader.h"
+#include "donner/gpu/shader/generated/DropShadowShader.h"
+#include "donner/gpu/shader/generated/FilterColorMatrixShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
+#include "donner/gpu/shader/generated/FilterResolveShader.h"
+#include "donner/gpu/shader/generated/FloodShader.h"
+#include "donner/gpu/shader/generated/MergeShader.h"
+#include "donner/gpu/shader/generated/MorphologyShader.h"
+#include "donner/gpu/shader/generated/OffsetShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
+#include "donner/gpu/shader/generated/SubregionClipShader.h"
+#include "donner/gpu/shader/generated/TileShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
@@ -50,19 +63,6 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-#include "embed_resources/ColorSpaceConvertWgsl.h"
-#include "embed_resources/FilterColorMatrixWgsl.h"
-#include "embed_resources/FilterComponentTransferWgsl.h"
-#include "embed_resources/FilterCompositeWgsl.h"
-#include "embed_resources/FilterDisplacementMapWgsl.h"
-#include "embed_resources/FilterDropShadowWgsl.h"
-#include "embed_resources/FilterMergeWgsl.h"
-#include "embed_resources/FilterMorphologyWgsl.h"
-#include "embed_resources/FilterResolveWgsl.h"
-#include "embed_resources/FilterTileWgsl.h"
-#include "embed_resources/FloodWgsl.h"
-#include "embed_resources/OffsetWgsl.h"
-#include "embed_resources/SubregionClipWgsl.h"
 
 namespace donner::geode {
 
@@ -1184,24 +1184,6 @@ RuntimeComputeProgram CreateRuntimeComputeProgram(
   return program;
 }
 
-/// Builds a WGSL compute pipeline through the descriptor-based runtime path.
-/// @param runtime Device to create through. @param name Debug label stem.
-/// @param wgsl Emitted source. @param entryPoint Compute entry point name.
-/// @param layoutEntries Bind group 0 entries. @param workgroupSize Workgroup x/y extent.
-RuntimeComputeProgram CreateRuntimeComputeProgram(
-    gpu::Device& runtime, std::string_view name, std::string_view wgsl, std::string_view entryPoint,
-    std::vector<gpu::BindGroupLayoutEntry> layoutEntries, uint32_t workgroupSize) {
-  const gpu::WorkgroupSize workgroup{workgroupSize, workgroupSize, 1};
-  return CreateRuntimeComputeProgram(
-      runtime,
-      gpu::ShaderModuleDescriptor{RcString(name),
-                                  RcString(wgsl),
-                                  gpu::ShaderSourceKind::Wgsl,
-                                  {},
-                                  {gpu::ComputeEntryPointInfo{RcString(entryPoint), workgroup}}},
-      std::move(layoutEntries));
-}
-
 /// The write-only storage-texture entry a filter program declares for its
 /// destination. @param binding Binding index.
 gpu::BindGroupLayoutEntry StorageOutputEntry(
@@ -1222,12 +1204,6 @@ gpu::BindGroupLayoutEntry SampledInputEntry(uint32_t binding) {
 gpu::BindGroupLayoutEntry UniformParamsEntry(uint32_t binding) {
   return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Compute,
                                    gpu::BindingType::UniformBuffer};
-}
-
-/// The bytes of an embedded build-time artifact, as a string view.
-/// @param resource Embedded span; the returned view aliases it and must not outlive it.
-std::string_view EmbeddedWgsl(std::span<const unsigned char> resource UTILS_LIFETIME_BOUND) {
-  return std::string_view(reinterpret_cast<const char*>(resource.data()), resource.size());
 }
 
 /// The bytes of \p value, for a parameter-buffer upload of a host struct.
@@ -1608,65 +1584,54 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::OffsetBinding;
     offsetProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterOffset", EmbeddedWgsl(donner::embedded::kOffsetWgsl),
-        gpu::shader::programs::kOffsetEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::offset::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(OffsetBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(OffsetBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(OffsetBinding::Params))},
-        gpu::shader::programs::kOffsetWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(OffsetBinding::Params))});
   }
 
   // --- feColorMatrix pipeline, through the GPU runtime ---
   {
     using gpu::shader::programs::FilterColorMatrixBinding;
     colorMatrixProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterColorMatrix",
-        EmbeddedWgsl(donner::embedded::kFilterColorMatrixWgsl),
-        gpu::shader::programs::kFilterColorMatrixEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::filter_color_matrix::BuildDescriptor(
+            device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(FilterColorMatrixBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(FilterColorMatrixBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(FilterColorMatrixBinding::Params))},
-        gpu::shader::programs::kFilterColorMatrixWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(FilterColorMatrixBinding::Params))});
   }
 
-  // --- feFlood pipeline (output + uniform, no input), through the GPU runtime ---
-  //
-  // The WGSL below is build-time output of the shader IR program (see the genrules in this
-  // package). Emitting it here instead would link the IR and the WGSL emitter into every binary
-  // holding this engine, which the editor's WebAssembly package cannot afford for strings that
-  // are identical on every run.
+  // Complete build-time descriptors keep shader IR and emitters out of the renderer binary.
   {
     using gpu::shader::programs::FloodBinding;
     floodProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterFlood", EmbeddedWgsl(donner::embedded::kFloodWgsl),
-        gpu::shader::programs::kFloodEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::flood::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {StorageOutputEntry(static_cast<uint32_t>(FloodBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(FloodBinding::Params))},
-        gpu::shader::programs::kFloodWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(FloodBinding::Params))});
   }
 
   {
     using gpu::shader::programs::MergeBinding;
     mergeProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterMerge", EmbeddedWgsl(donner::embedded::kFilterMergeWgsl),
-        gpu::shader::programs::kMergeEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::merge::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(MergeBinding::SourceTexture)),
          SampledInputEntry(static_cast<uint32_t>(MergeBinding::DestinationTexture)),
-         StorageOutputEntry(static_cast<uint32_t>(MergeBinding::OutputTexture))},
-        gpu::shader::programs::kMergeWorkgroupSize);
+         StorageOutputEntry(static_cast<uint32_t>(MergeBinding::OutputTexture))});
   }
 
   {
     using gpu::shader::programs::CompositeBinding;
     compositeProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterComposite",
-        EmbeddedWgsl(donner::embedded::kFilterCompositeWgsl),
-        gpu::shader::programs::kCompositeEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::composite::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(CompositeBinding::SourceTexture)),
          SampledInputEntry(static_cast<uint32_t>(CompositeBinding::DestinationTexture)),
          StorageOutputEntry(static_cast<uint32_t>(CompositeBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(CompositeBinding::Params))},
-        gpu::shader::programs::kCompositeWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(CompositeBinding::Params))});
   }
 
   // --- feBlend W3C blend-mode pipeline (two inputs + output + uniform) ---
@@ -1681,27 +1646,24 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::MorphologyBinding;
     morphologyProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterMorphology",
-        EmbeddedWgsl(donner::embedded::kFilterMorphologyWgsl),
-        gpu::shader::programs::kMorphologyEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::morphology::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(MorphologyBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(MorphologyBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(MorphologyBinding::Params))},
-        gpu::shader::programs::kMorphologyWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(MorphologyBinding::Params))});
   }
 
   // Packed channel functions and tables use the same bounded runtime parameter pool.
   {
     using gpu::shader::programs::ComponentTransferBinding;
     componentTransferProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterComponentTransfer",
-        EmbeddedWgsl(donner::embedded::kFilterComponentTransferWgsl),
-        gpu::shader::programs::kComponentTransferEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::component_transfer::BuildDescriptor(
+            device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(ComponentTransferBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(ComponentTransferBinding::OutputTexture)),
          {static_cast<uint32_t>(ComponentTransferBinding::Params), gpu::ShaderStage::Compute,
-          gpu::BindingType::ReadOnlyStorageBuffer}},
-        gpu::shader::programs::kComponentTransferWorkgroupSize);
+          gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
   {
@@ -1732,14 +1694,13 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::DisplacementMapBinding;
     displacementMapProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterDisplacementMap",
-        EmbeddedWgsl(donner::embedded::kFilterDisplacementMapWgsl),
-        gpu::shader::programs::kDisplacementMapEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::displacement_map::BuildDescriptor(
+            device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(DisplacementMapBinding::SourceTexture)),
          SampledInputEntry(static_cast<uint32_t>(DisplacementMapBinding::MapTexture)),
          StorageOutputEntry(static_cast<uint32_t>(DisplacementMapBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(DisplacementMapBinding::Params))},
-        gpu::shader::programs::kDisplacementMapWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(DisplacementMapBinding::Params))});
   }
 
   // --- feDiffuseLighting pipeline, through the GPU runtime ---
@@ -1774,14 +1735,12 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::DropShadowBinding;
     dropShadowProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterDropShadow",
-        EmbeddedWgsl(donner::embedded::kFilterDropShadowWgsl),
-        gpu::shader::programs::kDropShadowEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::drop_shadow::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(DropShadowBinding::SourceTexture)),
          SampledInputEntry(static_cast<uint32_t>(DropShadowBinding::BlurredTexture)),
          StorageOutputEntry(static_cast<uint32_t>(DropShadowBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(DropShadowBinding::Params))},
-        gpu::shader::programs::kDropShadowWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(DropShadowBinding::Params))});
   }
 
   // --- feImage placement pipeline (input + output + uniform) ---
@@ -1800,50 +1759,44 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   {
     using gpu::shader::programs::TileBinding;
     tileProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterTile", EmbeddedWgsl(donner::embedded::kFilterTileWgsl),
-        gpu::shader::programs::kTileEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::tile::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(TileBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(TileBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(TileBinding::Params))},
-        gpu::shader::programs::kTileWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(TileBinding::Params))});
   }
 
   // --- Per-primitive subregion clipping pipeline, through the GPU runtime ---
   {
     using gpu::shader::programs::SubregionClipBinding;
     subregionClipProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterSubregionClip",
-        EmbeddedWgsl(donner::embedded::kSubregionClipWgsl),
-        gpu::shader::programs::kSubregionClipEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::subregion_clip::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))},
-        gpu::shader::programs::kSubregionClipWorkgroupSize);
+         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))});
     filterResolveProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterResolve",
-        EmbeddedWgsl(donner::embedded::kFilterResolveWgsl),
-        gpu::shader::programs::kSubregionClipEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::filter_resolve::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture),
                             gpu::TextureFormat::RGBA8Unorm),
          UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params)),
-         {3, gpu::ShaderStage::Compute, gpu::BindingType::ReadOnlyStorageBuffer}},
-        gpu::shader::programs::kSubregionClipWorkgroupSize);
+         {3, gpu::ShaderStage::Compute, gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
   // --- sRGB to linear color space conversion pipeline, through the GPU runtime ---
   {
     using gpu::shader::programs::ColorSpaceConvertBinding;
     colorSpaceConvertProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(), "FilterColorSpaceConvert",
-        EmbeddedWgsl(donner::embedded::kColorSpaceConvertWgsl),
-        gpu::shader::programs::kColorSpaceConvertEntryPoint,
+        device_.adapterDevice(),
+        gpu::generated::color_space_convert::BuildDescriptor(
+            device_.adapterDevice().shaderSourceKind()),
         {SampledInputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::OutputTexture)),
          UniformParamsEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::Params)),
          {static_cast<uint32_t>(ColorSpaceConvertBinding::TransferTable), gpu::ShaderStage::Compute,
-          gpu::BindingType::ReadOnlyStorageBuffer}},
-        gpu::shader::programs::kColorSpaceConvertWorkgroupSize);
+          gpu::BindingType::ReadOnlyStorageBuffer}});
     const auto& samples = gpu::shader::programs::ColorTransferSamples();
     auto table = device_.adapterDevice().createBuffer(
         {"FilterColorTransferTable", sizeof(samples),

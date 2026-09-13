@@ -108,12 +108,15 @@ void MetalColorMatrixTest::runColorMatrixSlice(MetalDevice::MemoryModel memoryMo
   shader::ShaderResult<std::string> msl = shader::EmitMsl(irModule.result());
   ASSERT_FALSE(msl.hasError()) << msl.error();
 
+  const auto bindings = shader::BufferBindingsOf(irModule.result());
+  ASSERT_THAT(bindings, HasResult());
   ShaderModule shaderModule = unwrap(device_->createShaderModule(ShaderModuleDescriptor{
                                          "colorMatrix",
                                          RcString(msl.result()),
                                          ShaderSourceKind::Msl,
                                          {},
-                                         shader::ComputeEntryPointsOf(irModule.result())}),
+                                         shader::ComputeEntryPointsOf(irModule.result()),
+                                         bindings.result()}),
                                      "createShaderModule");
 
   const std::vector<BindGroupLayoutEntry> layoutEntries = {
