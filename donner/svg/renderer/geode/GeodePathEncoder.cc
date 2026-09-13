@@ -328,7 +328,7 @@ struct CanonicalCurveKey {
   Direction direction;
 };
 
-CanonicalCurveKey canonicalCurveKey(const EncodedPath::Curve& curve) {
+CanonicalCurveKey MakeCanonicalCurveKey(const EncodedPath::Curve& curve) {
   const std::array<uint32_t, 6> forward = {
       std::bit_cast<uint32_t>(curve.p0x), std::bit_cast<uint32_t>(curve.p0y),
       std::bit_cast<uint32_t>(curve.p1x), std::bit_cast<uint32_t>(curve.p1y),
@@ -343,7 +343,7 @@ CanonicalCurveKey canonicalCurveKey(const EncodedPath::Curve& curve) {
 }
 
 /// Admit the same bounded finite curve set before allocating cancellation scratch.
-bool curveCancellationInputFits(std::span<const CurveWithRange> curves, std::size_t maximumItems) {
+bool CurveCancellationInputFits(std::span<const CurveWithRange> curves, std::size_t maximumItems) {
   constexpr std::size_t kScratchBytesPerCurve = sizeof(std::size_t) + sizeof(uint8_t);
   if (curves.size() > maximumItems ||
       curves.size() > std::numeric_limits<std::size_t>::max() / kScratchBytesPerCurve) {
@@ -359,19 +359,19 @@ bool curveCancellationInputFits(std::span<const CurveWithRange> curves, std::siz
 }
 
 /// Mark balanced pairs in one non-palindromic key group, preserving excess multiplicity.
-void markOppositeCurveGroup(std::span<const CurveWithRange> curves,
+void MarkOppositeCurveGroup(std::span<const CurveWithRange> curves,
                             std::span<const std::size_t> indexes, std::size_t begin,
                             std::size_t end, std::span<uint8_t> canceled) {
   std::size_t forwardCount = 0;
   for (std::size_t i = begin; i < end; ++i) {
-    forwardCount += canonicalCurveKey(curves[indexes[i]].curve).direction ==
+    forwardCount += MakeCanonicalCurveKey(curves[indexes[i]].curve).direction ==
                     CanonicalCurveKey::Direction::Forward;
   }
   const std::size_t pairs = std::min(forwardCount, end - begin - forwardCount);
   std::size_t forwardRemaining = pairs;
   std::size_t reverseRemaining = pairs;
   for (std::size_t i = begin; i < end; ++i) {
-    const bool forward = canonicalCurveKey(curves[indexes[i]].curve).direction ==
+    const bool forward = MakeCanonicalCurveKey(curves[indexes[i]].curve).direction ==
                          CanonicalCurveKey::Direction::Forward;
     std::size_t& remaining = forward ? forwardRemaining : reverseRemaining;
     if (remaining > 0) {
@@ -382,7 +382,7 @@ void markOppositeCurveGroup(std::span<const CurveWithRange> curves,
 }
 
 /// Compact surviving records in their original order without reorienting them.
-void compactUncanceledCurves(std::vector<CurveWithRange>& curves,
+void CompactUncanceledCurves(std::vector<CurveWithRange>& curves,
                              std::span<const uint8_t> canceled) {
   std::size_t output = 0;
   for (std::size_t i = 0; i < curves.size(); ++i) {
@@ -395,8 +395,8 @@ void compactUncanceledCurves(std::vector<CurveWithRange>& curves,
 }
 
 /// Remove opposite copies within this path without changing survivor order or winding.
-bool cancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maximumItems) {
-  if (!curveCancellationInputFits(curves, maximumItems)) {
+bool CancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maximumItems) {
+  if (!CurveCancellationInputFits(curves, maximumItems)) {
     return false;
   }
   if (curves.size() < 2) {
@@ -407,25 +407,25 @@ bool cancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maxim
   std::vector<std::size_t> indexes(curves.size());
   std::iota(indexes.begin(), indexes.end(), 0u);
   std::sort(indexes.begin(), indexes.end(), [&](std::size_t lhs, std::size_t rhs) {
-    const CanonicalCurveKey left = canonicalCurveKey(curves[lhs].curve);
-    const CanonicalCurveKey right = canonicalCurveKey(curves[rhs].curve);
+    const CanonicalCurveKey left = MakeCanonicalCurveKey(curves[lhs].curve);
+    const CanonicalCurveKey right = MakeCanonicalCurveKey(curves[rhs].curve);
     return left.components != right.components ? left.components < right.components : lhs < rhs;
   });
   std::vector<uint8_t> canceled(curves.size(), 0);
   for (std::size_t begin = 0; begin < indexes.size();) {
-    const CanonicalCurveKey key = canonicalCurveKey(curves[indexes[begin]].curve);
+    const CanonicalCurveKey key = MakeCanonicalCurveKey(curves[indexes[begin]].curve);
     std::size_t end = begin + 1;
     while (end < indexes.size() &&
-           canonicalCurveKey(curves[indexes[end]].curve).components == key.components) {
+           MakeCanonicalCurveKey(curves[indexes[end]].curve).components == key.components) {
       ++end;
     }
     if (key.direction != CanonicalCurveKey::Direction::Palindromic) {
-      markOppositeCurveGroup(curves, indexes, begin, end, canceled);
+      MarkOppositeCurveGroup(curves, indexes, begin, end, canceled);
     }
     begin = end;
   }
 
-  compactUncanceledCurves(curves, canceled);
+  CompactUncanceledCurves(curves, canceled);
   return true;
 }
 
@@ -1037,7 +1037,7 @@ EncodedPath EncodeBoundedPath(const Path& path, double tolerance, GeodePathEncod
   std::vector<CurveWithRange> hCurves = omitRayParallelCurves(hAll, BandAxis::Y);
   result.stats.horizontal.omittedParallelCurves =
       static_cast<uint32_t>(hAll.size() - hCurves.size());
-  if (!cancelOppositeCurves(hCurves, limits.maximumEncodedGeometryItems)) {
+  if (!CancelOppositeCurves(hCurves, limits.maximumEncodedGeometryItems)) {
     return RejectedEncode();
   }
   if (hCurves.empty()) {
@@ -1069,7 +1069,7 @@ EncodedPath EncodeBoundedPath(const Path& path, double tolerance, GeodePathEncod
     std::vector<CurveWithRange> vAll = omitRayParallelCurves(vExtracted, BandAxis::X);
     result.stats.vertical.omittedParallelCurves =
         static_cast<uint32_t>(vExtracted.size() - vAll.size());
-    if (!cancelOppositeCurves(vAll, limits.maximumEncodedGeometryItems)) {
+    if (!CancelOppositeCurves(vAll, limits.maximumEncodedGeometryItems)) {
       return RejectedEncode();
     }
     if (!vAll.empty()) {

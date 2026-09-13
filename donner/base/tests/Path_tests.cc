@@ -1388,7 +1388,7 @@ int rayCastWinding(const Path& path, const Vector2d& query) {
 
 /// Check the fill rule required by Path::strokeToFill: all emitted pieces have
 /// positive winding, so overlapping pieces remain covered by a NonZero fill.
-bool strokeContains(const Path& path, const Vector2d& query) {
+bool StrokeContains(const Path& path, const Vector2d& query) {
   return rayCastWinding(path, query) != 0;
 }
 
@@ -1623,7 +1623,7 @@ TEST(Path, StrokeToFillRoundJoin) {
   // Geometric verification uses the NonZero contract of strokeToFill. The outside of the corner is
   // the (11,11) region; the round arc should include points close to (11,11)+hw in the corner
   // bisector.
-  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
+  auto nonZero = [&](Vector2d p) { return StrokeContains(filled, p); };
 
   // Inside the stroke ribbon along each leg.
   EXPECT_TRUE(nonZero({5, 0})) << "midpoint of horizontal leg stroke";
@@ -1652,7 +1652,7 @@ TEST(Path, StrokeToFillBevelJoin) {
   Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
-  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
+  auto nonZero = [&](Vector2d p) { return StrokeContains(filled, p); };
 
   // Stroke ribbon along each leg.
   EXPECT_TRUE(nonZero({5, 0})) << "midpoint of horizontal leg stroke";
@@ -1718,7 +1718,7 @@ TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
-  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
+  auto nonZero = [&](Vector2d p) { return StrokeContains(filled, p); };
 
   // Points clearly inside the stroke ribbon on each leg. The legs have
   // (unit) left normal n1 = (2,1)/√5 and n2 = (-2,1)/√5, so the stroke
@@ -1791,7 +1791,7 @@ TEST(Path, StrokeToFillClosedPath) {
   // matches how the Geode slug_fill shader evaluates inside/outside and
   // catches the "extra segment spanning the interior" bug directly, without
   // being sensitive to overshoot vertices that cancel in winding.
-  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
+  auto nonZero = [&](Vector2d p) { return StrokeContains(filled, p); };
 
   // Hole interior: (5, 5), (3, 5), (7, 5) - all should be OUTSIDE.
   EXPECT_FALSE(nonZero({5, 5})) << "center of hole";
@@ -1832,7 +1832,7 @@ TEST(Path, StrokeToFillThinCrossbarRemainsCoveredAtAllWidths) {
         std::pair{6.0, Vector2d{0, -0.5}}}) {
     const Path filled = crossbar.strokeToFill({.width = width}, kFlattenTolerance);
     ASSERT_FALSE(filled.empty()) << "width=" << width;
-    EXPECT_TRUE(strokeContains(filled, sample)) << "width=" << width;
+    EXPECT_TRUE(StrokeContains(filled, sample)) << "width=" << width;
   }
 }
 
@@ -1842,9 +1842,9 @@ TEST(Path, StrokeToFillFullyEngulfedClosedSquareHasNoParityHole) {
   const Path filled = square.strokeToFill({.width = 3.0}, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
-  EXPECT_TRUE(strokeContains(filled, {1, 1}));
-  EXPECT_TRUE(strokeContains(filled, {-0.5, 1}));
-  EXPECT_FALSE(strokeContains(filled, {-3, 1}));
+  EXPECT_TRUE(StrokeContains(filled, {1, 1}));
+  EXPECT_TRUE(StrokeContains(filled, {-0.5, 1}));
+  EXPECT_FALSE(StrokeContains(filled, {-3, 1}));
 }
 
 TEST(Path, StrokeToFillPreservesSmallNonzeroSubdivisions) {
@@ -1862,7 +1862,7 @@ TEST(Path, StrokeToFillPreservesSmallNonzeroSubdivisions) {
   ASSERT_FALSE(subdividedStroke.empty());
   EXPECT_EQ(subdividedStroke.bounds(), singleStroke.bounds());
   for (const double x : {2.5e-11, 7.5e-11, 1.25e-10, 1.75e-10}) {
-    EXPECT_TRUE(strokeContains(subdividedStroke, {x, 0}));
+    EXPECT_TRUE(StrokeContains(subdividedStroke, {x, 0}));
   }
 }
 
@@ -1897,11 +1897,11 @@ TEST(Path, StrokeToFillNormalizesSourceWindingAcrossCompoundContours) {
       counterClockwise.strokeToFill({.width = 2.0}, kFlattenTolerance);
   for (const Vector2d point : {Vector2d{4, 0.5}, Vector2d{11, 0.5}, Vector2d{7.5, 0.5},
                                Vector2d{0.5, 4}, Vector2d{14.5, 4}}) {
-    EXPECT_TRUE(strokeContains(clockwiseFilled, point));
-    EXPECT_TRUE(strokeContains(counterClockwiseFilled, point));
+    EXPECT_TRUE(StrokeContains(clockwiseFilled, point));
+    EXPECT_TRUE(StrokeContains(counterClockwiseFilled, point));
   }
-  EXPECT_FALSE(strokeContains(clockwiseFilled, {4, 4}));
-  EXPECT_FALSE(strokeContains(counterClockwiseFilled, {4, 4}));
+  EXPECT_FALSE(StrokeContains(clockwiseFilled, {4, 4}));
+  EXPECT_FALSE(StrokeContains(counterClockwiseFilled, {4, 4}));
 }
 
 TEST(Path, StrokeToFillPreservesWideCounterAndFillsNarrowCounter) {
@@ -1912,30 +1912,30 @@ TEST(Path, StrokeToFillPreservesWideCounterAndFillsNarrowCounter) {
 
   const Path narrowFilled = narrowCounter.strokeToFill({.width = 3.0}, kFlattenTolerance);
   const Path wideFilled = wideCounter.strokeToFill({.width = 3.0}, kFlattenTolerance);
-  EXPECT_TRUE(strokeContains(narrowFilled, {5, 5}));
-  EXPECT_FALSE(strokeContains(wideFilled, {5, 5}));
+  EXPECT_TRUE(StrokeContains(narrowFilled, {5, 5}));
+  EXPECT_FALSE(StrokeContains(wideFilled, {5, 5}));
 }
 
 TEST(Path, StrokeToFillOpenCrossingAndDashedPiecesUseNonZeroWinding) {
   const Path crossing = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
   const Path crossingFilled = crossing.strokeToFill({.width = 2.0}, kFlattenTolerance);
-  EXPECT_TRUE(strokeContains(crossingFilled, {5, 0}));
+  EXPECT_TRUE(StrokeContains(crossingFilled, {5, 0}));
 
   const Path dashed = PathBuilder().moveTo({0, 4}).lineTo({20, 4}).build();
   const Path dashedFilled =
       dashed.strokeToFill({.width = 2.0, .dashArray = {3.0, 3.0}}, kFlattenTolerance);
-  EXPECT_TRUE(strokeContains(dashedFilled, {1, 4}));
-  EXPECT_FALSE(strokeContains(dashedFilled, {4, 4}));
-  EXPECT_TRUE(strokeContains(dashedFilled, {7, 4}));
+  EXPECT_TRUE(StrokeContains(dashedFilled, {1, 4}));
+  EXPECT_FALSE(StrokeContains(dashedFilled, {4, 4}));
+  EXPECT_TRUE(StrokeContains(dashedFilled, {7, 4}));
 }
 
 TEST(Path, StrokeToFillRoundReversalExtendsOnlyTheRoundJoin) {
   const Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
   const Path round = path.strokeToFill({.width = 2.0, .join = LineJoin::Round}, kFlattenTolerance);
   const Path bevel = path.strokeToFill({.width = 2.0, .join = LineJoin::Bevel}, kFlattenTolerance);
-  EXPECT_TRUE(strokeContains(round, {10.5, 0}));
-  EXPECT_FALSE(strokeContains(round, {11.5, 0}));
-  EXPECT_FALSE(strokeContains(bevel, {10.5, 0}));
+  EXPECT_TRUE(StrokeContains(round, {10.5, 0}));
+  EXPECT_FALSE(StrokeContains(round, {11.5, 0}));
+  EXPECT_FALSE(StrokeContains(bevel, {10.5, 0}));
 }
 
 TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
@@ -1956,7 +1956,7 @@ TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
   Path filled = ellipse.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
-  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
+  auto nonZero = [&](Vector2d p) { return StrokeContains(filled, p); };
 
   // Points well inside the hole of the stroke ring (center and several offsets).
   // An ellipse has center (50, 30), semi-axes 50 and 30. Interior points:
@@ -1997,7 +1997,7 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
   style.width = 2.5;
   Path filled = path.strokeToFill(style, kFlattenTolerance);
 
-  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
+  auto nonZero = [&](Vector2d p) { return StrokeContains(filled, p); };
 
   // Per the Geode quadbezier1 golden, an artifact appears at screen-y=116
   // spanning screen-x [172, 257]. A pixel at (200, 116) is well inside the
