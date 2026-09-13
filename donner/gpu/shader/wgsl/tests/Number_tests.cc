@@ -3,9 +3,10 @@
 #include <gtest/gtest.h>
 
 #include <bit>
-#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <locale>
+#include <sstream>
 #include <string>
 
 namespace donner::gpu::shader::wgsl::number {
@@ -97,8 +98,15 @@ TEST(Number, DecimalConversionAgreesWithStandardLibraryForBoundedSamples) {
     SCOPED_TRACE(text);
     double reference64 = 0;
     float reference32 = 0;
-    ASSERT_EQ(std::from_chars(text.data(), text.data() + text.size(), reference64).ec, std::errc{});
-    ASSERT_EQ(std::from_chars(text.data(), text.data() + text.size(), reference32).ec, std::errc{});
+    std::istringstream stream64(text), stream32(text);
+    stream64.imbue(std::locale::classic());
+    stream32.imbue(std::locale::classic());
+    stream64 >> reference64;
+    stream32 >> reference32;
+    ASSERT_EQ(stream64.fail(), false);
+    ASSERT_EQ(stream32.fail(), false);
+    ASSERT_EQ(stream64.peek(), std::char_traits<char>::eof());
+    ASSERT_EQ(stream32.peek(), std::char_traits<char>::eof());
     const Value actual64 = Parse(text), actual32 = Parse(text + "f");
     ASSERT_EQ(actual64.error, Error::None);
     ASSERT_EQ(actual32.error, Error::None);
