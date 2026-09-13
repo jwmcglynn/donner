@@ -208,7 +208,10 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:firefox)/../",
     },
-    tags = ["no-local"],
+    tags = [
+        "manual",
+        "no-local",
+    ],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",

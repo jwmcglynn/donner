@@ -117,6 +117,12 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       assert.deepEqual(tags.sort(), ["manual", "perf"], "responsiveness timing must remain opt-in");
       assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
       assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+    } else if (laneName === "firefox_composited_invariants_test") {
+      assert.deepEqual(
+        tags.sort(),
+        ["manual", "no-local"],
+        "extended Firefox diagnostics are opt-in",
+      );
     } else {
       assert.ok(
         !tags.includes("manual") && !tags.includes("perf"),

@@ -457,14 +457,8 @@ test.describe("composited output invariants", () => {
     // would turn the bound into a statement about how long the tail is. The
     // tail's own defect class (a resize committed once input goes quiet) is
     // covered by (a) and (c), which do include it.
-    // Playwright's Firefox services animation frames at roughly a tenth of
-    // Chromium's rate while the Wasm editor is running, so a 700 ms window
-    // yields under ten samples there: too few to say anything about a
-    // per-frame fraction. Lengthen the gesture rather than lowering the bar,
-    // and hold the total pan DISTANCE fixed while doing it, so the slow engine
-    // does not scroll the document out of the pane and turn "did not move"
-    // into "was not there".
-    const panDurationMs = scaledMs(browserName === "firefox" ? 2_800 : 700);
+    // A slower fixed-distance gesture falls below the probe's per-frame spatial resolution.
+    const panDurationMs = scaledMs(700);
     const kPanDistanceCssPx = 294;
     const stream = await panStream(page, at, {
       dxPerSec: 0,

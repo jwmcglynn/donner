@@ -12,7 +12,7 @@ module.exports = {
     ...project,
     use: {
       ...project.use,
-      headless: true,
+      headless: false,
       trace: {
         mode: "retain-on-failure",
         screenshots: false,
@@ -20,8 +20,8 @@ module.exports = {
         sources: false,
       },
       launchOptions: {
+        ...project.use.launchOptions,
         timeout: 15000,
-        firefoxUserPrefs: { "dom.webgpu.enabled": true },
       },
     },
   })),
