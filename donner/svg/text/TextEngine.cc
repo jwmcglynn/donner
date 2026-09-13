@@ -452,7 +452,18 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   return result;
 }
 
-/// A textLength owner contains glyphs and nested owners in document order.
+/// A typographic cluster keeps glyph-local shaping offsets separate from path placement.
+struct TextPathCluster {
+  size_t runIndex;
+  size_t glyphStart;
+  size_t glyphEnd;
+  unsigned int charIndex;
+  double pathOffset;
+  double baselineOffset;
+  double advance = 0.0;
+};
+
+/// A textLength owner contains typographic clusters and nested owners in document order.
 struct PathLengthScope {
   struct Item {
     size_t index;
@@ -474,8 +485,7 @@ struct PathLengthScope {
 /// Adjusts path-local glyph positions before any path sampling, visiting each scope once.
 void applyTextPathLengths(Registry& registry, const components::ComputedTextComponent& text,
                           const TextLayoutParams& params, size_t firstRun,
-                          std::vector<TextRun>& runs) {
-  std::vector<TextGlyph*> glyphs;
+                          std::vector<TextRun>& runs, std::vector<TextPathCluster>& clusters) {
   std::vector<PathLengthScope> scopes(1);
   std::unordered_map<Entity, size_t> ownerScopes;
   const Entity pathEntity = text.spans[firstRun].textPathSourceEntity;
@@ -496,6 +506,7 @@ void applyTextPathLengths(Registry& registry, const components::ComputedTextComp
     }
   }
 
+  size_t clusterIndex = 0;
   for (size_t ri = firstRun; ri < runs.size(); ++ri) {
     const auto& span = text.spans[ri];
     size_t owner = 0;
@@ -531,10 +542,11 @@ void applyTextPathLengths(Registry& registry, const components::ComputedTextComp
       scopes.push_back(std::move(scope));
       owner = child;
     }
-    for (TextGlyph& glyph : runs[ri].glyphs) {
+    while (clusterIndex < clusters.size() && clusters[clusterIndex].runIndex == ri) {
+      const TextPathCluster& cluster = clusters[clusterIndex];
       scopes[owner].items.push_back(
-          {glyphs.size(), false, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
-      glyphs.push_back(&glyph);
+          {clusterIndex, false, cluster.pathOffset, cluster.pathOffset + cluster.advance});
+      ++clusterIndex;
     }
     runs[ri].textLengthAppliedOnPath = true;
   }
@@ -602,88 +614,93 @@ void applyTextPathLengths(Registry& registry, const components::ComputedTextComp
       if (item.scope) {
         scopes[item.index].position = position;
       } else {
-        TextGlyph& glyph = *glyphs[item.index];
-        glyph.xPosition = position;
-        glyph.xAdvance *= scope.scale;
-        glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+        TextPathCluster& cluster = clusters[item.index];
+        cluster.pathOffset = position;
+        cluster.advance *= scope.scale;
+        auto& run = runs[cluster.runIndex];
+        for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
+          TextGlyph& glyph = run.glyphs[gi];
+          glyph.xPosition *= scope.scale;
+          glyph.xAdvance *= scope.scale;
+          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+        }
       }
     }
   }
 }
 
-/// Places a completed textPath scope after length adjustments and absolute coordinate resets.
+/// Places shaped clusters after length adjustments and absolute coordinate resets.
 Vector2d placeTextPath(Registry& registry, const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params, size_t firstRun,
-                       std::vector<TextRun>& runs) {
-  applyTextPathLengths(registry, text, params, firstRun, runs);
-  struct PathGlyph {
-    TextGlyph* glyph;
-    const components::ComputedTextComponent::TextSpan* span;
-    bool chunk;
+                       const TextLayoutParams& params, size_t firstRun, std::vector<TextRun>& runs,
+                       std::vector<TextPathCluster>& clusters) {
+  applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
+  const auto hasAbsoluteX = [&](const TextPathCluster& cluster) {
+    const auto& positions = text.spans[cluster.runIndex].xList;
+    return cluster.charIndex < positions.size() && positions[cluster.charIndex].has_value();
   };
-  std::vector<PathGlyph> glyphs;
   double xShift = 0.0;
-  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
-    const auto& span = text.spans[ri];
-    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-    const auto mappings = buildByteIndexMappings(spanText);
-    for (size_t gi = 0; gi < runs[ri].glyphs.size(); ++gi) {
-      TextGlyph& glyph = runs[ri].glyphs[gi];
-      const size_t ci =
-          glyph.cluster < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[glyph.cluster] : 0;
-      const bool hasX = ci < span.xList.size() && span.xList[ci].has_value();
-      if (hasX) {
-        const double dx =
-            ci < span.dxList.size() && span.dxList[ci]
-                ? span.dxList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X)
-                : 0.0;
-        xShift = span.xList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
-                 dx - glyph.xPosition;
-      }
-      glyph.xPosition += xShift;
-      glyphs.push_back({&glyph, &span, glyphs.empty() || hasX});
+  for (TextPathCluster& cluster : clusters) {
+    const auto& span = text.spans[cluster.runIndex];
+    if (hasAbsoluteX(cluster)) {
+      const double dx = cluster.charIndex < span.dxList.size() && span.dxList[cluster.charIndex]
+                            ? span.dxList[cluster.charIndex]->toPixels(
+                                  params.viewBox, params.fontMetrics, Lengthd::Extent::X)
+                            : 0.0;
+      xShift = span.xList[cluster.charIndex]->toPixels(params.viewBox, params.fontMetrics,
+                                                       Lengthd::Extent::X) +
+               dx - cluster.pathOffset;
     }
+    cluster.pathOffset += xShift;
   }
-  for (size_t first = 0; first < glyphs.size();) {
+  for (size_t first = 0; first < clusters.size();) {
     size_t end = first + 1;
-    while (end < glyphs.size() && !glyphs[end].chunk) {
+    while (end < clusters.size() && !hasAbsoluteX(clusters[end])) {
       ++end;
     }
     double minimum = std::numeric_limits<double>::infinity();
     double maximum = -std::numeric_limits<double>::infinity();
-    for (size_t gi = first; gi < end; ++gi) {
-      const TextGlyph& glyph = *glyphs[gi].glyph;
-      minimum = std::min({minimum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
-      maximum = std::max({maximum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+    for (size_t ci = first; ci < end; ++ci) {
+      const TextPathCluster& cluster = clusters[ci];
+      minimum = std::min({minimum, cluster.pathOffset, cluster.pathOffset + cluster.advance});
+      maximum = std::max({maximum, cluster.pathOffset, cluster.pathOffset + cluster.advance});
     }
-    const TextAnchor anchor = glyphs[first].span->textAnchor;
+    const TextAnchor anchor = text.spans[clusters[first].runIndex].textAnchor;
     const double alignment = anchor == TextAnchor::Middle ? (minimum + maximum) / 2.0
                              : anchor == TextAnchor::End  ? maximum
                                                           : minimum;
-    const double shift = glyphs[first].glyph->xPosition - alignment;
-    for (size_t gi = first; gi < end; ++gi) {
-      glyphs[gi].glyph->xPosition += shift;
+    const double shift = clusters[first].pathOffset - alignment;
+    for (size_t ci = first; ci < end; ++ci) {
+      clusters[ci].pathOffset += shift;
     }
     first = end;
   }
   const auto& firstSpan = text.spans[firstRun];
   const Path::MeasuredPath path = firstSpan.pathSpline->measure();
   std::optional<Vector2d> lastPosition;
-  for (const auto& entry : glyphs) {
-    TextGlyph& glyph = *entry.glyph;
-    const double midpoint = firstSpan.pathStartOffset + glyph.xPosition + glyph.xAdvance * 0.5;
+  for (const TextPathCluster& cluster : clusters) {
+    const double halfAdvance = cluster.advance * 0.5;
+    const double midpoint = firstSpan.pathStartOffset + cluster.pathOffset + halfAdvance;
     const auto sample = path.pointAtArcLength(midpoint);
+    auto& run = runs[cluster.runIndex];
     if (sample.valid) {
-      const double halfAdvance = glyph.xAdvance * 0.5;
-      const double baseline = glyph.yPosition;
-      glyph.xPosition =
-          sample.point.x - halfAdvance * std::cos(sample.angle) - std::sin(sample.angle) * baseline;
-      glyph.yPosition =
-          sample.point.y - halfAdvance * std::sin(sample.angle) + std::cos(sample.angle) * baseline;
-      glyph.rotateDegrees += sample.angle * MathConstants<double>::kRadToDeg;
-      lastPosition = Vector2d(sample.point.x + glyph.xAdvance, sample.point.y);
+      const Vector2d origin(sample.point.x - halfAdvance * std::cos(sample.angle) -
+                                std::sin(sample.angle) * cluster.baselineOffset,
+                            sample.point.y - halfAdvance * std::sin(sample.angle) +
+                                std::cos(sample.angle) * cluster.baselineOffset);
+      for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
+        TextGlyph& glyph = run.glyphs[gi];
+        const double angle = sample.angle + glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+        const double localX = glyph.xPosition;
+        const double localY = glyph.yPosition;
+        glyph.xPosition = origin.x + localX * std::cos(angle) - localY * std::sin(angle);
+        glyph.yPosition = origin.y + localX * std::sin(angle) + localY * std::cos(angle);
+        glyph.rotateDegrees += sample.angle * MathConstants<double>::kRadToDeg;
+      }
+      lastPosition = Vector2d(sample.point.x + cluster.advance, sample.point.y);
     } else {
-      glyph.glyphIndex = 0;
+      for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
+        run.glyphs[gi].glyphIndex = 0;
+      }
     }
   }
   for (size_t ri = firstRun; ri < runs.size(); ++ri) {
@@ -1312,13 +1329,16 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   double pathAdvance = 0.0;
   double pathDy = 0.0;
   std::optional<size_t> firstPathRun;
+  std::vector<TextPathCluster> pathClusters;
 
   std::vector<ChunkBoundary> chunkBoundaries;
   std::vector<RunPenExtent> runExtents;
 
   auto finishTextPath = [&]() {
     if (firstPathRun) {
-      const Vector2d end = placeTextPath(registry_, text, params, *firstPathRun, runs);
+      const Vector2d end =
+          placeTextPath(registry_, text, params, *firstPathRun, runs, pathClusters);
+      pathClusters.clear();
       currentPenX = end.x;
       currentPenY = end.y;
       prevDefaultY = 0.0;
@@ -1698,8 +1718,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
           TextGlyph glyph;
           glyph.glyphIndex = sg.glyphIndex;
-          glyph.xPosition = penX + sg.xOffset;
-          glyph.yPosition = penY + sg.yOffset;
+          // Path glyphs retain local shaping offsets until their cluster is placed.
+          glyph.xPosition = span.pathSpline ? sg.xOffset : penX + sg.xOffset;
+          glyph.yPosition = span.pathSpline ? sg.yOffset : penY + sg.yOffset;
           glyph.xAdvance = sg.xAdvance;
           glyph.yAdvance = sg.yAdvance;
           glyph.xKern = sg.xKern;
@@ -1714,7 +1735,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           }
 
           // Rotate combining mark offsets around the base glyph so the cluster rotates together.
-          if (glyph.rotateDegrees != 0.0 && !run.glyphs.empty() && glyph.xAdvance == 0.0) {
+          if (!span.pathSpline && glyph.rotateDegrees != 0.0 && !run.glyphs.empty() &&
+              glyph.xAdvance == 0.0) {
             const auto& base = run.glyphs.back();
             if (base.xAdvance != 0.0) {
               const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
@@ -1776,29 +1798,41 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       }
       for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
         TextGlyph& glyph = run.glyphs[gi];
-        const size_t charIndex =
+        const unsigned int charIndex =
             glyph.cluster < byteToCharIdx.size() ? byteToCharIdx[glyph.cluster] : 0;
         if (gi > 0) {
           pathAdvance += glyph.xKern;
         }
-        if (charIndex < span.dxList.size() && span.dxList[charIndex]) {
-          pathAdvance += span.dxList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
-                                                          Lengthd::Extent::X);
+        if (gi == 0 || charIndex != pathClusters.back().charIndex) {
+          if (charIndex < span.dxList.size() && span.dxList[charIndex]) {
+            pathAdvance += span.dxList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
+                                                            Lengthd::Extent::X);
+          }
+          if (charIndex < span.dyList.size() && span.dyList[charIndex]) {
+            pathDy += span.dyList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
+                                                       Lengthd::Extent::Y);
+          }
+          pathClusters.push_back(
+              {runs.size(), gi, gi + 1, charIndex, pathAdvance, defaultY + pathDy});
         }
-        if (charIndex < span.dyList.size() && span.dyList[charIndex]) {
-          pathDy += span.dyList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
-                                                     Lengthd::Extent::Y);
-        }
-        glyph.xPosition = pathAdvance;
-        glyph.yPosition = defaultY + pathDy;
+        TextPathCluster& cluster = pathClusters.back();
+        glyph.xPosition = pathAdvance - cluster.pathOffset + (vertical ? 0.0 : glyph.xPosition);
+        glyph.yPosition = vertical ? 0.0 : glyph.yPosition;
         pathAdvance += glyph.xAdvance;
-        size_t cluster = glyph.cluster;
-        const uint32_t codepoint = decodeUtf8(spanText, cluster);
-        if (!backend_->isCursive(codepoint)) {
-          pathAdvance += span.letterSpacingPx;
-        }
-        if (codepoint == 0x20) {
-          pathAdvance += span.wordSpacingPx;
+        cluster.glyphEnd = gi + 1;
+        cluster.advance = pathAdvance - cluster.pathOffset;
+        const size_t nextCluster =
+            gi + 1 < run.glyphs.size() ? run.glyphs[gi + 1].cluster : spanText.size();
+        if (gi + 1 == run.glyphs.size() || nextCluster >= byteToCharIdx.size() ||
+            byteToCharIdx[nextCluster] != charIndex) {
+          size_t byteIndex = run.glyphs[cluster.glyphStart].cluster;
+          const uint32_t codepoint = decodeUtf8(spanText, byteIndex);
+          if (!backend_->isCursive(codepoint)) {
+            pathAdvance += span.letterSpacingPx;
+          }
+          if (codepoint == 0x20) {
+            pathAdvance += span.wordSpacingPx;
+          }
         }
       }
       run.onPath = true;
