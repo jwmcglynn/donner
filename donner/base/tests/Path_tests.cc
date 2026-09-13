@@ -1385,6 +1385,12 @@ int rayCastWinding(const Path& path, const Vector2d& query) {
   return winding;
 }
 
+/// Check the fill rule required by Path::strokeToFill: all emitted pieces have
+/// positive winding, so overlapping pieces remain covered by a NonZero fill.
+bool strokeContains(const Path& path, const Vector2d& query) {
+  return rayCastWinding(path, query) != 0;
+}
+
 }  // namespace
 
 TEST(Path, StrokeToFillRoundCap) {
@@ -1613,27 +1619,27 @@ TEST(Path, StrokeToFillRoundJoin) {
   EXPECT_GT(filled.points().size(), bevel.points().size())
       << "Round join should add arc points beyond the bevel baseline";
 
-  // Geometric verification via ray-cast (EvenOdd, matching the Geode
-  // renderer). The outside of the corner is the (11,11) region; the round
-  // arc should include points close to (11,11)+hw in the corner bisector.
-  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+  // Geometric verification uses the NonZero contract of strokeToFill. The outside of the corner is
+  // the (11,11) region; the round arc should include points close to (11,11)+hw in the corner
+  // bisector.
+  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
 
   // Inside the stroke ribbon along each leg.
-  EXPECT_TRUE(evenOdd({5, 0})) << "midpoint of horizontal leg stroke";
-  EXPECT_TRUE(evenOdd({10, 5})) << "midpoint of vertical leg stroke";
+  EXPECT_TRUE(nonZero({5, 0})) << "midpoint of horizontal leg stroke";
+  EXPECT_TRUE(nonZero({10, 5})) << "midpoint of vertical leg stroke";
 
   // The outside of the corner: the round arc should cover the area
   // close to (10.7, 0.7) (on the corner bisector, ~0.7 hw past vertex).
-  EXPECT_TRUE(evenOdd({10.7, 0.7})) << "inside round-join arc";
+  EXPECT_TRUE(nonZero({10.7, 0.7})) << "inside round-join arc";
 
   // Far past the round arc (more than hw beyond vertex on bisector):
   // (11.5, 1.5) is at distance ~2.12*hw from (10,0), outside the stroke.
-  EXPECT_FALSE(evenOdd({11.5, 1.5})) << "far past round-join arc";
+  EXPECT_FALSE(nonZero({11.5, 1.5})) << "far past round-join arc";
 
   // Points clearly outside the stroke ribbon.
-  EXPECT_FALSE(evenOdd({5, 5})) << "outside horizontal leg (far below)";
-  EXPECT_FALSE(evenOdd({5, -5})) << "outside horizontal leg (far above)";
-  EXPECT_FALSE(evenOdd({-5, 0})) << "left of horizontal leg";
+  EXPECT_FALSE(nonZero({5, 5})) << "outside horizontal leg (far below)";
+  EXPECT_FALSE(nonZero({5, -5})) << "outside horizontal leg (far above)";
+  EXPECT_FALSE(nonZero({-5, 0})) << "left of horizontal leg";
 }
 
 TEST(Path, StrokeToFillBevelJoin) {
@@ -1645,11 +1651,11 @@ TEST(Path, StrokeToFillBevelJoin) {
   Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
-  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
 
   // Stroke ribbon along each leg.
-  EXPECT_TRUE(evenOdd({5, 0})) << "midpoint of horizontal leg stroke";
-  EXPECT_TRUE(evenOdd({10, 5})) << "midpoint of vertical leg stroke";
+  EXPECT_TRUE(nonZero({5, 0})) << "midpoint of horizontal leg stroke";
+  EXPECT_TRUE(nonZero({10, 5})) << "midpoint of vertical leg stroke";
 
   // Bevel chamfers the outside of the corner: the point (10.7, 0.7) is
   // beyond the bevel chord (which runs from (11,0) to (10,-1)) - wait,
@@ -1664,16 +1670,16 @@ TEST(Path, StrokeToFillBevelJoin) {
   // it's BEYOND the bevel chord (11 - 10.9 + 0 + 0.9 = 1 which equals
   // the chord line offset, slightly outside by numerical drift). Use
   // (10.4, -0.4) which is comfortably inside the bevel triangle.
-  EXPECT_TRUE(evenOdd({10.4, -0.4})) << "inside bevel triangle";
+  EXPECT_TRUE(nonZero({10.4, -0.4})) << "inside bevel triangle";
 
   // The bevel chord cuts off the corner so beyond the chord there's no
   // fill: (11, -1) is past both offset lines.
-  EXPECT_FALSE(evenOdd({11, -1})) << "past bevel chord (outside)";
+  EXPECT_FALSE(nonZero({11, -1})) << "past bevel chord (outside)";
 
   // Concave side of the corner (inside of the turn, around (9, 1)):
   // the inner offset lines meet at (9,1). Points well inside the concave
   // pocket - deep in the L's interior - should be outside the stroke.
-  EXPECT_FALSE(evenOdd({5, 5})) << "deep inside L (concave region)";
+  EXPECT_FALSE(nonZero({5, 5})) << "deep inside L (concave region)";
 }
 
 TEST(Path, StrokeToFillMiterLimitFallbackMatchesBevelJoin) {
@@ -1711,7 +1717,7 @@ TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   Path filled = path.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
-  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
 
   // Points clearly inside the stroke ribbon on each leg. The legs have
   // (unit) left normal n1 = (2,1)/√5 and n2 = (-2,1)/√5, so the stroke
@@ -1720,44 +1726,44 @@ TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   //
   // Midpoint of leg 1: (25, 50). Perturb by small amounts along the
   // left/right normal - points within ±halfWidth must be filled.
-  EXPECT_TRUE(evenOdd({25, 50})) << "midpoint of leg 1";
-  EXPECT_TRUE(evenOdd({75, 50})) << "midpoint of leg 2";
+  EXPECT_TRUE(nonZero({25, 50})) << "midpoint of leg 1";
+  EXPECT_TRUE(nonZero({75, 50})) << "midpoint of leg 2";
 
   // Slightly inside (toward apex from midpoint): still on the leg.
-  EXPECT_TRUE(evenOdd({30, 40})) << "leg 1 toward apex";
-  EXPECT_TRUE(evenOdd({70, 40})) << "leg 2 toward apex";
+  EXPECT_TRUE(nonZero({30, 40})) << "leg 1 toward apex";
+  EXPECT_TRUE(nonZero({70, 40})) << "leg 2 toward apex";
 
   // Close to the apex vertex (50, 0) on the outside of the V: above
   // the apex but within half-width. The outer offset lines at the apex
   // meet at ~(50, -22.36) (the outside miter), so (50, -5) and (50, -15)
   // are inside the outside-miter triangle, well within the stroke.
-  EXPECT_TRUE(evenOdd({50, -5})) << "just above apex on outside miter";
-  EXPECT_TRUE(evenOdd({50, -15})) << "further above apex, still inside outside miter";
+  EXPECT_TRUE(nonZero({50, -5})) << "just above apex on outside miter";
+  EXPECT_TRUE(nonZero({50, -15})) << "further above apex, still inside outside miter";
 
   // Inside of the apex on the concave side: the inner offset lines meet
   // at ~(50, 22.36). Points between the apex and (50, 22) should be
   // inside the stroke ribbon (concave inside-miter triangle).
-  EXPECT_TRUE(evenOdd({50, 10})) << "inside concave miter triangle";
-  EXPECT_TRUE(evenOdd({50, 20})) << "near apex of inside miter triangle";
+  EXPECT_TRUE(nonZero({50, 10})) << "inside concave miter triangle";
+  EXPECT_TRUE(nonZero({50, 20})) << "near apex of inside miter triangle";
 
   // BELOW the inside miter point (deeper into the V's concave pocket):
   // must be OUTSIDE the stroke. Before the fix this region showed
   // spurious fills/gaps due to the self-intersecting polygon.
-  EXPECT_FALSE(evenOdd({50, 40})) << "deep inside V pocket (below inside miter)";
-  EXPECT_FALSE(evenOdd({50, 60})) << "further down V pocket";
-  EXPECT_FALSE(evenOdd({50, 80})) << "near bottom of V pocket";
+  EXPECT_FALSE(nonZero({50, 40})) << "deep inside V pocket (below inside miter)";
+  EXPECT_FALSE(nonZero({50, 60})) << "further down V pocket";
+  EXPECT_FALSE(nonZero({50, 80})) << "near bottom of V pocket";
 
   // Above the apex beyond the outside miter (more than miterLimit*hw
   // from the vertex on the exterior bisector): must be OUTSIDE.
-  EXPECT_FALSE(evenOdd({50, -30})) << "above outside miter point";
+  EXPECT_FALSE(nonZero({50, -30})) << "above outside miter point";
 
   // Points inside the V but off the leg: far from both legs.
-  EXPECT_FALSE(evenOdd({30, 90})) << "bottom-left interior";
-  EXPECT_FALSE(evenOdd({70, 90})) << "bottom-right interior";
+  EXPECT_FALSE(nonZero({30, 90})) << "bottom-left interior";
+  EXPECT_FALSE(nonZero({70, 90})) << "bottom-right interior";
 
   // Points clearly outside the legs.
-  EXPECT_FALSE(evenOdd({0, 0})) << "far upper left";
-  EXPECT_FALSE(evenOdd({100, 0})) << "far upper right";
+  EXPECT_FALSE(nonZero({0, 0})) << "far upper left";
+  EXPECT_FALSE(nonZero({100, 0})) << "far upper right";
 }
 
 TEST(Path, StrokeToFillClosedPath) {
@@ -1780,31 +1786,126 @@ TEST(Path, StrokeToFillClosedPath) {
   // full-height/width lines across the interior, manifesting as diagonal
   // streaks in Geode's rotated-rect stroke golden.
   //
-  // Verify via ray-cast winding (EvenOdd) at points in each region. This
+  // Verify via the NonZero stroke contract at points in each region. This
   // matches how the Geode slug_fill shader evaluates inside/outside and
   // catches the "extra segment spanning the interior" bug directly, without
   // being sensitive to overshoot vertices that cancel in winding.
-  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
 
   // Hole interior: (5, 5), (3, 5), (7, 5) - all should be OUTSIDE.
-  EXPECT_FALSE(evenOdd({5, 5})) << "center of hole";
-  EXPECT_FALSE(evenOdd({3, 5})) << "left of center";
-  EXPECT_FALSE(evenOdd({7, 5})) << "right of center";
+  EXPECT_FALSE(nonZero({5, 5})) << "center of hole";
+  EXPECT_FALSE(nonZero({3, 5})) << "left of center";
+  EXPECT_FALSE(nonZero({7, 5})) << "right of center";
 
   // Stroke ring (annulus): between original rect boundary and ±halfWidth.
-  EXPECT_TRUE(evenOdd({5, 0.5})) << "top stroke";
-  EXPECT_TRUE(evenOdd({5, 9.5})) << "bottom stroke";
-  EXPECT_TRUE(evenOdd({0.5, 5})) << "left stroke";
-  EXPECT_TRUE(evenOdd({9.5, 5})) << "right stroke";
+  EXPECT_TRUE(nonZero({5, 0.5})) << "top stroke";
+  EXPECT_TRUE(nonZero({5, 9.5})) << "bottom stroke";
+  EXPECT_TRUE(nonZero({0.5, 5})) << "left stroke";
+  EXPECT_TRUE(nonZero({9.5, 5})) << "right stroke";
   // Corners of the stroke ring.
-  EXPECT_TRUE(evenOdd({0.5, 0.5})) << "top-left stroke corner";
-  EXPECT_TRUE(evenOdd({9.5, 9.5})) << "bottom-right stroke corner";
+  EXPECT_TRUE(nonZero({0.5, 0.5})) << "top-left stroke corner";
+  EXPECT_TRUE(nonZero({9.5, 9.5})) << "bottom-right stroke corner";
 
   // Outside the outer ring.
-  EXPECT_FALSE(evenOdd({-5, 5})) << "left of stroke";
-  EXPECT_FALSE(evenOdd({15, 5})) << "right of stroke";
-  EXPECT_FALSE(evenOdd({5, -5})) << "above stroke";
-  EXPECT_FALSE(evenOdd({5, 15})) << "below stroke";
+  EXPECT_FALSE(nonZero({-5, 5})) << "left of stroke";
+  EXPECT_FALSE(nonZero({15, 5})) << "right of stroke";
+  EXPECT_FALSE(nonZero({5, -5})) << "above stroke";
+  EXPECT_FALSE(nonZero({5, 15})) << "below stroke";
+}
+
+TEST(Path, StrokeToFillThinCrossbarRemainsCoveredAtAllWidths) {
+  const Path crossbar = PathBuilder()
+                            .moveTo({-3, -3})
+                            .lineTo({3, -3})
+                            .lineTo({3, -2})
+                            .lineTo({1, -2})
+                            .lineTo({1, 4})
+                            .lineTo({-1, 4})
+                            .lineTo({-1, -2})
+                            .lineTo({-3, -2})
+                            .closePath()
+                            .build();
+
+  for (const double width : {1.0, 3.0, 6.0}) {
+    const Path filled = crossbar.strokeToFill({.width = width}, kFlattenTolerance);
+    ASSERT_FALSE(filled.empty()) << "width=" << width;
+    EXPECT_TRUE(strokeContains(filled, {0, -2.5})) << "width=" << width;
+    EXPECT_TRUE(strokeContains(filled, {0, -1.5})) << "width=" << width;
+  }
+}
+
+TEST(Path, StrokeToFillFullyEngulfedClosedSquareHasNoParityHole) {
+  const Path square =
+      PathBuilder().moveTo({0, 0}).lineTo({2, 0}).lineTo({2, 2}).lineTo({0, 2}).closePath().build();
+  const Path filled = square.strokeToFill({.width = 3.0}, kFlattenTolerance);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_TRUE(strokeContains(filled, {1, 1}));
+  EXPECT_TRUE(strokeContains(filled, {-0.5, 1}));
+  EXPECT_FALSE(strokeContains(filled, {-3, 1}));
+}
+
+TEST(Path, StrokeToFillNormalizesSourceWindingAcrossCompoundContours) {
+  const Path clockwise = PathBuilder()
+                             .moveTo({0, 0})
+                             .lineTo({8, 0})
+                             .lineTo({8, 8})
+                             .lineTo({0, 8})
+                             .closePath()
+                             .moveTo({12, 0})
+                             .lineTo({20, 0})
+                             .lineTo({20, 8})
+                             .lineTo({12, 8})
+                             .closePath()
+                             .build();
+  const Path counterClockwise = PathBuilder()
+                                    .moveTo({0, 0})
+                                    .lineTo({0, 8})
+                                    .lineTo({8, 8})
+                                    .lineTo({8, 0})
+                                    .closePath()
+                                    .moveTo({12, 0})
+                                    .lineTo({12, 8})
+                                    .lineTo({20, 8})
+                                    .lineTo({20, 0})
+                                    .closePath()
+                                    .build();
+
+  const Path clockwiseFilled = clockwise.strokeToFill({.width = 2.0}, kFlattenTolerance);
+  const Path counterClockwiseFilled =
+      counterClockwise.strokeToFill({.width = 2.0}, kFlattenTolerance);
+  for (const Vector2d point :
+       {Vector2d{4, 0.5}, Vector2d{16, 0.5}, Vector2d{0.5, 4}, Vector2d{19.5, 4}}) {
+    EXPECT_TRUE(strokeContains(clockwiseFilled, point));
+    EXPECT_TRUE(strokeContains(counterClockwiseFilled, point));
+  }
+  EXPECT_FALSE(strokeContains(clockwiseFilled, {4, 4}));
+  EXPECT_FALSE(strokeContains(counterClockwiseFilled, {4, 4}));
+}
+
+TEST(Path, StrokeToFillPreservesWideCounterAndFillsNarrowCounter) {
+  const Path narrowCounter =
+      PathBuilder().addRect(Box2d({0, 0}, {10, 10})).addRect(Box2d({4, 4}, {6, 6})).build();
+  const Path wideCounter =
+      PathBuilder().addRect(Box2d({0, 0}, {10, 10})).addRect(Box2d({1, 1}, {9, 9})).build();
+
+  const Path narrowFilled = narrowCounter.strokeToFill({.width = 3.0}, kFlattenTolerance);
+  const Path wideFilled = wideCounter.strokeToFill({.width = 3.0}, kFlattenTolerance);
+  EXPECT_TRUE(strokeContains(narrowFilled, {5, 5}));
+  EXPECT_FALSE(strokeContains(wideFilled, {5, 5}));
+}
+
+TEST(Path, StrokeToFillOpenCrossingAndDashedPiecesUseNonZeroWinding) {
+  const Path crossing = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
+  const Path crossingFilled = crossing.strokeToFill({.width = 2.0}, kFlattenTolerance);
+  EXPECT_TRUE(strokeContains(crossingFilled, {5, 0}));
+
+  const Path dashed = PathBuilder().moveTo({0, 4}).lineTo({20, 4}).build();
+  const Path dashedFilled =
+      dashed.strokeToFill({.width = 2.0, .dashArray = {3.0, 3.0}}, kFlattenTolerance);
+  EXPECT_TRUE(strokeContains(dashedFilled, {1, 4}));
+  EXPECT_FALSE(strokeContains(dashedFilled, {4, 4}));
+  EXPECT_TRUE(strokeContains(dashedFilled, {7, 4}));
 }
 
 TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
@@ -1815,7 +1916,7 @@ TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
   // renderer_geode_golden ellipse1/rect2/quadbezier1 cases).
   //
   // Verify via ray-cast winding that the interior of a stroked ellipse
-  // produces the expected EvenOdd result (outside) at several interior sample
+  // produces the expected NonZero result (outside) at several interior sample
   // points. Before the fix the interior would show odd winding counts at
   // positions where the zig-zag self-intersections happened to align with a
   // scan line.
@@ -1825,30 +1926,30 @@ TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
   Path filled = ellipse.strokeToFill(style, kFlattenTolerance);
   EXPECT_FALSE(filled.empty());
 
-  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
 
   // Points well inside the hole of the stroke ring (center and several offsets).
   // An ellipse has center (50, 30), semi-axes 50 and 30. Interior points:
-  EXPECT_FALSE(evenOdd({50, 30})) << "center of ellipse";
-  EXPECT_FALSE(evenOdd({30, 30})) << "inside-left";
-  EXPECT_FALSE(evenOdd({70, 30})) << "inside-right";
-  EXPECT_FALSE(evenOdd({50, 20})) << "inside-up";
-  EXPECT_FALSE(evenOdd({50, 40})) << "inside-down";
+  EXPECT_FALSE(nonZero({50, 30})) << "center of ellipse";
+  EXPECT_FALSE(nonZero({30, 30})) << "inside-left";
+  EXPECT_FALSE(nonZero({70, 30})) << "inside-right";
+  EXPECT_FALSE(nonZero({50, 20})) << "inside-up";
+  EXPECT_FALSE(nonZero({50, 40})) << "inside-down";
 
   // Points far outside the ellipse.
-  EXPECT_FALSE(evenOdd({-20, 30})) << "far left";
-  EXPECT_FALSE(evenOdd({120, 30})) << "far right";
-  EXPECT_FALSE(evenOdd({50, -20})) << "far above";
-  EXPECT_FALSE(evenOdd({50, 80})) << "far below";
+  EXPECT_FALSE(nonZero({-20, 30})) << "far left";
+  EXPECT_FALSE(nonZero({120, 30})) << "far right";
+  EXPECT_FALSE(nonZero({50, -20})) << "far above";
+  EXPECT_FALSE(nonZero({50, 80})) << "far below";
 
   // Points on the stroke ring at the ellipse's cardinal points. Inner edge
   // of the stroke is (50 ± 48, 30) on the major axis and (50, 30 ± 28) on
   // the minor, outer edge at ±52 and ±32. Sample points well inside the
   // annulus:
-  EXPECT_TRUE(evenOdd({1, 30})) << "left stroke";
-  EXPECT_TRUE(evenOdd({99, 30})) << "right stroke";
-  EXPECT_TRUE(evenOdd({50, 1})) << "top stroke";
-  EXPECT_TRUE(evenOdd({50, 59})) << "bottom stroke";
+  EXPECT_TRUE(nonZero({1, 30})) << "left stroke";
+  EXPECT_TRUE(nonZero({99, 30})) << "right stroke";
+  EXPECT_TRUE(nonZero({50, 1})) << "top stroke";
+  EXPECT_TRUE(nonZero({50, 59})) << "bottom stroke";
 }
 
 TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
@@ -1866,14 +1967,14 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
   style.width = 2.5;
   Path filled = path.strokeToFill(style, kFlattenTolerance);
 
-  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+  auto nonZero = [&](Vector2d p) { return strokeContains(filled, p); };
 
   // Per the Geode quadbezier1 golden, an artifact appears at screen-y=116
   // spanning screen-x [172, 257]. A pixel at (200, 116) is well inside the
   // lens - it should be OUTSIDE the stroke polygon.
-  EXPECT_FALSE(evenOdd({200, 116})) << "lens interior at y=116";
-  EXPECT_FALSE(evenOdd({215, 105})) << "near apex above curve";
-  EXPECT_FALSE(evenOdd({200, 130})) << "lens interior at y=130";
+  EXPECT_FALSE(nonZero({200, 116})) << "lens interior at y=116";
+  EXPECT_FALSE(nonZero({215, 105})) << "near apex above curve";
+  EXPECT_FALSE(nonZero({200, 130})) << "lens interior at y=130";
 }
 
 TEST(Path, StrokeToFillCurves) {
