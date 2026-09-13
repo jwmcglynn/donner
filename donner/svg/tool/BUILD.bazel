@@ -32,6 +32,7 @@ donner_cc_binary(
         "codeql_default",
         "codeql_text_full",
     ],
+    visibility = ["//tools/ci:__pkg__"],
     deps = [
         ":donner_svg_tool_lib",
         "//donner/base:failure_signal_handler",

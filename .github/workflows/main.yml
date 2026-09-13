@@ -611,8 +611,7 @@ jobs:
         shell: bash
         run: |
           bazelisk build --config=ci --linkopt=-fuse-ld=gold \
-            //donner/svg/tool:donner-svg \
-            //donner/svg/renderer/tests:filter_graph_executor_tests
+            //tools/ci:linker_canary
 
   # Admit the operator's ARM64 Linux job from a hosted runner. The FIFO wait
   # cannot run on the constrained self-hosted pool itself: newer runs could
@@ -1020,11 +1019,7 @@ jobs:
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
-        //donner/editor/tests:editor_window_tests_geode
-        //donner/editor/tests:layer_thumbnail_golden_tests_geode
-        //donner/editor/tests:async_renderer_tests_geode
-        //donner/editor/tests:rnr_replay_tests_geode
-        //donner/editor/tests:gl_rnr_replay_tests_geode
+        //tools/ci:editor_geode
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1067,7 +1062,7 @@ jobs:
           set -euo pipefail
           bazelisk test --config=ci --nocache_test_results --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/gpu/metal/tests:metal_validation_profile
+            //tools/ci:metal_profile
           profile=$(python3 tools/metal_validation_profile.py \
             bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
           case "$profile" in
@@ -1091,12 +1086,7 @@ jobs:
           set -euo pipefail
           tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/gpu/metal/tests:metal_buffer_bounds_tests \
-            //donner/gpu/metal/tests:metal_color_matrix_tests \
-            //donner/gpu/metal/tests:metal_queue_writes_tests \
-            //donner/gpu/metal/tests:metal_solid_fill_tests \
-            //donner/gpu/metal/tests:metal_sub_rectangle_copy_tests \
-            //donner/gpu/metal/tests:metal_shader_memory_validation_tests
+            //tools/ci:metal_preflight
 
       - name: Build
         shell: bash
@@ -1182,11 +1172,7 @@ jobs:
       # event, so both need the Geode editor lane. See that job for why these
       # targets need an explicit invocation.
       GEODE_EDITOR_TARGETS: >-
-        //donner/editor/tests:editor_window_tests_geode
-        //donner/editor/tests:layer_thumbnail_golden_tests_geode
-        //donner/editor/tests:async_renderer_tests_geode
-        //donner/editor/tests:rnr_replay_tests_geode
-        //donner/editor/tests:gl_rnr_replay_tests_geode
+        //tools/ci:editor_geode
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1210,7 +1196,7 @@ jobs:
           set -euo pipefail
           bazelisk --nohome_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/gpu/metal/tests:metal_full_validation_required
+            //tools/ci:metal_full_validation
 
       - name: Metal validation preflight
         id: metal_preflight
@@ -1219,12 +1205,7 @@ jobs:
           set -euo pipefail
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --nocache_test_results --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/gpu/metal/tests:metal_buffer_bounds_tests \
-            //donner/gpu/metal/tests:metal_color_matrix_tests \
-            //donner/gpu/metal/tests:metal_queue_writes_tests \
-            //donner/gpu/metal/tests:metal_solid_fill_tests \
-            //donner/gpu/metal/tests:metal_sub_rectangle_copy_tests \
-            //donner/gpu/metal/tests:metal_shader_memory_validation_tests
+            //tools/ci:metal_preflight
 
       - name: Build
         shell: bash

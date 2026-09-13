@@ -42,7 +42,7 @@ jobs:
       - name: Build Binaries
         run: |
           mkdir release
-          bazelisk build --lockfile_mode=off -c opt //donner/svg/tool:donner-svg
+          bazelisk build --lockfile_mode=off -c opt //tools/ci:release_svg
           cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_linux_x86_64
           (cd release && sha256sum donner-svg_linux_x86_64 > donner-svg_linux_x86_64.sha256)
           {
@@ -88,7 +88,7 @@ jobs:
       - name: Build Binaries
         run: |
           mkdir release
-          bazelisk build --lockfile_mode=off -c opt //donner/svg/tool:donner-svg
+          bazelisk build --lockfile_mode=off -c opt //tools/ci:release_svg
           cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_darwin_arm64
           (cd release && shasum -a 256 donner-svg_darwin_arm64 > donner-svg_darwin_arm64.sha256)
           {

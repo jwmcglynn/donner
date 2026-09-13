@@ -41,6 +41,16 @@ class WorkflowTargetsTest(unittest.TestCase):
         ]
         self.assertEqual(findings, [], "Move individual CI targets into //tools/ci BUILD metadata")
 
+    def test_filtered_workflows_include_their_ci_metadata(self):
+        resolver = runfiles.Create()
+        directory = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        for path in sorted(directory.glob("*.yml")) + sorted(directory.glob("*.yaml")):
+            source = path.read_text(encoding="utf-8")
+            header = source.split("\njobs:", 1)[0]
+            if "//tools/ci:" in source and re.search(r"(?m)^\s+paths:\s*$", header):
+                with self.subTest(workflow=path.name):
+                    self.assertIn('"tools/ci/**"', header)
+
     def test_guard_covers_multiline_lists_queries_and_implicit_targets(self):
         source = '''targets: >-
   //donner/foo:one
