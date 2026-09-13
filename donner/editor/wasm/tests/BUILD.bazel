@@ -331,5 +331,12 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
-    tags = ["manual"],
+    tags = [
+        "manual",
+        "no-local",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
 )
