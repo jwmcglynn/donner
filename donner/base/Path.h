@@ -439,6 +439,9 @@ public:
    * @param style Stroke parameters (width, cap, join, miter limit).
    * @param flattenTolerance Tolerance for curve flattening, in this path's
    *   coordinate space.
+   * The result is a union of overlapping, positive-winding pieces and must
+   * be consumed with ef FillRule::NonZero.
+   *
    * @return A new Path representing the filled outline of the stroke.
    */
   Path strokeToFill(const StrokeStyle& style, double flattenTolerance) const;

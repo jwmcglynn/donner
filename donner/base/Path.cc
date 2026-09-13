@@ -1765,243 +1765,6 @@ MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal
   return result;
 }
 
-/// Emit a line join between two consecutive offset segments.
-///
-/// **Calling convention** - the caller MUST NOT pre-emit `prevEnd` before
-/// calling `emitJoin`. On entry the cursor sits at the previous iteration's
-/// "exit point" (either `curStart` of the last outside join, the miter point
-/// of the last inside join, or `leftStart` for the very first join). The
-/// join itself is responsible for emitting `prevEnd` when the contour
-/// actually needs to traverse it (outside turns), and for skipping it
-/// entirely on inside turns where the ribbon's outer boundary truncates
-/// at the miter intersection instead.
-///
-/// This matters because the inside-turn miter point lies on both adjacent
-/// offset lines and is typically BEFORE the corresponding `prevEnd` /
-/// `curStart` (i.e., between them and the vertex). If the caller had
-/// pre-emitted `prevEnd`, the polygon edge `prevEnd → miter` would
-/// backtrack along the previous offset line, producing a self-intersecting
-/// ribbon that rendered as a starburst of artifacts in EvenOdd fill mode.
-///
-/// \p prevEnd    end of the previous offset segment on the current side.
-/// \p curStart   start of the current offset segment on the current side.
-/// \p vertex     the original path vertex (the corner point before offset).
-/// \p prevNormal outward normal of the previous segment on the current side.
-/// \p curNormal  outward normal of the current segment on the current side.
-/// \p halfWidth  half the stroke width.
-/// \p join       line-join style for outside turns.
-/// \p miterLimit SVG `stroke-miterlimit` value.
-/// \p prevSegmentLength length of the previous path segment adjacent to the vertex.
-/// \p curSegmentLength  length of the current path segment adjacent to the vertex.
-/// \p builder    the PathBuilder to emit to.
-/// \p isLeftSide whether this is the left (forward) or right (backward) contour.
-void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d& vertex,
-              const Vector2d& prevNormal, const Vector2d& curNormal, double halfWidth,
-              LineJoin join, double miterLimit, double prevSegmentLength, double curSegmentLength,
-              PathBuilder& builder, bool isLeftSide) {
-  if (builder.exceededMaximumPoints()) {
-    return;
-  }
-  // Determine the turn direction. The cross product of the two normals tells us
-  // whether the join is on the inside or outside of the turn.
-  // For a left turn (counter-clockwise), the outside is on the left side.
-  const double cross = prevNormal.x * curNormal.y - prevNormal.y * curNormal.x;
-
-  // Nearly-parallel normals: the two offset lines are colinear (straight
-  // run through `vertex`), so the ribbon has no corner to speak of. Emit
-  // `prevEnd` so the polygon edge covers the end of the previous segment,
-  // then fall through - the next iteration's `emitJoin` (or the final
-  // post-loop `lineTo`) will carry the contour to the next point.
-  if (NearZero(cross, 1e-10)) {
-    builder.lineTo(prevEnd);
-    return;
-  }
-
-  // Determine if this side is the outside of the turn.
-  // For a left-side contour: outside when turning right (cross < 0).
-  // For a right-side contour: outside when turning left (cross > 0).
-  const bool isOutside = isLeftSide ? (cross < 0.0) : (cross > 0.0);
-
-  if (!isOutside) {
-    // Inside of the turn: the two offset lines cross *before* reaching
-    // `prevEnd` / `curStart`. The true ribbon boundary terminates the
-    // previous segment and restarts the current segment at that
-    // intersection - the miter point. The polygon must NOT visit
-    // `prevEnd` or `curStart` (they sit on the wrong side of the
-    // intersection and tracing to them would self-intersect the ribbon;
-    // see the a-stroke-linecap-008/009 resvg regression).
-    //
-    // Unlike OUTSIDE turns, the miter LIMIT does NOT apply here: the
-    // limit exists to prevent the outside miter from sticking arbitrarily
-    // far outward at sharp corners, but the inside miter extends INWARD
-    // into the ribbon interior and has no analogous aesthetic concern.
-    // Capping the inside miter at a limit and falling back to a direct
-    // `prevEnd → curStart` connector would create a figure-8
-    // self-intersection at sharp-chevron inside corners (the
-    // a-stroke-miterlimit-001..005 resvg regression).
-    //
-    // We DO still guard against two degenerate cases:
-    //   1. SMOOTH flattened-curve joins (~1-10° turns) - the miter is
-    //      geometrically so close to `prevEnd`/`curStart` that using it
-    //      adds tiny zig-zag vertices which corrupt ray-cast winding on
-    //      dense flattened contours (`StrokeToFillClosedEllipseInteriorIsEmpty`
-    //      regression). Keep the naive connector in that regime - the
-    //      sub-halfWidth zig is imperceptible.
-    //   2. NUMERICALLY ill-conditioned miters (near 180° U-turns where
-    //      `cosHalfAngle → 0`) - `computeMiterPoint` returns `invalid`
-    //      for those and we fall through to the naive connector.
-    constexpr double kSharpInsideCosThreshold = 0.866;  // turn angle >= 60°
-    constexpr double kSharpInsideMiterRatio = 1.0 / kSharpInsideCosThreshold;
-    const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
-    if (miter.valid) {
-      const double miterRatio = miter.lengthFromVertex / halfWidth;
-      // The miter point is only the true ribbon boundary while it lies within
-      // BOTH adjacent offset segments' extents. It sits on each offset line
-      // at perpendicular distance `halfWidth` from its segment, so its
-      // distance from the vertex measured ALONG each segment is
-      // `sqrt(lengthFromVertex² − halfWidth²)`. Near-reversal joins (a
-      // segment followed by another heading back within a degree or two -
-      // common where image-traced art butts a tiny connector against a curve)
-      // put the intersection tens or hundreds of units past both segment
-      // ends; emitting it there traces a long thin spike across the canvas
-      // instead of a join.
-      const double alongSegment = std::sqrt(
-          std::max(0.0, miter.lengthFromVertex * miter.lengthFromVertex - halfWidth * halfWidth));
-      const bool withinSegments = alongSegment <= std::min(prevSegmentLength, curSegmentLength);
-      if (miterRatio >= kSharpInsideMiterRatio && withinSegments) {
-        builder.lineTo(miter.point);
-        return;
-      }
-    }
-    // Fallback: emit the naive `prevEnd → curStart` connector (used for
-    // gentle joins and for numerically-degenerate miters).
-    builder.lineTo(prevEnd);
-    builder.lineTo(curStart);
-    return;
-  }
-
-  // Outside of the turn: traverse to `prevEnd` (end of the previous offset
-  // segment), then apply the requested join style, then finish at
-  // `curStart` (start of the current offset segment).
-  builder.lineTo(prevEnd);
-
-  switch (join) {
-    case LineJoin::Bevel:
-      // Simple: connect the two offset endpoints with a straight line.
-      builder.lineTo(curStart);
-      break;
-
-    case LineJoin::Round: {
-      // Approximate a circular arc from prevEnd to curStart around vertex.
-      // We subdivide the angle into segments for a smooth approximation.
-      const Vector2d fromVec = prevEnd - vertex;
-      const Vector2d toVec = curStart - vertex;
-
-      double startAngle = std::atan2(fromVec.y, fromVec.x);
-      double endAngle = std::atan2(toVec.y, toVec.x);
-
-      // Choose the shorter arc direction.
-      double sweep = endAngle - startAngle;
-      if (sweep > MathConstants<double>::kPi) {
-        sweep -= 2.0 * MathConstants<double>::kPi;
-      } else if (sweep < -MathConstants<double>::kPi) {
-        sweep += 2.0 * MathConstants<double>::kPi;
-      }
-
-      // Subdivide into small arcs.
-      const int numSteps = BoundedRoundStrokeSubdivisionSteps(Abs(sweep) * halfWidth / 2.0, 4);
-      for (int s = 1; s <= numSteps && !builder.exceededMaximumPoints(); ++s) {
-        const double t = static_cast<double>(s) / static_cast<double>(numSteps);
-        const double angle = startAngle + sweep * t;
-        const Vector2d pt = vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth;
-        builder.lineTo(pt);
-      }
-      break;
-    }
-
-    case LineJoin::Miter: {
-      // Compute the miter point: the intersection of the two offset lines.
-      // The offset lines are { x : x·n = vertex·n + halfWidth }, and their
-      // intersection lies at `vertex + miterUnit * halfWidth/cosHalfAngle`,
-      // where `miterUnit = (n1+n2)/|n1+n2|` and
-      // `cosHalfAngle = |n1+n2|/2 = sin(interiorHalfAngle)`. This matches the
-      // standard SVG miter formula `halfWidth/sin(interiorHalfAngle)` used by
-      // `ComputeMiter` in `strokeMiterBounds`.
-      //
-      // Note: prior revisions used `halfWidth/sinHalfAngle` (where
-      // sinHalfAngle is the sine of the half-angle *between the normals*),
-      // which happens to coincide with the correct formula at exactly 90°
-      // turns (sin 45° = cos 45°) but drifts for every other angle -
-      // undershooting sharp outside miters (the inverted-V right contour
-      // bug) and rejecting gentle outside miters via a spuriously-large
-      // miter ratio.
-      const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
-      if (!miter.valid) {
-        builder.lineTo(curStart);
-        break;
-      }
-
-      const double miterRatio = miter.lengthFromVertex / halfWidth;
-      if (miterRatio > miterLimit) {
-        builder.lineTo(curStart);
-      } else {
-        builder.lineTo(miter.point);
-        builder.lineTo(curStart);
-      }
-      break;
-    }
-  }
-}
-
-/// Emit a line cap at a subpath endpoint.
-///
-/// \p point is the endpoint.
-/// \p direction is the tangent direction at the endpoint (pointing outward from the subpath).
-/// \p halfWidth is half the stroke width.
-/// \p cap is the cap style.
-/// \p builder is the PathBuilder to emit to.
-void emitCap(const Vector2d& point, const Vector2d& direction, double halfWidth, LineCap cap,
-             PathBuilder& builder) {
-  if (builder.exceededMaximumPoints()) {
-    return;
-  }
-  const Vector2d normal = Vector2d(-direction.y, direction.x);
-  const Vector2d leftPt = point + normal * halfWidth;
-  const Vector2d rightPt = point - normal * halfWidth;
-
-  switch (cap) {
-    case LineCap::Butt:
-      // Connect left to right directly (the caller has already placed us at leftPt).
-      builder.lineTo(rightPt);
-      break;
-
-    case LineCap::Square: {
-      // Extend by halfWidth in the direction of the tangent.
-      const Vector2d extension = direction * halfWidth;
-      builder.lineTo(leftPt + extension);
-      builder.lineTo(rightPt + extension);
-      builder.lineTo(rightPt);
-      break;
-    }
-
-    case LineCap::Round: {
-      // Semicircle from leftPt around to rightPt.
-      const double startAngle = std::atan2(normal.y, normal.x);
-      // Sweep PI radians (semicircle) in the direction from left to right around the cap.
-      const double sweep = -MathConstants<double>::kPi;
-
-      const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8);
-      for (int s = 1; s <= numSteps && !builder.exceededMaximumPoints(); ++s) {
-        const double t = static_cast<double>(s) / static_cast<double>(numSteps);
-        const double angle = startAngle + sweep * t;
-        const Vector2d pt = point + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth;
-        builder.lineTo(pt);
-      }
-      break;
-    }
-  }
-}
-
 /// Represents a subpath extracted from a flattened path (lines only).
 struct FlatSubpath {
   std::vector<Vector2d> points;
@@ -2026,6 +1789,133 @@ struct FlatSubpath {
   };
   std::vector<TangentOverride> tangentOverrides;
 };
+
+/// Emit a convex stroke piece with counter-clockwise winding.
+///
+/// strokeToFill represents a stroke as a union of overlapping pieces. Keeping
+/// every piece positive makes that union stable under FillRule::NonZero.
+void emitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder) {
+  if (builder.exceededMaximumPoints() || points.size() < 3) {
+    return;
+  }
+
+  for (const Vector2d& point : points) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      return;
+    }
+  }
+
+  double orientation = 0.0;
+  for (size_t i = 0; i < points.size(); ++i) {
+    const Vector2d& a = points[i];
+    const Vector2d& b = points[(i + 1) % points.size()];
+    const Vector2d& c = points[(i + 2) % points.size()];
+    orientation = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (orientation != 0.0) {
+      break;
+    }
+  }
+  if (orientation == 0.0 || std::isnan(orientation)) {
+    return;
+  }
+  if (orientation < 0.0) {
+    std::reverse(points.begin(), points.end());
+  }
+
+  builder.moveTo(points.front());
+  for (size_t i = 1; i < points.size() && !builder.exceededMaximumPoints(); ++i) {
+    builder.lineTo(points[i]);
+  }
+  builder.closePath();
+}
+
+void emitRoundCapPiece(const Vector2d& point, const Vector2d& outwardDirection, double halfWidth,
+                       PathBuilder& builder) {
+  const Vector2d normal(-outwardDirection.y, outwardDirection.x);
+  std::vector<Vector2d> points;
+  points.reserve(static_cast<size_t>(BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8)) + 2);
+  points.push_back(point);
+  const double startAngle = std::atan2(normal.y, normal.x);
+  const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8);
+  for (int step = 0; step <= numSteps; ++step) {
+    const double t = static_cast<double>(step) / static_cast<double>(numSteps);
+    const double angle = startAngle - MathConstants<double>::kPi * t;
+    points.push_back(point + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+  }
+  emitPositiveStrokePiece(std::move(points), builder);
+}
+
+void emitCapPiece(const Vector2d& point, const Vector2d& outwardDirection, double halfWidth,
+                  LineCap cap, PathBuilder& builder) {
+  if (cap == LineCap::Butt) {
+    return;
+  }
+  if (cap == LineCap::Round) {
+    emitRoundCapPiece(point, outwardDirection, halfWidth, builder);
+    return;
+  }
+
+  const Vector2d normal(-outwardDirection.y, outwardDirection.x);
+  emitPositiveStrokePiece(
+      {point + normal * halfWidth, point + normal * halfWidth + outwardDirection * halfWidth,
+       point - normal * halfWidth + outwardDirection * halfWidth, point - normal * halfWidth},
+      builder);
+}
+
+void emitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal,
+                          const Vector2d& currentNormal, double halfWidth, const StrokeStyle& style,
+                          PathBuilder& builder) {
+  const double turn = previousNormal.x * currentNormal.y - previousNormal.y * currentNormal.x;
+  if (NearZero(turn, 1e-10)) {
+    if (style.join == LineJoin::Round && previousNormal.dot(currentNormal) < 0.0) {
+      emitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth, builder);
+    }
+    return;
+  }
+
+  const double outsideSign = turn > 0.0 ? -1.0 : 1.0;
+  const Vector2d previousOuterNormal = previousNormal * outsideSign;
+  const Vector2d currentOuterNormal = currentNormal * outsideSign;
+  const Vector2d previousOuter = vertex + previousOuterNormal * halfWidth;
+  const Vector2d currentOuter = vertex + currentOuterNormal * halfWidth;
+
+  if (style.join == LineJoin::Bevel) {
+    emitPositiveStrokePiece({vertex, previousOuter, currentOuter}, builder);
+    return;
+  }
+
+  if (style.join == LineJoin::Miter) {
+    const MiterResult miter =
+        computeMiterPoint(vertex, previousOuterNormal, currentOuterNormal, halfWidth);
+    if (miter.valid && miter.lengthFromVertex / halfWidth <= style.miterLimit) {
+      emitPositiveStrokePiece({vertex, previousOuter, miter.point, currentOuter}, builder);
+    } else {
+      emitPositiveStrokePiece({vertex, previousOuter, currentOuter}, builder);
+    }
+    return;
+  }
+
+  const double startAngle = std::atan2(previousOuterNormal.y, previousOuterNormal.x);
+  const double endAngle = std::atan2(currentOuterNormal.y, currentOuterNormal.x);
+  double sweep = endAngle - startAngle;
+  if (turn > 0.0) {
+    if (sweep <= 0.0) {
+      sweep += MathConstants<double>::kPi * 2.0;
+    }
+  } else if (sweep >= 0.0) {
+    sweep -= MathConstants<double>::kPi * 2.0;
+  }
+  const int numSteps = BoundedRoundStrokeSubdivisionSteps(Abs(sweep) * halfWidth / 2.0, 4);
+  std::vector<Vector2d> points;
+  points.reserve(static_cast<size_t>(numSteps) + 3);
+  points.push_back(vertex);
+  for (int step = 0; step <= numSteps; ++step) {
+    const double t = static_cast<double>(step) / static_cast<double>(numSteps);
+    const double angle = startAngle + sweep * t;
+    points.push_back(vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+  }
+  emitPositiveStrokePiece(std::move(points), builder);
+}
 
 /// Extract subpaths from a flattened path without exceeding @p maximumPoints.
 std::optional<std::vector<FlatSubpath>> extractSubpaths(const Path& path,
@@ -2308,32 +2198,38 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
         tangent = Vector2d(1.0, 0.0);
       }
       const Vector2d normal(-tangent.y, tangent.x);
-      builder.moveTo(p - tangent * halfWidth - normal * halfWidth);
-      builder.lineTo(p + tangent * halfWidth - normal * halfWidth);
-      builder.lineTo(p + tangent * halfWidth + normal * halfWidth);
-      builder.lineTo(p - tangent * halfWidth + normal * halfWidth);
-      builder.closePath();
+      emitPositiveStrokePiece({p - tangent * halfWidth - normal * halfWidth,
+                               p + tangent * halfWidth - normal * halfWidth,
+                               p + tangent * halfWidth + normal * halfWidth,
+                               p - tangent * halfWidth + normal * halfWidth},
+                              builder);
       return;
     }
     // Round: full circle approximated as a polygon. Use the same
     // step-per-pixel heuristic as `emitCap`'s round-cap branch - 8 minimum,
     // otherwise proportional to the circumference.
     const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 4.0, 16);
-    builder.moveTo(Vector2d(p.x + halfWidth, p.y));
-    for (int s = 1; s < numSteps && !builder.exceededMaximumPoints(); ++s) {
+    std::vector<Vector2d> points;
+    points.reserve(static_cast<size_t>(numSteps));
+    for (int s = 0; s < numSteps; ++s) {
       const double angle = (static_cast<double>(s) / static_cast<double>(numSteps)) * 2.0 *
                            MathConstants<double>::kPi;
-      builder.lineTo(
+      points.push_back(
           Vector2d(p.x + std::cos(angle) * halfWidth, p.y + std::sin(angle) * halfWidth));
     }
-    builder.closePath();
+    emitPositiveStrokePiece(std::move(points), builder);
     return;
   }
 
-  // Compute per-segment normals (left-side normals, pointing to the left of the direction).
+  // A stroke is the union of segment strips, exterior joins, and endpoint
+  // caps. Every piece is independently wound counter-clockwise so overlap is
+  // stable under the NonZero fill rule, including when a wide stroke engulfs
+  // an entire closed contour.
   const size_t numSegments = n - 1;
   std::vector<Vector2d> normals(numSegments);
   std::vector<double> segmentLengths(numSegments);
+  std::vector<size_t> activeSegments;
+  activeSegments.reserve(numSegments);
   for (size_t i = 0; i < numSegments; ++i) {
     normals[i] = segmentNormal(pts[i], pts[i + 1]);
     segmentLengths[i] = (pts[i + 1] - pts[i]).length();
@@ -2352,131 +2248,40 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     }
   }
 
-  // ---- Left contour (forward walk) ----
-  // Offset each segment to the left by halfWidth.
-  //
-  // Invariant: `emitJoin` is responsible for emitting the end of the
-  // previous offset segment (`prevEnd`) on OUTSIDE turns and for
-  // short-circuiting directly to the miter intersection on sharp INSIDE
-  // turns (skipping both `prevEnd` and `curStart`). The caller must NOT
-  // pre-emit `prevEnd` - doing so would cause the polygon to backtrack
-  // along the previous offset line on inside-turn vertices, producing a
-  // self-intersecting ribbon.
-  //
-  // Trace shape: `leftStart → (joins) → (end of final segment)`.
-  // At the entry to each iteration `i`, the cursor is guaranteed to sit
-  // on the SEGMENT(i-1) offset line - either at `leftStart` (i=1), at
-  // `curStart` from the previous iteration's outside join, or at the
-  // previous iteration's inside miter point (which also lies on segment
-  // (i-1)'s offset line by construction).
-  const Vector2d leftStart = pts[0] + normals[0] * halfWidth;
-  builder.moveTo(leftStart);
-
-  // Each iteration processes the join at `pts[i]` between segment (i-1)
-  // and segment i. emitJoin handles the end-of-prev-offset / start-of-cur-
-  // offset bookkeeping itself.
-  for (size_t i = 1; i < numSegments && !builder.exceededMaximumPoints(); ++i) {
-    const Vector2d prevEnd = pts[i] + normals[i - 1] * halfWidth;
-    const Vector2d curStart = pts[i] + normals[i] * halfWidth;
-
-    emitJoin(prevEnd, curStart, pts[i], normals[i - 1], normals[i], halfWidth, style.join,
-             style.miterLimit, segmentLengths[i - 1], segmentLengths[i], builder,
-             /*isLeftSide=*/true);
+  for (size_t i = 0; i < numSegments; ++i) {
+    if (segmentLengths[i] > 1e-10 && normals[i].lengthSquared() > 1e-20) {
+      activeSegments.push_back(i);
+      const Vector2d offset = normals[i] * halfWidth;
+      emitPositiveStrokePiece(
+          {pts[i] + offset, pts[i] - offset, pts[i + 1] - offset, pts[i + 1] + offset}, builder);
+      if (builder.exceededMaximumPoints()) {
+        return;
+      }
+    }
   }
 
-  // Emit the end of the LAST segment's offset. For a stroke with a single
-  // segment (numSegments == 1, skipping the loop) this produces a straight
-  // left-side edge from `leftStart` to the end of segment 0's offset. For
-  // multi-segment strokes this completes the traversal from the last
-  // join's exit point (curStart or miter.point) to the far endpoint.
-  builder.lineTo(pts[n - 1] + normals[numSegments - 1] * halfWidth);
+  if (activeSegments.empty()) {
+    return;
+  }
 
-  if (subpath.closed) {
-    // For closed subpaths, join the last segment to the first.
-    const Vector2d prevEnd = pts[n - 1] + normals[numSegments - 1] * halfWidth;
-    const Vector2d curStart = pts[n - 1] + normals[0] * halfWidth;
-
-    // The last point should be equal to the first point for closed subpaths.
-    emitJoin(prevEnd, curStart, pts[n - 1], normals[numSegments - 1], normals[0], halfWidth,
-             style.join, style.miterLimit, segmentLengths[numSegments - 1], segmentLengths[0],
-             builder, /*isLeftSide=*/true);
-
-    // Now walk the right contour backward.
-    // For a closed path, we close the left contour and start a new subpath for the right.
-    builder.closePath();
-
-    // ---- Right contour (inner, wound opposite direction for closed paths) ----
-    // Walk backward, offset to the right (i.e., negate the normal). Same
-    // "caller does not pre-emit prevEnd" invariant as the left contour.
-    const Vector2d rightStart = pts[0] - normals[0] * halfWidth;
-    builder.moveTo(rightStart);
-
-    for (size_t i = 1; i < numSegments && !builder.exceededMaximumPoints(); ++i) {
-      const Vector2d prevEnd = pts[i] - normals[i - 1] * halfWidth;
-      const Vector2d curStart = pts[i] - normals[i] * halfWidth;
-
-      // Use right-facing normals for miter geometry and right-side turn classification.
-      emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i - 1].x, -normals[i - 1].y),
-               Vector2d(-normals[i].x, -normals[i].y), halfWidth, style.join, style.miterLimit,
-               segmentLengths[i - 1], segmentLengths[i], builder, /*isLeftSide=*/false);
+  const size_t joinCount = subpath.closed ? activeSegments.size() : activeSegments.size() - 1;
+  for (size_t i = 0; i < joinCount; ++i) {
+    const size_t previousSegment = activeSegments[i];
+    const size_t currentSegment = activeSegments[(i + 1) % activeSegments.size()];
+    emitOutsideJoinPiece(pts[currentSegment], normals[previousSegment], normals[currentSegment],
+                         halfWidth, style, builder);
+    if (builder.exceededMaximumPoints()) {
+      return;
     }
+  }
 
-    // NOTE: unlike the OPEN case, closed paths do NOT need a post-loop
-    // lineTo here - the following wrap-around emitJoin will emit the end
-    // of segment (numSegments-1)'s offset as its own `prevEnd` for outside
-    // turns, and will correctly short-circuit on inside turns.
-
-    // Close the right contour with a join at the start/end point.
-    {
-      const Vector2d prevEnd = pts[n - 1] - normals[numSegments - 1] * halfWidth;
-      const Vector2d curStart = pts[n - 1] - normals[0] * halfWidth;
-
-      emitJoin(prevEnd, curStart, pts[n - 1],
-               Vector2d(-normals[numSegments - 1].x, -normals[numSegments - 1].y),
-               Vector2d(-normals[0].x, -normals[0].y), halfWidth, style.join, style.miterLimit,
-               segmentLengths[numSegments - 1], segmentLengths[0], builder,
-               /*isLeftSide=*/false);
-    }
-
-    builder.closePath();
-  } else {
-    // ---- Open subpath: cap at end, then right contour backward, then cap at start ----
-
-    // End cap: going from the left side to the right side at the last point.
-    // On entry the left contour has ended at `pts[n-1] + normals[numSegments-1] * halfWidth`
-    // (the end of the last segment's offset) - the cap sweeps from that
-    // cursor over to the mirrored point on the right side.
-    {
-      const Vector2d endDir = (pts[n - 1] - pts[n - 2]).normalize();
-      emitCap(pts[n - 1], endDir, halfWidth, style.cap, builder);
-    }
-
-    // ---- Right contour (backward walk) ----
-    // Same "caller does not pre-emit prevEnd" invariant as the left
-    // contour. The cursor entering the loop sits at `pts[n-1] - normals[numSegments-1] * halfWidth`
-    // (the start of the right-contour traversal, which is where the end
-    // cap ended). Each iteration processes the join at `pts[i]` between
-    // segment i (previous, in the backward walk) and segment i-1 (current).
-    for (size_t i = numSegments - 1; i > 0 && !builder.exceededMaximumPoints(); --i) {
-      const Vector2d prevEnd = pts[i] - normals[i] * halfWidth;
-      const Vector2d curStart = pts[i] - normals[i - 1] * halfWidth;
-
-      emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i].x, -normals[i].y),
-               Vector2d(-normals[i - 1].x, -normals[i - 1].y), halfWidth, style.join,
-               style.miterLimit, segmentLengths[i], segmentLengths[i - 1], builder,
-               /*isLeftSide=*/true);
-    }
-
-    // End of the final (= seg 0) offset on the right side.
-    builder.lineTo(pts[0] - normals[0] * halfWidth);
-
-    // Start cap: going from the right side to the left side at the first point.
-    {
-      const Vector2d startDir = (pts[0] - pts[1]).normalize();
-      emitCap(pts[0], startDir, halfWidth, style.cap, builder);
-    }
-
-    builder.closePath();
+  if (!subpath.closed) {
+    const size_t firstSegment = activeSegments.front();
+    const size_t lastSegment = activeSegments.back();
+    emitCapPiece(pts[firstSegment], (pts[firstSegment] - pts[firstSegment + 1]).normalize(),
+                 halfWidth, style.cap, builder);
+    emitCapPiece(pts[lastSegment + 1], (pts[lastSegment + 1] - pts[lastSegment]).normalize(),
+                 halfWidth, style.cap, builder);
   }
 }
 

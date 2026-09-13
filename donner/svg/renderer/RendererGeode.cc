@@ -552,115 +552,6 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
   return style;
 }
 
-/// Rewrite a geometry so that any *closed* subpath whose anchor points are all
-/// collinear (a degenerate zero-thickness line, e.g. `M 30 100 L 170 100 Z`)
-/// is left *open* instead.
-///
-/// `Path::strokeToFill` of a collinear closed subpath emits two same-winding
-/// contours that, instead of nesting into an annulus, decompose the stroke
-/// rectangle into two overlapping triangles meeting along a diagonal. The
-/// analytic dual-ray coverage shader under-covers that thin diagonal-split band
-/// (the line's edge rows render at ~half coverage). An *open* subpath strokes
-/// into a single clean rectangle that the shader covers correctly. Closing a
-/// collinear subpath adds no enclosed area, so de-closing is visually
-/// equivalent and only touches this degenerate case.
-///
-/// Collinearity (not signed area) is the right test: a self-intersecting but
-/// genuinely 2D closed polygon - e.g. the symmetric zigzag
-/// `40 40 80 160 120 40 160 160` in painting/marker/marker-on-polygon - has
-/// zero *signed* area yet is a real shape whose close must be preserved.
-Path deCloseZeroAreaSubpaths(const Path& geometry) {
-  const std::span<const Path::Command> cmds = geometry.commands();
-  const std::span<const Vector2d> pts = geometry.points();
-
-  // Per-subpath: collect the index range of its points and whether it closes.
-  struct SubpathInfo {
-    size_t firstPoint = 0;
-    size_t pointCount = 0;
-    bool closed = false;
-    bool collinear = false;
-  };
-  std::vector<SubpathInfo> subpaths;
-  {
-    size_t pointIdx = 0;
-    for (const Path::Command& cmd : cmds) {
-      if (cmd.verb == Path::Verb::MoveTo) {
-        subpaths.push_back(SubpathInfo{pointIdx, 1, false, false});
-      } else if (cmd.verb == Path::Verb::ClosePath) {
-        if (!subpaths.empty()) {
-          subpaths.back().closed = true;
-        }
-      } else if (!subpaths.empty()) {
-        subpaths.back().pointCount += Path::pointsPerVerb(cmd.verb);
-      }
-      pointIdx += Path::pointsPerVerb(cmd.verb);
-    }
-  }
-
-  // A subpath is collinear when every point lies on the line through its first
-  // two distinct points (cross product ≈ 0). Single-point subpaths count as
-  // collinear (degenerate).
-  bool anyDegenerateClosed = false;
-  for (SubpathInfo& sp : subpaths) {
-    if (!sp.closed) {
-      continue;
-    }
-    const Vector2d& p0 = pts[sp.firstPoint];
-    Vector2d dir{0.0, 0.0};
-    bool haveDir = false;
-    bool collinear = true;
-    for (size_t i = 1; i < sp.pointCount; ++i) {
-      const Vector2d d = pts[sp.firstPoint + i] - p0;
-      if (!haveDir) {
-        if (d.lengthSquared() > 1e-12) {
-          dir = d;
-          haveDir = true;
-        }
-        continue;
-      }
-      const double cross = dir.x * d.y - dir.y * d.x;
-      if (std::abs(cross) > 1e-6) {
-        collinear = false;
-        break;
-      }
-    }
-    sp.collinear = collinear;
-    if (collinear) {
-      anyDegenerateClosed = true;
-    }
-  }
-
-  if (!anyDegenerateClosed) {
-    return geometry;
-  }
-
-  // Rebuild, dropping the ClosePath of each collinear closed subpath.
-  PathBuilder builder;
-  size_t pointIdx = 0;
-  size_t subpathIdx = static_cast<size_t>(-1);
-  for (const Path::Command& cmd : cmds) {
-    switch (cmd.verb) {
-      case Path::Verb::MoveTo:
-        ++subpathIdx;
-        builder.moveTo(pts[pointIdx]);
-        break;
-      case Path::Verb::LineTo: builder.lineTo(pts[pointIdx]); break;
-      case Path::Verb::QuadTo: builder.quadTo(pts[pointIdx], pts[pointIdx + 1]); break;
-      case Path::Verb::CurveTo:
-        builder.curveTo(pts[pointIdx], pts[pointIdx + 1], pts[pointIdx + 2]);
-        break;
-      case Path::Verb::ClosePath:
-        if (subpathIdx >= subpaths.size() || !subpaths[subpathIdx].collinear) {
-          builder.closePath();
-        }
-        break;
-    }
-    pointIdx += Path::pointsPerVerb(cmd.verb);
-  }
-
-  return builder.build();
-}
-
 /// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
 /// `objectBoundingBox` mode. Mirrors the helper used by the software renderer
 /// for gradient coordinate resolution.
@@ -3092,8 +2983,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const geode::EncodedPath* encoded = nullptr;
     /// True when both `strokedPath` and `encoded` live in the entity cache.
     bool persistent = false;
-    /// Fill rule to use. For open-path strokes, `strokeToFill` emits one
-    /// subpath → NonZero; for closed-path strokes, two → EvenOdd.
+    /// Stroke pieces use NonZero so their covered regions form a union.
     FillRule fillRule = FillRule::NonZero;
   };
 
@@ -4290,37 +4180,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     residentSlot->lastSceneFrame = currentFrameIndex;
   }
 
-  /// Determine the fill rule for a stroked outline. Each painted interval of
-  /// a valid dash pattern becomes a separate closed ribbon. Those ribbons use
-  /// NonZero so adjacent or wrapped dashes union instead of canceling their
-  /// overlaps. Invalid, oversized, and all-zero patterns fall back to solid stroking, where
-  /// open paths produce one subpath (NonZero) and closed paths produce two
-  /// same-winding subpaths (EvenOdd hollow-ring semantics).
-  static FillRule strokeFillRuleFor(const Path& strokedOutline, const StrokeStyle& strokeStyle) {
-    if (!strokeStyle.dashArray.empty() &&
-        strokeStyle.dashArray.size() <= StrokeStyle::kMaxDashEntries) {
-      double dashSum = 0.0;
-      for (double dash : strokeStyle.dashArray) {
-        if (!std::isfinite(dash) || dash < 0.0) {
-          dashSum = 0.0;
-          break;
-        }
-        dashSum += dash;
-      }
-      if (std::isfinite(dashSum) && dashSum > 0.0) {
-        return FillRule::NonZero;
-      }
-    }
-
-    size_t subpathCount = 0;
-    for (const auto& cmd : strokedOutline.commands()) {
-      if (cmd.verb == Path::Verb::MoveTo) {
-        ++subpathCount;
-      }
-    }
-    return (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
-  }
-
   /// Stroke-side of the cache. Builds (or reuses) the `strokeToFill`
   /// output and its encode on `source`'s `GeodePathCacheComponent`.
   /// Returns a `StrokeDerived` pointing into the cache (entity path) or
@@ -4348,12 +4207,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
 
       {
-        // Miss (or stroke-params / device-scale changed) - rebuild. De-close
-        // zero-area closed subpaths first (see `deCloseZeroAreaSubpaths`) so a
-        // degenerate `M L Z` line strokes into a clean rectangle the analytic
-        // shader covers correctly, instead of overlapping triangles.
-        Path stroked =
-            deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
+        // Rebuild the bounded NonZero stroke union when geometry or stroke parameters change.
+        Path stroked = geometry.strokeToFill(strokeStyle, flattenTolerance);
         if (stroked.empty()) {
           if (cache.strokeSlot.has_value() &&
               pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
@@ -4368,7 +4223,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           return result;  // strokedPath stays null.
         }
         countStrokeOutline(stroked);
-        const FillRule fillRule = strokeFillRuleFor(stroked, strokeStyle);
+        const FillRule fillRule = FillRule::NonZero;
         std::optional<geode::EncodedPath> encoded = encodeGeometry(stroked, fillRule);
         if (!encoded.has_value()) {
           return result;
@@ -4407,14 +4262,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return result;
     }
     // No-entity fallback: compute and admit into Impl-local scratch buffers.
-    strokeScratchPath =
-        deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
+    strokeScratchPath = geometry.strokeToFill(strokeStyle, flattenTolerance);
     if (strokeScratchPath.empty()) {
       return result;
     }
     countStrokeOutline(strokeScratchPath);
     result.strokedPath = &strokeScratchPath;
-    result.fillRule = strokeFillRuleFor(strokeScratchPath, strokeStyle);
+    result.fillRule = FillRule::NonZero;
     strokeScratchEncode = encodeGeometry(strokeScratchPath, result.fillRule);
     if (!strokeScratchEncode.has_value()) {
       return {};
@@ -6384,17 +6238,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // gradient-fill / pattern pipeline. `strokeToFill` handles flattening,
   // cap/join generation, and miter-limit fallback to bevel internally.
   //
-  // Fill rule: for closed subpaths, strokeToFill emits the outer and
-  // inner contours as two *same-winding* closed subpaths (not opposite),
-  // so NonZero would over-fill the interior and EvenOdd is required to
-  // get a hollow ring. For open subpaths, `strokeToFill` emits one
-  // closed polygon - but with overlapping start/end caps (e.g. the
-  // resvg `stroke-linecap/open-path-with-*` tests where the 4-point path
-  // `M 150 50 l 0 80 -100 -40 100 -40` ends at its start), the inside-
-  // miter shortcut in `emitJoin` creates a self-intersecting polygon
-  // whose interior has the wrong winding under EvenOdd (the first-
-  // segment rectangle drops out). NonZero handles that case correctly
-  // because the overlapping winding still sums to non-zero.
+  // All stroke pieces use NonZero and are composited together once, including
+  // overlapping contours, caps, and dashes.
   //
   // The cache (`GeodePathCacheComponent::strokeSlot`) memoizes the
   // `strokeToFill` output + its encode + the derived fill rule, keyed
@@ -6921,9 +6766,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const auto drawRunStroke = [&]() {
       for (const Path& placed : runGlyphPaths) {
         if (hasStrokePaint) {
-          // Closed glyph contours expand to same-winding outer+inner subpaths, so
-          // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
-          // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
+          // Stroke pieces share one winding and one draw, so overlaps stay covered
+          // without applying stroke opacity more than once within the glyph.
           // Same device-aware tolerance as `drawPath`'s stroke: glyph outlines
           // are submitted in text-local space and scaled on the GPU, so the
           // flattening must track the draw transform or stroked glyphs facet
@@ -6931,7 +6775,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           const Path stroked = placed.strokeToFill(*strokeStyle, impl_->strokeFlattenTolerance());
           if (!stroked.empty()) {
             impl_->countStrokeOutline(stroked);
-            const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *strokeStyle);
+            const FillRule strokeRule = FillRule::NonZero;
             const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(stroked, strokeRule);
             if (strokeIsGradient) {
               // Gradient stroke: resolve against the text bbox (the *original*
@@ -7051,7 +6895,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           const Path stroked = path.strokeToFill(*decoStrokeStyle, impl_->strokeFlattenTolerance());
           if (!stroked.empty()) {
             impl_->countStrokeOutline(stroked);
-            const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *decoStrokeStyle);
+            const FillRule strokeRule = FillRule::NonZero;
             const geode::EncodedPath* strokeEncoded =
                 impl_->encodeTransientGeometry(stroked, strokeRule);
             impl_->encoder->fillPath(stroked, *decoStrokeColor, strokeRule, strokeEncoded);

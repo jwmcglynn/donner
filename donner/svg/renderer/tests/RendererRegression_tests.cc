@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -224,7 +225,7 @@ TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
                              "\" fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"6\"/></svg>";
   const Path expanded = path.strokeToFill({.width = 6.0}, 0.1);
   const std::string outlineSource = header + "<path d=\"" + std::string(expanded.toSVGPathData()) +
-                                    "\" fill=\"#ff00ff\" fill-rule=\"evenodd\"/></svg>";
+                                    "\" fill=\"#ff00ff\" fill-rule=\"nonzero\"/></svg>";
   SVGDocument expectedDocument = instantiateSubtree(source, {}, {80, 80});
   SVGDocument actualDocument = instantiateSubtree(outlineSource, {}, {80, 80});
   const RendererBitmap expected =
@@ -236,6 +237,48 @@ TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
     const RendererBitmap geode =
         RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode);
     ExpectBitmapsIdentical(geode, expected, "geode_thin_crossbar");
+  }
+}
+
+TEST_F(RendererRegressionTests, ThickCrossbarStrokeMatchesItsUnionAtFractionalOffsets) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  constexpr std::string_view kCrossbar = "M30 10H34V24H46V28H34V55H30V28H22V24H30Z";
+  // A six-unit miter stroke completely covers the four-unit-wide stem and crossbar.
+  // Its boundary is the union of the two expanded axis-aligned rectangles.
+  constexpr std::string_view kStrokeUnion = "M27 7H37V21H49V31H37V58H27V31H19V21H27Z";
+  for (const std::string_view offset : {"0", "0.25", "-0.25"}) {
+    for (const std::string_view opacity : {"1", "0.5"}) {
+      SCOPED_TRACE(std::string(offset) + "/" + std::string(opacity));
+      const std::string header =
+          "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\"><g "
+          "transform=\"translate(" +
+          std::string(offset) + " " + std::string(offset) + ")\">";
+      const std::string strokeSource =
+          header + "<path d=\"" + std::string(kCrossbar) +
+          "\" fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"6\" stroke-opacity=\"" +
+          std::string(opacity) + "\"/></g></svg>";
+      const std::string unionSource = header + "<path d=\"" + std::string(kStrokeUnion) +
+                                      "\" fill=\"#ff00ff\" fill-opacity=\"" + std::string(opacity) +
+                                      "\"/></g></svg>";
+      SVGDocument strokeDocument = instantiateSubtree(strokeSource, {}, {80, 80});
+      SVGDocument unionDocument = instantiateSubtree(unionSource, {}, {80, 80});
+      const RendererBitmap actual =
+          RenderDocumentWithBackend(strokeDocument, RendererBackend::Geode);
+      const RendererBitmap expected =
+          RenderDocumentWithBackend(unionDocument, RendererBackend::Geode);
+      const std::string label =
+          "crossbar_union_" + std::string(offset) + "_" + std::string(opacity);
+      if (offset == "0") {
+        ExpectBitmapsIdentical(actual, expected, label);
+      } else {
+        // Fractional edges use the suite's standard AA-aware comparison. The dual-ray
+        // coverage of overlapping pieces can differ at partial corner pixels from a
+        // single boundary; integer overlap and opacity remain exact above.
+        donner::editor::tests::CompareBitmapToBitmap(actual, expected, label);
+      }
+    }
   }
 }
 

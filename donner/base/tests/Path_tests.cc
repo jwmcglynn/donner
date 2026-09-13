@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #include "donner/base/MathUtils.h"
@@ -1826,11 +1827,12 @@ TEST(Path, StrokeToFillThinCrossbarRemainsCoveredAtAllWidths) {
                             .closePath()
                             .build();
 
-  for (const double width : {1.0, 3.0, 6.0}) {
+  for (const auto [width, sample] :
+       {std::pair{1.0, Vector2d{0, -2.75}}, std::pair{3.0, Vector2d{0, -1.5}},
+        std::pair{6.0, Vector2d{0, -0.5}}}) {
     const Path filled = crossbar.strokeToFill({.width = width}, kFlattenTolerance);
     ASSERT_FALSE(filled.empty()) << "width=" << width;
-    EXPECT_TRUE(strokeContains(filled, {0, -2.5})) << "width=" << width;
-    EXPECT_TRUE(strokeContains(filled, {0, -1.5})) << "width=" << width;
+    EXPECT_TRUE(strokeContains(filled, sample)) << "width=" << width;
   }
 }
 
@@ -1852,10 +1854,10 @@ TEST(Path, StrokeToFillNormalizesSourceWindingAcrossCompoundContours) {
                              .lineTo({8, 8})
                              .lineTo({0, 8})
                              .closePath()
-                             .moveTo({12, 0})
-                             .lineTo({20, 0})
-                             .lineTo({20, 8})
-                             .lineTo({12, 8})
+                             .moveTo({7, 0})
+                             .lineTo({15, 0})
+                             .lineTo({15, 8})
+                             .lineTo({7, 8})
                              .closePath()
                              .build();
   const Path counterClockwise = PathBuilder()
@@ -1864,18 +1866,18 @@ TEST(Path, StrokeToFillNormalizesSourceWindingAcrossCompoundContours) {
                                     .lineTo({8, 8})
                                     .lineTo({8, 0})
                                     .closePath()
-                                    .moveTo({12, 0})
-                                    .lineTo({12, 8})
-                                    .lineTo({20, 8})
-                                    .lineTo({20, 0})
+                                    .moveTo({7, 0})
+                                    .lineTo({7, 8})
+                                    .lineTo({15, 8})
+                                    .lineTo({15, 0})
                                     .closePath()
                                     .build();
 
   const Path clockwiseFilled = clockwise.strokeToFill({.width = 2.0}, kFlattenTolerance);
   const Path counterClockwiseFilled =
       counterClockwise.strokeToFill({.width = 2.0}, kFlattenTolerance);
-  for (const Vector2d point :
-       {Vector2d{4, 0.5}, Vector2d{16, 0.5}, Vector2d{0.5, 4}, Vector2d{19.5, 4}}) {
+  for (const Vector2d point : {Vector2d{4, 0.5}, Vector2d{11, 0.5}, Vector2d{7.5, 0.5},
+                               Vector2d{0.5, 4}, Vector2d{14.5, 4}}) {
     EXPECT_TRUE(strokeContains(clockwiseFilled, point));
     EXPECT_TRUE(strokeContains(counterClockwiseFilled, point));
   }
@@ -1906,6 +1908,15 @@ TEST(Path, StrokeToFillOpenCrossingAndDashedPiecesUseNonZeroWinding) {
   EXPECT_TRUE(strokeContains(dashedFilled, {1, 4}));
   EXPECT_FALSE(strokeContains(dashedFilled, {4, 4}));
   EXPECT_TRUE(strokeContains(dashedFilled, {7, 4}));
+}
+
+TEST(Path, StrokeToFillRoundReversalExtendsOnlyTheRoundJoin) {
+  const Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
+  const Path round = path.strokeToFill({.width = 2.0, .join = LineJoin::Round}, kFlattenTolerance);
+  const Path bevel = path.strokeToFill({.width = 2.0, .join = LineJoin::Bevel}, kFlattenTolerance);
+  EXPECT_TRUE(strokeContains(round, {10.5, 0}));
+  EXPECT_FALSE(strokeContains(round, {11.5, 0}));
+  EXPECT_FALSE(strokeContains(bevel, {10.5, 0}));
 }
 
 TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
@@ -2375,7 +2386,6 @@ TEST(Path, StrokeToFillDashOversizedPatternFallsBackToSolid) {
 
   ASSERT_FALSE(filled.empty());
   EXPECT_EQ(filled, solid) << "an oversized dash pattern must retain the exact solid outline";
-  EXPECT_EQ(countSubpaths(filled), 2u);
 }
 
 TEST(Path, StrokeToFillDashSkipsZeroLengthSegments) {
@@ -2845,53 +2855,6 @@ TEST(Path, OstreamVertex) {
   EXPECT_NE(oss.str().find("Vertex"), std::string::npos);
 }
 
-// Regression for the emitJoin restructure (a-stroke-linecap-008). The open
-// triangle `M150,50 L150,130 L50,90 L150,50` has sharp inside turns at
-// every interior vertex; the pre-restructure strokeSubpath pre-emitted
-// `prevEnd` before `emitJoin`, which caused the polygon to backtrack along
-// the previous offset line when emitJoin substituted a miter point for
-// an inside turn - producing a wildly self-intersecting ribbon. The
-// invariant now is: `emitJoin` is responsible for emitting `prevEnd` on
-// outside turns (or a miter substitute on inside turns); the caller does
-// not pre-emit it. This test locks that invariant in place by verifying
-// the left-side contour trace stays monotonic along each segment's offset
-// line rather than backtracking into the previous segment.
-TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
-  Path path =
-      PathBuilder().moveTo({150, 50}).lineTo({150, 130}).lineTo({50, 90}).lineTo({150, 50}).build();
-  StrokeStyle style;
-  style.width = 20.0;
-  style.cap = LineCap::Round;
-  style.join = LineJoin::Miter;
-  style.miterLimit = 4.0;
-  Path filled = path.strokeToFill(style, kFlattenTolerance);
-  ASSERT_FALSE(filled.empty());
-
-  const auto commands = filled.commands();
-  const auto pts = filled.points();
-  double lastYOnSeg0Offset = -1.0;
-  bool seenIncrease = false;
-  for (const auto& cmd : commands) {
-    if (cmd.verb != Path::Verb::MoveTo && cmd.verb != Path::Verb::LineTo) {
-      continue;
-    }
-    const Vector2d& p = pts[cmd.pointIndex];
-    if (std::abs(p.x - 140.0) > 0.5) {
-      break;
-    }
-    if (lastYOnSeg0Offset < 0) {
-      lastYOnSeg0Offset = p.y;
-      continue;
-    }
-    ASSERT_GE(p.y, lastYOnSeg0Offset - 0.01) << "Left contour backtracked along seg 0 offset";
-    if (p.y > lastYOnSeg0Offset + 0.01) {
-      seenIncrease = true;
-    }
-    lastYOnSeg0Offset = p.y;
-  }
-  EXPECT_TRUE(seenIncrease) << "Expected at least one forward step along seg 0 offset";
-}
-
 // =============================================================================
 // Path::toSVGPathData
 // =============================================================================
@@ -3124,7 +3087,6 @@ TEST(Path, StrokeToFillMultipleOpenSubpaths) {
   Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
-  EXPECT_EQ(countSubpaths(filled), 2u);
   EXPECT_TRUE(filled.isInside({5, 0}));
   EXPECT_TRUE(filled.isInside({5, 10}));
   EXPECT_FALSE(filled.isInside({5, 5}));
@@ -3147,7 +3109,6 @@ TEST(Path, StrokeToFillCurveBoundaryOverridesSkipSubpathsWithoutCurves) {
   Path filled = path.strokeToFill(style, kFlattenTolerance);
 
   ASSERT_FALSE(filled.empty());
-  EXPECT_EQ(countSubpaths(filled), 2u);
   EXPECT_TRUE(filled.isInside({5, 0}));
   EXPECT_TRUE(filled.isInside({5, 20}));
   EXPECT_TRUE(filled.isInside({19, 24}));
