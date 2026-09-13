@@ -1,7 +1,6 @@
-"""Copy application files and immutable asset trees into one collision-checked web bundle."""
+"""Copy explicitly declared application files and assets into a collision-checked web bundle."""
 
 import argparse
-import os
 from pathlib import Path, PurePosixPath
 import shutil
 
@@ -9,7 +8,8 @@ import shutil
 def _add_input(inputs: dict[str, Path], relative: str, source: Path) -> None:
     path = PurePosixPath(relative)
     if (
-        path.is_absolute()
+        not path.parts
+        or path.is_absolute()
         or ".." in path.parts
         or path.as_posix() != relative
         or "\\" in relative
@@ -21,20 +21,6 @@ def _add_input(inputs: dict[str, Path], relative: str, source: Path) -> None:
     if not source.is_file():
         raise ValueError(f"Web package input is not a file: {source}")
     inputs[relative] = source
-
-
-def _add_tree(inputs: dict[str, Path], tree: Path) -> None:
-    if not tree.is_dir():
-        raise ValueError(f"Web package asset tree is not a directory: {tree}")
-    for parent, directories, names in os.walk(tree, followlinks=False):
-        directories.sort()
-        for name in sorted(directories + names):
-            source = Path(parent) / name
-            if source.is_symlink():
-                raise ValueError(f"Symlink in web package asset tree: {source}")
-        for name in sorted(names):
-            source = Path(parent) / name
-            _add_input(inputs, source.relative_to(tree).as_posix(), source)
 
 
 def _copy_inputs(output: Path, inputs: dict[str, Path]) -> None:
@@ -51,13 +37,13 @@ def _copy_inputs(output: Path, inputs: dict[str, Path]) -> None:
         shutil.copyfile(source, destination)
 
 
-def package_files(output: Path, files: list[Path], trees: list[Path]) -> None:
+def package_files(output: Path, files: list[Path], assets: list[tuple[str, Path]]) -> None:
     """Validate the complete destination map before writing any bundle content."""
     inputs: dict[str, Path] = {}
     for source in files:
         _add_input(inputs, source.name, source)
-    for tree in trees:
-        _add_tree(inputs, tree)
+    for relative, source in assets:
+        _add_input(inputs, relative, source)
     for relative in inputs:
         for parent in PurePosixPath(relative).parents:
             if parent.as_posix() in inputs:
@@ -69,9 +55,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--file", type=Path, action="append", default=[])
-    parser.add_argument("--tree", type=Path, action="append", default=[])
+    parser.add_argument("--asset", nargs=2, metavar=("RELATIVE", "SOURCE"), action="append", default=[])
     arguments = parser.parse_args()
-    package_files(arguments.output, arguments.file, arguments.tree)
+    assets = [(relative, Path(source)) for relative, source in arguments.asset]
+    package_files(arguments.output, arguments.file, assets)
 
 
 if __name__ == "__main__":
