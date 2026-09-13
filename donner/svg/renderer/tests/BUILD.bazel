@@ -303,6 +303,8 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/svg/renderer:pixel_format_utils",
+        "//donner/svg/renderer:renderer_image_io",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/tests:parser_test_utils",
