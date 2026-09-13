@@ -1490,6 +1490,22 @@ TEST(TextEngineScriptedTest, BoldSpanResolvesFontThroughWeightAwareLookup) {
   EXPECT_EQ(runs[0].font, altFace);
 }
 
+TEST(TextEngineScriptedTest, UnrepresentableSizeAdjustmentDoesNotReachShaping) {
+  for (double adjustment : {1e40, 1e308}) {
+    SCOPED_TRACE(adjustment);
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan("AB"));
+    auto params = MakeTextParams(64.0);
+    params.fontSizeAdjust = adjustment;
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty())));
+    EXPECT_THAT(runs.front().usedFontSizePx, FloatEq(0.0f));
+  }
+}
+
 TEST(TextEngineScriptedTest, FontSizeAdjustChangesUsedFontSizeFromXHeight) {
   Registry registry;
   FontManager fontManager(registry);

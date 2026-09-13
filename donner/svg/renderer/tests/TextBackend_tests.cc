@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <tuple>
 #include <vector>
@@ -398,6 +399,40 @@ TEST_P(TextBackendTest, IsBitmapOnlyFalseForOutlineFont) {
 }
 
 // ── Shaping ─────────────────────────────────────────────────────────────────
+
+TEST_P(TextBackendTest, NonfiniteAndNegativeSizesAreRejectedBeforeShaping) {
+  const FontHandle font = fallbackFont();
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  for (float size :
+       {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(), -1.0f}) {
+    SCOPED_TRACE(size);
+    for (FontVariant variant : {FontVariant::Normal, FontVariant::SmallCaps}) {
+      EXPECT_THAT(backend().shapeRun(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+      EXPECT_THAT(backend().shapeRunNoKerning(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+    }
+    EXPECT_DOUBLE_EQ(backend().crossSpanKern(font, size, font, size, 'A', 'V', false), 0.0);
+  }
+}
+
+TEST(TextBackendFullCapabilities, UnrepresentableFixedPointSizesAreRejected) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+  const FontHandle font = fontManager.fallbackFont();
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  for (float size : {1e20f, std::numeric_limits<float>::max()}) {
+    SCOPED_TRACE(size);
+    for (FontVariant variant : {FontVariant::Normal, FontVariant::SmallCaps}) {
+      EXPECT_THAT(backend.shapeRun(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+      EXPECT_THAT(backend.shapeRunNoKerning(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+    }
+    EXPECT_DOUBLE_EQ(backend.crossSpanKern(font, size, font, size, 'A', 'V', false), 0.0);
+  }
+}
 
 TEST_P(TextBackendTest, ShapeRunProducesGlyphsForLatinText) {
   const FontHandle font = fallbackFont();

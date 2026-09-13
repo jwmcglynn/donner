@@ -737,6 +737,30 @@ TEST(PropertyRegistry, FontShorthandAcceptsSizeKeywordsStretchAndLineHeight) {
   EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
 }
 
+TEST(PropertyRegistry, NegativeSpacingAndBaselineShiftRemainValid) {
+  PropertyRegistry registry;
+  registry.parseStyle("letter-spacing:-2px; word-spacing:-3px; baseline-shift:-4px");
+  EXPECT_THAT(registry.letterSpacing.get(), Optional(Lengthd(-2, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.wordSpacing.get(), Optional(Lengthd(-3, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.baselineShift.get(), Optional(Lengthd(-4, Lengthd::Unit::Px)));
+}
+
+TEST(PropertyRegistry, NumericFontWeightCanPrecedeEveryOptionalPrefix) {
+  for (std::string_view prefix :
+       {"700 italic small-caps condensed", "700 condensed small-caps italic",
+        "small-caps 700 italic condensed", "condensed italic 700 small-caps"}) {
+    SCOPED_TRACE(prefix);
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("font:") + std::string(prefix) + " 24px serif");
+    EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+    EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(24, Lengthd::Unit::Px)));
+    EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("serif"))));
+  }
+}
+
 TEST(PropertyRegistry, FontShorthandGrammarIsTransactional) {
   for (std::string_view value : {"normal normal normal normal normal 12px serif",
                                  "bold 600 12px serif",
