@@ -303,23 +303,8 @@ private:
       if (alignment > maximumAlignment) {
         maximumAlignment = alignment;
       }
-      indentation();
-      if (member.type.kind == TypeKind::Array) {
-        if (member.arrayStride != 4) {
-          error_ = TextEmitError::UniformLayoutMismatch;
-          return;
-        }
-        text("float ");
-        prefixed("donner_msl_member_", member.name);
-        character('[');
-        uintText(member.type.arrayCount);
-        character(']');
-      } else {
-        type(member.type);
-        character(' ');
-        prefixed("donner_msl_member_", member.name);
-      }
-      text(";\n");
+      emitStructMember(member);
+      if (error_ != TextEmitError::None) return;
     }
     const uint32_t naturalSize =
         ((offset + maximumAlignment - 1) / maximumAlignment) * maximumAlignment;
@@ -329,6 +314,26 @@ private:
     }
     --indent_;
     text("};\n");
+  }
+
+  constexpr void emitStructMember(const StructMember& member) {
+    indentation();
+    if (member.type.kind == TypeKind::Array) {
+      if (member.arrayStride != 4) {
+        error_ = TextEmitError::UniformLayoutMismatch;
+        return;
+      }
+      text("float ");
+      prefixed("donner_msl_member_", member.name);
+      character('[');
+      uintText(member.type.arrayCount);
+      character(']');
+    } else {
+      type(member.type);
+      character(' ');
+      prefixed("donner_msl_member_", member.name);
+    }
+    text(";\n");
   }
 
   constexpr void bindingName(uint16_t id) {
@@ -345,50 +350,53 @@ private:
         text(", ");
       }
       const Binding& binding = module_.bindings[index];
-      if (binding.group != 0 || (((binding.kind == BindingKind::Uniform ||
-                                   binding.kind == BindingKind::ReadOnlyStorage) &&
-                                  binding.binding >= kMslBufferBindingCount) ||
-                                 ((binding.kind == BindingKind::SampledTexture ||
-                                   binding.kind == BindingKind::StorageTexture) &&
-                                  binding.binding >= kMslTextureBindingCount))) {
+      const bool isBuffer =
+          binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage;
+      const uint32_t bindingLimit = isBuffer ? kMslBufferBindingCount : kMslTextureBindingCount;
+      if (binding.group != 0 || binding.binding >= bindingLimit) {
         error_ = TextEmitError::UnsupportedBinding;
         return;
       }
-      switch (binding.kind) {
-        case BindingKind::Uniform:
-          text("constant ");
-          type(binding.type);
-          text("& ");
-          bindingName(index);
-          if (attributes) {
-            text(" [[buffer(");
-            uintText(MslBufferIndex(binding.binding));
-            text(")]]");
-          }
-          break;
-        case BindingKind::ReadOnlyStorage:
-          text("const device ");
-          type(binding.type);
-          text("& ");
-          bindingName(index);
-          if (attributes) {
-            text(" [[buffer(");
-            uintText(MslBufferIndex(binding.binding));
-            text(")]]");
-          }
-          break;
-        case BindingKind::SampledTexture:
-        case BindingKind::StorageTexture:
-          type(binding.type);
-          character(' ');
-          bindingName(index);
-          if (attributes) {
-            text(" [[texture(");
-            uintText(MslTextureIndex(binding.binding));
-            text(")]]");
-          }
-          break;
-      }
+      emitResourceParameter(index, attributes);
+    }
+  }
+
+  constexpr void emitResourceParameter(uint16_t index, bool attributes) {
+    const Binding& binding = module_.bindings[index];
+    switch (binding.kind) {
+      case BindingKind::Uniform:
+        text("constant ");
+        type(binding.type);
+        text("& ");
+        bindingName(index);
+        if (attributes) {
+          text(" [[buffer(");
+          uintText(MslBufferIndex(binding.binding));
+          text(")]]");
+        }
+        break;
+      case BindingKind::ReadOnlyStorage:
+        text("const device ");
+        type(binding.type);
+        text("& ");
+        bindingName(index);
+        if (attributes) {
+          text(" [[buffer(");
+          uintText(MslBufferIndex(binding.binding));
+          text(")]]");
+        }
+        break;
+      case BindingKind::SampledTexture:
+      case BindingKind::StorageTexture:
+        type(binding.type);
+        character(' ');
+        bindingName(index);
+        if (attributes) {
+          text(" [[texture(");
+          uintText(MslTextureIndex(binding.binding));
+          text(")]]");
+        }
+        break;
     }
   }
 
@@ -484,83 +492,94 @@ private:
       return;
     }
     const Expression& node = module_.expressions[id];
-    const auto child = [&](uint8_t index) constexpr {
-      if (index >= node.operandCount) {
-        error_ = TextEmitError::InvalidArenaReference;
-      } else {
-        expression(node.operands[index]);
-      }
-    };
     switch (node.kind) {
       case ExpressionKind::Literal: emitLiteral(node); return;
       case ExpressionKind::Symbol: symbolName(static_cast<ArenaId>(node.payload)); return;
-      case ExpressionKind::Unary:
-        if (static_cast<UnaryOp>(node.payload) == UnaryOp::Negate &&
-            node.type.kind == TypeKind::I32) {
-          text("as_type<");
-          type(node.type);
-          text(">(");
-          Type unsignedType = node.type;
-          unsignedType.kind = TypeKind::U32;
-          vectorConstant(unsignedType, "0u");
-          text(" - as_type<");
-          type(unsignedType);
-          text(">(");
-          child(0);
-          text("))");
-          return;
-        }
-        character('(');
-        text(static_cast<UnaryOp>(node.payload) == UnaryOp::Negate ? "-" : "!");
-        child(0);
-        character(')');
-        return;
+      case ExpressionKind::Unary: emitUnary(node); return;
       case ExpressionKind::Binary: emitBinary(node); return;
-      case ExpressionKind::Member:
-        child(0);
-        character('.');
-        if (!validId(static_cast<ArenaId>(node.payload), module_.structMemberCount)) {
-          error_ = TextEmitError::InvalidArenaReference;
-          return;
-        }
-        prefixed("donner_msl_member_", module_.structMembers[node.payload].name);
-        return;
-      case ExpressionKind::Swizzle: {
-        child(0);
-        character('.');
-        const uint32_t packed = node.payload;
-        const uint8_t count = static_cast<uint8_t>(packed >> 8);
-        if (count == 0 || count > 4) {
-          error_ = TextEmitError::InvalidModule;
-          return;
-        }
-        constexpr char kComponents[] = {'x', 'y', 'z', 'w'};
-        for (uint8_t index = 0; index < count; ++index) {
-          const uint8_t component = static_cast<uint8_t>((packed >> (index * 2)) & 3u);
-          character(kComponents[component]);
-        }
-        return;
-      }
-      case ExpressionKind::Construct:
-        if (node.operandCount == 1 &&
-            module_.expressions[node.operands[0]].type.lanes == node.type.lanes &&
-            module_.expressions[node.operands[0]].type.kind != node.type.kind) {
-          emitConversion(node);
-          return;
-        }
-        type(node.type);
-        character('(');
-        for (uint8_t index = 0; index < node.operandCount; ++index) {
-          if (index != 0) text(", ");
-          child(index);
-        }
-        character(')');
-        return;
+      case ExpressionKind::Member: emitMember(node); return;
+      case ExpressionKind::Swizzle: emitSwizzle(node); return;
+      case ExpressionKind::Construct: emitConstruct(node); return;
       case ExpressionKind::Convert: emitConversion(node); return;
       case ExpressionKind::BuiltinCall: emitBuiltin(node); return;
       case ExpressionKind::FunctionCall: emitFunctionCall(node); return;
       case ExpressionKind::Index: emitIndex(node); return;
     }
+  }
+
+  constexpr void emitChild(const Expression& node, uint8_t index) {
+    if (index >= node.operandCount) {
+      error_ = TextEmitError::InvalidArenaReference;
+    } else {
+      expression(node.operands[index]);
+    }
+  }
+
+  constexpr void emitUnary(const Expression& node) {
+    if (static_cast<UnaryOp>(node.payload) == UnaryOp::Negate && node.type.kind == TypeKind::I32) {
+      text("as_type<");
+      type(node.type);
+      text(">(");
+      Type unsignedType = node.type;
+      unsignedType.kind = TypeKind::U32;
+      vectorConstant(unsignedType, "0u");
+      text(" - as_type<");
+      type(unsignedType);
+      text(">(");
+      emitChild(node, 0);
+      text("))");
+      return;
+    }
+    character('(');
+    text(static_cast<UnaryOp>(node.payload) == UnaryOp::Negate ? "-" : "!");
+    emitChild(node, 0);
+    character(')');
+    return;
+  }
+
+  constexpr void emitMember(const Expression& node) {
+    emitChild(node, 0);
+    character('.');
+    if (!validId(static_cast<ArenaId>(node.payload), module_.structMemberCount)) {
+      error_ = TextEmitError::InvalidArenaReference;
+      return;
+    }
+    prefixed("donner_msl_member_", module_.structMembers[node.payload].name);
+    return;
+  }
+
+  constexpr void emitSwizzle(const Expression& node) {
+    emitChild(node, 0);
+    character('.');
+    const uint32_t packed = node.payload;
+    const uint8_t count = static_cast<uint8_t>(packed >> 8);
+    if (count == 0 || count > 4) {
+      error_ = TextEmitError::InvalidModule;
+      return;
+    }
+    constexpr char kComponents[] = {'x', 'y', 'z', 'w'};
+    for (uint8_t index = 0; index < count; ++index) {
+      const uint8_t component = static_cast<uint8_t>((packed >> (index * 2)) & 3u);
+      character(kComponents[component]);
+    }
+    return;
+  }
+
+  constexpr void emitConstruct(const Expression& node) {
+    if (node.operandCount == 1 &&
+        module_.expressions[node.operands[0]].type.lanes == node.type.lanes &&
+        module_.expressions[node.operands[0]].type.kind != node.type.kind) {
+      emitConversion(node);
+      return;
+    }
+    type(node.type);
+    character('(');
+    for (uint8_t index = 0; index < node.operandCount; ++index) {
+      if (index != 0) text(", ");
+      emitChild(node, index);
+    }
+    character(')');
+    return;
   }
 
   constexpr void emitLiteral(const Expression& node) {

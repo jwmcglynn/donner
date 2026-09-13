@@ -400,15 +400,19 @@ private:
 
   constexpr TokenKind TwoCharacterPunctuation(char ch) {
     switch (ch) {
-      case '<': return Peek('=') ? TokenKind::LessEqual : TokenKind::Less;
-      case '>': return Peek('=') ? TokenKind::GreaterEqual : TokenKind::Greater;
-      case '-': return Peek('>') ? TokenKind::Arrow : TokenKind::Minus;
-      case '=': return Peek('=') ? TokenKind::Equal : TokenKind::Assign;
-      case '!': return Peek('=') ? TokenKind::NotEqual : TokenKind::Not;
-      case '&': return Peek('&') ? TokenKind::And : TokenKind::End;
-      case '|': return Peek('|') ? TokenKind::Or : TokenKind::End;
+      case '<': return PunctuationSuffix('=', TokenKind::LessEqual, TokenKind::Less);
+      case '>': return PunctuationSuffix('=', TokenKind::GreaterEqual, TokenKind::Greater);
+      case '-': return PunctuationSuffix('>', TokenKind::Arrow, TokenKind::Minus);
+      case '=': return PunctuationSuffix('=', TokenKind::Equal, TokenKind::Assign);
+      case '!': return PunctuationSuffix('=', TokenKind::NotEqual, TokenKind::Not);
+      case '&': return PunctuationSuffix('&', TokenKind::And, TokenKind::End);
+      case '|': return PunctuationSuffix('|', TokenKind::Or, TokenKind::End);
       default: return TokenKind::End;
     }
+  }
+
+  constexpr TokenKind PunctuationSuffix(char expected, TokenKind paired, TokenKind single) {
+    return Peek(expected) ? paired : single;
   }
 
   constexpr bool Peek(char expected) {
@@ -1275,73 +1279,81 @@ private:
     ExpressionInfo value = ParsePrimary();
     while (!failed() && (token_.kind == TokenKind::Dot || token_.kind == TokenKind::LeftBracket)) {
       if (Match(TokenKind::LeftBracket)) {
-        const ExpressionInfo index = ParseExpression();
-        const SourceSpan end = token_.span;
-        Expect(TokenKind::RightBracket);
-        const Type base = ExpressionAt(value.id).type;
-        const Type indexType = ExpressionAt(index.id).type;
-        if (base.kind != TypeKind::Array || indexType.lanes != 1 ||
-            (indexType.kind != TypeKind::I32 && indexType.kind != TypeKind::U32)) {
-          Fail(ErrorCode::TypeMismatch, end);
-          return ErrorExpression(end);
-        }
-        int32_t signedIndex = 0;
-        uint32_t unsignedIndex = 0;
-        const bool hasSignedIndex = ConstI32Value(index.id, &signedIndex);
-        const bool hasUnsignedIndex = ConstU32Value(index.id, &unsignedIndex);
-        if ((IsConstantSyntax(index.id) && !hasSignedIndex && !hasUnsignedIndex) ||
-            (hasSignedIndex &&
-             (signedIndex < 0 || static_cast<uint32_t>(signedIndex) >= base.arrayCount)) ||
-            (hasUnsignedIndex && unsignedIndex >= base.arrayCount)) {
-          Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index.id).span);
-        }
-        value = AddExpression(Expression{ExpressionKind::Index,
-                                         Type{base.elementKind, base.elementLanes},
-                                         SourceSpan{ExpressionAt(value.id).span.begin, end.end},
-                                         {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
-                                         2,
-                                         0},
-                              false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
-        continue;
-      }
-      Match(TokenKind::Dot);
-      const Token member = ExpectIdentifier();
-      const Type base = ExpressionAt(value.id).type;
-      if (base.kind == TypeKind::Struct) {
-        ArenaId memberId = kInvalidArenaId;
-        const Struct& structure = module_.structs[base.structId];
-        for (uint16_t i = 0; i < structure.memberCount; ++i) {
-          const ArenaId candidate = structure.firstMember + i;
-          if (SameName(module_.structMembers[candidate].name, member)) memberId = candidate;
-        }
-        if (memberId == kInvalidArenaId) {
-          Fail(ErrorCode::UnknownName, member.span);
-          return ErrorExpression(member.span);
-        }
-        value = AddExpression(
-            Expression{ExpressionKind::Member,
-                       module_.structMembers[memberId].type,
-                       SourceSpan{ExpressionAt(value.id).span.begin, member.span.end},
-                       {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                       1,
-                       memberId},
-            value.mutableLvalue, value.rootSymbol, std::numeric_limits<int32_t>::max());
+        value = ParseArrayIndex(value);
       } else {
-        uint32_t encoding = 0;
-        if (!ParseSwizzle(member, base, &encoding)) Fail(ErrorCode::TypeMismatch, member.span);
-        const uint8_t lanes = static_cast<uint8_t>(encoding >> 8);
-        Type type = base;
-        type.lanes = lanes;
-        value =
-            AddExpression(Expression{ExpressionKind::Swizzle,
-                                     type,
-                                     SourceSpan{ExpressionAt(value.id).span.begin, member.span.end},
-                                     {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                                     1,
-                                     encoding},
-                          value.mutableLvalue && lanes == 1, value.rootSymbol,
-                          std::numeric_limits<int32_t>::max());
+        Match(TokenKind::Dot);
+        value = ParseMemberAccess(value);
       }
+    }
+    return value;
+  }
+
+  constexpr ExpressionInfo ParseArrayIndex(ExpressionInfo value) {
+    const ExpressionInfo index = ParseExpression();
+    const SourceSpan end = token_.span;
+    Expect(TokenKind::RightBracket);
+    const Type base = ExpressionAt(value.id).type;
+    const Type indexType = ExpressionAt(index.id).type;
+    if (base.kind != TypeKind::Array || indexType.lanes != 1 ||
+        (indexType.kind != TypeKind::I32 && indexType.kind != TypeKind::U32)) {
+      Fail(ErrorCode::TypeMismatch, end);
+      return ErrorExpression(end);
+    }
+    int32_t signedIndex = 0;
+    uint32_t unsignedIndex = 0;
+    const bool hasSignedIndex = ConstI32Value(index.id, &signedIndex);
+    const bool hasUnsignedIndex = ConstU32Value(index.id, &unsignedIndex);
+    if ((IsConstantSyntax(index.id) && !hasSignedIndex && !hasUnsignedIndex) ||
+        (hasSignedIndex &&
+         (signedIndex < 0 || static_cast<uint32_t>(signedIndex) >= base.arrayCount)) ||
+        (hasUnsignedIndex && unsignedIndex >= base.arrayCount)) {
+      Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index.id).span);
+    }
+    return AddExpression(Expression{ExpressionKind::Index,
+                                    Type{base.elementKind, base.elementLanes},
+                                    SourceSpan{ExpressionAt(value.id).span.begin, end.end},
+                                    {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
+                                    2,
+                                    0},
+                         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+  }
+
+  constexpr ExpressionInfo ParseMemberAccess(ExpressionInfo value) {
+    const Token member = ExpectIdentifier();
+    const Type base = ExpressionAt(value.id).type;
+    if (base.kind == TypeKind::Struct) {
+      ArenaId memberId = kInvalidArenaId;
+      const Struct& structure = module_.structs[base.structId];
+      for (uint16_t i = 0; i < structure.memberCount; ++i) {
+        const ArenaId candidate = structure.firstMember + i;
+        if (SameName(module_.structMembers[candidate].name, member)) memberId = candidate;
+      }
+      if (memberId == kInvalidArenaId) {
+        Fail(ErrorCode::UnknownName, member.span);
+        return ErrorExpression(member.span);
+      }
+      value =
+          AddExpression(Expression{ExpressionKind::Member,
+                                   module_.structMembers[memberId].type,
+                                   SourceSpan{ExpressionAt(value.id).span.begin, member.span.end},
+                                   {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
+                                   1,
+                                   memberId},
+                        value.mutableLvalue, value.rootSymbol, std::numeric_limits<int32_t>::max());
+    } else {
+      uint32_t encoding = 0;
+      if (!ParseSwizzle(member, base, &encoding)) Fail(ErrorCode::TypeMismatch, member.span);
+      const uint8_t lanes = static_cast<uint8_t>(encoding >> 8);
+      Type type = base;
+      type.lanes = lanes;
+      value = AddExpression(
+          Expression{ExpressionKind::Swizzle,
+                     type,
+                     SourceSpan{ExpressionAt(value.id).span.begin, member.span.end},
+                     {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
+                     1,
+                     encoding},
+          value.mutableLvalue && lanes == 1, value.rootSymbol, std::numeric_limits<int32_t>::max());
     }
     return value;
   }
