@@ -60,6 +60,39 @@ shader::ShaderResult<shader::IrModule> BuildBufferReadModule() {
   return builder.build();
 }
 
+TEST(MetalShaderMetadataTests, RejectsMissingBufferFacts) {
+  auto device = MetalDevice::Create();
+  DONNER_REQUIRE_METAL_DEVICE(device, "Metal shader metadata");
+  auto ir = BuildBufferReadModule();
+  ASSERT_THAT(ir, HasResult());
+  auto msl = shader::EmitMsl(ir.result());
+  ASSERT_THAT(msl, HasResult());
+  EXPECT_THAT(device->createShaderModule({"missingFacts",
+                                          RcString(msl.result()),
+                                          ShaderSourceKind::Msl,
+                                          {},
+                                          shader::ComputeEntryPointsOf(ir.result())}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    testing::HasSubstr("buffer binding metadata")));
+}
+
+TEST(MetalShaderMetadataTests, AcceptsExplicitlyEmptyBufferFacts) {
+  auto device = MetalDevice::Create();
+  DONNER_REQUIRE_METAL_DEVICE(device, "Metal shader metadata");
+  shader::ModuleBuilder builder;
+  auto ir = builder.build();
+  ASSERT_THAT(ir, HasResult());
+  auto msl = shader::EmitMsl(ir.result());
+  ASSERT_THAT(msl, HasResult());
+  auto facts = shader::BufferBindingsOf(ir.result());
+  ASSERT_THAT(facts, HasResult());
+  ASSERT_THAT(facts.result(), testing::IsEmpty());
+  EXPECT_THAT(
+      device->createShaderModule(
+          {"noBuffers", RcString(msl.result()), ShaderSourceKind::Msl, {}, {}, facts.result()}),
+      HasResult());
+}
+
 enum class BindingOrder { Normal, BeforePipeline, PipelineSwitch, Replacement };
 
 struct ReadOptions {
