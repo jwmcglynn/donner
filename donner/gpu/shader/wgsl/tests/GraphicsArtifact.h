@@ -12,4 +12,7 @@ const CompiledShaderView& GraphicsShader();
 /// Returns an all-projection matrix graphics artifact with static storage duration.
 const CompiledShaderView& MatrixShader();
 
+/// Returns an all-projection matrix-operation artifact with static storage duration.
+const CompiledShaderView& MatrixOperationsShader();
+
 }  // namespace donner::gpu::shader::wgsl::tests

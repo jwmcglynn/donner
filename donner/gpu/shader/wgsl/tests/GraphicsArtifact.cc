@@ -15,6 +15,8 @@ constexpr auto kMatrixArtifact = Compile<kMatrixSource, Projection::All>();
 constexpr CompiledShaderView kMatrixView = kMatrixArtifact.view();
 static_assert(kMatrixView.matchesMember("params", "mvp", 0, 64, ShaderScalarType::F32, 4, 0, 0, 4,
                                         16));
+constexpr auto kOperationsArtifact = Compile<kMatrixOperationsSource, Projection::All>();
+constexpr CompiledShaderView kOperationsView = kOperationsArtifact.view();
 }  // namespace
 
 const CompiledShaderView& GraphicsShader() {
@@ -23,6 +25,10 @@ const CompiledShaderView& GraphicsShader() {
 
 const CompiledShaderView& MatrixShader() {
   return kMatrixView;
+}
+
+const CompiledShaderView& MatrixOperationsShader() {
+  return kOperationsView;
 }
 
 }  // namespace donner::gpu::shader::wgsl::tests

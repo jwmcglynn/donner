@@ -190,6 +190,29 @@
         "Params"
       ]
     },
+    "donner/gpu/shader/wgsl/tests/MatrixSource.h#inline1": {
+      "bindings": [],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "let",
+        "return",
+        "var"
+      ],
+      "structs": []
+    },
     "donner/gpu/shader/wgsl/tests/corpus/compute.wgsl": {
       "bindings": [
         {
@@ -346,6 +369,29 @@
       "structs": [
         "Params"
       ]
+    },
+    "donner/gpu/shader/wgsl/tests/corpus/matrix_operations.wgsl": {
+      "bindings": [],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "let",
+        "return",
+        "var"
+      ],
+      "structs": []
     },
     "donner/svg/renderer/geode/shaders/filter_blend.wgsl": {
       "bindings": [

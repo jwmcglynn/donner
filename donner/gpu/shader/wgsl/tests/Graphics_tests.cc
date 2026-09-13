@@ -70,6 +70,20 @@ TEST(GraphicsCompiler, ReflectsMatrixShapeStrideAndResourceVisibility) {
   EXPECT_EQ(descriptor.bufferBindings->front().minSizeBytes, 64u);
 }
 
+TEST(GraphicsCompiler, NonSquareMatrixOperationsMatchOrdinaryEmission) {
+  const auto& shader = tests::MatrixOperationsShader();
+  const auto parsed = Parse(tests::kMatrixOperationsSource.view());
+  ASSERT_TRUE(parsed.hasResult());
+  std::array<char, kMaxTextEmitBytes> text{};
+  TextSink sink{text.data(), uint32_t(text.size())};
+  ASSERT_TRUE(EmitMsl(parsed.module, sink).ok());
+  EXPECT_EQ(sink.view(), shader.msl);
+  std::array<uint32_t, 24576> words{};
+  SpirvSink binary{words.data(), uint32_t(words.size())};
+  ASSERT_TRUE(EmitSpirv(parsed.module, binary).isSuccess());
+  EXPECT_THAT(std::span(words.data(), binary.size), testing::ElementsAreArray(shader.spirv));
+}
+
 TEST(GraphicsCompiler, RejectsMatrixShapeIndexAndUnsupportedLayoutCases) {
   constexpr std::string_view cases[] = {
       "fn f(m: mat2x2f) -> vec4f { return m * vec4f(0f); }",

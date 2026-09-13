@@ -2361,7 +2361,7 @@ private:
         expression.kind == ExpressionKind::Swizzle) {
       return IsConstantSyntax(expression.operands[0]);
     }
-    if (expression.kind == ExpressionKind::Binary) {
+    if (expression.kind == ExpressionKind::Binary || expression.kind == ExpressionKind::Index) {
       return IsConstantSyntax(expression.operands[0]) && IsConstantSyntax(expression.operands[1]);
     }
     if (expression.kind == ExpressionKind::Construct) {

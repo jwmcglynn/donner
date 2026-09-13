@@ -224,6 +224,8 @@ TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
                                  "compiled_graphics.spv");
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixShader().spirv,
                                  "compiled_matrices.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixOperationsShader().spirv,
+                                 "matrix_operations.spv");
 }
 
 TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
