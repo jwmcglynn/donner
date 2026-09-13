@@ -7,7 +7,7 @@ resolved to their `actual` targets) and reports whether any affected target is
 an instrumentable C/C++ compilation unit.
 
 The coverage lane uses this to skip PR coverage when a change's affected targets
-are all non-instrumentable (docs, shell/python tooling, filegroups, build
+are all non-instrumentable (docs, shell/Python/JavaScript tooling, filegroups, build
 flags), which would otherwise produce an empty LCOV report and trip the
 "no executable line data" guard in check_lcov_report.py with a deterministic red
 that no rerun can clear.
@@ -56,6 +56,8 @@ NON_INSTRUMENTABLE_RULE_KINDS = frozenset(
         "sh_test",
         "sh_binary",
         "sh_library",
+        # aspect_rules_js instruments JavaScript/TypeScript, not host C/C++ sources.
+        "js_test",
         "java_library",
         "java_binary",
         "java_test",
