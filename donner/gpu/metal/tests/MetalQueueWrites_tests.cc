@@ -57,18 +57,20 @@ protected:
   }
 
   Capture captureUniform(const Buffer& uniform) {
-    const ShaderModule module = GetResultOrFail(device_->createShaderModule(
-        ShaderModuleDescriptor{"captureUniform",
-                               RcString(R"msl(#include <metal_stdlib>
+    const ShaderModule module = GetResultOrFail(device_->createShaderModule(ShaderModuleDescriptor{
+        "captureUniform",
+        RcString(R"msl(#include <metal_stdlib>
 using namespace metal;
 kernel void cs_main(constant float4& color [[buffer(1)]],
                     texture2d<float, access::write> output [[texture(1)]]) {
   output.write(color, uint2(0));
 }
 )msl"),
-                               ShaderSourceKind::Msl,
-                               {},
-                               {ComputeEntryPointInfo{"cs_main", WorkgroupSize{1, 1, 1}}}}));
+        ShaderSourceKind::Msl,
+        {},
+        {ComputeEntryPointInfo{"cs_main", WorkgroupSize{1, 1, 1}}},
+        std::vector<ShaderBufferBindingInfo>{
+            {"cs_main", ShaderStage::Compute, 0, 0, BindingType::UniformBuffer, 16, 0}}}));
     const BindGroupLayout layout =
         GetResultOrFail(device_->createBindGroupLayout(BindGroupLayoutDescriptor{
             "captureLayout",

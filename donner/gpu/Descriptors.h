@@ -630,7 +630,9 @@ struct ShaderModuleDescriptor {
   std::vector<ComputeEntryPointInfo> computeEntryPoints;
   /// Buffer requirements derived from shader IR. An engaged empty list means no entry point
   /// uses a buffer; absence means requirements were not supplied. Native Metal requires these
-  /// facts because its buffer arguments do not retain a declared binding range.
+  /// facts for every MSL module before native compilation, including an explicitly empty list
+  /// for modules without buffer bindings. Facts let pipeline creation reject mismatched binding
+  /// types and stage visibility before a shader can read an unbound native buffer argument.
   std::optional<std::vector<ShaderBufferBindingInfo>> bufferBindings;
 };
 

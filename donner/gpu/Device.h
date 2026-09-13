@@ -306,6 +306,8 @@ public:
 
   /**
    * Creates a shader module from trusted generated source. Fails closed on empty source text.
+   * Native Metal also requires engaged buffer-binding metadata before compiling any MSL module;
+   * an explicitly empty list declares that the module uses no buffers.
    *
    * @param descriptor Validated shader module descriptor.
    */
