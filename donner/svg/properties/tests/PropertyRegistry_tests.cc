@@ -701,6 +701,22 @@ TEST(PropertyRegistry, FontKerningAndSizeAdjustInherit) {
   EXPECT_FALSE(reset.fontSizeAdjust.get()->has_value());
 }
 
+TEST(PropertyRegistry, FontShorthandRejectsConflictsWithoutPartialMutation) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-style: italic; font-weight: bold; font-size: 18px; font-family: preserved");
+
+  registry.parseStyle("font: italic oblique 50px 'Noto Sans'");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(18, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
+
+  registry.parseStyle("font: 50px 'Noto Sans',");
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
+}
+
 TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;

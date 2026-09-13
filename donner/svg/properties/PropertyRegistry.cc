@@ -1754,6 +1754,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                      setState(registry.fontStretch);
                      setState(registry.fontVariant);
                      setState(registry.fontKerning);
+                     setState(registry.fontSizeAdjust);
                    };
 
                    if (params.explicitState != PropertyState::NotSet) {
@@ -1775,38 +1776,78 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    int fontStretch = static_cast<int>(FontStretch::Normal);
                    FontVariant fontVariant = FontVariant::Normal;
                    bool fontKerning = true;
+                   std::optional<double> fontSizeAdjust;
                    std::optional<Lengthd> fontSize;
+                   bool sawStyle = false;
+                   bool sawVariant = false;
+                   bool sawWeight = false;
+                   bool sawStretch = false;
 
                    skipWhitespace();
                    while (i < components.size()) {
                      const css::ComponentValue& component = components[i];
                      if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
                        if (ident->value.equalsLowercase("italic")) {
+                         if (sawStyle) {
+                           ParseDiagnostic error;
+                           error.reason = "Duplicate font-style in font shorthand";
+                           error.range.start = component.sourceOffset();
+                           return std::optional<ParseDiagnostic>(std::move(error));
+                         }
                          fontStyle = FontStyle::Italic;
+                         sawStyle = true;
                          ++i;
                          skipWhitespace();
                          continue;
                        }
                        if (ident->value.equalsLowercase("oblique")) {
+                         if (sawStyle) {
+                           ParseDiagnostic error;
+                           error.reason = "Duplicate font-style in font shorthand";
+                           error.range.start = component.sourceOffset();
+                           return std::optional<ParseDiagnostic>(std::move(error));
+                         }
                          fontStyle = FontStyle::Oblique;
+                         sawStyle = true;
                          ++i;
                          skipWhitespace();
                          continue;
                        }
                        if (ident->value.equalsLowercase("small-caps")) {
+                         if (sawVariant) {
+                           ParseDiagnostic error;
+                           error.reason = "Duplicate font-variant in font shorthand";
+                           error.range.start = component.sourceOffset();
+                           return std::optional<ParseDiagnostic>(std::move(error));
+                         }
                          fontVariant = FontVariant::SmallCaps;
+                         sawVariant = true;
                          ++i;
                          skipWhitespace();
                          continue;
                        }
                        if (ident->value.equalsLowercase("bold")) {
+                         if (sawWeight) {
+                           ParseDiagnostic error;
+                           error.reason = "Duplicate font-weight in font shorthand";
+                           error.range.start = component.sourceOffset();
+                           return std::optional<ParseDiagnostic>(std::move(error));
+                         }
                          fontWeight = 700;
+                         sawWeight = true;
                          ++i;
                          skipWhitespace();
                          continue;
                        }
                        if (ident->value.equalsLowercase("condensed")) {
+                         if (sawStretch) {
+                           ParseDiagnostic error;
+                           error.reason = "Duplicate font-stretch in font shorthand";
+                           error.range.start = component.sourceOffset();
+                           return std::optional<ParseDiagnostic>(std::move(error));
+                         }
                          fontStretch = static_cast<int>(FontStretch::Condensed);
+                         sawStretch = true;
                          ++i;
                          skipWhitespace();
                          continue;
@@ -1818,7 +1859,14 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        }
                      } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
                        if (number->value >= 1 && number->value <= 1000) {
+                         if (sawWeight) {
+                           ParseDiagnostic error;
+                           error.reason = "Duplicate font-weight in font shorthand";
+                           error.range.start = component.sourceOffset();
+                           return std::optional<ParseDiagnostic>(std::move(error));
+                         }
                          fontWeight = static_cast<int>(number->value);
+                         sawWeight = true;
                          ++i;
                          skipWhitespace();
                          continue;
@@ -1846,10 +1894,18 @@ DONNER_CONSTEXPR_MAP auto kProperties =
 
                    skipWhitespace();
                    SmallVector<RcString, 1> fontFamilies;
+                   bool needsFamily = true;
                    while (i < components.size()) {
                      if (components[i].isToken<css::Token::Comma>()) {
+                       if (needsFamily) {
+                         ParseDiagnostic error;
+                         error.reason = "Missing font family in font shorthand";
+                         error.range.start = components[i].sourceOffset();
+                         return std::optional<ParseDiagnostic>(std::move(error));
+                       }
                        ++i;
                        skipWhitespace();
+                       needsFamily = true;
                        continue;
                      }
 
@@ -1861,6 +1917,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                      if (family.size() == 1 && family.front().isToken<css::Token::String>()) {
                        fontFamilies.emplace_back(
                            family.front().get<css::Token>().get<css::Token::String>().value);
+                       needsFamily = false;
                        continue;
                      }
 
@@ -1887,9 +1944,10 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        return std::optional<ParseDiagnostic>(std::move(error));
                      }
                      fontFamilies.emplace_back(RcString(name));
+                     needsFamily = false;
                    }
 
-                   if (fontFamilies.empty()) {
+                   if (fontFamilies.empty() || needsFamily) {
                      ParseDiagnostic error;
                      error.reason = "Missing font family in font shorthand";
                      return std::optional<ParseDiagnostic>(std::move(error));
@@ -1907,6 +1965,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    set(registry.fontStretch, fontStretch);
                    set(registry.fontVariant, fontVariant);
                    set(registry.fontKerning, fontKerning);
+                   set(registry.fontSizeAdjust, fontSizeAdjust);
                    return std::optional<ParseDiagnostic>();
                  }},  //
                 {"font-size",
