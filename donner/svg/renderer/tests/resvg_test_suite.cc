@@ -1211,13 +1211,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFont, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/font",
-                {
-                    {"simple-case.svg", Params::Skip("Canvas size mismatch (400 vs 500)")},
-
-                    {"font-shorthand.svg", Params::Skip("Not impl: font shorthand property")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("text/font",
+                                        {
+                                            {"simple-case.svg",
+                                             Params::Skip("Canvas size mismatch (400 vs 500)")},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1249,18 +1247,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    TextFontKerning, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/font-kerning",
-                {
-                    {"arabic-script.svg",
-                     Params::Skip("Not impl: font-kerning property (HarfBuzz feature toggle)")},
-                    {"none.svg",
-                     Params::Skip("Not impl: font-kerning property (HarfBuzz feature toggle)")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(TextFontKerning, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("text/font-kerning", {})),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontSize, ImageComparisonTestFixture,
@@ -1280,15 +1270,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    TextFontSizeAdjust, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("text/font-size-adjust",
-                                        {
-                                            {"simple-case.svg",
-                                             Params::Skip("Not impl: font-size-adjust property")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(TextFontSizeAdjust, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("text/font-size-adjust")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextFontStretch, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("text/font-stretch")),

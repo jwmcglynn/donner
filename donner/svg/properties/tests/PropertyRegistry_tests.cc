@@ -667,6 +667,22 @@ TEST(PropertyRegistry, FontStyle) {
   }
 }
 
+TEST(PropertyRegistry, FontShorthandResetsOmittedLonghands) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-style: italic; font-weight: bold; font-stretch: condensed; font-variant: small-caps; "
+      "font-size: 18px; font-family: inherited");
+
+  registry.parseStyle("font: 50px 'Noto Sans'");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Normal));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(400));
+  EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Normal)));
+  EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::Normal));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(50, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+}
+
 TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
