@@ -368,6 +368,40 @@ TEST(SVGTextElementPublicApiTests, EndPositionOfCharReturnsComputedValue) {
   EXPECT_NEAR(end.y, start.y, 1.0);
 }
 
+TEST(SVGTextElementPublicApiTests, SizeAdjustScalesCharacterGeometryWithAdvances) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200">
+      <text id="small" font-size="64" font-size-adjust="0.3">Text</text>
+      <text id="large" font-size="64" font-size-adjust="0.6">Text</text>
+    </svg>
+  )");
+  const auto small = document.querySelector("#small")->cast<SVGTextElement>();
+  const auto large = document.querySelector("#large")->cast<SVGTextElement>();
+  EXPECT_THAT(large.getComputedTextLength(),
+              testing::DoubleNear(2.0 * small.getComputedTextLength(), 1e-4));
+  for (size_t i = 0; i < 4; ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_THAT(large.getExtentOfChar(i).size(),
+                Vector2Near(2.0 * small.getExtentOfChar(i).size().x,
+                            2.0 * small.getExtentOfChar(i).size().y));
+  }
+}
+
+TEST(SVGTextElementPublicApiTests, SpanCanDisableInheritedSizeAdjustment) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-size="64">
+      <text font-size-adjust="0.3"><tspan id="reset" font-size-adjust="none">Text</tspan></text>
+      <text id="control">Text</text>
+    </svg>
+  )");
+  const auto reset = document.querySelector("#reset")->cast<SVGTSpanElement>();
+  const auto control = document.querySelector("#control")->cast<SVGTextElement>();
+  EXPECT_THAT(reset.getComputedTextLength(),
+              testing::DoubleNear(control.getComputedTextLength(), 1e-4));
+  EXPECT_THAT(reset.getExtentOfChar(0).size(), Vector2Near(control.getExtentOfChar(0).size().x,
+                                                           control.getExtentOfChar(0).size().y));
+}
+
 TEST(SVGTextElementPublicApiTests, SelectSubstringIsNoOp) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 120 40">
