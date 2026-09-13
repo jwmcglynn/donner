@@ -1574,6 +1574,64 @@ TEST(TextEngineScriptedTest, HorizontalCrossSpanKernShiftsContinuationSpan) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(13.0))))));
 }
 
+TEST(TextEngineScriptedTest, ZeroUsedSizeDoesNotBridgeCrossSpanKerning) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  auto middle = MakeSpan("B");
+  middle.startsNewChunk = false;
+  middle.fontSizeAdjust.emplace(0.0);
+  text.spans.push_back(std::move(middle));
+  auto continuation = MakeSpan("V");
+  continuation.startsNewChunk = false;
+  text.spans.push_back(std::move(continuation));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_THAT(
+      runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(IsEmpty()), RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(runs[0].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].usedFontSizePx, FloatEq(0.0f));
+  EXPECT_THAT(runs[2].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[2].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphXAdvanceIs(DoubleEq(10.0)))));
+  EXPECT_THAT(runs[2].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(10.0))));
+}
+
+TEST(TextEngineScriptedTest, EmptySpanPreservesCrossSpanKerning) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  auto middle = MakeSpan("");
+  middle.startsNewChunk = false;
+  middle.fontSizeAdjust.emplace(0.0);
+  text.spans.push_back(std::move(middle));
+  auto continuation = MakeSpan("V");
+  continuation.startsNewChunk = false;
+  text.spans.push_back(std::move(continuation));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_THAT(
+      runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(IsEmpty()), RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(runs[0].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].usedFontSizePx, FloatEq(0.0f));
+  EXPECT_THAT(runs[2].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[2].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphXAdvanceIs(DoubleEq(10.0)))));
+  EXPECT_THAT(runs[2].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(13.0))));
+}
+
 TEST(TextEngineScriptedTest, VerticalCrossSpanKernShiftsContinuationSpan) {
   Registry registry;
   FontManager fontManager(registry);
