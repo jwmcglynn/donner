@@ -468,6 +468,7 @@ TEST_F(VulkanBufferWritesTests, FailedSubmissionPreservesPendingWritesAndSerial)
   EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 16u);
   EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 0u);
   EXPECT_EQ(device_->bufferWriteStatsForTest().submittedBatches, 0u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().lostDeviceDrains, 0u);
   const uint64_t nextReaderSerial = submitRead(input_);
   EXPECT_EQ(nextReaderSerial, readerSerial + 1);
   EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 0u);
@@ -529,6 +530,11 @@ TEST_F(VulkanBufferWritesTests, TextureSubmissionLossDrainsAndRejectsLaterAccess
               IsGpuError(GpuErrorType::InvalidState));
   EXPECT_THAT(device_->writeTexture(texture, bytes, {0, 256, 1}, {1, 1}),
               IsGpuError(GpuErrorType::InvalidState));
+  auto encoder = GetResultOrFail(device_->createCommandEncoder());
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_THAT(device_->submit(GetResultOrFail(encoder->finish())),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(device_->lastSubmittedSerial(), 0u);
 }
 
 TEST_F(VulkanBufferWritesTests, UnalignedWriteTimesOutWithoutDiscardingPendingWrites) {
