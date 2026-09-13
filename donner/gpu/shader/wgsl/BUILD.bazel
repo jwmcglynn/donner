@@ -9,6 +9,12 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "number",
+    hdrs = ["Number.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
     name = "frontend",
     hdrs = [
         "Module.h",
@@ -98,6 +104,15 @@ donner_cc_fuzzer(
         ":frontend",
         ":spirv_emitter",
         ":text_emitter",
+    ],
+)
+
+donner_cc_test(
+    name = "number_tests",
+    srcs = ["tests/Number_tests.cc"],
+    deps = [
+        ":number",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
