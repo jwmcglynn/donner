@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -22,6 +23,22 @@ namespace {
 
 /// Geometry assertions use path-local units rather than a device-derived tolerance.
 constexpr double kFlattenTolerance = Path::kLocalFlattenTolerance;
+
+/// Match either direction of a straight line's endpoint/midpoint encoding.
+bool HasEncodedLine(const std::vector<EncodedPath::Curve>& curves, const Vector2d& start,
+                    const Vector2d& end) {
+  const Vector2d middle = (start + end) * 0.5;
+  const std::array<float, 6> forward = {static_cast<float>(start.x),  static_cast<float>(start.y),
+                                        static_cast<float>(middle.x), static_cast<float>(middle.y),
+                                        static_cast<float>(end.x),    static_cast<float>(end.y)};
+  const std::array<float, 6> reverse = {forward[4], forward[5], forward[2],
+                                        forward[3], forward[0], forward[1]};
+  return std::any_of(curves.begin(), curves.end(), [&](const EncodedPath::Curve& curve) {
+    const std::array<float, 6> fields = {curve.p0x, curve.p0y, curve.p1x,
+                                         curve.p1y, curve.p2x, curve.p2y};
+    return fields == forward || fields == reverse;
+  });
+}
 
 MATCHER(IsFiniteFloat, "is finite") {
   return std::isfinite(arg);
@@ -635,15 +652,71 @@ TEST(GeodePathEncoder, CapSeamsCancelButGenuineCapBoundariesRemain) {
   }
 }
 
-TEST(GeodePathEncoder, SquareCapsShareCurveBoundaryNormals) {
+TEST(GeodePathEncoder, SquareCapsRemoveActualSlopedCurveEndSeams) {
   const Path curve = PathBuilder().moveTo({0, 0}).curveTo({0, 20}, {20, 20}, {20, 0}).build();
-  const Path stroke = curve.strokeToFill({.width = 6.0, .cap = LineCap::Square}, kFlattenTolerance);
-  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::NonZero);
-  ASSERT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
-  for (const auto& item : encoded.vCurves) {
-    EXPECT_THAT(item.p0y == 0 && item.p1y == 0 && item.p2y == 0, testing::IsFalse())
-        << "The square cap and curve strip must not retain their shared base at y=0";
+  const Path flattened = curve.flatten(kFlattenTolerance);
+  const auto points = flattened.points();
+  ASSERT_GE(points.size(), 3u);
+  const Path buttStroke =
+      curve.strokeToFill({.width = 6.0, .cap = LineCap::Butt}, kFlattenTolerance);
+  const Path squareStroke =
+      curve.strokeToFill({.width = 6.0, .cap = LineCap::Square}, kFlattenTolerance);
+  const EncodedPath butt = GeodePathEncoder::encode(buttStroke, FillRule::NonZero);
+  const EncodedPath square = GeodePathEncoder::encode(squareStroke, FillRule::NonZero);
+  ASSERT_EQ(butt.outcome, EncodedPath::Outcome::Ready);
+  ASSERT_EQ(square.outcome, EncodedPath::Outcome::Ready);
+
+  // This single curve has no interior command junction, so its end normals come from the chords.
+  for (bool atStart : {true, false}) {
+    SCOPED_TRACE(atStart);
+    const Vector2d origin = atStart ? points.front() : points.back();
+    const Vector2d chord =
+        atStart ? points[1] - points[0] : points.back() - points[points.size() - 2];
+    const Vector2d offset = Vector2d(-chord.y, chord.x).normalize() * 3.0;
+    ASSERT_NE(offset.x, 0.0);
+    ASSERT_NE(offset.y, 0.0);
+    for (bool verticalRay : {false, true}) {
+      SCOPED_TRACE(verticalRay);
+      const auto& buttCurves = verticalRay ? butt.vCurves : butt.curves;
+      const auto& squareCurves = verticalRay ? square.vCurves : square.curves;
+      for (const Vector2d endpoint : {origin - offset, origin + offset}) {
+        // A butt end retains these genuine boundaries; a square cap must absorb them.
+        EXPECT_THAT(HasEncodedLine(buttCurves, origin, endpoint), testing::IsTrue());
+        EXPECT_THAT(HasEncodedLine(squareCurves, origin, endpoint), testing::IsFalse());
+      }
+      EXPECT_THAT(HasEncodedLine(squareCurves, origin - offset, origin + offset),
+                  testing::IsFalse())
+          << "An unsplit cap base must not survive opposite the two strip half-edges";
+    }
   }
+}
+
+TEST(GeodePathEncoder, RoundJoinSeamsUseInteriorCurveBoundaryNormals) {
+  const Path path =
+      PathBuilder().moveTo({0, 0}).curveTo({0, 20}, {20, 20}, {20, 0}).lineTo({40, 0}).build();
+  const Path flattened = path.flatten(kFlattenTolerance);
+  const auto points = flattened.points();
+  ASSERT_GE(points.size(), 4u);
+  EXPECT_DOUBLE_EQ(points[points.size() - 2].x, 20.0);
+  EXPECT_DOUBLE_EQ(points[points.size() - 2].y, 0.0);
+  const Vector2d arrival = points[points.size() - 2] - points[points.size() - 3];
+  ASSERT_GT(arrival.x, 0.0);
+  ASSERT_LT(arrival.y, 0.0);
+
+  const StrokeStyle style{.width = 6.0, .join = LineJoin::Round};
+  const EncodedPath encoded =
+      GeodePathEncoder::encode(path.strokeToFill(style, kFlattenTolerance), FillRule::NonZero);
+  const EncodedPath chordControl =
+      GeodePathEncoder::encode(flattened.strokeToFill(style, kFlattenTolerance), FillRule::NonZero);
+  ASSERT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+  ASSERT_EQ(chordControl.outcome, EncodedPath::Outcome::Ready);
+
+  // The cubic exits vertically at the interior junction, so its exact incoming normal is +x.
+  // Flattening first deliberately removes the curve-command provenance and this override.
+  EXPECT_THAT(HasEncodedLine(chordControl.vCurves, {20, 0}, {23, 0}), testing::IsFalse());
+  EXPECT_THAT(HasEncodedLine(encoded.vCurves, {20, 0}, {23, 0}), testing::IsTrue());
+  EXPECT_THAT(HasEncodedLine(encoded.vCurves, {17, 0}, {20, 0}), testing::IsFalse())
+      << "The round join must cancel its exact radial seam with the overridden strip";
 }
 
 TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
