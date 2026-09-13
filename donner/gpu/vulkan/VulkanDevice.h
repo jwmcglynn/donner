@@ -39,12 +39,10 @@ struct VulkanApi;
  * five seconds for that buffer's prior submission before copying; timeout refuses the write and
  * leaves its bytes unchanged. Idle buffers copy directly.
  *
- * Two consequences of that simplification are worth stating, because callers cannot see them:
- * this backend refuses a write to a busy buffer where MetalDevice queues an equivalent aligned
+ * This backend refuses a write to a busy buffer where MetalDevice queues an equivalent aligned
  * write and returns success, so \ref donner::gpu::Device::writeBuffer can fail here and succeed
- * there for the same call; and \ref readBackBuffer copies the mapping without consulting the
- * buffer's last use, so a caller reading a buffer an unfinished submission still writes must
- * wait for that submission itself. Both are tracked follow-ups, not intended end states.
+ * there for the same call. Readback waits for the buffer's last use before reading mapped memory;
+ * a timeout or device error returns an error without copying any bytes.
  *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
@@ -123,9 +121,10 @@ public:
    *
    * Test/readback convenience for the vertical slice, pending the buffer mapping API: validates
    * the handle (null, device identity, and generation) through the base class, then reads the
-   * persistently mapped host-visible allocation. Callers must ensure relevant GPU work has
-   * completed first (see \ref waitForSerial); fence completion makes device writes visible to
-   * the host for HOST_COHERENT memory.
+   * persistently mapped host-visible allocation after waiting up to five seconds for this
+   * buffer's last submission. Unrelated work does not delay an idle buffer. Timeout or device
+   * failure returns an error without reading memory; fence completion makes device writes
+   * visible to the host for HOST_COHERENT memory.
    *
    * @param buffer Buffer to read back; must be a live buffer of this device.
    */
