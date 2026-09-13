@@ -1357,7 +1357,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/lengthAdjust",
                 {
-                    {"text-on-path.svg", Params()},
                     {"vertical.svg",
                      Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
                     {"with-underline.svg",
