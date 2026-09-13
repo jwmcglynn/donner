@@ -12,7 +12,7 @@ module.exports = {
     ...project,
     use: {
       ...project.use,
-      headless: false,
+      headless: true,
       trace: {
         mode: "retain-on-failure",
         screenshots: false,
