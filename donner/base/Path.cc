@@ -1914,29 +1914,24 @@ void EmitRoundJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNor
                         const Vector2d& currentOuterNormal, const Vector2d& previousOuter,
                         const Vector2d& currentOuter, double halfWidth, double turn,
                         PathBuilder& builder) {
-  const double startAngle = std::atan2(previousOuterNormal.y, previousOuterNormal.x);
-  const double endAngle = std::atan2(currentOuterNormal.y, currentOuterNormal.x);
-  double sweep = endAngle - startAngle;
-  if (turn > 0.0) {
-    if (sweep <= 0.0) {
-      sweep += MathConstants<double>::kPi * 2.0;
-    }
-  } else if (sweep >= 0.0) {
-    sweep -= MathConstants<double>::kPi * 2.0;
-  }
-  const int numSteps = BoundedRoundStrokeSubdivisionSteps(Abs(sweep) * halfWidth / 2.0, 4);
+  const double alignment = previousOuterNormal.dot(currentOuterNormal);
+  const double sweep = std::atan2(turn, alignment);
+  // Near-reversal sectors use the same subdivision density as round caps.
+  const int numSteps = NearZero(turn, 1e-10) && alignment < 0.0
+                           ? BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8)
+                           : BoundedRoundStrokeSubdivisionSteps(Abs(sweep) * halfWidth / 2.0, 4);
   std::vector<Vector2d> points;
   points.reserve(static_cast<size_t>(numSteps) + 3);
   points.push_back(vertex);
   for (int step = 0; step <= numSteps; ++step) {
     const double t = static_cast<double>(step) / static_cast<double>(numSteps);
-    const double angle = startAngle + sweep * t;
+    const double angle = sweep * t;
     if (step == 0) {
       points.push_back(previousOuter);
     } else if (step == numSteps) {
       points.push_back(currentOuter);
     } else {
-      points.push_back(vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+      points.push_back(vertex + previousOuterNormal.rotate(angle) * halfWidth);
     }
   }
   EmitPositiveStrokePiece(std::move(points), builder);
@@ -1946,7 +1941,7 @@ void EmitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal
                           const Vector2d& currentNormal, double halfWidth, const StrokeStyle& style,
                           PathBuilder& builder) {
   const double turn = previousNormal.x * currentNormal.y - previousNormal.y * currentNormal.x;
-  if (NearZero(turn, 1e-10)) {
+  if (turn == 0.0) {
     if (style.join == LineJoin::Round && previousNormal.dot(currentNormal) < 0.0) {
       EmitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth, builder);
     }
