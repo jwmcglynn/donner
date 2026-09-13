@@ -81,6 +81,88 @@ TEST(GeodePathEncoder, EmptyPath) {
   EXPECT_TRUE(encoded.bands.empty());
 }
 
+TEST(GeodePathEncoder, ExactReverseContoursCancelWithoutChangingBounds) {
+  const Path path = PathBuilder()
+                        .addRect(Box2d({0, 0}, {10, 10}))
+                        .moveTo({0, 0})
+                        .lineTo({0, 10})
+                        .lineTo({10, 10})
+                        .lineTo({10, 0})
+                        .closePath()
+                        .build();
+  for (FillRule rule : {FillRule::NonZero, FillRule::EvenOdd}) {
+    const EncodedPath encoded = GeodePathEncoder::encode(path, rule);
+    EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty);
+    EXPECT_THAT(encoded.bands, testing::IsEmpty());
+    EXPECT_THAT(encoded.vBands, testing::IsEmpty());
+    EXPECT_THAT(encoded.curveIndices, testing::IsEmpty());
+    EXPECT_THAT(encoded.vCurveIndices, testing::IsEmpty());
+    EXPECT_EQ(encoded.pathBounds, path.bounds());
+  }
+}
+
+TEST(GeodePathEncoder, ExactCancellationRetainsNetMultiplicityAndDirection) {
+  const Path forward = PathBuilder().addRect(Box2d({0, 0}, {10, 10})).build();
+  const Path reverse = PathBuilder()
+                           .moveTo({0, 0})
+                           .lineTo({0, 10})
+                           .lineTo({10, 10})
+                           .lineTo({10, 0})
+                           .closePath()
+                           .build();
+  const Path mixed = PathBuilder().addPath(forward).addPath(forward).addPath(reverse).build();
+  const Path duplicate = PathBuilder().addPath(forward).addPath(forward).build();
+  const auto fields = [](const EncodedPath::Curve& curve) {
+    return std::tuple(curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y);
+  };
+  for (FillRule rule : {FillRule::NonZero, FillRule::EvenOdd}) {
+    const EncodedPath expected = GeodePathEncoder::encode(forward, rule);
+    const EncodedPath actual = GeodePathEncoder::encode(mixed, rule);
+    const EncodedPath twice = GeodePathEncoder::encode(duplicate, rule);
+    ASSERT_THAT(actual.curves, testing::SizeIs(expected.curves.size()));
+    ASSERT_THAT(actual.vCurves, testing::SizeIs(expected.vCurves.size()));
+    for (size_t i = 0; i < actual.curves.size(); ++i) {
+      EXPECT_THAT(fields(actual.curves[i]), testing::Eq(fields(expected.curves[i])));
+    }
+    for (size_t i = 0; i < actual.vCurves.size(); ++i) {
+      EXPECT_THAT(fields(actual.vCurves[i]), testing::Eq(fields(expected.vCurves[i])));
+    }
+    EXPECT_THAT(twice.curves, testing::SizeIs(expected.curves.size() * 2));
+    EXPECT_THAT(twice.vCurves, testing::SizeIs(expected.vCurves.size() * 2));
+  }
+}
+
+TEST(GeodePathEncoder, CancellationRetainsOneUlpControlDifferences) {
+  const float distinctControl = std::nextafter(0.5f, 1.0f);
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .quadTo({0.5, 0.25}, {1, 1})
+                        .closePath()
+                        .moveTo({1, 1})
+                        .quadTo({distinctControl, 0.25}, {0, 0})
+                        .closePath()
+                        .build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+  EXPECT_THAT(encoded.curves, testing::SizeIs(2));
+  EXPECT_THAT(encoded.vCurves, testing::SizeIs(2));
+}
+
+TEST(GeodePathEncoder, CancellationDoesNotAdmitOversizedRawInput) {
+  const Path path = PathBuilder()
+                        .addRect(Box2d({0, 0}, {10, 10}))
+                        .moveTo({0, 0})
+                        .lineTo({0, 10})
+                        .lineTo({10, 10})
+                        .lineTo({10, 0})
+                        .closePath()
+                        .build();
+  GeodePathEncoder::Limits limits;
+  limits.maximumConvertedCommands = 2;
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero, 0.1, limits);
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Rejected);
+}
+
 TEST(GeodePathEncoder, SimpleTriangle) {
   Path path = PathBuilder()
                   .moveTo(Vector2d(0, 0))

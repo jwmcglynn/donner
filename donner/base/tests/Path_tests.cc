@@ -3258,6 +3258,23 @@ TEST(Path, StrokeToFillCurveFlatteningSharesAggregateGeometryBudget) {
   EXPECT_TRUE(builder.build().strokeToFill(style, 0.0).empty());
 }
 
+TEST(Path, StrokeSeamSubdivisionPreservesPositiveWinding) {
+  const Vector2d p(93.2175662895048, 12.455955998377087);
+  const Vector2d q(42.593677805702846, 34.97932902943062);
+  const Vector2d middle = (p + q) * 0.5;
+  for (bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    const Path line = PathBuilder().moveTo(reverse ? q : p).lineTo(reverse ? p : q).build();
+    const Path stroke = line.strokeToFill({.width = 17.970666902188974}, kFlattenTolerance);
+    const Path overlap = PathBuilder()
+                             .addPath(stroke)
+                             .addRect(Box2d(middle - Vector2d(1, 1), middle + Vector2d(1, 1)))
+                             .build();
+    EXPECT_THAT(overlap.isInside(middle, FillRule::NonZero), testing::IsTrue())
+        << "A positive rectangle must not cancel the overlapping stroke strip";
+  }
+}
+
 TEST(Path, StrokeToFillNonFiniteWidthReturnsEmpty) {
   const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
   StrokeStyle style;
