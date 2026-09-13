@@ -491,6 +491,7 @@ private:
         (name.text.size() >= 2 && name.text[0] == '_' && name.text[1] == '_')) {
       return false;
     }
+    if (IsVectorTypeName(name) || IsMatrixTypeName(name)) return false;
     for (std::string_view reserved : kReservedDeclarationNames) {
       if (name.text == reserved) return false;
     }
@@ -692,6 +693,11 @@ private:
         return true;
       }
     }
+    if (type.kind == TypeKind::Matrix) {
+      *alignment = type.rows == 2 ? 8 : 16;
+      *size = type.columns * *alignment;
+      return true;
+    }
     if (type.kind == TypeKind::Array && type.elementKind == TypeKind::F32 &&
         type.elementLanes == 1 && type.arrayCount > 0) {
       *alignment = 4;
@@ -708,6 +714,7 @@ private:
     if (name.text == "texture_2d") return ParseSampledTextureType();
     if (name.text == "texture_storage_2d") return ParseStorageTextureType();
     if (IsVectorTypeName(name)) return ParseVectorType(name);
+    if (IsMatrixTypeName(name)) return ParseMatrixType(name);
     if (Type structure = NamedStructType(name); structure.kind != TypeKind::Void) return structure;
     Fail(ErrorCode::UnknownType, name.span);
     return {};
@@ -759,19 +766,50 @@ private:
   }
 
   constexpr bool IsVectorTypeName(Token name) const {
-    return name.text.size() == 4 && name.text.substr(0, 3) == "vec" && name.text[3] >= '2' &&
-           name.text[3] <= '4';
+    return (name.text.size() == 4 ||
+            (name.text.size() == 5 &&
+             (name.text[4] == 'f' || name.text[4] == 'i' || name.text[4] == 'u'))) &&
+           name.text.substr(0, 3) == "vec" && name.text[3] >= '2' && name.text[3] <= '4';
   }
 
   constexpr Type ParseVectorType(Token name) {
-    Expect(TokenKind::Less);
-    Type scalar = ParseType();
-    Expect(TokenKind::Greater);
-    if (scalar.lanes != 1 || (scalar.kind != TypeKind::Bool && !scalar.isNumeric())) {
-      Fail(ErrorCode::UnknownType, name.span);
+    Type scalar;
+    if (name.text.size() == 5) {
+      const char suffix = name.text[4];
+      scalar.kind = suffix == 'f'   ? TypeKind::F32
+                    : suffix == 'i' ? TypeKind::I32
+                    : suffix == 'u' ? TypeKind::U32
+                                    : TypeKind::Void;
+    } else {
+      Expect(TokenKind::Less);
+      scalar = ParseType();
+      Expect(TokenKind::Greater);
     }
+    if (scalar.lanes != 1 || (scalar.kind != TypeKind::Bool && !scalar.isNumeric()))
+      Fail(ErrorCode::UnknownType, name.span);
     scalar.lanes = static_cast<uint8_t>(name.text[3] - '0');
     return scalar;
+  }
+
+  constexpr bool IsMatrixTypeName(Token name) const {
+    return (name.text.size() == 6 || (name.text.size() == 7 && name.text[6] == 'f')) &&
+           name.text.substr(0, 3) == "mat" && name.text[3] >= '2' && name.text[3] <= '4' &&
+           name.text[4] == 'x' && name.text[5] >= '2' && name.text[5] <= '4';
+  }
+
+  constexpr Type ParseMatrixType(Token name) {
+    if (name.text.size() == 7) {
+      if (name.text[6] != 'f') Fail(ErrorCode::UnknownType, name.span);
+    } else {
+      Expect(TokenKind::Less);
+      const Type scalar = ParseType();
+      Expect(TokenKind::Greater);
+      if (scalar != Type{TypeKind::F32}) Fail(ErrorCode::UnknownType, name.span);
+    }
+    Type result{TypeKind::Matrix};
+    result.columns = uint8_t(name.text[3] - '0');
+    result.rows = uint8_t(name.text[5] - '0');
+    return result;
   }
 
   constexpr Type NamedStructType(Token name) const {
@@ -798,6 +836,14 @@ private:
     }
     const BindingKind kind = ResolveBindingKind(addressSpace, accessMode, type, name);
     if (failed()) return;
+    if (kind == BindingKind::Uniform) {
+      const Struct& structure = module_.structs[type.structId];
+      for (uint16_t i = 0; i < structure.memberCount; ++i) {
+        const Type member = module_.structMembers[structure.firstMember + i].type;
+        if (member.kind == TypeKind::Matrix && member.rows == 2)
+          Fail(ErrorCode::UnsupportedConstruct, name.span);
+      }
+    }
     if (!BindingWithinLimits(attributes, kind, name)) return;
     InsertBinding(attributes, kind, type, name);
   }
@@ -954,7 +1000,7 @@ private:
   }
 
   constexpr bool IsValueType(Type type) const {
-    return type.isNumeric() || type.kind == TypeKind::Bool ||
+    return type.isNumeric() || type.kind == TypeKind::Bool || type.kind == TypeKind::Matrix ||
            (type.kind == TypeKind::Struct && !StructHasArray(type.structId));
   }
 
@@ -1425,7 +1471,7 @@ private:
     Expect(TokenKind::RightBracket);
     const Type base = ExpressionAt(value.id).type;
     const Type indexType = ExpressionAt(index.id).type;
-    if (base.kind != TypeKind::Array || indexType.lanes != 1 ||
+    if ((base.kind != TypeKind::Array && base.kind != TypeKind::Matrix) || indexType.lanes != 1 ||
         (indexType.kind != TypeKind::I32 && indexType.kind != TypeKind::U32)) {
       Fail(ErrorCode::TypeMismatch, end);
       return ErrorExpression(end);
@@ -1434,19 +1480,25 @@ private:
     uint32_t unsignedIndex = 0;
     const bool hasSignedIndex = ConstI32Value(index.id, &signedIndex);
     const bool hasUnsignedIndex = ConstU32Value(index.id, &unsignedIndex);
+    const uint32_t count = base.kind == TypeKind::Matrix ? base.columns : base.arrayCount;
+    if (base.kind == TypeKind::Matrix && !hasSignedIndex && !hasUnsignedIndex)
+      Fail(ErrorCode::UnsupportedConstruct, ExpressionAt(index.id).span);
     if ((IsConstantSyntax(index.id) && !hasSignedIndex && !hasUnsignedIndex) ||
-        (hasSignedIndex &&
-         (signedIndex < 0 || static_cast<uint32_t>(signedIndex) >= base.arrayCount)) ||
-        (hasUnsignedIndex && unsignedIndex >= base.arrayCount)) {
+        (hasSignedIndex && (signedIndex < 0 || static_cast<uint32_t>(signedIndex) >= count)) ||
+        (hasUnsignedIndex && unsignedIndex >= count)) {
       Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index.id).span);
     }
-    return AddExpression(Expression{ExpressionKind::Index,
-                                    Type{base.elementKind, base.elementLanes},
-                                    SourceSpan{ExpressionAt(value.id).span.begin, end.end},
-                                    {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
-                                    2,
-                                    0},
-                         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+    return AddExpression(
+        Expression{ExpressionKind::Index,
+                   base.kind == TypeKind::Matrix ? Type{TypeKind::F32, base.rows}
+                                                 : Type{base.elementKind, base.elementLanes},
+                   SourceSpan{ExpressionAt(value.id).span.begin, end.end},
+                   {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
+                   2,
+                   base.kind == TypeKind::Matrix
+                       ? (hasSignedIndex ? uint32_t(signedIndex) : unsignedIndex)
+                       : 0},
+        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
   constexpr ExpressionInfo ParseMemberAccess(ExpressionInfo value) {
@@ -1523,7 +1575,16 @@ private:
 
   constexpr ExpressionInfo ParseNamedPrimary(Token name) {
     if (name.text == "true" || name.text == "false") return ParseBoolLiteral(name);
-    if (IsVectorConstructor(name) && Match(TokenKind::Less)) return ParseVectorConstruction(name);
+    if (IsVectorTypeName(name)) {
+      const Type type = ParseVectorType(name);
+      Expect(TokenKind::LeftParen);
+      return ParseConstruction(name, type);
+    }
+    if (IsMatrixTypeName(name)) {
+      const Type type = ParseMatrixType(name);
+      Expect(TokenKind::LeftParen);
+      return ParseMatrixConstruction(name, type);
+    }
     if (Match(TokenKind::LeftParen)) return ParseCallOrConversion(name);
     return ParseSymbolReference(name);
   }
@@ -1537,15 +1598,6 @@ private:
                    0,
                    name.text == "true" ? 1u : 0u},
         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
-  }
-
-  constexpr ExpressionInfo ParseVectorConstruction(Token name) {
-    Type type = ParseType();
-    if (type.lanes != 1 || !type.isNumeric()) Fail(ErrorCode::UnknownType, name.span);
-    type.lanes = static_cast<uint8_t>(name.text[3] - '0');
-    Expect(TokenKind::Greater);
-    Expect(TokenKind::LeftParen);
-    return ParseConstruction(name, type);
   }
 
   constexpr ExpressionInfo ParseCallOrConversion(Token name) {
@@ -1584,6 +1636,35 @@ private:
         resolved.mutableValue, symbol, symbolUpperBounds_[symbol]);
   }
 
+  constexpr ExpressionInfo ParseMatrixConstruction(Token name, Type type) {
+    std::array<ArenaId, 4> operands{kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
+                                    kInvalidArenaId};
+    uint8_t count = 0;
+    if (token_.kind != TokenKind::RightParen) {
+      do {
+        if (count == operands.size()) {
+          Fail(ErrorCode::InvalidCall, token_.span);
+          break;
+        }
+        operands[count++] = ParseExpression().id;
+      } while (Match(TokenKind::Comma));
+    }
+    const SourceSpan end = Expect(TokenKind::RightParen).span;
+    if (count == 0)
+      return AddExpression(Expression{ExpressionKind::Zero, type, {name.span.begin, end.end}},
+                           false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+    bool valid = count == 1 && ExpressionAt(operands[0]).type == type;
+    if (count == type.columns) {
+      valid = true;
+      for (uint8_t i = 0; i < count; ++i)
+        valid &= ExpressionAt(operands[i]).type == Type{TypeKind::F32, type.rows};
+    }
+    if (!valid) Fail(ErrorCode::InvalidCall, name.span);
+    return AddExpression(
+        Expression{ExpressionKind::Construct, type, {name.span.begin, end.end}, operands, count},
+        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+  }
+
   constexpr ExpressionInfo ParseConstruction(Token constructor, Type type) {
     std::array<ExpressionInfo, 4> arguments;
     uint8_t count = 0;
@@ -1618,10 +1699,6 @@ private:
     return AddExpression(Expression{ExpressionKind::Construct, type,
                                     SourceSpan{constructor.span.begin, end.end}, operands, count},
                          false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
-  }
-
-  constexpr bool IsVectorConstructor(Token name) const {
-    return name.text == "vec2" || name.text == "vec3" || name.text == "vec4";
   }
 
   constexpr ExpressionInfo ParseCall(Token name) {
@@ -2006,9 +2083,45 @@ private:
     }
   }
 
+  constexpr Type MatrixProductType(Type left, Type right) const {
+    if (left.kind == TypeKind::Matrix && right.kind == TypeKind::Matrix) {
+      if (left.columns != right.rows) return {};
+      Type result = left;
+      result.columns = right.columns;
+      return result;
+    }
+    if (left.kind == TypeKind::Matrix && right.kind == TypeKind::F32) {
+      if (right.lanes == 1) return left;
+      return right.lanes == left.columns ? Type{TypeKind::F32, left.rows} : Type{};
+    }
+    if (right.kind == TypeKind::Matrix && left.kind == TypeKind::F32) {
+      if (left.lanes == 1) return right;
+      return left.lanes == right.rows ? Type{TypeKind::F32, right.columns} : Type{};
+    }
+    return {};
+  }
+
+  constexpr ExpressionInfo MakeMatrixProduct(Token op, ExpressionInfo lhs, ExpressionInfo rhs) {
+    const Type result = MatrixProductType(ExpressionAt(lhs.id).type, ExpressionAt(rhs.id).type);
+    if (op.kind != TokenKind::Star || result.kind == TypeKind::Void)
+      Fail(ErrorCode::TypeMismatch, op.span);
+    if (IsConstantSyntax(lhs.id) && IsConstantSyntax(rhs.id))
+      Fail(ErrorCode::InvalidConstantExpression, op.span);
+    return AddExpression(
+        Expression{ExpressionKind::Binary,
+                   result,
+                   {ExpressionAt(lhs.id).span.begin, ExpressionAt(rhs.id).span.end},
+                   {lhs.id, rhs.id, kInvalidArenaId, kInvalidArenaId},
+                   2,
+                   uint32_t(BinaryOp::Mul)},
+        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+  }
+
   constexpr ExpressionInfo MakeBinary(Token op, ExpressionInfo lhs, ExpressionInfo rhs) {
     const Type left = ExpressionAt(lhs.id).type;
     const Type right = ExpressionAt(rhs.id).type;
+    if (left.kind == TypeKind::Matrix || right.kind == TypeKind::Matrix)
+      return MakeMatrixProduct(op, lhs, rhs);
     BinaryOp binary;
     Type result;
     bool valid = true;
@@ -2242,7 +2355,8 @@ private:
   constexpr bool IsConstantSyntax(ArenaId expressionId) const {
     if (expressionId == kInvalidArenaId) return false;
     const Expression& expression = ExpressionAt(expressionId);
-    if (expression.kind == ExpressionKind::Literal) return true;
+    if (expression.kind == ExpressionKind::Literal || expression.kind == ExpressionKind::Zero)
+      return true;
     if (expression.kind == ExpressionKind::Unary || expression.kind == ExpressionKind::Convert ||
         expression.kind == ExpressionKind::Swizzle) {
       return IsConstantSyntax(expression.operands[0]);

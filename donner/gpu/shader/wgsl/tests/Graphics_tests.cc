@@ -6,6 +6,7 @@
 
 #include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsSource.h"
+#include "donner/gpu/shader/wgsl/tests/MatrixSource.h"
 
 namespace donner::gpu::shader::wgsl {
 namespace {
@@ -48,6 +49,41 @@ TEST(GraphicsCompiler, FrozenAndOrdinaryGraphicsEmissionAgree) {
   SpirvSink binary{words.data(), uint32_t(words.size())};
   ASSERT_TRUE(EmitSpirv(parsed.module, binary).isSuccess());
   EXPECT_THAT(std::span(words.data(), binary.size), testing::ElementsAreArray(shader.spirv));
+}
+
+TEST(GraphicsCompiler, ReflectsMatrixShapeStrideAndResourceVisibility) {
+  const auto& shader = tests::MatrixShader();
+  ASSERT_THAT(shader.members, SizeIs(1));
+  EXPECT_EQ(shader.members[0].matrixColumns, 4u);
+  EXPECT_EQ(shader.members[0].lanes, 4u);
+  EXPECT_EQ(shader.members[0].matrixStrideBytes, 16u);
+  EXPECT_TRUE(shader.matchesMember("params", "mvp", 0, 64, ShaderScalarType::F32, 4, 0, 0, 4, 16));
+  EXPECT_FALSE(shader.matchesMember("params", "mvp", 0, 64, ShaderScalarType::F32, 4, 0, 0, 4, 8));
+  const auto layout = MakeBindingLayout(shader);
+  ASSERT_THAT(layout, SizeIs(1));
+  EXPECT_EQ(layout[0].visibility, ShaderStage::Vertex);
+  const auto descriptor = MakeShaderDescriptor(shader, ShaderSourceKind::Msl, "matrix");
+  ASSERT_TRUE(descriptor.bufferBindings.has_value());
+  ASSERT_THAT(*descriptor.bufferBindings, SizeIs(1));
+  EXPECT_EQ(descriptor.bufferBindings->front().entryPoint, "vs_main");
+  EXPECT_EQ(descriptor.bufferBindings->front().stage, ShaderStage::Vertex);
+  EXPECT_EQ(descriptor.bufferBindings->front().minSizeBytes, 64u);
+}
+
+TEST(GraphicsCompiler, RejectsMatrixShapeIndexAndUnsupportedLayoutCases) {
+  constexpr std::string_view cases[] = {
+      "fn f(m: mat2x2f) -> vec4f { return m * vec4f(0f); }",
+      "fn f(m: mat2x2f) -> mat2x2f { return m + m; }",
+      "fn f(m: mat2x2f) -> vec2f { return m[2i]; }",
+      "fn f(m: mat2x2f) -> vec2f { return m[-1i]; }",
+      "fn f(m: mat2x2f, i: i32) -> vec2f { return m[i]; }",
+      "fn f(v: vec3f) -> mat2x2f { return mat2x2f(v, v); }",
+      "struct P { m: mat2x2f, } @group(0) @binding(0) var<uniform> p: P;",
+  };
+  for (const auto source : cases) {
+    SCOPED_TRACE(source);
+    EXPECT_FALSE(Parse(source).hasResult());
+  }
 }
 
 TEST(GraphicsCompiler, RejectsInvalidEntryInterfaces) {

@@ -300,6 +300,11 @@ private:
       declarations_.word(members[i]);
       annotations_.instruction(72, value, i, 35,
                                module_.structMembers[structure.firstMember + i].offset);
+      const Type memberType = module_.structMembers[structure.firstMember + i].type;
+      if (memberType.kind == TypeKind::Matrix) {
+        annotations_.instruction(72, value, i, 5);
+        annotations_.instruction(72, value, i, 7, memberType.rows == 2 ? 8 : 16);
+      }
     }
     for (uint16_t i = 0; i < module_.bindingCount; ++i) {
       if (module_.bindings[i].type == type) {
@@ -324,6 +329,9 @@ private:
       case TypeKind::StorageTexture2d: declareImageType(type, value); break;
       case TypeKind::Struct: declareStructType(type, value); break;
       case TypeKind::Array: declareArrayType(type, value); break;
+      case TypeKind::Matrix:
+        declarations_.instruction(24, value, typeId(Type{TypeKind::F32, type.rows}), type.columns);
+        break;
     }
   }
 
@@ -358,7 +366,7 @@ private:
       declarations_.word(typeValue);
       declarations_.word(value);
       for (uint8_t i = 0; i < type.lanes; ++i) declarations_.word(component);
-    } else if (type.kind == TypeKind::Struct) {
+    } else if (type.kind == TypeKind::Struct || type.kind == TypeKind::Matrix) {
       declarations_.instruction(46, typeValue, value);
     } else if (type.kind == TypeKind::Bool) {
       declarations_.instruction(bits ? 41 : 42, typeValue, value);
@@ -681,6 +689,15 @@ constexpr uint32_t Emitter::emitExpression(ArenaId index) {
       }
       [[fallthrough]];
     case ExpressionKind::Index: {
+      const Type base = module_.expressions[node.operands[0]].type;
+      if (base.kind == TypeKind::Matrix) {
+        if (node.payload >= base.columns) {
+          fail(SpirvEmitError::InvalidNode);
+          break;
+        }
+        value = operation(81, node.type, emitExpression(node.operands[0]), node.payload);
+        break;
+      }
       uint32_t storage = 0;
       value = operation(61, node.type, lvalue(index, storage));
       break;
@@ -750,9 +767,11 @@ constexpr uint32_t Emitter::emitSwizzle(const Expression& node) {
 constexpr uint32_t Emitter::emitConstruct(const Expression& node) {
   std::array<uint32_t, 4> values{};
   for (uint8_t i = 0; i < node.operandCount; ++i) values[i] = emitExpression(node.operands[i]);
-  if (node.operandCount == 1 && module_.expressions[node.operands[0]].type.lanes == 1)
+  if (node.type.kind == TypeKind::Matrix && node.operandCount == 1) return values[0];
+  if (node.type.kind != TypeKind::Matrix && node.operandCount == 1 &&
+      module_.expressions[node.operands[0]].type.lanes == 1)
     return splat(node.type, values[0]);
-  if (node.operandCount == 1)
+  if (node.type.kind != TypeKind::Matrix && node.operandCount == 1)
     return convert(module_.expressions[node.operands[0]].type, node.type, values[0]);
   const uint32_t result = id();
   functions_.word((uint32_t(node.operandCount + 3) << 16) | 80u);
@@ -877,6 +896,18 @@ constexpr uint32_t Emitter::emitBinary(const Expression& node) {
   uint32_t rhs = emitExpression(node.operands[1]);
   const Type leftType = module_.expressions[node.operands[0]].type;
   const Type rightType = module_.expressions[node.operands[1]].type;
+  if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix) {
+    if (op != BinaryOp::Mul) {
+      fail(SpirvEmitError::InvalidNode);
+      return 0;
+    }
+    if (leftType.kind == TypeKind::Matrix && rightType.kind == TypeKind::Matrix)
+      return operation(146, node.type, lhs, rhs);
+    if (leftType.kind == TypeKind::Matrix)
+      return operation(rightType.lanes == 1 ? 143 : 145, node.type, lhs, rhs);
+    return leftType.lanes == 1 ? operation(143, node.type, rhs, lhs)
+                               : operation(144, node.type, lhs, rhs);
+  }
   const TypeKind kind = leftType.kind;
   Type operandType = leftType;
   operandType.lanes = leftType.lanes > rightType.lanes ? leftType.lanes : rightType.lanes;

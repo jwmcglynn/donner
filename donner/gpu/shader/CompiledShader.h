@@ -33,8 +33,10 @@ struct ShaderBufferMember {
   uint32_t offsetBytes = 0;
   uint32_t sizeBytes = 0;
   uint32_t alignmentBytes = 1;
-  uint32_t arrayCount = 0;        //!< Fixed array length, or zero for a scalar/vector member.
-  uint32_t arrayStrideBytes = 0;  //!< Byte stride for a fixed array member.
+  uint32_t arrayCount = 0;         //!< Fixed array length, or zero for a scalar/vector member.
+  uint32_t arrayStrideBytes = 0;   //!< Byte stride for a fixed array member.
+  uint8_t matrixColumns = 0;       //!< Matrix columns; lanes gives rows. Zero for non-matrices.
+  uint32_t matrixStrideBytes = 0;  //!< Byte stride between matrix columns.
 };
 
 /// One resource and the layout of its parameter block, when applicable.
@@ -98,10 +100,13 @@ struct CompiledShaderView {
   /// @param scalarType C++ numeric component kind. @param lanes C++ component count.
   /// @param arrayCount Fixed array length, or zero for a non-array member.
   /// @param arrayStrideBytes Fixed array element stride, or zero for a non-array member.
+  /// @param matrixColumns Matrix columns, or zero for a non-matrix member.
+  /// @param matrixStrideBytes Matrix column stride, or zero for a non-matrix member.
   constexpr bool matchesMember(std::string_view resourceName, std::string_view memberName,
                                uint32_t offsetBytes, uint32_t sizeBytes,
                                ShaderScalarType scalarType, uint8_t lanes = 1,
-                               uint32_t arrayCount = 0, uint32_t arrayStrideBytes = 0) const {
+                               uint32_t arrayCount = 0, uint32_t arrayStrideBytes = 0,
+                               uint8_t matrixColumns = 0, uint32_t matrixStrideBytes = 0) const {
     const ShaderResource* binding = resource(resourceName);
     if (!binding || binding->firstMember > members.size() ||
         binding->memberCount > members.size() - binding->firstMember)
@@ -112,7 +117,9 @@ struct CompiledShaderView {
       if (member.name.view() == memberName)
         return member.offsetBytes == offsetBytes && member.sizeBytes == sizeBytes &&
                member.scalarType == scalarType && member.lanes == lanes &&
-               member.arrayCount == arrayCount && member.arrayStrideBytes == arrayStrideBytes;
+               member.arrayCount == arrayCount && member.arrayStrideBytes == arrayStrideBytes &&
+               member.matrixColumns == matrixColumns &&
+               member.matrixStrideBytes == matrixStrideBytes;
     }
     return false;
   }

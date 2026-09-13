@@ -145,18 +145,22 @@ consteval auto Compile() {
   for (size_t i = 0; i < emitted.spirvSize; ++i) result.spirv[i] = emitted.spirv[i];
   for (size_t i = 0; i < parsed.module.structMemberCount; ++i) {
     const StructMember& member = parsed.module.structMembers[i];
-    result.members[i] = {compiler_detail::Name(parsed.module.name(member.name)),
-                         (member.type.kind == TypeKind::Array ? member.type.elementKind
-                                                              : member.type.kind) == TypeKind::F32
-                             ? ShaderScalarType::F32
-                         : member.type.kind == TypeKind::I32 ? ShaderScalarType::I32
-                                                             : ShaderScalarType::U32,
-                         member.type.lanes,
-                         member.offset,
-                         member.size,
-                         member.alignment,
-                         member.type.arrayCount,
-                         member.arrayStride};
+    result.members[i] = {
+        compiler_detail::Name(parsed.module.name(member.name)),
+        (member.type.kind == TypeKind::Matrix ||
+         (member.type.kind == TypeKind::Array ? member.type.elementKind : member.type.kind) ==
+             TypeKind::F32)
+            ? ShaderScalarType::F32
+        : member.type.kind == TypeKind::I32 ? ShaderScalarType::I32
+                                            : ShaderScalarType::U32,
+        member.type.kind == TypeKind::Matrix ? member.type.rows : member.type.lanes,
+        member.offset,
+        member.size,
+        member.alignment,
+        member.type.arrayCount,
+        member.arrayStride,
+        member.type.kind == TypeKind::Matrix ? member.type.columns : uint8_t(0),
+        member.type.kind == TypeKind::Matrix ? (member.type.rows == 2 ? 8u : 16u) : 0u};
   }
   for (size_t i = 0; i < parsed.module.bindingCount; ++i) {
     const Binding& binding = parsed.module.bindings[i];

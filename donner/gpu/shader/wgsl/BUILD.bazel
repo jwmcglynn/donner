@@ -51,7 +51,10 @@ donner_cc_library(
 donner_cc_library(
     name = "graphics_test_source",
     testonly = True,
-    hdrs = ["tests/GraphicsSource.h"],
+    hdrs = [
+        "tests/GraphicsSource.h",
+        "tests/MatrixSource.h",
+    ],
     visibility = donner_internal_visibility(),
     deps = [":compiler"],
 )

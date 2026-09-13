@@ -9,4 +9,7 @@ namespace donner::gpu::shader::wgsl::tests {
 /// Returns an all-projection graphics test artifact with static storage duration.
 const CompiledShaderView& GraphicsShader();
 
+/// Returns an all-projection matrix graphics artifact with static storage duration.
+const CompiledShaderView& MatrixShader();
+
 }  // namespace donner::gpu::shader::wgsl::tests

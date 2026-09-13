@@ -105,6 +105,14 @@ validated interface records. A shared full-screen triangle fixture verifies the 
 reflection, ordinary/constant-evaluation agreement and offline native compilation. Production Slug
 migration and its additional language features remain separate qualification work.
 
+The matrix profile accepts f32 matrix types and their `matCxRf` aliases, column-vector, copy and
+zero constructors, value parameters/returns, constant column reads and dimension-checked
+multiplication. Vector aliases such as `vec2f` and `vec2i` share the normal type/constructor path.
+Reflection records matrix row/column counts and column stride. Uniform matrices with 8-byte column
+stride are explicitly outside the portable Vulkan 1.1 layout profile; storage layouts and value
+matrices retain their natural stride. Dynamic matrix column indexing, scalar-list matrix
+constructors and constant matrix arithmetic remain unsupported.
+
 ## Validation
 
 The focused compiler tests cover the real Gaussian and convolution modules, exact artifact/interface construction,

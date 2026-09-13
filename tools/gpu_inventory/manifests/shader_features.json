@@ -155,6 +155,41 @@
         "Input"
       ]
     },
+    "donner/gpu/shader/wgsl/tests/MatrixSource.h#inline0": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "params",
+          "type": "Params"
+        }
+      ],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "let",
+        "mat2x2f",
+        "mat4x4f",
+        "return",
+        "var"
+      ],
+      "structs": [
+        "Params"
+      ]
+    },
     "donner/gpu/shader/wgsl/tests/corpus/compute.wgsl": {
       "bindings": [
         {
@@ -276,6 +311,41 @@
         "let"
       ],
       "structs": []
+    },
+    "donner/gpu/shader/wgsl/tests/corpus/matrix_graphics.wgsl": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "params",
+          "type": "Params"
+        }
+      ],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "let",
+        "mat2x2f",
+        "mat4x4f",
+        "return",
+        "var"
+      ],
+      "structs": [
+        "Params"
+      ]
     },
     "donner/svg/renderer/geode/shaders/filter_blend.wgsl": {
       "bindings": [

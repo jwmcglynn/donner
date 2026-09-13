@@ -45,6 +45,7 @@ enum class TypeKind : uint8_t {
   U32,               //!< `u32`.
   F32,               //!< `f32`.
   Struct,            //!< A declared structure.
+  Matrix,            //!< A column-major f32 matrix.
   Array,             //!< A fixed-size array.
   SampledTexture2d,  //!< `texture_2d<f32>`.
   StorageTexture2d,  //!< `texture_storage_2d<rgba32float, write>`.
@@ -59,6 +60,8 @@ struct Type {
   TypeKind elementKind = TypeKind::Void;  //!< Array element category.
   uint8_t elementLanes = 1;               //!< Array element vector lane count.
   uint16_t arrayCount = 0;                //!< Fixed array element count.
+  uint8_t columns = 1;                    //!< Matrix columns; one for non-matrices.
+  uint8_t rows = 1;                       //!< Matrix rows; one for non-matrices.
 
   /// Returns true for identical resolved types.
   constexpr bool operator==(const Type& other) const = default;

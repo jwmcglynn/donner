@@ -192,6 +192,7 @@ TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, CompiledGraphicsEntriesPassMetalCompilation) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(wgsl::tests::GraphicsShader().msl, "compiled_graphics");
+  ExpectCompilesWithMetalCompiler(wgsl::tests::MatrixShader().msl, "compiled_matrices");
 }
 
 TEST(MslXcrunValidation, EmittedConvolveMatrixCompilesWithMetalCompiler) {

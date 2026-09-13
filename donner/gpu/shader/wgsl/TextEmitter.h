@@ -241,6 +241,12 @@ private:
         }
         prefixed("donner_msl_struct_", module_.structs[value.structId].name);
         return;
+      case TypeKind::Matrix:
+        text("float");
+        uintText(value.columns);
+        character('x');
+        uintText(value.rows);
+        return;
       case TypeKind::Array: error_ = TextEmitError::UnsupportedType; return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d: text("texture2d<float, access::write>"); return;
@@ -252,6 +258,7 @@ private:
   }
 
   constexpr uint32_t typeAlignment(const Type& value) const {
+    if (value.kind == TypeKind::Matrix) return value.rows == 2 ? 8 : 16;
     if (value.kind == TypeKind::Array) {
       return value.elementKind == TypeKind::F32 && value.elementLanes == 1 && value.arrayCount != 0
                  ? 4
@@ -264,6 +271,7 @@ private:
   }
 
   constexpr uint32_t typeSize(const Type& value) const {
+    if (value.kind == TypeKind::Matrix) return typeAlignment(value) * value.columns;
     if (value.kind == TypeKind::Array) {
       return typeAlignment(value) == 0 ? 0 : 4 * value.arrayCount;
     }
@@ -644,6 +652,17 @@ private:
     }
     const Type& array = module_.expressions[node.operands[0]].type;
     const Type& index = module_.expressions[node.operands[1]].type;
+    if (array.kind == TypeKind::Matrix) {
+      if (node.payload >= array.columns) {
+        error_ = TextEmitError::InvalidModule;
+        return;
+      }
+      expression(node.operands[0]);
+      character('[');
+      uintText(node.payload);
+      character(']');
+      return;
+    }
     if (array.kind != TypeKind::Array || array.elementKind != TypeKind::F32 ||
         array.elementLanes != 1 || array.arrayCount == 0 ||
         (index.kind != TypeKind::I32 && index.kind != TypeKind::U32) || index.lanes != 1) {
