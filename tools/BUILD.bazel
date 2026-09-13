@@ -243,6 +243,14 @@ py_test(
 )
 
 py_test(
+    name = "sanitizer_allocator_isolation_tests",
+    size = "small",
+    srcs = ["sanitizer_allocator_isolation_tests.py"],
+    data = ["//:.github/workflows/sanitizers.yml"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "ci_runner_routing_tests",
     size = "small",
     srcs = ["ci_runner_routing_tests.py"],
