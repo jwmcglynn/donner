@@ -1515,10 +1515,10 @@ TEST(TextEngineScriptedTest, SpanKerningCanOverrideDisabledParent) {
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
   components::ComputedTextComponent text;
   auto span = MakeSpan("AB");
-  span.fontKerning = true;
+  span.fontKerning = FontKerning::Normal;
   text.spans.push_back(std::move(span));
   TextLayoutParams params = MakeTextParams(20.0);
-  params.fontKerning = false;
+  params.fontKerning = FontKerning::None;
   const auto runs = engine.layout(text, params);
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)),
                                                          GlyphXPositionIs(DoubleEq(11.0))))));
@@ -1531,7 +1531,7 @@ TEST(TextEngineScriptedTest, FontKerningNoneSuppressesWithinRunKerning) {
 
   components::ComputedTextComponent text;
   auto span = MakeSpan("AB");
-  span.fontKerning = false;
+  span.fontKerning = FontKerning::None;
   text.spans.push_back(std::move(span));
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));

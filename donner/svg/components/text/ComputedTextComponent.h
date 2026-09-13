@@ -10,6 +10,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
@@ -110,11 +111,12 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity.
     FontVariant fontVariant = FontVariant::Normal;
 
-    /// Whether kerning is enabled for this span.
-    bool fontKerning = true;
+    /// Resolved kerning policy; absent values use the text root layout parameters.
+    std::optional<FontKerning> fontKerning;
 
-    /// Requested x-height to font-size ratio, or `none` when absent.
-    std::optional<double> fontSizeAdjust;
+    /// Resolved size adjustment; an absent outer value uses root parameters, while an empty
+    /// inner value explicitly disables adjustment (`font-size-adjust: none`).
+    std::optional<std::optional<double>> fontSizeAdjust;
 
     /// CSS font-size for this span. When different from the text element's font-size,
     /// the layout engine uses this to shape glyphs at the correct size.

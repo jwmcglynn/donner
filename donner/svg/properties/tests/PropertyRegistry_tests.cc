@@ -680,7 +680,7 @@ TEST(PropertyRegistry, FontShorthandResetsOmittedLonghands) {
   EXPECT_THAT(registry.fontWeight.get(), Optional(400));
   EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Normal)));
   EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::Normal));
-  EXPECT_THAT(registry.fontKerning.get(), Optional(true));
+  EXPECT_THAT(registry.fontKerning.get(), Optional(FontKerning::Auto));
   EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(50, Lengthd::Unit::Px)));
   EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
 }
@@ -690,14 +690,14 @@ TEST(PropertyRegistry, FontKerningAndSizeAdjustInherit) {
   parent.parseStyle("font-kerning: none; font-size-adjust: 0.3");
 
   const PropertyRegistry inherited = PropertyRegistry().inheritFrom(parent);
-  EXPECT_THAT(inherited.fontKerning.get(), Optional(false));
+  EXPECT_THAT(inherited.fontKerning.get(), Optional(FontKerning::None));
   ASSERT_TRUE(inherited.fontSizeAdjust.get().has_value());
   ASSERT_TRUE(inherited.fontSizeAdjust.get()->has_value());
   EXPECT_DOUBLE_EQ(**inherited.fontSizeAdjust.get(), 0.3);
 
   PropertyRegistry reset;
   reset.parseStyle("font-kerning: normal; font-size-adjust: none");
-  EXPECT_THAT(reset.fontKerning.get(), Optional(true));
+  EXPECT_THAT(reset.fontKerning.get(), Optional(FontKerning::Normal));
   ASSERT_TRUE(reset.fontSizeAdjust.get().has_value());
   EXPECT_FALSE(reset.fontSizeAdjust.get()->has_value());
 }
@@ -747,7 +747,7 @@ TEST(PropertyRegistry, FontShorthandGrammarIsTransactional) {
                                  "12px , serif",
                                  "12px serif,",
                                  "12px serif,,sans-serif",
-                                 "12px ''",
+
                                  "12px/ serif",
                                  "12px/-1 serif",
                                  "12px/-2px serif",
@@ -781,6 +781,9 @@ TEST(PropertyRegistry, FontShorthandReusesLonghandValues) {
   EXPECT_THAT(registry.fontWeight.get(), Optional(600));
   EXPECT_THAT(registry.fontFamily.get(),
               Optional(testing::ElementsAre(RcString("Noto Sans"), RcString("serif"))));
+  registry.parseStyle("font: normal normal normal normal 12px '', serif");
+  EXPECT_THAT(registry.fontFamily.get(),
+              Optional(testing::ElementsAre(RcString(""), RcString("serif"))));
   registry.parseStyle("font: bolder 12px serif");
   EXPECT_THAT(registry.fontWeight.get(), Optional(PropertyRegistry::kFontWeightBolder));
 }

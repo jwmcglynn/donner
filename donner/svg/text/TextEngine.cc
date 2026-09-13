@@ -301,7 +301,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
     span.fontVariant = style->properties->fontVariant.get().value();
     span.fontKerning = style->properties->fontKerning.get().value();
-    span.fontSizeAdjust = style->properties->fontSizeAdjust.get().value();
+    span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
     span.fontFamilies = style->properties->fontFamily.get().value();
     span.visibility = style->properties->visibility.get().value();
@@ -1576,7 +1576,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
     spanFont = selectBackendSafeFont(*backend_, fontManager_, spanFont);
     const std::optional<double>& fontSizeAdjust =
-        span.fontSizeAdjust.has_value() ? span.fontSizeAdjust : params.fontSizeAdjust;
+        span.fontSizeAdjust.has_value() ? *span.fontSizeAdjust : params.fontSizeAdjust;
     if (fontSizeAdjust.has_value()) {
       const FontVMetrics metrics = backend_->fontVMetrics(spanFont);
       const double xHeight = metrics.xHeight > 0
@@ -1690,7 +1690,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     FontHandle prevChunkFont = prevSpanFont;
     float prevChunkFontSizePx = prevSpanFontSizePx;
     bool prevChunkFontKerning = prevSpanFontKerning;
-    const bool spanFontKerning = span.fontKerning && params.fontKerning;
+    const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];

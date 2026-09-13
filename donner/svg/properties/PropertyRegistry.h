@@ -17,6 +17,7 @@
 #include "donner/svg/core/Cursor.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
@@ -344,8 +345,8 @@ public:
       "font-variant", []() -> std::optional<FontVariant> { return FontVariant::Normal; }};
 
   /// `font-kerning` property. Inherited. `auto` and `normal` enable kerning; `none` disables it.
-  Property<bool, PropertyCascade::Inherit> fontKerning{
-      "font-kerning", []() -> std::optional<bool> { return true; }};
+  Property<FontKerning, PropertyCascade::Inherit> fontKerning{
+      "font-kerning", []() -> std::optional<FontKerning> { return FontKerning::Auto; }};
 
   /// `font-size-adjust` property. Inherited. An empty value represents the initial `none` value.
   Property<std::optional<double>, PropertyCascade::Inherit> fontSizeAdjust{
