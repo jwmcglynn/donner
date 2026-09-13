@@ -119,6 +119,7 @@ donner_cc_library(
         "//donner/base/xml/components",
         "//donner/svg/components/filter:components",
         "//donner/svg/components/resources:components",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/text:components",
         "//donner/svg/resources:font_catalog_types",
         "//donner/svg/resources:font_manager",

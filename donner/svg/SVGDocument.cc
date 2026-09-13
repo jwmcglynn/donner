@@ -893,16 +893,55 @@ struct FontRefreshTraversal {
   explicit FontRefreshTraversal(components::FontResourceGraphCache::Stats& stats) : cache(&stats) {}
 };
 
-bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal) {
-  const auto handle = document.handle();
-  if (traversal.refreshed.contains(handle.get())) return traversal.refreshed.at(handle.get());
-  traversal.active.insert(handle.get());
-  const auto access = document.writeAccess();
-  Registry& registry = access.registry();
-  traversal.cache.preserveBeforeRefresh(handle);
-  std::vector<Entity> changedOwners;
-  bool readinessChanged = false;
+bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal);
 
+bool UpdateChildFontSnapshot(SVGDocument& nested, components::ChildFontPaintDependencies& child,
+                             FontRefreshTraversal& traversal) {
+  const auto childAccess = nested.readAccess();
+  const auto childHandle = nested.handle();
+  auto collection = traversal.cache.collect(childHandle, child.target);
+  auto rendered = traversal.cache.collect(childHandle, child.target,
+                                          components::FontResourceGraph::Purpose::RenderedFrame);
+  const uint64_t revision = nested.fontResourceRevision();
+  // A child registry may serve several different referenced subtrees. Its global revision
+  // alone does not make every host's pixels stale; compare the faces that this target used.
+  const bool changed = child.fontDependencies != collection.dependencies ||
+                       child.needsRender != collection.needsRender ||
+                       child.resourceLimit != collection.resourceLimit ||
+                       child.renderedFontDependencies != rendered.dependencies ||
+                       child.renderedNeedsRender != rendered.needsRender ||
+                       child.renderedResourceLimit != rendered.resourceLimit;
+  child.renderedFontDependencies = std::move(rendered.dependencies);
+  child.renderedNeedsRender = rendered.needsRender;
+  child.renderedResourceLimit = rendered.resourceLimit;
+  child.fontDependencies = std::move(collection.dependencies);
+  child.fontResourceRevision = revision;
+  child.needsRender = collection.needsRender;
+  child.resourceLimit = collection.resourceLimit;
+  return changed;
+}
+
+bool RefreshChildFontResource(components::ChildFontPaintDependencies& child,
+                              FontRefreshTraversal& traversal) {
+  const auto childHandle = child.document.lock();
+  if (!childHandle || traversal.active.contains(childHandle.get()) ||
+      (!traversal.refreshed.contains(childHandle.get()) &&
+       traversal.refreshed.size() + traversal.active.size() >=
+           components::kMaximumFontChildDocuments + 1)) {
+    const bool changed = !child.resourceLimit;
+    child.resourceLimit = true;
+    return changed;
+  }
+  SVGDocument nested = SVGDocument::CreateFromHandle(childHandle);
+  if (!traversal.refreshed.contains(childHandle.get())) {
+    RefreshDocumentFonts(nested, traversal);
+  }
+  if (!traversal.refreshed.at(childHandle.get())) return false;
+  return UpdateChildFontSnapshot(nested, child, traversal);
+}
+
+std::vector<Entity> RefreshChildFontResources(Registry& registry, FontRefreshTraversal& traversal) {
+  std::vector<Entity> changedOwners;
   // Child documents persist in the source cache; a fresh facade must not hide their pending
   // layouts. Resolve each shared child once, then update every parent rendering host that uses it.
   for (auto view = registry.view<components::FontPaintDependenciesComponent>();
@@ -910,41 +949,7 @@ bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal
     auto& paint = view.get<components::FontPaintDependenciesComponent>(host);
     bool hostChanged = false;
     for (auto& child : paint.children) {
-      const auto childHandle = child.document.lock();
-      if (!childHandle || traversal.active.contains(childHandle.get()) ||
-          (!traversal.refreshed.contains(childHandle.get()) &&
-           traversal.refreshed.size() + traversal.active.size() >=
-               components::kMaximumFontChildDocuments + 1)) {
-        hostChanged |= !child.resourceLimit;
-        child.resourceLimit = true;
-        continue;
-      }
-      SVGDocument nested = SVGDocument::CreateFromHandle(childHandle);
-      if (!traversal.refreshed.contains(childHandle.get())) {
-        RefreshDocumentFonts(nested, traversal);
-      }
-      if (!traversal.refreshed.at(childHandle.get())) continue;
-      const auto childAccess = nested.readAccess();
-      auto collection = traversal.cache.collect(childHandle, child.target);
-      auto rendered = traversal.cache.collect(
-          childHandle, child.target, components::FontResourceGraph::Purpose::RenderedFrame);
-      const uint64_t revision = nested.fontResourceRevision();
-      // A child registry may serve several different referenced subtrees. Its global revision
-      // alone does not make every host's pixels stale; compare the faces that this target used.
-      const bool childChanged = child.fontDependencies != collection.dependencies ||
-                                child.needsRender != collection.needsRender ||
-                                child.resourceLimit != collection.resourceLimit ||
-                                child.renderedFontDependencies != rendered.dependencies ||
-                                child.renderedNeedsRender != rendered.needsRender ||
-                                child.renderedResourceLimit != rendered.resourceLimit;
-      child.renderedFontDependencies = std::move(rendered.dependencies);
-      child.renderedNeedsRender = rendered.needsRender;
-      child.renderedResourceLimit = rendered.resourceLimit;
-      child.fontDependencies = std::move(collection.dependencies);
-      child.fontResourceRevision = revision;
-      child.needsRender = collection.needsRender;
-      child.resourceLimit = collection.resourceLimit;
-      hostChanged |= childChanged;
+      hostChanged |= RefreshChildFontResource(child, traversal);
     }
     if (hostChanged) {
       registry.get_or_emplace<components::DirtyFlagsComponent>(host).mark(
@@ -953,6 +958,11 @@ bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal
       changedOwners.push_back(host);
     }
   }
+  return changedOwners;
+}
+
+bool RefreshOwnFontResources(Registry& registry, std::vector<Entity>& changedOwners) {
+  bool readinessChanged = false;
   auto* engine = registry.ctx().find<TextEngine>();
   if (!changedOwners.empty() || (engine && engine->needsFontResourceRefresh())) {
     if (engine && engine->needsFontResourceRefresh()) {
@@ -964,6 +974,18 @@ bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal
     }
     components::InvalidateFontResourcePreparation(registry);
   }
+  return readinessChanged;
+}
+
+bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal) {
+  const auto handle = document.handle();
+  if (traversal.refreshed.contains(handle.get())) return traversal.refreshed.at(handle.get());
+  traversal.active.insert(handle.get());
+  const auto access = document.writeAccess();
+  Registry& registry = access.registry();
+  traversal.cache.preserveBeforeRefresh(handle);
+  std::vector<Entity> changedOwners = RefreshChildFontResources(registry, traversal);
+  const bool readinessChanged = RefreshOwnFontResources(registry, changedOwners);
   traversal.cache.finishRefresh(handle, changedOwners);
   traversal.active.erase(handle.get());
   const bool changed = !changedOwners.empty() || readinessChanged;
