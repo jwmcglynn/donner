@@ -494,12 +494,13 @@ public:
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
-   * A write never changes bytes an already submitted command still reads, but backends reach
-   * that guarantee differently and the difference is visible to callers. MetalDevice queues an
-   * aligned write to a busy buffer behind the outstanding submission and returns success;
-   * VulkanDevice waits for that buffer's submission and returns a GpuErrorType::InvalidState
-   * error if the wait times out. Portable callers should either write buffers no in-flight
-   * submission references, or handle the busy-buffer failure.
+   * A write never changes bytes an already submitted command still reads. MetalDevice and
+   * VulkanDevice copy busy-buffer writes with four-byte-aligned offsets and sizes into a bounded
+   * queue, flushed before the next ordinary submission, including an empty command stream.
+   * Unaligned writes wait for that buffer's outstanding work and return
+   * GpuErrorType::InvalidState if the bounded wait times out. Queued writes can fail with
+   * GpuErrorType::LimitExceeded when their staging budget is exhausted. Callers must handle
+   * these errors without assuming a failed write changed the buffer.
    *
    * @param buffer Destination buffer.
    * @param offsetBytes Destination byte offset.

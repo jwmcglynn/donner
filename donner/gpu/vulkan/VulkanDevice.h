@@ -34,15 +34,21 @@ struct VulkanApi;
  * enabled on any production path; the sole exception is VK_KHR_timeline_semaphore, which
  * \ref CreateWithTimelineSemaphoreForTest requests so a test can hold a submission open.
  *
- * Memory model (documented simplification for this slice): every buffer lives in
- * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped. Queue writes wait up to
- * five seconds for that buffer's prior submission before copying; timeout refuses the write and
- * leaves its bytes unchanged. Idle buffers copy directly.
+ * Every buffer lives in HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped.
+ * Idle queue writes copy directly. Four-byte-aligned writes to busy buffers copy their payload
+ * into a bounded queue, flushed in order before the next ordinary submission, including empty
+ * command streams. Unaligned writes wait up to five seconds for that buffer's prior submission;
+ * timeout refuses the write without changing its bytes. Pending and in-flight write payloads
+ * share a 1 GiB budget, and at most 16,384 distinct ranges may be pending. Identical ranges
+ * coalesce at the newest write's position, preserving overlap order.
  *
- * This backend refuses a write to a busy buffer where MetalDevice queues an equivalent aligned
- * write and returns success, so \ref donner::gpu::Device::writeBuffer can fail here and succeed
- * there for the same call. Readback waits for the buffer's last use before reading mapped memory;
- * a timeout or device error returns an error without copying any bytes.
+ * Readback waits for the buffer's last use before reading mapped memory; a timeout or device
+ * error returns an error without copying any bytes. Queued writes become visible after the
+ * subsequent submission completes. Staging and destination allocations remain alive until its
+ * fence signals, including destinations absent from the public command stream. Terminal queue
+ * submission loss is latched before cleanup, and the device is drained before submitted objects
+ * are freed. Vulkan requires this lost-device idle wait to return finitely, but the wait has no
+ * caller-configured deadline. Later host accesses and submissions return the latched error.
  *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
@@ -212,8 +218,30 @@ public:
   /// Returns borrowed native objects solely for deterministic backend synchronization tests.
   NativeContextForTest nativeContextForTest() const;
 
-  /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
-  /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
+  /// Snapshot of queued buffer-write ownership, without polling the queue.
+  struct BufferWriteStats {
+    size_t pendingWrites = 0;         //!< Coalesced writes awaiting an ordinary submission.
+    uint64_t pendingBytes = 0;        //!< Owned payload bytes awaiting submission.
+    uint64_t inFlightBytes = 0;       //!< Packed staging bytes retained until fence completion.
+    uint64_t stagingAllocations = 0;  //!< Successful staging allocations, including failed submits.
+    uint64_t submittedBatches = 0;    //!< Accepted submissions containing queued writes.
+    size_t retainedDestinations = 0;  //!< Retired destinations retained by outstanding uploads.
+    uint64_t lostDeviceDrains = 0;    //!< Lost-device submission drains completed before cleanup.
+  };
+
+  /// Returns the current queued-write counters without waiting or changing state.
+  BufferWriteStats bufferWriteStatsForTest() const;
+
+  /// Lowers the combined pending/in-flight payload limit for deterministic budget tests.
+  /// @param byteBudget Maximum payload bytes, clamped to the production limit.
+  void setBufferWriteByteBudgetForTest(uint64_t byteBudget);
+
+  /// Makes the next native submission fail before it reaches the queue, after encoding finishes.
+  /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
+  void failNextSubmissionForTest(bool deviceLost = false);
+
+  /// First latched Vulkan failure observed during submission, polling, or waiting on fences
+  /// (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.
   std::string lastErrorForTest() const;
 
@@ -234,6 +262,7 @@ protected:
                                 const RenderPipelineDescriptor& descriptor) override;
   Status onCreateComputePipeline(uint32_t slotIndex,
                                  const ComputePipelineDescriptor& descriptor) override;
+  void onRetireBuffer(uint32_t slotIndex) override;
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override;
   Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                        std::span<const uint8_t> data) override;
@@ -244,6 +273,11 @@ protected:
                   std::span<const Command> commands) override;
 
 private:
+  /// Waits for a buffer's last use and reports timeout or device error before host access.
+  /// @param serial Last submitted use of this buffer.
+  /// @param operation Operation name included in a timeout diagnostic.
+  Status waitForBufferAccess(uint64_t serial, std::string_view operation);
+
   /// Creates the common backend, optionally enabling the extension used by native test gates.
   static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest);
 
