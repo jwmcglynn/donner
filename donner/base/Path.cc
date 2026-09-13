@@ -1790,11 +1790,18 @@ struct FlatSubpath {
   std::vector<TangentOverride> tangentOverrides;
 };
 
+/// A shared construction point on an edge of the unsplit convex piece.
+struct StrokePieceSeam {
+  size_t edge;
+  Vector2d point;
+};
+
 /// Emit a convex stroke piece with counter-clockwise winding.
 ///
 /// strokeToFill represents a stroke as a union of overlapping pieces. Keeping
 /// every piece positive makes that union stable under FillRule::NonZero.
-void emitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder) {
+void emitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder,
+                             std::span<const StrokePieceSeam> seams = {}) {
   if (builder.exceededMaximumPoints() || points.size() < 3) {
     return;
   }
@@ -1805,6 +1812,14 @@ void emitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder)
     }
   }
 
+  for (const StrokePieceSeam& seam : seams) {
+    UTILS_RELEASE_ASSERT(seam.edge < points.size());
+    if (!std::isfinite(seam.point.x) || !std::isfinite(seam.point.y)) {
+      return;
+    }
+  }
+
+  // Classify the original corners before subdivision introduces rounded collinear triples.
   double orientation = 0.0;
   for (size_t i = 0; i < points.size(); ++i) {
     const Vector2d& a = points[i];
@@ -1818,14 +1833,26 @@ void emitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder)
   if (orientation == 0.0 || std::isnan(orientation)) {
     return;
   }
-  if (orientation < 0.0) {
+  const bool reversed = orientation < 0.0;
+  if (reversed) {
     std::reverse(points.begin(), points.end());
   }
 
+  const auto emitSeams = [&](size_t edge) {
+    for (const StrokePieceSeam& seam : seams) {
+      const size_t mappedEdge =
+          reversed ? points.size() - 1 - (seam.edge + 1) % points.size() : seam.edge;
+      if (mappedEdge == edge && !builder.exceededMaximumPoints()) {
+        builder.lineTo(seam.point);
+      }
+    }
+  };
   builder.moveTo(points.front());
   for (size_t i = 1; i < points.size() && !builder.exceededMaximumPoints(); ++i) {
+    emitSeams(i - 1);
     builder.lineTo(points[i]);
   }
+  emitSeams(points.size() - 1);
   builder.closePath();
 }
 
@@ -1840,7 +1867,13 @@ void emitRoundCapPiece(const Vector2d& point, const Vector2d& outwardDirection, 
   for (int step = 0; step <= numSteps; ++step) {
     const double t = static_cast<double>(step) / static_cast<double>(numSteps);
     const double angle = startAngle - MathConstants<double>::kPi * t;
-    points.push_back(point + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+    if (step == 0) {
+      points.push_back(point + normal * halfWidth);
+    } else if (step == numSteps) {
+      points.push_back(point - normal * halfWidth);
+    } else {
+      points.push_back(point + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+    }
   }
   emitPositiveStrokePiece(std::move(points), builder);
 }
@@ -1856,10 +1889,11 @@ void emitCapPiece(const Vector2d& point, const Vector2d& outwardDirection, doubl
   }
 
   const Vector2d normal(-outwardDirection.y, outwardDirection.x);
+  const std::array<StrokePieceSeam, 1> seams{{{3, point}}};
   emitPositiveStrokePiece(
       {point + normal * halfWidth, point + normal * halfWidth + outwardDirection * halfWidth,
        point - normal * halfWidth + outwardDirection * halfWidth, point - normal * halfWidth},
-      builder);
+      builder, seams);
 }
 
 void emitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal,
@@ -1912,7 +1946,13 @@ void emitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal
   for (int step = 0; step <= numSteps; ++step) {
     const double t = static_cast<double>(step) / static_cast<double>(numSteps);
     const double angle = startAngle + sweep * t;
-    points.push_back(vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+    if (step == 0) {
+      points.push_back(previousOuter);
+    } else if (step == numSteps) {
+      points.push_back(currentOuter);
+    } else {
+      points.push_back(vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth);
+    }
   }
   emitPositiveStrokePiece(std::move(points), builder);
 }
@@ -2252,8 +2292,10 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     if (segmentLengths[i] > 0.0 && normals[i].lengthSquared() > 0.0) {
       activeSegments.push_back(i);
       const Vector2d offset = normals[i] * halfWidth;
+      const std::array<StrokePieceSeam, 2> seams{{{0, pts[i]}, {2, pts[i + 1]}}};
       emitPositiveStrokePiece(
-          {pts[i] + offset, pts[i] - offset, pts[i + 1] - offset, pts[i + 1] + offset}, builder);
+          {pts[i] + offset, pts[i] - offset, pts[i + 1] - offset, pts[i + 1] + offset}, builder,
+          seams);
       if (builder.exceededMaximumPoints()) {
         return;
       }
@@ -2278,10 +2320,10 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   if (!subpath.closed) {
     const size_t firstSegment = activeSegments.front();
     const size_t lastSegment = activeSegments.back();
-    emitCapPiece(pts[firstSegment], (pts[firstSegment] - pts[firstSegment + 1]).normalize(),
-                 halfWidth, style.cap, builder);
-    emitCapPiece(pts[lastSegment + 1], (pts[lastSegment + 1] - pts[lastSegment]).normalize(),
-                 halfWidth, style.cap, builder);
+    const Vector2d firstOutward(-normals[firstSegment].y, normals[firstSegment].x);
+    const Vector2d lastOutward(normals[lastSegment].y, -normals[lastSegment].x);
+    emitCapPiece(pts[firstSegment], firstOutward, halfWidth, style.cap, builder);
+    emitCapPiece(pts[lastSegment + 1], lastOutward, halfWidth, style.cap, builder);
   }
 }
 
