@@ -1089,7 +1089,7 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
                                                       GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
   const double secondSpanFirstGlyphX = runs[1].glyphs.front().xPosition;
   EXPECT_THAT(runs[2].glyphs, FirstGlyphMatches(AllOf(GlyphXPositionIs(Gt(secondSpanFirstGlyphX)),
-                                                      GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
+                                                      GlyphYPositionIs(DoubleNear(-10.0, 1e-6)))));
 }
 
 // This exact Latin case preserves the e-x kerning result across a paint-only tspan boundary.

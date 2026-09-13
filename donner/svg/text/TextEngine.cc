@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
+#include <unordered_map>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
@@ -450,6 +452,252 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   return result;
 }
 
+/// A textLength owner contains glyphs and nested owners in document order.
+struct PathLengthScope {
+  struct Item {
+    size_t index;
+    bool scope;
+    double start = 0.0;
+    double end = 0.0;
+    double position = 0.0;
+  };
+  std::optional<double> target;
+  LengthAdjust adjust = LengthAdjust::Default;
+  std::vector<Item> items;
+  double start = 0.0;
+  double end = 0.0;
+  double length = 0.0;
+  double scale = 1.0;
+  double position = 0.0;
+};
+
+/// Adjusts path-local glyph positions before any path sampling, visiting each scope once.
+void applyTextPathLengths(Registry& registry, const components::ComputedTextComponent& text,
+                          const TextLayoutParams& params, size_t firstRun,
+                          std::vector<TextRun>& runs) {
+  std::vector<TextGlyph*> glyphs;
+  std::vector<PathLengthScope> scopes(1);
+  std::unordered_map<Entity, size_t> ownerScopes;
+  const Entity pathEntity = text.spans[firstRun].textPathSourceEntity;
+  auto setLength = [&](PathLengthScope& scope, const std::optional<Lengthd>& length,
+                       LengthAdjust adjust) {
+    if (length) {
+      const double value = length->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+      if (std::isfinite(value) && value >= 0.0) {
+        scope.target = value;
+        scope.adjust = adjust;
+      }
+    }
+  };
+  if (pathEntity != entt::null && registry.valid(pathEntity)) {
+    ownerScopes.emplace(pathEntity, 0);
+    if (const auto* component = registry.try_get<components::TextComponent>(pathEntity)) {
+      setLength(scopes[0], component->textLength, component->lengthAdjust);
+    }
+  }
+
+  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
+    const auto& span = text.spans[ri];
+    size_t owner = 0;
+    Entity current = span.sourceEntity;
+    std::vector<Entity> ancestors;
+    while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
+      ancestors.push_back(current);
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+      current = tree ? tree->parent() : entt::null;
+    }
+    if (const auto found = ownerScopes.find(current); found != ownerScopes.end()) {
+      owner = found->second;
+    }
+    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+      PathLengthScope scope;
+      if (const auto* component = registry.try_get<components::TextComponent>(*it)) {
+        setLength(scope, component->textLength, component->lengthAdjust);
+      }
+      if (scope.target) {
+        const size_t child = scopes.size();
+        scopes[owner].items.push_back({child, true});
+        scopes.push_back(std::move(scope));
+        owner = child;
+      }
+      ownerScopes.emplace(*it, owner);
+    }
+    // Direct layout callers may supply spans without a source tree.
+    if (span.sourceEntity == entt::null && span.textLength) {
+      PathLengthScope scope;
+      setLength(scope, span.textLength, span.lengthAdjust);
+      const size_t child = scopes.size();
+      scopes[0].items.push_back({child, true});
+      scopes.push_back(std::move(scope));
+      owner = child;
+    }
+    for (TextGlyph& glyph : runs[ri].glyphs) {
+      scopes[owner].items.push_back(
+          {glyphs.size(), false, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+      glyphs.push_back(&glyph);
+    }
+    runs[ri].textLengthAppliedOnPath = true;
+  }
+
+  // Children have larger indices, so both traversals are iterative and linear in the tree size.
+  for (size_t si = scopes.size(); si-- > 0;) {
+    PathLengthScope& scope = scopes[si];
+    std::erase_if(scope.items, [&](const PathLengthScope::Item& item) {
+      return item.scope && scopes[item.index].items.empty();
+    });
+    if (scope.items.empty()) {
+      continue;
+    }
+    double fixedLength = 0.0;
+    double cursor = 0.0;
+    double previousEnd = 0.0;
+    for (size_t ii = 0; ii < scope.items.size(); ++ii) {
+      auto& item = scope.items[ii];
+      if (item.scope) {
+        item.start = scopes[item.index].start;
+        item.end = scopes[item.index].end;
+      }
+      if (ii == 0) {
+        scope.start = item.start;
+      } else {
+        cursor += item.start - previousEnd;
+      }
+      item.position = cursor;
+      const double length = item.scope ? scopes[item.index].length : item.end - item.start;
+      cursor += length;
+      if (item.scope) {
+        fixedLength += length;
+      }
+      previousEnd = item.end;
+    }
+    scope.end = previousEnd;
+    scope.length = cursor;
+    double extraSpacing = 0.0;
+    const double adjustableLength = cursor - fixedLength;
+    if (scope.target && cursor > 0.0) {
+      if (scope.adjust == LengthAdjust::Spacing && scope.items.size() > 1) {
+        extraSpacing = (*scope.target - cursor) / static_cast<double>(scope.items.size() - 1);
+      } else if (scope.adjust == LengthAdjust::SpacingAndGlyphs && adjustableLength > 0.0) {
+        const double scale = std::max(0.0, *scope.target - fixedLength) / adjustableLength;
+        if (std::isfinite(scale) && scale <= std::numeric_limits<float>::max()) {
+          scope.scale = scale;
+        }
+      }
+    }
+    cursor = 0.0;
+    previousEnd = scope.start;
+    for (auto& item : scope.items) {
+      cursor += (item.start - previousEnd) * scope.scale;
+      item.position = cursor;
+      cursor += item.scope ? scopes[item.index].length : (item.end - item.start) * scope.scale;
+      cursor += extraSpacing;
+      previousEnd = item.end;
+    }
+    scope.length = cursor - extraSpacing;
+  }
+  scopes[0].position = scopes[0].start;
+  for (PathLengthScope& scope : scopes) {
+    for (const auto& item : scope.items) {
+      const double position = scope.position + item.position;
+      if (item.scope) {
+        scopes[item.index].position = position;
+      } else {
+        TextGlyph& glyph = *glyphs[item.index];
+        glyph.xPosition = position;
+        glyph.xAdvance *= scope.scale;
+        glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+      }
+    }
+  }
+}
+
+/// Places a completed textPath scope after length adjustments and absolute coordinate resets.
+Vector2d placeTextPath(Registry& registry, const components::ComputedTextComponent& text,
+                       const TextLayoutParams& params, size_t firstRun,
+                       std::vector<TextRun>& runs) {
+  applyTextPathLengths(registry, text, params, firstRun, runs);
+  struct PathGlyph {
+    TextGlyph* glyph;
+    const components::ComputedTextComponent::TextSpan* span;
+    bool chunk;
+  };
+  std::vector<PathGlyph> glyphs;
+  double xShift = 0.0;
+  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
+    const auto& span = text.spans[ri];
+    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+    const auto mappings = buildByteIndexMappings(spanText);
+    for (size_t gi = 0; gi < runs[ri].glyphs.size(); ++gi) {
+      TextGlyph& glyph = runs[ri].glyphs[gi];
+      const size_t ci =
+          glyph.cluster < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[glyph.cluster] : 0;
+      const bool hasX = ci < span.xList.size() && span.xList[ci].has_value();
+      if (hasX) {
+        const double dx =
+            ci < span.dxList.size() && span.dxList[ci]
+                ? span.dxList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X)
+                : 0.0;
+        xShift = span.xList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
+                 dx - glyph.xPosition;
+      }
+      glyph.xPosition += xShift;
+      glyphs.push_back({&glyph, &span, glyphs.empty() || hasX});
+    }
+  }
+  for (size_t first = 0; first < glyphs.size();) {
+    size_t end = first + 1;
+    while (end < glyphs.size() && !glyphs[end].chunk) {
+      ++end;
+    }
+    double minimum = std::numeric_limits<double>::infinity();
+    double maximum = -std::numeric_limits<double>::infinity();
+    for (size_t gi = first; gi < end; ++gi) {
+      const TextGlyph& glyph = *glyphs[gi].glyph;
+      minimum = std::min({minimum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+      maximum = std::max({maximum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+    }
+    const TextAnchor anchor = glyphs[first].span->textAnchor;
+    const double alignment = anchor == TextAnchor::Middle ? (minimum + maximum) / 2.0
+                             : anchor == TextAnchor::End  ? maximum
+                                                          : minimum;
+    const double shift = glyphs[first].glyph->xPosition - alignment;
+    for (size_t gi = first; gi < end; ++gi) {
+      glyphs[gi].glyph->xPosition += shift;
+    }
+    first = end;
+  }
+  const auto& firstSpan = text.spans[firstRun];
+  const Path::MeasuredPath path = firstSpan.pathSpline->measure();
+  std::optional<Vector2d> lastPosition;
+  for (const auto& entry : glyphs) {
+    TextGlyph& glyph = *entry.glyph;
+    const double midpoint = firstSpan.pathStartOffset + glyph.xPosition + glyph.xAdvance * 0.5;
+    const auto sample = path.pointAtArcLength(midpoint);
+    if (sample.valid) {
+      const double halfAdvance = glyph.xAdvance * 0.5;
+      const double baseline = glyph.yPosition;
+      glyph.xPosition =
+          sample.point.x - halfAdvance * std::cos(sample.angle) - std::sin(sample.angle) * baseline;
+      glyph.yPosition =
+          sample.point.y - halfAdvance * std::sin(sample.angle) + std::cos(sample.angle) * baseline;
+      glyph.rotateDegrees += sample.angle * MathConstants<double>::kRadToDeg;
+      lastPosition = Vector2d(sample.point.x + glyph.xAdvance, sample.point.y);
+    } else {
+      glyph.glyphIndex = 0;
+    }
+  }
+  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
+    if (text.spans[ri].visibility != Visibility::Visible) {
+      runs[ri].glyphs.clear();
+    }
+  }
+  if (lastPosition) {
+    return *lastPosition;
+  }
+  const auto end = path.pointAtArcLength(path.pathLength());
+  return end.valid ? end.point : Vector2d::Zero();
+}
+
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                      const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
                      bool vertical, double currentPenX, double currentPenY,
@@ -478,6 +726,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       if (run.onPath) {
         carryActive = false;
         carriedAdvanceDelta = 0.0;
+        if (run.textLengthAppliedOnPath) {
+          continue;
+        }
       } else if (carryActive) {
         const auto& inlinePositions = vertical ? span.yList : span.xList;
         std::optional<size_t> resetCharIndex;
@@ -1058,22 +1309,39 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   FontHandle prevSpanFont;
   float prevSpanFontSizePx = 0.0f;
   Entity prevTextPathSource = entt::null;
-  double prevTextPathEndOffset = 0.0;
-  double prevTextPathPerpShift = 0.0;
+  double pathAdvance = 0.0;
+  double pathDy = 0.0;
+  std::optional<size_t> firstPathRun;
 
   std::vector<ChunkBoundary> chunkBoundaries;
   std::vector<RunPenExtent> runExtents;
 
+  auto finishTextPath = [&]() {
+    if (firstPathRun) {
+      const Vector2d end = placeTextPath(registry_, text, params, *firstPathRun, runs);
+      currentPenX = end.x;
+      currentPenY = end.y;
+      prevDefaultY = 0.0;
+      haveCurrentPosition = true;
+      firstPathRun.reset();
+      prevTextPathSource = entt::null;
+      pathAdvance = 0.0;
+      pathDy = 0.0;
+    }
+  };
+
   // ── Per-span layout loop ──────────────────────────────────────────────────────
   for (const auto& span : text.spans) {
+    if (firstPathRun && !span.hidden &&
+        (!span.pathSpline || span.textPathSourceEntity == entt::null ||
+         span.textPathSourceEntity != prevTextPathSource)) {
+      finishTextPath();
+    }
     TextRun run;
 
     // Hidden spans (display:none) are not rendered. Push empty run.
     // Also hide textPath spans whose href could not be resolved (SVG spec §10.12.1).
     if (span.hidden || span.textPathFailed) {
-      prevTextPathSource = entt::null;
-      prevTextPathEndOffset = 0.0;
-      prevTextPathPerpShift = 0.0;
       runExtents.push_back({0.0, 0.0, 0.0, 0.0});
       runs.push_back(std::move(run));
       continue;
@@ -1144,6 +1412,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // double-applying in the glyph loop.
     SmallVector<std::optional<Lengthd>, 1> xListLocal = span.xList;
     SmallVector<std::optional<Lengthd>, 1> yListLocal = span.yList;
+    if (span.pathSpline && !vertical) {
+      yListLocal.clear();
+    }
     SmallVector<std::optional<Lengthd>, 1> dxListLocal = span.dxList;
     SmallVector<std::optional<Lengthd>, 1> dyListLocal = span.dyList;
     if (span.startsNewChunk || !haveCurrentPosition) {
@@ -1497,135 +1768,40 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       }
     }
 
-    // ── Text-on-path ──────────────────────────────────────────────────────────
-    // If the span has path data, reposition glyphs along the path.
-    if (span.pathSpline && !run.glyphs.empty()) {
-      const auto& pathSpline = *span.pathSpline;
-
-      // Compute total text advance (including kerning and inter-glyph letter-spacing) for
-      // text-anchor. For the simple backend, xKern holds per-glyph kerning that was applied to
-      // penX during flat layout but must be re-applied here for path positioning.
-      double totalAdvance = 0.0;
+    // Keep glyphs in path-local coordinates until the entire textPath has been shaped.
+    if (span.pathSpline) {
+      if (!firstPathRun) {
+        firstPathRun = runs.size();
+        prevTextPathSource = span.textPathSourceEntity;
+      }
       for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+        TextGlyph& glyph = run.glyphs[gi];
+        const size_t charIndex =
+            glyph.cluster < byteToCharIdx.size() ? byteToCharIdx[glyph.cluster] : 0;
         if (gi > 0) {
-          totalAdvance += run.glyphs[gi].xKern;
+          pathAdvance += glyph.xKern;
         }
-        totalAdvance += run.glyphs[gi].xAdvance;
-        if (gi + 1 < run.glyphs.size()) {
-          totalAdvance += span.letterSpacingPx;
+        if (charIndex < span.dxList.size() && span.dxList[charIndex]) {
+          pathAdvance += span.dxList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
+                                                          Lengthd::Extent::X);
         }
-      }
-
-      // Apply text-anchor by shifting the effective startOffset along the path.
-      // Per SVG spec §10.12.3, text-anchor adjusts where text is placed on the path
-      // relative to the startOffset point.
-      double anchorShift = 0.0;
-      if (span.textAnchor == TextAnchor::Middle) {
-        anchorShift = -totalAdvance / 2.0;
-      } else if (span.textAnchor == TextAnchor::End) {
-        anchorShift = -totalAdvance;
-      }
-      const bool sameTextPath = span.textPathSourceEntity != entt::null &&
-                                span.textPathSourceEntity == prevTextPathSource;
-      const bool hasExplicitPathX = span.hasExplicitX();
-      double startOffset = sameTextPath && !span.startsNewChunk && !hasExplicitPathX
-                               ? prevTextPathEndOffset
-                               : span.pathStartOffset;
-      if (hasExplicitPathX) {
-        startOffset =
-            span.xList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-      }
-      if (!span.dxList.empty() && span.dxList[0].has_value()) {
-        startOffset +=
-            span.dxList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-      }
-      startOffset += anchorShift;
-
-      // Compute perpendicular baseline offset (dominant-baseline + per-span baseline-shift).
-      // For text-on-path, this shifts glyphs perpendicular to the path tangent instead of
-      // vertically. In flat layout, defaultY is negative for "above" (superscript). Here we
-      // negate it so positive perpShift = above the path.
-      const bool hasExplicitPathY = span.hasExplicitY();
-      double perpShift = sameTextPath && !span.startsNewChunk && !hasExplicitPathY
-                             ? prevTextPathPerpShift
-                             : -defaultY;
-      (void)hasExplicitPathY;
-
-      // Reposition each glyph at the midpoint of its advance along the path.
-      double advanceAccum = 0.0;
-      std::optional<Vector2d> lastVisibleMidpoint;
-      double lastVisibleAdvance = 0.0;
-      for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-        auto& g = run.glyphs[gi];
-        // Apply within-run kerning before this glyph (not for first glyph).
-        if (gi > 0) {
-          advanceAccum += g.xKern;
+        if (charIndex < span.dyList.size() && span.dyList[charIndex]) {
+          pathDy += span.dyList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
+                                                     Lengthd::Extent::Y);
         }
-        // Sample the path at the center of this glyph's advance width.
-        const double glyphMid = startOffset + advanceAccum + g.xAdvance * 0.5;
-        const auto sample = pathSpline.pointAtArcLength(glyphMid);
-
-        if (sample.valid) {
-          // Shift the glyph origin back along the tangent by half its advance so the
-          // glyph's visual center (not its left edge) sits at the path midpoint.
-          const double halfAdv = g.xAdvance * 0.5;
-          g.xPosition = sample.point.x - halfAdv * std::cos(sample.angle);
-          g.yPosition = sample.point.y - halfAdv * std::sin(sample.angle);
-
-          // Apply baseline shift perpendicular to the path tangent.
-          // The perpendicular "above" direction is (sin(θ), -cos(θ)) in SVG coordinates.
-          if (perpShift != 0.0) {
-            g.xPosition += std::sin(sample.angle) * perpShift;
-            g.yPosition -= std::cos(sample.angle) * perpShift;
-          }
-
-          // Convert tangent angle to degrees and add the per-glyph rotation
-          // (already set from per-character rotateList).
-          g.rotateDegrees = sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
-          lastVisibleMidpoint = sample.point;
-          lastVisibleAdvance = g.xAdvance;
-        } else {
-          // Past the end of the path - hide the glyph.
-          g.glyphIndex = 0;
+        glyph.xPosition = pathAdvance;
+        glyph.yPosition = defaultY + pathDy;
+        pathAdvance += glyph.xAdvance;
+        size_t cluster = glyph.cluster;
+        const uint32_t codepoint = decodeUtf8(spanText, cluster);
+        if (!backend_->isCursive(codepoint)) {
+          pathAdvance += span.letterSpacingPx;
         }
-
-        advanceAccum += g.xAdvance;
-        // Add inter-glyph letter-spacing (not after the last glyph).
-        if (gi + 1 < run.glyphs.size()) {
-          advanceAccum += span.letterSpacingPx;
+        if (codepoint == 0x20) {
+          pathAdvance += span.wordSpacingPx;
         }
       }
-
-      if (lastVisibleMidpoint.has_value()) {
-        currentPenX = lastVisibleMidpoint->x + lastVisibleAdvance;
-        currentPenY = lastVisibleMidpoint->y;
-        haveCurrentPosition = true;
-      } else {
-        const auto pathEnd = pathSpline.pointAtArcLength(pathSpline.pathLength());
-        if (pathEnd.valid) {
-          currentPenX = pathEnd.point.x;
-          currentPenY = pathEnd.point.y;
-          haveCurrentPosition = true;
-        } else {
-          currentPenX = 0.0;
-          currentPenY = 0.0;
-          haveCurrentPosition = true;
-        }
-      }
-      prevDefaultY = 0.0;  // Path sets absolute position; no shift to undo.
-      prevTextPathSource = span.textPathSourceEntity;
-      prevTextPathEndOffset = startOffset + advanceAccum;
-      prevTextPathPerpShift = perpShift;
-
-      // Hidden/collapsed spans on a path still advance along the path but are not drawn.
-      if (span.visibility != Visibility::Visible) {
-        run.glyphs.clear();
-      }
-
-      // Mark this run as on-path so applyTextAnchor skips it.
       run.onPath = true;
-
-      // Path-based text handles text-anchor above; skip the post-loop adjustment.
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
       runs.push_back(std::move(run));
       continue;
@@ -1639,9 +1815,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     prevSpanLastCodepoint = lastCodepoint;
     prevSpanFont = spanFont;
     prevSpanFontSizePx = spanFontSizePx;
-    prevTextPathSource = entt::null;
-    prevTextPathEndOffset = 0.0;
-    prevTextPathPerpShift = 0.0;
 
     // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
     // are not rendered. Clear the glyph list so the renderer skips this run.
@@ -1652,6 +1825,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
     runs.push_back(std::move(run));
   }
+
+  finishTextPath();
 
   // ── inline-size auto-flow (SVG2) ──────────────────────────────────────────────
   // Wrapping is supported only for horizontal writing modes (documented limitation). When it
