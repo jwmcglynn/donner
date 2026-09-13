@@ -772,11 +772,11 @@ TEST(TextEngineScriptedTest, HorizontalTextPathCarriesDyAlongThePathNormal) {
                 GlyphYPositionIs(DoubleNear(50.0, 1e-6)))));
 }
 
-TEST(TextEngineScriptedTest, TextPathDyCarriesAcrossConsecutivePaths) {
+TEST(TextEngineScriptedTest, TextPathDyResetsForConsecutivePaths) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p"><tspan dy="10">A</tspan></textPath><textPath href="#p">B</textPath>)");
   EXPECT_THAT(glyphs, ElementsAre(GlyphYPositionIs(DoubleNear(10.0, 1e-6)),
-                                  GlyphYPositionIs(DoubleNear(10.0, 1e-6))));
+                                  GlyphYPositionIs(DoubleNear(0.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathAbsoluteXPreservesSameGlyphDx) {

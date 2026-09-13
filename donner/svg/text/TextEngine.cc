@@ -632,14 +632,16 @@ Vector2d placeTextPath(Registry& registry, const components::ComputedTextCompone
       const size_t ci =
           glyph.cluster < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[glyph.cluster] : 0;
       const bool hasX = ci < span.xList.size() && span.xList[ci].has_value();
-      const bool hasY = ci < span.yList.size() && span.yList[ci].has_value();
       if (hasX) {
-        xShift = span.xList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) -
-                 glyph.xPosition;
+        const double dx =
+            ci < span.dxList.size() && span.dxList[ci]
+                ? span.dxList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X)
+                : 0.0;
+        xShift = span.xList[ci]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
+                 dx - glyph.xPosition;
       }
       glyph.xPosition += xShift;
-      glyphs.push_back(
-          {&glyph, &span, glyphs.empty() || hasX || hasY || (gi == 0 && span.startsNewChunk)});
+      glyphs.push_back({&glyph, &span, glyphs.empty() || hasX});
     }
   }
   for (size_t first = 0; first < glyphs.size();) {
@@ -647,19 +649,25 @@ Vector2d placeTextPath(Registry& registry, const components::ComputedTextCompone
     while (end < glyphs.size() && !glyphs[end].chunk) {
       ++end;
     }
-    const double advance = glyphs[end - 1].glyph->xPosition + glyphs[end - 1].glyph->xAdvance -
-                           glyphs[first].glyph->xPosition;
+    double minimum = std::numeric_limits<double>::infinity();
+    double maximum = -std::numeric_limits<double>::infinity();
+    for (size_t gi = first; gi < end; ++gi) {
+      const TextGlyph& glyph = *glyphs[gi].glyph;
+      minimum = std::min({minimum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+      maximum = std::max({maximum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+    }
     const TextAnchor anchor = glyphs[first].span->textAnchor;
-    const double shift = anchor == TextAnchor::Middle ? -advance / 2.0
-                         : anchor == TextAnchor::End  ? -advance
-                                                      : 0.0;
+    const double alignment = anchor == TextAnchor::Middle ? (minimum + maximum) / 2.0
+                             : anchor == TextAnchor::End  ? maximum
+                                                          : minimum;
+    const double shift = glyphs[first].glyph->xPosition - alignment;
     for (size_t gi = first; gi < end; ++gi) {
       glyphs[gi].glyph->xPosition += shift;
     }
     first = end;
   }
   const auto& firstSpan = text.spans[firstRun];
-  const Path& path = *firstSpan.pathSpline;
+  const Path::MeasuredPath path = firstSpan.pathSpline->measure();
   std::optional<Vector2d> lastPosition;
   for (const auto& entry : glyphs) {
     TextGlyph& glyph = *entry.glyph;
@@ -1302,6 +1310,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   float prevSpanFontSizePx = 0.0f;
   Entity prevTextPathSource = entt::null;
   double pathAdvance = 0.0;
+  double pathDy = 0.0;
   std::optional<size_t> firstPathRun;
 
   std::vector<ChunkBoundary> chunkBoundaries;
@@ -1317,6 +1326,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       firstPathRun.reset();
       prevTextPathSource = entt::null;
       pathAdvance = 0.0;
+      pathDy = 0.0;
     }
   };
 
@@ -1402,6 +1412,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // double-applying in the glyph loop.
     SmallVector<std::optional<Lengthd>, 1> xListLocal = span.xList;
     SmallVector<std::optional<Lengthd>, 1> yListLocal = span.yList;
+    if (span.pathSpline && !vertical) {
+      yListLocal.clear();
+    }
     SmallVector<std::optional<Lengthd>, 1> dxListLocal = span.dxList;
     SmallVector<std::optional<Lengthd>, 1> dyListLocal = span.dyList;
     if (span.startsNewChunk || !haveCurrentPosition) {
@@ -1772,8 +1785,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           pathAdvance += span.dxList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
                                                           Lengthd::Extent::X);
         }
+        if (charIndex < span.dyList.size() && span.dyList[charIndex]) {
+          pathDy += span.dyList[charIndex]->toPixels(params.viewBox, params.fontMetrics,
+                                                     Lengthd::Extent::Y);
+        }
         glyph.xPosition = pathAdvance;
-        glyph.yPosition = defaultY;
+        glyph.yPosition = defaultY + pathDy;
         pathAdvance += glyph.xAdvance;
         size_t cluster = glyph.cluster;
         const uint32_t codepoint = decodeUtf8(spanText, cluster);
