@@ -268,6 +268,37 @@ TEST(NestedSvgFontResourcesTest, ParentLoadedFaceCannotHideChildWaitingForShared
   EXPECT_EQ(document.hasUnresolvedFontResources(), false);
 }
 
+TEST(NestedSvgFontResourcesTest, UncachedBackendLayoutPublishesPendingFontDependencies) {
+  auto store = std::make_shared<CatalogEncodedFontStore>();
+  FontCatalog catalog(store);
+  ScopedDefaultProvider defaults(catalog);
+  auto parsed = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="160" height="70"><text id="label" x="3" y="43" font-family="Inter" font-size="35">WiWmmm</text></svg>)");
+  ASSERT_TRUE(parsed.has_value());
+  testing::NiceMock<tests::MockRendererInterface> backend;
+  EXPECT_CALL(backend, drawText(testing::_, testing::_, testing::_))
+      .WillOnce([](Registry& registry, const components::ComputedTextComponent& text,
+                   const TextParams& params) {
+        TextLayoutParams layout;
+        layout.fontFamilies = params.fontFamilies;
+        layout.fontSize = params.fontSize;
+        layout.viewBox = params.viewBox;
+        layout.fontMetrics = params.fontMetrics;
+        EXPECT_THAT(registry.ctx().get<TextEngine>().layout(text, layout), Not(IsEmpty()));
+      });
+  RendererDriver driver(backend);
+  driver.draw(*parsed);
+  const auto pending = parsed->registry().ctx().get<FontManager>().faceDependencies();
+  ASSERT_THAT(pending, SizeIs(1));
+  EXPECT_EQ(pending[0].family, "inter");
+  EXPECT_EQ(pending[0].state, FontFaceLoadState::WaitingForBytes);
+  const auto fonts = parsed->renderedFontResources();
+  EXPECT_EQ(fonts.status, FontResourcePreflight::Status::PendingFonts);
+  EXPECT_THAT(fonts.dependencies, testing::ElementsAre(pending[0]));
+  const auto label = *parsed->querySelector("#label");
+  EXPECT_THAT(parsed->fontDependenciesForElement(label), testing::ElementsAre(pending[0]));
+}
+
 TEST(NestedSvgFontResourcesTest, MissingOffscreenRendererPreservesUnpreparedChildStatus) {
   auto parsed = ParseDocument(FilterSource());
   ASSERT_TRUE(parsed.has_value());

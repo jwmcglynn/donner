@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
   findElementColoredPixel,
@@ -1216,7 +1217,56 @@ test(
       });
       expect(fatalMessages).toEqual([]);
     } finally {
-      releaseFont();
+      try {
+        const diagnostic = await page.evaluate(() => {
+          const state = window as Window & {
+            __donnerCatalogBrokers?: Map<number, {
+              broker: {
+                enabled: boolean;
+                closed: boolean;
+                running: number;
+                assets: Map<string, unknown>;
+                requests: Map<string, { state: string; token: number }>;
+              };
+            }>;
+          };
+          return {
+            firstFrame: state.__donnerFirstFramePresented,
+            frameCount: state.__donnerMainLoopRenderedFrames,
+            activeSample: document.querySelector("canvas")?.getAttribute("data-active-sample-id"),
+            sampleStats: state.__donnerSampleThumbnailStats,
+            workerStats: state.__donnerWorkerStats,
+            interactionStats: state.__donnerInteractionStats,
+            fontRequests: state.__catalogFontTest,
+            brokers: Array.from(state.__donnerCatalogBrokers ?? [], ([session, record]) => ({
+              session,
+              enabled: record.broker.enabled,
+              closed: record.broker.closed,
+              running: record.broker.running,
+              assetCount: record.broker.assets.size,
+              requests: Array.from(record.broker.requests, ([id, request]) => ({
+                id,
+                state: request.state,
+                token: request.token,
+              })),
+            })),
+          };
+        });
+        const diagnosticPath = testInfo.outputPath("catalog-font-final.json");
+        await writeFile(diagnosticPath, JSON.stringify({ diagnostic, networkRequests }, null, 2));
+        await testInfo.attach("catalog-font-final", {
+          path: diagnosticPath,
+          contentType: "application/json",
+        });
+        await page.locator("canvas#canvas").screenshot({
+          path: testInfo.outputPath("catalog-font-final.png"),
+          timeout: 2000,
+        });
+      } catch (error) {
+        console.error(`catalog font diagnostic capture failed: ${String(error)}`);
+      } finally {
+        releaseFont();
+      }
     }
   },
 );
