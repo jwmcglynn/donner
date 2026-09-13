@@ -372,6 +372,8 @@ donner_cc_library(
         "//donner/gpu/shader:morphology_artifact",
         "//donner/gpu/shader:offset_artifact",
         "//donner/gpu/shader:program_bindings",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:snapshot_unpremultiply_artifact",
         "//donner/gpu/shader:subregion_clip_artifact",
         "//donner/gpu/shader:tile_artifact",
@@ -470,18 +472,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Path-clip mask shader. Same band/curve encoding as slug_fill.wgsl but
-# outputs a single-channel coverage value into an R8Unorm target so the
-# main fill / gradient pipelines can sample it as a clip mask (Phase 3b).
-embed_resources(
-    name = "slug_mask_wgsl",
-    header_output = "embed_resources/SlugMaskWgsl.h",
-    resources = {
-        "kSlugMaskWgsl": "shaders/slug_mask.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 # feBlend W3C Compositing 1 blend-mode compute shader.
 embed_resources(
     name = "filter_blend_wgsl",
@@ -504,9 +494,10 @@ donner_cc_library(
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
-        ":slug_mask_wgsl",
         "//donner/base",
         "//donner/gpu",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
@@ -522,10 +513,11 @@ donner_cc_test(
         ":geode_wgpu_util",
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
-        ":slug_mask_wgsl",
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:wgsl_emitter",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
@@ -582,6 +574,8 @@ donner_cc_library(
         ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
         "//donner/svg/core",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/resources:image_resource",

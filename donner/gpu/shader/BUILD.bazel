@@ -137,6 +137,56 @@ donner_cc_library(
     ],
 )
 
+# Slug mask compilation uses a measured, bounded target-local evaluator budget.
+donner_cc_library(
+    name = "slug_mask_api",
+    hdrs = ["programs/SlugMask.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "slug_mask_source",
+    hdrs = ["programs/SlugMaskSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "slug_mask_validation",
+    hdrs = ["programs/SlugMaskArtifactValidation.h"],
+    deps = [":slug_mask_api"],
+)
+
+donner_cc_library(
+    name = "slug_mask_artifact",
+    srcs = ["programs/SlugMask.cc"],
+    copts = ["-fconstexpr-steps=2097152"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":slug_mask_api",
+        ":slug_mask_source",
+        ":slug_mask_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_mask_native_artifact",
+    srcs = ["programs/SlugMaskNative.cc"],
+    copts = ["-fconstexpr-steps=2097152"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":slug_mask_api",
+        ":slug_mask_source",
+        ":slug_mask_validation",
+    ],
+)
+
 # The typed shader IR and each emitter have independent compilation dependencies.
 #
 # A typed immutable IR with a validating builder, host-shareable layout

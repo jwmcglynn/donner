@@ -1,13 +1,22 @@
-// Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
+#pragma once
+/// @file
+/// Authoritative WGSL source for analytic dual-ray clip-mask coverage.
+
+#include "donner/gpu/shader/wgsl/Compiler.h"
+
+namespace donner::gpu::shader::programs {
+
+inline constexpr wgsl::SourceText kSlugMaskSource{
+    R"WGSL(// Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
 // into an RGBA8Unorm mask texture for use as a clip source by the main fill /
 // gradient pipelines (path clipping).
 //
 // Analytic version of the mask. Single convex bounding fan + dense H/V band
-// grids → no band-seam double-count. Each fragment writes its scalar coverage
+// grids -> no band-seam double-count. Each fragment writes its scalar coverage
 // into ALL FOUR channels; the pipeline blends with BlendOperation::Max, so
 // overlapping clip-path draws union as max(c1, c2) per channel (correct union,
 // no double-count). The mask reader (`clip_mask_coverage`) averages the four
-// channels → returns the coverage, so the Max-union invariant is preserved with
+// channels -> returns the coverage, so the Max-union invariant is preserved with
 // no reader change.
 
 // ============================================================================
@@ -45,7 +54,6 @@ struct Band {
 @group(0) @binding(1) var<storage, read> bands: array<Band>;
 @group(0) @binding(2) var<storage, read> curveData: array<f32>;
 @group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
-@group(0) @binding(4) var clipMaskSampler: sampler;
 @group(0) @binding(5) var<storage, read> vBands: array<Band>;
 @group(0) @binding(6) var<storage, read> vCurveData: array<f32>;
 @group(0) @binding(7) var<storage, read> hBandGrid: array<u32>;
@@ -494,3 +502,6 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   out.color = vec4f(coverage, coverage, coverage, coverage);
   return out;
 }
+)WGSL"};
+
+}  // namespace donner::gpu::shader::programs

@@ -146,7 +146,7 @@ private:
 
 /**
  * Caches a compiled render pipeline for the path-clip mask shader
- * (`shaders/slug_mask.wgsl`) plus its bind-group layout.
+ * (`donner/gpu/shader/programs/SlugMaskSource.h`) plus its bind-group layout.
  *
  * The mask pipeline is a stripped-down sibling of @ref GeodePipeline -
  * it reuses the same vertex shader and band/curve storage SSBOs. The fragment

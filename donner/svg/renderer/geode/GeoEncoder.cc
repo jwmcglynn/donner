@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -1630,31 +1631,12 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
       impl_->allocStorageOrDummy(impl_->gridArena, encoded.vCurveIndices.data(),
                                  encoded.vCurveIndices.size() * sizeof(uint32_t));
 
-  // Mask uniforms - mvp, viewport, fillRule, hasClipMask, grid params. The
-  // `hasClipMask` field gates whether the fragment shader intersects with the
-  // nested clip mask at binding 3 (nested `<clipPath>` references).
-  struct alignas(16) MaskUniforms {
-    float mvp[16];                  //  0 ..  64
-    float viewport[2];              // 64 ..  72
-    uint32_t fillRule;              // 72 ..  76
-    uint32_t hasClipMask;           // 76 ..  80
-    float gridYBase;                // 80 ..  84
-    float gridHStride;              // 84 ..  88
-    uint32_t gridHBandCount;        // 88 ..  92
-    float gridXBase;                // 92 ..  96
-    float gridVStride;              // 96 .. 100
-    uint32_t gridVBandCount;        // 100 .. 104
-    uint32_t antialias;             // 104 .. 108 - 0 = binary coverage, 1 = analytic AA
-    uint32_t _gridPad1;             // 108 .. 112
-    uint32_t boundingVertexCount;   // 112 .. 116
-    uint32_t _boundingPad0;         // 116 .. 120
-    uint32_t _boundingPad1;         // 120 .. 124
-    uint32_t _boundingPad2;         // 124 .. 128
-    float boundingVertices[4 * 4];  // 128 .. 192
-  };
-  static_assert(sizeof(MaskUniforms) == 192, "MaskUniforms layout mismatch");
-
-  MaskUniforms u = {};
+  static_assert(sizeof(EncodedPath::Band) == sizeof(gpu::shader::programs::SlugMaskBand));
+  static_assert(offsetof(EncodedPath::Band, curveStart) ==
+                offsetof(gpu::shader::programs::SlugMaskBand, curveStart));
+  static_assert(offsetof(EncodedPath::Band, curveCount) ==
+                offsetof(gpu::shader::programs::SlugMaskBand, curveCount));
+  gpu::shader::programs::SlugMaskParams u = {};
   impl_->buildMvp(u.mvp);
   u.viewport[0] = static_cast<float>(impl_->targetWidth);
   u.viewport[1] = static_cast<float>(impl_->targetHeight);
@@ -1670,32 +1652,52 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   writeBoundingPolygonUniforms(u, encoded);
 
   const auto uniAlloc =
-      impl_->allocInArena(impl_->uniformArena, &u, sizeof(MaskUniforms), kUniformOffsetAlignment);
+      impl_->allocInArena(impl_->uniformArena, &u, sizeof(u), kUniformOffsetAlignment);
+
+  static const auto kBindings = [] {
+    const auto& shader = gpu::shader::programs::SlugMaskShader();
+    return std::array{
+        shader.resource("uniforms")->binding,      shader.resource("bands")->binding,
+        shader.resource("curveData")->binding,     shader.resource("clipMaskTexture")->binding,
+        shader.resource("vBands")->binding,        shader.resource("vCurveData")->binding,
+        shader.resource("hBandGrid")->binding,     shader.resource("vBandGrid")->binding,
+        shader.resource("hCurveIndices")->binding, shader.resource("vCurveIndices")->binding,
+    };
+  }();
+  const auto& [uniformsBinding, bandsBinding, curvesBinding, clipBinding, vBandsBinding,
+               vCurvesBinding, hGridBinding, vGridBinding, hRefsBinding, vRefsBinding] = kBindings;
 
   gpu::Result<gpu::BindGroup> bindGroupResult =
       impl_->gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
           "GeodeMaskBindGroup",
           impl_->maskPipelineOwned->bindGroupLayout(),
-          {gpu::BindGroupEntry{0,
+          {gpu::BindGroupEntry{uniformsBinding,
                                gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
            gpu::BindGroupEntry{
-               1, gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+               bandsBinding,
+               gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
            gpu::BindGroupEntry{
-               2, gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
-           gpu::BindGroupEntry{3, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
-           gpu::BindGroupEntry{4, gpu::SamplerBinding{*impl_->gpuContext->dummyClipMaskSampler}},
+               curvesBinding,
+               gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
+           gpu::BindGroupEntry{clipBinding, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
            gpu::BindGroupEntry{
-               5, gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
+               vBandsBinding,
+               gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
            gpu::BindGroupEntry{
-               6, gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
+               vCurvesBinding,
+               gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
            gpu::BindGroupEntry{
-               7, gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
+               hGridBinding,
+               gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
            gpu::BindGroupEntry{
-               8, gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
+               vGridBinding,
+               gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
            gpu::BindGroupEntry{
-               9, gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
+               hRefsBinding,
+               gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
            gpu::BindGroupEntry{
-               10, gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
+               vRefsBinding,
+               gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
   if (bindGroupResult.hasError()) {
     return;
   }

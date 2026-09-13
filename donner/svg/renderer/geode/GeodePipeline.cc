@@ -8,6 +8,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
+#include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
@@ -181,26 +182,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
 // ============================================================================
 
 GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
-  // Eleven bindings - uniforms, H bands SSBO, H curves SSBO, nested clip mask
-  // texture, nested clip mask sampler, and (analytic dual-ray) V bands SSBO,
-  // V curves SSBO, H band grid, V band grid, and compact references into each
-  // canonical curve array. The clip-mask slot is always bound; a 1x1 dummy is
-  // used when `uniforms.hasClipMask == 0`.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      FragmentStorageEntry(1),
-      FragmentStorageEntry(2),
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      FragmentStorageEntry(5),
-      FragmentStorageEntry(6),
-      FragmentStorageEntry(7),
-      FragmentStorageEntry(8),
-      FragmentStorageEntry(9),
-      FragmentStorageEntry(10),
-  };
+  const auto entries = gpu::shader::MakeBindingLayout(gpu::shader::programs::SlugMaskShader());
   bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                                        gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
                                    "GeodeSlugMaskBGL createBindGroupLayout");

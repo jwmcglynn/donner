@@ -3,12 +3,12 @@
 #include <string_view>
 
 #include "donner/base/RcString.h"
+#include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
-#include "embed_resources/SlugMaskWgsl.h"
 
 namespace donner::geode {
 
@@ -66,8 +66,8 @@ gpu::Result<gpu::ShaderModule> createSlugGradientShader(gpu::Device& device) {
 }
 
 gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
-  return createGpuShaderFromWgsl(device, "SlugMask", donner::embedded::kSlugMaskWgsl.data(),
-                                 donner::embedded::kSlugMaskWgsl.size());
+  return device.createShaderModule(gpu::shader::MakeShaderDescriptor(
+      gpu::shader::programs::SlugMaskShader(), gpu::ShaderSourceKind::Wgsl, "SlugMask"));
 }
 
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {

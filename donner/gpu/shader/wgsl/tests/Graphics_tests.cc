@@ -115,6 +115,13 @@ TEST(GraphicsCompiler, ReflectsRuntimeStridesIntoDeviceBufferRequirements) {
   ASSERT_NE(shader.resource("bands"), nullptr);
   EXPECT_EQ(shader.resource("bands")->minSizeBytes, 8u);
   EXPECT_EQ(shader.resource("bands")->runtimeArrayStrideBytes, 8u);
+  EXPECT_EQ(shader.resource("bands")->runtimeArrayLanes, 0u);
+  ASSERT_NE(shader.resource("values"), nullptr);
+  EXPECT_EQ(shader.resource("values")->runtimeArrayScalarType, ShaderScalarType::F32);
+  EXPECT_EQ(shader.resource("values")->runtimeArrayLanes, 1u);
+  ASSERT_NE(shader.resource("indices"), nullptr);
+  EXPECT_EQ(shader.resource("indices")->runtimeArrayScalarType, ShaderScalarType::U32);
+  EXPECT_EQ(shader.resource("indices")->runtimeArrayLanes, 1u);
   EXPECT_TRUE(shader.matchesMember("bands", "count", 4, 4, ShaderScalarType::U32));
   EXPECT_TRUE(shader.matchesMember("params", "vertices", 0, 64, ShaderScalarType::F32, 4, 4, 16));
   const auto descriptor = MakeShaderDescriptor(shader, ShaderSourceKind::Msl, "storage arrays");

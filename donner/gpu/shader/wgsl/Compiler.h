@@ -188,6 +188,13 @@ consteval auto Compile() {
         resource.minSizeBytes = resource.runtimeArrayStrideBytes;
         resource.alignmentBytes = parsed.module.typeAlignment(binding.type);
         layoutType = binding.type.elementType();
+        if (layoutType.isNumeric()) {
+          resource.runtimeArrayScalarType = layoutType.kind == TypeKind::F32 ? ShaderScalarType::F32
+                                            : layoutType.kind == TypeKind::I32
+                                                ? ShaderScalarType::I32
+                                                : ShaderScalarType::U32;
+          resource.runtimeArrayLanes = layoutType.lanes;
+        }
       } else {
         resource.minSizeBytes = parsed.module.typeSize(binding.type);
         resource.alignmentBytes = parsed.module.typeAlignment(binding.type);
