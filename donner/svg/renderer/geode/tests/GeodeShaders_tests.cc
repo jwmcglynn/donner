@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -153,7 +154,7 @@ protected:
   }
 
   struct ProbeInput {
-    std::array<float, 12> curves;
+    std::vector<float> curves;
     std::array<float, 2> sample = {540.0f, 223.75f};
     uint32_t curveCount = 1;
   };
@@ -208,7 +209,7 @@ protected:
 
   static void orientProbeInput(ProbeInput& input, bool transpose, bool reverse) {
     if (reverse) {
-      for (size_t first : {0u, 6u}) {
+      for (size_t first = 0; first < input.curves.size(); first += 6) {
         std::swap(input.curves[first], input.curves[first + 4]);
         std::swap(input.curves[first + 1], input.curves[first + 5]);
       }
@@ -237,7 +238,8 @@ protected:
     return input;
   }
 
-  static std::string coverageSource(EndpointShader shader, bool transpose) {
+  static std::string coverageSource(EndpointShader shader, bool transpose,
+                                    bool includeWeight = false) {
     std::string wgsl = source(shader);
     const std::string function = transpose ? "accumulateVert" : "accumulateHoriz";
     const std::string paint = shader == EndpointShader::Fill ? "paint, " : "";
@@ -251,9 +253,8 @@ fn endpoint_coverage() {
       wgsl += "  var paint: PaintParams;\n";
     }
     wgsl += "  let ray = " + function + "(" + paint + "0u, endpointSamples[0], 2.0);\n";
-    wgsl += R"(  textureStore(endpointResult, vec2i(0), vec4f(abs(ray.cov), 0.0, 0.0, 1.0));
-}
-)";
+    wgsl += "  textureStore(endpointResult, vec2i(0), vec4f(abs(ray.cov), " +
+            std::string(includeWeight ? "ray.wgt" : "0.0") + ", 0.0, 1.0));\n}\n";
     return wgsl;
   }
 
@@ -288,11 +289,13 @@ fn endpoint_coverage() {
                                             const ProbeInput& input, EndpointShader shader,
                                             bool transpose) {
     const std::array<uint32_t, 8> band = {0, input.curveCount};
-    const std::array<uint32_t, 2> indices = {0, 1};
+    std::vector<uint32_t> indices(input.curves.size() / 6);
+    std::iota(indices.begin(), indices.end(), 0u);
     const wgpu::Buffer bandBuffer = storageBuffer(resources, band.data(), sizeof(band));
     const wgpu::Buffer curveBuffer =
-        storageBuffer(resources, input.curves.data(), sizeof(input.curves));
-    const wgpu::Buffer indexBuffer = storageBuffer(resources, indices.data(), sizeof(indices));
+        storageBuffer(resources, input.curves.data(), (input.curves.size() * sizeof(float)));
+    const wgpu::Buffer indexBuffer =
+        storageBuffer(resources, indices.data(), (indices.size() * sizeof(uint32_t)));
     const bool typed = shader == EndpointShader::TypedFill;
     const bool fill = shader == EndpointShader::Fill;
     const uint32_t bandBinding = !transpose ? 1 : (typed || fill ? 8 : 5);
@@ -304,10 +307,10 @@ fn endpoint_coverage() {
     entries[0].size = sizeof(band);
     entries[1].binding = curveBinding;
     entries[1].buffer = curveBuffer;
-    entries[1].size = sizeof(input.curves);
+    entries[1].size = (input.curves.size() * sizeof(float));
     entries[2].binding = indexBinding;
     entries[2].buffer = indexBuffer;
-    entries[2].size = sizeof(indices);
+    entries[2].size = (indices.size() * sizeof(uint32_t));
     ProbeBinding result;
     result.layout = ScopedWgpuHandle<wgpu::BindGroupLayout>(pipeline.getBindGroupLayout(0));
     wgpu::BindGroupDescriptor groupDesc{};
@@ -384,6 +387,61 @@ fn endpoint_coverage() {
         createGeometryBinding(resources, pipeline.pipeline.get(), input, shader, transpose);
     const ProbeOutput output = createProbeOutput(resources, pipeline.pipeline.get(), input.sample);
     return dispatchCoverage(pipeline.pipeline.get(), geometry.group, output);
+  }
+
+  struct RayEvent {
+    float distance;
+    int direction;
+  };
+
+  static void expectRayEvents(EndpointShader shader, const std::vector<RayEvent>& events,
+                              uint8_t coverageByte, uint8_t weightByte, std::string_view label) {
+    for (bool transpose : {false, true}) {
+      for (bool reverse : {false, true}) {
+        SCOPED_TRACE(label);
+        SCOPED_TRACE(transpose);
+        SCOPED_TRACE(reverse);
+        ProbeInput input{{}, {0.0f, 0.0f}, static_cast<uint32_t>(events.size())};
+        for (const RayEvent& event : events) {
+          const float x = event.distance / 2.0f;
+          const float direction = static_cast<float>(event.direction);
+          input.curves.insert(input.curves.end(), {x, -direction, x, 0.0f, x, direction});
+        }
+        orientProbeInput(input, transpose, reverse);
+        ScopedWgpuResourceArena resources;
+        const ProbePipeline pipeline = createProbePipeline(coverageSource(shader, transpose, true));
+        const ProbeBinding geometry =
+            createGeometryBinding(resources, pipeline.pipeline.get(), input, shader, transpose);
+        const ProbeOutput output =
+            createProbeOutput(resources, pipeline.pipeline.get(), input.sample);
+        const svg::RendererBitmap actual =
+            dispatchCoverage(pipeline.pipeline.get(), geometry.group, output);
+        const svg::RendererBitmap expected{Vector2i(1, 1), {coverageByte, weightByte, 0, 255}, 4};
+        editor::tests::CompareBitmapToBitmap(
+            actual, expected,
+            std::string(label) + "_" + std::to_string(static_cast<int>(shader)) + "_" +
+                (transpose ? "vertical_" : "horizontal_") + (reverse ? "reversed" : "forward"),
+            editor::tests::PixelmatchIdentityParams());
+      }
+    }
+  }
+
+  static void expectNonzeroRayEvents(EndpointShader shader) {
+    expectRayEvents(shader, {{0.25f, 1}, {0.25f, 1}, {-0.25f, -1}}, 191, 128,
+                    "slug_overlapping_ray");
+    expectRayEvents(shader, {{1.0f, 1}, {0.0f, 1}}, 255, 0, "slug_internal_edge_weight");
+    expectRayEvents(shader, {{1.0f, 1}, {0.25f, -1}, {-0.25f, 1}}, 128, 128, "slug_hole_ray");
+    expectRayEvents(shader, {{0.25f, 1}, {0.25f, -1}}, 0, 0, "slug_cancelling_tie");
+    expectRayEvents(shader, {{0.5f, 1}, {-0.5f, -1}}, 255, 0, "slug_pixel_boundary_ray");
+  }
+
+  static void expectBoundedRayEvents(EndpointShader shader) {
+    std::vector<RayEvent> events(16, RayEvent{0.25f, 1});
+    events.insert(events.end(), 16, RayEvent{-0.25f, -1});
+    expectRayEvents(shader, events, 128, 128, "slug_event_capacity");
+    events.insert(events.begin(), RayEvent{0.25f, 1});
+    // Overflow retains the complete original winding calculation, including every crossing.
+    expectRayEvents(shader, events, 255, 128, "slug_event_overflow");
   }
 
   static void expectFlatTangentCancellation(EndpointShader shader) {
@@ -507,5 +565,24 @@ TEST_F(SlugEndpointTest, MaskRetainsFlatTangentCrossings) {
 }
 
 }  // namespace
+
+TEST_F(SlugEndpointTest, FillNonzeroRayEvents) {
+  expectNonzeroRayEvents(EndpointShader::Fill);
+}
+TEST_F(SlugEndpointTest, GradientNonzeroRayEvents) {
+  expectNonzeroRayEvents(EndpointShader::Gradient);
+}
+TEST_F(SlugEndpointTest, MaskNonzeroRayEvents) {
+  expectNonzeroRayEvents(EndpointShader::Mask);
+}
+TEST_F(SlugEndpointTest, FillBoundedRayEvents) {
+  expectBoundedRayEvents(EndpointShader::Fill);
+}
+TEST_F(SlugEndpointTest, GradientBoundedRayEvents) {
+  expectBoundedRayEvents(EndpointShader::Gradient);
+}
+TEST_F(SlugEndpointTest, MaskBoundedRayEvents) {
+  expectBoundedRayEvents(EndpointShader::Mask);
+}
 
 }  // namespace donner::geode
