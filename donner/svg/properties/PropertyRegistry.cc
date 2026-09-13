@@ -1548,7 +1548,7 @@ ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue>
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 73> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 74> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -1580,6 +1580,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 73> kValidPresentationAt
     {"flood-color", true},
     {"flood-opacity", true},
     {"font-family", true},
+    {"font", true},
     {"font-size", true},
     {"font-size-adjust", true},
     {"font-stretch", true},
@@ -1858,7 +1859,16 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          continue;
                        }
                      } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-                       if (number->value >= 1 && number->value <= 1000) {
+                       size_t next = i + 1;
+                       while (next < components.size() &&
+                              components[next].isToken<css::Token::Whitespace>()) {
+                         ++next;
+                       }
+                       const bool followedByFontSize =
+                           next < components.size() &&
+                           !parser::ParseLengthPercentage(components[next], params.allowUserUnits())
+                                .hasError();
+                       if (number->value >= 1 && number->value <= 1000 && followedByFontSize) {
                          if (sawWeight) {
                            ParseDiagnostic error;
                            error.reason = "Duplicate font-weight in font shorthand";

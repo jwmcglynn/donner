@@ -717,6 +717,13 @@ TEST(PropertyRegistry, FontShorthandRejectsConflictsWithoutPartialMutation) {
   EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
 }
 
+TEST(PropertyRegistry, FontShorthandPresentationAttributeAcceptsUserUnitSize) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parsePresentationAttribute("font", "50 Noto Sans"), ParseResultIs(true));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(50, Lengthd::Unit::None)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+}
+
 TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
