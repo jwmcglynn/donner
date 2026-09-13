@@ -43,10 +43,8 @@ constexpr uint32_t kTargetApiVersion = VK_API_VERSION_1_1;
 /// stuck driver fails closed with an error instead of hanging the caller forever.
 constexpr uint64_t kUploadFenceTimeoutNs = 60ull * 1000ull * 1000ull * 1000ull;
 
-/// How long \ref VulkanDevice::onWriteBuffer waits for a buffer's outstanding submission before
-/// refusing the write. Long enough for any legitimate frame, short enough to leave the device
-/// recoverable rather than wedging the calling thread.
-constexpr double kBusyBufferWriteTimeoutSeconds = 5.0;
+/// Bound for a host access waiting on the buffer's outstanding submission.
+constexpr double kBusyBufferAccessTimeoutSeconds = 5.0;
 
 /// Validation layer enabled when the loader enumerates it (CI installs it explicitly; plain
 /// driver installs usually do not have it, and it is skipped silently then).
@@ -1541,6 +1539,15 @@ Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) 
                                 buffer.slotIndex())};
   }
 
+  const uint64_t lastUse = bufferLastUseSerial(buffer.slotIndex());
+  if (!waitForSerial(lastUse, kBusyBufferAccessTimeoutSeconds)) {
+    const std::string error = lastErrorForTest();
+    return GpuError{GpuErrorType::InvalidState,
+                    error.empty()
+                        ? std::format("readBackBuffer timed out waiting for submission {}", lastUse)
+                        : error};
+  }
+
   const uint8_t* contents = static_cast<const uint8_t*>(record->allocation.mapped);
   return std::vector<uint8_t>(contents, contents + record->byteSize);
 }
@@ -2294,7 +2301,7 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
   // Writes to idle buffers stay unaffected by an unrelated earlier failure, exactly as before.
   const uint64_t lastUse = bufferLastUseSerial(slotIndex);
   if (lastUse > impl_->completedSerialValue &&
-      !waitForSerial(lastUse, kBusyBufferWriteTimeoutSeconds)) {
+      !waitForSerial(lastUse, kBusyBufferAccessTimeoutSeconds)) {
     const std::string error = lastErrorForTest();
     return GpuError{GpuErrorType::InvalidState,
                     error.empty()

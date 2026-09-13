@@ -307,6 +307,48 @@ TEST_F(VulkanBufferWritesTests, FreshAndCompletedBuffersDoNotWaitForUnrelatedWor
   expectPixel({255, 0, 0, 255});
 }
 
+TEST_F(VulkanBufferWritesTests, InFlightReadbackFailsUntilItsCopyCompletes) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  const uint64_t serial = submitRead(input_);
+  ASSERT_NE(serial, 0u);
+  ASSERT_LT(device_->completedSerial(), serial);
+
+  const auto read = device_->readBackBuffer(readback_);
+  EXPECT_THAT(read, IsGpuError(GpuErrorType::InvalidState));
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
+  expectPixel({255, 0, 0, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, IdleReadbacksDoNotWaitForUnrelatedWork) {
+  ASSERT_THAT(device_->waitForSerial(submitRead(input_), 5.0), testing::IsTrue());
+  const Buffer completed = std::move(readback_);
+  const auto expected = device_->readBackBuffer(completed);
+  ASSERT_THAT(expected, HasResult());
+  const Buffer fresh = GetResultOrFail(device_->createBuffer(
+      {"idle readback", sizeof(kRed), BufferUsage::CopyDst | BufferUsage::MapRead}));
+  ASSERT_THAT(device_->writeBuffer(fresh, 0, AsBytes(kRed)), IsOk());
+  readback_ = GetResultOrFail(
+      device_->createBuffer({"busy readback", 256, BufferUsage::CopyDst | BufferUsage::MapRead}));
+
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  const uint64_t serial = submitRead(input_);
+  ASSERT_LT(device_->completedSerial(), serial);
+  const auto completedRead = device_->readBackBuffer(completed);
+  ASSERT_THAT(completedRead, HasResult());
+  EXPECT_THAT(completedRead.result(), testing::ElementsAreArray(expected.result()));
+  const auto freshRead = device_->readBackBuffer(fresh);
+  ASSERT_THAT(freshRead, HasResult());
+  EXPECT_THAT(freshRead.result(), testing::ElementsAreArray(AsBytes(kRed)));
+  EXPECT_THAT(device_->readBackBuffer(Buffer{}), IsGpuError(GpuErrorType::InvalidHandle));
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
+}
+
 TEST_F(VulkanBufferWritesTests, CompletedWritesReportHostCopyCost) {
   ASSERT_THAT(device_->waitForSerial(submitRead(input_), 5.0), testing::IsTrue());
   constexpr uint32_t kWrites = 20'000;
