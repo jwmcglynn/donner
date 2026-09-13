@@ -86,6 +86,14 @@ TEST(GraphicsCompiler, RejectsMatrixShapeIndexAndUnsupportedLayoutCases) {
   }
 }
 
+TEST(GraphicsCompiler, MatrixColumnConstantsCannotBypassConstantValidation) {
+  constexpr std::string_view division = "fn bad() -> f32 { return mat2x2f()[0i].x / 0f; }";
+  constexpr std::string_view product =
+      "fn bad() -> vec2f { return mat2x2f(vec2f(1f), vec2f(1f)) * mat2x2f()[0i]; }";
+  EXPECT_EQ(Parse(division).diagnostic.code, ErrorCode::InvalidConstantExpression);
+  EXPECT_EQ(Parse(product).diagnostic.code, ErrorCode::InvalidConstantExpression);
+}
+
 TEST(GraphicsCompiler, RejectsInvalidEntryInterfaces) {
   constexpr std::string_view cases[] = {
       "@vertex fn v() -> @location(0) vec4<f32> { return vec4<f32>(0f); }",
