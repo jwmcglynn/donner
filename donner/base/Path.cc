@@ -2249,7 +2249,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   }
 
   for (size_t i = 0; i < numSegments; ++i) {
-    if (segmentLengths[i] > 1e-10 && normals[i].lengthSquared() > 1e-20) {
+    if (segmentLengths[i] > 0.0 && normals[i].lengthSquared() > 0.0) {
       activeSegments.push_back(i);
       const Vector2d offset = normals[i] * halfWidth;
       emitPositiveStrokePiece(

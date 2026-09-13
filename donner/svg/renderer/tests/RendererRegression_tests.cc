@@ -11,7 +11,6 @@
 #include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
-#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -270,14 +269,7 @@ TEST_F(RendererRegressionTests, ThickCrossbarStrokeMatchesItsUnionAtFractionalOf
           RenderDocumentWithBackend(unionDocument, RendererBackend::Geode);
       const std::string label =
           "crossbar_union_" + std::string(offset) + "_" + std::string(opacity);
-      if (offset == "0") {
-        ExpectBitmapsIdentical(actual, expected, label);
-      } else {
-        // Fractional edges use the suite's standard AA-aware comparison. The dual-ray
-        // coverage of overlapping pieces can differ at partial corner pixels from a
-        // single boundary; integer overlap and opacity remain exact above.
-        donner::editor::tests::CompareBitmapToBitmap(actual, expected, label);
-      }
+      ExpectBitmapsIdentical(actual, expected, label);
     }
   }
 }

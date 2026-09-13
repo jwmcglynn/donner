@@ -20,9 +20,7 @@ namespace donner::geode {
 
 namespace {
 
-/// Path-local flattening tolerance. This case asserts on exact path-local point
-/// counts, so it pins the local-space tolerance rather than a device-derived
-/// one (`strokeToFill` has no default; every caller states its intent).
+/// Geometry assertions use path-local units rather than a device-derived tolerance.
 constexpr double kFlattenTolerance = Path::kLocalFlattenTolerance;
 
 MATCHER(IsFiniteFloat, "is finite") {
@@ -570,10 +568,9 @@ TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   }
 }
 
-TEST(GeodePathEncoder, ClosedStrokeRightContourUsesInsideJoins) {
-  // Exact path from filters/filter/path-bbox.svg. The closed stroke's right contour must
-  // truncate inside joins at their miter intersections instead of retaining both offset
-  // endpoints. The latter produces a self-intersecting wedge at (65, 135).
+TEST(GeodePathEncoder, ClosedStrokeUnionDoesNotExtendAboveSharedVertex) {
+  // Exact path from filters/filter/path-bbox.svg. The stroke must not introduce
+  // a filled wedge extending vertically above the shared vertex at (65, 135).
   const Path path = PathBuilder()
                         .moveTo({50, 85})
                         .lineTo({65, 135})
@@ -584,11 +581,11 @@ TEST(GeodePathEncoder, ClosedStrokeRightContourUsesInsideJoins) {
                         .build();
   const Path stroke = path.strokeToFill({.width = 1.0}, kFlattenTolerance);
   ASSERT_FALSE(stroke.empty());
-  EXPECT_EQ(stroke.points().size(), 95u)
-      << "Pre-fix right-contour misclassification emitted 117 outline points";
-  EXPECT_EQ(stroke.commands().size(), 97u);
-
-  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::EvenOdd);
+  for (const double y : {90.0, 100.0, 110.0, 120.0}) {
+    EXPECT_FALSE(stroke.isInside({65, y}, FillRule::NonZero)) << "y=" << y;
+  }
+  EXPECT_TRUE(stroke.isInside({100, 135}, FillRule::NonZero));
+  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::NonZero);
   ASSERT_FALSE(encoded.empty());
 }
 
