@@ -1753,6 +1753,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                      setState(registry.fontStyle);
                      setState(registry.fontStretch);
                      setState(registry.fontVariant);
+                     setState(registry.fontKerning);
                    };
 
                    if (params.explicitState != PropertyState::NotSet) {
@@ -1773,6 +1774,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    int fontWeight = 400;
                    int fontStretch = static_cast<int>(FontStretch::Normal);
                    FontVariant fontVariant = FontVariant::Normal;
+                   bool fontKerning = true;
                    std::optional<Lengthd> fontSize;
 
                    skipWhitespace();
@@ -1904,6 +1906,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    set(registry.fontStyle, fontStyle);
                    set(registry.fontStretch, fontStretch);
                    set(registry.fontVariant, fontVariant);
+                   set(registry.fontKerning, fontKerning);
                    return std::optional<ParseDiagnostic>();
                  }},  //
                 {"font-size",
