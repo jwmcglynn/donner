@@ -55,7 +55,7 @@ TEST(Compiler, FreezesAllGaussianBlurProjectionsAndMetadata) {
   static_assert(shader.spirv[1] == 0x00010300u);
   static_assert(shader.resources.size() == 3);
   static_assert(shader.members.size() == 10);
-  static_assert(shader.entryPoint.view() == "cs_main");
+  static_assert(shader.entryPoints.front().name.view() == "cs_main");
 
   EXPECT_EQ(shader.wgsl, programs::kGaussianBlurSource.view());
   constexpr CompiledShaderView repeated = kRepeatedGaussianArtifact.view();
@@ -63,10 +63,10 @@ TEST(Compiler, FreezesAllGaussianBlurProjectionsAndMetadata) {
   EXPECT_EQ(shader.msl, repeated.msl);
   EXPECT_TRUE(std::equal(shader.spirv.begin(), shader.spirv.end(), repeated.spirv.begin(),
                          repeated.spirv.end()));
-  EXPECT_EQ(shader.entryPoint.view(), "cs_main");
-  EXPECT_EQ(shader.workgroupSize[0], 8u);
-  EXPECT_EQ(shader.workgroupSize[1], 8u);
-  EXPECT_EQ(shader.workgroupSize[2], 1u);
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize[0], 8u);
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize[1], 8u);
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize[2], 1u);
   ASSERT_NE(shader.resource("params"), nullptr);
   EXPECT_EQ(shader.resource("params")->binding, 2u);
   EXPECT_TRUE(shader.matchesMember("params", "pad", 44, 4, ShaderScalarType::U32));
@@ -75,13 +75,13 @@ TEST(Compiler, FreezesAllGaussianBlurProjectionsAndMetadata) {
 TEST(Compiler, ReflectionTracksBindingAndWorkgroupMutations) {
   constexpr CompiledShaderView shader = kBindingAndWorkgroupArtifact.view();
   static_assert(shader.resource("params")->binding == 7);
-  static_assert(shader.workgroupSize == std::array<uint32_t, 3>{4, 2, 1});
+  static_assert(shader.entryPoints.front().workgroupSize == std::array<uint32_t, 3>{4, 2, 1});
 
   const auto descriptor = MakeShaderDescriptor(shader, ShaderSourceKind::Msl, "changed dispatch");
   ASSERT_TRUE(descriptor.bufferBindings.has_value());
   ASSERT_EQ(descriptor.bufferBindings->size(), 1u);
   EXPECT_EQ(descriptor.bufferBindings->front().binding, 7u);
-  EXPECT_EQ(shader.workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
 }
 
 TEST(Compiler, OrdinaryEvaluationMatchesFrozenProjections) {
@@ -110,7 +110,7 @@ TEST(Compiler, BindingMutationUpdatesDerivedReflection) {
   EXPECT_EQ(shader.resource("params")->binding, 7u);
   EXPECT_NE(shader.wgsl.find("@binding(7) var<uniform> params"), std::string_view::npos);
   EXPECT_NE(shader.msl.find("[[buffer(8)]]"), std::string_view::npos);
-  const auto layout = MakeComputeBindingLayout(shader);
+  const auto layout = MakeBindingLayout(shader);
   ASSERT_EQ(layout.size(), 3u);
   EXPECT_EQ(layout[2].binding, 7u);
   EXPECT_EQ(layout[2].type, BindingType::UniformBuffer);

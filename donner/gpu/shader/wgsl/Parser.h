@@ -212,6 +212,7 @@ public:
   /// Parses a full source module.
   constexpr ParseResult parse() {
     while (!failed() && token_.kind != TokenKind::End) {
+      if (Match(TokenKind::Semicolon)) continue;
       Attributes attributes;
       ParseLeadingAttributes(&attributes);
       if (MatchIdentifier("struct")) {
@@ -239,8 +240,11 @@ private:
     bool hasGroup = false;
     bool hasBinding = false;
     bool compute = false;
+    bool vertex = false;
+    bool fragment = false;
     bool hasWorkgroupSize = false;
-    bool globalInvocationId = false;
+    BuiltinValue builtin = BuiltinValue::None;
+    uint32_t location = UINT32_MAX;
     uint32_t group = 0;
     uint32_t binding = 0;
     uint32_t workgroupX = 1;
@@ -248,8 +252,15 @@ private:
     uint32_t workgroupZ = 1;
 
     constexpr bool any() const {
-      return hasGroup || hasBinding || compute || hasWorkgroupSize || globalInvocationId;
+      return hasGroup || hasBinding || compute || vertex || fragment || hasWorkgroupSize ||
+             interface().present();
     }
+
+    constexpr bool nonInterface() const {
+      return hasGroup || hasBinding || compute || vertex || fragment || hasWorkgroupSize;
+    }
+
+    constexpr InterfaceDecoration interface() const { return {builtin, location}; }
   };
 
   struct ExpressionInfo {
@@ -509,9 +520,18 @@ private:
   }
 
   constexpr void ParseLeadingAttribute(Attributes* attributes, SourceSpan atSpan, Token name) {
-    if (name.text == "compute") {
-      if (attributes->compute) Fail(ErrorCode::InvalidAttribute, atSpan);
-      attributes->compute = true;
+    if (name.text == "compute" || name.text == "vertex" || name.text == "fragment") {
+      if (attributes->compute || attributes->vertex || attributes->fragment)
+        Fail(ErrorCode::InvalidAttribute, atSpan);
+      attributes->compute = name.text == "compute";
+      attributes->vertex = name.text == "vertex";
+      attributes->fragment = name.text == "fragment";
+    } else if (name.text == "location") {
+      if (attributes->location != UINT32_MAX) Fail(ErrorCode::InvalidAttribute, atSpan);
+      Expect(TokenKind::LeftParen);
+      attributes->location = ParseUnsignedNumber();
+      Expect(TokenKind::RightParen);
+      if (attributes->location >= 16) Fail(ErrorCode::InvalidAttribute, atSpan);
     } else if (name.text == "workgroup_size") {
       ParseWorkgroupSizeAttribute(attributes, atSpan);
     } else if (name.text == "group" || name.text == "binding") {
@@ -550,10 +570,15 @@ private:
     Expect(TokenKind::LeftParen);
     const Token value = ExpectIdentifier();
     Expect(TokenKind::RightParen);
-    if (value.text != "global_invocation_id" || attributes->globalInvocationId) {
+    if (attributes->builtin != BuiltinValue::None) Fail(ErrorCode::InvalidAttribute, value.span);
+    if (value.text == "global_invocation_id")
+      attributes->builtin = BuiltinValue::GlobalInvocationId;
+    else if (value.text == "vertex_index")
+      attributes->builtin = BuiltinValue::VertexIndex;
+    else if (value.text == "position")
+      attributes->builtin = BuiltinValue::Position;
+    else
       Fail(ErrorCode::InvalidAttribute, value.span);
-    }
-    attributes->globalInvocationId = true;
   }
 
   constexpr uint32_t ParseUnsignedNumber() {
@@ -593,7 +618,10 @@ private:
     uint32_t cursor = 0;
     uint32_t maxAlignment = 1;
     while (!failed() && token_.kind != TokenKind::RightBrace) {
+      Attributes memberAttributes;
+      ParseLeadingAttributes(&memberAttributes);
       const Token memberName = ExpectIdentifier();
+      if (memberAttributes.nonInterface()) Fail(ErrorCode::InvalidAttribute, memberName.span);
       if (!IsValidDeclarationName(memberName)) Fail(ErrorCode::InvalidIdentifier, memberName.span);
       Expect(TokenKind::Colon);
       const Type memberType = ParseType();
@@ -621,7 +649,8 @@ private:
                        cursor,
                        alignment,
                        size,
-                       memberType.kind == TypeKind::Array ? size / memberType.arrayCount : 0};
+                       memberType.kind == TypeKind::Array ? size / memberType.arrayCount : 0,
+                       memberAttributes.interface()};
       cursor += size;
       if (alignment > maxAlignment) maxAlignment = alignment;
       ++structure.memberCount;
@@ -782,7 +811,8 @@ private:
 
   constexpr bool BindingAttributesValid(const Attributes& attributes) const {
     return attributes.hasGroup && attributes.hasBinding && !attributes.compute &&
-           !attributes.hasWorkgroupSize && !attributes.globalInvocationId;
+           !attributes.hasWorkgroupSize && !attributes.vertex && !attributes.fragment &&
+           !attributes.interface().present();
   }
 
   constexpr BindingKind ResolveBindingKind(Token addressSpace, Token accessMode, Type type,
@@ -862,6 +892,7 @@ private:
     ParseFunctionReturnType(&function, name);
     const BlockInfo body = ParseFunctionBody(function.returnType, functionId);
     function.firstStatement = body.first;
+    function.resourceMask = module_.functions[functionId].resourceMask;
     ValidateCompletedFunction(function, name, body.alwaysReturns);
     module_.functions[functionId] = function;
     PopScope();
@@ -871,14 +902,17 @@ private:
     Function function;
     function.name = AddName(name);
     function.nameSpan = name.span;
-    function.stage = attributes.compute ? Stage::Compute : Stage::None;
+    function.stage = attributes.compute    ? Stage::Compute
+                     : attributes.vertex   ? Stage::Vertex
+                     : attributes.fragment ? Stage::Fragment
+                                           : Stage::None;
     function.workgroupSize = {attributes.workgroupX, attributes.workgroupY, attributes.workgroupZ};
     return function;
   }
 
   constexpr bool FunctionAttributesValid(const Attributes& attributes) const {
     if (attributes.compute != attributes.hasWorkgroupSize || attributes.hasGroup ||
-        attributes.hasBinding || attributes.globalInvocationId)
+        attributes.hasBinding || attributes.interface().present())
       return false;
     if (!attributes.compute) return true;
     return attributes.workgroupX > 0 && attributes.workgroupY > 0 && attributes.workgroupZ > 0 &&
@@ -906,23 +940,35 @@ private:
     if (!IsValidDeclarationName(name)) Fail(ErrorCode::InvalidIdentifier, name.span);
     Expect(TokenKind::Colon);
     const Type type = ParseType();
-    const bool invalid = attributes.hasGroup || attributes.hasBinding || attributes.compute ||
-                         attributes.hasWorkgroupSize || type.kind == TypeKind::Struct ||
-                         (function->stage == Stage::None && !type.isNumeric()) ||
-                         (attributes.globalInvocationId &&
-                          (function->stage != Stage::Compute || type != Type{TypeKind::U32, 3}));
-    if (invalid) Fail(ErrorCode::InvalidAttribute, name.span);
+    if (function->stage == Stage::Compute && type.kind == TypeKind::Struct)
+      Fail(ErrorCode::UnsupportedConstruct, name.span);
+    if (attributes.nonInterface() || !IsValueType(type) ||
+        (function->stage == Stage::None && attributes.interface().present()))
+      Fail(ErrorCode::InvalidAttribute, name.span);
     const ArenaId symbol = AddSymbol(SymbolKind::Parameter, type, name, false);
-    if (symbol != kInvalidArenaId && attributes.globalInvocationId)
-      module_.symbols[symbol].builtin = BuiltinInput::GlobalInvocationId;
+    if (symbol != kInvalidArenaId) {
+      module_.symbols[symbol].builtin = attributes.builtin;
+      module_.symbols[symbol].location = attributes.location;
+    }
     ++function->parameterCount;
   }
 
+  constexpr bool IsValueType(Type type) const {
+    return type.isNumeric() || type.kind == TypeKind::Bool ||
+           (type.kind == TypeKind::Struct && !StructHasArray(type.structId));
+  }
+
   constexpr void ParseFunctionReturnType(Function* function, Token name) {
-    if (Match(TokenKind::Arrow)) function->returnType = ParseType();
-    if (function->returnType.kind == TypeKind::Struct ||
-        (function->stage == Stage::None && function->returnType.kind != TypeKind::Void &&
-         !function->returnType.isNumeric()))
+    Attributes attributes;
+    if (Match(TokenKind::Arrow)) {
+      ParseLeadingAttributes(&attributes);
+      function->returnType = ParseType();
+      function->returnInterface = attributes.interface();
+    }
+    if (attributes.nonInterface() ||
+        (function->stage == Stage::None && attributes.interface().present()))
+      Fail(ErrorCode::InvalidAttribute, name.span);
+    if (function->returnType.kind != TypeKind::Void && !IsValueType(function->returnType))
       Fail(ErrorCode::UnsupportedConstruct, name.span);
     if (function->stage == Stage::Compute && function->returnType.kind != TypeKind::Void)
       Fail(ErrorCode::InvalidReturn, name.span);
@@ -939,14 +985,93 @@ private:
     return body;
   }
 
-  constexpr void ValidateCompletedFunction(const Function& function, Token name,
-                                           bool alwaysReturns) {
+  constexpr void ValidateCompletedFunction(Function& function, Token name, bool alwaysReturns) {
     if (function.returnType.kind != TypeKind::Void && !alwaysReturns)
       Fail(ErrorCode::MissingReturn, name.span);
-    if (function.stage == Stage::Compute &&
-        (function.parameterCount != 1 ||
-         SymbolAt(function.firstParameter).builtin != BuiltinInput::GlobalInvocationId))
+    if (function.stage == Stage::None) return;
+    function.firstInput = module_.interfaceVariableCount;
+    uint32_t inputLocations = 0;
+    uint32_t inputBuiltins = 0;
+    for (uint16_t i = 0; i < function.parameterCount; ++i) {
+      const Symbol& symbol = SymbolAt(function.firstParameter + i);
+      ValidateInterfaceType(function.stage, true, symbol.type, {symbol.builtin, symbol.location},
+                            symbol.nameSpan, symbol.name, function.firstParameter + i,
+                            &inputLocations, &inputBuiltins);
+    }
+    function.inputCount = module_.interfaceVariableCount - function.firstInput;
+    function.firstOutput = module_.interfaceVariableCount;
+    uint32_t outputLocations = 0;
+    uint32_t outputBuiltins = 0;
+    if (function.returnType.kind != TypeKind::Void)
+      ValidateInterfaceType(function.stage, false, function.returnType, function.returnInterface,
+                            name.span, function.name, kInvalidArenaId, &outputLocations,
+                            &outputBuiltins);
+    function.outputCount = module_.interfaceVariableCount - function.firstOutput;
+    if (function.stage == Stage::Vertex &&
+        !(outputBuiltins & (1u << uint32_t(BuiltinValue::Position))))
       Fail(ErrorCode::InvalidAttribute, name.span);
+  }
+
+  constexpr void ValidateInterfaceType(Stage stage, bool input, Type type,
+                                       InterfaceDecoration decoration, SourceSpan span,
+                                       NameRef name, ArenaId symbol, uint32_t* locations,
+                                       uint32_t* builtins) {
+    if (type.kind == TypeKind::Struct) {
+      if (decoration.present()) Fail(ErrorCode::InvalidAttribute, span);
+      const Struct& structure = module_.structs[type.structId];
+      for (uint16_t i = 0; i < structure.memberCount; ++i) {
+        const StructMember& member = module_.structMembers[structure.firstMember + i];
+        ValidateInterfaceLeaf(stage, input, member.type, member.interface, member.nameSpan,
+                              locations, builtins);
+        AddInterfaceVariable({member.name, member.type, member.interface, symbol,
+                              ArenaId(structure.firstMember + i)},
+                             member.nameSpan);
+      }
+    } else {
+      ValidateInterfaceLeaf(stage, input, type, decoration, span, locations, builtins);
+      AddInterfaceVariable({name, type, decoration, symbol, kInvalidArenaId}, span);
+    }
+  }
+
+  constexpr void AddInterfaceVariable(InterfaceVariable variable, SourceSpan span) {
+    if (failed()) return;
+    if (module_.interfaceVariableCount == ModuleLimits::kMaxInterfaceVariables) {
+      Fail(ErrorCode::InvalidAttribute, span);
+      return;
+    }
+    module_.interfaceVariables[module_.interfaceVariableCount++] = variable;
+  }
+
+  constexpr void ValidateInterfaceLeaf(Stage stage, bool input, Type type,
+                                       InterfaceDecoration decoration, SourceSpan span,
+                                       uint32_t* locations, uint32_t* builtins) {
+    if (decoration.location != UINT32_MAX) {
+      if (decoration.location >= 16 || decoration.builtin != BuiltinValue::None ||
+          stage == Stage::Compute || type.kind != TypeKind::F32 ||
+          (*locations & (1u << decoration.location))) {
+        Fail(ErrorCode::InvalidAttribute, span);
+        return;
+      }
+      *locations |= 1u << decoration.location;
+      return;
+    }
+    const uint32_t bit = 1u << uint32_t(decoration.builtin);
+    bool valid = false;
+    switch (decoration.builtin) {
+      case BuiltinValue::GlobalInvocationId:
+        valid = stage == Stage::Compute && input && type == Type{TypeKind::U32, 3};
+        break;
+      case BuiltinValue::VertexIndex:
+        valid = stage == Stage::Vertex && input && type == Type{TypeKind::U32};
+        break;
+      case BuiltinValue::Position:
+        valid = type == Type{TypeKind::F32, 4} &&
+                ((stage == Stage::Vertex && !input) || (stage == Stage::Fragment && input));
+        break;
+      case BuiltinValue::None: break;
+    }
+    if (!valid || (*builtins & bit)) Fail(ErrorCode::InvalidAttribute, span);
+    *builtins |= bit;
   }
 
   constexpr ArenaId AddSymbol(SymbolKind kind, Type type, Token name, bool mutableValue) {
@@ -1076,11 +1201,17 @@ private:
       hasDeclared = true;
       if (declared.kind == TypeKind::Array) Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
-    Expect(TokenKind::Assign);
-    const ExpressionInfo initializer = ParseExpression();
+    ExpressionInfo initializer;
+    if (mutableValue && hasDeclared && token_.kind == TokenKind::Semicolon) {
+      initializer = AddExpression(Expression{ExpressionKind::Zero, declared, name.span}, false,
+                                  kInvalidArenaId, std::numeric_limits<int32_t>::max());
+    } else {
+      Expect(TokenKind::Assign);
+      initializer = ParseExpression();
+    }
     if (semicolon) Expect(TokenKind::Semicolon);
     if (!hasDeclared) declared = ExpressionAt(initializer.id).type;
-    if (!declared.isNumeric() && declared.kind != TypeKind::Bool) {
+    if (!IsValueType(declared)) {
       Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
     if (initializer.id != kInvalidArenaId && declared != ExpressionAt(initializer.id).type) {
@@ -1441,6 +1572,8 @@ private:
     const ArenaId symbol = ResolveSymbol(name);
     if (symbol == kInvalidArenaId) return ErrorExpression(name.span);
     const Symbol& resolved = SymbolAt(symbol);
+    if (resolved.kind == SymbolKind::Binding && currentFunctionId_ < module_.functionCount)
+      module_.functions[currentFunctionId_].resourceMask |= 1u << resolved.bindingId;
     return AddExpression(
         Expression{ExpressionKind::Symbol,
                    resolved.type,
@@ -1533,6 +1666,7 @@ private:
           valid = SymbolAt(function.firstParameter + j).type == ExpressionAt(arguments[j].id).type;
         }
         if (!valid) Fail(ErrorCode::InvalidCall, name.span);
+        module_.functions[currentFunctionId_].resourceMask |= function.resourceMask;
         return AddExpression(Expression{ExpressionKind::FunctionCall, function.returnType,
                                         SourceSpan{name.span.begin, end.end}, operands, count, i},
                              false, kInvalidArenaId, std::numeric_limits<int32_t>::max());

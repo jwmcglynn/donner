@@ -47,6 +47,7 @@
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
+#include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -216,6 +217,11 @@ TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
 }
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
   ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
+}
+
+TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::GraphicsShader().spirv,
+                                 "compiled_graphics.spv");
 }
 
 TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {

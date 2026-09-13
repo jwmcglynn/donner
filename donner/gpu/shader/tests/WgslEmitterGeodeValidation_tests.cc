@@ -1189,7 +1189,7 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
           auto actual = RunInputOutputUniformProgram(
               device->device(), device->queue(), wgsl, source, kOffsetExtent, kOffsetExtent,
               std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-              shader.workgroupSize[0]);
+              shader.entryPoints.front().workgroupSize[0]);
           ASSERT_THAT(actual, testing::SizeIs(source.size()));
           auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kOffsetExtent, kOffsetExtent);
           ASSERT_THAT(pixels.has_value(), testing::IsTrue());

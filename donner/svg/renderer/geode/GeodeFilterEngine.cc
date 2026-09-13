@@ -1192,10 +1192,13 @@ RuntimeComputeProgram CreateReflectedFilterProgram(gpu::Device& runtime,
   const auto* input = shader.resource("inputTexture");
   const auto* output = shader.resource("outputTexture");
   const auto* params = shader.resource("params");
-  if (!input || !output || !params || shader.workgroupSize[2] != 1) return {};
+  if (!input || !output || !params || shader.entryPoints.size() != 1 ||
+      shader.entryPoints.front().stage != gpu::ShaderStage::Compute ||
+      shader.entryPoints.front().workgroupSize[2] != 1)
+    return {};
   RuntimeComputeProgram result = CreateRuntimeComputeProgram(
       runtime, gpu::shader::MakeShaderDescriptor(shader, runtime.shaderSourceKind(), label),
-      gpu::shader::MakeComputeBindingLayout(shader));
+      gpu::shader::MakeBindingLayout(shader));
   result.inputOutputParameterBindings = {input->binding, output->binding, params->binding};
   result.useReflectedInputOutputMetadata = true;
   return result;

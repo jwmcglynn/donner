@@ -50,6 +50,30 @@ struct ShaderResource {
   TextureFormat storageFormat = TextureFormat::RGBA32Float;
 };
 
+/// Builtin reflected by an entry-point interface.
+enum class ShaderBuiltin : uint8_t { None, GlobalInvocationId, VertexIndex, Position };
+
+/// A flattened scalar/vector entry-point input or output.
+struct ShaderInterfaceVariable {
+  ShaderName name;
+  ShaderScalarType scalarType = ShaderScalarType::F32;
+  uint8_t lanes = 1;
+  ShaderBuiltin builtin = ShaderBuiltin::None;
+  uint32_t location = UINT32_MAX;
+};
+
+/// One entry point and its source-derived interface ranges.
+struct ShaderEntryPoint {
+  ShaderName name;
+  ShaderStage stage = ShaderStage::None;              //!< Exactly one shader stage.
+  std::array<uint32_t, 3> workgroupSize = {1, 1, 1};  //!< Compute workgroup dimensions only.
+  uint32_t firstInput = 0;    //!< First input in the artifact interface-variable array.
+  uint32_t inputCount = 0;    //!< Number of flattened inputs.
+  uint32_t firstOutput = 0;   //!< First output in the artifact interface-variable array.
+  uint32_t outputCount = 0;   //!< Number of flattened outputs.
+  uint32_t resourceMask = 0;  //!< Bit i identifies an accessed resource in the artifact.
+};
+
 /// Borrowed views into a shader artifact with static storage in the owning program.
 struct CompiledShaderView {
   std::string_view wgsl;
@@ -57,8 +81,8 @@ struct CompiledShaderView {
   std::span<const uint32_t> spirv;
   std::span<const ShaderResource> resources;
   std::span<const ShaderBufferMember> members;
-  ShaderName entryPoint;
-  std::array<uint32_t, 3> workgroupSize = {1, 1, 1};
+  std::span<const ShaderEntryPoint> entryPoints;
+  std::span<const ShaderInterfaceVariable> interfaceVariables;
 
   /// Finds a resource by its authored WGSL name; the result borrows this view's artifact.
   /// @param name Authored resource name.
@@ -100,8 +124,8 @@ struct CompiledShaderView {
 ShaderModuleDescriptor MakeShaderDescriptor(const CompiledShaderView& shader, ShaderSourceKind kind,
                                             std::string_view label);
 
-/// Derives a group-zero compute layout from the same resource metadata as the source.
+/// Derives a group-zero layout and stage visibility from statically accessed resources.
 /// @param shader Static artifact views.
-std::vector<BindGroupLayoutEntry> MakeComputeBindingLayout(const CompiledShaderView& shader);
+std::vector<BindGroupLayoutEntry> MakeBindingLayout(const CompiledShaderView& shader);
 
 }  // namespace donner::gpu::shader

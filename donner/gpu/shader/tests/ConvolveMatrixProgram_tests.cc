@@ -72,10 +72,13 @@ TEST(ConvolveMatrixProgramTests, GeneratedDescriptorsPreserveTheTypedInterface) 
     EXPECT_EQ(descriptor.sourceText.empty(), kind == ShaderSourceKind::Spirv);
     EXPECT_EQ(descriptor.spirvWords.empty(), kind != ShaderSourceKind::Spirv);
     ASSERT_EQ(descriptor.computeEntryPoints.size(), 1u);
-    EXPECT_EQ(descriptor.computeEntryPoints.front().name, shader.entryPoint.view());
-    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.x, shader.workgroupSize[0]);
-    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.y, shader.workgroupSize[1]);
-    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.z, shader.workgroupSize[2]);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().name, shader.entryPoints.front().name.view());
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.x,
+              shader.entryPoints.front().workgroupSize[0]);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.y,
+              shader.entryPoints.front().workgroupSize[1]);
+    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.z,
+              shader.entryPoints.front().workgroupSize[2]);
   }
 }
 

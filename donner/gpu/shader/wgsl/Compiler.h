@@ -28,15 +28,16 @@ struct SourceText {
 };
 
 /// Exact-sized owned shader bytes and the interface derived from them.
-template <size_t WgslBytes, size_t MslBytes, size_t SpirvWords, size_t Resources, size_t Members>
+template <size_t WgslBytes, size_t MslBytes, size_t SpirvWords, size_t Resources, size_t Members,
+          size_t Entries, size_t InterfaceVariables>
 struct CompiledShader {
   std::array<char, WgslBytes> wgsl{};
   std::array<char, MslBytes> msl{};
   std::array<uint32_t, SpirvWords> spirv{};
   std::array<ShaderResource, Resources> resources{};
   std::array<ShaderBufferMember, Members> members{};
-  ShaderName entryPoint;
-  std::array<uint32_t, 3> workgroupSize{};
+  std::array<ShaderEntryPoint, Entries> entryPoints{};
+  std::array<ShaderInterfaceVariable, InterfaceVariables> interfaceVariables{};
 
   /// Borrows views from this artifact. Keep the artifact alive while the views are in use.
   constexpr CompiledShaderView view() const& UTILS_LIFETIME_BOUND {
@@ -45,8 +46,8 @@ struct CompiledShader {
             spirv,
             resources,
             members,
-            entryPoint,
-            workgroupSize};
+            entryPoints,
+            interfaceVariables};
   }
   CompiledShaderView view() const&& = delete;
 };
@@ -92,6 +93,8 @@ constexpr bool FitsNames(const Module& module) {
     if (module.structMembers[i].name.length > 64) return false;
   for (uint16_t i = 0; i < module.functionCount; ++i)
     if (module.functions[i].name.length > 64) return false;
+  for (uint16_t i = 0; i < module.interfaceVariableCount; ++i)
+    if (module.interfaceVariables[i].name.length > 64) return false;
   return true;
 }
 
@@ -103,10 +106,10 @@ constexpr ShaderName Name(std::string_view text) {
   return result;
 }
 
-constexpr uint16_t ComputeEntryCount(const Module& module) {
+constexpr uint16_t EntryCount(const Module& module) {
   uint16_t count = 0;
   for (uint16_t i = 0; i < module.functionCount; ++i)
-    if (module.functions[i].stage == Stage::Compute) ++count;
+    if (module.functions[i].stage != Stage::None) ++count;
   return count;
 }
 
@@ -124,8 +127,8 @@ consteval auto Compile() {
                                           parsed.diagnostic.span.end>());
   static_assert(parsed.hasResult(),
                 "WGSL parsing or validation failed; inspect diagnostic code and span");
-  static_assert(compiler_detail::ComputeEntryCount(parsed.module) == 1,
-                "The compiled artifact requires exactly one compute entry point");
+  static_assert(compiler_detail::EntryCount(parsed.module) > 0,
+                "The compiled artifact requires at least one entry point");
   static_assert(compiler_detail::FitsNames(parsed.module),
                 "WGSL interface name exceeds artifact limit");
   constexpr auto emitted = compiler_detail::Emit<Target>(parsed.module);
@@ -134,7 +137,8 @@ consteval auto Compile() {
   constexpr size_t wgslBytes =
       (uint8_t(Target) & uint8_t(Projection::Wgsl)) ? Source.view().size() : 0;
   CompiledShader<wgslBytes, emitted.mslSize, emitted.spirvSize, parsed.module.bindingCount,
-                 parsed.module.structMemberCount>
+                 parsed.module.structMemberCount, compiler_detail::EntryCount(parsed.module),
+                 parsed.module.interfaceVariableCount>
       result;
   for (size_t i = 0; i < wgslBytes; ++i) result.wgsl[i] = Source.bytes[i];
   for (size_t i = 0; i < emitted.mslSize; ++i) result.msl[i] = emitted.msl[i];
@@ -174,11 +178,35 @@ consteval auto Compile() {
       resource.memberCount = structure.memberCount;
     }
   }
-  for (const Function& function : parsed.module.functions) {
-    if (function.stage == Stage::Compute) {
-      result.entryPoint = compiler_detail::Name(parsed.module.name(function.name));
-      result.workgroupSize = function.workgroupSize;
-    }
+  size_t entryIndex = 0;
+  for (uint16_t i = 0; i < parsed.module.functionCount; ++i) {
+    const Function& function = parsed.module.functions[i];
+    if (function.stage == Stage::None) continue;
+    result.entryPoints[entryIndex++] = {compiler_detail::Name(parsed.module.name(function.name)),
+                                        function.stage == Stage::Compute  ? ShaderStage::Compute
+                                        : function.stage == Stage::Vertex ? ShaderStage::Vertex
+                                                                          : ShaderStage::Fragment,
+                                        function.workgroupSize,
+                                        function.firstInput,
+                                        function.inputCount,
+                                        function.firstOutput,
+                                        function.outputCount,
+                                        function.resourceMask};
+  }
+  for (uint16_t i = 0; i < parsed.module.interfaceVariableCount; ++i) {
+    const InterfaceVariable& variable = parsed.module.interfaceVariables[i];
+    result.interfaceVariables[i] = {
+        compiler_detail::Name(parsed.module.name(variable.name)),
+        variable.type.kind == TypeKind::F32   ? ShaderScalarType::F32
+        : variable.type.kind == TypeKind::I32 ? ShaderScalarType::I32
+                                              : ShaderScalarType::U32,
+        variable.type.lanes,
+        variable.decoration.builtin == BuiltinValue::GlobalInvocationId
+            ? ShaderBuiltin::GlobalInvocationId
+        : variable.decoration.builtin == BuiltinValue::VertexIndex ? ShaderBuiltin::VertexIndex
+        : variable.decoration.builtin == BuiltinValue::Position    ? ShaderBuiltin::Position
+                                                                   : ShaderBuiltin::None,
+        variable.decoration.location};
   }
   return result;
 }

@@ -111,6 +111,50 @@
         "BlurParams"
       ]
     },
+    "donner/gpu/shader/wgsl/tests/GraphicsSource.h#inline0": {
+      "bindings": [],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "if",
+        "return",
+        "var"
+      ],
+      "structs": [
+        "Varyings"
+      ]
+    },
+    "donner/gpu/shader/wgsl/tests/Graphics_tests.cc#source": {
+      "bindings": [],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "compute_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1"
+          ]
+        }
+      ],
+      "features": [],
+      "structs": [
+        "Input"
+      ]
+    },
     "donner/gpu/shader/wgsl/tests/corpus/compute.wgsl": {
       "bindings": [
         {
@@ -157,6 +201,31 @@
       ],
       "structs": [
         "Parameters"
+      ]
+    },
+    "donner/gpu/shader/wgsl/tests/corpus/graphics_entries.wgsl": {
+      "bindings": [],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "if",
+        "return",
+        "var"
+      ],
+      "structs": [
+        "Varyings"
       ]
     },
     "donner/gpu/shader/wgsl/tests/corpus/invalid_layout.wgsl": {

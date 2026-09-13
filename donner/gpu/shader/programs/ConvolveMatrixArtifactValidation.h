@@ -21,7 +21,10 @@ consteval bool ValidateConvolveMatrixArtifact() {
   static_assert(output->type == BindingType::WriteOnlyStorageTexture2d);
   static_assert(params->minSizeBytes == sizeof(ConvolveMatrixParams));
   static_assert(params->alignmentBytes == alignof(ConvolveMatrixParams));
-  static_assert(shader.workgroupSize[2] == 1);
+  static_assert(
+      shader.entryPoints.size() == 1 && shader.entryPoints.front().stage == ShaderStage::Compute,
+      "The filter artifact requires exactly one compute entry");
+  static_assert(shader.entryPoints.front().workgroupSize[2] == 1);
   static_assert(shader.matchesMember("params", "orderX", offsetof(ConvolveMatrixParams, orderX),
                                      sizeof(ConvolveMatrixParams::orderX), ShaderScalarType::I32));
   static_assert(shader.matchesMember("params", "orderY", offsetof(ConvolveMatrixParams, orderY),

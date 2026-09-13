@@ -23,7 +23,10 @@ consteval bool ValidateGaussianBlurArtifact() {
   static_assert(params->type == BindingType::UniformBuffer);
   static_assert(params->minSizeBytes == sizeof(GaussianBlurParams));
   static_assert(params->alignmentBytes == alignof(GaussianBlurParams));
-  static_assert(shader.workgroupSize[2] == 1);
+  static_assert(
+      shader.entryPoints.size() == 1 && shader.entryPoints.front().stage == ShaderStage::Compute,
+      "The filter artifact requires exactly one compute entry");
+  static_assert(shader.entryPoints.front().workgroupSize[2] == 1);
   static_assert(
       shader.matchesMember("params", "stdDeviation", offsetof(GaussianBlurParams, stdDeviation),
                            sizeof(GaussianBlurParams::stdDeviation), ShaderScalarType::F32));

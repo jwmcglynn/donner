@@ -19,8 +19,8 @@ TEST(GaussianBlurProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
   EXPECT_FALSE(shader.wgsl.empty());
   EXPECT_FALSE(shader.msl.empty());
   EXPECT_FALSE(shader.spirv.empty());
-  EXPECT_EQ(shader.entryPoint.view(), "cs_main");
-  EXPECT_EQ(shader.workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
   ASSERT_NE(shader.resource("inputTexture"), nullptr);
   ASSERT_NE(shader.resource("outputTexture"), nullptr);
   ASSERT_NE(shader.resource("params"), nullptr);

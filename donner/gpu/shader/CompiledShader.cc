@@ -15,26 +15,36 @@ ShaderModuleDescriptor MakeShaderDescriptor(const CompiledShaderView& shader, Sh
       break;
   }
   if (result.sourceText.empty() && result.spirvWords.empty()) return result;
-  result.computeEntryPoints.push_back(
-      {RcString(shader.entryPoint.view()),
-       {shader.workgroupSize[0], shader.workgroupSize[1], shader.workgroupSize[2]}});
   result.bufferBindings.emplace();
-  for (const ShaderResource& resource : shader.resources) {
-    if (resource.type == BindingType::UniformBuffer ||
-        resource.type == BindingType::ReadOnlyStorageBuffer)
-      result.bufferBindings->push_back({RcString(shader.entryPoint.view()), ShaderStage::Compute,
-                                        resource.group, resource.binding, resource.type,
-                                        resource.minSizeBytes, 0});
+  for (const ShaderEntryPoint& entry : shader.entryPoints) {
+    if (entry.stage == ShaderStage::Compute)
+      result.computeEntryPoints.push_back(
+          {RcString(entry.name.view()),
+           {entry.workgroupSize[0], entry.workgroupSize[1], entry.workgroupSize[2]}});
+    for (size_t i = 0; i < shader.resources.size() && i < 32; ++i) {
+      if ((entry.resourceMask & (1u << i)) == 0) continue;
+      const ShaderResource& resource = shader.resources[i];
+      if (resource.type == BindingType::UniformBuffer ||
+          resource.type == BindingType::ReadOnlyStorageBuffer)
+        result.bufferBindings->push_back({RcString(entry.name.view()), entry.stage, resource.group,
+                                          resource.binding, resource.type, resource.minSizeBytes,
+                                          0});
+    }
   }
   return result;
 }
 
-std::vector<BindGroupLayoutEntry> MakeComputeBindingLayout(const CompiledShaderView& shader) {
+std::vector<BindGroupLayoutEntry> MakeBindingLayout(const CompiledShaderView& shader) {
   std::vector<BindGroupLayoutEntry> result;
   result.reserve(shader.resources.size());
-  for (const ShaderResource& resource : shader.resources)
-    result.push_back(
-        {resource.binding, ShaderStage::Compute, resource.type, resource.storageFormat});
+  for (size_t i = 0; i < shader.resources.size() && i < 32; ++i) {
+    ShaderStage stages = ShaderStage::None;
+    for (const ShaderEntryPoint& entry : shader.entryPoints)
+      if ((entry.resourceMask & (1u << i)) != 0) stages |= entry.stage;
+    if (stages == ShaderStage::None) continue;
+    const ShaderResource& resource = shader.resources[i];
+    result.push_back({resource.binding, stages, resource.type, resource.storageFormat});
+  }
   return result;
 }
 

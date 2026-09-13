@@ -453,6 +453,7 @@ donner_cc_test(
         ":programs",
         ":shader",
         ":stage_io_test_modules",
+        "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -480,6 +481,7 @@ donner_cc_test(
         ":spirv_emitter",
         ":stage_io_test_modules",
         "//donner/base:base_test_utils",
+        "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
     ],
 )

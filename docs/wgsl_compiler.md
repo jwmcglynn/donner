@@ -1,4 +1,4 @@
-# WGSL compute shader compilation {#WgslCompiler}
+# WGSL shader compilation {#WgslCompiler}
 
 Gaussian/box blur and matrix convolution are authored as inline WGSL in
 `donner/gpu/shader/programs/GaussianBlurSource.h` and `ConvolveMatrixSource.h`. The C++20 compiler
@@ -43,7 +43,7 @@ Native GPU tools still perform their normal final compilation.
 ## Reflected host interface
 
 `MakeShaderDescriptor` selects precompiled bytes for the device and supplies compute-entry and
-buffer-range metadata. `MakeComputeBindingLayout` derives layout entries from the same resource
+buffer-range metadata. `MakeBindingLayout` derives layout entries and stage visibility from the same resource
 records. Gaussian and convolution dispatch resolve their input, output and parameter bindings by
 their authored names; changing a binding number changes the layout and resource entries together.
 
@@ -64,7 +64,7 @@ fixed `array<f32, N>` members of read-only storage structs, group-zero sampled/s
 numeric literals, scalar/vector expressions and conversions, local bindings, conditionals,
 incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
-textures; texture writes occur in the compute entry. Local declarations require initializers.
+textures; texture writes occur in the compute entry. Mutable local declarations may omit an initializer and receive a zero value; immutable declarations require one.
 Unsupported language constructs fail explicitly. Fixed arrays have 1 through 256 elements; uniform,
 local, parameter, return and nested arrays are outside this profile. Constant out-of-range indices
 fail compilation. Native dynamic indices are clamped before memory access; authored convolution
@@ -83,6 +83,27 @@ box-extent bounds. Shader compilation does not make arbitrary GPU execution safe
 MSL/SPIR-V lowering preserves short-circuit operators, protects texture accesses, and handles
 defined integer division/remainder and numeric conversion edges. No general optimizer runs in the
 frontend. Backend compilers retain responsibility for final target code generation.
+
+## Graphics entry interfaces
+
+Artifacts contain an entry-point array with stage, workgroup dimensions, accessed-resource bits,
+and ranges into a flattened input/output array. Function resource use includes called helpers.
+Runtime descriptors add compute metadata only for Compute entries, and buffer requirements carry
+the actual entry name and stage. The blur and convolution consumers explicitly require one Compute
+entry before reading dispatch metadata.
+
+Vertex and fragment entries accept direct scalar/vector interfaces or flat numeric IO structures.
+The supported builtins are vertex index, vertex-output/fragment-input position and compute global
+invocation ID. User locations currently support f32 scalars/vectors with default interpolation;
+integer interpolation and structured compute inputs remain explicitly unsupported. Duplicate
+locations/builtins, missing decorations, invalid stage/type combinations and vertex entries without
+position are rejected. Flat structure values may be passed to and returned from helpers.
+
+MSL projects entry interfaces through stage-specific wrappers over ordinary value structures.
+SPIR-V declares stage IO variables and reconstructs parameters and return values from the same
+validated interface records. A shared full-screen triangle fixture verifies the two-entry artifact,
+reflection, ordinary/constant-evaluation agreement and offline native compilation. Production Slug
+migration and its additional language features remain separate qualification work.
 
 ## Validation
 

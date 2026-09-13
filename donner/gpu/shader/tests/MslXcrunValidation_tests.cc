@@ -46,6 +46,7 @@
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
+#include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -186,6 +187,11 @@ TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");
+}
+
+TEST(MslXcrunValidation, CompiledGraphicsEntriesPassMetalCompilation) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(wgsl::tests::GraphicsShader().msl, "compiled_graphics");
 }
 
 TEST(MslXcrunValidation, EmittedConvolveMatrixCompilesWithMetalCompiler) {

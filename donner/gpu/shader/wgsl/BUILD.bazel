@@ -48,15 +48,38 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "graphics_test_source",
+    testonly = True,
+    hdrs = ["tests/GraphicsSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiler"],
+)
+
+donner_cc_library(
+    name = "graphics_test_artifact",
+    testonly = True,
+    srcs = ["tests/GraphicsArtifact.cc"],
+    hdrs = ["tests/GraphicsArtifact.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":graphics_test_source",
+        "//donner/gpu/shader:compiled_shader",
+    ],
+)
+
 donner_cc_test(
     name = "wgsl_tests",
     srcs = [
         "tests/Compiler_tests.cc",
+        "tests/Graphics_tests.cc",
         "tests/Parser_tests.cc",
         "tests/TextEmitter_tests.cc",
     ],
     deps = [
         ":compiler",
+        ":graphics_test_artifact",
+        ":graphics_test_source",
         "//donner/gpu/shader:gaussian_blur_artifact",
         "//donner/gpu/shader:gaussian_blur_source",
         "@com_google_gtest//:gtest_main",

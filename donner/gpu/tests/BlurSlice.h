@@ -42,6 +42,8 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   uint32_t uniformBinding = 2;
   WorkgroupSize workgroupSize{8, 8, 1};
   if (shaderMetadata != nullptr) {
+    ASSERT_THAT(shaderMetadata->entryPoints, testing::SizeIs(1));
+    ASSERT_EQ(shaderMetadata->entryPoints.front().stage, ShaderStage::Compute);
     const shader::ShaderResource* input = shaderMetadata->resource("inputTexture");
     const shader::ShaderResource* output = shaderMetadata->resource("outputTexture");
     const shader::ShaderResource* uniform = shaderMetadata->resource("params");
@@ -54,8 +56,9 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
     inputBinding = input->binding;
     outputBinding = output->binding;
     uniformBinding = uniform->binding;
-    workgroupSize = {shaderMetadata->workgroupSize[0], shaderMetadata->workgroupSize[1],
-                     shaderMetadata->workgroupSize[2]};
+    workgroupSize = {shaderMetadata->entryPoints.front().workgroupSize[0],
+                     shaderMetadata->entryPoints.front().workgroupSize[1],
+                     shaderMetadata->entryPoints.front().workgroupSize[2]};
   }
   auto shader = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shader, HasResult());

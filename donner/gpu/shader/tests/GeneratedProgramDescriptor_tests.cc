@@ -32,17 +32,19 @@ TEST_P(GeneratedProgramDescriptorTests, PreservesSourceAndCompleteInterface) {
     ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
     ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(1));
     const auto& binding = descriptor.bufferBindings->front();
-    EXPECT_THAT(binding.entryPoint, testing::Eq(shader.entryPoint.view()));
+    EXPECT_THAT(binding.entryPoint, testing::Eq(shader.entryPoints.front().name.view()));
     EXPECT_THAT(binding.stage, testing::Eq(ShaderStage::Compute));
     EXPECT_THAT(binding.group, testing::Eq(0));
     EXPECT_THAT(binding.binding, testing::Eq(shader.resource("params")->binding));
     EXPECT_THAT(binding.type, testing::Eq(shader.resource("params")->type));
     EXPECT_THAT(binding.minSizeBytes, testing::Eq(shader.resource("params")->minSizeBytes));
     ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
-    EXPECT_THAT(descriptor.computeEntryPoints.front().name, testing::Eq(shader.entryPoint.view()));
+    EXPECT_THAT(descriptor.computeEntryPoints.front().name,
+                testing::Eq(shader.entryPoints.front().name.view()));
     EXPECT_THAT(descriptor.computeEntryPoints.front().workgroupSize,
-                testing::Eq((gpu::WorkgroupSize{shader.workgroupSize[0], shader.workgroupSize[1],
-                                                shader.workgroupSize[2]})));
+                testing::Eq((gpu::WorkgroupSize{shader.entryPoints.front().workgroupSize[0],
+                                                shader.entryPoints.front().workgroupSize[1],
+                                                shader.entryPoints.front().workgroupSize[2]})));
     return;
   }
   const auto module = GetParam().buildModule();

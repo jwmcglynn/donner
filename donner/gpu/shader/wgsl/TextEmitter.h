@@ -107,6 +107,10 @@ public:
       emitFunction(index);
       newline();
     }
+    for (uint16_t index = 0; index < module_.functionCount; ++index) {
+      const Stage stage = module_.functions[index].stage;
+      if (stage == Stage::Vertex || stage == Stage::Fragment) emitGraphicsWrapper(index);
+    }
     return finish();
   }
 
@@ -275,6 +279,10 @@ private:
       return;
     }
     const Struct& structure = module_.structs[structId];
+    bool buffer = false;
+    for (uint16_t i = 0; i < module_.bindingCount; ++i)
+      buffer |= module_.bindings[i].type.kind == TypeKind::Struct &&
+                module_.bindings[i].type.structId == structId;
     if (!validId(structure.firstMember, module_.structMemberCount) ||
         structure.memberCount > module_.structMemberCount - structure.firstMember) {
       error_ = TextEmitError::InvalidArenaReference;
@@ -290,12 +298,13 @@ private:
       const StructMember& member = module_.structMembers[structure.firstMember + index];
       const uint32_t alignment = typeAlignment(member.type);
       const uint32_t size = typeSize(member.type);
-      if (alignment == 0 || size == 0 || member.alignment != alignment || member.size != size) {
+      if (alignment == 0 || size == 0 ||
+          (buffer && (member.alignment != alignment || member.size != size))) {
         error_ = TextEmitError::UniformLayoutMismatch;
         return;
       }
       offset = ((offset + alignment - 1) / alignment) * alignment;
-      if (member.offset != offset) {
+      if (buffer && member.offset != offset) {
         error_ = TextEmitError::UniformLayoutMismatch;
         return;
       }
@@ -308,7 +317,7 @@ private:
     }
     const uint32_t naturalSize =
         ((offset + maximumAlignment - 1) / maximumAlignment) * maximumAlignment;
-    if (structure.alignment != maximumAlignment || structure.size != naturalSize) {
+    if (buffer && (structure.alignment != maximumAlignment || structure.size != naturalSize)) {
       error_ = TextEmitError::UniformLayoutMismatch;
       return;
     }
@@ -493,6 +502,10 @@ private:
     }
     const Expression& node = module_.expressions[id];
     switch (node.kind) {
+      case ExpressionKind::Zero:
+        type(node.type);
+        text("{}");
+        return;
       case ExpressionKind::Literal: emitLiteral(node); return;
       case ExpressionKind::Symbol: symbolName(static_cast<ArenaId>(node.payload)); return;
       case ExpressionKind::Unary: emitUnary(node); return;
@@ -982,6 +995,153 @@ private:
     }
   }
 
+  constexpr void ioTypeName(uint16_t functionId, bool input) {
+    text(input ? "donner_msl_input_" : "donner_msl_output_");
+    uintText(functionId);
+  }
+
+  constexpr void ioField(uint16_t variableId) {
+    text("donner_msl_io_");
+    uintText(variableId);
+  }
+
+  constexpr void ioAttribute(const InterfaceVariable& variable, Stage stage, bool input) {
+    if (variable.decoration.builtin == BuiltinValue::Position) {
+      text(" [[position]]");
+    } else if (variable.decoration.location != UINT32_MAX) {
+      text(stage == Stage::Vertex && input      ? " [[attribute("
+           : stage == Stage::Fragment && !input ? " [[color("
+                                                : " [[user(locn");
+      uintText(variable.decoration.location);
+      text(")]]");
+    } else {
+      error_ = TextEmitError::InvalidModule;
+    }
+  }
+
+  constexpr bool validIoRange(uint16_t first, uint16_t count) {
+    if (first > module_.interfaceVariableCount || count > module_.interfaceVariableCount - first) {
+      error_ = TextEmitError::InvalidArenaReference;
+      return false;
+    }
+    return true;
+  }
+
+  constexpr uint16_t emitIoStruct(uint16_t functionId, bool input) {
+    const Function& function = module_.functions[functionId];
+    const uint16_t first = input ? function.firstInput : function.firstOutput;
+    const uint16_t count = input ? function.inputCount : function.outputCount;
+    if (!validIoRange(first, count)) return 0;
+    uint16_t fields = 0;
+    for (uint16_t i = first; i < first + count; ++i)
+      fields += module_.interfaceVariables[i].decoration.builtin != BuiltinValue::VertexIndex;
+    if (fields == 0) return 0;
+    text("struct ");
+    ioTypeName(functionId, input);
+    text(" {\n");
+    for (uint16_t i = first; i < first + count; ++i) {
+      const InterfaceVariable& variable = module_.interfaceVariables[i];
+      if (variable.decoration.builtin == BuiltinValue::VertexIndex) continue;
+      text("  ");
+      type(variable.type);
+      character(' ');
+      ioField(i);
+      ioAttribute(variable, function.stage, input);
+      text(";\n");
+    }
+    text("};\n");
+    return fields;
+  }
+
+  constexpr void emitIoInput(uint16_t variableId) {
+    if (module_.interfaceVariables[variableId].decoration.builtin == BuiltinValue::VertexIndex) {
+      text("donner_msl_vertex_index");
+    } else {
+      text("donner_msl_inputs.");
+      ioField(variableId);
+    }
+  }
+
+  constexpr void emitGraphicsArguments(const Function& function) {
+    forwardingParameters();
+    for (uint16_t parameter = 0; parameter < function.parameterCount; ++parameter) {
+      if (parameter != 0 || module_.bindingCount != 0) text(", ");
+      const ArenaId symbolId = function.firstParameter + parameter;
+      const Symbol& symbol = module_.symbols[symbolId];
+      const bool structure = symbol.type.kind == TypeKind::Struct;
+      if (structure) {
+        type(symbol.type);
+        character('{');
+      }
+      uint16_t count = 0;
+      for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
+        if (module_.interfaceVariables[i].symbol != symbolId) continue;
+        if (count++ != 0) text(", ");
+        emitIoInput(i);
+      }
+      if (structure) character('}');
+    }
+  }
+
+  constexpr void emitGraphicsReturn(const Function& function, uint16_t functionId) {
+    if (function.outputCount == 0) return;
+    text("  return ");
+    ioTypeName(functionId, false);
+    character('{');
+    for (uint16_t i = 0; i < function.outputCount; ++i) {
+      if (i != 0) text(", ");
+      text("donner_msl_result");
+      const InterfaceVariable& variable = module_.interfaceVariables[function.firstOutput + i];
+      if (variable.member != kInvalidArenaId) {
+        character('.');
+        prefixed("donner_msl_member_", variable.name);
+      }
+    }
+    text("};\n");
+  }
+
+  constexpr void emitGraphicsWrapper(uint16_t functionId) {
+    const Function& function = module_.functions[functionId];
+    const uint16_t inputFields = emitIoStruct(functionId, true);
+    const uint16_t outputFields = emitIoStruct(functionId, false);
+    if (error_ != TextEmitError::None) return;
+    const auto name = module_.name(function.name);
+    if (!validName(name) || reservedEntryName(name) || name.starts_with("donner_msl_")) {
+      error_ = TextEmitError::UnsupportedEntryPointName;
+      return;
+    }
+    text(function.stage == Stage::Vertex ? "vertex " : "fragment ");
+    if (outputFields != 0)
+      ioTypeName(functionId, false);
+    else
+      text("void");
+    character(' ');
+    text(name);
+    character('(');
+    resourceParameters(true);
+    bool comma = module_.bindingCount != 0;
+    if (inputFields != 0) {
+      if (comma) text(", ");
+      ioTypeName(functionId, true);
+      text(" donner_msl_inputs [[stage_in]]");
+      comma = true;
+    }
+    for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
+      if (module_.interfaceVariables[i].decoration.builtin != BuiltinValue::VertexIndex) continue;
+      if (comma) text(", ");
+      text("uint donner_msl_vertex_index [[vertex_id]]");
+      comma = true;
+    }
+    text(") {\n  ");
+    if (outputFields != 0) text("const auto donner_msl_result = ");
+    prefixed("donner_msl_function_", function.name);
+    character('(');
+    emitGraphicsArguments(function);
+    text(");\n");
+    emitGraphicsReturn(function, functionId);
+    text("}\n\n");
+  }
+
   constexpr void emitFunction(uint16_t functionId) {
     if (error_ != TextEmitError::None) return;
     if (functionId >= module_.functionCount) {
@@ -990,7 +1150,8 @@ private:
     }
     const Function& function = module_.functions[functionId];
     const bool entry = function.stage == Stage::Compute;
-    if (function.stage != Stage::None && !entry) {
+    if (function.stage != Stage::None && !entry && function.stage != Stage::Vertex &&
+        function.stage != Stage::Fragment) {
       error_ = TextEmitError::InvalidModule;
       return;
     }
@@ -1035,8 +1196,8 @@ private:
       }
       if (module_.bindingCount != 0 || index != 0) text(", ");
       const Symbol& symbol = module_.symbols[symbolId];
-      if ((entry && symbol.builtin != BuiltinInput::GlobalInvocationId) ||
-          (!entry && symbol.builtin != BuiltinInput::None)) {
+      if ((entry && symbol.builtin != BuiltinValue::GlobalInvocationId) ||
+          (function.stage == Stage::None && symbol.builtin != BuiltinValue::None)) {
         error_ = TextEmitError::InvalidModule;
         return;
       }

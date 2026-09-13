@@ -69,15 +69,33 @@ struct Type {
   }
 };
 
+/// Builtin value supported by a shader entry interface.
+enum class BuiltinValue : uint8_t {
+  None,
+  GlobalInvocationId,
+  VertexIndex,
+  Position,
+};
+
+/// A scalar/vector leaf in an entry-point interface.
+struct InterfaceDecoration {
+  BuiltinValue builtin = BuiltinValue::None;
+  uint32_t location = UINT32_MAX;
+
+  /// Returns whether this value is decorated as shader IO.
+  constexpr bool present() const { return builtin != BuiltinValue::None || location != UINT32_MAX; }
+};
+
 /// Storage layout of one structure member.
 struct StructMember {
-  NameRef name;              //!< Module-owned member name.
-  SourceSpan nameSpan;       //!< Name location in the source.
-  Type type;                 //!< Resolved member type.
-  uint32_t offset = 0;       //!< Uniform-buffer byte offset.
-  uint32_t alignment = 1;    //!< Uniform-buffer byte alignment.
-  uint32_t size = 0;         //!< Uniform-buffer byte size.
-  uint32_t arrayStride = 0;  //!< Storage-array byte stride, zero for non-arrays.
+  NameRef name;                   //!< Module-owned member name.
+  SourceSpan nameSpan;            //!< Name location in the source.
+  Type type;                      //!< Resolved member type.
+  uint32_t offset = 0;            //!< Uniform-buffer byte offset.
+  uint32_t alignment = 1;         //!< Uniform-buffer byte alignment.
+  uint32_t size = 0;              //!< Uniform-buffer byte size.
+  uint32_t arrayStride = 0;       //!< Storage-array byte stride, zero for non-arrays.
+  InterfaceDecoration interface;  //!< Entry-point decoration, when this is an IO structure.
 };
 
 /// One declared structure and its computed uniform layout.
@@ -117,12 +135,6 @@ enum class SymbolKind : uint8_t {
   Var,        //!< A mutable local variable.
 };
 
-/// Builtin decoration supported on an entry-point parameter.
-enum class BuiltinInput : uint8_t {
-  None,                //!< An ordinary parameter.
-  GlobalInvocationId,  //!< `@builtin(global_invocation_id)`.
-};
-
 /// One resolved identifier declaration.
 struct Symbol {
   SymbolKind kind = SymbolKind::Let;          //!< Declaration category.
@@ -131,7 +143,8 @@ struct Symbol {
   SourceSpan nameSpan;                        //!< Name location in the source.
   bool mutableValue = false;                  //!< True only for a `var` declaration.
   ArenaId bindingId = kInvalidArenaId;        //!< Binding arena item for Binding symbols.
-  BuiltinInput builtin = BuiltinInput::None;  //!< Entry-point parameter decoration.
+  BuiltinValue builtin = BuiltinValue::None;  //!< Entry-point parameter builtin.
+  uint32_t location = UINT32_MAX;             //!< Entry-point parameter location, if present.
 };
 
 /// Unary operator represented by Expression::payload.
@@ -172,6 +185,7 @@ enum class Builtin : uint8_t {
 
 /// Kind of a typed expression node.
 enum class ExpressionKind : uint8_t {
+  Zero,          //!< Zero initialization of a constructible value.
   Literal,       //!< A scalar literal; payload holds IEEE or integer bits.
   Symbol,        //!< A resolved Symbol; payload is its arena identifier.
   Unary,         //!< A UnaryOp and one operand.
@@ -223,8 +237,19 @@ struct Statement {
 
 /// Pipeline stage associated with a function.
 enum class Stage : uint8_t {
-  None,     //!< Helper function.
-  Compute,  //!< Compute entry point.
+  None,      //!< Helper function.
+  Compute,   //!< Compute entry point.
+  Vertex,    //!< Vertex entry point.
+  Fragment,  //!< Fragment entry point.
+};
+
+/// A flattened scalar/vector input or output of one entry point.
+struct InterfaceVariable {
+  NameRef name;
+  Type type;
+  InterfaceDecoration decoration;
+  ArenaId symbol = kInvalidArenaId;  //!< Parameter symbol, or invalid for a return value.
+  ArenaId member = kInvalidArenaId;  //!< Structure member, or invalid for a direct value.
 };
 
 /// One declared function.
@@ -237,6 +262,12 @@ struct Function {
   ArenaId firstStatement = kInvalidArenaId;           //!< First body statement.
   Stage stage = Stage::None;                          //!< Helper or compute entry point.
   std::array<uint32_t, 3> workgroupSize = {1, 1, 1};  //!< Compute workgroup dimensions.
+  InterfaceDecoration returnInterface;                //!< Direct return-value decoration.
+  uint32_t resourceMask = 0;  //!< Resources statically accessed, including called helpers.
+  uint16_t firstInput = 0;
+  uint16_t inputCount = 0;
+  uint16_t firstOutput = 0;
+  uint16_t outputCount = 0;
 };
 
 /// Fixed capacities for one frontend module.
@@ -253,6 +284,7 @@ struct ModuleLimits {
   static constexpr uint16_t kMaxStatements = 256;
   static constexpr uint16_t kMaxFunctions = 16;
   static constexpr uint16_t kMaxNesting = 16;
+  static constexpr uint16_t kMaxInterfaceVariables = 64;
 };
 
 /// A complete, immutable-on-success frontend module backed by fixed arenas.
@@ -289,6 +321,8 @@ struct Module {
   uint16_t statementCount = 0;
   std::array<Function, ModuleLimits::kMaxFunctions> functions = {};
   uint16_t functionCount = 0;
+  std::array<InterfaceVariable, ModuleLimits::kMaxInterfaceVariables> interfaceVariables = {};
+  uint16_t interfaceVariableCount = 0;
 };
 
 }  // namespace donner::gpu::shader::wgsl

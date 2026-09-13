@@ -114,7 +114,7 @@ public:
     if (!module_.isValid()) return {SpirvEmitError::InvalidModule, {}};
     for (ArenaId i = 0; i < module_.functionCount; ++i) functionIds_[i] = id();
     declareBindings();
-    declareBuiltinInputs();
+    declareInterfaces();
     for (ArenaId i = 0; i < module_.functionCount && result_.isSuccess(); ++i) emitFunction(i);
     if (!declarations_.valid || !annotations_.valid || !functions_.valid)
       fail(SpirvEmitError::Capacity);
@@ -154,13 +154,43 @@ private:
     }
   }
 
-  constexpr void declareBuiltinInputs() {
+  constexpr bool validIoRange(uint16_t first, uint16_t count) {
+    if (first > module_.interfaceVariableCount || count > module_.interfaceVariableCount - first) {
+      fail(SpirvEmitError::InvalidNode);
+      return false;
+    }
+    return true;
+  }
+
+  constexpr void declareInterfaceRange(uint16_t first, uint16_t count, Stage stage, bool input) {
+    if (!validIoRange(first, count)) return;
+    for (uint16_t i = first; i < first + count; ++i) {
+      const InterfaceVariable& variable = module_.interfaceVariables[i];
+      interfaceIds_[i] = id();
+      const uint32_t storage = input ? 1 : 3;
+      const uint32_t pointer = pointerType(typeId(variable.type), storage);
+      declarations_.instruction(59, pointer, interfaceIds_[i], storage);
+      if (variable.decoration.location != UINT32_MAX) {
+        annotations_.instruction(71, interfaceIds_[i], 30, variable.decoration.location);
+      } else {
+        uint32_t builtin = 0;
+        switch (variable.decoration.builtin) {
+          case BuiltinValue::GlobalInvocationId: builtin = 28; break;
+          case BuiltinValue::VertexIndex: builtin = 42; break;
+          case BuiltinValue::Position: builtin = stage == Stage::Fragment ? 15 : 0; break;
+          default: fail(SpirvEmitError::InvalidNode); return;
+        }
+        annotations_.instruction(71, interfaceIds_[i], 11, builtin);
+      }
+    }
+  }
+
+  constexpr void declareInterfaces() {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
-      if (module_.functions[i].stage != Stage::Compute) continue;
-      inputIds_[i] = id();
-      const uint32_t pointer = pointerType(typeId(Type{TypeKind::U32, 3}), 1);
-      declarations_.instruction(59, pointer, inputIds_[i], 1);
-      annotations_.instruction(71, inputIds_[i], 11, 28);
+      const Function& function = module_.functions[i];
+      if (function.stage == Stage::None) continue;
+      declareInterfaceRange(function.firstInput, function.inputCount, function.stage, true);
+      declareInterfaceRange(function.firstOutput, function.outputCount, function.stage, false);
     }
   }
 
@@ -183,21 +213,25 @@ private:
   constexpr void writeEntryPoints(SpirvSink& sink) {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       const Function& function = module_.functions[i];
-      if (function.stage != Stage::Compute) continue;
-      const auto name = module_.name(function.name);
-      sink.word(((5u + uint32_t(name.size() / 4)) << 16) | 15u);
-      sink.word(5);
-      sink.word(functionIds_[i]);
+      if (function.stage == Stage::None) continue;
       Words<64> encoded;
-      encoded.string(name);
+      encoded.string(module_.name(function.name));
       if (!encoded.valid) {
         fail(SpirvEmitError::Capacity);
         return;
       }
+      sink.word(((3u + encoded.size + function.inputCount + function.outputCount) << 16) | 15u);
+      sink.word(function.stage == Stage::Compute ? 5 : function.stage == Stage::Vertex ? 0 : 4);
+      sink.word(functionIds_[i]);
       for (uint32_t j = 0; j < encoded.size; ++j) sink.word(encoded.data[j]);
-      sink.word(inputIds_[i]);
-      writeInstruction(sink, 16, functionIds_[i], 17, function.workgroupSize[0],
-                       function.workgroupSize[1], function.workgroupSize[2]);
+      for (uint16_t j = 0; j < function.inputCount; ++j)
+        sink.word(interfaceIds_[function.firstInput + j]);
+      for (uint16_t j = 0; j < function.outputCount; ++j)
+        sink.word(interfaceIds_[function.firstOutput + j]);
+      if (function.stage == Stage::Compute)
+        writeInstruction(sink, 16, functionIds_[i], 17, function.workgroupSize[0],
+                         function.workgroupSize[1], function.workgroupSize[2]);
+      if (function.stage == Stage::Fragment) writeInstruction(sink, 16, functionIds_[i], 7);
     }
   }
 
@@ -267,7 +301,12 @@ private:
       annotations_.instruction(72, value, i, 35,
                                module_.structMembers[structure.firstMember + i].offset);
     }
-    annotations_.instruction(71, value, 2);
+    for (uint16_t i = 0; i < module_.bindingCount; ++i) {
+      if (module_.bindings[i].type == type) {
+        annotations_.instruction(71, value, 2);
+        break;
+      }
+    }
   }
 
   constexpr void declareType(Type type, uint32_t value) {
@@ -319,6 +358,8 @@ private:
       declarations_.word(typeValue);
       declarations_.word(value);
       for (uint8_t i = 0; i < type.lanes; ++i) declarations_.word(component);
+    } else if (type.kind == TypeKind::Struct) {
+      declarations_.instruction(46, typeValue, value);
     } else if (type.kind == TypeKind::Bool) {
       declarations_.instruction(bits ? 41 : 42, typeValue, value);
     } else {
@@ -364,8 +405,8 @@ private:
 
   constexpr uint32_t functionType(const Function& function) {
     FunctionTypeRecord record;
-    record.result = typeId(function.returnType);
-    record.count = function.stage == Stage::Compute ? 0 : function.parameterCount;
+    record.result = typeId(function.stage == Stage::None ? function.returnType : Type{});
+    record.count = function.stage == Stage::None ? function.parameterCount : 0;
     if (record.count > record.parameters.size()) {
       fail(SpirvEmitError::Capacity);
       return 0;
@@ -409,10 +450,12 @@ private:
 
   constexpr void emitFunction(ArenaId index) {
     const Function& function = module_.functions[index];
+    currentFunction_ = index;
     for (uint16_t i = 0; i < module_.symbolCount; ++i) symbolValues_[i] = 0;
     const uint32_t signature = functionType(function);
-    functions_.instruction(54, typeId(function.returnType), functionIds_[index], 0, signature);
-    if (function.stage != Stage::Compute) {
+    functions_.instruction(54, typeId(function.stage == Stage::None ? function.returnType : Type{}),
+                           functionIds_[index], 0, signature);
+    if (function.stage == Stage::None) {
       for (uint16_t i = 0; i < function.parameterCount; ++i) {
         const ArenaId symbol = function.firstParameter + i;
         symbolValues_[symbol] = id();
@@ -421,9 +464,7 @@ private:
     }
     label(id());
     declareVariables(function.firstStatement);
-    if (function.stage == Stage::Compute && function.parameterCount == 1)
-      symbolValues_[function.firstParameter] =
-          operation(61, Type{TypeKind::U32, 3}, inputIds_[index]);
+    if (function.stage != Stage::None) loadEntryParameters(function);
     emitBlock(function.firstStatement);
     if (!terminated_) {
       if (function.returnType.kind != TypeKind::Void)
@@ -432,6 +473,72 @@ private:
         functions_.instruction(253);
     }
     functions_.instruction(56);
+  }
+
+  constexpr void loadEntryParameters(const Function& function) {
+    for (uint16_t parameter = 0; parameter < function.parameterCount; ++parameter) {
+      const ArenaId symbol = function.firstParameter + parameter;
+      const Type type = module_.symbols[symbol].type;
+      std::array<uint32_t, ModuleLimits::kMaxStructMembers> values{};
+      uint16_t count = 0;
+      for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
+        const InterfaceVariable& variable = module_.interfaceVariables[i];
+        if (variable.symbol == symbol)
+          values[count++] = operation(61, variable.type, interfaceIds_[i]);
+      }
+      if (type.kind != TypeKind::Struct) {
+        if (count != 1) {
+          fail(SpirvEmitError::InvalidNode);
+          return;
+        }
+        symbolValues_[symbol] = values[0];
+      } else {
+        const uint32_t result = id();
+        functions_.word((uint32_t(count + 3) << 16) | 80u);
+        functions_.word(typeId(type));
+        functions_.word(result);
+        for (uint16_t i = 0; i < count; ++i) functions_.word(values[i]);
+        symbolValues_[symbol] = result;
+      }
+    }
+  }
+
+  constexpr void emitReturn(ArenaId expression) {
+    const Function& function = module_.functions[currentFunction_];
+    if (expression == kInvalidArenaId) {
+      functions_.instruction(253);
+      return;
+    }
+    const uint32_t value = emitExpression(expression);
+    if (function.stage == Stage::None) {
+      functions_.instruction(254, value);
+      return;
+    }
+    for (uint16_t i = function.firstOutput; i < function.firstOutput + function.outputCount; ++i) {
+      const InterfaceVariable& variable = module_.interfaceVariables[i];
+      uint32_t leaf = value;
+      if (variable.member != kInvalidArenaId) {
+        const uint32_t member =
+            variable.member - module_.structs[function.returnType.structId].firstMember;
+        leaf = operation(81, variable.type, value, member);
+      }
+      functions_.instruction(62, interfaceIds_[i], leaf);
+    }
+    functions_.instruction(253);
+  }
+
+  constexpr bool addressable(ArenaId expression) const {
+    for (uint16_t depth = 0; depth < ModuleLimits::kMaxNesting; ++depth) {
+      if (expression >= module_.expressionCount) return false;
+      const Expression& node = module_.expressions[expression];
+      if (node.kind == ExpressionKind::Symbol && node.payload < module_.symbolCount) {
+        const auto kind = module_.symbols[node.payload].kind;
+        return kind == SymbolKind::Var || kind == SymbolKind::Binding;
+      }
+      if (node.kind != ExpressionKind::Member && node.kind != ExpressionKind::Index) return false;
+      expression = node.operands[0];
+    }
+    return false;
   }
 
   constexpr uint32_t lvalue(ArenaId expression, uint32_t& storage) {
@@ -502,6 +609,7 @@ private:
   SpirvEmitResult result_;
   uint32_t nextId_ = 2;
   uint32_t currentBlock_ = 0;
+  ArenaId currentFunction_ = kInvalidArenaId;
   bool terminated_ = false;
   uint16_t expressionDepth_ = 0;
   Words<1024> annotations_;
@@ -517,7 +625,7 @@ private:
   uint16_t functionTypeCount_ = 0;
   std::array<uint32_t, ModuleLimits::kMaxBindings> bindingIds_{};
   std::array<uint32_t, ModuleLimits::kMaxFunctions> functionIds_{};
-  std::array<uint32_t, ModuleLimits::kMaxFunctions> inputIds_{};
+  std::array<uint32_t, ModuleLimits::kMaxInterfaceVariables> interfaceIds_{};
   std::array<uint32_t, ModuleLimits::kMaxSymbols> symbolValues_{};
 };
 
@@ -557,9 +665,21 @@ constexpr uint32_t Emitter::emitExpression(ArenaId index) {
   const Expression& node = module_.expressions[index];
   uint32_t value = 0;
   switch (node.kind) {
+    case ExpressionKind::Zero: value = constant(node.type, 0); break;
     case ExpressionKind::Literal: value = constant(node.type, node.payload); break;
     case ExpressionKind::Symbol: value = emitSymbol(node); break;
     case ExpressionKind::Member:
+      if (!addressable(index)) {
+        const Type base = module_.expressions[node.operands[0]].type;
+        if (base.structId >= module_.structCount) {
+          fail(SpirvEmitError::InvalidNode);
+          break;
+        }
+        const uint32_t member = node.payload - module_.structs[base.structId].firstMember;
+        value = operation(81, node.type, emitExpression(node.operands[0]), member);
+        break;
+      }
+      [[fallthrough]];
     case ExpressionKind::Index: {
       uint32_t storage = 0;
       value = operation(61, node.type, lvalue(index, storage));
@@ -929,10 +1049,7 @@ constexpr void Emitter::emitStatement(const Statement& node) {
     case StatementKind::If: emitIf(node); break;
     case StatementKind::For: emitFor(node); break;
     case StatementKind::Return:
-      if (node.expression == kInvalidArenaId)
-        functions_.instruction(253);
-      else
-        functions_.instruction(254, emitExpression(node.expression));
+      emitReturn(node.expression);
       terminated_ = true;
       break;
     case StatementKind::TextureStore: {
