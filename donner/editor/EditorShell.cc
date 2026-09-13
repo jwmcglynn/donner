@@ -68,9 +68,11 @@
 #include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
+#ifndef __EMSCRIPTEN__
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/repro/ReproRecorder.h"
+#endif
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -1346,6 +1348,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   gui::EditorWindow* const wakeWindow = &window_;
   renderCoordinator_.asyncRenderer().setWakeCallback(
       [wakeWindow]() { wakeWindow->wakeEventLoop(); });
+#ifndef __EMSCRIPTEN__
   if (options_.reproOutputPath.has_value()) {
     repro::ReproRecorderOptions recorderOptions;
     recorderOptions.outputPath = *options_.reproOutputPath;
@@ -1358,6 +1361,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     reproRecorder_ = std::make_unique<repro::ReproRecorder>(std::move(recorderOptions));
     std::fprintf(stderr, "[repro] recording UI inputs to %s\n", options_.reproOutputPath->c_str());
   }
+#endif
 
   showSamplePicker_ = options_.showWelcome;
   welcomePlaceholderActive_ = options_.showWelcome;
@@ -1420,11 +1424,13 @@ EditorShell::~EditorShell() {
 #ifdef DONNER_EDITOR_WGPU
   window_.setWgpuDirectRenderCallback({});
 #endif
+#ifndef __EMSCRIPTEN__
   if (reproRecorder_) {
     if (!reproRecorder_->flush()) {
       std::fprintf(stderr, "[repro] flush failed - recording lost\n");
     }
   }
+#endif
 }
 
 void EditorShell::configureClipboardCapability() {
@@ -1447,6 +1453,7 @@ void EditorShell::assignInitialFilePathIfAllowed() {
   }
 }
 
+#ifndef __EMSCRIPTEN__
 void EditorShell::overrideViewportForReplay(const ViewportState& viewport) {
   pendingViewportReplayOverride_ = viewport;
 }
@@ -1527,6 +1534,7 @@ void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) 
       break;
   }
 }
+#endif
 
 std::optional<std::string> EditorShell::selectedElementLabelForReadback() const {
   const std::optional<svg::SVGElement>& selected = app_.selectedElement();
@@ -1693,6 +1701,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
   return readback;
 }
 
+#ifndef __EMSCRIPTEN__
 void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   if (!pendingDocumentSpaceReplayInput_.has_value()) {
     return;
@@ -1836,6 +1845,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     renderCoordinator_.setTextBoxDragPreview(std::nullopt);
   }
 }
+#endif
 
 void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost) {
   if (!ResourceDiagnosticsEnabled()) {
@@ -4069,11 +4079,13 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                           /*preservePaneCenterDocumentPoint=*/true);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
+#ifndef __EMSCRIPTEN__
   if (pendingViewportReplayOverride_.has_value()) {
     interactionController_.viewport() = *pendingViewportReplayOverride_;
     pendingViewportReplayOverride_.reset();
     viewportInitialized_ = true;
   }
+#endif
 
   // The canvas is docked into the DockSpace central node, so ImGui owns the pane rectangle and
   // reports transient values while a layout change propagates. Fit-to-actual-size must not latch
@@ -4274,7 +4286,9 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 
   updateRenderPaneTextChrome(textToolActive);
 
+#ifndef __EMSCRIPTEN__
   applyPendingDocumentSpaceReplayInputForTesting();
+#endif
 
   renderRenderPanePresentation(contentRegion, paneOriginImGui, paneRect, toolPaletteRect,
                                hoverTransformIntent, rotateCursorLocked, penToolActive,
@@ -6844,6 +6858,7 @@ void EditorShell::prepareFrame() {
   }
 }
 
+#ifndef __EMSCRIPTEN__
 void EditorShell::snapshotReproFrame() {
   if (!reproRecorder_) {
     return;
@@ -6881,6 +6896,7 @@ void EditorShell::snapshotReproFrame() {
   };
   reproRecorder_->snapshotFrame(frameContext);
 }
+#endif
 
 void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
@@ -7111,14 +7127,18 @@ void EditorShell::runFrame() {
     destination += std::chrono::duration<double, std::milli>(now - phaseStart).count();
     phaseStart = now;
   };
+#ifndef __EMSCRIPTEN__
   contentOnlyCaptureThisFrame_ = contentOnlyCaptureForNextFrame_;
   contentOnlyCaptureForNextFrame_ = false;
+#endif
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
   if (!showSamplePicker_) {
     advanceFontPreviewGeneration();
   }
+#ifndef __EMSCRIPTEN__
   snapshotReproFrame();
+#endif
   const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
   interactionController_.noteFrameDelta(frameDeltaMs);
 
@@ -7339,7 +7359,9 @@ void EditorShell::runFrame() {
   penDragFlushedThisFrame_ = false;
   markPhase(mainFrameCost.endRenderRequestMs);
   recordFrameTelemetry(mainFrameCost, directPresentationCost);
+#ifndef __EMSCRIPTEN__
   contentOnlyCaptureThisFrame_ = false;
+#endif
 }
 
 namespace internal {

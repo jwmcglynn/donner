@@ -1046,6 +1046,46 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   EXPECT_NEAR(rotatedMark.yPosition - rotatedBase.yPosition, expectedDy, 1.0);
 }
 
+TEST(TextEngineTest, TextPathSpacingPreservesFullShapingCombiningMarkCluster) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue()) << "Noto Sans fixture font must load";
+  TextBackendFull backend(fontManager, registry);
+  const std::string value =
+      "q\xCC\x81"
+      "B";
+  const auto shaped =
+      backend.shapeRun(font, 24.0f, value, 0, value.size(), false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(Field("cluster", &TextBackend::ShapedGlyph::cluster, 0u),
+                                         Field("cluster", &TextBackend::ShapedGlyph::cluster, 0u),
+                                         Field("cluster", &TextBackend::ShapedGlyph::cluster, 3u)));
+  ASSERT_THAT(shaped.glyphs[1].xAdvance, DoubleEq(0.0));
+  ASSERT_THAT(shaped.glyphs[1].glyphIndex, Not(0));
+  const double clusterAdvance = shaped.glyphs[0].xAdvance + shaped.glyphs[1].xAdvance;
+  const double target = clusterAdvance + shaped.glyphs[2].xAdvance + 40.0;
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(500.0, 0.0)).build();
+  span.textLength = Lengthd(target, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::Spacing;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(24.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(shaped.glyphs[0].xOffset, 1e-6)),
+                GlyphYPositionIs(DoubleNear(shaped.glyphs[0].yOffset, 1e-6))),
+          AllOf(GlyphXPositionIs(
+                    DoubleNear(shaped.glyphs[0].xAdvance + shaped.glyphs[1].xOffset, 1e-6)),
+                GlyphYPositionIs(DoubleNear(shaped.glyphs[1].yOffset, 1e-6))),
+          GlyphXPositionIs(DoubleNear(clusterAdvance + shaped.glyphs[2].xOffset + 40.0, 1e-6))))));
+}
+
 TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   Registry registry;
   FontManager fontManager(registry);
@@ -1089,7 +1129,7 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
                                                       GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
   const double secondSpanFirstGlyphX = runs[1].glyphs.front().xPosition;
   EXPECT_THAT(runs[2].glyphs, FirstGlyphMatches(AllOf(GlyphXPositionIs(Gt(secondSpanFirstGlyphX)),
-                                                      GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
+                                                      GlyphYPositionIs(DoubleNear(-10.0, 1e-6)))));
 }
 
 // This exact Latin case preserves the e-x kerning result across a paint-only tspan boundary.

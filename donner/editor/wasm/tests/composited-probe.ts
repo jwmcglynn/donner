@@ -1,4 +1,6 @@
-import { type Page, type TestInfo } from "@playwright/test";
+import type { Page } from "@playwright/test";
+
+export { stopCompositedProbe } from "./composited-probe-evidence.mjs";
 
 /**
  * Per-frame probe over the editor's COMPOSITED output.
@@ -505,33 +507,6 @@ export async function startCompositedProbe(page: Page): Promise<void> {
     }
     probe.start();
   });
-}
-
-/** Stop sampling and attach the collected window with its gesture before any assertion. */
-export async function stopCompositedProbe(
-  page: Page,
-  testInfo: TestInfo,
-  gesture: unknown,
-): Promise<CompositedProbeResult> {
-  const result = await page.evaluate(() => {
-    const probe = window.__donnerCompositedProbe;
-    if (probe === undefined) {
-      throw new Error("composited probe: install before stop");
-    }
-    probe.stop();
-    return {
-      samples: probe.samples.slice(),
-      drawFailures: probe.drawFailures,
-      frames: probe.frames,
-      readbackRetries: probe.readbackRetries,
-      readbackRescues: probe.readbackRescues,
-    };
-  });
-  await testInfo.attach("composited-probe", {
-    body: JSON.stringify({ gesture, result }),
-    contentType: "application/json",
-  });
-  return result;
 }
 
 /** Black-frame accounting over a sampled window. */

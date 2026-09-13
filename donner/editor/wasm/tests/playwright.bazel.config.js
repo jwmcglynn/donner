@@ -1,4 +1,5 @@
 const { createHash } = require("node:crypto");
+const { mkdirSync } = require("node:fs");
 const path = require("node:path");
 const baseConfig = require("./playwright.config.js");
 
@@ -14,7 +15,12 @@ function shellQuote(value) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-const testIdentity = process.env.TEST_TMPDIR || process.cwd();
+const temporaryDirectory = path.resolve(requireEnvironment("TEST_TMPDIR"));
+// Chromium's crash database ignores its per-launch user-data-dir.
+const crashDirectory = path.join(temporaryDirectory, "chromium-crashpad");
+mkdirSync(crashDirectory, { recursive: true });
+
+const testIdentity = temporaryDirectory;
 const portSeed = createHash("sha256").update(testIdentity).digest().readUInt16BE(0);
 const port = 20000 + (portSeed % 20000);
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -31,6 +37,16 @@ module.exports = {
   reporter: "list",
   retries: 0,
   workers: 1,
+  use: {
+    ...baseConfig.use,
+    launchOptions: {
+      ...baseConfig.use.launchOptions,
+      env: {
+        ...(baseConfig.use.launchOptions.env ?? process.env),
+        BREAKPAD_DUMP_LOCATION: crashDirectory,
+      },
+    },
+  },
   webServer: {
     command: [
       shellQuote(process.execPath),

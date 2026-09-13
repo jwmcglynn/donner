@@ -1,3 +1,4 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
 
@@ -189,6 +190,7 @@ playwright_bin.playwright_test(
         "composited-drag-invariants.spec.ts",
         "composited-invariants.spec.ts",
         "composited-probe.ts",
+        "composited-probe-evidence.mjs",
         "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",
@@ -216,4 +218,40 @@ playwright_bin.playwright_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "playwright_bazel_config_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "playwright.bazel.config.js",
+        "playwright.boot-presentation.bazel.config.js",
+    ],
+    entry_point = "playwright-bazel-config.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
+    name = "browser_matrix_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = glob([
+        "*.js",
+        "*.json",
+        "*.mjs",
+        "*.ts",
+        "*.yaml",
+    ]) + [
+        "BUILD.bazel",
+        ":node_modules/@playwright/test",
+        "//:.github/workflows/editor_wasm.yml",
+        "//:MODULE.bazel",
+        "//donner/editor/wasm:BUILD.bazel",
+        "//tools:run-browser-ci.sh",
+    ],
+    entry_point = "browser-matrix.spec.mjs",
+    # Loading Playwright config initializes its llhttp WebAssembly module.
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
 )

@@ -1124,11 +1124,9 @@ donner_cc_library(
         "//donner/base:memory_attribution",
         "//donner/base/xml",
         "//donner/editor/gui:editor_window",
-        "//donner/editor/repro:repro_recorder",
         "//donner/svg",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/resources:font_catalog",
         "//donner/svg/resources:font_manager",
         "//third_party/fira-code",
@@ -1142,6 +1140,9 @@ donner_cc_library(
             "//donner/svg/renderer:renderer_geode",
         ],
         "//conditions:default": [],
+    }) + select({
+        "@platforms//os:emscripten": [],
+        "//conditions:default": ["//donner/editor/repro:repro_recorder"],
     }) + select({
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",

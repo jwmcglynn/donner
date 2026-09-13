@@ -300,7 +300,7 @@ class RealTreeParityReportTests(unittest.TestCase):
         self.assertEqual(summary["total_cases"], 1679)
         self.assertEqual(summary["active_cases"], 1679)
         self.assertEqual(summary["disabled_cases"], 0)
-        self.assertEqual(summary["skip_cases"], 133)
+        self.assertEqual(summary["skip_cases"], 132)
         self.assertEqual(summary["render_only_cases"], 78)
         self.assertEqual(summary["pixel_budget_sources"], 103)
         self.assertEqual(summary["effective_pixel_budget_cases"], 125)

@@ -33,6 +33,8 @@ struct TextRun {
   FontHandle font;                ///< Font handle for this run.
   std::vector<TextGlyph> glyphs;  ///< Positioned glyphs.
   bool onPath = false;            ///< True if glyphs are positioned along a textPath.
+  bool textLengthAppliedOnPath =
+      false;  ///< True when path placement consumed this run's textLength.
 };
 
 }  // namespace donner::svg

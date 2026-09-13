@@ -85,7 +85,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertLess(hosted.index("Fetch Metal validation dependencies"),
                         hosted.index("Select Metal validation profile"))
         selection = self._step_body(hosted, "Select Metal validation profile")
-        self.assertIn("//donner/gpu/metal/tests:metal_validation_profile", selection)
+        self.assertIn("//tools/ci:metal_profile", selection)
         self.assertIn("tools/metal_validation_profile.py", selection)
         self.assertIn("--nocache_test_results", selection)
         case_start = selection.index('          case "$profile" in')
@@ -112,18 +112,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             preflight = self._step_body(job, "Metal validation preflight")
             self.assertIn("--nocache_test_results", preflight)
             self.assertLess(job.index("Metal validation preflight"), job.index("- name: Build"))
-            for target in (
-                "metal_buffer_bounds_tests", "metal_color_matrix_tests", "metal_queue_writes_tests",
-                "metal_solid_fill_tests", "metal_sub_rectangle_copy_tests",
-                "metal_shader_memory_validation_tests",
-            ):
-                self.assertIn("//donner/gpu/metal/tests:" + target, preflight)
+            self.assertIn("//tools/ci:metal_preflight", preflight)
             self.assertIn("steps.metal_preflight.outcome == 'failure'", job)
         trusted = self._job_body("macos-self-hosted")
         required = self._step_body(trusted, "Require full Metal shader validation")
         self.assertIn("--test_tag_filters=", required)
         self.assertIn("--nocache_test_results", required)
-        self.assertIn("//donner/gpu/metal/tests:metal_full_validation_required", required)
+        self.assertIn("//tools/ci:metal_full_validation", required)
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
 
     def test_bazel_version_change_selects_full_suite_before_graph_hashing(self):
@@ -295,10 +290,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
 
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
-        """A hardcoded target list that yields no tests is a real defect.
+        """A named fixed test suite that yields no tests is a real defect.
 
-        The Geode editor lanes name their tests literally, so an empty test set
-        there means a target was renamed or deleted out from under the lane.
+        The Geode editor lanes select a fixed suite, so an empty test set
+        there means its Bazel membership is broken.
         That must stay red rather than inherit the change-based lanes' notice.
         """
         for job_name in ("macos", "macos-self-hosted"):
@@ -380,6 +375,41 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(3, build.count("bazelisk test"))
         self.assertNotIn("continue-on-error", build)
+
+    def test_editor_wasm_handoff_resolves_artifact_and_provenance_from_metadata(self):
+        stage = self.editor_wasm.split("- name: Stage package for handoff", 1)[1].split(
+            "- name: Upload Geode package artifact", 1
+        )[0]
+        script = textwrap.dedent(stage.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "package"
+            package.mkdir()
+            (package / "editor.wasm").write_bytes(b"package fixture")
+            bazel = root / "bazelisk"
+            bazel.write_text(
+                '#!/bin/sh\n'
+                'case "$1" in\n'
+                'query) printf "%s\\n" "//fixture:package" ;;\n'
+                'cquery) printf "%s\\n" "$PACKAGE_PATH" ;;\n'
+                '*) exit 31 ;;\n'
+                'esac\n'
+            )
+            bazel.chmod(0o755)
+            output = root / "output"
+            environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                               PACKAGE_PATH=str(package), RUNNER_TEMP=str(root),
+                               GITHUB_OUTPUT=str(output))
+            result = self._run_script("#!/bin/bash\n" + script, [], env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("package_target=//fixture:package\n", output.read_text())
+            staged = root / "editor-wasm-package-geode" / "editor.wasm"
+            self.assertEqual(staged.read_bytes(), b"package fixture")
+            environment["PACKAGE_PATH"] = str(package) + "\n" + str(package)
+            result = self._run_script("#!/bin/bash\n" + script, [], env=environment)
+            self.assertNotEqual(result.returncode, 0, "ambiguous artifact outputs must fail")
+        self.assertIn("PACKAGE_TARGET: ${{ needs.build.outputs.package_target }}", self.editor_wasm)
+        self.assertIn('\\"targets\\":[\\"${PACKAGE_TARGET}\\"]', self.editor_wasm)
 
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""

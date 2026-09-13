@@ -1357,8 +1357,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/lengthAdjust",
                 {
-                    {"text-on-path.svg",
-                     Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
                     {"vertical.svg",
                      Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
                     {"with-underline.svg",
@@ -1524,11 +1522,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {"complex.svg", Params::Skip("Deferred: vertical + circular path")},
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png",
-                     0.05f)
+                     "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
                      .withMaxPixelsDifferent(1100)
                      .withReason(
-                         "AA + minor char advance diffs, different w/ text vs. text-full so")},
+                         "resvg 0.47.0 reference; full-text small-font placement residual")},
                 {"link-to-rect.svg", Params::Skip("Not impl: link to rect (SVG 2)")},
                 {"m-A-path.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
@@ -1576,7 +1573,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"tspan-with-relative-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png")
-                     .withReason("Minor char")},
+                     .withReason("Reference generated independently with resvg 0.47.0")},
                 {"two-paths.svg", Params::WithGoldenOverride(
                                       "donner/svg/renderer/testdata/golden/resvg-two-paths.png")
                                       .withReason("Minor char")},

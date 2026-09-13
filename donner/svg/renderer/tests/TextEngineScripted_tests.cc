@@ -58,6 +58,7 @@ TextLayoutParams MakeTextParams(double fontSize) {
 class ScriptedTextBackend : public TextBackend {
 public:
   bool reverseClusters = false;
+  bool clusterCombiningMarks = false;
   std::optional<SubSuperMetrics> subSuper;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
@@ -127,6 +128,13 @@ public:
       glyph.xKern = run.glyphs.empty() ? 0.0 : 1.0;
       glyph.yKern = run.glyphs.empty() ? 0.0 : 2.0;
       glyph.cluster = static_cast<uint32_t>(cluster);
+      if (clusterCombiningMarks && codepoint == 0x0301 && !run.glyphs.empty()) {
+        glyph.cluster = run.glyphs.back().cluster;
+        glyph.xKern = 0.0;
+        glyph.yKern = 0.0;
+        glyph.xOffset = -7.0;
+        glyph.yOffset = -4.0;
+      }
       glyph.fontSizeScale = fontVariant == FontVariant::SmallCaps ? 0.8f : 1.0f;
       if (codepoint >= 0x2E80) {
         glyph.xOffset = 2.0;
@@ -150,9 +158,11 @@ public:
 
 TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
                               bool reverseClusters = false,
-                              std::optional<SubSuperMetrics> subSuper = std::nullopt) {
+                              std::optional<SubSuperMetrics> subSuper = std::nullopt,
+                              bool clusterCombiningMarks = false) {
   auto backend = std::make_unique<ScriptedTextBackend>();
   backend->reverseClusters = reverseClusters;
+  backend->clusterCombiningMarks = clusterCombiningMarks;
   backend->subSuper = subSuper;
   return TextEngine(fontManager, registry, std::move(backend));
 }
@@ -513,7 +523,7 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
   auto first = MakeSpan("AB");
   first.pathSpline = path;
   first.textPathSourceEntity = textPathEntity;
-  first.pathStartOffset = 10.0;
+  first.pathStartOffset = 20.0;
   first.textAnchor = TextAnchor::Middle;
 
   auto continued = MakeSpan("C");
@@ -524,7 +534,7 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
   auto hidden = MakeSpan("D");
   hidden.pathSpline = path;
   hidden.textPathSourceEntity = textPathEntity;
-  hidden.pathStartOffset = 80.0;
+  hidden.xList = {Lengthd(80.0, Lengthd::Unit::None)};
   hidden.visibility = Visibility::Hidden;
 
   text.spans.push_back(std::move(first));
@@ -535,11 +545,365 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
 
   EXPECT_THAT(
       runs, ElementsAre(AllOf(RunOnPathIs(Eq(true)),
-                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(-0.5, 0.001)),
-                                                       GlyphXPositionIs(DoubleNear(10.5, 0.001))))),
+                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(4.5, 0.001)),
+                                                       GlyphXPositionIs(DoubleNear(15.5, 0.001))))),
                         AllOf(RunOnPathIs(Eq(true)),
-                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(20.5, 0.001))))),
+                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(25.5, 0.001))))),
                         AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
+}
+
+std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true,
+                                            std::string_view pathData = "M0 0H500",
+                                            bool clusterCombiningMarks = false) {
+  const std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="200">
+        <path id="p" d=")" +
+      std::string(pathData) + R"("/><text font-size="20">)" + std::string(markup) + "</text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_THAT(parsed.hasResult(), Eq(true));
+  if (!parsed.hasResult()) {
+    return {};
+  }
+  SVGDocument document = std::move(parsed).result();
+  Registry& registry = document.registry();
+  FontManager fontManager(registry);
+  auto scriptedBackend = std::make_unique<ScriptedTextBackend>();
+  scriptedBackend->clusterCombiningMarks = clusterCombiningMarks;
+  auto engine =
+      scripted ? std::make_unique<TextEngine>(fontManager, registry, std::move(scriptedBackend))
+               : std::make_unique<TextEngine>(fontManager, registry);
+  const auto textElement = document.querySelector("text");
+  const EntityHandle handle = textElement->unsafeEntityHandle();
+  engine->prepareForElement(handle, warnings);
+  auto& text = handle.get<components::ComputedTextComponent>();
+  engine->resolvePerSpanLayoutStyles(handle, text);
+  const auto runs = engine->layout(text, MakeTextParams(20.0));
+  std::vector<TextGlyph> result;
+  for (const auto& run : runs) {
+    result.insert(result.end(), run.glyphs.begin(), run.glyphs.end());
+  }
+  return result;
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthIncludesMixedDirectAndChildContent) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="90" lengthAdjust="spacingAndGlyphs">A<tspan>B</tspan>C</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs.back().xPosition + glyphs.back().xAdvance - glyphs.front().xPosition,
+              DoubleNear(90.0, 1e-6));
+  EXPECT_THAT(glyphs, testing::Each(GlyphStretchScaleXIs(FloatEq(3.0f))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthIncludesAllChildContent) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="42" lengthAdjust="spacingAndGlyphs"><tspan>AB</tspan></textPath>)");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(20.0)),
+                        GlyphStretchScaleXIs(FloatEq(2.0f))),
+                  AllOf(GlyphXPositionIs(DoubleNear(22.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(20.0)),
+                        GlyphStretchScaleXIs(FloatEq(2.0f)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthSpacingCountsChildBoundaries) {
+  const auto glyphs =
+      LayoutParsedTextPath(R"(<textPath href="#p" textLength="90">A<tspan>B</tspan>C</textPath>)");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(10.0))),
+          AllOf(GlyphXPositionIs(DoubleNear(40.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(10.0))),
+          AllOf(GlyphXPositionIs(DoubleNear(80.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(10.0)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthPreservesNestedOverrides) {
+  for (const std::string adjust : {"spacing", "spacingAndGlyphs"}) {
+    SCOPED_TRACE(adjust);
+    const auto glyphs = LayoutParsedTextPath(
+        "<textPath href=\"#p\" textLength=\"100\" lengthAdjust=\"" + adjust +
+        R"(">A<tspan textLength="40" lengthAdjust="spacingAndGlyphs">B<tspan>C</tspan>D</tspan>E</textPath>)");
+    ASSERT_THAT(glyphs, SizeIs(5));
+    EXPECT_THAT(glyphs[3].xPosition + glyphs[3].xAdvance - glyphs[1].xPosition,
+                DoubleNear(40.0, 1e-6));
+    EXPECT_THAT(glyphs[4].xPosition + glyphs[4].xAdvance - glyphs[0].xPosition,
+                DoubleNear(100.0, 1e-6));
+    for (size_t i = 1; i <= 3; ++i) {
+      EXPECT_THAT(glyphs[i].stretchScaleX, FloatEq(4.0f / 3.0f));
+    }
+    EXPECT_THAT(glyphs[0].stretchScaleX, FloatEq(adjust == "spacing" ? 1.0f : 3.0f));
+    EXPECT_THAT(glyphs[4].stretchScaleX, FloatEq(glyphs[0].stretchScaleX));
+  }
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthAppliesChildCoordinateResetsAfterAdjustment) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" startOffset="10" textLength="80" lengthAdjust="spacingAndGlyphs">A<tspan x="50 100" y="20 40">BC</tspan>D</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(4));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(10.0, 1e-6));
+  EXPECT_THAT(glyphs[1].xPosition, DoubleNear(60.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(110.0, 1e-6));
+  EXPECT_THAT(glyphs[3].xPosition, DoubleNear(glyphs[2].xPosition + glyphs[2].xAdvance, 1e-6));
+  EXPECT_THAT(glyphs, testing::Each(GlyphYPositionIs(DoubleNear(0.0, 1e-6))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthAnchorsTheWholeScopeAtStartOffset) {
+  for (const std::string anchor : {"middle", "end"}) {
+    SCOPED_TRACE(anchor);
+    const auto glyphs = LayoutParsedTextPath(
+        "<textPath href=\"#p\" startOffset=\"150\" text-anchor=\"" + anchor +
+        R"(" textLength="90" lengthAdjust="spacingAndGlyphs">A<tspan>B</tspan>C</textPath>)");
+    ASSERT_THAT(glyphs, SizeIs(3));
+    const double expectedStart = anchor == "middle" ? 105.0 : 60.0;
+    EXPECT_THAT(glyphs.front().xPosition, DoubleNear(expectedStart, 1e-6));
+    EXPECT_THAT(glyphs.back().xPosition + glyphs.back().xAdvance,
+                DoubleNear(expectedStart + 90.0, 1e-6));
+  }
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthHandlesEmptySingleZeroNegativeAndLargeValues) {
+  EXPECT_THAT(LayoutParsedTextPath(R"(<textPath href="#p" textLength="100"><tspan/></textPath>)"),
+              IsEmpty());
+  const auto single =
+      LayoutParsedTextPath(R"(<textPath href="#p" textLength="100"><tspan>A</tspan></textPath>)");
+  EXPECT_THAT(single, ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)),
+                                        GlyphXAdvanceIs(DoubleEq(10.0)))));
+  const auto zero = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="0" lengthAdjust="spacingAndGlyphs">A<tspan>B</tspan></textPath>)");
+  EXPECT_THAT(zero, testing::Each(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)),
+                                        GlyphStretchScaleXIs(FloatEq(0.0f)))));
+  const auto negative = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="-10" lengthAdjust="spacingAndGlyphs">A<tspan>B</tspan></textPath>)");
+  EXPECT_THAT(negative, testing::Each(AllOf(GlyphXAdvanceIs(DoubleEq(10.0)),
+                                            GlyphStretchScaleXIs(FloatEq(1.0f)))));
+  const auto large = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="1e30" lengthAdjust="spacingAndGlyphs">A<tspan>B</tspan></textPath>)");
+  EXPECT_THAT(large, testing::Each(GlyphIndexIs(Eq(0))));
+  for (const TextGlyph& glyph : large) {
+    EXPECT_THAT(std::isfinite(glyph.xPosition), Eq(true));
+    EXPECT_THAT(std::isfinite(glyph.xAdvance), Eq(true));
+    EXPECT_THAT(std::isfinite(glyph.stretchScaleX), Eq(true));
+  }
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthRetainsHiddenAdvancesAndIgnoresDisplayNone) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="90" lengthAdjust="spacingAndGlyphs">A<tspan visibility="hidden">B</tspan><tspan display="none">ignored</tspan>C</textPath>)");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
+          AllOf(GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthWholeScopeUsesSelectedBackend) {
+  for (const std::string content : {"A<tspan>B</tspan>C", "<tspan>ABC</tspan>"}) {
+    SCOPED_TRACE(content);
+    const auto glyphs = LayoutParsedTextPath(
+        R"(<textPath href="#p" textLength="100" lengthAdjust="spacingAndGlyphs">)" + content +
+            "</textPath>",
+        /*scripted=*/false);
+    ASSERT_THAT(glyphs, SizeIs(3));
+    EXPECT_THAT(glyphs.back().xPosition + glyphs.back().xAdvance - glyphs.front().xPosition,
+                DoubleNear(100.0, 1e-5));
+  }
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthKeepsSpacingOnlyChildWidth) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="100" lengthAdjust="spacingAndGlyphs">A<tspan textLength="40">BC</tspan>D</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(4));
+  EXPECT_THAT(glyphs[0].xAdvance, DoubleNear(30.0, 1e-6));
+  EXPECT_THAT(glyphs[1].xAdvance, DoubleEq(10.0));
+  EXPECT_THAT(glyphs[2].xAdvance, DoubleEq(10.0));
+  EXPECT_THAT(glyphs[2].xPosition + glyphs[2].xAdvance - glyphs[1].xPosition,
+              DoubleNear(40.0, 1e-6));
+  EXPECT_THAT(glyphs[3].xPosition + glyphs[3].xAdvance, DoubleNear(100.0, 1e-6));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthKeepsThreeLevelsOfOverrides) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs">A<tspan textLength="60" lengthAdjust="spacingAndGlyphs">B<tspan textLength="20" lengthAdjust="spacingAndGlyphs">CD</tspan>E</tspan>F</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(6));
+  EXPECT_THAT(glyphs[3].xPosition + glyphs[3].xAdvance - glyphs[2].xPosition,
+              DoubleNear(20.0, 1e-6));
+  EXPECT_THAT(glyphs[4].xPosition + glyphs[4].xAdvance - glyphs[1].xPosition,
+              DoubleNear(60.0, 1e-6));
+  EXPECT_THAT(glyphs[5].xPosition + glyphs[5].xAdvance, DoubleNear(120.0, 1e-6));
+  const auto allChildren = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs"><tspan textLength="40" lengthAdjust="spacingAndGlyphs">AB</tspan></textPath>)");
+  ASSERT_THAT(allChildren, SizeIs(2));
+  EXPECT_THAT(allChildren.back().xPosition + allChildren.back().xAdvance, DoubleNear(40.0, 1e-6));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthRejectsUnrepresentableGlyphScale) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(100.0, 0.0)).build();
+  span.textLength = Lengthd(1e300, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(testing::Each(AllOf(
+                        GlyphXAdvanceIs(DoubleEq(10.0)), GlyphStretchScaleXIs(FloatEq(1.0f)))))));
+}
+
+TEST(TextEngineScriptedTest, HorizontalTextPathIgnoresYOnlyPositioningAndChunkBoundaries) {
+  for (const bool scripted : {true, false}) {
+    SCOPED_TRACE(scripted);
+    const auto expected = LayoutParsedTextPath(
+        R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan>BC</tspan>D</textPath>)",
+        scripted);
+    const auto actual = LayoutParsedTextPath(
+        R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan y="20 40">BC</tspan>D</textPath>)",
+        scripted);
+    ASSERT_THAT(actual, SizeIs(expected.size()));
+    for (size_t i = 0; i < actual.size(); ++i) {
+      SCOPED_TRACE(i);
+      EXPECT_THAT(actual[i], AllOf(GlyphXPositionIs(DoubleNear(expected[i].xPosition, 1e-6)),
+                                   GlyphYPositionIs(DoubleNear(expected[i].yPosition, 1e-6)),
+                                   GlyphXAdvanceIs(DoubleNear(expected[i].xAdvance, 1e-6))));
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, HorizontalTextPathCarriesDyAlongThePathNormal) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs">A<tspan dy="10">B</tspan><tspan dy="-5">C</tspan>D</textPath>)",
+      /*scripted=*/true, "M0 0H40V200");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphYPositionIs(DoubleNear(0.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)), GlyphYPositionIs(DoubleNear(-10.0, 1e-6)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)), GlyphYPositionIs(DoubleNear(20.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)),
+                GlyphYPositionIs(DoubleNear(50.0, 1e-6)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathDyResetsForConsecutivePaths) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p"><tspan dy="10">A</tspan></textPath><textPath href="#p">B</textPath>)");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphYPositionIs(DoubleNear(10.0, 1e-6)),
+                                  GlyphYPositionIs(DoubleNear(0.0, 1e-6))));
+}
+
+TEST(TextEngineScriptedTest, TextPathAbsoluteXPreservesSameGlyphDx) {
+  const auto glyphs =
+      LayoutParsedTextPath(R"(<textPath href="#p"><tspan x="50" dx="7">A</tspan></textPath>)");
+  EXPECT_THAT(glyphs, ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(57.0, 1e-6)),
+                                        GlyphXAdvanceIs(DoubleEq(10.0)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathAnchorUsesIntermediateGlyphExtents) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan dx="100">B</tspan><tspan dx="-100">C</tspan></textPath>)");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphXPositionIs(DoubleNear(90.0, 1e-6)),
+                                  GlyphXPositionIs(DoubleNear(200.0, 1e-6)),
+                                  GlyphXPositionIs(DoubleNear(110.0, 1e-6))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthPreservesMultiGlyphClusterOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, false, std::nullopt,
+                                         /*clusterCombiningMarks=*/true);
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(500.0, 0.0)).build();
+  for (const LengthAdjust adjust : {LengthAdjust::Spacing, LengthAdjust::SpacingAndGlyphs}) {
+    SCOPED_TRACE(adjust);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(
+        "q\xCC\x81"
+        "B");
+    span.pathSpline = path;
+    span.textLength = Lengthd(adjust == LengthAdjust::Spacing ? 61.0 : 42.0, Lengthd::Unit::None);
+    span.lengthAdjust = adjust;
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(20.0));
+    const double scale = adjust == LengthAdjust::Spacing ? 1.0 : 2.0;
+    const double nextOrigin = adjust == LengthAdjust::Spacing ? 51.0 : 22.0;
+    EXPECT_THAT(
+        runs,
+        ElementsAre(RunGlyphsAre(ElementsAre(
+            AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphYPositionIs(DoubleNear(0.0, 1e-6)),
+                  GlyphXAdvanceIs(DoubleEq(10.0 * scale))),
+            AllOf(GlyphXPositionIs(DoubleNear(3.0 * scale, 1e-6)),
+                  GlyphYPositionIs(DoubleNear(-4.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(0.0)),
+                  Field("cluster", &TextGlyph::cluster, 0u)),
+            GlyphXPositionIs(DoubleNear(nextOrigin, 1e-6))))));
+  }
+}
+
+TEST(TextEngineScriptedTest, TextPathClusterCoordinatesAndTangentApplyOnce) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, false, std::nullopt,
+                                         /*clusterCombiningMarks=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("q\xCC\x81");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 200.0)).build();
+  span.pathStartOffset = 20.0;
+  span.textLength = Lengthd(100.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::Spacing;
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span.dxList = {Lengthd(2.0, Lengthd::Unit::None)};
+  span.dyList = {Lengthd(5.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(-5.0, 1e-6)), GlyphYPositionIs(DoubleNear(32.0, 1e-6)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(-1.0, 1e-6)), GlyphYPositionIs(DoubleNear(35.0, 1e-6)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6)), GlyphIndexIs(Not(Eq(0))))))));
+}
+
+TEST(TextEngineScriptedTest, TextPathClusterSpacingRespectsNestedLengthOwners) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="100">A<tspan textLength="40">q&#x301;B</tspan>C</textPath>)",
+      /*scripted=*/true, "M0 0H500", /*clusterCombiningMarks=*/true);
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(
+          GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXPositionIs(DoubleNear(30.0, 1e-6)),
+          AllOf(GlyphXPositionIs(DoubleNear(33.0, 1e-6)), GlyphYPositionIs(DoubleNear(-4.0, 1e-6))),
+          GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const entt::entity textPathEntity = registry.create();
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .lineTo(Vector2d(20.0, 0.0))
+                        .lineTo(Vector2d(20.0, 100.0))
+                        .build();
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.pathSpline = path;
+  span.textPathSourceEntity = textPathEntity;
+  span.textLength = Lengthd(42.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  EXPECT_THAT(runs, ElementsAre(AllOf(RunOnPathIs(Eq(true)),
+                                      RunGlyphsAre(ElementsAre(
+                                          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-9)),
+                                                GlyphXAdvanceIs(DoubleNear(20.0, 1e-9)),
+                                                GlyphStretchScaleXIs(FloatEq(2.0f))),
+                                          AllOf(GlyphXPositionIs(DoubleNear(20.0, 1e-9)),
+                                                GlyphYPositionIs(DoubleNear(2.0, 1e-9)),
+                                                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9))))))));
 }
 
 TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAndGlyphsScalesHorizontalAdvances) {

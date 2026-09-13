@@ -4,7 +4,6 @@ on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main, feature/ci-hardening-2026q2]
 
 permissions:
   contents: read

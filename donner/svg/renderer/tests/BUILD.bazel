@@ -206,6 +206,7 @@ donner_cc_test(
         "FilterGraphExecutor_tests.cc",
     ],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//tools/ci:__pkg__"],
     deps = [
         "//donner/svg/renderer:filter_graph_executor",
         "@com_google_gtest//:gtest_main",
@@ -554,6 +555,43 @@ donner_cc_test(
         "//donner/svg/text:text_backend_simple",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_test(
+    name = "text_path_geode_tests_impl",
+    srcs = ["TextPathGeode_tests.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+        "//third_party/resvg-test-suite:fonts",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_variant_cc_test(
+    name = "text_path_geode_tests",
+    dep = ":text_path_geode_tests_impl",
+    named_variants = [
+        {
+            "name": "basic",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "false",
+        },
+        {
+            "name": "full",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "true",
+        },
+    ],
+    opens_gpu_device = True,
 )
 
 donner_cc_test(
