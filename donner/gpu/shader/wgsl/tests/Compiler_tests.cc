@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 #include "donner/gpu/shader/programs/GaussianBlurSource.h"
@@ -81,6 +82,23 @@ TEST(Compiler, ReflectionTracksBindingAndWorkgroupMutations) {
   ASSERT_EQ(descriptor.bufferBindings->size(), 1u);
   EXPECT_EQ(descriptor.bufferBindings->front().binding, 7u);
   EXPECT_EQ(shader.workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+}
+
+TEST(Compiler, OrdinaryEvaluationMatchesFrozenProjections) {
+  const std::string source(programs::kGaussianBlurSource.view());
+  const ParseResult parsed = Parse(source);
+  ASSERT_TRUE(parsed.hasResult());
+
+  std::array<char, kGaussianArtifact.msl.size()> text{};
+  TextSink textSink{text.data(), uint32_t(text.size())};
+  ASSERT_TRUE(EmitMsl(parsed.module, textSink).ok());
+  EXPECT_EQ(std::string_view(text.data(), textSink.size), kGaussianArtifact.view().msl);
+
+  std::array<uint32_t, kGaussianArtifact.spirv.size()> words{};
+  SpirvSink wordSink{words.data(), uint32_t(words.size())};
+  ASSERT_TRUE(EmitSpirv(parsed.module, wordSink).isSuccess());
+  ASSERT_EQ(wordSink.size, words.size());
+  EXPECT_EQ(words, kGaussianArtifact.spirv);
 }
 
 TEST(Compiler, BindingMutationUpdatesDerivedReflection) {
