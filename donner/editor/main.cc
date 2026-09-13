@@ -351,12 +351,12 @@ int main(int argc, char** argv) {
   std::optional<std::string> svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
-  std::optional<std::string> reproOutputPath;
   bool showWelcome = false;
 #ifdef __EMSCRIPTEN__
   initialSource = kWelcomePlaceholderSvg;
   showWelcome = true;
 #else
+  std::optional<std::string> reproOutputPath;
   constexpr std::string_view kUsage =
       "Usage: donner-editor [--experimental] [--save-repro <path>] [filename]\n";
   for (int i = 1; i < argc; ++i) {
@@ -418,7 +418,10 @@ int main(int argc, char** argv) {
                    .showWelcome = showWelcome,
                    .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
                    .editorBuildInfo = EmbeddedBytesToString(donner::embedded::kEditorBuildInfo),
-                   .reproOutputPath = reproOutputPath});
+#ifndef __EMSCRIPTEN__
+                   .reproOutputPath = reproOutputPath,
+#endif
+               });
   if (!shell->valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";

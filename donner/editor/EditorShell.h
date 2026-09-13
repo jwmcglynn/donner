@@ -47,7 +47,6 @@
 #include "donner/editor/ViewportInteractionController.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/renderer/Renderer.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/resources/FontCatalog.h"
 
 namespace donner::editor::gui {
@@ -60,6 +59,7 @@ class RendererGeode;
 }
 #endif
 
+#ifndef __EMSCRIPTEN__
 namespace donner::editor::repro {
 class ReproRecorder;
 struct ReproAction;
@@ -67,6 +67,7 @@ struct ReproFrame;
 struct ReplayInputFrameCost;
 struct ReplaySemanticActionCost;
 }  // namespace donner::editor::repro
+#endif
 
 namespace donner::editor {
 
@@ -94,13 +95,16 @@ struct EditorShellOptions {
   /// Embedded "<version>\n<commit>\n" build metadata displayed in the About
   /// dialog. May be empty when the build did not embed it.
   std::string editorBuildInfo;
+#ifndef __EMSCRIPTEN__
   /// Optional destination path for a `.donner-repro` recording of the
   /// user's UI interactions. When set, the shell constructs a
   /// `ReproRecorder` and snapshots ImGui input state at the start of
   /// every frame. Written to disk in the destructor.
   std::optional<std::string> reproOutputPath;
+#endif
 };
 
+#ifndef __EMSCRIPTEN__
 /// Document-space replay input consumed by the editor shell test harness.
 struct EditorShellDocumentReplayInput {
   /// Current pointer position in SVG document coordinates.
@@ -116,6 +120,7 @@ struct EditorShellDocumentReplayInput {
   /// Optional element id captured by the replay hit-test checkpoint.
   std::optional<std::string> hitElementId;
 };
+#endif
 
 /// Layer-inspector freshness status exposed to replay/readback harnesses.
 struct LayerInspectorStatusReadback {
@@ -276,6 +281,7 @@ public:
   [[nodiscard]] const ViewportState& viewportForReadback() const {
     return interactionController_.viewport();
   }
+#ifndef __EMSCRIPTEN__
   /// Override the viewport from a recorded replay frame before rendering.
   ///
   /// @param viewport Recorded viewport snapshot to install for the next frame.
@@ -307,6 +313,7 @@ public:
   /// Estimate source-mutation work reachable through raw replay input for one frame.
   [[nodiscard]] repro::ReplayInputFrameCost estimateReplayInputCostForTesting(
       const repro::ReproFrame& frame, std::size_t heldRepeatSourceRewriteUnits = 0) const;
+#endif
   /// Current selection label for replay/readback harnesses.
   [[nodiscard]] std::optional<std::string> selectedElementLabelForReadback() const;
 
@@ -316,6 +323,7 @@ public:
   /// Current layer-inspector freshness status for replay/readback harnesses.
   [[nodiscard]] LayerInspectorStatusReadback layerInspectorStatusForReadback() const;
 
+#ifndef __EMSCRIPTEN__
   /// Async renderer access for replay harnesses.
   [[nodiscard]] AsyncRenderer& asyncRendererForReplay() {
     return renderCoordinator_.asyncRenderer();
@@ -329,6 +337,7 @@ public:
   void setContentOnlyCaptureForNextFrameForReplay(bool enabled) {
     contentOnlyCaptureForNextFrame_ = enabled;
   }
+#endif
 
 private:
   void configureClipboardCapability();
@@ -351,7 +360,9 @@ private:
   /// Apply Group or Ungroup only while the render worker releases DOM ownership.
   bool tryApplyGroupOperation(bool ungroup);
   bool trySavePath(std::string_view path, std::string* error);
+#ifndef __EMSCRIPTEN__
   void applyPendingDocumentSpaceReplayInputForTesting();
+#endif
 
   // Shape clipboard. These run when the
   // canvas selection - not the source pane - owns Cut/Copy/Paste. Each routes a
@@ -426,7 +437,9 @@ private:
   // spends gigabytes tiering up that one body. The `noinline` attributes are the source-side guard
   // for that budget, not a performance hint: each stage runs at most once per frame, so the extra
   // call is unmeasurable next to the work it performs.
+#ifndef __EMSCRIPTEN__
   [[gnu::noinline]] void snapshotReproFrame();
+#endif
   [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
   [[gnu::noinline]] void applyDeferredRenderRequest();
   [[gnu::noinline]] void recordFrameTelemetry(
@@ -633,8 +646,10 @@ private:
   ViewportInteractionController interactionController_;
   svg::SVGDocumentHandle documentViewBoxCacheDocument_;
   std::optional<Box2d> documentViewBoxCache_;
+#ifndef __EMSCRIPTEN__
   std::optional<ViewportState> pendingViewportReplayOverride_;
   std::optional<EditorShellDocumentReplayInput> pendingDocumentSpaceReplayInput_;
+#endif
   /// True while the save modal is being used for File → Export Viewport as SVG
   /// rather than an ordinary document save. Routes the dialog's write callback
   /// to \ref tryExportViewportSvgToPath.
@@ -644,8 +659,12 @@ private:
   /// \ref ViewportExportOptions::includeSelectionOverlay and the
   /// capture-at-export-time overlay snapshot in \ref tryExportViewportSvgToPath.
   bool pendingViewportExportOverlay_ = false;
+#ifdef __EMSCRIPTEN__
+  static constexpr bool contentOnlyCaptureThisFrame_ = false;
+#else
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
+#endif
   /// History commands waiting for the async renderer to release document read access.
   std::deque<HistoryAction> pendingHistoryActions_;
   bool requestRenderAtEndOfFrame_ = false;
@@ -849,11 +868,13 @@ private:
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;
 
+#ifndef __EMSCRIPTEN__
   /// Optional UI-input recorder. Populated when `options_.reproOutputPath`
   /// is set. Snapshots ImGui state at the start of each frame and
   /// flushes to disk in the destructor. See
   /// `donner/editor/repro/ReproRecorder.h`.
   std::unique_ptr<repro::ReproRecorder> reproRecorder_;
+#endif
 };
 
 }  // namespace donner::editor

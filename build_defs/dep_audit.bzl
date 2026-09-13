@@ -1,4 +1,7 @@
-"""Rule for asserting a target does NOT transitively depend on another target.
+"""Dependency audits for unconfigured backend and configured product graphs.
+
+`configured_dependency_audit_test` follows selected binary/library dependencies
+through build transitions, so it also audits product dispatchers and Wasm packages.
 
 Companion to `banned_deps.bzl`. Where `banned_deps_test` checks *direct*
 (depth-1) dependencies on external libraries, `forbidden_transitive_dep_test`
@@ -85,5 +88,94 @@ def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
         srcs = [":" + checker_name],
         args = ["$(location :" + genquery_name + ")"],
         data = [":" + genquery_name],
+        **kwargs
+    )
+
+_ConfiguredDepsInfo = provider(fields = ["labels"])
+
+# Follow binary/library dependencies and the wrappers used to package Wasm.
+_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps"]
+
+def _configured_deps_impl(target, ctx):
+    transitive = []
+    for name in _CONFIGURED_DEP_ATTRS:
+        deps = getattr(ctx.rule.attr, name, [])
+        if type(deps) != "list":
+            deps = [deps] if deps != None else []
+        for dep in deps:
+            if _ConfiguredDepsInfo in dep:
+                transitive.append(dep[_ConfiguredDepsInfo].labels)
+    return [_ConfiguredDepsInfo(labels = depset([target.label], transitive = transitive))]
+
+_configured_deps = aspect(
+    implementation = _configured_deps_impl,
+    attr_aspects = _CONFIGURED_DEP_ATTRS,
+)
+
+def _configured_dependency_audit_impl(ctx):
+    labels = ctx.attr.target[_ConfiguredDepsInfo].labels.to_list()
+    forbidden = [Label(label) for label in ctx.attr.forbidden]
+    missing = [label for label in ctx.attr.required if Label(label) not in labels]
+    found = sorted([str(label) for label in labels if label in forbidden])
+    for package in ctx.attr.forbidden_packages:
+        package_label = Label(package + ":__pkg__")
+        found += sorted([
+            str(label)
+            for label in labels
+            if label.workspace_name == package_label.workspace_name and
+               (label.package == package_label.package or
+                label.package.startswith(package_label.package + "/"))
+        ])
+
+    messages = ["Configured dependency audit: " + str(ctx.attr.target.label)]
+    messages += ["Forbidden dependency: " + label for label in found]
+    messages += ["Missing required dependency: " + label for label in missing]
+    if not found and not missing:
+        messages.append("PASS: required dependencies present; forbidden dependencies absent")
+
+    output = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(
+        output,
+        "#!/bin/sh\ncat <<'AUDIT'\n" + "\n".join(messages) +
+        "\nAUDIT\nexit {}\n".format(1 if found or missing else 0),
+        is_executable = True,
+    )
+    return [DefaultInfo(executable = output)]
+
+_configured_dependency_audit = rule(
+    implementation = _configured_dependency_audit_impl,
+    executable = True,
+    attrs = {
+        "target": attr.label(mandatory = True, aspects = [_configured_deps]),
+        "forbidden": attr.string_list(),
+        "forbidden_packages": attr.string_list(),
+        "required": attr.string_list(),
+    },
+    doc = "Audits selected dependency edges after select() and platform transitions, without compiling.",
+)
+
+def configured_dependency_audit_test(name, target, forbidden = [], forbidden_packages = [], required = [], **kwargs):
+    """Audit the configured binary graph using an ordinary shell test.
+
+    Args:
+      name: Test name.
+      target: Product root, including any platform-transition wrappers.
+      forbidden: Labels that must not be reachable through binary dependencies.
+      forbidden_packages: Packages (and subpackages) that must not be reachable.
+      required: Labels that must be visited, guarding traversal through wrappers.
+      **kwargs: Standard sh_test attributes.
+    """
+    checker = name + "_checker"
+    _configured_dependency_audit(
+        name = checker,
+        target = target,
+        forbidden = forbidden,
+        forbidden_packages = forbidden_packages,
+        required = required,
+        testonly = True,
+    )
+    native.sh_test(
+        name = name,
+        srcs = [":" + checker],
         **kwargs
     )
