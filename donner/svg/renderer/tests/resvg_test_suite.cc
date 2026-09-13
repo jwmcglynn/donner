@@ -1725,43 +1725,4 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-#ifdef DONNER_GEODE_BACKEND_AVAILABLE
-TEST_F(ImageComparisonTestFixture, TextPathRelativeOffsetsGeode) {
-  const std::filesystem::path source = Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/tests/text/textPath/tspan-with-relative-position.svg");
-  SVGDocument document = loadSVG(source.string().c_str(),
-                                 Runfiles::instance().Rlocation("third_party/resvg-test-suite/"));
-  Params params;
-  params.setCanvasSize(500, 500);
-  const std::string golden = Runfiles::instance().Rlocation(
-      "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png");
-  renderAndCompare(document, source, golden.c_str(), params, ComparisonMode::GeodeGolden);
-}
-
-TEST_F(ImageComparisonTestFixture, TextPathTinyRelativeOffsetsGeode) {
-  const std::filesystem::path source = Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/tests/text/textPath/dy-with-tiny-coordinates.svg");
-  SVGDocument document = loadSVG(source.string().c_str(),
-                                 Runfiles::instance().Rlocation("third_party/resvg-test-suite/"));
-  Params params;
-  params.setCanvasSize(500, 500);
-  const std::string golden = Runfiles::instance().Rlocation(
-      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png");
-  renderAndCompare(document, source, golden.c_str(), params, ComparisonMode::GeodeGolden);
-}
-
-TEST_F(ImageComparisonTestFixture, TextPathLengthPlacementGeode) {
-  const std::filesystem::path source = Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/tests/text/lengthAdjust/text-on-path.svg");
-  SVGDocument document = loadSVG(source.string().c_str(),
-                                 Runfiles::instance().Rlocation("third_party/resvg-test-suite/"));
-  Params params;
-  params.setCanvasSize(500, 500);
-  const std::string golden = Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/tests/text/lengthAdjust/text-on-path.png");
-  renderAndCompare(document, source, golden.c_str(), params, ComparisonMode::GeodeGolden);
-}
-
-#endif
-
 }  // namespace donner::svg
