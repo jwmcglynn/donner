@@ -11,6 +11,9 @@ module.exports = {
   use: { headless: true, viewport: { width: 500, height: 500 }, deviceScaleFactor: 1 },
   projects: [
     { name: "chromium", use: { browserName: "chromium", channel: "chromium" } },
-    { name: "firefox", use: { browserName: "firefox", headless: false, launchOptions: { timeout: 15000 } } },
+    {
+      name: "firefox",
+      use: { browserName: "firefox", headless: false, launchOptions: { timeout: 15000 } },
+    },
   ],
 };

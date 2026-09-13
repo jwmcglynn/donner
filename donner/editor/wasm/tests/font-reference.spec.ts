@@ -19,7 +19,9 @@ for (const source of ["attribute", "style"]) {
             style="${source === "style" ? `font-size-adjust:${adjustment}` : ""}">Text</text>
           <rect x="1" y="1" width="198" height="198" fill="none" stroke="black"/>
         </svg>`);
-      await page.evaluate(async () => { await document.fonts.ready; });
+      await page.evaluate(async () => {
+        await document.fonts.ready;
+      });
       const metrics = await page.evaluate(() => {
         const text = document.querySelector<SVGTextElement>("#text")!;
         const style = getComputedStyle(text);
@@ -42,9 +44,21 @@ for (const source of ["attribute", "style"]) {
       expect(metrics.loaded).toBe(true);
       expect(metrics.size).toBe("64px");
       const name = `${browserName}-font-size-adjust-${source}-${adjustment}`;
-      writeFileSync(path.join(outputRoot, `${name}.json`), JSON.stringify({ browser: browserName, version: browser.version(),
-        fontSha256: createHash("sha256").update(Buffer.from(fontBytes, "base64")).digest("hex"),
-        source, requestedAdjustment: adjustment, ...metrics }, null, 2));
+      writeFileSync(
+        path.join(outputRoot, `${name}.json`),
+        JSON.stringify(
+          {
+            browser: browserName,
+            version: browser.version(),
+            fontSha256: createHash("sha256").update(Buffer.from(fontBytes, "base64")).digest("hex"),
+            source,
+            requestedAdjustment: adjustment,
+            ...metrics,
+          },
+          null,
+          2,
+        ),
+      );
       await page.screenshot({ path: path.join(outputRoot, `${name}.png`) });
     });
   }

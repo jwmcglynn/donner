@@ -165,13 +165,18 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     if (laneName === "font_reference_probe") {
       assert.deepEqual(specFiles, ["font-reference.spec.ts"]);
       assert.match(lane, /--config=\$\(rootpath :playwright\.font-reference\.config\.js\)/);
-      for (const dependency of [
-        "playwright.font-reference.config.js",
-        "//third_party/resvg-test-suite:fonts",
-        "@playwright//:chromium",
-        "@playwright//:firefox",
-      ]) {
-        assert.ok(lane.includes(`"${dependency}"`), `font reference probe is missing ${dependency}`);
+      for (
+        const dependency of [
+          "playwright.font-reference.config.js",
+          "//third_party/resvg-test-suite:fonts",
+          "@playwright//:chromium",
+          "@playwright//:firefox",
+        ]
+      ) {
+        assert.ok(
+          lane.includes(`"${dependency}"`),
+          `font reference probe is missing ${dependency}`,
+        );
       }
       assert.match(
         lane,
