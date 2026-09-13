@@ -3,14 +3,25 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/tests/Runfiles.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/css/FontFace.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::Eq;
@@ -368,22 +379,66 @@ TEST(SVGTextElementPublicApiTests, EndPositionOfCharReturnsComputedValue) {
   EXPECT_NEAR(end.y, start.y, 1.0);
 }
 
-TEST(SVGTextElementPublicApiTests, SizeAdjustScalesCharacterGeometryWithAdvances) {
+TEST(SVGTextElementPublicApiTests, SizeAdjustCharacterGeometryMatchesExplicitFontSize) {
   SVGDocument document = instantiateSubtree(R"(
-    <svg viewBox="0 0 200 200">
-      <text id="small" font-size="64" font-size-adjust="0.3">Text</text>
-      <text id="large" font-size="64" font-size-adjust="0.6">Text</text>
+    <svg viewBox="0 0 200 200" font-family="MetricNotoSans">
+      <text id="small" y="100" font-size="64" font-size-adjust="0.3">Text</text>
+      <text id="small-control" y="100" font-size="35.82089552238806">Text</text>
+      <text id="large" y="100" font-size="64" font-size-adjust="0.6">Text</text>
+      <text id="large-control" y="100" font-size="71.64179104477612">Text</text>
     </svg>
-  )");
-  const auto small = document.querySelector("#small")->cast<SVGTextElement>();
-  const auto large = document.querySelector("#large")->cast<SVGTextElement>();
-  EXPECT_THAT(large.getComputedTextLength(),
-              testing::DoubleNear(2.0 * small.getComputedTextLength(), 1e-4));
-  for (size_t i = 0; i < 4; ++i) {
-    SCOPED_TRACE(i);
-    EXPECT_THAT(large.getExtentOfChar(i).size(),
-                Vector2Near(2.0 * small.getExtentOfChar(i).size().x,
-                            2.0 * small.getExtentOfChar(i).size().y));
+  )",
+                                            {}, Vector2i(500, 500));
+
+  const std::string fontPath =
+      Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf");
+  std::ifstream fontFile(fontPath, std::ios::binary);
+  ASSERT_THAT(fontFile.good(), testing::IsTrue()) << "Cannot read the pinned Noto Sans fixture";
+  const auto bytes = std::make_shared<const std::vector<uint8_t>>(
+      std::istreambuf_iterator<char>(fontFile), std::istreambuf_iterator<char>());
+  ASSERT_THAT(*bytes, testing::Not(testing::IsEmpty()));
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = bytes;
+  source.trusted = true;
+  css::FontFace face;
+  face.familyName = RcString("MetricNotoSans");
+  face.fontWeight = 400;
+  face.sources.push_back(std::move(source));
+  FontManager fontManager(document.registry());
+  fontManager.addFontFace(face);
+  const FontHandle font = fontManager.findFont("MetricNotoSans");
+  ASSERT_THAT(fontManager.fontData(font), testing::ElementsAreArray(*bytes));
+  RecordProperty("font_fixture", "NotoSans-Regular.ttf");
+  RecordProperty("font_units_per_em", 1000);
+  RecordProperty("font_x_height", 536);
+
+  // Each control uses 64 * adjustment / (536 / 1000), independent of backend metric quantization.
+  for (const auto& [adjustedId, controlId] :
+       {std::pair{"#small", "#small-control"}, std::pair{"#large", "#large-control"}}) {
+    SCOPED_TRACE(adjustedId);
+    const auto adjusted = document.querySelector(adjustedId)->cast<SVGTextElement>();
+    const auto control = document.querySelector(controlId)->cast<SVGTextElement>();
+    EXPECT_THAT(adjusted.getComputedTextLength(), testing::Gt(0.0));
+    EXPECT_THAT(adjusted.getComputedTextLength(),
+                testing::DoubleNear(control.getComputedTextLength(), 1e-4));
+    for (size_t i = 0; i < 4; ++i) {
+      SCOPED_TRACE(i);
+      const Vector2d expectedSize = control.getExtentOfChar(i).size();
+      EXPECT_THAT(adjusted.getExtentOfChar(i).size(),
+                  Vector2Eq(testing::DoubleNear(expectedSize.x, 1e-4),
+                            testing::DoubleNear(expectedSize.y, 1e-4)));
+    }
+    const auto& runs =
+        document.registry()
+            .get<components::ComputedTextGeometryComponent>(adjusted.unsafeEntityHandle().entity())
+            .runs;
+    const auto glyphRun = std::find_if(runs.begin(), runs.end(),
+                                       [](const TextRun& run) { return !run.glyphs.empty(); });
+    ASSERT_THAT(glyphRun != runs.end(), testing::IsTrue());
+    EXPECT_THAT(glyphRun->font, testing::Eq(font));
+    RecordProperty(std::string(adjustedId + 1) + "_used_size_px",
+                   std::to_string(glyphRun->usedFontSizePx));
   }
 }
 
