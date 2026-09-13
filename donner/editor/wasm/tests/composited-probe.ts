@@ -1,4 +1,4 @@
-import { type Page, type TestInfo } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
 
 /**
  * Per-frame probe over the editor's COMPOSITED output.

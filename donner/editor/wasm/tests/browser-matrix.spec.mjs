@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -362,6 +363,45 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     /kFailureArchiveDir="\$\{kTestsDir\}\/playwright-failures"/,
   );
   assert.match(normalizedWorkflow, /path: donner\/editor\/wasm\/tests\/playwright-failures/);
+});
+
+test("composited probe evidence survives lane archival and the next lane", async () => {
+  const { stopCompositedProbe } = await import("./composited-probe.ts");
+  const temporary = mkdtempSync(path.join(tmpdir(), "donner-probe-evidence-"));
+  const outputDirectory = path.join(temporary, "test-results", "failed-drag");
+  const archiveDirectory = path.join(temporary, "archived-lane");
+  mkdirSync(outputDirectory, { recursive: true });
+  const result = {
+    samples: [{ t: 10, coloredCentroidX: 8, coloredCentroidY: 4, drawOk: true }],
+    drawFailures: 0,
+    frames: 1,
+    readbackRetries: 0,
+    readbackRescues: 0,
+  };
+  const gesture = { trace: [[10, 20, 30]] };
+  const attachments = [];
+  const testInfo = {
+    outputPath: (name) => path.join(outputDirectory, name),
+    attach: async (name, attachment) => attachments.push({ name, ...attachment }),
+  };
+  try {
+    const observed = await stopCompositedProbe({ evaluate: async () => result }, testInfo, gesture);
+    assert.deepEqual(observed, result);
+    assert.equal(attachments.length, 1);
+    assert.equal(attachments[0].name, "composited-probe");
+    assert.equal(attachments[0].contentType, "application/json");
+    assert.equal(typeof attachments[0].path, "string", "evidence must be an archived output file");
+    const relative = path.relative(outputDirectory, attachments[0].path);
+    assert.equal(relative, path.basename(relative), "evidence must stay inside this test's output");
+    cpSync(outputDirectory, archiveDirectory, { recursive: true });
+    rmSync(outputDirectory, { recursive: true });
+    assert.deepEqual(JSON.parse(readFileSync(path.join(archiveDirectory, relative), "utf8")), {
+      gesture,
+      result,
+    });
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("real Safari gate pins the served Wasm and scopes every visibility probe", () => {
