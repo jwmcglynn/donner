@@ -166,17 +166,26 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
 
     def test_host_compatible_javascript_test_skips_cpp_coverage(self):
         label = "//donner/editor/wasm/tests:playwright_bazel_config_tests"
+        incompatible = [
+            "//donner/editor/wasm/tests:boot_presentation_test",
+            "//donner/editor/wasm/tests:browser_presentation_regression_test",
+            "//donner/editor/wasm/tests:chromium_remote_smoke",
+        ]
+        targets = [*incompatible, label]
         verdict = self._decide(
-            label_kinds=[f"js_test rule {label}"],
-            final_targets=[label],
-            host_compat=[f"@@{label} HOST_COMPATIBLE"],
+            label_kinds=[f"js_test rule {target}" for target in targets],
+            final_targets=targets,
+            host_compat=[
+                *(f"@@{target} HOST_INCOMPATIBLE" for target in incompatible),
+                f"@@{label} HOST_COMPATIBLE",
+            ],
         )
         self.assertEqual("skip", verdict)
 
     def test_javascript_subset_retains_native_and_unknown_coverage(self):
         javascript = "//donner/editor/wasm/tests:playwright_bazel_config_tests"
         native = "//donner/base:native_tests"
-        for kind in ("cc_test", "donner_multi_transitioned_test", "unknown_test"):
+        for kind in ("cc_test", "_donner_multi_transitioned_test", "unknown_test"):
             with self.subTest(kind=kind):
                 verdict = self._decide(
                     label_kinds=[f"js_test rule {javascript}", f"{kind} rule {native}"],
