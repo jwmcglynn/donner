@@ -1847,6 +1847,25 @@ TEST(Path, StrokeToFillFullyEngulfedClosedSquareHasNoParityHole) {
   EXPECT_FALSE(strokeContains(filled, {-3, 1}));
 }
 
+TEST(Path, StrokeToFillPreservesSmallNonzeroSubdivisions) {
+  const Path subdivided = PathBuilder()
+                              .moveTo({0, 0})
+                              .lineTo({5e-11, 0})
+                              .lineTo({1e-10, 0})
+                              .lineTo({1.5e-10, 0})
+                              .lineTo({2e-10, 0})
+                              .build();
+  const Path single = PathBuilder().moveTo({0, 0}).lineTo({2e-10, 0}).build();
+  const StrokeStyle style{.width = 2e-11};
+  const Path subdividedStroke = subdivided.strokeToFill(style, kFlattenTolerance);
+  const Path singleStroke = single.strokeToFill(style, kFlattenTolerance);
+  ASSERT_FALSE(subdividedStroke.empty());
+  EXPECT_EQ(subdividedStroke.bounds(), singleStroke.bounds());
+  for (const double x : {2.5e-11, 7.5e-11, 1.25e-10, 1.75e-10}) {
+    EXPECT_TRUE(strokeContains(subdividedStroke, {x, 0}));
+  }
+}
+
 TEST(Path, StrokeToFillNormalizesSourceWindingAcrossCompoundContours) {
   const Path clockwise = PathBuilder()
                              .moveTo({0, 0})
