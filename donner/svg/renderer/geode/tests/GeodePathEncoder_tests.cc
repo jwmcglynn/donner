@@ -615,6 +615,37 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
 // The vertical (X-monotonic) band set must be populated and produce winding
 // numbers consistent with the horizontal set - winding is ray-direction-independent,
 // so a point is inside per the horizontal ray iff it is inside per the vertical ray.
+TEST(GeodePathEncoder, CapSeamsCancelButGenuineCapBoundariesRemain) {
+  const Path line = PathBuilder().moveTo({0, 0}).lineTo({20, 0}).build();
+  for (LineCap cap : {LineCap::Butt, LineCap::Square, LineCap::Round}) {
+    SCOPED_TRACE(static_cast<int>(cap));
+    const Path stroke = line.strokeToFill({.width = 6.0, .cap = cap}, kFlattenTolerance);
+    const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::NonZero);
+    ASSERT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+    const auto hasVerticalEdge = [&](float x) {
+      return std::any_of(encoded.curves.begin(), encoded.curves.end(), [x](const auto& curve) {
+        return curve.p0x == x && curve.p1x == x && curve.p2x == x;
+      });
+    };
+    EXPECT_THAT(hasVerticalEdge(0), testing::Eq(cap == LineCap::Butt));
+    EXPECT_THAT(hasVerticalEdge(20), testing::Eq(cap == LineCap::Butt));
+    EXPECT_THAT(HorizontalWinding(encoded.curves, -2, 0) != 0, testing::Eq(cap != LineCap::Butt));
+    EXPECT_THAT(HorizontalWinding(encoded.curves, -4, 0), testing::Eq(0));
+    EXPECT_THAT(VerticalWinding(encoded.vCurves, 10, 0) != 0, testing::IsTrue());
+  }
+}
+
+TEST(GeodePathEncoder, SquareCapsShareCurveBoundaryNormals) {
+  const Path curve = PathBuilder().moveTo({0, 0}).curveTo({0, 20}, {20, 20}, {20, 0}).build();
+  const Path stroke = curve.strokeToFill({.width = 6.0, .cap = LineCap::Square}, kFlattenTolerance);
+  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::NonZero);
+  ASSERT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+  for (const auto& item : encoded.vCurves) {
+    EXPECT_THAT(item.p0y == 0 && item.p1y == 0 && item.p2y == 0, testing::IsFalse())
+        << "The square cap and curve strip must not retain their shared base at y=0";
+  }
+}
+
 TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   // A triangle plus an interior hole exercises non-trivial winding both ways.
   Path path = PathBuilder()
@@ -747,17 +778,11 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
   EXPECT_EQ(openEncoded.curveIndices.size(), closedEncoded.curveIndices.size());
   EXPECT_EQ(openEncoded.bands.size(), closedEncoded.bands.size());
 
-  // A straight line (the geometry resvg's `a-stroke-linecap-001` feeds to
-  // the fill path before the stroke ribbon is generated) must produce
-  // non-empty output with the implicit close. Pre-fix it would have been
-  // a single forward curve with no return edge, producing spill fill.
+  // The implicit return of a line cancels its forward edge, leaving no filled area.
   Path openLine = PathBuilder().moveTo(Vector2d(40, 40)).lineTo(Vector2d(160, 160)).build();
   EncodedPath encoded = GeodePathEncoder::encode(openLine, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
-  // There must be an even number of forward+return segments per band
-  // (one LineTo forward, one implicit close back). `curves.size()` is
-  // stored canonically, so the forward and return segments form a pair.
-  EXPECT_EQ(encoded.curves.size() % 2u, 0u);
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty);
+  EXPECT_THAT(encoded.curves, testing::IsEmpty());
 }
 
 // Multi-subpath regression: a MoveTo in the middle of a path starts a new
@@ -815,7 +840,7 @@ TEST(GeodePathEncoder, RecordsOutputNeutralEncodingStatistics) {
   EXPECT_LE(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
 }
 
-TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
+TEST(GeodePathEncoder, CanceledLinesLeaveFiniteEmptyBandMetadata) {
   const Path path = PathBuilder()
                         .moveTo(Vector2d(0, 0))
                         .lineTo(Vector2d(0, 10))
@@ -824,7 +849,9 @@ TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
                         .build();
 
   const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  ASSERT_FALSE(encoded.empty());
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty);
+  EXPECT_THAT(encoded.bands, testing::IsEmpty());
+  EXPECT_EQ(encoded.hBandCount, 0u);
   EXPECT_TRUE(encoded.vBands.empty());
   EXPECT_TRUE(encoded.vCurves.empty());
   EXPECT_EQ(encoded.vBandCount, 0u);
