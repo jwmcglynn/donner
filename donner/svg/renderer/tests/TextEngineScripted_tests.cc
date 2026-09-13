@@ -542,6 +542,54 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
                         AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
 }
 
+std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup) {
+  const std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="200">
+        <path id="p" d="M0 0H500"/><text font-size="20">)" +
+      std::string(markup) + "</text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_THAT(parsed.hasResult(), Eq(true));
+  if (!parsed.hasResult()) {
+    return {};
+  }
+  SVGDocument document = std::move(parsed).result();
+  Registry& registry = document.registry();
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const auto textElement = document.querySelector("text");
+  const EntityHandle handle = textElement->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  auto& text = handle.get<components::ComputedTextComponent>();
+  engine.resolvePerSpanLayoutStyles(handle, text);
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  std::vector<TextGlyph> result;
+  for (const auto& run : runs) {
+    result.insert(result.end(), run.glyphs.begin(), run.glyphs.end());
+  }
+  return result;
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthIncludesMixedDirectAndChildContent) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="90" lengthAdjust="spacingAndGlyphs">A<tspan>B</tspan>C</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs.back().xPosition + glyphs.back().xAdvance - glyphs.front().xPosition,
+              DoubleNear(90.0, 1e-6));
+  EXPECT_THAT(glyphs, testing::Each(GlyphStretchScaleXIs(FloatEq(3.0f))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthIncludesAllChildContent) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="42" lengthAdjust="spacingAndGlyphs"><tspan>AB</tspan></textPath>)");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(20.0)),
+                        GlyphStretchScaleXIs(FloatEq(2.0f))),
+                  AllOf(GlyphXPositionIs(DoubleNear(22.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(20.0)),
+                        GlyphStretchScaleXIs(FloatEq(2.0f)))));
+}
+
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
   Registry registry;
   FontManager fontManager(registry);
