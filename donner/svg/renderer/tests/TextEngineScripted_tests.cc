@@ -542,11 +542,12 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
                         AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
 }
 
-std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true) {
+std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true,
+                                            std::string_view pathData = "M0 0H500") {
   const std::string source =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="200">
-        <path id="p" d="M0 0H500"/><text font-size="20">)" +
-      std::string(markup) + "</text></svg>";
+        <path id="p" d=")" +
+      std::string(pathData) + R"("/><text font-size="20">)" + std::string(markup) + "</text></svg>";
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_THAT(parsed.hasResult(), Eq(true));
@@ -735,6 +736,55 @@ TEST(TextEngineScriptedTest, TextPathLengthRejectsUnrepresentableGlyphScale) {
   const auto runs = engine.layout(text, MakeTextParams(20.0));
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(testing::Each(AllOf(
                         GlyphXAdvanceIs(DoubleEq(10.0)), GlyphStretchScaleXIs(FloatEq(1.0f)))))));
+}
+
+TEST(TextEngineScriptedTest, HorizontalTextPathIgnoresYOnlyPositioningAndChunkBoundaries) {
+  for (const bool scripted : {true, false}) {
+    SCOPED_TRACE(scripted);
+    const auto expected = LayoutParsedTextPath(
+        R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan>BC</tspan>D</textPath>)",
+        scripted);
+    const auto actual = LayoutParsedTextPath(
+        R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan y="20 40">BC</tspan>D</textPath>)",
+        scripted);
+    ASSERT_THAT(actual, SizeIs(expected.size()));
+    for (size_t i = 0; i < actual.size(); ++i) {
+      SCOPED_TRACE(i);
+      EXPECT_THAT(actual[i], AllOf(GlyphXPositionIs(DoubleNear(expected[i].xPosition, 1e-6)),
+                                   GlyphYPositionIs(DoubleNear(expected[i].yPosition, 1e-6)),
+                                   GlyphXAdvanceIs(DoubleNear(expected[i].xAdvance, 1e-6))));
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, HorizontalTextPathCarriesDyAlongThePathNormal) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs">A<tspan dy="10">B</tspan><tspan dy="-5">C</tspan>D</textPath>)",
+      /*scripted=*/true, "M0 0H40V200");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphYPositionIs(DoubleNear(0.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)), GlyphYPositionIs(DoubleNear(-10.0, 1e-6)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)), GlyphYPositionIs(DoubleNear(20.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)),
+                GlyphYPositionIs(DoubleNear(50.0, 1e-6)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathAbsoluteXPreservesSameGlyphDx) {
+  const auto glyphs =
+      LayoutParsedTextPath(R"(<textPath href="#p"><tspan x="50" dx="7">A</tspan></textPath>)");
+  EXPECT_THAT(glyphs, ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(57.0, 1e-6)),
+                                        GlyphXAdvanceIs(DoubleEq(10.0)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathAnchorUsesIntermediateGlyphExtents) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan dx="100">B</tspan><tspan dx="-100">C</tspan></textPath>)");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphXPositionIs(DoubleNear(90.0, 1e-6)),
+                                  GlyphXPositionIs(DoubleNear(200.0, 1e-6)),
+                                  GlyphXPositionIs(DoubleNear(110.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
