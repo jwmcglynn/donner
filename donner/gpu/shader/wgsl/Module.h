@@ -44,9 +44,12 @@ enum class TypeKind : uint8_t {
   I32,               //!< `i32`.
   U32,               //!< `u32`.
   F32,               //!< `f32`.
+  AbstractInt,       //!< Shader-creation-time signed integer.
+  AbstractFloat,     //!< Shader-creation-time binary64 value.
   Struct,            //!< A declared structure.
   Matrix,            //!< A column-major f32 matrix.
   Array,             //!< A fixed-size array.
+  Sampler,           //!< Filtering sampler resource.
   SampledTexture2d,  //!< `texture_2d<f32>`.
   StorageTexture2d,  //!< `texture_storage_2d<rgba32float, write>`.
 };
@@ -68,6 +71,11 @@ struct Type {
 
   /// Returns true for identical resolved types.
   constexpr bool operator==(const Type& other) const = default;
+
+  /// Returns whether scalar materialization is still required.
+  constexpr bool isAbstract() const {
+    return kind == TypeKind::AbstractInt || kind == TypeKind::AbstractFloat;
+  }
 
   /// Returns true for scalar numeric types and vectors of them.
   constexpr bool isNumeric() const {
@@ -118,6 +126,7 @@ struct Struct {
 enum class BindingKind : uint8_t {
   Uniform,          //!< `var<uniform>`.
   ReadOnlyStorage,  //!< `var<storage, read>`.
+  Sampler,          //!< A filtering sampler.
   SampledTexture,   //!< `texture_2d<f32>`.
   StorageTexture,   //!< Write-only storage texture.
 };
@@ -135,6 +144,7 @@ struct Binding {
 
 /// Scope category of one resolved name.
 enum class SymbolKind : uint8_t {
+  Constant,   //!< A module-scope constant value.
   Binding,    //!< A module-scope resource binding.
   Parameter,  //!< An immutable function parameter.
   Let,        //!< An immutable local binding.
@@ -143,14 +153,15 @@ enum class SymbolKind : uint8_t {
 
 /// One resolved identifier declaration.
 struct Symbol {
-  SymbolKind kind = SymbolKind::Let;          //!< Declaration category.
-  Type type;                                  //!< Resolved declared type.
-  NameRef name;                               //!< Module-owned declaration name.
-  SourceSpan nameSpan;                        //!< Name location in the source.
-  bool mutableValue = false;                  //!< True only for a `var` declaration.
-  ArenaId bindingId = kInvalidArenaId;        //!< Binding arena item for Binding symbols.
-  BuiltinValue builtin = BuiltinValue::None;  //!< Entry-point parameter builtin.
-  uint32_t location = UINT32_MAX;             //!< Entry-point parameter location, if present.
+  SymbolKind kind = SymbolKind::Let;             //!< Declaration category.
+  Type type;                                     //!< Resolved declared type.
+  NameRef name;                                  //!< Module-owned declaration name.
+  SourceSpan nameSpan;                           //!< Name location in the source.
+  bool mutableValue = false;                     //!< True only for a `var` declaration.
+  ArenaId bindingId = kInvalidArenaId;           //!< Binding arena item for Binding symbols.
+  BuiltinValue builtin = BuiltinValue::None;     //!< Entry-point parameter builtin.
+  uint32_t location = UINT32_MAX;                //!< Entry-point parameter location, if present.
+  ArenaId constantExpression = kInvalidArenaId;  //!< Initializer for module constants.
 };
 
 /// Unary operator represented by Expression::payload.
@@ -161,7 +172,8 @@ enum class UnaryOp : uint8_t {
 
 /// Binary operator represented by Expression::payload.
 enum class BinaryOp : uint8_t {
-  Add,  //!< `+`.
+  BitAnd = 13,  //!< Integer bitwise AND.
+  Add = 0,
   Sub,  //!< `-`.
   Mul,  //!< `*`.
   Div,  //!< `/`.
@@ -178,6 +190,17 @@ enum class BinaryOp : uint8_t {
 
 /// Builtins accepted by the frontend profile.
 enum class Builtin : uint8_t {
+  All,
+  Abs,
+  Max,
+  Round,
+  Sqrt,
+  Dot,
+  Length,
+  Normalize,
+  Saturate,
+  Fract,
+  Fwidth,
   Any,                //!< `any`.
   Clamp,              //!< `clamp`.
   Select,             //!< `select`.
@@ -214,6 +237,7 @@ struct Expression {
                                      kInvalidArenaId};  //!< Child expressions.
   uint8_t operandCount = 0;                             //!< Number of valid operands.
   uint32_t payload = 0;                                 //!< Kind-specific bits or arena identifier.
+  uint32_t literalHighBits = 0;  //!< Upper bits for abstract scalar literals.
 };
 
 /// Kind of a typed statement node.
@@ -224,6 +248,9 @@ enum class StatementKind : uint8_t {
   For,           //!< A `for` loop.
   Return,        //!< A return statement.
   TextureStore,  //!< `textureStore(texture, coord, value)`.
+  Break,         //!< Exit the innermost loop.
+  Continue,      //!< Run the innermost loop continuation.
+  Discard,       //!< Discard the current fragment invocation.
 };
 
 /// One typed statement node. The next link preserves lexical statement order.
@@ -278,17 +305,17 @@ struct Function {
 
 /// Fixed capacities for one frontend module.
 struct ModuleLimits {
-  static constexpr uint32_t kMaxSourceBytes = 16384;
-  static constexpr uint16_t kMaxTokens = 2048;
-  static constexpr uint16_t kMaxIdentifierBytes = 2048;
+  static constexpr uint32_t kMaxSourceBytes = 32768;
+  static constexpr uint16_t kMaxTokens = 8192;
+  static constexpr uint16_t kMaxIdentifierBytes = 8192;
   static constexpr uint16_t kMaxStructs = 8;
   static constexpr uint16_t kMaxStructMembers = 64;
   static constexpr uint16_t kMaxArrayElements = 256;
   static constexpr uint16_t kMaxBindings = 16;
-  static constexpr uint16_t kMaxSymbols = 192;
-  static constexpr uint16_t kMaxExpressions = 768;
-  static constexpr uint16_t kMaxStatements = 256;
-  static constexpr uint16_t kMaxFunctions = 16;
+  static constexpr uint16_t kMaxSymbols = 512;
+  static constexpr uint16_t kMaxExpressions = 2048;
+  static constexpr uint16_t kMaxStatements = 512;
+  static constexpr uint16_t kMaxFunctions = 32;
   static constexpr uint16_t kMaxNesting = 16;
   static constexpr uint16_t kMaxInterfaceVariables = 64;
 };

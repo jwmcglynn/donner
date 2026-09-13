@@ -60,8 +60,8 @@ field offsets are checked against reflection independently for each retained pro
 ## Supported profile and limits
 
 The frontend covers the Gaussian and convolution families: flat numeric buffer structures,
-fixed numeric array members of buffer structs, root runtime storage arrays, group-zero sampled/storage textures, typed
-numeric literals, scalar/vector expressions and conversions, local bindings, conditionals,
+fixed numeric array members of buffer structs, root runtime storage arrays, group-zero sampled/storage textures and samplers, bounded decimal/hexadecimal
+numeric literals and abstract scalar constants, scalar/vector expressions and conversions, local bindings, conditionals,
 incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
 textures; texture writes occur in the compute entry. Mutable local declarations may omit an initializer and receive a zero value; immutable declarations require one.
@@ -152,3 +152,18 @@ native formats. All-projection controls retain all three deliberately.
 Report section/payload sizes as well as file sizes: executable page alignment, symbol tables and
 metadata retention can hide or exaggerate a change in payload bytes. Cross-linked ELF inspection
 proves byte retention; native driver execution remains a separate validation step.
+
+The numeric/control profile also covers the Slug mask's scalar abstract arithmetic, module constants,
+`break`, `continue`, `discard`, bitwise AND, vector math and derivatives. `fwidth` is restricted to
+straight-line fragment-entry code before any conditional or loop and outside short-circuit operands;
+this conservative profile does not claim general uniformity analysis. Module constants cannot call
+runtime helpers. Logical/bitwise grouping and relational non-associativity are validated explicitly.
+MSL helpers receive only the resources in their validated transitive use masks. Immutable parse and
+emission phases are shared by source/projection template instances before freezing the exact-sized
+artifact. No compiler phase executes at runtime. The complete production Slug caller migration and
+its performance qualification are still pending.
+
+WGSL `discard` retains the source-level Next behavior, so it does not satisfy a value-returning
+function's authored return requirement. The accepted profile disallows derivatives after discard
+and has no observable fragment-side resource writes; native lowering can end the discarded
+invocation early. See the [WGSL discard and behavior rules](https://www.w3.org/TR/WGSL/#discard-statement).

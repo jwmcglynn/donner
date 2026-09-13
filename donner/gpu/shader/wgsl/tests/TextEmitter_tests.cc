@@ -90,7 +90,7 @@ TEST(TextEmitter, ProjectsValidatedWgslBytesExactly) {
   EXPECT_EQ(sink.view(), kSource);
 }
 
-TEST(TextEmitter, MslManglesNamesAndForwardsEveryResourceToHelpers) {
+TEST(TextEmitter, MslManglesNamesAndForwardsUsedResourcesToHelpers) {
   std::array<char, 16384> output = {};
   TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
 
@@ -104,6 +104,8 @@ TEST(TextEmitter, MslManglesNamesAndForwardsEveryResourceToHelpers) {
   EXPECT_THAT(msl, HasSubstr("donner_msl_function_sample_renamed("));
   EXPECT_THAT(msl,
               HasSubstr("donner_msl_function_sample_renamed(donner_msl_binding_input_renamed"));
+  EXPECT_THAT(msl, HasSubstr("donner_msl_function_sample_renamed(donner_msl_binding_input_renamed, "
+                             "donner_msl_binding_params_renamed, "));
   EXPECT_THAT(msl, HasSubstr("donner_msl_member_gain"));
   EXPECT_THAT(msl, HasSubstr("kernel void blur_vertical("));
   EXPECT_THAT(msl, HasSubstr("donner_msl_texture_load("));
@@ -151,7 +153,7 @@ TEST(TextEmitter, EmitsReadOnlyStorageArraysWithClampedIndices) {
   const std::string_view msl = sink.view();
   EXPECT_THAT(msl, HasSubstr("float donner_msl_member_weights[4];"));
   EXPECT_THAT(msl, HasSubstr("const device donner_msl_struct_storage_values&"));
-  EXPECT_THAT(msl, HasSubstr("[[buffer(6)]]"));
+  EXPECT_THAT(msl, Not(HasSubstr("[[buffer(6)]]")));
   EXPECT_THAT(msl, HasSubstr("uint(clamp(donner_msl_symbol_index_1, int(0), int(3)))"));
   EXPECT_THAT(msl, HasSubstr("min(donner_msl_symbol_index_2, 3u)"));
 }

@@ -1,5 +1,6 @@
 #include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 
+#include "donner/gpu/shader/wgsl/tests/ControlSource.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsSource.h"
 #include "donner/gpu/shader/wgsl/tests/MatrixSource.h"
 #include "donner/gpu/shader/wgsl/tests/StorageArraySource.h"
@@ -23,6 +24,8 @@ constexpr CompiledShaderView kStorageView = kStorageArtifact.view();
 static_assert(kStorageView.resource("bands")->runtimeArrayStrideBytes == 8);
 static_assert(kStorageView.matchesMember("params", "vertices", 0, 64, ShaderScalarType::F32, 4, 4,
                                          16));
+constexpr auto kControlArtifact = Compile<kControlSource, Projection::All>();
+constexpr CompiledShaderView kControlView = kControlArtifact.view();
 }  // namespace
 
 const CompiledShaderView& GraphicsShader() {
@@ -39,6 +42,10 @@ const CompiledShaderView& MatrixOperationsShader() {
 
 const CompiledShaderView& StorageArrayShader() {
   return kStorageView;
+}
+
+const CompiledShaderView& ControlShader() {
+  return kControlView;
 }
 
 }  // namespace donner::gpu::shader::wgsl::tests

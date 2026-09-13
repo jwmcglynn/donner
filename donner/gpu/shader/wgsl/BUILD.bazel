@@ -21,7 +21,10 @@ donner_cc_library(
         "Parser.h",
     ],
     visibility = donner_internal_visibility(),
-    deps = ["//donner/base"],
+    deps = [
+        ":number",
+        "//donner/base",
+    ],
 )
 
 donner_cc_library(
@@ -58,6 +61,7 @@ donner_cc_library(
     name = "graphics_test_source",
     testonly = True,
     hdrs = [
+        "tests/ControlSource.h",
         "tests/GraphicsSource.h",
         "tests/MatrixSource.h",
         "tests/StorageArraySource.h",
@@ -83,6 +87,7 @@ donner_cc_test(
     srcs = [
         "tests/Compiler_tests.cc",
         "tests/Graphics_tests.cc",
+        "tests/Language_tests.cc",
         "tests/Parser_tests.cc",
         "tests/TextEmitter_tests.cc",
     ],

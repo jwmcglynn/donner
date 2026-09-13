@@ -340,11 +340,14 @@ private:
       return;
     }
     switch (type.kind) {
+      case TypeKind::AbstractInt:
+      case TypeKind::AbstractFloat: fail(SpirvEmitError::UnsupportedType); break;
       case TypeKind::Void: declarations_.instruction(19, value); break;
       case TypeKind::Bool: declarations_.instruction(20, value); break;
       case TypeKind::I32: declarations_.instruction(21, value, 32, 1); break;
       case TypeKind::U32: declarations_.instruction(21, value, 32, 0); break;
       case TypeKind::F32: declarations_.instruction(22, value, 32); break;
+      case TypeKind::Sampler: declarations_.instruction(26, value); break;
       case TypeKind::SampledTexture2d:
       case TypeKind::StorageTexture2d: declareImageType(type, value); break;
       case TypeKind::Struct: declareStructType(type, value); break;
@@ -644,6 +647,8 @@ private:
   uint32_t currentBlock_ = 0;
   ArenaId currentFunction_ = kInvalidArenaId;
   bool terminated_ = false;
+  uint32_t breakTarget_ = 0;
+  uint32_t continueTarget_ = 0;
   uint16_t expressionDepth_ = 0;
   Words<1024> annotations_;
   Words<4096> declarations_;
@@ -966,6 +971,7 @@ constexpr uint32_t Emitter::emitBinary(const Expression& node) {
   uint32_t lhs = emitExpression(node.operands[0]);
   if (op == BinaryOp::And || op == BinaryOp::Or) return emitShortCircuit(node, lhs);
   uint32_t rhs = emitExpression(node.operands[1]);
+  if (op == BinaryOp::BitAnd) return operation(199, node.type, lhs, rhs);
   const Type leftType = module_.expressions[node.operands[0]].type;
   const Type rightType = module_.expressions[node.operands[1]].type;
   if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix) {
@@ -999,6 +1005,20 @@ constexpr uint32_t Emitter::emitBuiltin(const Expression& node) {
   std::array<uint32_t, 4> args{};
   for (uint8_t i = 0; i < node.operandCount; ++i) args[i] = emitExpression(node.operands[i]);
   switch (static_cast<Builtin>(node.payload)) {
+    case Builtin::All: return operation(155, node.type, args[0]);
+    case Builtin::Abs: return extended(4, node.type, args[0]);
+    case Builtin::Max:
+      return extended(NumericOpcode(node.type.kind, 40, 42, 41), node.type, args[0], args[1]);
+    case Builtin::Round: return extended(2, node.type, args[0]);
+    case Builtin::Sqrt: return extended(31, node.type, args[0]);
+    case Builtin::Dot: return operation(148, node.type, args[0], args[1]);
+    case Builtin::Length: return extended(66, node.type, args[0]);
+    case Builtin::Normalize: return extended(69, node.type, args[0]);
+    case Builtin::Saturate:
+      return extended(43, node.type, args[0], constant(node.type, 0),
+                      constant(node.type, 0x3f800000u));
+    case Builtin::Fract: return extended(10, node.type, args[0]);
+    case Builtin::Fwidth: return operation(209, node.type, args[0]);
     case Builtin::Any: return operation(154, node.type, args[0]);
     case Builtin::Ceil: return extended(9, node.type, args[0]);
     case Builtin::Exp: return extended(27, node.type, args[0]);
@@ -1137,7 +1157,12 @@ constexpr void Emitter::emitFor(const Statement& node) {
   const uint32_t condition = emitExpression(node.expression);
   functions_.instruction(250, condition, body, merge);
   label(body);
+  const uint32_t outerBreak = breakTarget_, outerContinue = continueTarget_;
+  breakTarget_ = merge;
+  continueTarget_ = continuing;
   emitBlock(node.firstBody);
+  breakTarget_ = outerBreak;
+  continueTarget_ = outerContinue;
   branch(continuing);
   label(continuing);
   emitStatement(module_.statements[node.continuing]);
@@ -1151,6 +1176,19 @@ constexpr void Emitter::emitStatement(const Statement& node) {
     case StatementKind::Assign: emitAssignment(node); break;
     case StatementKind::If: emitIf(node); break;
     case StatementKind::For: emitFor(node); break;
+    case StatementKind::Break:
+    case StatementKind::Continue: {
+      const uint32_t target = node.kind == StatementKind::Break ? breakTarget_ : continueTarget_;
+      if (target == 0)
+        fail(SpirvEmitError::InvalidNode, node.span);
+      else
+        branch(target);
+      break;
+    }
+    case StatementKind::Discard:
+      functions_.instruction(252);
+      terminated_ = true;
+      break;
     case StatementKind::Return:
       emitReturn(node.expression);
       terminated_ = true;

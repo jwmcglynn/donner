@@ -62,7 +62,7 @@ consteval bool RequireValidSource() {
 }
 
 struct Emitted {
-  std::array<char, 32768> msl{};
+  std::array<char, kMaxTextEmitBytes> msl{};
   std::array<uint32_t, 24576> spirv{};
   uint32_t mslSize = 0;
   uint32_t spirvSize = 0;
@@ -85,6 +85,12 @@ constexpr Emitted Emit(const Module& module) {
   }
   return output;
 }
+
+template <SourceText Source>
+inline constexpr auto kParsedSource = Parse(Source.view());
+
+template <SourceText Source, Projection Target>
+inline constexpr auto kEmittedSource = Emit<Target>(kParsedSource<Source>.module);
 
 constexpr bool FitsNames(const Module& module) {
   for (uint16_t i = 0; i < module.bindingCount; ++i)
@@ -121,7 +127,7 @@ template <SourceText Source, Projection Target>
 consteval auto Compile() {
   static_assert(uint8_t(Target) != 0 && (uint8_t(Target) & ~uint8_t(Projection::All)) == 0,
                 "Unknown WGSL projection selection");
-  constexpr auto parsed = Parse(Source.view());
+  constexpr const auto& parsed = compiler_detail::kParsedSource<Source>;
   static_assert(
       compiler_detail::RequireValidSource<parsed.diagnostic.code, parsed.diagnostic.span.begin,
                                           parsed.diagnostic.span.end>());
@@ -131,7 +137,7 @@ consteval auto Compile() {
                 "The compiled artifact requires at least one entry point");
   static_assert(compiler_detail::FitsNames(parsed.module),
                 "WGSL interface name exceeds artifact limit");
-  constexpr auto emitted = compiler_detail::Emit<Target>(parsed.module);
+  constexpr const auto& emitted = compiler_detail::kEmittedSource<Source, Target>;
   static_assert(emitted.textError == TextEmitError::None, "WGSL text projection failed");
   static_assert(emitted.binaryError == SpirvEmitError::None, "WGSL SPIR-V projection failed");
   constexpr size_t wgslBytes =
@@ -168,7 +174,8 @@ consteval auto Compile() {
     resource.name = compiler_detail::Name(parsed.module.name(binding.name));
     resource.group = binding.group;
     resource.binding = binding.binding;
-    resource.type = binding.kind == BindingKind::Uniform ? BindingType::UniformBuffer
+    resource.type = binding.kind == BindingKind::Sampler   ? BindingType::FilteringSampler
+                    : binding.kind == BindingKind::Uniform ? BindingType::UniformBuffer
                     : binding.kind == BindingKind::ReadOnlyStorage
                         ? BindingType::ReadOnlyStorageBuffer
                     : binding.kind == BindingKind::SampledTexture

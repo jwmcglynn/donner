@@ -194,6 +194,7 @@ TEST(MslXcrunValidation, CompiledGraphicsEntriesPassMetalCompilation) {
   ExpectCompilesWithMetalCompiler(wgsl::tests::GraphicsShader().msl, "compiled_graphics");
   ExpectCompilesWithMetalCompiler(wgsl::tests::MatrixShader().msl, "compiled_matrices");
   ExpectCompilesWithMetalCompiler(wgsl::tests::StorageArrayShader().msl, "storage_arrays");
+  ExpectCompilesWithMetalCompiler(wgsl::tests::ControlShader().msl, "numeric_control");
   ExpectCompilesWithMetalCompiler(wgsl::tests::MatrixOperationsShader().msl, "matrix_operations");
 }
 

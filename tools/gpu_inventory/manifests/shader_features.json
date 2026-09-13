@@ -449,6 +449,57 @@
       ],
       "structs": []
     },
+    "donner/gpu/shader/wgsl/tests/corpus/numeric_control.wgsl": {
+      "bindings": [
+        {
+          "addressSpace": "storage,read",
+          "binding": 3,
+          "group": 0,
+          "name": "values",
+          "type": "array<Item>"
+        },
+        {
+          "binding": 4,
+          "group": 0,
+          "name": "unusedSampler",
+          "type": "sampler"
+        }
+      ],
+      "builtins": [
+        "position"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        }
+      ],
+      "features": [
+        "abs",
+        "array",
+        "break",
+        "const",
+        "continue",
+        "discard",
+        "dot",
+        "for",
+        "fract",
+        "fwidth",
+        "if",
+        "length",
+        "let",
+        "max",
+        "normalize",
+        "return",
+        "round",
+        "saturate",
+        "sqrt",
+        "var"
+      ],
+      "structs": [
+        "Item"
+      ]
+    },
     "donner/gpu/shader/wgsl/tests/corpus/storage_arrays.wgsl": {
       "bindings": [
         {

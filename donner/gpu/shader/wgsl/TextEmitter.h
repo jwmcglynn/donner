@@ -33,7 +33,7 @@ struct TextEmitResult {
 };
 
 /// Maximum bytes emitted for one text projection, including count-only calls.
-inline constexpr uint32_t kMaxTextEmitBytes = 32768;
+inline constexpr uint32_t kMaxTextEmitBytes = 65536;
 
 /// A fixed, caller-owned character sink.
 ///
@@ -230,6 +230,8 @@ private:
     }
     std::string_view scalar;
     switch (value.kind) {
+      case TypeKind::AbstractInt:
+      case TypeKind::AbstractFloat: error_ = TextEmitError::UnsupportedType; return;
       case TypeKind::Void: text("void"); return;
       case TypeKind::Bool: scalar = "bool"; break;
       case TypeKind::I32: scalar = "int"; break;
@@ -249,6 +251,7 @@ private:
         uintText(value.rows);
         return;
       case TypeKind::Array: error_ = TextEmitError::UnsupportedType; return;
+      case TypeKind::Sampler: text("sampler"); return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d: text("texture2d<float, access::write>"); return;
     }
@@ -351,9 +354,9 @@ private:
     text(";\n");
   }
 
-  constexpr bool usesRuntimeArrays() const {
+  constexpr bool usesRuntimeArrays(uint32_t mask = ~uint32_t(0)) const {
     for (uint16_t i = 0; i < module_.bindingCount; ++i)
-      if (module_.bindings[i].type.kind == TypeKind::Array &&
+      if ((mask & (uint32_t(1) << i)) && module_.bindings[i].type.kind == TypeKind::Array &&
           module_.bindings[i].type.arrayCount == 0)
         return true;
     return false;
@@ -379,23 +382,30 @@ private:
     prefixed("donner_msl_binding_", module_.bindings[id].name);
   }
 
-  constexpr void resourceParameters(bool attributes) {
+  constexpr void resourceParameters(bool attributes, uint32_t mask) {
+    bool comma = false;
     for (uint16_t index = 0; index < module_.bindingCount; ++index) {
-      if (index != 0) {
+      if (!(mask & (uint32_t(1) << index))) continue;
+      if (comma) {
         text(", ");
       }
+      comma = true;
       const Binding& binding = module_.bindings[index];
       const bool isBuffer =
           binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage;
-      const uint32_t bindingLimit = isBuffer ? kMslBufferBindingCount : kMslTextureBindingCount;
+      const uint32_t bindingLimit = isBuffer ? kMslBufferBindingCount
+                                    : binding.kind == BindingKind::Sampler
+                                        ? kMslSamplerBindingCount
+                                        : kMslTextureBindingCount;
       if (binding.group != 0 || binding.binding >= bindingLimit) {
         error_ = TextEmitError::UnsupportedBinding;
         return;
       }
       emitResourceParameter(index, attributes);
     }
-    if (usesRuntimeArrays()) {
-      text(", constant uint* donner_msl_lengths");
+    if (usesRuntimeArrays(mask)) {
+      if (comma) text(", ");
+      text("constant uint* donner_msl_lengths");
       if (attributes) {
         text(" [[buffer(");
         uintText(kMslBufferLengthsIndex);
@@ -429,6 +439,16 @@ private:
           text(")]]");
         }
         break;
+      case BindingKind::Sampler:
+        type(binding.type);
+        character(' ');
+        bindingName(index);
+        if (attributes) {
+          text(" [[sampler(");
+          uintText(MslSamplerIndex(binding.binding));
+          text(")]]");
+        }
+        break;
       case BindingKind::SampledTexture:
       case BindingKind::StorageTexture:
         type(binding.type);
@@ -443,14 +463,18 @@ private:
     }
   }
 
-  constexpr void forwardingParameters() {
+  constexpr void forwardingParameters(uint32_t mask) {
+    bool comma = false;
     for (uint16_t index = 0; index < module_.bindingCount; ++index) {
-      if (index != 0) {
-        text(", ");
-      }
+      if (!(mask & (uint32_t(1) << index))) continue;
+      if (comma) text(", ");
       bindingName(index);
+      comma = true;
     }
-    if (usesRuntimeArrays()) text(", donner_msl_lengths");
+    if (usesRuntimeArrays(mask)) {
+      if (comma) text(", ");
+      text("donner_msl_lengths");
+    }
   }
 
   constexpr void emitTextureHelpers() {
@@ -649,7 +673,7 @@ private:
 
   constexpr void emitBinary(const Expression& node) {
     constexpr std::string_view kOperators[] = {
-        "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "||"};
+        "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "||", "&"};
     const uint32_t op = node.payload;
     if (op >= sizeof(kOperators) / sizeof(kOperators[0])) {
       error_ = TextEmitError::InvalidModule;
@@ -889,6 +913,61 @@ private:
   constexpr void emitBuiltin(const Expression& node) {
     const Builtin builtin = static_cast<Builtin>(node.payload);
     switch (builtin) {
+      case Builtin::All:
+        text("all(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Abs:
+        text("abs(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Max:
+        text("max(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Round:
+        text("rint(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Sqrt:
+        text("sqrt(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Dot:
+        text("dot(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Length:
+        text("length(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Normalize:
+        text("normalize(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Saturate:
+        text("saturate(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Fract:
+        text("fract(");
+        expressionList(node);
+        character(')');
+        return;
+      case Builtin::Fwidth:
+        text("fwidth(");
+        expressionList(node);
+        character(')');
+        return;
       case Builtin::Any:
         text("any(");
         expressionList(node);
@@ -951,9 +1030,9 @@ private:
     }
     prefixed("donner_msl_function_", function.name);
     character('(');
-    forwardingParameters();
+    forwardingParameters(function.resourceMask);
     for (uint8_t index = 0; index < node.operandCount; ++index) {
-      if (module_.bindingCount != 0 || index != 0) text(", ");
+      if (function.resourceMask != 0 || index != 0) text(", ");
       expression(node.operands[index]);
     }
     character(')');
@@ -972,6 +1051,13 @@ private:
       case StatementKind::Assign: emitAssignment(node, inlineStatement); break;
       case StatementKind::If: emitIf(node); break;
       case StatementKind::For: emitFor(node); break;
+      case StatementKind::Break: text("break;"); break;
+      case StatementKind::Continue: text("continue;"); break;
+      case StatementKind::Discard:
+        text("discard_fragment(); return");
+        if (currentReturnType_.kind != TypeKind::Void) text(" {}");
+        character(';');
+        break;
       case StatementKind::Return: emitReturn(node, inlineStatement); break;
       case StatementKind::TextureStore: emitTextureStore(node, inlineStatement); break;
     }
@@ -1136,9 +1222,9 @@ private:
   }
 
   constexpr void emitGraphicsArguments(const Function& function) {
-    forwardingParameters();
+    forwardingParameters(function.resourceMask);
     for (uint16_t parameter = 0; parameter < function.parameterCount; ++parameter) {
-      if (parameter != 0 || module_.bindingCount != 0) text(", ");
+      if (parameter != 0 || function.resourceMask != 0) text(", ");
       const ArenaId symbolId = function.firstParameter + parameter;
       const Symbol& symbol = module_.symbols[symbolId];
       const bool structure = symbol.type.kind == TypeKind::Struct;
@@ -1191,8 +1277,8 @@ private:
     character(' ');
     text(name);
     character('(');
-    resourceParameters(true);
-    bool comma = module_.bindingCount != 0;
+    resourceParameters(true, function.resourceMask);
+    bool comma = function.resourceMask != 0;
     if (inputFields != 0) {
       if (comma) text(", ");
       ioTypeName(functionId, true);
@@ -1215,6 +1301,8 @@ private:
     text("}\n\n");
   }
 
+  Type currentReturnType_;
+
   constexpr void emitFunction(uint16_t functionId) {
     if (error_ != TextEmitError::None) return;
     if (functionId >= module_.functionCount) {
@@ -1228,8 +1316,9 @@ private:
       error_ = TextEmitError::InvalidModule;
       return;
     }
+    currentReturnType_ = function.returnType;
     emitFunctionHead(function, entry);
-    resourceParameters(entry);
+    resourceParameters(entry, function.resourceMask);
     emitFunctionParameters(function, entry);
     text(") {\n");
     ++indent_;
@@ -1267,7 +1356,7 @@ private:
         error_ = TextEmitError::InvalidArenaReference;
         return;
       }
-      if (module_.bindingCount != 0 || index != 0) text(", ");
+      if (function.resourceMask != 0 || index != 0) text(", ");
       const Symbol& symbol = module_.symbols[symbolId];
       if ((entry && symbol.builtin != BuiltinValue::GlobalInvocationId) ||
           (function.stage == Stage::None && symbol.builtin != BuiltinValue::None)) {

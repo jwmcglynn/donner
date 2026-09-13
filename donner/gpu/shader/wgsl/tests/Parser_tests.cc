@@ -35,7 +35,7 @@ TEST(Parser, RejectsSourceAndArenaBudgetViolations) {
   EXPECT_EQ(Parse(kNonAscii).diagnostic.code, ErrorCode::NonAsciiSource);
 }
 
-TEST(Parser, EnforcesTypedLiteralAndSemanticRules) {
+TEST(Parser, EnforcesLiteralAndSemanticRules) {
   constexpr std::string_view kUntypedLiteral = R"(
 @compute @workgroup_size(1)
 fn cs(@builtin(global_invocation_id) gid: vec3<u32>) { let value = 1; }
@@ -57,29 +57,26 @@ fn divide(value: i32, denominator: i32) -> i32 { return value / denominator; }
 fn cs(@builtin(global_invocation_id) gid: vec3<u32>) {}
 )";
 
-  EXPECT_EQ(Parse(kUntypedLiteral).diagnostic.code, ErrorCode::InvalidLiteral);
+  EXPECT_EQ(Parse(kUntypedLiteral).diagnostic.code, ErrorCode::None);
   EXPECT_EQ(Parse(kInvalidReturn).diagnostic.code, ErrorCode::InvalidReturn);
   EXPECT_EQ(Parse(kDuplicateName).diagnostic.code, ErrorCode::DuplicateName);
   EXPECT_EQ(Parse(kConstantDivideByZero).diagnostic.code, ErrorCode::InvalidConstantExpression);
   EXPECT_TRUE(Parse(kDynamicDivideIsAccepted).hasResult());
 }
 
-TEST(Parser, AcceptsOnlyExactlyRepresentableFractionalF32Literals) {
-  constexpr std::string_view kExactBoundaryValues = R"(
-fn f() {
-  let half = 8388607.5f;
-  let quarter = 4194303.25f;
-  let threeQuarters = 4194303.75f;
-}
-)";
-  constexpr std::string_view kInexactHalf = R"(fn f() { let value = 8388608.5f; })";
-  constexpr std::string_view kInexactQuarter = R"(fn f() { let value = 4194304.25f; })";
-  constexpr std::string_view kInexactThreeQuarters = R"(fn f() { let value = 4194304.75f; })";
-
-  EXPECT_TRUE(Parse(kExactBoundaryValues).hasResult());
-  EXPECT_EQ(Parse(kInexactHalf).diagnostic.code, ErrorCode::InvalidLiteral);
-  EXPECT_EQ(Parse(kInexactQuarter).diagnostic.code, ErrorCode::InvalidLiteral);
-  EXPECT_EQ(Parse(kInexactThreeQuarters).diagnostic.code, ErrorCode::InvalidLiteral);
+TEST(Parser, RoundsFractionalF32LiteralsToRepresentableValues) {
+  struct Case {
+    const char* source;
+    uint32_t bits;
+  };
+  for (const auto& item : {Case{"fn f() { let value = 8388608.5f; }", 0x4b000000},
+                           Case{"fn f() { let value = 4194304.25f; }", 0x4a800000},
+                           Case{"fn f() { let value = 4194304.75f; }", 0x4a800002}}) {
+    SCOPED_TRACE(item.source);
+    const auto result = Parse(item.source);
+    ASSERT_EQ(result.diagnostic.code, ErrorCode::None);
+    EXPECT_EQ(result.module.expressions[0].payload, item.bits);
+  }
 }
 
 TEST(Parser, RejectsReversedStaticClampBounds) {
