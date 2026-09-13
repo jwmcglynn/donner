@@ -342,8 +342,8 @@ CanonicalCurveKey canonicalCurveKey(const EncodedPath::Curve& curve) {
                                       : CanonicalCurveKey::Direction::Forward};
 }
 
-/// Remove opposite copies within this path without changing survivor order or winding.
-bool cancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maximumItems) {
+/// Admit the same bounded finite curve set before allocating cancellation scratch.
+bool curveCancellationInputFits(std::span<const CurveWithRange> curves, std::size_t maximumItems) {
   constexpr std::size_t kScratchBytesPerCurve = sizeof(std::size_t) + sizeof(uint8_t);
   if (curves.size() > maximumItems ||
       curves.size() > std::numeric_limits<std::size_t>::max() / kScratchBytesPerCurve) {
@@ -354,6 +354,50 @@ bool cancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maxim
     for (float coordinate : {curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y}) {
       if (!std::isfinite(coordinate)) return false;
     }
+  }
+  return true;
+}
+
+/// Mark balanced pairs in one non-palindromic key group, preserving excess multiplicity.
+void markOppositeCurveGroup(std::span<const CurveWithRange> curves,
+                            std::span<const std::size_t> indexes, std::size_t begin,
+                            std::size_t end, std::span<uint8_t> canceled) {
+  std::size_t forwardCount = 0;
+  for (std::size_t i = begin; i < end; ++i) {
+    forwardCount += canonicalCurveKey(curves[indexes[i]].curve).direction ==
+                    CanonicalCurveKey::Direction::Forward;
+  }
+  const std::size_t pairs = std::min(forwardCount, end - begin - forwardCount);
+  std::size_t forwardRemaining = pairs;
+  std::size_t reverseRemaining = pairs;
+  for (std::size_t i = begin; i < end; ++i) {
+    const bool forward = canonicalCurveKey(curves[indexes[i]].curve).direction ==
+                         CanonicalCurveKey::Direction::Forward;
+    std::size_t& remaining = forward ? forwardRemaining : reverseRemaining;
+    if (remaining > 0) {
+      canceled[indexes[i]] = 1;
+      --remaining;
+    }
+  }
+}
+
+/// Compact surviving records in their original order without reorienting them.
+void compactUncanceledCurves(std::vector<CurveWithRange>& curves,
+                             std::span<const uint8_t> canceled) {
+  std::size_t output = 0;
+  for (std::size_t i = 0; i < curves.size(); ++i) {
+    if (canceled[i] == 0) {
+      if (output != i) curves[output] = curves[i];
+      ++output;
+    }
+  }
+  curves.resize(output);
+}
+
+/// Remove opposite copies within this path without changing survivor order or winding.
+bool cancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maximumItems) {
+  if (!curveCancellationInputFits(curves, maximumItems)) {
+    return false;
   }
   if (curves.size() < 2) {
     return true;
@@ -376,35 +420,12 @@ bool cancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maxim
       ++end;
     }
     if (key.direction != CanonicalCurveKey::Direction::Palindromic) {
-      std::size_t forwardCount = 0;
-      for (std::size_t i = begin; i < end; ++i) {
-        forwardCount += canonicalCurveKey(curves[indexes[i]].curve).direction ==
-                        CanonicalCurveKey::Direction::Forward;
-      }
-      const std::size_t pairs = std::min(forwardCount, end - begin - forwardCount);
-      std::size_t forwardRemaining = pairs;
-      std::size_t reverseRemaining = pairs;
-      for (std::size_t i = begin; i < end; ++i) {
-        const bool forward = canonicalCurveKey(curves[indexes[i]].curve).direction ==
-                             CanonicalCurveKey::Direction::Forward;
-        std::size_t& remaining = forward ? forwardRemaining : reverseRemaining;
-        if (remaining > 0) {
-          canceled[indexes[i]] = 1;
-          --remaining;
-        }
-      }
+      markOppositeCurveGroup(curves, indexes, begin, end, canceled);
     }
     begin = end;
   }
 
-  std::size_t output = 0;
-  for (std::size_t i = 0; i < curves.size(); ++i) {
-    if (canceled[i] == 0) {
-      if (output != i) curves[output] = curves[i];
-      ++output;
-    }
-  }
-  curves.resize(output);
+  compactUncanceledCurves(curves, canceled);
   return true;
 }
 

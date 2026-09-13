@@ -440,7 +440,7 @@ public:
    * @param flattenTolerance Tolerance for curve flattening, in this path's
    *   coordinate space.
    * The result is a union of overlapping, positive-winding pieces and must
-   * be consumed with ef FillRule::NonZero.
+   * be consumed with \ref FillRule::NonZero.
    *
    * @return A new Path representing the filled outline of the stroke.
    */
