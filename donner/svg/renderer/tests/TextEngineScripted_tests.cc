@@ -524,7 +524,7 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
   auto hidden = MakeSpan("D");
   hidden.pathSpline = path;
   hidden.textPathSourceEntity = textPathEntity;
-  hidden.pathStartOffset = 80.0;
+  hidden.xList = {Lengthd(80.0, Lengthd::Unit::None)};
   hidden.visibility = Visibility::Hidden;
 
   text.spans.push_back(std::move(first));
@@ -770,6 +770,13 @@ TEST(TextEngineScriptedTest, HorizontalTextPathCarriesDyAlongThePathNormal) {
           AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)), GlyphYPositionIs(DoubleNear(20.0, 1e-6))),
           AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)),
                 GlyphYPositionIs(DoubleNear(50.0, 1e-6)))));
+}
+
+TEST(TextEngineScriptedTest, TextPathDyCarriesAcrossConsecutivePaths) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p"><tspan dy="10">A</tspan></textPath><textPath href="#p">B</textPath>)");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphYPositionIs(DoubleNear(10.0, 1e-6)),
+                                  GlyphYPositionIs(DoubleNear(10.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathAbsoluteXPreservesSameGlyphDx) {
