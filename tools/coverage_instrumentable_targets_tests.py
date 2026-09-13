@@ -34,7 +34,7 @@ class ClassifyTest(unittest.TestCase):
         self.assertFalse(result.instrumentable_present)
 
     def test_javascript_test_preserves_native_and_unknown_coverage(self):
-        for kind in ("cc_test", "donner_multi_transitioned_test", "unknown_test"):
+        for kind in ("cc_test", "_donner_multi_transitioned_test", "unknown_test"):
             with self.subTest(kind=kind):
                 result = mod.classify(
                     [
