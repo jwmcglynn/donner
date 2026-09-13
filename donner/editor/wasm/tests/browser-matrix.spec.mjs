@@ -103,6 +103,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
       "chromium_remote_smoke",
+      "firefox_composited_invariants_test",
     ],
     "every playwright_test lane must be named and checked; update this contract when one is added",
   );
@@ -116,6 +117,12 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       assert.deepEqual(tags.sort(), ["manual", "perf"], "responsiveness timing must remain opt-in");
       assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
       assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+    } else if (laneName === "firefox_composited_invariants_test") {
+      assert.deepEqual(
+        tags.sort(),
+        ["manual", "no-local"],
+        "extended Firefox diagnostics are opt-in",
+      );
     } else {
       assert.ok(
         !tags.includes("manual") && !tags.includes("perf"),
@@ -123,21 +130,41 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       );
     }
     const specPattern = performanceLane
-      ? /\$\(rootpath :([^)]+\.perf\.ts)\)/
-      : /\$\(rootpath :([^)]+\.spec\.ts)\)/;
-    const specFile = specPattern.exec(lane)?.[1];
-    assert.ok(specFile, `${laneName} must run a named spec`);
-    if (performanceLane) assert.equal(specFile, "browser-responsiveness.perf.ts");
-    assert.ok(
-      lane.includes(`"${specFile}"`),
-      `${laneName} must list ${specFile} in its data`,
-    );
-    const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
-    for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
-      assert.ok(
-        lane.includes(`"${importedModule}.ts"`),
-        `${laneName} is missing ${specFile} dependency ${importedModule}.ts`,
+      ? /\$\(rootpath :([^)]+\.perf\.ts)\)/g
+      : /\$\(rootpath :([^)]+\.spec\.ts)\)/g;
+    const specFiles = [...lane.matchAll(specPattern)].map(([, spec]) => spec);
+    assert.ok(specFiles.length > 0, `${laneName} must run a named spec`);
+    if (performanceLane) assert.deepEqual(specFiles, ["browser-responsiveness.perf.ts"]);
+    if (laneName === "firefox_composited_invariants_test") {
+      assert.deepEqual(specFiles, [
+        "composited-invariants.spec.ts",
+        "composited-drag-invariants.spec.ts",
+      ]);
+      assert.match(
+        lane,
+        /--config=\$\(rootpath :playwright\.composited-firefox\.bazel\.config\.js\)/,
       );
+      assert.ok(lane.includes("\"@playwright//:firefox\""));
+      assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
+      assert.ok(tags.includes("no-local"), "the composited browser gate must use remote execution");
+      assert.doesNotMatch(
+        lane,
+        /--grep/,
+        "the composited lane must include the classifier controls",
+      );
+    }
+    for (const specFile of specFiles) {
+      assert.ok(
+        lane.includes(`"${specFile}"`),
+        `${laneName} must list ${specFile} in its data`,
+      );
+      const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
+      for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
+        assert.ok(
+          lane.includes(`"${importedModule}.ts"`),
+          `${laneName} is missing ${specFile} dependency ${importedModule}.ts`,
+        );
+      }
     }
   }
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
