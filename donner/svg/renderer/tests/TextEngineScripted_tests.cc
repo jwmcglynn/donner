@@ -58,6 +58,7 @@ TextLayoutParams MakeTextParams(double fontSize) {
 class ScriptedTextBackend : public TextBackend {
 public:
   bool reverseClusters = false;
+  bool clusterCombiningMarks = false;
   std::optional<SubSuperMetrics> subSuper;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
@@ -127,6 +128,13 @@ public:
       glyph.xKern = run.glyphs.empty() ? 0.0 : 1.0;
       glyph.yKern = run.glyphs.empty() ? 0.0 : 2.0;
       glyph.cluster = static_cast<uint32_t>(cluster);
+      if (clusterCombiningMarks && codepoint == 0x0301 && !run.glyphs.empty()) {
+        glyph.cluster = run.glyphs.back().cluster;
+        glyph.xKern = 0.0;
+        glyph.yKern = 0.0;
+        glyph.xOffset = -7.0;
+        glyph.yOffset = -4.0;
+      }
       glyph.fontSizeScale = fontVariant == FontVariant::SmallCaps ? 0.8f : 1.0f;
       if (codepoint >= 0x2E80) {
         glyph.xOffset = 2.0;
@@ -150,9 +158,11 @@ public:
 
 TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
                               bool reverseClusters = false,
-                              std::optional<SubSuperMetrics> subSuper = std::nullopt) {
+                              std::optional<SubSuperMetrics> subSuper = std::nullopt,
+                              bool clusterCombiningMarks = false) {
   auto backend = std::make_unique<ScriptedTextBackend>();
   backend->reverseClusters = reverseClusters;
+  backend->clusterCombiningMarks = clusterCombiningMarks;
   backend->subSuper = subSuper;
   return TextEngine(fontManager, registry, std::move(backend));
 }
@@ -543,7 +553,8 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
 }
 
 std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true,
-                                            std::string_view pathData = "M0 0H500") {
+                                            std::string_view pathData = "M0 0H500",
+                                            bool clusterCombiningMarks = false) {
   const std::string source =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="200">
         <path id="p" d=")" +
@@ -557,9 +568,11 @@ std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool script
   SVGDocument document = std::move(parsed).result();
   Registry& registry = document.registry();
   FontManager fontManager(registry);
-  auto engine = scripted ? std::make_unique<TextEngine>(fontManager, registry,
-                                                        std::make_unique<ScriptedTextBackend>())
-                         : std::make_unique<TextEngine>(fontManager, registry);
+  auto scriptedBackend = std::make_unique<ScriptedTextBackend>();
+  scriptedBackend->clusterCombiningMarks = clusterCombiningMarks;
+  auto engine =
+      scripted ? std::make_unique<TextEngine>(fontManager, registry, std::move(scriptedBackend))
+               : std::make_unique<TextEngine>(fontManager, registry);
   const auto textElement = document.querySelector("text");
   const EntityHandle handle = textElement->unsafeEntityHandle();
   engine->prepareForElement(handle, warnings);
@@ -792,6 +805,74 @@ TEST(TextEngineScriptedTest, TextPathAnchorUsesIntermediateGlyphExtents) {
   EXPECT_THAT(glyphs, ElementsAre(GlyphXPositionIs(DoubleNear(90.0, 1e-6)),
                                   GlyphXPositionIs(DoubleNear(200.0, 1e-6)),
                                   GlyphXPositionIs(DoubleNear(110.0, 1e-6))));
+}
+
+TEST(TextEngineScriptedTest, TextPathLengthPreservesMultiGlyphClusterOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, false, std::nullopt,
+                                         /*clusterCombiningMarks=*/true);
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(500.0, 0.0)).build();
+  for (const LengthAdjust adjust : {LengthAdjust::Spacing, LengthAdjust::SpacingAndGlyphs}) {
+    SCOPED_TRACE(adjust);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(
+        "q\xCC\x81"
+        "B");
+    span.pathSpline = path;
+    span.textLength = Lengthd(adjust == LengthAdjust::Spacing ? 61.0 : 42.0, Lengthd::Unit::None);
+    span.lengthAdjust = adjust;
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(20.0));
+    const double scale = adjust == LengthAdjust::Spacing ? 1.0 : 2.0;
+    const double nextOrigin = adjust == LengthAdjust::Spacing ? 51.0 : 22.0;
+    EXPECT_THAT(
+        runs,
+        ElementsAre(RunGlyphsAre(ElementsAre(
+            AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphYPositionIs(DoubleNear(0.0, 1e-6)),
+                  GlyphXAdvanceIs(DoubleEq(10.0 * scale))),
+            AllOf(GlyphXPositionIs(DoubleNear(3.0 * scale, 1e-6)),
+                  GlyphYPositionIs(DoubleNear(-4.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(0.0)),
+                  Field("cluster", &TextGlyph::cluster, 0u)),
+            GlyphXPositionIs(DoubleNear(nextOrigin, 1e-6))))));
+  }
+}
+
+TEST(TextEngineScriptedTest, TextPathClusterCoordinatesAndTangentApplyOnce) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, false, std::nullopt,
+                                         /*clusterCombiningMarks=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("q\xCC\x81");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 200.0)).build();
+  span.pathStartOffset = 20.0;
+  span.textLength = Lengthd(100.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::Spacing;
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span.dxList = {Lengthd(2.0, Lengthd::Unit::None)};
+  span.dyList = {Lengthd(5.0, Lengthd::Unit::None)};
+  text.spans.push_back(std::move(span));
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(-5.0, 1e-6)), GlyphYPositionIs(DoubleNear(32.0, 1e-6)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6))),
+          AllOf(GlyphXPositionIs(DoubleNear(-1.0, 1e-6)), GlyphYPositionIs(DoubleNear(35.0, 1e-6)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6)), GlyphIndexIs(Not(Eq(0))))))));
+}
+
+TEST(TextEngineScriptedTest, TextPathClusterSpacingRespectsNestedLengthOwners) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p" textLength="100">A<tspan textLength="40">q&#x301;B</tspan>C</textPath>)",
+      /*scripted=*/true, "M0 0H500", /*clusterCombiningMarks=*/true);
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(
+          GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXPositionIs(DoubleNear(30.0, 1e-6)),
+          AllOf(GlyphXPositionIs(DoubleNear(33.0, 1e-6)), GlyphYPositionIs(DoubleNear(-4.0, 1e-6))),
+          GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
