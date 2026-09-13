@@ -61,7 +61,6 @@ NON_INSTRUMENTABLE_RULE_KINDS = frozenset(
         "java_library",
         "java_binary",
         "java_test",
-        "js_test",
         "proto_library",
         # Grouping / query rules (no compilation of their own). NOTE: `alias`
         # is deliberately NOT listed. An alias can resolve to an instrumentable
