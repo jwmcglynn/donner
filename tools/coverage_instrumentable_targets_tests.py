@@ -45,6 +45,28 @@ class ClassifyTest(unittest.TestCase):
                 self.assertEqual(["//donner/base:native_tests"], result.instrumentable)
                 self.assertTrue(result.instrumentable_present)
 
+    def test_js_test_is_not_host_cpp_instrumentable(self):
+        result = mod.classify([
+            "js_test rule //donner/editor/wasm/tests:playwright_bazel_config_tests",
+        ])
+        self.assertFalse(result.instrumentable_present)
+        self.assertEqual(result.instrumentable, [])
+
+    def test_host_cpp_still_runs_alongside_js_tests(self):
+        result = mod.classify([
+            "js_test rule //donner/editor/wasm/tests:playwright_bazel_config_tests",
+            "cc_test rule //donner/base:string_utils_tests",
+        ])
+        self.assertTrue(result.instrumentable_present)
+        self.assertEqual(result.instrumentable, ["//donner/base:string_utils_tests"])
+
+    def test_unknown_javascript_wrapper_still_fails_closed(self):
+        result = mod.classify([
+            "custom_js_native_test rule //donner/base:unknown_wrapper",
+        ])
+        self.assertTrue(result.instrumentable_present)
+        self.assertEqual(result.instrumentable, ["//donner/base:unknown_wrapper"])
+
     def test_cc_target_forces_coverage_run(self):
         # A change touching a native C++ target must run coverage even though a
         # lint py_test is also affected.

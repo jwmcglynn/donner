@@ -276,6 +276,37 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
         )
         self.assertEqual("run", verdict)
 
+    def test_js_config_test_with_incompatible_browser_tests_skips(self):
+        browser_tests = [
+            "//donner/editor/wasm/tests:boot_presentation_test",
+            "//donner/editor/wasm/tests:browser_presentation_regression_test",
+            "//donner/editor/wasm/tests:chromium_remote_smoke",
+        ]
+        config_test = "//donner/editor/wasm/tests:playwright_bazel_config_tests"
+        selected = browser_tests + [config_test]
+        verdict = self._decide(
+            label_kinds=["js_test rule " + label for label in selected],
+            final_targets=selected,
+            host_compat=["@@%s HOST_INCOMPATIBLE" % label for label in browser_tests]
+            + ["@@%s HOST_COMPATIBLE" % config_test],
+        )
+        self.assertEqual("skip", verdict)
+
+    def test_host_cpp_and_host_js_selection_keeps_coverage(self):
+        native_test = "//donner/base:string_utils_tests"
+        config_test = "//donner/editor/wasm/tests:playwright_bazel_config_tests"
+        verdict = self._decide(
+            label_kinds=[
+                "cc_test rule " + native_test,
+                "js_test rule " + config_test,
+            ],
+            final_targets=[native_test, config_test],
+            host_compat=[
+                "@@%s HOST_COMPATIBLE" % label for label in [native_test, config_test]
+            ],
+        )
+        self.assertEqual("run", verdict)
+
     # ---- positive control and fail-open paths ---------------------------
 
     def test_mixed_set_with_host_compatible_cc_test_runs(self):
