@@ -510,6 +510,27 @@ TEST_F(VulkanBufferWritesTests, DeviceLossDrainsAndRejectsIdleHostAccessAndSubmi
   EXPECT_EQ(device_->lastSubmittedSerial(), serial);
 }
 
+TEST_F(VulkanBufferWritesTests, TextureSubmissionLossDrainsAndRejectsLaterAccess) {
+  const Texture texture =
+      GetResultOrFail(device_->createTexture({"upload loss",
+                                              {1, 1},
+                                              TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopyDst | TextureUsage::CopySrc}));
+  const std::array<uint8_t, 256> bytes{};
+  expectDeviceLoss_ = true;
+  device_->failNextSubmissionForTest(/*deviceLost=*/true);
+  EXPECT_THAT(device_->writeTexture(texture, bytes, {0, 256, 1}, {1, 1}),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(device_->bufferWriteStatsForTest().lostDeviceDrains, 1u);
+  EXPECT_EQ(device_->pendingTextureUploadCountForTest(), 0u);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::HasSubstr("VK_ERROR_DEVICE_LOST"));
+  EXPECT_THAT(device_->readBackBuffer(input_), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(device_->writeTexture(texture, bytes, {0, 256, 1}, {1, 1}),
+              IsGpuError(GpuErrorType::InvalidState));
+}
+
 TEST_F(VulkanBufferWritesTests, UnalignedWriteTimesOutWithoutDiscardingPendingWrites) {
   NativeQueueGate gate(device_->nativeContextForTest());
   gate.start();

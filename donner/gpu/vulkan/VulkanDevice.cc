@@ -952,6 +952,19 @@ struct VulkanDevice::Impl {
   /// Returns true once any failure was recorded.
   bool hasError() const { return errorState->hadError.load(std::memory_order_acquire); }
 
+  /// Submits one command buffer, with the shared one-shot native failure seam for tests.
+  /// @param commandBuffer Command buffer to submit.
+  /// @param fence Fence signaled by the submission.
+  VkResult submitToQueue(VkCommandBuffer commandBuffer, VkFence fence) {
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+    const VkResult injectedFailure = std::exchange(nextSubmissionFailure, VK_SUCCESS);
+    return injectedFailure != VK_SUCCESS ? injectedFailure
+                                         : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+  }
+
   /// Device-loss submission errors can leave work pending, unlike recoverable OOM failures.
   /// @param result Queue submission result, before any transient resources are released.
   void drainFailedSubmission(VkResult result) {
@@ -2569,12 +2582,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
     return VkError("vkCreateFence", result);
   }
 
-  VkSubmitInfo submitInfo = {};
-  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &commandBuffer;
-  if (const VkResult result = api->vkQueueSubmit(queue, 1, &submitInfo, fence);
-      result != VK_SUCCESS) {
+  if (const VkResult result = submitToQueue(commandBuffer, fence); result != VK_SUCCESS) {
     return VkError("vkQueueSubmit (writeTexture)", result);
   }
   // Past this point the work is the queue's, and it will run whatever this call reports.
@@ -3355,14 +3363,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     return failEncoding(VkError("vkCreateFence", result));
   }
 
-  VkSubmitInfo submitInfo = {};
-  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &state.commandBuffer;
-  const VkResult injectedFailure = std::exchange(impl.nextSubmissionFailure, VK_SUCCESS);
-  const VkResult submitResult = injectedFailure != VK_SUCCESS
-                                    ? injectedFailure
-                                    : impl_->api->vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
+  const VkResult submitResult = impl.submitToQueue(state.commandBuffer, fence);
   if (submitResult != VK_SUCCESS) {
     impl.drainFailedSubmission(submitResult);
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
