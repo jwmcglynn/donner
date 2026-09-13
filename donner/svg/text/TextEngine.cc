@@ -1537,6 +1537,19 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
   return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
 }
 
+/// Nonempty unshaped text interrupts kerning; an empty span keeps the previous pair.
+void UpdateUnshapedSpanPredecessor(std::string_view text, const TextRun& run, bool kerningEnabled,
+                                   uint32_t& previousCodepoint, FontHandle& previousFont,
+                                   float& previousSizePx, bool& previousKerning) {
+  if (text.empty()) {
+    return;
+  }
+  previousCodepoint = 0;
+  previousFont = run.font;
+  previousSizePx = run.usedFontSizePx;
+  previousKerning = kerningEnabled;
+}
+
 }  // namespace
 
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
@@ -1694,12 +1707,15 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       chunkBoundaries.push_back({runs.size(), 0, span.textAnchor});
     }
 
-    // For empty spans, span-start already applied positioning - just propagate.
+    const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
+    // Propagate the span-start position even when the span produces no glyphs.
     if (!HasRenderableSpanText(spanText, spanFontSizePx)) {
       currentPenX = penX;
       currentPenY = penY;
       prevDefaultY = defaultY;
       haveCurrentPosition = true;
+      UpdateUnshapedSpanPredecessor(spanText, run, spanFontKerning, prevSpanLastCodepoint,
+                                    prevSpanFont, prevSpanFontSizePx, prevSpanFontKerning);
       runExtents.push_back({penX, penY, penX, penY});
       runs.push_back(std::move(run));
       continue;
@@ -1725,7 +1741,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     FontHandle prevChunkFont = prevSpanFont;
     float prevChunkFontSizePx = prevSpanFontSizePx;
     bool prevChunkFontKerning = prevSpanFontKerning;
-    const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
