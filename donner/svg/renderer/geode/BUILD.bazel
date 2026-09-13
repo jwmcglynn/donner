@@ -1024,6 +1024,7 @@ donner_cc_test(
         ":geode_device",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/gpu:recording_device",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
