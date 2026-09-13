@@ -45,7 +45,10 @@ struct VulkanApi;
  * Readback waits for the buffer's last use before reading mapped memory; a timeout or device
  * error returns an error without copying any bytes. Queued writes become visible after the
  * subsequent submission completes. Staging and destination allocations remain alive until its
- * fence signals, including destinations absent from the public command stream.
+ * fence signals, including destinations absent from the public command stream. Terminal queue
+ * submission loss is latched before cleanup, and the device is drained before submitted objects
+ * are freed. Vulkan requires this lost-device idle wait to return finitely, but the wait has no
+ * caller-configured deadline. Later host accesses and submissions return the latched error.
  *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
@@ -237,8 +240,8 @@ public:
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
 
-  /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
-  /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
+  /// First latched Vulkan failure observed during submission, polling, or waiting on fences
+  /// (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.
   std::string lastErrorForTest() const;
 

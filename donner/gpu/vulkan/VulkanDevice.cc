@@ -952,6 +952,18 @@ struct VulkanDevice::Impl {
   /// Returns true once any failure was recorded.
   bool hasError() const { return errorState->hadError.load(std::memory_order_acquire); }
 
+  /// Device-loss submission errors can leave work pending, unlike recoverable OOM failures.
+  /// @param result Queue submission result, before any transient resources are released.
+  void drainFailedSubmission(VkResult result) {
+    if (result != VK_ERROR_DEVICE_LOST) return;
+    recordError(std::format("vkQueueSubmit failed with {}", VkResultToString(result)));
+    // Vulkan requires an idle wait on a lost device to return finitely, with success or loss.
+    const VkResult idleResult = api->vkDeviceWaitIdle(device);
+    UTILS_RELEASE_ASSERT_MSG(idleResult == VK_SUCCESS || idleResult == VK_ERROR_DEVICE_LOST,
+                             "lost Vulkan device did not finish pending work");
+    ++lostDeviceDrains;
+  }
+
   /// Destroys the debug-utils messenger; must run before the instance is destroyed.
   void destroyDebugMessenger() {
     if (debugMessenger != VK_NULL_HANDLE && destroyDebugMessengerFn != nullptr &&
@@ -1008,6 +1020,9 @@ struct VulkanDevice::Impl {
 
   /// Allocates one primary command buffer from the pool.
   Result<VkCommandBuffer> allocateCommandBuffer() {
+    if (hasError()) {
+      return GpuError{GpuErrorType::InvalidState, errorState->firstMessage()};
+    }
     VkCommandBufferAllocateInfo allocateInfo = {};
     allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocateInfo.commandPool = commandPool;
@@ -2440,10 +2455,11 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
     return OkStatus();
   }
   const uint64_t lastUse = std::max(bufferLastUseSerial(slotIndex), record->uploadSerial);
-  if (lastUse > completedSerial() || impl_->hasPendingBufferWrite(slotIndex)) {
-    if (impl_->hasError()) {
-      return GpuError{GpuErrorType::InvalidState, lastErrorForTest()};
-    }
+  const uint64_t completed = completedSerial();
+  if (impl_->hasError()) {
+    return GpuError{GpuErrorType::InvalidState, lastErrorForTest()};
+  }
+  if (lastUse > completed || impl_->hasPendingBufferWrite(slotIndex)) {
     if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
       return impl_->queueBufferWrite(slotIndex, offsetBytes, data);
     }
@@ -3348,6 +3364,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
                                     ? injectedFailure
                                     : impl_->api->vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
   if (submitResult != VK_SUCCESS) {
+    impl.drainFailedSubmission(submitResult);
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
     return failEncoding(VkError("vkQueueSubmit", submitResult));
   }
