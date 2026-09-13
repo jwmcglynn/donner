@@ -527,7 +527,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       auto& run = runs[i];
       const auto& span = text.spans[i];
 
-      if (run.onPath) {
+      if (run.onPath && span.pathSpline.has_value()) {
         carryActive = false;
         carriedAdvanceDelta = 0.0;
         continue;
