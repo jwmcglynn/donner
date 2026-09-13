@@ -59,10 +59,35 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
         patterns = [argument for argument in arguments if re.match(r"^-?//", argument)]
 
         def matches(pattern):
-            return target.startswith(pattern[:-3]) if pattern.endswith("...") else target == pattern
+            if not pattern.endswith("/..."):
+                return target == pattern
+            package = target.split(":", 1)[0]
+            root = pattern[:-4]
+            return package == root or package.startswith(root + "/")
 
         return any(matches(pattern) for pattern in patterns if not pattern.startswith("-")) and not any(
             matches(pattern[1:]) for pattern in patterns if pattern.startswith("-")
+        )
+
+    def test_recursive_exclusions_cover_the_package_and_descendants(self):
+        arguments = ["//donner/...", "-//donner/gpu/..."]
+        selection = {
+            target: self._selects(arguments, target)
+            for target in (
+                "//donner/gpu:gpu_tests",
+                "//donner/gpu/metal/tests:metal_buffer_bounds_tests",
+                "//donner/gpu_tools:tests",
+                "//donner/svg/parser:parser_tests",
+            )
+        }
+        self.assertEqual(
+            selection,
+            {
+                "//donner/gpu:gpu_tests": False,
+                "//donner/gpu/metal/tests:metal_buffer_bounds_tests": False,
+                "//donner/gpu_tools:tests": True,
+                "//donner/svg/parser:parser_tests": True,
+            },
         )
 
     def test_replacement_allocator_binaries_are_excluded(self):
@@ -85,7 +110,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
     def test_regular_parser_and_gpu_tests_remain_selected(self):
         for sanitizer in ("ASan", "UBSan"):
             commands = self._commands(sanitizer)
-            for target in ("//donner/svg/parser:svg_parser_tests", "//donner/gpu:device_tests"):
+            for target in ("//donner/svg/parser:parser_tests", "//donner/gpu:gpu_tests"):
                 with self.subTest(sanitizer=sanitizer, target=target):
                     self.assertEqual(sum(self._selects(command, target) for command in commands), 1)
 
