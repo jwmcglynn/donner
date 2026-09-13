@@ -28,6 +28,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep - provides UnpremultiplyRgba
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -2271,6 +2272,69 @@ TEST_F(RendererGeodeTest, StrokeRectOutline) {
   // Far corner: outside everything.
   auto corner = pixelAt(snap, 2, 2);
   EXPECT_THAT(corner, IsTransparent()) << "Corner should be transparent";
+}
+
+TEST_F(RendererGeodeTest, AffineStrokePiecesMatchExplicitUnion) {
+  const Path centerline = PathBuilder()
+                              .moveTo({30, 10})
+                              .lineTo({34, 10})
+                              .lineTo({34, 24})
+                              .lineTo({46, 24})
+                              .lineTo({46, 28})
+                              .lineTo({34, 28})
+                              .lineTo({34, 55})
+                              .lineTo({30, 55})
+                              .lineTo({30, 28})
+                              .lineTo({22, 28})
+                              .lineTo({22, 24})
+                              .lineTo({30, 24})
+                              .closePath()
+                              .build();
+  const Path pieces = centerline.strokeToFill({.width = 6.0}, 0.1);
+  const Path boundary = PathBuilder()
+                            .moveTo({27, 7})
+                            .lineTo({37, 7})
+                            .lineTo({37, 21})
+                            .lineTo({49, 21})
+                            .lineTo({49, 31})
+                            .lineTo({37, 31})
+                            .lineTo({37, 58})
+                            .lineTo({27, 58})
+                            .lineTo({27, 31})
+                            .lineTo({19, 31})
+                            .lineTo({19, 21})
+                            .lineTo({27, 21})
+                            .closePath()
+                            .build();
+  const std::array<Transform2d, 2> canvasFromPath = {
+      Transform2d::Rotate(0.31) * Transform2d::Translate({24.25, 10.25}),
+      Transform2d::SkewX(0.27) * Transform2d::SkewY(-0.19) *
+          Transform2d::Translate({10.25, 20.25})};
+  for (size_t index = 0; index < canvasFromPath.size(); ++index) {
+    // Bake the transform so the encoded curves themselves contain diagonal coincident edges.
+    const Path actualPath = TransformPath(pieces, canvasFromPath[index]);
+    const Path expectedPath = TransformPath(boundary, canvasFromPath[index]);
+    for (uint8_t alpha : {uint8_t{255}, uint8_t{128}}) {
+      const auto render = [&](const Path& path) {
+        RendererGeode renderer = createRenderer();
+        RenderViewport viewport;
+        viewport.size = Vector2d(128, 128);
+        viewport.devicePixelRatio = 1.0;
+        renderer.beginFrame(viewport);
+        renderer.setPaint(solidFill(css::RGBA(255, 0, 255, alpha)));
+        PathShape shape;
+        shape.path = &path;
+        shape.fillRule = FillRule::NonZero;
+        renderer.drawPath(shape, StrokeParams{});
+        renderer.endFrame();
+        return renderer.takeSnapshot();
+      };
+      editor::tests::CompareBitmapToBitmap(
+          render(actualPath), render(expectedPath),
+          "affine_stroke_union_" + std::to_string(index) + "_" + std::to_string(alpha),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 TEST_F(RendererGeodeTest, StrokeSharedVertexDoesNotExtendVertically) {
