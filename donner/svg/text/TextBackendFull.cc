@@ -3,6 +3,7 @@
 #include <ft2build.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -657,6 +658,24 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
                                                  size_t byteLength, bool isVertical,
                                                  FontVariant fontVariant,
                                                  bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
+                      true, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendFull::shapeRunNoKerning(FontHandle font, float fontSizePx,
+                                                          std::string_view spanText,
+                                                          size_t byteOffset, size_t byteLength,
+                                                          bool isVertical, FontVariant fontVariant,
+                                                          bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
+                      false, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float fontSizePx,
+                                                     std::string_view spanText, size_t byteOffset,
+                                                     size_t byteLength, bool isVertical,
+                                                     FontVariant fontVariant, bool enableKerning,
+                                                     bool forceLogicalOrder) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return {};
@@ -785,10 +804,17 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
   };
 
   const char* shapeText = smallCapsText.empty() ? chunkData : smallCapsText.data();
+  std::array<hb_feature_t, 2> features;
+  unsigned int numFeatures = 0;
+  if (useSmcpFeature) {
+    features[numFeatures++] = {HB_TAG('s', 'm', 'c', 'p'), 1, 0, UINT_MAX};
+  }
+  if (!enableKerning) {
+    features[numFeatures++] = {HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
+  }
 
   if (useSmcpFeature) {
-    hb_feature_t smcpFeature = {HB_TAG('s', 'm', 'c', 'p'), 1, 0, UINT_MAX};
-    shapeRange(chunkData, 0, byteLength, false, &smcpFeature, 1);
+    shapeRange(chunkData, 0, byteLength, false, features.data(), numFeatures);
   } else if (!isSmallCap.empty()) {
     // Synthesized small-caps: split into sub-runs at small-cap boundaries
     // and shape each at the appropriate font size.
@@ -817,7 +843,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
           hb_ft_font_changed(hbFont);
         }
 
-        shapeRange(shapeText, subStart, bi, true, nullptr, 0);
+        shapeRange(shapeText, subStart, bi, true, features.data(), numFeatures);
 
         // Restore full font size.
         if (FT_IS_SCALABLE(ftFace)) {
@@ -825,11 +851,11 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
           hb_ft_font_changed(hbFont);
         }
       } else {
-        shapeRange(shapeText, subStart, bi, false, nullptr, 0);
+        shapeRange(shapeText, subStart, bi, false, features.data(), numFeatures);
       }
     }
   } else {
-    shapeRange(chunkData, 0, byteLength, false, nullptr, 0);
+    shapeRange(chunkData, 0, byteLength, false, features.data(), numFeatures);
   }
 
   // Convert shaped glyphs to ShapedRun output.

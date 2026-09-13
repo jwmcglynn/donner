@@ -249,7 +249,23 @@ TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSi
                                                    std::string_view spanText, size_t byteOffset,
                                                    size_t byteLength, bool isVertical,
                                                    FontVariant fontVariant,
-                                                   bool /*forceLogicalOrder*/) const {
+                                                   bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
+                      true, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendSimple::shapeRunNoKerning(
+    FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
+    size_t byteLength, bool isVertical, FontVariant fontVariant, bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
+                      false, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fontSizePx,
+                                                       std::string_view spanText, size_t byteOffset,
+                                                       size_t byteLength, bool isVertical,
+                                                       FontVariant fontVariant, bool enableKerning,
+                                                       bool /*forceLogicalOrder*/) const {
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
@@ -286,7 +302,7 @@ TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSi
     // Compute kerning from previous glyph to this one.
     double kernX = 0;
     double kernY = 0;
-    if (prevGlyph != 0 && glyphIndex != 0) {
+    if (enableKerning && prevGlyph != 0 && glyphIndex != 0) {
       const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
       if (kern != 0) {
         if (isVertical && codepoint < 0x2E80) {

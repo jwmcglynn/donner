@@ -432,6 +432,16 @@ TEST_F(TextBackendSimpleTest, ShapeRunAppliesHorizontalKerning) {
                         GlyphXKernIs(DoubleNear(-10.0, 1e-4)), GlyphYKernIs(DoubleEq(0.0)))));
 }
 
+TEST_F(TextBackendSimpleTest, ShapeRunWithoutKerningSuppressesKerningAdjustments) {
+  const FontHandle font = loadFont(MakeTestFontData(true, 1, false));
+
+  const auto shaped =
+      backend_.shapeRunNoKerning(font, 100.0f, "AV", 0, 2, false, FontVariant::Normal, false);
+
+  ASSERT_EQ(shaped.glyphs.size(), 2u);
+  EXPECT_DOUBLE_EQ(shaped.glyphs[1].xKern, 0.0);
+}
+
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalLatinUsesSidewaysAdvancesAndVerticalKern) {
   const FontHandle font = fullFont();
 

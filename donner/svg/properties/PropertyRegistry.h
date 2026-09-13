@@ -343,6 +343,15 @@ public:
   Property<FontVariant, PropertyCascade::Inherit> fontVariant{
       "font-variant", []() -> std::optional<FontVariant> { return FontVariant::Normal; }};
 
+  /// `font-kerning` property. Inherited. `auto` and `normal` enable kerning; `none` disables it.
+  Property<bool, PropertyCascade::Inherit> fontKerning{
+      "font-kerning", []() -> std::optional<bool> { return true; }};
+
+  /// `font-size-adjust` property. Inherited. An empty value represents the initial `none` value.
+  Property<std::optional<double>, PropertyCascade::Inherit> fontSizeAdjust{
+      "font-size-adjust",
+      []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
+
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
@@ -447,9 +456,10 @@ public:
         stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
         strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, maskType, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
-        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
-        textDecoration, dominantBaseline, writingMode, inlineSize, letterSpacing, wordSpacing,
-        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
+        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, inlineSize,
+        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
+        imageRendering, paintOrder);
   }
 
   /**

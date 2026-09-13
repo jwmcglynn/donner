@@ -28,6 +28,8 @@ struct TextLayoutParams {
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
   WritingMode writingMode = WritingMode::HorizontalTb;
+  bool fontKerning = true;
+  std::optional<double> fontSizeAdjust;
   double letterSpacingPx = 0.0;
   double wordSpacingPx = 0.0;
   std::optional<Lengthd> textLength;

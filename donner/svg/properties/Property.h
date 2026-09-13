@@ -8,6 +8,16 @@
 
 namespace donner::svg {
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::optional<T>& value) {
+  if (value.has_value()) {
+    os << *value;
+  } else {
+    os << "none";
+  }
+  return os;
+}
+
 /**
  * Defines how this property cascades between the parent and child elements.
  */

@@ -110,10 +110,19 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity.
     FontVariant fontVariant = FontVariant::Normal;
 
+    /// Whether kerning is enabled for this span.
+    bool fontKerning = true;
+
+    /// Requested x-height to font-size ratio, or `none` when absent.
+    std::optional<double> fontSizeAdjust;
+
     /// CSS font-size for this span. When different from the text element's font-size,
     /// the layout engine uses this to shape glyphs at the correct size.
     /// Populated by RendererDriver from sourceEntity.
     Lengthd fontSize;
+
+    /// CSS font-family list for this span.
+    SmallVector<RcString, 1> fontFamilies;
 
     /// Indicates whether baseline-shift was set via the `sub` or `super` keywords,
     /// which should be resolved from font OS/2 metrics at layout time.

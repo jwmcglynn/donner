@@ -683,6 +683,23 @@ TEST(PropertyRegistry, FontShorthandResetsOmittedLonghands) {
   EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
 }
 
+TEST(PropertyRegistry, FontKerningAndSizeAdjustInherit) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-kerning: none; font-size-adjust: 0.3");
+
+  const PropertyRegistry inherited = PropertyRegistry().inheritFrom(parent);
+  EXPECT_THAT(inherited.fontKerning.get(), Optional(false));
+  ASSERT_TRUE(inherited.fontSizeAdjust.get().has_value());
+  ASSERT_TRUE(inherited.fontSizeAdjust.get()->has_value());
+  EXPECT_DOUBLE_EQ(**inherited.fontSizeAdjust.get(), 0.3);
+
+  PropertyRegistry reset;
+  reset.parseStyle("font-kerning: normal; font-size-adjust: none");
+  EXPECT_THAT(reset.fontKerning.get(), Optional(true));
+  ASSERT_TRUE(reset.fontSizeAdjust.get().has_value());
+  EXPECT_FALSE(reset.fontSizeAdjust.get()->has_value());
+}
+
 TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;

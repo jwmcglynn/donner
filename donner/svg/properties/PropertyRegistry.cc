@@ -1,6 +1,7 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <limits>
 #include <span>
@@ -1738,6 +1739,173 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontFamily);
                  }},  //
+                {"font",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   const auto setAll = [&](PropertyState state) {
+                     const auto setState = [&](auto& property) {
+                       if (!property.isSpecified() || params.specificity >= property.specificity) {
+                         property.set(state, params.specificity);
+                       }
+                     };
+                     setState(registry.fontFamily);
+                     setState(registry.fontSize);
+                     setState(registry.fontWeight);
+                     setState(registry.fontStyle);
+                     setState(registry.fontStretch);
+                     setState(registry.fontVariant);
+                   };
+
+                   if (params.explicitState != PropertyState::NotSet) {
+                     setAll(params.explicitState);
+                     return std::optional<ParseDiagnostic>();
+                   }
+
+                   const auto components = params.components();
+                   size_t i = 0;
+                   const auto skipWhitespace = [&]() {
+                     while (i < components.size() &&
+                            components[i].isToken<css::Token::Whitespace>()) {
+                       ++i;
+                     }
+                   };
+
+                   FontStyle fontStyle = FontStyle::Normal;
+                   int fontWeight = 400;
+                   int fontStretch = static_cast<int>(FontStretch::Normal);
+                   FontVariant fontVariant = FontVariant::Normal;
+                   std::optional<Lengthd> fontSize;
+
+                   skipWhitespace();
+                   while (i < components.size()) {
+                     const css::ComponentValue& component = components[i];
+                     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+                       if (ident->value.equalsLowercase("italic")) {
+                         fontStyle = FontStyle::Italic;
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                       if (ident->value.equalsLowercase("oblique")) {
+                         fontStyle = FontStyle::Oblique;
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                       if (ident->value.equalsLowercase("small-caps")) {
+                         fontVariant = FontVariant::SmallCaps;
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                       if (ident->value.equalsLowercase("bold")) {
+                         fontWeight = 700;
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                       if (ident->value.equalsLowercase("condensed")) {
+                         fontStretch = static_cast<int>(FontStretch::Condensed);
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                       if (ident->value.equalsLowercase("normal")) {
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                     } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+                       if (number->value >= 1 && number->value <= 1000) {
+                         fontWeight = static_cast<int>(number->value);
+                         ++i;
+                         skipWhitespace();
+                         continue;
+                       }
+                     }
+
+                     auto sizeResult =
+                         parser::ParseLengthPercentage(component, params.allowUserUnits());
+                     if (sizeResult.hasError()) {
+                       ParseDiagnostic error;
+                       error.reason = "Invalid font shorthand";
+                       error.range.start = component.sourceOffset();
+                       return std::optional<ParseDiagnostic>(std::move(error));
+                     }
+                     fontSize = sizeResult.result();
+                     ++i;
+                     break;
+                   }
+
+                   if (!fontSize.has_value()) {
+                     ParseDiagnostic error;
+                     error.reason = "Missing font size in font shorthand";
+                     return std::optional<ParseDiagnostic>(std::move(error));
+                   }
+
+                   skipWhitespace();
+                   SmallVector<RcString, 1> fontFamilies;
+                   while (i < components.size()) {
+                     if (components[i].isToken<css::Token::Comma>()) {
+                       ++i;
+                       skipWhitespace();
+                       continue;
+                     }
+
+                     const size_t familyStart = i;
+                     while (i < components.size() && !components[i].isToken<css::Token::Comma>()) {
+                       ++i;
+                     }
+                     const auto family = components.subspan(familyStart, i - familyStart);
+                     if (family.size() == 1 && family.front().isToken<css::Token::String>()) {
+                       fontFamilies.emplace_back(
+                           family.front().get<css::Token>().get<css::Token::String>().value);
+                       continue;
+                     }
+
+                     std::string name;
+                     for (const css::ComponentValue& item : family) {
+                       if (item.isToken<css::Token::Whitespace>()) {
+                         continue;
+                       }
+                       const auto* ident = item.tryGetToken<css::Token::Ident>();
+                       if (ident == nullptr) {
+                         ParseDiagnostic error;
+                         error.reason = "Invalid font family in font shorthand";
+                         error.range.start = item.sourceOffset();
+                         return std::optional<ParseDiagnostic>(std::move(error));
+                       }
+                       if (!name.empty()) {
+                         name.push_back(' ');
+                       }
+                       name.append(ident->value);
+                     }
+                     if (name.empty()) {
+                       ParseDiagnostic error;
+                       error.reason = "Missing font family in font shorthand";
+                       return std::optional<ParseDiagnostic>(std::move(error));
+                     }
+                     fontFamilies.emplace_back(RcString(name));
+                   }
+
+                   if (fontFamilies.empty()) {
+                     ParseDiagnostic error;
+                     error.reason = "Missing font family in font shorthand";
+                     return std::optional<ParseDiagnostic>(std::move(error));
+                   }
+
+                   const auto set = [&](auto& property, auto value) {
+                     if (!property.isSpecified() || params.specificity >= property.specificity) {
+                       property.set(std::move(value), params.specificity);
+                     }
+                   };
+                   set(registry.fontFamily, std::move(fontFamilies));
+                   set(registry.fontSize, *fontSize);
+                   set(registry.fontWeight, fontWeight);
+                   set(registry.fontStyle, fontStyle);
+                   set(registry.fontStretch, fontStretch);
+                   set(registry.fontVariant, fontVariant);
+                   return std::optional<ParseDiagnostic>();
+                 }},  //
                 {"font-size",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -1890,6 +2058,55 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return err;
                        },
                        &registry.fontVariant);
+                 }},  //
+                {"font-kerning",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) -> ParseResult<bool> {
+                         const auto& components = params.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("auto") ||
+                                 ident->value.equalsLowercase("normal")) {
+                               return true;
+                             }
+                             if (ident->value.equalsLowercase("none")) {
+                               return false;
+                             }
+                           }
+                         }
+                         ParseDiagnostic error;
+                         error.reason = "Invalid font-kerning value";
+                         return error;
+                       },
+                       &registry.fontKerning);
+                 }},  //
+                {"font-size-adjust",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params)
+                           -> ParseResult<std::optional<double>> {
+                         const auto& components = params.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>();
+                               ident && ident->value.equalsLowercase("none")) {
+                             return std::optional<double>();
+                           }
+                           if (const auto* number =
+                                   components.front().tryGetToken<css::Token::Number>();
+                               number && std::isfinite(number->value) && number->value >= 0.0) {
+                             return std::optional<double>(number->value);
+                           }
+                         }
+                         ParseDiagnostic error;
+                         error.reason = "Invalid font-size-adjust value";
+                         return error;
+                       },
+                       &registry.fontSizeAdjust);
                  }},  //
                 {"text-anchor",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
