@@ -710,6 +710,7 @@ struct VulkanDevice::Impl {
     VkBuffer buffer = VK_NULL_HANDLE;  //!< Buffer handle.
     BufferAllocation allocation;       //!< Memory this buffer was bound into.
     VkDeviceSize byteSize = 0;         //!< Creation size in bytes.
+    uint64_t uploadSerial = 0;  //!< Last submission containing a queued write to this buffer.
   };
 
   /// An image plus its dedicated allocation. Its synchronization state lives in \ref syncStates
@@ -802,7 +803,94 @@ struct VulkanDevice::Impl {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;  //!< Submitted command buffer.
     std::vector<VkRenderPass> renderPasses;          //!< Transient per-pass render passes.
     std::vector<VkFramebuffer> framebuffers;         //!< Transient per-pass framebuffers.
+    BufferRecord bufferWriteStaging;                 //!< Packed queued-write payload.
+    std::vector<BufferRecord> retiredBuffers;  //!< Upload destinations whose slots were freed.
   };
+
+  /// A copied host payload awaiting an ordinary submission, ordered by write call.
+  struct PendingBufferWrite {
+    uint32_t slotIndex = 0;      //!< Destination slot; discarded when the buffer is retired.
+    uint64_t offsetBytes = 0;    //!< Destination byte offset.
+    std::vector<uint8_t> bytes;  //!< Owned payload, independent of caller storage.
+  };
+
+  std::vector<PendingBufferWrite> pendingBufferWrites;  //!< Unsent writes in call order.
+  uint64_t pendingBufferWriteBytes = 0;                 //!< Bytes reserved by unsent writes.
+  uint64_t inFlightBufferWriteBytes = 0;                //!< Staging bytes retained by submissions.
+  uint64_t bufferWriteByteBudget = kMaxBufferByteSize;  //!< Combined pending/in-flight limit.
+  uint64_t bufferWriteStagingAllocations = 0;           //!< Successful packed staging allocations.
+  uint64_t submittedBufferWriteBatches = 0;             //!< Submitted batches with queued writes.
+  bool failNextSubmission = false;  //!< Test-only failure before queue submission.
+
+  /// Whether this destination has older unsent writes that a host copy must not overtake.
+  bool hasPendingBufferWrite(uint32_t slotIndex) const {
+    return std::ranges::any_of(pendingBufferWrites, [slotIndex](const PendingBufferWrite& write) {
+      return write.slotIndex == slotIndex;
+    });
+  }
+
+  /// Discards writes to a retired buffer, or writes just applied through its idle mapping.
+  void discardPendingBufferWrites(uint32_t slotIndex) {
+    std::erase_if(pendingBufferWrites, [&](const PendingBufferWrite& write) {
+      if (write.slotIndex != slotIndex) return false;
+      pendingBufferWriteBytes -= write.bytes.size();
+      return true;
+    });
+  }
+
+  /// Copies a write into the bounded queue; identical ranges coalesce at the newest position.
+  Status queueBufferWrite(uint32_t slotIndex, uint64_t offsetBytes,
+                          std::span<const uint8_t> bytes) {
+    const auto previous =
+        std::ranges::find_if(pendingBufferWrites, [&](const PendingBufferWrite& write) {
+          return write.slotIndex == slotIndex && write.offsetBytes == offsetBytes &&
+                 write.bytes.size() == bytes.size();
+        });
+    const uint64_t replacedBytes =
+        previous == pendingBufferWrites.end() ? 0 : previous->bytes.size();
+    const uint64_t queuedBytes = pendingBufferWriteBytes - replacedBytes + bytes.size();
+    if (queuedBytes > bufferWriteByteBudget ||
+        inFlightBufferWriteBytes > bufferWriteByteBudget - queuedBytes ||
+        (previous == pendingBufferWrites.end() && pendingBufferWrites.size() >= 16'384)) {
+      return GpuError{GpuErrorType::LimitExceeded,
+                      std::format("Vulkan buffer write budget exceeded: {} queued / {} in-flight "
+                                  "bytes (limit {}), {} pending writes",
+                                  queuedBytes, inFlightBufferWriteBytes, bufferWriteByteBudget,
+                                  pendingBufferWrites.size())};
+    }
+    PendingBufferWrite write{.slotIndex = slotIndex, .offsetBytes = offsetBytes};
+    if (previous != pendingBufferWrites.end()) {
+      write.bytes = std::move(previous->bytes);
+      pendingBufferWrites.erase(previous);
+    }
+    write.bytes.assign(bytes.begin(), bytes.end());
+    pendingBufferWrites.push_back(std::move(write));
+    pendingBufferWriteBytes = queuedBytes;
+    return OkStatus();
+  }
+
+  /// Applies older queued writes before an unaligned host write to an idle destination.
+  void flushPendingBufferWritesToHost(uint32_t slotIndex, void* mapped) {
+    for (const PendingBufferWrite& write : pendingBufferWrites) {
+      if (write.slotIndex == slotIndex) {
+        std::memcpy(static_cast<uint8_t*>(mapped) + write.offsetBytes, write.bytes.data(),
+                    write.bytes.size());
+      }
+    }
+    discardPendingBufferWrites(slotIndex);
+  }
+
+  /// Records accepted writes' last-use serials and releases their pending payloads.
+  void commitPendingBufferWrites(uint64_t submissionSerial) {
+    if (pendingBufferWrites.empty()) return;
+    for (const PendingBufferWrite& write : pendingBufferWrites) {
+      FindRecord(buffers, write.slotIndex)->uploadSerial = submissionSerial;
+    }
+    inFlightBufferWriteBytes += pendingBufferWriteBytes;
+    pendingBufferWrites.clear();
+    pendingBufferWriteBytes = 0;
+    ++submittedBufferWriteBatches;
+  }
 
   /// Upload objects retained when the queue accepted the copy but its wait timed out.
   struct PendingUpload {
@@ -874,6 +962,11 @@ struct VulkanDevice::Impl {
 
   /// Destroys the transient objects and command buffer of a completed submission.
   void releaseSubmission(InFlightSubmission& submission) {
+    inFlightBufferWriteBytes -= submission.bufferWriteStaging.byteSize;
+    destroyBufferRecord(submission.bufferWriteStaging);
+    for (BufferRecord& record : submission.retiredBuffers) {
+      destroyBufferRecord(record);
+    }
     for (VkFramebuffer framebuffer : submission.framebuffers) {
       api->vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
@@ -1086,6 +1179,7 @@ struct VulkanDevice::Impl {
     std::vector<VkFramebuffer> transientFramebuffers;  //!< Framebuffers created while encoding.
     bool inRenderPass = false;                         //!< True between begin and end pass.
     bool inComputePass = false;                        //!< True between begin and end compute pass.
+    BufferRecord bufferWriteStaging;                   //!< Staging released on encoding failure.
     Extent2d passExtent;                               //!< Extent of the active pass.
     const RenderPipelineRecord* currentPipeline = nullptr;  //!< Pipeline bound in the pass.
     /// Compute pipeline bound in the active compute pass.
@@ -1102,6 +1196,10 @@ struct VulkanDevice::Impl {
     /// exactly at the end as an empty range; only a nonzero draw proves the range nonempty.
     std::optional<PendingIndexBinding> pendingIndexBinding;
   };
+
+  /// Packs and records pending writes before the command stream without consuming the queue.
+  /// @param state Encoding state that owns the staging buffer until submission succeeds.
+  Status encodePendingBufferWrites(EncodingState& state);
 
   /// Records the barrier that puts \p textureSlot into \p usage, if one is needed, and stages
   /// the state it leaves behind.
@@ -1239,6 +1337,11 @@ struct VulkanDevice::Impl {
   /// @param commandIndex Index of the command to encode.
   Status encodeCommand(EncodingState& state, std::span<const Command> commands,
                        size_t commandIndex);
+
+  /// Encodes a complete validated stream, preserving the first failure.
+  /// @param state Per-submission encoding state.
+  /// @param commands Commands to encode in order.
+  Status encodeCommands(EncodingState& state, std::span<const Command> commands);
 
   /// The synchronization state of every live texture, staged during an encode and committed
   /// only once its submission reached the queue.
@@ -1479,6 +1582,24 @@ VulkanDevice::~VulkanDevice() {
   impl_->teardown();
 }
 
+VulkanDevice::BufferWriteStats VulkanDevice::bufferWriteStatsForTest() const {
+  size_t retiredBuffers = 0;
+  for (const Impl::InFlightSubmission& submission : impl_->inFlight) {
+    retiredBuffers += submission.retiredBuffers.size();
+  }
+  return {impl_->pendingBufferWrites.size(),  impl_->pendingBufferWriteBytes,
+          impl_->inFlightBufferWriteBytes,    impl_->bufferWriteStagingAllocations,
+          impl_->submittedBufferWriteBatches, retiredBuffers};
+}
+
+void VulkanDevice::setBufferWriteByteBudgetForTest(uint64_t byteBudget) {
+  impl_->bufferWriteByteBudget = std::min(byteBudget, kMaxBufferByteSize);
+}
+
+void VulkanDevice::failNextSubmissionForTest() {
+  impl_->failNextSubmission = true;
+}
+
 VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
   return {impl_->api, impl_->device, impl_->queue, impl_->queueFamilyIndex};
 }
@@ -1526,6 +1647,15 @@ bool VulkanDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
   return !impl.hasError() && impl.completedSerialValue >= serial;
 }
 
+Status VulkanDevice::waitForBufferAccess(uint64_t serial, std::string_view operation) {
+  if (waitForSerial(serial, kBusyBufferAccessTimeoutSeconds)) return OkStatus();
+  const std::string error = lastErrorForTest();
+  return GpuError{GpuErrorType::InvalidState,
+                  error.empty()
+                      ? std::format("{} timed out waiting for submission {}", operation, serial)
+                      : error};
+}
+
 Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) {
   // Full handle validation (null, device identity, AND generation) through the base class, so a
   // stale handle whose slot was reused cannot read the replacement buffer.
@@ -1539,13 +1669,9 @@ Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) 
                                 buffer.slotIndex())};
   }
 
-  const uint64_t lastUse = bufferLastUseSerial(buffer.slotIndex());
-  if (!waitForSerial(lastUse, kBusyBufferAccessTimeoutSeconds)) {
-    const std::string error = lastErrorForTest();
-    return GpuError{GpuErrorType::InvalidState,
-                    error.empty()
-                        ? std::format("readBackBuffer timed out waiting for submission {}", lastUse)
-                        : error};
+  const uint64_t lastUse = std::max(bufferLastUseSerial(buffer.slotIndex()), record->uploadSerial);
+  if (Status status = waitForBufferAccess(lastUse, "readBackBuffer"); status.hasError()) {
+    return std::move(status).error();
   }
 
   const uint8_t* contents = static_cast<const uint8_t*>(record->allocation.mapped);
@@ -2127,7 +2253,16 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
 
 void VulkanDevice::Impl::destroyBufferSlot(uint32_t slotIndex) {
   if (BufferRecord* record = FindRecord(buffers, slotIndex)) {
-    destroyBufferRecord(*record);
+    if (record->uploadSerial > completedSerialValue) {
+      const auto submission =
+          std::ranges::find_if(inFlight, [&](const InFlightSubmission& pending) {
+            return pending.serial == record->uploadSerial;
+          });
+      UTILS_RELEASE_ASSERT(submission != inFlight.end());
+      submission->retiredBuffers.push_back(*record);
+    } else {
+      destroyBufferRecord(*record);
+    }
     buffers[slotIndex].reset();
   }
 }
@@ -2259,11 +2394,13 @@ void VulkanDevice::Impl::destroyComputePipelineSlot(uint32_t slotIndex) {
   }
 }
 
+void VulkanDevice::onRetireBuffer(uint32_t slotIndex) {
+  impl_->discardPendingBufferWrites(slotIndex);
+}
+
 void VulkanDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   Impl& impl = *impl_;
-  // The base class defers this hook until every submission referencing the resource has
-  // completed, so immediate destruction is safe. Unknown resource names are ignored; the base
-  // class owns their bookkeeping.
+  // Buffer slots also retain destinations used only by queued uploads, outside the public stream.
   if (resourceName == "buffer") {
     impl.destroyBufferSlot(slotIndex);
   } else if (resourceName == "texture") {
@@ -2297,19 +2434,72 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
   if (data.empty()) {
     return OkStatus();
   }
-  // A latched device failure is reported through waitForSerial below, which fails closed on it.
-  // Writes to idle buffers stay unaffected by an unrelated earlier failure, exactly as before.
-  const uint64_t lastUse = bufferLastUseSerial(slotIndex);
-  if (lastUse > impl_->completedSerialValue &&
-      !waitForSerial(lastUse, kBusyBufferAccessTimeoutSeconds)) {
-    const std::string error = lastErrorForTest();
-    return GpuError{GpuErrorType::InvalidState,
-                    error.empty()
-                        ? std::format("writeBuffer timed out waiting for submission {}", lastUse)
-                        : error};
+  const uint64_t lastUse = std::max(bufferLastUseSerial(slotIndex), record->uploadSerial);
+  if (lastUse > completedSerial() || impl_->hasPendingBufferWrite(slotIndex)) {
+    if (impl_->hasError()) {
+      return GpuError{GpuErrorType::InvalidState, lastErrorForTest()};
+    }
+    if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
+      return impl_->queueBufferWrite(slotIndex, offsetBytes, data);
+    }
+    if (Status status = waitForBufferAccess(lastUse, "writeBuffer"); status.hasError()) {
+      return status;
+    }
+    impl_->flushPendingBufferWritesToHost(slotIndex, record->allocation.mapped);
   }
   std::memcpy(static_cast<uint8_t*>(record->allocation.mapped) + offsetBytes, data.data(),
               data.size());
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodePendingBufferWrites(EncodingState& state) {
+  if (pendingBufferWrites.empty()) return OkStatus();
+  auto staging = createHostVisibleBuffer(pendingBufferWriteBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                         "queued buffer writes");
+  if (staging.hasError()) return std::move(staging).error();
+  state.bufferWriteStaging = std::move(staging).result();
+  ++bufferWriteStagingAllocations;
+
+  VkMemoryBarrier hostBarrier = {};
+  hostBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+  hostBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &hostBarrier, 0, nullptr, 0,
+                            nullptr);
+  VkDeviceSize stagingOffset = 0;
+  for (const PendingBufferWrite& write : pendingBufferWrites) {
+    const BufferRecord* destination = FindRecord(buffers, write.slotIndex);
+    if (destination == nullptr) {
+      return GpuError{GpuErrorType::InvalidState, "queued buffer write lost its destination"};
+    }
+    std::memcpy(static_cast<uint8_t*>(state.bufferWriteStaging.allocation.mapped) + stagingOffset,
+                write.bytes.data(), write.bytes.size());
+    VkBufferMemoryBarrier beforeCopy = {};
+    beforeCopy.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    beforeCopy.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    beforeCopy.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    beforeCopy.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    beforeCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    beforeCopy.buffer = destination->buffer;
+    beforeCopy.offset = write.offsetBytes;
+    beforeCopy.size = write.bytes.size();
+    api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &beforeCopy, 0,
+                              nullptr);
+    const VkBufferCopy copy{stagingOffset, write.offsetBytes, write.bytes.size()};
+    api->vkCmdCopyBuffer(state.commandBuffer, state.bufferWriteStaging.buffer, destination->buffer,
+                         1, &copy);
+    stagingOffset += write.bytes.size();
+  }
+  VkMemoryBarrier afterCopies = {};
+  afterCopies.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  afterCopies.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  afterCopies.dstAccessMask =
+      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT;
+  api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                            &afterCopies, 0, nullptr, 0, nullptr);
   return OkStatus();
 }
 
@@ -3077,6 +3267,15 @@ Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const C
   return OkStatus();
 }
 
+Status VulkanDevice::Impl::encodeCommands(EncodingState& state, std::span<const Command> commands) {
+  for (size_t commandIndex = 0; commandIndex < commands.size(); ++commandIndex) {
+    if (Status status = encodeCommand(state, commands, commandIndex); status.hasError()) {
+      return status;
+    }
+  }
+  return OkStatus();
+}
+
 Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                               std::span<const Command> commands) {
   (void)commandBufferSlotIndex;
@@ -3096,6 +3295,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     // encoding it must not survive into the tracked state.
     impl.syncStates.discardStaged();
     impl.destroyTransientEncodingObjects(state);
+    impl.destroyBufferRecord(state.bufferWriteStaging);
     return error;
   };
 
@@ -3107,11 +3307,12 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     return failEncoding(VkError("vkBeginCommandBuffer", result));
   }
 
-  for (size_t commandIndex = 0; commandIndex < commands.size(); ++commandIndex) {
-    Status encodeStatus = impl.encodeCommand(state, commands, commandIndex);
-    if (encodeStatus.hasError()) {
-      return failEncoding(std::move(encodeStatus));
-    }
+  if (Status status = impl.encodePendingBufferWrites(state); status.hasError()) {
+    return failEncoding(std::move(status));
+  }
+
+  if (Status status = impl.encodeCommands(state, commands); status.hasError()) {
+    return failEncoding(std::move(status));
   }
 
   if (state.inRenderPass || state.inComputePass) {
@@ -3137,10 +3338,12 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &state.commandBuffer;
-  if (const VkResult result = impl_->api->vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
-      result != VK_SUCCESS) {
+  const VkResult submitResult = std::exchange(impl.failNextSubmission, false)
+                                    ? VK_ERROR_OUT_OF_HOST_MEMORY
+                                    : impl_->api->vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
+  if (submitResult != VK_SUCCESS) {
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
-    return failEncoding(VkError("vkQueueSubmit", result));
+    return failEncoding(VkError("vkQueueSubmit", submitResult));
   }
 
   // The GPU will execute the recorded transitions: commit them to the tracked per-texture state.
@@ -3152,6 +3355,8 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   submission.commandBuffer = state.commandBuffer;
   submission.renderPasses = std::move(state.transientRenderPasses);
   submission.framebuffers = std::move(state.transientFramebuffers);
+  submission.bufferWriteStaging = state.bufferWriteStaging;
+  impl.commitPendingBufferWrites(submissionSerial);
   impl.inFlight.push_back(std::move(submission));
   return OkStatus();
 }

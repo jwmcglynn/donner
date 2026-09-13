@@ -47,7 +47,7 @@ struct BufferAllocation {
  * Supplies the memory a buffer is bound into.
  *
  * Every buffer this backend allocates is host-visible, host-coherent, and persistently mapped:
- * queue writes are a memcpy and readback needs no staging. An implementation must preserve that,
+ * idle queue writes copy mappings directly, and readback needs no staging. Preserve that contract,
  * because the rest of the backend reads and writes buffers straight through
  * \ref BufferAllocation::mapped with no flush or invalidate of its own.
  */

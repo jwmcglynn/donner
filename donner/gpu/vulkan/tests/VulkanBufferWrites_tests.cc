@@ -346,6 +346,8 @@ TEST_F(VulkanBufferWritesTests, RetiringBufferDiscardsUnsentWrites) {
   const uint64_t serial = submitRead(input_);
   ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
   ASSERT_THAT(device_->destroyBuffer(std::move(input_)), IsOk());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 0u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 0u);
   ASSERT_EQ(gate.release(), VK_SUCCESS);
   ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
   device_->poll();
@@ -369,6 +371,7 @@ TEST_F(VulkanBufferWritesTests, UploadOnlyDestinationSurvivesSlotRecycling) {
 
   const uint32_t oldSlot = input_.slotIndex();
   ASSERT_THAT(device_->destroyBuffer(std::move(input_)), IsOk());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().retainedDestinations, 1u);
   input_ = GetResultOrFail(device_->createBuffer(
       {"replacement", sizeof(kRed), BufferUsage::Uniform | BufferUsage::CopyDst}));
   ASSERT_EQ(input_.slotIndex(), oldSlot);
@@ -376,7 +379,117 @@ TEST_F(VulkanBufferWritesTests, UploadOnlyDestinationSurvivesSlotRecycling) {
   const uint64_t nextReaderSerial = submitRead(input_);
   ASSERT_EQ(uploadGate.release(), VK_SUCCESS);
   ASSERT_THAT(device_->waitForSerial(nextReaderSerial, 5.0), testing::IsTrue());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().retainedDestinations, 0u);
   expectPixel({255, 0, 0, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, OverlappingWritesPreserveOrderWhenBudgetRefusesAnotherWrite) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  ASSERT_NE(submitRead(input_), 0u);
+  device_->setBufferWriteByteBudgetForTest(24);
+  const std::array<float, 2> redGreen{1, 1};
+  const float zero = 0;
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(redGreen)), IsOk());
+  EXPECT_THAT(device_->writeBuffer(input_, 4, AsBytes(zero)),
+              IsGpuError(GpuErrorType::LimitExceeded));
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 2u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 24u);
+  const uint64_t serial = submitRead(input_);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 0u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 24u);
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 0u);
+  expectPixel({255, 255, 255, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, IdenticalRangeReplacementMovesAfterOverlappingWrites) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  ASSERT_NE(submitRead(input_), 0u);
+  device_->setBufferWriteByteBudgetForTest(20);
+  const float one = 1;
+  constexpr std::array<float, 4> kGreen{0, 1, 0, 1};
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(one)), IsOk());
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kGreen)), IsOk());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 2u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 20u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().stagingAllocations, 0u);
+  const uint64_t serial = submitRead(input_);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().stagingAllocations, 1u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().submittedBatches, 1u);
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
+  expectPixel({0, 255, 0, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, PendingAndInFlightWritesShareOneBudget) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  ASSERT_NE(submitRead(input_), 0u);
+  device_->setBufferWriteByteBudgetForTest(16);
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  const uint64_t serial = submitEmpty();
+  EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 16u);
+  EXPECT_THAT(device_->writeBuffer(input_, 0, AsBytes(kRed)),
+              IsGpuError(GpuErrorType::LimitExceeded));
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 0u);
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 0u);
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kRed)), IsOk());
+}
+
+TEST_F(VulkanBufferWritesTests, FailedSubmissionPreservesPendingWritesAndSerial) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  const uint64_t readerSerial = submitRead(input_);
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  device_->failNextSubmissionForTest();
+  auto encoder = GetResultOrFail(device_->createCommandEncoder());
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_THAT(device_->submit(GetResultOrFail(encoder->finish())),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(device_->lastSubmittedSerial(), readerSerial);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 1u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 16u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().inFlightBytes, 0u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().submittedBatches, 0u);
+  const uint64_t nextReaderSerial = submitRead(input_);
+  EXPECT_EQ(nextReaderSerial, readerSerial + 1);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 0u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().stagingAllocations, 2u);
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(nextReaderSerial, 5.0), testing::IsTrue());
+  expectPixel({0, 0, 255, 255});
+}
+
+TEST_F(VulkanBufferWritesTests, UnalignedWriteTimesOutWithoutDiscardingPendingWrites) {
+  NativeQueueGate gate(device_->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue());
+  const uint64_t readerSerial = submitRead(input_);
+  ASSERT_THAT(device_->writeBuffer(input_, 0, AsBytes(kBlue)), IsOk());
+  const std::array<uint8_t, 1> zero{0};
+  EXPECT_THAT(device_->writeBuffer(input_, 3, zero), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 1u);
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(device_->waitForSerial(readerSerial, 5.0), testing::IsTrue());
+  expectPixel({255, 0, 0, 255});
+
+  ASSERT_THAT(device_->writeBuffer(input_, 3, zero), IsOk());
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingWrites, 0u);
+  EXPECT_EQ(device_->bufferWriteStatsForTest().pendingBytes, 0u);
+  const uint64_t serial = submitRead(input_);
+  ASSERT_THAT(device_->waitForSerial(serial, 5.0), testing::IsTrue());
+  expectPixel({0, 0, 255, 255});
 }
 
 TEST_F(VulkanBufferWritesTests, FreshAndCompletedBuffersDoNotWaitForUnrelatedWork) {
