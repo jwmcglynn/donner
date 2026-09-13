@@ -514,6 +514,249 @@ donner_cc_library(
     deps = ["//donner/gpu:descriptors"],
 )
 
+genrule(
+    name = "snapshot_unpremultiply_generated",
+    outs = ["generated/SnapshotUnpremultiplyShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) snapshot_unpremultiply " +
+          "$(location generated/SnapshotUnpremultiplyShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_artifact",
+    hdrs = ["generated/SnapshotUnpremultiplyShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "flood_generated",
+    outs = ["generated/FloodShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) flood " +
+          "$(location generated/FloodShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "flood_artifact",
+    hdrs = ["generated/FloodShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "subregion_clip_generated",
+    outs = ["generated/SubregionClipShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) subregion_clip " +
+          "$(location generated/SubregionClipShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "subregion_clip_artifact",
+    hdrs = ["generated/SubregionClipShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "offset_generated",
+    outs = ["generated/OffsetShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) offset " +
+          "$(location generated/OffsetShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "offset_artifact",
+    hdrs = ["generated/OffsetShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "color_space_convert_generated",
+    outs = ["generated/ColorSpaceConvertShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) color_space_convert " +
+          "$(location generated/ColorSpaceConvertShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "color_space_convert_artifact",
+    hdrs = ["generated/ColorSpaceConvertShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "filter_color_matrix_generated",
+    outs = ["generated/FilterColorMatrixShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_color_matrix " +
+          "$(location generated/FilterColorMatrixShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_artifact",
+    hdrs = ["generated/FilterColorMatrixShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "gaussian_blur_generated",
+    outs = ["generated/GaussianBlurShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) gaussian_blur " +
+          "$(location generated/GaussianBlurShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "gaussian_blur_artifact",
+    hdrs = ["generated/GaussianBlurShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "merge_generated",
+    outs = ["generated/MergeShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) merge " +
+          "$(location generated/MergeShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "merge_artifact",
+    hdrs = ["generated/MergeShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "composite_generated",
+    outs = ["generated/CompositeShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) composite " +
+          "$(location generated/CompositeShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "composite_artifact",
+    hdrs = ["generated/CompositeShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "morphology_generated",
+    outs = ["generated/MorphologyShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) morphology " +
+          "$(location generated/MorphologyShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "morphology_artifact",
+    hdrs = ["generated/MorphologyShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "tile_generated",
+    outs = ["generated/TileShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) tile " +
+          "$(location generated/TileShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "tile_artifact",
+    hdrs = ["generated/TileShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+genrule(
+    name = "filter_resolve_generated",
+    outs = ["generated/FilterResolveShader.h"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_resolve " +
+          "$(location generated/FilterResolveShader.h) --wgsl-descriptor-header",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+donner_cc_library(
+    name = "filter_resolve_artifact",
+    hdrs = ["generated/FilterResolveShader.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu:descriptors"],
+)
+
+donner_cc_library(
+    name = "generated_program_descriptor_test_cases",
+    testonly = 1,
+    hdrs = ["tests/GeneratedProgramDescriptorTestCases.h"],
+    deps = [
+        ":color_space_convert_artifact",
+        ":component_transfer_artifact",
+        ":composite_artifact",
+        ":convolve_matrix_artifact",
+        ":displacement_map_artifact",
+        ":drop_shadow_artifact",
+        ":filter_color_matrix_artifact",
+        ":filter_image_artifact",
+        ":filter_resolve_artifact",
+        ":flood_artifact",
+        ":gaussian_blur_artifact",
+        ":lighting_artifacts",
+        ":merge_artifact",
+        ":morphology_artifact",
+        ":offset_artifact",
+        ":snapshot_unpremultiply_artifact",
+        ":subregion_clip_artifact",
+        ":tile_artifact",
+        ":turbulence_artifact",
+        ":programs",
+        ":shader",
+    ],
+)
+
+donner_cc_test(
+    name = "generated_program_descriptor_tests",
+    srcs = [
+        "tests/GeneratedProgramDescriptor_tests.cc",
+        "tests/ShaderTestUtils.h",
+    ],
+    deps = [
+        ":generated_program_descriptor_test_cases",
+        ":module_interface",
+        ":wgsl_emitter",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# This target replaces global allocation operators and must remain opt-in.
+donner_cc_test(
+    name = "generated_program_descriptor_bench",
+    srcs = [
+        "tests/GeneratedProgramDescriptor_bench.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    tags = ["manual", "perf"],
+    deps = [
+        ":generated_program_descriptor_test_cases",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()
 
 donner_cc_test(

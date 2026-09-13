@@ -6,6 +6,7 @@
 /// to the CPU copy path. Each path is forced by controlling texture usage
 /// flags: the GPU path requires TextureBinding, the CPU path requires CopySrc.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <utility>
 
+#include "donner/gpu/RecordingDevice.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -25,6 +27,13 @@ namespace donner::svg {
 using ::donner::geode::wgpuLabel;
 
 namespace {
+
+TEST(GeodeSnapshotDescriptorTests, PreservesKnownEmptyBufferInterface) {
+  gpu::RecordingDevice device;
+  geode::GeodeSnapshotReadbackPipeline pipeline(device);
+  ASSERT_THAT(pipeline.valid(), testing::IsTrue());
+  EXPECT_THAT(device.serialize(), testing::HasSubstr("bufferBindings=[]"));
+}
 
 constexpr uint32_t kWidth = 8;
 constexpr uint32_t kHeight = 4;
