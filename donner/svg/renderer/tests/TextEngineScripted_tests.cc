@@ -1509,6 +1509,21 @@ TEST(TextEngineScriptedTest, FontSizeAdjustChangesUsedFontSizeFromXHeight) {
   EXPECT_FLOAT_EQ(*shapedFontSizePx, 12.0f);
 }
 
+TEST(TextEngineScriptedTest, SpanKerningCanOverrideDisabledParent) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.fontKerning = true;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontKerning = false;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)),
+                                                         GlyphXPositionIs(DoubleEq(11.0))))));
+}
+
 TEST(TextEngineScriptedTest, FontKerningNoneSuppressesWithinRunKerning) {
   Registry registry;
   FontManager fontManager(registry);
