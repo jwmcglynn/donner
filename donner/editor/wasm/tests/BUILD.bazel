@@ -1,3 +1,4 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
 
@@ -216,4 +217,16 @@ playwright_bin.playwright_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "playwright_bazel_config_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "playwright.bazel.config.js",
+        "playwright.boot-presentation.bazel.config.js",
+    ],
+    entry_point = "playwright-bazel-config.spec.mjs",
+    node_options = ["--test"],
 )
