@@ -60,6 +60,7 @@ public:
   bool reverseClusters = false;
   bool clusterCombiningMarks = false;
   std::optional<SubSuperMetrics> subSuper;
+  std::shared_ptr<float> shapedFontSizePx;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
     return FontVMetrics{
@@ -108,9 +109,12 @@ public:
     return std::nullopt;
   }
 
-  ShapedRun shapeRun(FontHandle /*font*/, float /*fontSizePx*/, std::string_view spanText,
+  ShapedRun shapeRun(FontHandle /*font*/, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool /*isVertical*/,
                      FontVariant fontVariant, bool forceLogicalOrder) const override {
+    if (shapedFontSizePx) {
+      *shapedFontSizePx = fontSizePx;
+    }
     ShapedRun run;
     const size_t byteEnd = std::min(spanText.size(), byteOffset + byteLength);
     for (size_t pos = byteOffset; pos < byteEnd;) {
@@ -145,6 +149,18 @@ public:
 
     if (reverseClusters && !forceLogicalOrder) {
       std::reverse(run.glyphs.begin(), run.glyphs.end());
+    }
+    return run;
+  }
+
+  ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
+                              size_t byteOffset, size_t byteLength, bool isVertical,
+                              FontVariant fontVariant, bool forceLogicalOrder) const override {
+    ShapedRun run = shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                             fontVariant, forceLogicalOrder);
+    for (auto& glyph : run.glyphs) {
+      glyph.xKern = 0.0;
+      glyph.yKern = 0.0;
     }
     return run;
   }
@@ -1472,6 +1488,41 @@ TEST(TextEngineScriptedTest, BoldSpanResolvesFontThroughWeightAwareLookup) {
 
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
   EXPECT_EQ(runs[0].font, altFace);
+}
+
+TEST(TextEngineScriptedTest, FontSizeAdjustChangesUsedFontSizeFromXHeight) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto shapedFontSizePx = std::make_shared<float>();
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->shapedFontSizePx = shapedFontSizePx;
+  TextEngine engine(fontManager, registry, std::move(backend));
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_FLOAT_EQ(*shapedFontSizePx, 12.0f);
+}
+
+TEST(TextEngineScriptedTest, FontKerningNoneSuppressesWithinRunKerning) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.fontKerning = false;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)),
+                                                         GlyphXPositionIs(DoubleEq(10.0))))));
 }
 
 TEST(TextEngineScriptedTest, HorizontalCrossSpanKernShiftsContinuationSpan) {
