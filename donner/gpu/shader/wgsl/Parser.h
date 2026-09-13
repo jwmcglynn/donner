@@ -636,6 +636,8 @@ private:
           Fail(ErrorCode::DuplicateName, memberName.span);
         }
       }
+      if (memberType.kind == TypeKind::Array && memberType.elementKind == TypeKind::Struct)
+        Fail(ErrorCode::UnsupportedConstruct, memberName.span);
       uint32_t alignment = 0;
       uint32_t size = 0;
       if (memberType.kind == TypeKind::Struct || !LayoutOf(memberType, &alignment, &size)) {
@@ -650,7 +652,7 @@ private:
                        cursor,
                        alignment,
                        size,
-                       memberType.kind == TypeKind::Array ? size / memberType.arrayCount : 0,
+                       memberType.kind == TypeKind::Array ? module_.arrayStride(memberType) : 0,
                        memberAttributes.interface()};
       cursor += size;
       if (alignment > maxAlignment) maxAlignment = alignment;
@@ -671,40 +673,9 @@ private:
   }
 
   constexpr bool LayoutOf(Type type, uint32_t* alignment, uint32_t* size) const {
-    if (type.kind == TypeKind::I32 || type.kind == TypeKind::U32 || type.kind == TypeKind::F32) {
-      if (type.lanes == 1) {
-        *alignment = 4;
-        *size = 4;
-        return true;
-      }
-      if (type.lanes == 2) {
-        *alignment = 8;
-        *size = 8;
-        return true;
-      }
-      if (type.lanes == 3) {
-        *alignment = 16;
-        *size = 12;
-        return true;
-      }
-      if (type.lanes == 4) {
-        *alignment = 16;
-        *size = 16;
-        return true;
-      }
-    }
-    if (type.kind == TypeKind::Matrix) {
-      *alignment = type.rows == 2 ? 8 : 16;
-      *size = type.columns * *alignment;
-      return true;
-    }
-    if (type.kind == TypeKind::Array && type.elementKind == TypeKind::F32 &&
-        type.elementLanes == 1 && type.arrayCount > 0) {
-      *alignment = 4;
-      *size = static_cast<uint32_t>(type.arrayCount) * 4;
-      return true;
-    }
-    return false;
+    *alignment = module_.typeAlignment(type);
+    *size = module_.typeSize(type);
+    return *alignment != 0 && *size != 0;
   }
 
   constexpr Type ParseType() {
@@ -730,18 +701,21 @@ private:
 
   constexpr Type ParseArrayType(Token name) {
     Expect(TokenKind::Less);
-    const Token element = ExpectIdentifier();
-    Expect(TokenKind::Comma);
-    const uint32_t count = ParseUnsignedNumber();
+    const Type element = ParseType();
+    const bool fixed = Match(TokenKind::Comma);
+    const uint32_t count = fixed ? ParseUnsignedNumber() : 0;
     Expect(TokenKind::Greater);
-    if (element.text != "f32" || count == 0 || count > ModuleLimits::kMaxArrayElements) {
+    const bool elementValid = element.isNumeric() || (element.kind == TypeKind::Struct &&
+                                                      !StructHasArray(element.structId));
+    if (!elementValid || (fixed && (count == 0 || count > ModuleLimits::kMaxArrayElements))) {
       Fail(ErrorCode::UnknownType, name.span);
       return {};
     }
     Type array;
     array.kind = TypeKind::Array;
-    array.elementKind = TypeKind::F32;
-    array.elementLanes = 1;
+    array.elementKind = element.kind;
+    array.elementLanes = element.lanes;
+    array.structId = element.structId;
     array.arrayCount = static_cast<uint16_t>(count);
     return array;
   }
@@ -842,6 +816,8 @@ private:
         const Type member = module_.structMembers[structure.firstMember + i].type;
         if (member.kind == TypeKind::Matrix && member.rows == 2)
           Fail(ErrorCode::UnsupportedConstruct, name.span);
+        if (member.kind == TypeKind::Array && module_.arrayStride(member) % 16 != 0)
+          Fail(ErrorCode::UnsupportedConstruct, name.span);
       }
     }
     if (!BindingWithinLimits(attributes, kind, name)) return;
@@ -864,10 +840,11 @@ private:
   constexpr BindingKind ResolveBindingKind(Token addressSpace, Token accessMode, Type type,
                                            Token name) {
     if (addressSpace.text == "uniform" && accessMode.text.empty() &&
-        type.kind == TypeKind::Struct && !StructHasArray(type.structId)) {
+        type.kind == TypeKind::Struct) {
       return BindingKind::Uniform;
     } else if (addressSpace.text == "storage" && accessMode.text == "read" &&
-               type.kind == TypeKind::Struct) {
+               (type.kind == TypeKind::Struct ||
+                (type.kind == TypeKind::Array && type.arrayCount == 0))) {
       return BindingKind::ReadOnlyStorage;
     } else if (addressSpace.text.empty() && type.kind == TypeKind::SampledTexture2d) {
       return BindingKind::SampledTexture;
@@ -1484,20 +1461,20 @@ private:
     if (base.kind == TypeKind::Matrix && !hasSignedIndex && !hasUnsignedIndex)
       Fail(ErrorCode::UnsupportedConstruct, ExpressionAt(index.id).span);
     if ((IsConstantSyntax(index.id) && !hasSignedIndex && !hasUnsignedIndex) ||
-        (hasSignedIndex && (signedIndex < 0 || static_cast<uint32_t>(signedIndex) >= count)) ||
-        (hasUnsignedIndex && unsignedIndex >= count)) {
+        (hasSignedIndex &&
+         (signedIndex < 0 || (count != 0 && static_cast<uint32_t>(signedIndex) >= count))) ||
+        (hasUnsignedIndex && count != 0 && unsignedIndex >= count)) {
       Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index.id).span);
     }
     return AddExpression(
-        Expression{ExpressionKind::Index,
-                   base.kind == TypeKind::Matrix ? Type{TypeKind::F32, base.rows}
-                                                 : Type{base.elementKind, base.elementLanes},
-                   SourceSpan{ExpressionAt(value.id).span.begin, end.end},
-                   {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
-                   2,
-                   base.kind == TypeKind::Matrix
-                       ? (hasSignedIndex ? uint32_t(signedIndex) : unsignedIndex)
-                       : 0},
+        Expression{
+            ExpressionKind::Index,
+            base.kind == TypeKind::Matrix ? Type{TypeKind::F32, base.rows} : base.elementType(),
+            SourceSpan{ExpressionAt(value.id).span.begin, end.end},
+            {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
+            2,
+            base.kind == TypeKind::Matrix ? (hasSignedIndex ? uint32_t(signedIndex) : unsignedIndex)
+                                          : 0},
         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 

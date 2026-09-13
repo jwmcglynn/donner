@@ -7,6 +7,7 @@
 #include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsSource.h"
 #include "donner/gpu/shader/wgsl/tests/MatrixSource.h"
+#include "donner/gpu/shader/wgsl/tests/StorageArraySource.h"
 
 namespace donner::gpu::shader::wgsl {
 namespace {
@@ -106,6 +107,62 @@ TEST(GraphicsCompiler, MatrixColumnConstantsCannotBypassConstantValidation) {
       "fn bad() -> vec2f { return mat2x2f(vec2f(1f), vec2f(1f)) * mat2x2f()[0i]; }";
   EXPECT_EQ(Parse(division).diagnostic.code, ErrorCode::InvalidConstantExpression);
   EXPECT_EQ(Parse(product).diagnostic.code, ErrorCode::InvalidConstantExpression);
+}
+
+TEST(GraphicsCompiler, ReflectsRuntimeStridesIntoDeviceBufferRequirements) {
+  const auto& shader = tests::StorageArrayShader();
+  ASSERT_THAT(shader.resources, SizeIs(4));
+  ASSERT_NE(shader.resource("bands"), nullptr);
+  EXPECT_EQ(shader.resource("bands")->minSizeBytes, 8u);
+  EXPECT_EQ(shader.resource("bands")->runtimeArrayStrideBytes, 8u);
+  EXPECT_TRUE(shader.matchesMember("bands", "count", 4, 4, ShaderScalarType::U32));
+  EXPECT_TRUE(shader.matchesMember("params", "vertices", 0, 64, ShaderScalarType::F32, 4, 4, 16));
+  const auto descriptor = MakeShaderDescriptor(shader, ShaderSourceKind::Msl, "storage arrays");
+  ASSERT_TRUE(descriptor.bufferBindings.has_value());
+  ASSERT_THAT(*descriptor.bufferBindings, SizeIs(4));
+  EXPECT_EQ((*descriptor.bufferBindings)[0].runtimeArrayStrideBytes, 0u);
+  EXPECT_EQ((*descriptor.bufferBindings)[1].runtimeArrayStrideBytes, 8u);
+  EXPECT_EQ((*descriptor.bufferBindings)[2].runtimeArrayStrideBytes, 4u);
+  EXPECT_EQ((*descriptor.bufferBindings)[3].runtimeArrayStrideBytes, 4u);
+  for (const auto& binding : *descriptor.bufferBindings)
+    EXPECT_EQ(binding.stage, ShaderStage::Fragment);
+}
+
+TEST(GraphicsCompiler, StorageArrayOrdinaryEmissionMatchesFrozenArtifact) {
+  const auto& shader = tests::StorageArrayShader();
+  const auto parsed = Parse(tests::kStorageArraySource.view());
+  ASSERT_TRUE(parsed.hasResult());
+  std::array<char, kMaxTextEmitBytes> text{};
+  TextSink sink{text.data(), uint32_t(text.size())};
+  ASSERT_TRUE(EmitMsl(parsed.module, sink).ok());
+  EXPECT_EQ(sink.view(), shader.msl);
+  std::array<uint32_t, 24576> words{};
+  SpirvSink binary{words.data(), uint32_t(words.size())};
+  ASSERT_TRUE(EmitSpirv(parsed.module, binary).isSuccess());
+  EXPECT_THAT(std::span(words.data(), binary.size), testing::ElementsAreArray(shader.spirv));
+}
+
+TEST(GraphicsCompiler, RejectsUnsupportedArrayUsesAndConstantNegativeIndices) {
+  constexpr std::string_view cases[] = {
+      "@group(0) @binding(0) var<uniform> data: array<f32>;",
+      "@group(0) @binding(0) var<storage, read> data: array<array<f32>>;",
+      "@group(0) @binding(0) var<storage, read_write> data: array<f32>;",
+      "@group(0) @binding(0) var<storage, read> data: array<bool>;",
+      "struct P { data: array<f32, 4>, } @group(0) @binding(0) var<uniform> p: P;",
+      "struct P { data: array<f32>, }",
+      "fn f(data: array<f32>) {}",
+      "@group(0) @binding(0) var<storage, read> data: array<f32>; fn f() { let copy = data; }",
+      "@group(0) @binding(0) var<storage, read> data: array<f32>; fn f() { data[0i] = 1f; }",
+      "@group(0) @binding(0) var<storage, read> data: array<f32>; fn f() -> f32 { return "
+      "data[-1i]; }",
+  };
+  for (auto source : cases) {
+    SCOPED_TRACE(source);
+    EXPECT_FALSE(Parse(source).hasResult());
+  }
+  EXPECT_TRUE(Parse("@group(0) @binding(0) var<storage, read> data: array<f32>; "
+                    "fn first() -> f32 { return data[0u]; }")
+                  .hasResult());
 }
 
 TEST(GraphicsCompiler, RejectsInvalidEntryInterfaces) {

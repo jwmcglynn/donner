@@ -213,6 +213,62 @@
       ],
       "structs": []
     },
+    "donner/gpu/shader/wgsl/tests/StorageArraySource.h#inline0": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "params",
+          "type": "Params"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 1,
+          "group": 0,
+          "name": "bands",
+          "type": "array<Band>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 2,
+          "group": 0,
+          "name": "values",
+          "type": "array<f32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 3,
+          "group": 0,
+          "name": "indices",
+          "type": "array<u32>"
+        }
+      ],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "array",
+        "let",
+        "return",
+        "var"
+      ],
+      "structs": [
+        "Band",
+        "Params"
+      ]
+    },
     "donner/gpu/shader/wgsl/tests/corpus/compute.wgsl": {
       "bindings": [
         {
@@ -392,6 +448,62 @@
         "var"
       ],
       "structs": []
+    },
+    "donner/gpu/shader/wgsl/tests/corpus/storage_arrays.wgsl": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "params",
+          "type": "Params"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 1,
+          "group": 0,
+          "name": "bands",
+          "type": "array<Band>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 2,
+          "group": 0,
+          "name": "values",
+          "type": "array<f32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 3,
+          "group": 0,
+          "name": "indices",
+          "type": "array<u32>"
+        }
+      ],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "array",
+        "let",
+        "return",
+        "var"
+      ],
+      "structs": [
+        "Band",
+        "Params"
+      ]
     },
     "donner/svg/renderer/geode/shaders/filter_blend.wgsl": {
       "bindings": [

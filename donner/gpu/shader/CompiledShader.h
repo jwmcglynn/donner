@@ -47,6 +47,7 @@ struct ShaderResource {
   uint32_t binding = 0;
   uint32_t minSizeBytes = 0;
   uint32_t alignmentBytes = 1;
+  uint32_t runtimeArrayStrideBytes = 0;  //!< Zero for fixed-size resources.
   uint32_t firstMember = 0;
   uint32_t memberCount = 0;
   TextureFormat storageFormat = TextureFormat::RGBA32Float;

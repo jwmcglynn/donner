@@ -145,22 +145,22 @@ consteval auto Compile() {
   for (size_t i = 0; i < emitted.spirvSize; ++i) result.spirv[i] = emitted.spirv[i];
   for (size_t i = 0; i < parsed.module.structMemberCount; ++i) {
     const StructMember& member = parsed.module.structMembers[i];
+    const Type valueType =
+        member.type.kind == TypeKind::Array ? member.type.elementType() : member.type;
     result.members[i] = {
         compiler_detail::Name(parsed.module.name(member.name)),
-        (member.type.kind == TypeKind::Matrix ||
-         (member.type.kind == TypeKind::Array ? member.type.elementKind : member.type.kind) ==
-             TypeKind::F32)
+        valueType.kind == TypeKind::F32 || valueType.kind == TypeKind::Matrix
             ? ShaderScalarType::F32
-        : member.type.kind == TypeKind::I32 ? ShaderScalarType::I32
-                                            : ShaderScalarType::U32,
-        member.type.kind == TypeKind::Matrix ? member.type.rows : member.type.lanes,
+        : valueType.kind == TypeKind::I32 ? ShaderScalarType::I32
+                                          : ShaderScalarType::U32,
+        valueType.kind == TypeKind::Matrix ? valueType.rows : valueType.lanes,
         member.offset,
         member.size,
         member.alignment,
         member.type.arrayCount,
         member.arrayStride,
-        member.type.kind == TypeKind::Matrix ? member.type.columns : uint8_t(0),
-        member.type.kind == TypeKind::Matrix ? (member.type.rows == 2 ? 8u : 16u) : 0u};
+        valueType.kind == TypeKind::Matrix ? valueType.columns : uint8_t(0),
+        valueType.kind == TypeKind::Matrix ? (valueType.rows == 2 ? 8u : 16u) : 0u};
   }
   for (size_t i = 0; i < parsed.module.bindingCount; ++i) {
     const Binding& binding = parsed.module.bindings[i];
@@ -175,13 +175,24 @@ consteval auto Compile() {
                         ? BindingType::SampledTexture2dUnfilterableFloat
                         : BindingType::WriteOnlyStorageTexture2d;
     if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage) {
-      const Struct& structure = parsed.module.structs[binding.type.structId];
-      resource.minSizeBytes = structure.size;
-      resource.alignmentBytes = structure.alignment;
-      resource.firstMember = structure.firstMember;
-      resource.memberCount = structure.memberCount;
+      Type layoutType = binding.type;
+      if (binding.type.kind == TypeKind::Array) {
+        resource.runtimeArrayStrideBytes = parsed.module.arrayStride(binding.type);
+        resource.minSizeBytes = resource.runtimeArrayStrideBytes;
+        resource.alignmentBytes = parsed.module.typeAlignment(binding.type);
+        layoutType = binding.type.elementType();
+      } else {
+        resource.minSizeBytes = parsed.module.typeSize(binding.type);
+        resource.alignmentBytes = parsed.module.typeAlignment(binding.type);
+      }
+      if (layoutType.kind == TypeKind::Struct) {
+        const Struct& structure = parsed.module.structs[layoutType.structId];
+        resource.firstMember = structure.firstMember;
+        resource.memberCount = structure.memberCount;
+      }
     }
   }
+
   size_t entryIndex = 0;
   for (uint16_t i = 0; i < parsed.module.functionCount; ++i) {
     const Function& function = parsed.module.functions[i];

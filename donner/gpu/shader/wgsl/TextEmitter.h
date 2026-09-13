@@ -101,6 +101,7 @@ public:
       emitStruct(index);
       newline();
     }
+    emitArrayHelpers();
     emitTextureHelpers();
     for (uint16_t index = 0; index < module_.functionCount; ++index) {
       if (error_ != TextEmitError::None) return finish();
@@ -259,11 +260,7 @@ private:
 
   constexpr uint32_t typeAlignment(const Type& value) const {
     if (value.kind == TypeKind::Matrix) return value.rows == 2 ? 8 : 16;
-    if (value.kind == TypeKind::Array) {
-      return value.elementKind == TypeKind::F32 && value.elementLanes == 1 && value.arrayCount != 0
-                 ? 4
-                 : 0;
-    }
+    if (value.kind == TypeKind::Array) return typeAlignment(value.elementType());
     if (!value.isNumeric()) {
       return 0;
     }
@@ -272,9 +269,7 @@ private:
 
   constexpr uint32_t typeSize(const Type& value) const {
     if (value.kind == TypeKind::Matrix) return typeAlignment(value) * value.columns;
-    if (value.kind == TypeKind::Array) {
-      return typeAlignment(value) == 0 ? 0 : 4 * value.arrayCount;
-    }
+    if (value.kind == TypeKind::Array) return module_.arrayStride(value) * value.arrayCount;
     if (!value.isNumeric()) {
       return 0;
     }
@@ -289,7 +284,9 @@ private:
     const Struct& structure = module_.structs[structId];
     bool buffer = false;
     for (uint16_t i = 0; i < module_.bindingCount; ++i)
-      buffer |= module_.bindings[i].type.kind == TypeKind::Struct &&
+      buffer |= (module_.bindings[i].type.kind == TypeKind::Struct ||
+                 (module_.bindings[i].type.kind == TypeKind::Array &&
+                  module_.bindings[i].type.elementKind == TypeKind::Struct)) &&
                 module_.bindings[i].type.structId == structId;
     if (!validId(structure.firstMember, module_.structMemberCount) ||
         structure.memberCount > module_.structMemberCount - structure.firstMember) {
@@ -336,11 +333,12 @@ private:
   constexpr void emitStructMember(const StructMember& member) {
     indentation();
     if (member.type.kind == TypeKind::Array) {
-      if (member.arrayStride != 4) {
+      if (member.arrayStride != module_.arrayStride(member.type)) {
         error_ = TextEmitError::UniformLayoutMismatch;
         return;
       }
-      text("float ");
+      type(member.type.elementType());
+      character(' ');
       prefixed("donner_msl_member_", member.name);
       character('[');
       uintText(member.type.arrayCount);
@@ -351,6 +349,26 @@ private:
       prefixed("donner_msl_member_", member.name);
     }
     text(";\n");
+  }
+
+  constexpr bool usesRuntimeArrays() const {
+    for (uint16_t i = 0; i < module_.bindingCount; ++i)
+      if (module_.bindings[i].type.kind == TypeKind::Array &&
+          module_.bindings[i].type.arrayCount == 0)
+        return true;
+    return false;
+  }
+
+  constexpr void emitArrayHelpers() {
+    if (!usesRuntimeArrays()) return;
+    text(
+        "template<typename T> T donner_msl_array_load(const device T* data, uint count, uint "
+        "index) {\n");
+    text("  if (count == 0u) return T{};\n  return data[min(index, count - 1u)];\n}\n");
+    text(
+        "template<typename T> T donner_msl_array_load(const device T* data, uint count, int index) "
+        "{\n");
+    text("  return donner_msl_array_load(data, count, uint(max(index, 0)));\n}\n\n");
   }
 
   constexpr void bindingName(uint16_t id) {
@@ -376,6 +394,14 @@ private:
       }
       emitResourceParameter(index, attributes);
     }
+    if (usesRuntimeArrays()) {
+      text(", constant uint* donner_msl_lengths");
+      if (attributes) {
+        text(" [[buffer(");
+        uintText(kMslBufferLengthsIndex);
+        text(")]]");
+      }
+    }
   }
 
   constexpr void emitResourceParameter(uint16_t index, bool attributes) {
@@ -394,8 +420,8 @@ private:
         break;
       case BindingKind::ReadOnlyStorage:
         text("const device ");
-        type(binding.type);
-        text("& ");
+        type(binding.type.kind == TypeKind::Array ? binding.type.elementType() : binding.type);
+        text(binding.type.kind == TypeKind::Array ? "* " : "& ");
         bindingName(index);
         if (attributes) {
           text(" [[buffer(");
@@ -424,6 +450,7 @@ private:
       }
       bindingName(index);
     }
+    if (usesRuntimeArrays()) text(", donner_msl_lengths");
   }
 
   constexpr void emitTextureHelpers() {
@@ -644,6 +671,29 @@ private:
     character(')');
   }
 
+  constexpr void emitRuntimeArrayIndex(const Expression& node, const Type& array) {
+    const Expression& base = module_.expressions[node.operands[0]];
+    if (base.kind != ExpressionKind::Symbol || base.payload >= module_.symbolCount) {
+      error_ = TextEmitError::InvalidModule;
+      return;
+    }
+    const Symbol& symbol = module_.symbols[base.payload];
+    if (symbol.kind != SymbolKind::Binding || symbol.bindingId >= module_.bindingCount ||
+        module_.arrayStride(array) == 0) {
+      error_ = TextEmitError::InvalidModule;
+      return;
+    }
+    text("donner_msl_array_load(");
+    bindingName(symbol.bindingId);
+    text(", donner_msl_lengths[");
+    uintText(module_.bindings[symbol.bindingId].binding);
+    text("] / ");
+    uintText(module_.arrayStride(array));
+    text("u, ");
+    expression(node.operands[1]);
+    character(')');
+  }
+
   constexpr void emitIndex(const Expression& node) {
     if (node.operandCount != 2 || !validId(node.operands[0], module_.expressionCount) ||
         !validId(node.operands[1], module_.expressionCount)) {
@@ -663,9 +713,13 @@ private:
       character(']');
       return;
     }
-    if (array.kind != TypeKind::Array || array.elementKind != TypeKind::F32 ||
-        array.elementLanes != 1 || array.arrayCount == 0 ||
-        (index.kind != TypeKind::I32 && index.kind != TypeKind::U32) || index.lanes != 1) {
+    if (array.kind == TypeKind::Array && array.arrayCount == 0) {
+      emitRuntimeArrayIndex(node, array);
+      return;
+    }
+    if (array.kind != TypeKind::Array || !array.elementType().isNumeric() ||
+        array.arrayCount == 0 || (index.kind != TypeKind::I32 && index.kind != TypeKind::U32) ||
+        index.lanes != 1) {
       error_ = TextEmitError::UnsupportedType;
       return;
     }

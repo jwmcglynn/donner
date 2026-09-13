@@ -54,6 +54,7 @@ donner_cc_library(
     hdrs = [
         "tests/GraphicsSource.h",
         "tests/MatrixSource.h",
+        "tests/StorageArraySource.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [":compiler"],

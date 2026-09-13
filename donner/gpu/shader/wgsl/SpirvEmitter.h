@@ -142,7 +142,9 @@ private:
     for (ArenaId i = 0; i < module_.bindingCount; ++i) {
       const Binding& binding = module_.bindings[i];
       const uint32_t storage = resourceStorage(binding.kind);
-      const uint32_t pointer = pointerType(typeId(binding.type), storage);
+      const uint32_t blockType = binding.type.kind == TypeKind::Array ? arrayBlockType(binding.type)
+                                                                      : typeId(binding.type);
+      const uint32_t pointer = pointerType(blockType, storage);
       bindingIds_[i] = id();
       declarations_.instruction(59, pointer, bindingIds_[i], storage);
       annotations_.instruction(71, bindingIds_[i], 33, binding.binding);
@@ -152,6 +154,22 @@ private:
       if (binding.kind == BindingKind::ReadOnlyStorage)
         annotations_.instruction(71, bindingIds_[i], 24);
     }
+  }
+
+  constexpr uint32_t arrayBlockType(Type type) {
+    const uint32_t array = typeId(type);
+    for (uint16_t i = 0; i < arrayBlockCount_; ++i)
+      if (arrayBlocks_[i].type == array) return arrayBlocks_[i].id;
+    if (arrayBlockCount_ == arrayBlocks_.size()) {
+      fail(SpirvEmitError::Capacity);
+      return 0;
+    }
+    const uint32_t block = id();
+    arrayBlocks_[arrayBlockCount_++] = {array, 0, block};
+    declarations_.instruction(30, block, array);
+    annotations_.instruction(72, block, 0, 35, 0);
+    annotations_.instruction(71, block, 2);
+    return block;
   }
 
   constexpr bool validIoRange(uint16_t first, uint16_t count) {
@@ -274,15 +292,17 @@ private:
   }
 
   constexpr void declareArrayType(Type type, uint32_t value) {
-    if (type.elementKind != TypeKind::F32 || type.elementLanes != 1 || type.arrayCount == 0 ||
-        type.arrayCount > ModuleLimits::kMaxArrayElements) {
+    const uint32_t stride = module_.arrayStride(type);
+    if (stride == 0 || type.arrayCount > ModuleLimits::kMaxArrayElements) {
       fail(SpirvEmitError::UnsupportedType);
       return;
     }
-    const uint32_t element = typeId(Type{type.elementKind, type.elementLanes});
-    const uint32_t count = constant(Type{TypeKind::U32}, type.arrayCount);
-    declarations_.instruction(28, value, element, count);
-    annotations_.instruction(71, value, 6, 4);
+    const uint32_t element = typeId(type.elementType());
+    if (type.arrayCount == 0)
+      declarations_.instruction(29, value, element);
+    else
+      declarations_.instruction(28, value, element, constant(Type{TypeKind::U32}, type.arrayCount));
+    annotations_.instruction(71, value, 6, stride);
   }
 
   constexpr void declareStructType(Type type, uint32_t value) {
@@ -543,6 +563,10 @@ private:
         const auto kind = module_.symbols[node.payload].kind;
         return kind == SymbolKind::Var || kind == SymbolKind::Binding;
       }
+      if (node.kind == ExpressionKind::Index && node.operands[0] < module_.expressionCount) {
+        const Type base = module_.expressions[node.operands[0]].type;
+        if (base.kind == TypeKind::Array && base.arrayCount == 0) return false;
+      }
       if (node.kind != ExpressionKind::Member && node.kind != ExpressionKind::Index) return false;
       expression = node.operands[0];
     }
@@ -597,6 +621,7 @@ private:
   constexpr uint32_t emitSymbol(const Expression& node);
   constexpr uint32_t emitSwizzle(const Expression& node);
   constexpr uint32_t emitConstruct(const Expression& node);
+  constexpr uint32_t emitRuntimeArrayIndex(const Expression& node);
   constexpr uint32_t emitCall(const Expression& node);
   constexpr uint32_t emitShortCircuit(const Expression& node, uint32_t lhs);
   constexpr uint32_t safeDivisor(Type type, uint32_t lhs, uint32_t rhs);
@@ -627,6 +652,8 @@ private:
   uint16_t typeCount_ = 0;
   std::array<PointerRecord, 96> pointers_{};
   uint16_t pointerCount_ = 0;
+  std::array<PointerRecord, ModuleLimits::kMaxBindings> arrayBlocks_{};
+  uint16_t arrayBlockCount_ = 0;
   std::array<ConstantRecord, 128> constants_{};
   uint16_t constantCount_ = 0;
   std::array<FunctionTypeRecord, ModuleLimits::kMaxFunctions> functionTypes_{};
@@ -658,6 +685,46 @@ constexpr uint32_t Emitter::indexedPointer(const Expression& node, uint32_t& sto
   const uint32_t result = id();
   functions_.instruction(65, pointerType(typeId(node.type), storage), result, base, bounded);
   return result;
+}
+
+constexpr uint32_t Emitter::emitRuntimeArrayIndex(const Expression& node) {
+  const Expression& base = module_.expressions[node.operands[0]];
+  if (base.kind != ExpressionKind::Symbol || base.payload >= module_.symbolCount) {
+    fail(SpirvEmitError::InvalidNode);
+    return 0;
+  }
+  const Symbol& symbol = module_.symbols[base.payload];
+  if (symbol.kind != SymbolKind::Binding || symbol.bindingId >= module_.bindingCount) {
+    fail(SpirvEmitError::InvalidNode);
+    return 0;
+  }
+  uint32_t index = emitExpression(node.operands[1]);
+  const Type indexType = module_.expressions[node.operands[1]].type;
+  const Type integer{TypeKind::U32};
+  if (indexType.kind == TypeKind::I32) {
+    index = extended(42, indexType, index, constant(indexType, 0));
+    index = operation(124, integer, index);
+  }
+  const uint32_t count = operation(68, integer, bindingIds_[symbol.bindingId], 0);
+  const uint32_t nonempty = operation(171, Type{TypeKind::Bool}, count, constant(integer, 0));
+  const uint32_t readLabel = id(), emptyLabel = id(), mergeLabel = id();
+  functions_.instruction(247, mergeLabel, 0);
+  functions_.instruction(250, nonempty, readLabel, emptyLabel);
+  label(readLabel);
+  const uint32_t last = operation(130, integer, count, constant(integer, 1));
+  const uint32_t bounded = extended(38, integer, index, last);
+  const uint32_t pointer = id();
+  functions_.instruction(65, pointerType(typeId(node.type), 12), pointer,
+                         bindingIds_[symbol.bindingId], constant(integer, 0), bounded);
+  const uint32_t loaded = operation(61, node.type, pointer);
+  const uint32_t readBlock = currentBlock_;
+  branch(mergeLabel);
+  label(emptyLabel);
+  const uint32_t zero = constant(node.type, 0);
+  const uint32_t emptyBlock = currentBlock_;
+  branch(mergeLabel);
+  label(mergeLabel);
+  return operation(245, node.type, loaded, readBlock, zero, emptyBlock);
 }
 
 constexpr uint32_t Emitter::emitExpression(ArenaId index) {
@@ -696,6 +763,10 @@ constexpr uint32_t Emitter::emitExpression(ArenaId index) {
           break;
         }
         value = operation(81, node.type, emitExpression(node.operands[0]), node.payload);
+        break;
+      }
+      if (base.kind == TypeKind::Array && base.arrayCount == 0) {
+        value = emitRuntimeArrayIndex(node);
         break;
       }
       uint32_t storage = 0;
@@ -739,7 +810,8 @@ constexpr uint32_t Emitter::emitSymbol(const Expression& node) {
   }
   const Symbol& symbol = module_.symbols[node.payload];
   if (symbol.kind == SymbolKind::Binding) {
-    if (symbol.type.kind == TypeKind::Struct || symbol.bindingId >= module_.bindingCount) {
+    if (symbol.type.kind == TypeKind::Struct || symbol.type.kind == TypeKind::Array ||
+        symbol.bindingId >= module_.bindingCount) {
       fail(SpirvEmitError::UnsupportedType, node.span);
       return 0;
     }

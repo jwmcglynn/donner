@@ -222,6 +222,8 @@ TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
 TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::GraphicsShader().spirv,
                                  "compiled_graphics.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::StorageArrayShader().spirv,
+                                 "storage_arrays.spv");
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixShader().spirv,
                                  "compiled_matrices.spv");
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixOperationsShader().spirv,

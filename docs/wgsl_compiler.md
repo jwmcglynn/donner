@@ -60,13 +60,13 @@ field offsets are checked against reflection independently for each retained pro
 ## Supported profile and limits
 
 The frontend covers the Gaussian and convolution families: flat numeric buffer structures,
-fixed `array<f32, N>` members of read-only storage structs, group-zero sampled/storage textures, typed
+fixed numeric array members of buffer structs, root runtime storage arrays, group-zero sampled/storage textures, typed
 numeric literals, scalar/vector expressions and conversions, local bindings, conditionals,
 incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
 textures; texture writes occur in the compute entry. Mutable local declarations may omit an initializer and receive a zero value; immutable declarations require one.
-Unsupported language constructs fail explicitly. Fixed arrays have 1 through 256 elements; uniform,
-local, parameter, return and nested arrays are outside this profile. Constant out-of-range indices
+Unsupported language constructs fail explicitly. Fixed arrays have 1 through 256 elements; local, parameter, return and nested arrays are outside
+this profile. Constant out-of-range indices
 fail compilation. Native dynamic indices are clamped before memory access; authored convolution
 also clamps its coefficient index explicitly for consistent WebGPU execution. Buffer layouts that
 MSL cannot represent, including unsupported vec3 packing, fail projection instead of changing
@@ -112,6 +112,18 @@ Reflection records matrix row/column counts and column stride. Uniform matrices 
 stride are explicitly outside the portable Vulkan 1.1 layout profile; storage layouts and value
 matrices retain their natural stride. Dynamic matrix column indexing, scalar-list matrix
 constructors and constant matrix arithmetic remain unsupported.
+
+Runtime storage arrays are supported at binding roots with numeric or flat structure elements.
+Fixed numeric arrays may appear in buffers; uniform arrays require a stride divisible by 16.
+Reflection carries runtime element stride and a minimum range containing one element into the
+existing device buffer-requirement contract. Nested/member runtime arrays, array aliases and array
+writes remain unsupported.
+
+Metal reads the existing reserved table of exact declared buffer lengths, converts bytes to element
+counts using the reflected stride, and guards empty/clamped reads. SPIR-V emits buffer-block
+wrappers, `OpArrayLength` and guarded value loads. A structure member is extracted from the guarded
+loaded value, so member access cannot bypass the empty-array guard. The shared storage fixture
+covers nested reads, direct structure-member reads and fixed uniform vector arrays.
 
 ## Validation
 

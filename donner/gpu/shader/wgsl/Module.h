@@ -63,6 +63,9 @@ struct Type {
   uint8_t columns = 1;                    //!< Matrix columns; one for non-matrices.
   uint8_t rows = 1;                       //!< Matrix rows; one for non-matrices.
 
+  /// Returns the scalar/vector/structure element type of an array.
+  constexpr Type elementType() const { return Type{elementKind, elementLanes, structId}; }
+
   /// Returns true for identical resolved types.
   constexpr bool operator==(const Type& other) const = default;
 
@@ -303,6 +306,34 @@ struct Module {
   /// Returns the validated WGSL source retained for WGSL projection.
   constexpr std::string_view source() const UTILS_LIFETIME_BOUND {
     return std::string_view(sourceBytes.data(), sourceByteCount);
+  }
+
+  /// Returns natural host-shareable alignment, or zero for an unsupported type.
+  constexpr uint32_t typeAlignment(Type type) const {
+    if (type.isNumeric()) return type.lanes == 1 ? 4 : type.lanes == 2 ? 8 : 16;
+    if (type.kind == TypeKind::Matrix) return type.rows == 2 ? 8 : 16;
+    if (type.kind == TypeKind::Struct)
+      return type.structId < structCount ? structs[type.structId].alignment : 0;
+    if (type.kind == TypeKind::Array) return typeAlignment(type.elementType());
+    return 0;
+  }
+
+  /// Returns fixed byte size; runtime arrays and unsupported types have size zero.
+  constexpr uint32_t typeSize(Type type) const {
+    if (type.isNumeric()) return 4u * type.lanes;
+    if (type.kind == TypeKind::Matrix) return typeAlignment(type) * type.columns;
+    if (type.kind == TypeKind::Struct)
+      return type.structId < structCount ? structs[type.structId].size : 0;
+    if (type.kind == TypeKind::Array) return arrayStride(type) * type.arrayCount;
+    return 0;
+  }
+
+  /// Returns the array element stride, including trailing element padding.
+  constexpr uint32_t arrayStride(Type type) const {
+    const Type element = type.elementType();
+    const uint32_t alignment = typeAlignment(element);
+    const uint32_t size = typeSize(element);
+    return alignment == 0 ? 0 : ((size + alignment - 1) / alignment) * alignment;
   }
 
   bool valid = false;  //!< Set only after complete successful parsing and validation.

@@ -28,7 +28,7 @@ ShaderModuleDescriptor MakeShaderDescriptor(const CompiledShaderView& shader, Sh
           resource.type == BindingType::ReadOnlyStorageBuffer)
         result.bufferBindings->push_back({RcString(entry.name.view()), entry.stage, resource.group,
                                           resource.binding, resource.type, resource.minSizeBytes,
-                                          0});
+                                          resource.runtimeArrayStrideBytes});
     }
   }
   return result;
