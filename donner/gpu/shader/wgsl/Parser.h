@@ -1625,6 +1625,11 @@ private:
         return {};
       }
     }
+    if ((fraction == 0.5f && whole >= 8388608u) ||
+        ((fraction == 0.25f || fraction == 0.75f) && whole >= 4194304u)) {
+      Fail(ErrorCode::InvalidLiteral, literal.span);
+      return {};
+    }
     const float value = static_cast<float>(whole) + fraction;
     return AddExpression(
         Expression{ExpressionKind::Literal,
@@ -1974,8 +1979,9 @@ private:
  * `textureStore` is accepted only in the compute entry point; helper functions are pure numeric
  * functions over read-only globals and by-value parameters. Numeric literals are
  * deliberately limited to typed integers and f32 values with an integer part no larger than
- * 16,777,216 plus an optional .0, .25, .5, or .75 fractional part. This keeps every accepted f32
- * decimal exactly representable; other decimal forms fail closed. Static f32 arithmetic, builtin
+ * 16,777,216. Fractional .5 values are accepted only below 8,388,608; .25 and .75 values only
+ * below 4,194,304. This keeps every accepted f32 decimal exactly representable; other decimal
+ * forms fail closed. Static f32 arithmetic, builtin
  * calls, and cross-scalar conversions are rejected. Static clamp bounds support only f32 literals,
  * unary negation, and vector construction; every static lane must satisfy low <= high.
  *

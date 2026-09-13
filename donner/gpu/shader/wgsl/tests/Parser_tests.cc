@@ -63,6 +63,24 @@ fn cs(@builtin(global_invocation_id) gid: vec3<u32>) {}
   EXPECT_TRUE(Parse(kDynamicDivideIsAccepted).hasResult());
 }
 
+TEST(Parser, AcceptsOnlyExactlyRepresentableFractionalF32Literals) {
+  constexpr std::string_view kExactBoundaryValues = R"(
+fn f() {
+  let half = 8388607.5f;
+  let quarter = 4194303.25f;
+  let threeQuarters = 4194303.75f;
+}
+)";
+  constexpr std::string_view kInexactHalf = R"(fn f() { let value = 8388608.5f; })";
+  constexpr std::string_view kInexactQuarter = R"(fn f() { let value = 4194304.25f; })";
+  constexpr std::string_view kInexactThreeQuarters = R"(fn f() { let value = 4194304.75f; })";
+
+  EXPECT_TRUE(Parse(kExactBoundaryValues).hasResult());
+  EXPECT_EQ(Parse(kInexactHalf).diagnostic.code, ErrorCode::InvalidLiteral);
+  EXPECT_EQ(Parse(kInexactQuarter).diagnostic.code, ErrorCode::InvalidLiteral);
+  EXPECT_EQ(Parse(kInexactThreeQuarters).diagnostic.code, ErrorCode::InvalidLiteral);
+}
+
 TEST(Parser, RejectsReversedStaticClampBounds) {
   constexpr std::string_view kReversedScalarBounds = R"(
 fn scalar(value: f32) -> f32 { return clamp(value, 1f, 0f); }
