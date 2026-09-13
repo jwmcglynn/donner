@@ -250,5 +250,7 @@ js_test(
         "//tools:run-browser-ci.sh",
     ],
     entry_point = "browser-matrix.spec.mjs",
+    # Loading Playwright config initializes its llhttp WebAssembly module.
+    env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
 )

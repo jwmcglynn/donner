@@ -301,9 +301,12 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   const normalizedWorkflow = workflow.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
   assert.match(
     normalizedWorkflow,
-    /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \/\/donner\/editor\/wasm:wasm_geode_package_size_tests/,
+    /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \/\/tools\/ci:editor_wasm_size_tests/,
   );
-  assert.match(workflow, /geode_excludes_tiny_skia_audit/);
+  assert.match(
+    normalizedWorkflow,
+    /bazelisk test --test_output=errors \/\/tools\/ci:editor_wasm_audits/,
+  );
   assert.doesNotMatch(
     workflow,
     /editor-wasm-tiny-skia|wasm_tiny_skia|package-tiny_skia|backend:\s*tiny_skia/,
