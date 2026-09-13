@@ -51,6 +51,24 @@ class WorkflowTargetsTest(unittest.TestCase):
                 with self.subTest(workflow=path.name):
                     self.assertIn('"tools/ci/**"', header)
 
+    def test_required_pr_workflows_admit_stacked_base_branches(self):
+        resolver = runfiles.Create()
+        workflows = ("main.yml", "coverage.yml", "cmake.yml", "lint.yml", "sanitizers-pr.yml")
+        for workflow in workflows:
+            with self.subTest(workflow=workflow):
+                source = Path(resolver.Rlocation(f"donner/.github/workflows/{workflow}"))
+                header = source.read_text(encoding="utf-8").split("\njobs:", 1)[0]
+                trigger = re.search(
+                    r"(?m)^  pull_request:[^\n]*\n(?P<body>(?:^    [^\n]*\n|^\s*\n)*)",
+                    header,
+                )
+                self.assertIsNotNone(trigger, "required pull_request trigger is missing")
+                self.assertNotRegex(
+                    trigger.group("body"),
+                    r"(?m)^    branches(?:-ignore)?:",
+                    "Required PR checks must admit dependency branches as well as main",
+                )
+
     def test_guard_covers_multiline_lists_queries_and_implicit_targets(self):
         source = '''targets: >-
   //donner/foo:one
