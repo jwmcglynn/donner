@@ -2453,6 +2453,20 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTextPathElement>(SVGParserConte
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setStartOffset(*length);
     }
+  } else if (name == XMLQualifiedNameRef("textLength")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setTextLength(length);
+    }
+  } else if (name == XMLQualifiedNameRef("lengthAdjust")) {
+    if (value == "spacing") {
+      element.setLengthAdjust(LengthAdjust::Spacing);
+    } else if (value == "spacingAndGlyphs") {
+      element.setLengthAdjust(LengthAdjust::SpacingAndGlyphs);
+    } else {
+      ParseDiagnostic err;
+      err.reason = "Invalid lengthAdjust value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
   } else if (name == XMLQualifiedNameRef("method")) {
     auto& comp = element.entityHandle().get_or_emplace<components::TextPathComponent>();
     if (value == "align") {

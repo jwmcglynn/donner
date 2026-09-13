@@ -450,6 +450,58 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   return result;
 }
 
+struct TextPathLengthAdjustment {
+  double letterSpacingPx = 0.0;
+  double extraSpacingPx = 0.0;
+};
+
+TextPathLengthAdjustment applyTextPathLength(
+    TextRun& run, const components::ComputedTextComponent::TextSpan& span,
+    const TextLayoutParams& params) {
+  TextPathLengthAdjustment result;
+  result.letterSpacingPx = span.letterSpacingPx;
+  if (!span.textLength.has_value() || run.glyphs.empty()) {
+    return result;
+  }
+
+  double naturalLength = 0.0;
+  for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
+    const TextGlyph& glyph = run.glyphs[glyphIndex];
+    if (glyphIndex > 0) {
+      naturalLength += glyph.xKern;
+    }
+    naturalLength += glyph.xAdvance;
+    if (glyphIndex + 1 < run.glyphs.size()) {
+      naturalLength += span.letterSpacingPx;
+    }
+  }
+
+  if (naturalLength <= 0.0) {
+    return result;
+  }
+
+  const double targetLength =
+      span.textLength->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  if (targetLength < 0.0) {
+    return result;
+  }
+
+  if (span.lengthAdjust == LengthAdjust::Spacing) {
+    const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
+    result.extraSpacingPx = (targetLength - naturalLength) / static_cast<double>(numGaps);
+    return result;
+  }
+
+  const double scale = targetLength / naturalLength;
+  result.letterSpacingPx *= scale;
+  for (TextGlyph& glyph : run.glyphs) {
+    glyph.xAdvance *= scale;
+    glyph.xKern *= scale;
+    glyph.stretchScaleX *= NarrowToFloat(scale);
+  }
+  return result;
+}
+
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                      const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
                      bool vertical, double currentPenX, double currentPenY,
@@ -478,6 +530,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       if (run.onPath) {
         carryActive = false;
         carriedAdvanceDelta = 0.0;
+        continue;
       } else if (carryActive) {
         const auto& inlinePositions = vertical ? span.yList : span.xList;
         std::optional<size_t> resetCharIndex;
@@ -1501,6 +1554,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // If the span has path data, reposition glyphs along the path.
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
+      const TextPathLengthAdjustment pathLengthAdjustment = applyTextPathLength(run, span, params);
 
       // Compute total text advance (including kerning and inter-glyph letter-spacing) for
       // text-anchor. For the simple backend, xKern holds per-glyph kerning that was applied to
@@ -1512,7 +1566,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         }
         totalAdvance += run.glyphs[gi].xAdvance;
         if (gi + 1 < run.glyphs.size()) {
-          totalAdvance += span.letterSpacingPx;
+          totalAdvance +=
+              pathLengthAdjustment.letterSpacingPx + pathLengthAdjustment.extraSpacingPx;
         }
       }
 
@@ -1592,7 +1647,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         advanceAccum += g.xAdvance;
         // Add inter-glyph letter-spacing (not after the last glyph).
         if (gi + 1 < run.glyphs.size()) {
-          advanceAccum += span.letterSpacingPx;
+          advanceAccum +=
+              pathLengthAdjustment.letterSpacingPx + pathLengthAdjustment.extraSpacingPx;
         }
       }
 

@@ -1825,7 +1825,7 @@ TEST(AttributeParserTest, TextAnchorAndPathAttributes) {
       <text>
         <textPath id="path-text" href="#path" startOffset="50%" method="align"
                   side="left" spacing="exact" x="22 23" y="24 25" dx="26 27" dy="28 29"
-                  rotate="30 31">path</textPath>
+                  rotate="30 31" textLength="32" lengthAdjust="spacingAndGlyphs">path</textPath>
       </text>
       <text>
         <textPath id="path-text-variant" xlink:href="#path" method="stretch"
@@ -1879,6 +1879,8 @@ TEST(AttributeParserTest, TextAnchorAndPathAttributes) {
   EXPECT_THAT(pathText.dyList(), testing::ElementsAre(Lengthd(28), Lengthd(29)));
   EXPECT_THAT(pathText.rotateList(),
               testing::ElementsAre(DoubleNear(30.0, 1e-12), DoubleNear(31.0, 1e-12)));
+  EXPECT_THAT(pathText.textLength(), testing::Optional(Lengthd(32)));
+  EXPECT_EQ(pathText.lengthAdjust(), LengthAdjust::SpacingAndGlyphs);
   const auto& pathTextComponent =
       QueryComponent<components::TextPathComponent>(document, "#path-text");
   EXPECT_EQ(pathTextComponent.method, components::TextPathMethod::Align);

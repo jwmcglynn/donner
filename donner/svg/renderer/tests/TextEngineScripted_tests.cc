@@ -542,6 +542,37 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
                         AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
 }
 
+TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const entt::entity textPathEntity = registry.create();
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .lineTo(Vector2d(20.0, 0.0))
+                        .lineTo(Vector2d(20.0, 100.0))
+                        .build();
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.pathSpline = path;
+  span.textPathSourceEntity = textPathEntity;
+  span.textLength = Lengthd(42.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  EXPECT_THAT(runs, ElementsAre(AllOf(RunOnPathIs(Eq(true)),
+                                      RunGlyphsAre(ElementsAre(
+                                          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-9)),
+                                                GlyphXAdvanceIs(DoubleNear(20.0, 1e-9)),
+                                                GlyphStretchScaleXIs(FloatEq(2.0f))),
+                                          AllOf(GlyphXPositionIs(DoubleNear(20.0, 1e-9)),
+                                                GlyphYPositionIs(DoubleNear(2.0, 1e-9)),
+                                                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9))))))));
+}
+
 TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAndGlyphsScalesHorizontalAdvances) {
   Registry registry;
   FontManager fontManager(registry);
