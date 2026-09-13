@@ -965,11 +965,12 @@ struct VulkanDevice::Impl {
                                          : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
   }
 
-  /// Device-loss submission errors can leave work pending, unlike recoverable OOM failures.
-  /// @param result Queue submission result, before any transient resources are released.
-  void drainFailedSubmission(VkResult result) {
+  /// Latches terminal native failure and drains pending work before releasing its objects.
+  /// @param result Native operation result, before any transient resources are released.
+  /// @param operation Operation name included in the latched diagnostic.
+  void drainAfterDeviceLoss(VkResult result, std::string_view operation) {
     if (result != VK_ERROR_DEVICE_LOST) return;
-    recordError(std::format("vkQueueSubmit failed with {}", VkResultToString(result)));
+    recordError(std::format("{} failed with {}", operation, VkResultToString(result)));
     // Vulkan requires an idle wait on a lost device to return finitely, with success or loss.
     const VkResult idleResult = api->vkDeviceWaitIdle(device);
     UTILS_RELEASE_ASSERT_MSG(idleResult == VK_SUCCESS || idleResult == VK_ERROR_DEVICE_LOST,
@@ -2583,6 +2584,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
   }
 
   if (const VkResult result = submitToQueue(commandBuffer, fence); result != VK_SUCCESS) {
+    drainAfterDeviceLoss(result, "vkQueueSubmit (writeTexture)");
     return VkError("vkQueueSubmit (writeTexture)", result);
   }
   // Past this point the work is the queue's, and it will run whatever this call reports.
@@ -2599,12 +2601,13 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
   if (const VkResult result =
           api->vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
       result != VK_SUCCESS) {
-    if (result == VK_TIMEOUT) {
-      // Retain all upload objects until the fence completes or device teardown waits idle.
-      objectsStillInUse = true;
-      return VkError("vkWaitForFences (writeTexture, still pending)", result);
+    if (result == VK_ERROR_DEVICE_LOST) {
+      drainAfterDeviceLoss(result, "vkWaitForFences (writeTexture)");
+      return VkError("vkWaitForFences (writeTexture)", result);
     }
-    return VkError("vkWaitForFences (writeTexture)", result);
+    // A failed wait does not prove completion; retain ownership until polling or teardown does.
+    objectsStillInUse = true;
+    return VkError("vkWaitForFences (writeTexture, still pending)", result);
   }
   return OkStatus();
 }
@@ -2662,19 +2665,8 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkBeginCommandBuffer", result);
   }
 
-  // What the tracker should be left holding depends on where this stops, so the guard decides by
-  // where it got to rather than by whether it succeeded.
-  //
-  // Before the submission reaches the queue, the recorded transitions describe work that will
-  // never run: discarding them is what stops the next unrelated successful submission's commit
-  // from promoting a state the GPU never reached.
-  //
-  // Once the queue has accepted the submission, the opposite is true. The upload runs whether or
-  // not this call could wait for it, and the single in-order queue puts it ahead of every later
-  // submission, so the layout it leaves behind is exactly what those submissions' barriers will
-  // meet. Discarding then would make the tracker describe a state the image is not in - the
-  // mirror of the phantom the discard exists to prevent. A queue that never drains at all is a
-  // lost device, which resets tracking on its own.
+  // Accepted submissions retain their transitions even if the wait fails. Unsubmitted work is
+  // discarded. Device loss makes layouts undefined and blocks later use through the error latch.
   struct StagedUploadGuard {
     Impl* impl = nullptr;       //!< Device whose staged state this guards.
     bool reachedQueue = false;  //!< Whether the queue accepted the submission.
@@ -3320,8 +3312,8 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   Impl::EncodingState state;
   state.commandBuffer = commandBufferResult.result();
   const auto failEncoding = [&](Status error) -> Status {
-    // Nothing recorded into this command buffer will execute, so the transitions staged while
-    // encoding it must not survive into the tracked state.
+    // Recoverable failures leave the queue unchanged. Device loss can execute work, but its
+    // layouts are undefined and the error latch prevents any later submission from using them.
     impl.syncStates.discardStaged();
     impl.destroyTransientEncodingObjects(state);
     impl.destroyBufferRecord(state.bufferWriteStaging);
@@ -3365,7 +3357,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
 
   const VkResult submitResult = impl.submitToQueue(state.commandBuffer, fence);
   if (submitResult != VK_SUCCESS) {
-    impl.drainFailedSubmission(submitResult);
+    impl.drainAfterDeviceLoss(submitResult, "vkQueueSubmit");
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
     return failEncoding(VkError("vkQueueSubmit", submitResult));
   }
