@@ -830,6 +830,11 @@ Status MetalDevice::onCreateShaderModule(uint32_t slotIndex,
     return GpuError{GpuErrorType::Unsupported, "the Metal backend compiles MSL only"};
   }
 
+  if (!descriptor.bufferBindings.has_value()) {
+    return GpuError{GpuErrorType::InvalidDescriptor,
+                    "the Metal backend requires buffer binding metadata for every MSL module"};
+  }
+
   NSString* source = ToNSString(std::string_view(descriptor.sourceText));
   if (source == nil) {
     return GpuError{GpuErrorType::InvalidDescriptor,

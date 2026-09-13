@@ -33,6 +33,7 @@
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/tests/MetalDeviceGate.h"
+#include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -225,8 +226,15 @@ TEST_F(MetalSolidFillTest, EmittedMslForAPositionOnlyFragmentEntryCompilesOnTheD
   shader::ShaderResult<std::string> msl = shader::EmitMsl(module.result());
   ASSERT_FALSE(msl.hasError()) << msl.error();
 
-  Result<ShaderModule> compiled = device_->createShaderModule(ShaderModuleDescriptor{
-      "positionOnlyFragment", RcString(msl.result()), ShaderSourceKind::Msl});
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasResult());
+  Result<ShaderModule> compiled =
+      device_->createShaderModule(ShaderModuleDescriptor{"positionOnlyFragment",
+                                                         RcString(msl.result()),
+                                                         ShaderSourceKind::Msl,
+                                                         {},
+                                                         {},
+                                                         bindings.result()});
   EXPECT_FALSE(compiled.hasError())
       << "the device rejected the emitted MSL: " << compiled.error() << "\n"
       << msl.result();
@@ -256,10 +264,12 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   shader::ShaderResult<std::string> msl = shader::EmitMsl(irModule.result());
   ASSERT_FALSE(msl.hasError()) << msl.error();
 
-  ShaderModule shaderModule =
-      unwrap(device_->createShaderModule(ShaderModuleDescriptor{"solidFill", RcString(msl.result()),
-                                                                ShaderSourceKind::Msl}),
-             "createShaderModule");
+  const auto bindings = shader::BufferBindingsOf(irModule.result());
+  ASSERT_THAT(bindings, HasResult());
+  ShaderModule shaderModule = unwrap(
+      device_->createShaderModule(ShaderModuleDescriptor{
+          "solidFill", RcString(msl.result()), ShaderSourceKind::Msl, {}, {}, bindings.result()}),
+      "createShaderModule");
 
   // The 12-entry bind group layout mirroring the production solid-fill pipeline's stage
   // visibilities: uniforms vertex+fragment, instance transforms vertex-only, everything else
@@ -477,9 +487,16 @@ TEST_F(MetalSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {
   ASSERT_FALSE(module.hasError()) << module.error();
   const auto emitted = shader::EmitMsl(module.result());
   ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasResult());
   gpu::tests::CheckVertexInputScene(
       *device_,
-      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      ShaderModuleDescriptor{"attributes",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             {},
+                             bindings.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, false);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
@@ -489,9 +506,16 @@ TEST_F(MetalSolidFillTest, IndexedQuadsWithOffsetsInstancingAndScissorMatchTheEx
   ASSERT_FALSE(module.hasError()) << module.error();
   const auto emitted = shader::EmitMsl(module.result());
   ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasResult());
   gpu::tests::CheckIndexedDrawScene(
       *device_,
-      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      ShaderModuleDescriptor{"attributes",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             {},
+                             bindings.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
@@ -501,9 +525,16 @@ TEST_F(MetalSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
   ASSERT_FALSE(module.hasError()) << module.error();
   const auto emitted = shader::EmitMsl(module.result());
   ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasResult());
   gpu::tests::CheckVertexInputScene(
       *device_,
-      ShaderModuleDescriptor{"attributes", RcString(emitted.result()), ShaderSourceKind::Msl},
+      ShaderModuleDescriptor{"attributes",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             {},
+                             bindings.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
