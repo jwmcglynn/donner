@@ -44,7 +44,6 @@ function fixture(t) {
       launchOptions: {
         args: ["--existing-launch-argument"],
         timeout: 1234,
-        env: { LAUNCH_SETTING: "preserved" },
       },
     },
   };
@@ -68,10 +67,22 @@ test("Bazel browser launch preserves caller environment and launch options", (t)
   const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
   assert.equal(config.use.launchOptions.env?.HOME, environment.HOME);
   assert.equal(config.use.launchOptions.env?.CALLER_SETTING, "preserved");
-  assert.equal(config.use.launchOptions.env?.LAUNCH_SETTING, "preserved");
   assert.equal(config.use.launchOptions.timeout, 1234);
   assert.deepEqual(Array.from(config.use.launchOptions.args), ["--existing-launch-argument"]);
   assert.equal(config.use.viewport.width, 100);
+});
+
+test("Explicit launch environments retain their filtering", (t) => {
+  const { temporary, environment, baseConfig } = fixture(t);
+  baseConfig.use.launchOptions.env = { LAUNCH_SETTING: "preserved" };
+  const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
+  assert.equal(config.use.launchOptions.env.LAUNCH_SETTING, "preserved");
+  assert.equal(config.use.launchOptions.env.CALLER_SETTING, undefined);
+  assert.equal(config.use.launchOptions.env.HOME, undefined);
+  assert.equal(
+    config.use.launchOptions.env.BREAKPAD_DUMP_LOCATION,
+    path.join(temporary, "chromium-crashpad"),
+  );
 });
 
 test("Bazel config requires an owned temporary directory", (t) => {
