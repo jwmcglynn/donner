@@ -206,6 +206,7 @@ donner_cc_test(
         "FilterGraphExecutor_tests.cc",
     ],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//tools/ci:__pkg__"],
     deps = [
         "//donner/svg/renderer:filter_graph_executor",
         "@com_google_gtest//:gtest_main",

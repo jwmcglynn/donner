@@ -1,0 +1,130 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "BUILD.bazel",
+    "test_with_exclusions.py",
+])
+
+# Manual suites select existing tests without adding new wildcard configurations.
+test_suite(
+    name = "editor_geode",
+    tags = ["manual"],
+    tests = [
+        "//donner/editor/tests:async_renderer_tests_geode",
+        "//donner/editor/tests:editor_window_tests_geode",
+        "//donner/editor/tests:gl_rnr_replay_tests_geode",
+        "//donner/editor/tests:layer_thumbnail_golden_tests_geode",
+        "//donner/editor/tests:rnr_replay_tests_geode",
+    ],
+)
+
+test_suite(
+    name = "metal_preflight",
+    tags = ["manual"],
+    tests = [
+        "//donner/gpu/metal/tests:metal_buffer_bounds_tests",
+        "//donner/gpu/metal/tests:metal_color_matrix_tests",
+        "//donner/gpu/metal/tests:metal_queue_writes_tests",
+        "//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
+        "//donner/gpu/metal/tests:metal_solid_fill_tests",
+        "//donner/gpu/metal/tests:metal_sub_rectangle_copy_tests",
+    ],
+)
+
+test_suite(
+    name = "metal_profile",
+    tags = ["manual"],
+    tests = ["//donner/gpu/metal/tests:metal_validation_profile"],
+)
+
+test_suite(
+    name = "metal_full_validation",
+    tags = ["manual"],
+    tests = ["//donner/gpu/metal/tests:metal_full_validation_required"],
+)
+
+test_suite(
+    name = "editor_wasm_audits",
+    tags = ["manual"],
+    tests = [
+        "//donner/editor/wasm:editor_wasm_transition_tests",
+        "//donner/svg/renderer:geode_excludes_tiny_skia_audit",
+    ],
+)
+
+test_suite(
+    name = "wasm_size_tests",
+    tags = ["manual"],
+    tests = ["//donner/svg/renderer/wasm:render_test"],
+)
+
+test_suite(
+    name = "editor_wasm_size_tests",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],
+)
+
+test_suite(
+    name = "asan_geode_pr",
+    tags = ["manual"],
+    tests = ["//donner/svg/renderer/tests:resvg_test_suite_geode"],
+)
+
+test_suite(
+    name = "sanitizer_allocator_exclusions",
+    tags = ["manual"],
+    tests = [
+        "//donner/benchmarks:svg_parse_allocation_tests",
+        "//donner/gpu:gpu_allocation_tests",
+        "//donner/gpu/metal/tests:metal_buffer_bounds_tests",
+    ],
+)
+
+test_suite(
+    name = "asan_no_leak_tests",
+    tags = ["manual"],
+    tests = [
+        "//donner/svg/renderer/tests:renderer_geode_golden_tests",
+        "//donner/svg/renderer/tests:renderer_geode_tests",
+    ],
+)
+
+test_suite(
+    name = "asan_exclusions",
+    tags = ["manual"],
+    tests = [
+        ":asan_no_leak_tests",
+        ":sanitizer_allocator_exclusions",
+        "//donner/editor/tests:gl_rnr_replay_tests",
+    ],
+)
+
+filegroup(
+    name = "linker_canary",
+    testonly = True,
+    srcs = [
+        "//donner/svg/renderer/tests:filter_graph_executor_tests",
+        "//donner/svg/tool:donner-svg",
+    ],
+    tags = ["manual"],
+)
+
+alias(
+    name = "release_svg",
+    actual = "//donner/svg/tool:donner-svg",
+    tags = ["manual"],
+)
+
+alias(
+    name = "editor_wasm_package",
+    actual = "//donner/editor/wasm:wasm_web_package",
+    tags = ["manual"],
+)
+
+py_test(
+    name = "test_with_exclusions_tests",
+    size = "small",
+    srcs = ["test_with_exclusions_tests.py"],
+    data = ["test_with_exclusions.py"],
+    deps = ["@rules_python//python/runfiles"],
+)

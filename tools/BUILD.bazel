@@ -1,6 +1,9 @@
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 
-exports_files(["lint.sh"])
+exports_files([
+    "lint.sh",
+    "run-browser-ci.sh",
+])
 
 refresh_compile_commands(
     name = "refresh_compile_commands",
@@ -246,7 +249,11 @@ py_test(
     name = "sanitizer_allocator_isolation_tests",
     size = "small",
     srcs = ["sanitizer_allocator_isolation_tests.py"],
-    data = ["//:.github/workflows/sanitizers.yml"],
+    data = [
+        "//:.github/workflows/sanitizers.yml",
+        "//tools/ci:BUILD.bazel",
+        "//tools/ci:test_with_exclusions.py",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -327,4 +334,12 @@ py_test(
         "check_design_doc_provenance.py",
         "check_design_doc_provenance_tests.py",
     ],
+)
+
+py_test(
+    name = "ci_workflow_targets_tests",
+    size = "small",
+    srcs = ["ci_workflow_targets_tests.py"],
+    data = ["//:github_action_definitions"],
+    deps = ["@rules_python//python/runfiles"],
 )

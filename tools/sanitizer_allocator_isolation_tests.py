@@ -1,5 +1,6 @@
 """Exercises sanitizer workflow commands to keep replacement allocators out."""
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,15 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         resolver = runfiles.Create()
+        cls.repo = Path(resolver.Rlocation("donner/tools/ci/test_with_exclusions.py")).parents[2]
+        cls.suites = {}
+        tree = ast.parse(Path(resolver.Rlocation("donner/tools/ci/BUILD.bazel")).read_text())
+        for statement in tree.body:
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+                call = statement.value
+                if isinstance(call.func, ast.Name) and call.func.id == "test_suite":
+                    attributes = {item.arg: ast.literal_eval(item.value) for item in call.keywords}
+                    cls.suites["//tools/ci:" + attributes["name"]] = attributes["tests"]
         cls.workflow = Path(resolver.Rlocation("donner/.github/workflows/sanitizers.yml")).read_text(
             encoding="utf-8"
         )
@@ -37,30 +47,44 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
                 "#!/usr/bin/env python3\n"
                 "import json, os, sys\n"
                 "with open(os.environ['CAPTURE_COMMANDS'], 'a', encoding='utf-8') as output:\n"
-                "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n",
+                "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "if sys.argv[1] == 'query':\n"
+                "    print('\\n'.join(json.loads(os.environ['QUERY_SUITES'])[sys.argv[-1]]))\n",
                 encoding="utf-8",
             )
             stub.chmod(0o755)
-            environment = dict(os.environ, CAPTURE_COMMANDS=str(capture))
+            query_suites = {f"tests({name})": self._expand_suite(name) for name in self.suites}
+            environment = dict(os.environ, CAPTURE_COMMANDS=str(capture),
+                               QUERY_SUITES=json.dumps(query_suites))
             environment["PATH"] = str(root) + os.pathsep + environment["PATH"]
             result = subprocess.run(
                 ["bash", "-euo", "pipefail", "-c", script],
                 env=environment,
+                cwd=self.repo,
                 capture_output=True,
                 text=True,
                 check=False,
                 timeout=10,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            return [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
+            commands = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
+            return [command for command in commands if command[0] == "test"]
 
-    @staticmethod
-    def _selects(arguments, target):
+    @classmethod
+    def _expand_suite(cls, label):
+        if label.startswith(":"):
+            label = "//tools/ci" + label
+        if label not in cls.suites:
+            return [label]
+        return [target for member in cls.suites[label] for target in cls._expand_suite(member)]
+
+    @classmethod
+    def _selects(cls, arguments, target):
         patterns = [argument for argument in arguments if re.match(r"^-?//", argument)]
 
         def matches(pattern):
             if not pattern.endswith("/..."):
-                return target == pattern
+                return target in cls._expand_suite(pattern)
             package = target.split(":", 1)[0]
             root = pattern[:-4]
             return package == root or package.startswith(root + "/")
