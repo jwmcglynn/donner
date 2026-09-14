@@ -1533,6 +1533,12 @@ private:
       case TokenKind::LessEqual:
       case TokenKind::Greater:
       case TokenKind::GreaterEqual: return 4;
+      default: return ArithmeticPrecedence(kind);
+    }
+  }
+
+  constexpr uint8_t ArithmeticPrecedence(TokenKind kind) const {
+    switch (kind) {
       case TokenKind::Plus:
       case TokenKind::Minus: return 5;
       case TokenKind::Star:
