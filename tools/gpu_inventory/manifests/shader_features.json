@@ -111,6 +111,58 @@
         "BlurParams"
       ]
     },
+    "donner/gpu/shader/programs/OffsetSource.h#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "OffsetParams"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "abs",
+        "floor",
+        "if",
+        "let",
+        "return",
+        "sign",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "OffsetParams"
+      ]
+    },
     "donner/gpu/shader/programs/SlugMaskSource.h#inline0": {
       "bindings": [
         {
@@ -235,6 +287,44 @@
         "Uniforms",
         "VertexOutput"
       ]
+    },
+    "donner/gpu/shader/tests/CompiledOffset.cc#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "floor",
+        "let",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
     },
     "donner/gpu/shader/wgsl/tests/ControlSource.h#inline0": {
       "bindings": [

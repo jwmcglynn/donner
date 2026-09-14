@@ -1934,6 +1934,8 @@ private:
     Builtin kind;
   };
   inline static constexpr BuiltinEntry kBuiltinEntries[] = {
+      {"floor", Builtin::Floor},
+      {"sign", Builtin::Sign},
       {"any", Builtin::Any},
       {"all", Builtin::All},
       {"abs", Builtin::Abs},
@@ -1963,17 +1965,13 @@ private:
   }
 
   constexpr bool IsUnaryFloatBuiltin(Builtin builtin) const {
-    switch (builtin) {
-      case Builtin::Abs:
-      case Builtin::Round:
-      case Builtin::Sqrt:
-      case Builtin::Saturate:
-      case Builtin::Fract:
-      case Builtin::Fwidth:
-      case Builtin::Ceil:
-      case Builtin::Exp: return true;
-      default: return false;
+    constexpr Builtin kBuiltins[] = {
+        Builtin::Abs,    Builtin::Round, Builtin::Sqrt, Builtin::Saturate, Builtin::Fract,
+        Builtin::Fwidth, Builtin::Ceil,  Builtin::Exp,  Builtin::Floor,    Builtin::Sign};
+    for (Builtin candidate : kBuiltins) {
+      if (candidate == builtin) return true;
     }
+    return false;
   }
 
   constexpr bool IsVectorMathBuiltin(Builtin builtin) const {
@@ -2827,7 +2825,8 @@ private:
  * constants. Abstract scalar arithmetic is evaluated at shader creation. Concrete static f32/vector
  * arithmetic, constant builtin calls and cross-scalar constant conversions remain unsupported.
  * Static f32 clamp bounds support literals, unary negation and vector construction, with low <=
- * high required in every lane. Other unsupported constructs fail explicitly.
+ * high required in every lane. Floor and sign accept runtime f32 scalars/vectors in this profile.
+ * Other unsupported constructs fail explicitly.
  *
  * @param source ASCII WGSL bytes to parse.
  * @return A fully validated fixed-arena module or a diagnostic with its offending byte range.

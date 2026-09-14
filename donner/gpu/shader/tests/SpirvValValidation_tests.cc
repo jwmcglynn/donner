@@ -34,7 +34,6 @@
 #include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
-#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -42,6 +41,7 @@
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -277,7 +277,9 @@ TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::OffsetAllProjections().spirv, "offset.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FloorAllProjections().spirv, "wgsl_floor.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::SignAllProjections().spirv, "wgsl_sign.spv");
 }
 
 TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {

@@ -159,6 +159,76 @@ py_test(
 )
 
 donner_cc_binary(
+    name = "offset_wgsl_probe",
+    testonly = 1,
+    srcs = ["OffsetWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:offset_api",
+        "//donner/gpu/shader:offset_artifact",
+    ],
+)
+
+py_test(
+    name = "offset_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=offset",
+        "--binary=$(rootpath :offset_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":offset_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "offset_native_probe",
+    testonly = 1,
+    srcs = ["OffsetNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:offset_api",
+        "//donner/gpu/shader:offset_native_artifact",
+    ],
+)
+
+py_test(
+    name = "offset_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=offset",
+        "--binary=$(rootpath :offset_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":offset_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "offset_all_probe",
+    testonly = 1,
+    srcs = ["OffsetAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:offset_source"],
+)
+
+py_test(
+    name = "offset_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=offset",
+        "--binary=$(rootpath :offset_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":offset_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
     name = "slug_wgsl_probe",
     testonly = 1,
     srcs = ["SlugMaskWgslProbe.cc"],

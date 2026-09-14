@@ -1021,17 +1021,19 @@ constexpr uint32_t Emitter::emitNumericBinary(const Expression& node, Type leftT
 }
 
 constexpr uint32_t Emitter::UnaryBuiltinOpcode(Builtin builtin) {
-  switch (builtin) {
-    case Builtin::Abs: return 4;
-    case Builtin::Round: return 2;
-    case Builtin::Sqrt: return 31;
-    case Builtin::Length: return 66;
-    case Builtin::Normalize: return 69;
-    case Builtin::Fract: return 10;
-    case Builtin::Ceil: return 9;
-    case Builtin::Exp: return 27;
-    default: return 0;
+  struct Encoding {
+    Builtin builtin;
+    uint32_t opcode;
+  };
+  constexpr Encoding kEncodings[] = {
+      {Builtin::Abs, 4},        {Builtin::Round, 2},  {Builtin::Sqrt, 31}, {Builtin::Length, 66},
+      {Builtin::Normalize, 69}, {Builtin::Fract, 10}, {Builtin::Ceil, 9},  {Builtin::Exp, 27},
+      {Builtin::Floor, 8},      {Builtin::Sign, 6},
+  };
+  for (const Encoding& encoding : kEncodings) {
+    if (encoding.builtin == builtin) return encoding.opcode;
   }
+  return 0;
 }
 
 constexpr uint32_t Emitter::emitBuiltin(const Expression& node) {

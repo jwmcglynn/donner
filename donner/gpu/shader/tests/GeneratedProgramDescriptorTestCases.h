@@ -17,7 +17,6 @@
 #include "donner/gpu/shader/generated/FloodShader.h"
 #include "donner/gpu/shader/generated/MergeShader.h"
 #include "donner/gpu/shader/generated/MorphologyShader.h"
-#include "donner/gpu/shader/generated/OffsetShader.h"
 #include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/SubregionClipShader.h"
@@ -58,7 +57,11 @@ inline const Program kPrograms[] = {
     {"flood", programs::BuildFloodModule, generated::flood::BuildDescriptor, false},
     {"subregion_clip", programs::BuildSubregionClipModule,
      generated::subregion_clip::BuildDescriptor, false},
-    {"offset", programs::BuildOffsetModule, generated::offset::BuildDescriptor, false},
+    {"offset", nullptr,
+     [](ShaderSourceKind kind) {
+       return MakeShaderDescriptor(programs::OffsetShader(), kind, "Offset");
+     },
+     false, programs::OffsetShader},
     {"color_space_convert", programs::BuildColorSpaceConvertModule,
      generated::color_space_convert::BuildDescriptor, false},
     {"filter_color_matrix", programs::BuildFilterColorMatrixModule,

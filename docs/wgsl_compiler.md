@@ -1,12 +1,10 @@
 # WGSL shader compilation {#WgslCompiler}
 
-Gaussian/box blur and matrix convolution are authored as inline WGSL in
-`donner/gpu/shader/programs/GaussianBlurSource.h` and `ConvolveMatrixSource.h`. The C++20 compiler
-validates that source,
-produces immutable shader projections, and derives the resource interface during constant
-evaluation. `GaussianBlur.cc` holds the compiled artifact and checks the host uniform layout.
-Application code consumes its data through `CompiledShaderView`; it does not invoke a parser or
-shader emitter at runtime.
+Gaussian/box blur, matrix convolution, Slug mask and offset are authored as inline WGSL in
+`donner/gpu/shader/programs/*Source.h`. The C++20 compiler validates each source, produces immutable
+shader projections and derives its resource interface during constant evaluation. Each artifact
+implementation checks the shared host parameter layout. Application code consumes frozen data
+through `CompiledShaderView`; it does not invoke a parser or shader emitter at runtime.
 
 ## Authoring and ownership
 
@@ -44,7 +42,7 @@ Native GPU tools still perform their normal final compilation.
 
 `MakeShaderDescriptor` selects precompiled bytes for the device and supplies compute-entry and
 buffer-range metadata. `MakeBindingLayout` derives layout entries and stage visibility from the same resource
-records. Gaussian and convolution dispatch resolve their input, output and parameter bindings by
+records. Gaussian, convolution and offset dispatch resolve their input, output and parameter bindings by
 their authored names; changing a binding number changes the layout and resource entries together.
 
 `GaussianBlurParams` is the host parameter type. Its implementation checks the resource's total
@@ -59,12 +57,16 @@ field offsets are checked against reflection independently for each retained pro
 
 ## Supported profile and limits
 
-The frontend covers the Gaussian and convolution families: flat numeric buffer structures,
+The compute frontend supports the migrated filter families with: flat numeric buffer structures,
 fixed numeric array members of buffer structs, root runtime storage arrays, group-zero sampled/storage textures and samplers, bounded decimal/hexadecimal
 numeric literals and abstract scalar constants, scalar/vector expressions and conversions, local bindings, conditionals,
 incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
 textures; texture writes occur in the compute entry. Mutable local declarations may omit an initializer and receive a zero value; immutable declarations require one.
+`floor` and `sign` support runtime f32 scalar/vector operands. Integer `sign` and constant builtin
+calls are outside this profile and fail explicitly. Offset retains its half-away-from-zero
+rounding helper; replacing it with WGSL `round` changes exact half-pixel shifts.
+
 Unsupported language constructs fail explicitly. Fixed arrays have 1 through 256 elements; local, parameter, return and nested arrays are outside
 this profile. Constant out-of-range indices
 fail compilation. Native dynamic indices are clamped before memory access; authored convolution
@@ -102,8 +104,9 @@ position are rejected. Flat structure values may be passed to and returned from 
 MSL projects entry interfaces through stage-specific wrappers over ordinary value structures.
 SPIR-V declares stage IO variables and reconstructs parameters and return values from the same
 validated interface records. A shared full-screen triangle fixture verifies the two-entry artifact,
-reflection, ordinary/constant-evaluation agreement and offline native compilation. Production Slug
-migration and its additional language features remain separate qualification work.
+reflection, ordinary/constant-evaluation agreement and offline native compilation. The authored
+Slug mask uses these interfaces; native execution also covers analytic/binary coverage, winding
+rules, clipping and declared buffer ranges.
 
 The matrix profile accepts f32 matrix types and their `matCxRf` aliases, column-vector, copy and
 zero constructors, value parameters/returns, constant column reads and dimension-checked

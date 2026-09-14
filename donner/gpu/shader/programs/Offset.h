@@ -1,31 +1,30 @@
 #pragma once
 /// @file
-/// The SVG offset filter primitive, expressed in the \c donner::gpu::shader IR.
+/// SVG offset parameters and precompiled shader projections.
 
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/OffsetBindings.h"
+#include <cstdint>
+
+#include "donner/gpu/shader/CompiledShader.h"
 
 namespace donner::gpu::shader::programs {
 
-/**
- * Builds the SVG offset filter program: one `@compute @workgroup_size(8, 8, 1)` entry point named
- * `cs_main` that reads each destination texel from the source shifted by a whole number of
- * pixels.
- *
- * The shift arrives in pixels and is rounded half away from zero, which is what the CPU filter
- * path's `std::round` does and what WGSL's `round` does not: `round` is round-half-to-even and
- * disagrees on every exact half, and a filter chain scaled so a shift lands on one would place
- * the whole primitive a pixel away from the reference. The rounding is the shared recipe rather
- * than a composition written here.
- *
- * Callers provide finite pixel shifts in [-4096, 4096], matching the filter execution bounds.
- *
- * Source texels outside the sampled texture produce transparent black. The specification defines
- * no edge behaviour for this primitive, so there is no mode to select.
- *
- * Invocations outside the destination extent return without writing, so a dispatch rounded up to
- * whole workgroups is safe.
- */
-ShaderResult<IrModule> BuildOffsetModule();
+/// Uniform layout for finite pixel shifts in the admitted [-4096, 4096] range.
+struct OffsetParams {
+  float dx;       //!< Shift along x, rounded half away from zero by the shader.
+  float dy;       //!< Shift along y, rounded half away from zero by the shader.
+  uint32_t pad0;  //!< Padding to the 16-byte uniform block size.
+  uint32_t pad1;  //!< Padding to the 16-byte uniform block size.
+};
+static_assert(sizeof(OffsetParams) == 16);
+
+/// Returns the authored WGSL offset shader and its reflected resource/compute interface.
+/// Source texels outside the input extent become transparent black. Invocations outside the
+/// destination extent do not write. Callers provide finite shifts in [-4096, 4096].
+/// @return Stable view into a process-lifetime artifact.
+const CompiledShaderView& OffsetShader();
+
+/// Returns only the platform's native MSL or SPIR-V projection and the reflected interface.
+/// @return Stable view into a process-lifetime artifact.
+const CompiledShaderView& OffsetNativeShader();
 
 }  // namespace donner::gpu::shader::programs

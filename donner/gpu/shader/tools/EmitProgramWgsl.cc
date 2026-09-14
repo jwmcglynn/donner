@@ -40,7 +40,6 @@
 #include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
-#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
@@ -71,7 +70,6 @@ constexpr ProgramEntry kPrograms[] = {
     {"component_transfer", 1, &programs::BuildComponentTransferModule},
     {"displacement_map", 1, &programs::BuildDisplacementMapModule},
     {"drop_shadow", 1, &programs::BuildDropShadowModule},
-    {"offset", 1, &programs::BuildOffsetModule},
     {"tile", 1, &programs::BuildTileModule},
     {"turbulence", 1, &programs::BuildTurbulenceModule},
     {"snapshot_unpremultiply", 1, &programs::BuildSnapshotUnpremultiplyModule},

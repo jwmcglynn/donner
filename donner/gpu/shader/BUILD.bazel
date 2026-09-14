@@ -318,7 +318,6 @@ donner_cc_library(
         "programs/LightingBindings.h",
         "programs/MergeBindings.h",
         "programs/MorphologyBindings.h",
-        "programs/OffsetBindings.h",
         "programs/SnapshotUnpremultiplyBindings.h",
         "programs/SubregionClipBindings.h",
         "programs/TileBindings.h",
@@ -343,7 +342,6 @@ donner_cc_library(
         "programs/Lighting.cc",
         "programs/Merge.cc",
         "programs/Morphology.cc",
-        "programs/Offset.cc",
         "programs/RoundHalfAwayFromZero.cc",
         "programs/SnapshotUnpremultiply.cc",
         "programs/SolidFill.cc",
@@ -366,7 +364,6 @@ donner_cc_library(
         "programs/Lighting.h",
         "programs/Merge.h",
         "programs/Morphology.h",
-        "programs/Offset.h",
         "programs/RoundHalfAwayFromZero.h",
         "programs/SnapshotUnpremultiply.h",
         "programs/SolidFill.h",
@@ -446,6 +443,10 @@ donner_cc_test(
         ":lighting_artifacts",
         ":module_interface",
         ":msl_emitter",
+        ":offset_api",
+        ":offset_artifact",
+        ":offset_source",
+        ":offset_test_artifact",
         ":programs",
         ":shader",
         ":spirv_emitter",
@@ -515,6 +516,7 @@ donner_cc_test(
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
         ":msl_emitter",
+        ":offset_test_artifact",
         ":programs",
         ":shader",
         ":slug_mask_test_artifact",
@@ -542,6 +544,7 @@ donner_cc_test(
         ":convolve_matrix_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
+        ":offset_test_artifact",
         ":programs",
         ":shader",
         ":slug_mask_test_artifact",
@@ -572,6 +575,8 @@ donner_cc_test(
         ":float_storage_test_module",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
+        ":offset_api",
+        ":offset_artifact",
         ":programs",
         ":shader",
         ":wgsl_emitter",
@@ -755,19 +760,63 @@ donner_cc_library(
     deps = ["//donner/gpu:descriptors"],
 )
 
-genrule(
-    name = "offset_generated",
-    outs = ["generated/OffsetShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) offset " +
-          "$(location generated/OffsetShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+donner_cc_library(
+    name = "offset_api",
+    hdrs = ["programs/Offset.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "offset_source",
+    hdrs = ["programs/OffsetSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "offset_validation",
+    hdrs = ["programs/OffsetArtifactValidation.h"],
+    deps = [":offset_api"],
 )
 
 donner_cc_library(
     name = "offset_artifact",
-    hdrs = ["generated/OffsetShader.h"],
+    srcs = ["programs/Offset.cc"],
     visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
+    deps = [
+        ":offset_api",
+        ":offset_source",
+        ":offset_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "offset_native_artifact",
+    srcs = ["programs/OffsetNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":offset_api",
+        ":offset_source",
+        ":offset_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "offset_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledOffset.cc"],
+    hdrs = ["tests/CompiledOffset.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":offset_source",
+    ],
 )
 
 genrule(
@@ -897,6 +946,7 @@ donner_cc_library(
         ":lighting_artifacts",
         ":merge_artifact",
         ":morphology_artifact",
+        ":offset_api",
         ":offset_artifact",
         ":programs",
         ":shader",

@@ -32,7 +32,6 @@
 #include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
-#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -40,6 +39,7 @@
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
@@ -275,7 +275,9 @@ TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
-  ExpectCompilesWithMetalCompiler(programs::BuildOffsetModule(), "offset");
+  ExpectCompilesWithMetalCompiler(tests::OffsetAllProjections().msl, "offset");
+  ExpectCompilesWithMetalCompiler(tests::FloorAllProjections().msl, "wgsl_floor");
+  ExpectCompilesWithMetalCompiler(tests::SignAllProjections().msl, "wgsl_sign");
 }
 
 TEST(MslXcrunValidation, EmittedTileComputeCompilesWithMetalCompiler) {

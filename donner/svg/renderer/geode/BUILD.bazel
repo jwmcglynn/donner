@@ -370,6 +370,7 @@ donner_cc_library(
         "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:merge_artifact",
         "//donner/gpu/shader:morphology_artifact",
+        "//donner/gpu/shader:offset_api",
         "//donner/gpu/shader:offset_artifact",
         "//donner/gpu/shader:program_bindings",
         "//donner/gpu/shader:slug_mask_api",

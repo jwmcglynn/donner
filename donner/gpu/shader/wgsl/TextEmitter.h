@@ -1001,6 +1001,8 @@ private:
       std::string_view name;
     };
     constexpr NamedBuiltin kNames[] = {
+        {Builtin::Floor, "floor"},
+        {Builtin::Sign, "sign"},
         {Builtin::All, "all"},
         {Builtin::Abs, "abs"},
         {Builtin::Max, "max"},

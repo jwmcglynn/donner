@@ -755,10 +755,7 @@ TEST(WgslEmitterGeodeValidation, EmittedOffsetComputePassesRendererValidation) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildOffsetModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -779,10 +776,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsOffsetParamsBufferTypeMis
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildOffsetModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -1060,7 +1054,7 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   return RunInputOutputUniformProgram(
       device, queue, wgsl, OffsetSourceTexels(), kOffsetExtent, kOffsetExtent,
       std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-      programs::kOffsetWorkgroupSize);
+      programs::OffsetShader().entryPoints.front().workgroupSize[0]);
 }
 
 TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
@@ -1072,10 +1066,7 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildOffsetModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   struct Shift {
     float dx;

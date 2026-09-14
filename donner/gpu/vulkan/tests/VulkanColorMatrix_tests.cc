@@ -32,6 +32,7 @@
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
@@ -43,6 +44,7 @@
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/LightingSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
+#include "donner/gpu/tests/OffsetSlice.h"
 #include "donner/gpu/tests/SlugMaskSlice.h"
 #include "donner/gpu/tests/TileSlice.h"
 #include "donner/gpu/tests/TurbulenceSlice.h"
@@ -319,6 +321,49 @@ TEST_F(VulkanColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatSt
           lightType);
     }
   }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, OffsetPreservesRoundingAndTransparentEdges) {
+  const auto& shader = shader::programs::OffsetNativeShader();
+  const std::array<std::array<float, 2>, 10> shifts{
+      {{0, 0},
+       {2, -3},
+       {0.5f, -0.5f},
+       {-0.5f, 0.5f},
+       {2.5f, -2.5f},
+       {3.5f, -3.5f},
+       {4096, 0},
+       {0, -4096},
+       {std::nextafter(0.5f, 0.0f), std::nextafter(-0.5f, 0.0f)},
+       {std::nextafter(0.5f, 1.0f), std::nextafter(-0.5f, -1.0f)}}};
+  for (const auto& shift : shifts) {
+    gpu::tests::CheckOffsetStorage(
+        *device_, shader, [this](const Buffer& b) { return device_->readBackBuffer(b); }, shift[0],
+        shift[1]);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(VulkanColorMatrixTest, OffsetUsesChangedBindingAndWorkgroupShape) {
+  gpu::tests::CheckOffsetStorage(
+      *device_, shader::tests::OffsetMutatedAllProjections(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, 0.5f, -0.5f);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(VulkanColorMatrixTest, WgslFloorAndSignPreserveVectorLanes) {
+  const std::array<float, 4> values{-1.5f, -0.0f, 0.25f, 1.5f};
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::FloorAllProjections(),
+                                   device_->shaderSourceKind(), "floor"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, values,
+      {-2.0f, 0.0f, 0.0f, 1.0f});
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::SignAllProjections(), device_->shaderSourceKind(),
+                                   "sign"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, values,
+      {-1.0f, 0.0f, 1.0f, 1.0f});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

@@ -210,6 +210,8 @@ enum class Builtin : uint8_t {
   TextureLoad,        //!< `textureLoad`.
   TextureDimensions,  //!< `textureDimensions`.
   TextureStore,       //!< `textureStore`.
+  Floor,              //!< Floating-point `floor`.
+  Sign,               //!< Floating-point `sign`.
 };
 
 /// Kind of a typed expression node.

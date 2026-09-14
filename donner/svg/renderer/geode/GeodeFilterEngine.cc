@@ -33,7 +33,6 @@
 #include "donner/gpu/shader/generated/FloodShader.h"
 #include "donner/gpu/shader/generated/MergeShader.h"
 #include "donner/gpu/shader/generated/MorphologyShader.h"
-#include "donner/gpu/shader/generated/OffsetShader.h"
 #include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/SubregionClipShader.h"
 #include "donner/gpu/shader/generated/TileShader.h"
@@ -51,7 +50,7 @@
 #include "donner/gpu/shader/programs/LightingBindings.h"
 #include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/MorphologyBindings.h"
-#include "donner/gpu/shader/programs/OffsetBindings.h"
+#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/gpu/shader/programs/TileBindings.h"
 #include "donner/gpu/shader/programs/TurbulenceBindings.h"
@@ -661,14 +660,7 @@ int32_t boundedCeilInt32(double value, int32_t minimum, int32_t maximum) {
   return static_cast<int32_t>(std::ceil(value));
 }
 
-/// Uniform buffer layout mirroring the shader program's `OffsetParams` struct. Host offsets
-/// are rounded in double precision before narrowing to these exactly representable float pixels.
-struct OffsetParams {
-  float dx;       //!< Shift along x, in pixels.
-  float dy;       //!< Shift along y, in pixels.
-  uint32_t pad0;  //!< Trailing word the program declares; the two sizes must agree.
-  uint32_t pad1;  //!< Trailing word the program declares; the two sizes must agree.
-};
+using OffsetParams = gpu::shader::programs::OffsetParams;
 
 /// Uniform buffer layout mirroring the shader program's `FilterColorMatrixParams` struct.
 /// 4x5 matrix stored as 5 column vectors (each vec4f = one column across
@@ -1583,16 +1575,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   blurProgram_ = CreateReflectedFilterProgram(
       device_.adapterDevice(), gpu::shader::programs::GaussianBlurShader(), "GaussianBlur");
 
-  // --- feOffset pipeline, through the GPU runtime ---
-  {
-    using gpu::shader::programs::OffsetBinding;
-    offsetProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(),
-        gpu::generated::offset::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
-        {SampledInputEntry(static_cast<uint32_t>(OffsetBinding::InputTexture)),
-         StorageOutputEntry(static_cast<uint32_t>(OffsetBinding::OutputTexture)),
-         UniformParamsEntry(static_cast<uint32_t>(OffsetBinding::Params))});
-  }
+  offsetProgram_ = CreateReflectedFilterProgram(device_.adapterDevice(),
+                                                gpu::shader::programs::OffsetShader(), "Offset");
 
   // --- feColorMatrix pipeline, through the GPU runtime ---
   {
@@ -3000,7 +2984,7 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 
   if (!dispatchRuntimeInputOutputParameters(arena, offsetProgram_, input, *output,
                                             UniformBytes(params), "FilterOffsetPass",
-                                            gpu::shader::programs::kOffsetWorkgroupSize)) {
+                                            offsetProgram_.workgroupSize.x)) {
     return {};
   }
 
