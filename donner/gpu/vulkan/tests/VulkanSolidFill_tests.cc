@@ -38,6 +38,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/CompiledCheckerboard.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
@@ -252,6 +253,11 @@ TEST_F(VulkanSolidFillTest, CheckerboardMatchesAnchoredAndCompositedPixels) {
   const Device& runtime = *device_;
   EXPECT_EQ(runtime.shaderSourceKind(), ShaderSourceKind::Spirv);
   gpu::tests::ExpectCheckerboardPixels(*device_);
+}
+
+TEST_F(VulkanSolidFillTest, CheckerboardMutatedArtifactMatchesAnchoredPixels) {
+  gpu::tests::ExpectCheckerboardShaderPixels(*device_,
+                                             shader::tests::CheckerboardMutatedAllProjections());
 }
 
 TEST_F(VulkanSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {

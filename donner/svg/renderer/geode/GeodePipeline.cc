@@ -7,11 +7,11 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
-#include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -160,26 +160,32 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 // ============================================================================
 
 GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device) {
-  const gpu::ShaderModuleDescriptor descriptor =
-      gpu::generated::snapshot_unpremultiply::BuildDescriptor(device.shaderSourceKind());
-  gpu::Result<gpu::ShaderModule> shaderModule = device.createShaderModule(descriptor);
+  const gpu::shader::CompiledShaderView& shader =
+      gpu::shader::programs::SnapshotUnpremultiplyShader();
+  const gpu::shader::ShaderResource* input = shader.resource("inputTexture");
+  const gpu::shader::ShaderResource* output = shader.resource("outputTexture");
+  if (input == nullptr || output == nullptr || shader.entryPoints.size() != 1 ||
+      shader.entryPoints.front().stage != gpu::ShaderStage::Compute) {
+    return;
+  }
+  inputBinding_ = input->binding;
+  outputBinding_ = output->binding;
+  const gpu::shader::ShaderEntryPoint& entry = shader.entryPoints.front();
+  workgroupSize_ = {entry.workgroupSize[0], entry.workgroupSize[1], entry.workgroupSize[2]};
+
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      device.createShaderModule(gpu::shader::MakeShaderDescriptor(shader, device.shaderSourceKind(),
+                                                                  "SnapshotUnpremultiply"));
   if (shaderModule.hasError()) {
     return;
   }
   shaderModule_ = std::move(shaderModule).result();
 
-  // Two bindings: the premultiplied render target read with textureLoad, and the straight-alpha
-  // RGBA8 staging storage texture.
-  using Binding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
+  // The reflected layout holds the premultiplied render target read with textureLoad and the
+  // straight-alpha RGBA8 staging storage texture.
   gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
       device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
-          "GeodeSnapshotReadbackBGL",
-          {gpu::BindGroupLayoutEntry{static_cast<uint32_t>(Binding::InputTexture),
-                                     gpu::ShaderStage::Compute,
-                                     gpu::BindingType::SampledTexture2dFloat},
-           gpu::BindGroupLayoutEntry{
-               static_cast<uint32_t>(Binding::OutputTexture), gpu::ShaderStage::Compute,
-               gpu::BindingType::WriteOnlyStorageTexture2d, gpu::TextureFormat::RGBA8Unorm}}});
+          "GeodeSnapshotReadbackBGL", gpu::shader::MakeBindingLayout(shader)});
   if (bindGroupLayout.hasError()) {
     return;
   }
@@ -195,8 +201,7 @@ GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device
   gpu::Result<gpu::ComputePipeline> pipeline =
       device.createComputePipeline(gpu::ComputePipelineDescriptor{
           "GeodeSnapshotReadback", pipelineLayout_,
-          gpu::ComputeState{shaderModule_, descriptor.computeEntryPoints.front().name},
-          descriptor.computeEntryPoints.front().workgroupSize});
+          gpu::ComputeState{shaderModule_, RcString(entry.name.view())}, workgroupSize_});
   if (pipeline.hasError()) {
     return;
   }

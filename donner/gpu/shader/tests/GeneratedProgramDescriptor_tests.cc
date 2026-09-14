@@ -1,5 +1,6 @@
 /// @file
-/// Build-time shader artifacts retain the source module's interface at production call sites.
+/// Production compute artifacts expose complete descriptors and binding ranges at their call
+/// sites.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -10,8 +11,6 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/RecordingDevice.h"
-#include "donner/gpu/shader/ModuleInterface.h"
-#include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/tests/GeneratedProgramDescriptorTestCases.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -25,63 +24,43 @@ using tests::Program;
 class GeneratedProgramDescriptorTests : public testing::TestWithParam<Program> {};
 
 TEST_P(GeneratedProgramDescriptorTests, PreservesSourceAndCompleteInterface) {
-  if (GetParam().compiledShader) {
-    const CompiledShaderView& shader = GetParam().compiledShader();
-    const auto descriptor = GetParam().buildDescriptor(ShaderSourceKind::Wgsl);
-    EXPECT_THAT(descriptor.sourceText, testing::Eq(shader.wgsl));
-    ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
-    std::vector<const ShaderResource*> buffers;
-    for (const auto& resource : shader.resources) {
-      if (resource.type == BindingType::UniformBuffer ||
-          resource.type == BindingType::ReadOnlyStorageBuffer)
-        buffers.push_back(&resource);
-    }
-    ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(buffers.size()));
-    for (size_t i = 0; i < buffers.size(); ++i) {
-      const auto& binding = descriptor.bufferBindings->at(i);
-      EXPECT_EQ(binding.entryPoint, shader.entryPoints.front().name.view());
-      EXPECT_EQ(binding.stage, ShaderStage::Compute);
-      EXPECT_EQ(binding.group, buffers[i]->group);
-      EXPECT_EQ(binding.binding, buffers[i]->binding);
-      EXPECT_EQ(binding.type, buffers[i]->type);
-      EXPECT_EQ(binding.minSizeBytes, buffers[i]->minSizeBytes);
-    }
-    ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
-    EXPECT_THAT(descriptor.computeEntryPoints.front().name,
-                testing::Eq(shader.entryPoints.front().name.view()));
-    EXPECT_THAT(descriptor.computeEntryPoints.front().workgroupSize,
-                testing::Eq((gpu::WorkgroupSize{shader.entryPoints.front().workgroupSize[0],
-                                                shader.entryPoints.front().workgroupSize[1],
-                                                shader.entryPoints.front().workgroupSize[2]})));
-    return;
-  }
-  const auto module = GetParam().buildModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto source = EmitWgsl(module.result());
-  ASSERT_THAT(source, HasShaderResult());
-  const auto bindings = BufferBindingsOf(module.result());
-  ASSERT_THAT(bindings, HasShaderResult());
+  const CompiledShaderView& shader = GetParam().compiledShader();
   const auto descriptor = GetParam().buildDescriptor(ShaderSourceKind::Wgsl);
-  EXPECT_THAT(descriptor.sourceText, testing::Eq(source.result()));
+  EXPECT_THAT(descriptor.sourceText, testing::Eq(shader.wgsl));
   ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
-  EXPECT_THAT(*descriptor.bufferBindings, testing::ElementsAreArray(bindings.result()));
-  const auto entries = ComputeEntryPointsOf(module.result());
-  ASSERT_THAT(entries, testing::SizeIs(1));
-  EXPECT_THAT(
-      descriptor.computeEntryPoints,
-      testing::ElementsAre(testing::AllOf(
-          testing::Field(&ComputeEntryPointInfo::name, entries.front().name),
-          testing::Field(&ComputeEntryPointInfo::workgroupSize, entries.front().workgroupSize))));
-  if (!GetParam().nativeSources) {
-    for (ShaderSourceKind kind : {ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
-      const auto unavailable = GetParam().buildDescriptor(kind);
-      EXPECT_THAT(unavailable.sourceText, testing::IsEmpty());
-      EXPECT_THAT(unavailable.spirvWords, testing::IsEmpty());
-      EXPECT_THAT(unavailable.bufferBindings, testing::Eq(std::nullopt));
-      RecordingDevice device;
-      EXPECT_THAT(device.createShaderModule(unavailable),
-                  IsGpuError(GpuErrorType::InvalidDescriptor));
-    }
+  std::vector<const ShaderResource*> buffers;
+  for (const auto& resource : shader.resources) {
+    if (resource.type == BindingType::UniformBuffer ||
+        resource.type == BindingType::ReadOnlyStorageBuffer)
+      buffers.push_back(&resource);
+  }
+  ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(buffers.size()));
+  for (size_t i = 0; i < buffers.size(); ++i) {
+    const auto& binding = descriptor.bufferBindings->at(i);
+    EXPECT_EQ(binding.entryPoint, shader.entryPoints.front().name.view());
+    EXPECT_EQ(binding.stage, ShaderStage::Compute);
+    EXPECT_EQ(binding.group, buffers[i]->group);
+    EXPECT_EQ(binding.binding, buffers[i]->binding);
+    EXPECT_EQ(binding.type, buffers[i]->type);
+    EXPECT_EQ(binding.minSizeBytes, buffers[i]->minSizeBytes);
+  }
+  ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
+  EXPECT_THAT(descriptor.computeEntryPoints.front().name,
+              testing::Eq(shader.entryPoints.front().name.view()));
+  EXPECT_THAT(descriptor.computeEntryPoints.front().workgroupSize,
+              testing::Eq((gpu::WorkgroupSize{shader.entryPoints.front().workgroupSize[0],
+                                              shader.entryPoints.front().workgroupSize[1],
+                                              shader.entryPoints.front().workgroupSize[2]})));
+  // The adapter artifact retains only WGSL, so a native descriptor built from it is empty and the
+  // device refuses it instead of compiling nothing.
+  for (ShaderSourceKind kind : {ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
+    const auto unavailable = GetParam().buildDescriptor(kind);
+    EXPECT_THAT(unavailable.sourceText, testing::IsEmpty());
+    EXPECT_THAT(unavailable.spirvWords, testing::IsEmpty());
+    EXPECT_THAT(unavailable.bufferBindings, testing::Eq(std::nullopt));
+    RecordingDevice device;
+    EXPECT_THAT(device.createShaderModule(unavailable),
+                IsGpuError(GpuErrorType::InvalidDescriptor));
   }
 }
 

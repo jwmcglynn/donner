@@ -26,7 +26,6 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -7489,13 +7488,11 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
   if (createdView.hasError()) return false;
   const gpu::TextureView inputView = std::move(createdView).result();
-  using Binding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
   auto bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
       "RendererGeodeReadbackBG",
       pipeline.bindGroupLayout(),
-      {gpu::BindGroupEntry{static_cast<uint32_t>(Binding::InputTexture),
-                           gpu::TextureViewBinding{inputView}},
-       gpu::BindGroupEntry{static_cast<uint32_t>(Binding::OutputTexture),
+      {gpu::BindGroupEntry{pipeline.inputBinding(), gpu::TextureViewBinding{inputView}},
+       gpu::BindGroupEntry{pipeline.outputBinding(),
                            gpu::TextureViewBinding{resources.stagingView}}}});
   if (bindGroup.hasError()) return false;
   auto createdEncoder = runtime.createCommandEncoder();
@@ -7505,12 +7502,11 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       encoder->beginComputePass(gpu::ComputePassDescriptor{"RendererGeodeReadbackPass"});
   if (createdPass.hasError()) return false;
   gpu::ComputePassEncoder* pass = createdPass.result();
-  constexpr uint32_t kWorkgroupX = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
-  constexpr uint32_t kWorkgroupY = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
+  const gpu::WorkgroupSize workgroup = pipeline.workgroupSize();
   if (pass->setPipeline(pipeline.pipeline()).hasError() ||
       pass->setBindGroup(0, bindGroup.result()).hasError() ||
-      pass->dispatchWorkgroups((width + kWorkgroupX - 1) / kWorkgroupX,
-                               (height + kWorkgroupY - 1) / kWorkgroupY, 1)
+      pass->dispatchWorkgroups((width + workgroup.x - 1) / workgroup.x,
+                               (height + workgroup.y - 1) / workgroup.y, 1)
           .hasError() ||
       pass->end().hasError())
     return false;

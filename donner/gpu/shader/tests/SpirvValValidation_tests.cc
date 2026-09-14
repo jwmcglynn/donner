@@ -21,33 +21,33 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
-#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
-#include "donner/gpu/shader/programs/ComponentTransfer.h"
-#include "donner/gpu/shader/programs/Composite.h"
-#include "donner/gpu/shader/programs/DisplacementMap.h"
-#include "donner/gpu/shader/programs/DropShadow.h"
-#include "donner/gpu/shader/programs/FilterColorMatrix.h"
-#include "donner/gpu/shader/programs/FilterImage.h"
-#include "donner/gpu/shader/programs/Flood.h"
-#include "donner/gpu/shader/programs/Lighting.h"
-#include "donner/gpu/shader/programs/Merge.h"
-#include "donner/gpu/shader/programs/Morphology.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
-#include "donner/gpu/shader/programs/SubregionClip.h"
-#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/tests/CompiledCheckerboard.h"
+#include "donner/gpu/shader/tests/CompiledColorSpaceConvert.h"
+#include "donner/gpu/shader/tests/CompiledComponentTransfer.h"
+#include "donner/gpu/shader/tests/CompiledComposite.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledDiffuseLighting.h"
+#include "donner/gpu/shader/tests/CompiledDisplacementMap.h"
+#include "donner/gpu/shader/tests/CompiledDropShadow.h"
 #include "donner/gpu/shader/tests/CompiledFilterBlend.h"
+#include "donner/gpu/shader/tests/CompiledFilterColorMatrix.h"
+#include "donner/gpu/shader/tests/CompiledFilterImage.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
+#include "donner/gpu/shader/tests/CompiledFlood.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
+#include "donner/gpu/shader/tests/CompiledMerge.h"
+#include "donner/gpu/shader/tests/CompiledMorphology.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugFill.h"
 #include "donner/gpu/shader/tests/CompiledSlugGradient.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
+#include "donner/gpu/shader/tests/CompiledSnapshotUnpremultiply.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
+#include "donner/gpu/shader/tests/CompiledSubregionClip.h"
+#include "donner/gpu/shader/tests/CompiledTile.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -215,7 +215,10 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
 }
 
 TEST(SpirvValValidation, EmittedCheckerboardPassesVulkan11Validation) {
-  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCheckerboardModule(), "checkerboard.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CheckerboardAllProjections().spirv,
+                                 "checkerboard.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CheckerboardMutatedAllProjections().spirv,
+                                 "checkerboard_mutated.spv");
 }
 
 TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
@@ -223,7 +226,10 @@ TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
                                  "filter_resolve.spv");
 }
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
-  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CompositeAllProjections().spirv,
+                                 "composite.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CompositeMutatedAllProjections().spirv,
+                                 "composite_mutated.spv");
 }
 
 TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
@@ -245,7 +251,9 @@ TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
 }
 
 TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {
-  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildMergeModule(), "merge.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::MergeAllProjections().spirv, "merge.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::MergeMutatedAllProjections().spirv,
+                                 "merge_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
@@ -260,23 +268,33 @@ TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
 
 TEST(SpirvValValidation, EmittedFloodComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildFloodModule(), "flood.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FloodAllProjections().spirv, "flood.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FloodMutatedAllProjections().spirv,
+                                 "flood_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedSubregionClipComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildSubregionClipModule(), "subregion_clip.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::SubregionClipAllProjections().spirv,
+                                 "subregion_clip.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::SubregionClipMutatedAllProjections().spirv,
+                                 "subregion_clip_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
-                             "filter_color_matrix.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterColorMatrixAllProjections().spirv,
+                                 "filter_color_matrix.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterColorMatrixMutatedAllProjections().spirv,
+                                 "filter_color_matrix_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterImagePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterImageModule(), "filter_image.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterImageAllProjections().spirv,
+                                 "filter_image.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterImageMutatedAllProjections().spirv,
+                                 "filter_image_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
@@ -292,15 +310,19 @@ TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildTileModule(), "tile.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::TileAllProjections().spirv, "tile.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::TileMutatedAllProjections().spirv,
+                                 "tile_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildComponentTransferModule(),
-                             "component_transfer.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::ComponentTransferAllProjections().spirv,
+                                 "component_transfer.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::ComponentTransferMutatedAllProjections().spirv,
+                                 "component_transfer_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedTurbulenceComputePassesVulkan11Validation) {
@@ -315,13 +337,18 @@ TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildDropShadowModule(), "drop_shadow.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::DropShadowAllProjections().spirv,
+                                 "drop_shadow.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::DropShadowMutatedAllProjections().spirv,
+                                 "drop_shadow_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedDisplacementMapComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildDisplacementMapModule(),
-                             "displacement_map.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::DisplacementMapAllProjections().spirv,
+                                 "displacement_map.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::DisplacementMapMutatedAllProjections().spirv,
+                                 "displacement_map_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {
@@ -334,13 +361,18 @@ TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildMorphologyModule(), "morphology.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::MorphologyAllProjections().spirv,
+                                 "morphology.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::MorphologyMutatedAllProjections().spirv,
+                                 "morphology_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedLightingComputesPassVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildDiffuseLightingModule(),
-                             "diffuse_lighting.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::DiffuseLightingAllProjections().spirv,
+                                 "diffuse_lighting.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::DiffuseLightingMutatedAllProjections().spirv,
+                                 "diffuse_lighting_mutated.spv");
   ExpectWordsValidateForVulkan11(spirvVal, tests::LightingMathAllProjections().spirv,
                                  "lighting_vector_math.spv");
   ExpectWordsValidateForVulkan11(spirvVal, tests::SpecularLightingAllProjections().spirv,
@@ -352,8 +384,10 @@ TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
   // return out of a structured branch, so the validator is what confirms the merge blocks the
   // emitter writes around those returns are well formed.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildColorSpaceConvertModule(),
-                             "color_space_convert.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::ColorSpaceConvertAllProjections().spirv,
+                                 "color_space_convert.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::ColorSpaceConvertMutatedAllProjections().spirv,
+                                 "color_space_convert_mutated.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {
@@ -376,8 +410,11 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
   // The first module to emit OpUGreaterThanEqual over a vector, OpAny, and OpShiftRightLogical,
   // so this is where the validator confirms those encodings and their result types.
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildSnapshotUnpremultiplyModule(),
-                             "snapshot_unpremultiply.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::SnapshotUnpremultiplyAllProjections().spirv,
+                                 "snapshot_unpremultiply.spv");
+  ExpectWordsValidateForVulkan11(spirvVal,
+                                 tests::SnapshotUnpremultiplyMutatedAllProjections().spirv,
+                                 "snapshot_unpremultiply_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {

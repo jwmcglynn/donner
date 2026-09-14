@@ -1,14 +1,14 @@
 #pragma once
 /// @file
-/// The SVG merge filter program expressed in the typed shader IR.
+/// feMerge precompiled shader projections.
+#include <cstdint>
 
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/MergeBindings.h"
-
+#include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
-
-/// Builds a bounded 8-by-8 compute program over premultiplied source and destination textures.
-/// Applies source-over compositing for each successive merge input.
-ShaderResult<IrModule> BuildMergeModule();
-
+/// Returns the WGSL merge artifact: one premultiplied source-over pass of two inputs.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& MergeShader();
+/// Returns only the platform-native Merge projection.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& MergeNativeShader();
 }  // namespace donner::gpu::shader::programs

@@ -19,33 +19,33 @@
 #include <string_view>
 
 #include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
-#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
-#include "donner/gpu/shader/programs/ComponentTransfer.h"
-#include "donner/gpu/shader/programs/Composite.h"
-#include "donner/gpu/shader/programs/DisplacementMap.h"
-#include "donner/gpu/shader/programs/DropShadow.h"
-#include "donner/gpu/shader/programs/FilterColorMatrix.h"
-#include "donner/gpu/shader/programs/FilterImage.h"
-#include "donner/gpu/shader/programs/Flood.h"
-#include "donner/gpu/shader/programs/Lighting.h"
-#include "donner/gpu/shader/programs/Merge.h"
-#include "donner/gpu/shader/programs/Morphology.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
-#include "donner/gpu/shader/programs/SubregionClip.h"
-#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/tests/CompiledCheckerboard.h"
+#include "donner/gpu/shader/tests/CompiledColorSpaceConvert.h"
+#include "donner/gpu/shader/tests/CompiledComponentTransfer.h"
+#include "donner/gpu/shader/tests/CompiledComposite.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledDiffuseLighting.h"
+#include "donner/gpu/shader/tests/CompiledDisplacementMap.h"
+#include "donner/gpu/shader/tests/CompiledDropShadow.h"
 #include "donner/gpu/shader/tests/CompiledFilterBlend.h"
+#include "donner/gpu/shader/tests/CompiledFilterColorMatrix.h"
+#include "donner/gpu/shader/tests/CompiledFilterImage.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
+#include "donner/gpu/shader/tests/CompiledFlood.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
+#include "donner/gpu/shader/tests/CompiledMerge.h"
+#include "donner/gpu/shader/tests/CompiledMorphology.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugFill.h"
 #include "donner/gpu/shader/tests/CompiledSlugGradient.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
+#include "donner/gpu/shader/tests/CompiledSnapshotUnpremultiply.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
+#include "donner/gpu/shader/tests/CompiledSubregionClip.h"
+#include "donner/gpu/shader/tests/CompiledTile.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
@@ -184,7 +184,9 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
 
 TEST(MslXcrunValidation, EmittedCheckerboardCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildCheckerboardModule(), "checkerboard");
+  ExpectCompilesWithMetalCompiler(tests::CheckerboardAllProjections().msl, "checkerboard");
+  ExpectCompilesWithMetalCompiler(tests::CheckerboardMutatedAllProjections().msl,
+                                  "checkerboard_mutated");
 }
 
 TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
@@ -193,7 +195,8 @@ TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
 }
 TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildCompositeModule(), "composite");
+  ExpectCompilesWithMetalCompiler(tests::CompositeAllProjections().msl, "composite");
+  ExpectCompilesWithMetalCompiler(tests::CompositeMutatedAllProjections().msl, "composite_mutated");
 }
 
 TEST(MslXcrunValidation, CompiledGraphicsEntriesPassMetalCompilation) {
@@ -213,7 +216,8 @@ TEST(MslXcrunValidation, EmittedConvolveMatrixCompilesWithMetalCompiler) {
 
 TEST(MslXcrunValidation, EmittedMergeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildMergeModule(), "merge");
+  ExpectCompilesWithMetalCompiler(tests::MergeAllProjections().msl, "merge");
+  ExpectCompilesWithMetalCompiler(tests::MergeMutatedAllProjections().msl, "merge_mutated");
 }
 
 TEST(MslXcrunValidation, APositionOnlyFragmentEntryCompilesWithMetalCompiler) {
@@ -238,10 +242,12 @@ TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
 
 TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  // This program is the first to emit a componentwise comparison, a bool-vector reduction, and a
-  // shift, so it is also the first to have the compiler confirm those spellings are real MSL.
-  ExpectCompilesWithMetalCompiler(programs::BuildSnapshotUnpremultiplyModule(),
+  // This program emits a componentwise comparison, a bool-vector reduction and unsigned
+  // division, so the compiler confirms those spellings are real MSL.
+  ExpectCompilesWithMetalCompiler(tests::SnapshotUnpremultiplyAllProjections().msl,
                                   "snapshot_unpremultiply");
+  ExpectCompilesWithMetalCompiler(tests::SnapshotUnpremultiplyMutatedAllProjections().msl,
+                                  "snapshot_unpremultiply_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
@@ -259,22 +265,30 @@ TEST(MslXcrunValidation, EmittedMathPrimitivesCompileWithMetalCompiler) {
 
 TEST(MslXcrunValidation, EmittedFloodComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildFloodModule(), "flood");
+  ExpectCompilesWithMetalCompiler(tests::FloodAllProjections().msl, "flood");
+  ExpectCompilesWithMetalCompiler(tests::FloodMutatedAllProjections().msl, "flood_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedSubregionClipComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildSubregionClipModule(), "subregion_clip");
+  ExpectCompilesWithMetalCompiler(tests::SubregionClipAllProjections().msl, "subregion_clip");
+  ExpectCompilesWithMetalCompiler(tests::SubregionClipMutatedAllProjections().msl,
+                                  "subregion_clip_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
+  ExpectCompilesWithMetalCompiler(tests::FilterColorMatrixAllProjections().msl,
+                                  "filter_color_matrix");
+  ExpectCompilesWithMetalCompiler(tests::FilterColorMatrixMutatedAllProjections().msl,
+                                  "filter_color_matrix_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedFilterImageCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildFilterImageModule(), "filter_image");
+  ExpectCompilesWithMetalCompiler(tests::FilterImageAllProjections().msl, "filter_image");
+  ExpectCompilesWithMetalCompiler(tests::FilterImageMutatedAllProjections().msl,
+                                  "filter_image_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
@@ -290,14 +304,18 @@ TEST(MslXcrunValidation, EmittedTileComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
-  ExpectCompilesWithMetalCompiler(programs::BuildTileModule(), "tile");
+  ExpectCompilesWithMetalCompiler(tests::TileAllProjections().msl, "tile");
+  ExpectCompilesWithMetalCompiler(tests::TileMutatedAllProjections().msl, "tile_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedComponentTransferComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
-  ExpectCompilesWithMetalCompiler(programs::BuildComponentTransferModule(), "component_transfer");
+  ExpectCompilesWithMetalCompiler(tests::ComponentTransferAllProjections().msl,
+                                  "component_transfer");
+  ExpectCompilesWithMetalCompiler(tests::ComponentTransferMutatedAllProjections().msl,
+                                  "component_transfer_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedTurbulenceComputeCompilesWithMetalCompiler) {
@@ -310,12 +328,16 @@ TEST(MslXcrunValidation, EmittedDropShadowComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
-  ExpectCompilesWithMetalCompiler(programs::BuildDropShadowModule(), "drop_shadow");
+  ExpectCompilesWithMetalCompiler(tests::DropShadowAllProjections().msl, "drop_shadow");
+  ExpectCompilesWithMetalCompiler(tests::DropShadowMutatedAllProjections().msl,
+                                  "drop_shadow_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedDisplacementMapComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildDisplacementMapModule(), "displacement_map");
+  ExpectCompilesWithMetalCompiler(tests::DisplacementMapAllProjections().msl, "displacement_map");
+  ExpectCompilesWithMetalCompiler(tests::DisplacementMapMutatedAllProjections().msl,
+                                  "displacement_map_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedGaussianBlurComputeCompilesWithMetalCompiler) {
@@ -327,12 +349,16 @@ TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
-  ExpectCompilesWithMetalCompiler(programs::BuildMorphologyModule(), "morphology");
+  ExpectCompilesWithMetalCompiler(tests::MorphologyAllProjections().msl, "morphology");
+  ExpectCompilesWithMetalCompiler(tests::MorphologyMutatedAllProjections().msl,
+                                  "morphology_mutated");
 }
 
 TEST(MslXcrunValidation, EmittedLightingComputesCompileWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildDiffuseLightingModule(), "diffuse_lighting");
+  ExpectCompilesWithMetalCompiler(tests::DiffuseLightingAllProjections().msl, "diffuse_lighting");
+  ExpectCompilesWithMetalCompiler(tests::DiffuseLightingMutatedAllProjections().msl,
+                                  "diffuse_lighting_mutated");
   ExpectCompilesWithMetalCompiler(tests::LightingMathAllProjections().msl, "lighting_vector_math");
   ExpectCompilesWithMetalCompiler(tests::SpecularLightingAllProjections().msl, "specular_lighting");
 }
@@ -344,7 +370,10 @@ TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {
 
 TEST(MslXcrunValidation, EmittedColorSpaceConvertCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildColorSpaceConvertModule(), "color_space_convert");
+  ExpectCompilesWithMetalCompiler(tests::ColorSpaceConvertAllProjections().msl,
+                                  "color_space_convert");
+  ExpectCompilesWithMetalCompiler(tests::ColorSpaceConvertMutatedAllProjections().msl,
+                                  "color_space_convert_mutated");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {

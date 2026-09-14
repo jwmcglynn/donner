@@ -56,11 +56,11 @@ struct FilterResourceArena;
 struct FilterResourceCache;
 
 /**
- * A compute pipeline built from a shader IR program's build-time emitted source, with the objects
- * it is layered on.
+ * A compute pipeline built from a precompiled shader artifact, with the objects it is layered on.
  *
  * Every handle is null when any step of the build failed, which is what a dispatch checks before
- * recording: a pipeline that was never created must not be dispatched with.
+ * recording: a pipeline that was never created must not be dispatched with. Binding slots come
+ * from the artifact's reflected resource names, never from a host-side table.
  */
 struct RuntimeComputeProgram {
   gpu::ShaderModule shaderModule;        //!< Module holding the compute entry point.
@@ -69,11 +69,10 @@ struct RuntimeComputeProgram {
   gpu::ComputePipeline pipeline;         //!< The pipeline itself.
   gpu::WorkgroupSize workgroupSize;      //!< Dispatch dimensions declared by the entry point.
   std::array<uint32_t, 3> inputOutputParameterBindings = {0, 1, 2};
-  //!< Input texture, output texture, and uniform resource bindings.
+  //!< Reflected input texture, output texture, and parameter resource bindings.
   std::optional<uint32_t> transferTableBinding;  //!< Optional reflected lookup-table binding.
-  std::optional<std::array<uint32_t, 4>> twoInputBindings;
-  //!< Reflected source, backdrop, output and parameter bindings; also selects reflected X/Y.
-  bool useReflectedInputOutputMetadata = false;  //!< Selects the reflected dispatch contract.
+  std::array<uint32_t, 4> twoInputBindings = {0, 1, 2, 3};
+  //!< Reflected source, backdrop, output and parameter bindings of a two-input program.
 };
 
 /**

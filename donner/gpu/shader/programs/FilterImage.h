@@ -1,19 +1,29 @@
 #pragma once
 /// @file
-/// SVG image filter compute program expressed in the shader IR.
+/// feImage parameters and precompiled shader projections.
+#include <cstdint>
 
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/FilterImageBindings.h"
-
+#include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
-
-/**
- * Builds affine image placement with nearest-neighbor, CSS pixelated, and
- * Mitchell-Netravali sampling.
- *
- * Source taps clamp to the source edge, while output pixel centers outside the image remain
- * transparent. Results are clamped to finite premultiplied color inputs' valid range.
- */
-ShaderResult<IrModule> BuildFilterImageModule();
-
+/// Uniform row-major 2x3 image-from-output transform and sampling selection.
+struct FilterImageParams {
+  float m00;              //!< Output-x coefficient of image x.
+  float m01;              //!< Output-y coefficient of image x.
+  float m02;              //!< Constant term of image x.
+  float m10;              //!< Output-x coefficient of image y.
+  float m11;              //!< Output-y coefficient of image y.
+  float m12;              //!< Constant term of image y.
+  uint32_t samplingMode;  //!< Zero smooth, one crisp edges, two pixelated.
+  float pixelatedScaleX;  //!< Device pixels per image texel along x.
+  float pixelatedScaleY;  //!< Device pixels per image texel along y.
+  uint32_t padding;       //!< Reserved layout padding.
+};
+static_assert(sizeof(FilterImageParams) == 40);
+/// Returns the WGSL image artifact: smooth, crisp or pixelated placement through an
+/// image-from-output transform.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& FilterImageShader();
+/// Returns only the platform-native FilterImage projection.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& FilterImageNativeShader();
 }  // namespace donner::gpu::shader::programs

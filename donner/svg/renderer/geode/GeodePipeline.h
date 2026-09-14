@@ -181,9 +181,10 @@ private:
 /**
  * Compute pipeline for GPU-side snapshot unpremultiplication.
  *
- * Reads a premultiplied-alpha render target (binding 0, `texture_2d<f32>`)
- * and writes straight-alpha RGBA8 into the storage texture at binding 1
- * (`rgba8unorm`, write-only). Owned lazily by `GeodeDevice` so every
+ * Reads a premultiplied-alpha render target (`texture_2d<f32>`) and writes
+ * straight-alpha RGBA8 into a write-only `rgba8unorm` storage texture; both
+ * binding slots and the workgroup shape come from the precompiled artifact's
+ * reflected interface. Owned lazily by `GeodeDevice` so every
  * snapshot sharing the device reuses one compiled pipeline (issue #575:
  * wgpu-native retains compiled pipelines).
  *
@@ -193,10 +194,8 @@ private:
  */
 class GeodeSnapshotReadbackPipeline {
 public:
-  /**
-   * Create the snapshot-unpremultiply compute pipeline for the given device.
-   */
-  /// Create the snapshot-unpremultiply compute pipeline on \p device from the shader IR program.
+  /// Create the snapshot-unpremultiply compute pipeline on \p device from the precompiled
+  /// artifact.
   /// @param device Runtime device the pipeline and its layouts are created on.
   explicit GeodeSnapshotReadbackPipeline(gpu::Device& device);
 
@@ -213,12 +212,21 @@ public:
   const gpu::ComputePipeline& pipeline() const { return pipeline_; }
   /// The bind group layout used by the pipeline.
   const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  /// Reflected binding of the premultiplied source texture.
+  uint32_t inputBinding() const { return inputBinding_; }
+  /// Reflected binding of the straight-alpha storage destination.
+  uint32_t outputBinding() const { return outputBinding_; }
+  /// Workgroup shape the entry point declares.
+  gpu::WorkgroupSize workgroupSize() const { return workgroupSize_; }
 
 private:
   gpu::ShaderModule shaderModule_;
   gpu::BindGroupLayout bindGroupLayout_;
   gpu::PipelineLayout pipelineLayout_;
   gpu::ComputePipeline pipeline_;
+  uint32_t inputBinding_ = 0;
+  uint32_t outputBinding_ = 1;
+  gpu::WorkgroupSize workgroupSize_{8, 8, 1};
 };
 
 }  // namespace donner::geode

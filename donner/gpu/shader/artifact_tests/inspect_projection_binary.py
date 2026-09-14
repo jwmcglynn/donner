@@ -21,6 +21,21 @@ PAYLOAD_MARKERS = {
     "image_blit": (b"fn sample_pixelated(", b"donner_msl_member_pixelatedScale"),
     "turbulence": (b"struct TurbulenceParams", b"donner_msl_member_stitchTiles"),
     "slug": (b"fn effective_bounding_vertex(", b"donner_msl_member_boundingVertexCount"),
+    "flood": (b"struct FloodParams", b"donner_msl_member_color"),
+    "merge": (b"let remainingSourceAlpha", b"donner_msl_texture_load"),
+    "composite": (b"struct CompositeParams", b"donner_msl_member_op"),
+    "filter_color_matrix": (b"struct FilterColorMatrixParams", b"donner_msl_member_col0"),
+    "subregion_clip": (b"struct SubregionClipParams", b"donner_msl_member_invA"),
+    "snapshot_unpremultiply": (b"let halfAlpha", b"donner_msl_texture_load"),
+    "tile": (b"struct TileParams", b"donner_msl_member_srcX"),
+    "checkerboard": (b"struct CheckerboardParams", b"donner_msl_member_checker_size"),
+    "color_space_convert": (b"struct ColorSpaceConvertParams", b"donner_msl_member_direction"),
+    "morphology": (b"struct MorphologyParams", b"donner_msl_member_radiusX"),
+    "component_transfer": (b"fn transfer(value", b"donner_msl_texture_load"),
+    "displacement_map": (b"struct DisplacementParams", b"donner_msl_member_scale"),
+    "drop_shadow": (b"struct DropShadowParams", b"donner_msl_member_color"),
+    "filter_image": (b"struct ImageParams", b"donner_msl_member_m00"),
+    "diffuse_lighting": (b"fn spotLightFactor(", b"donner_msl_member_coneAngleRad"),
 }
 
 

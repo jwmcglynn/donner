@@ -16,8 +16,8 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/shader/programs/FilterImageBindings.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/ReflectedComputeSlice.h"
 
 namespace donner::gpu::tests {
 
@@ -155,41 +155,19 @@ inline std::array<FilterImageTestParams, 3> FilterImageScenes(uint32_t samplingM
 
 /// Executes one sampling mode and affine scene against a native backend descriptor.
 /// @param device Native device with bounded wait/readback support.
-/// @param shaderDescriptor Build-generated descriptor for the native backend.
+/// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads a submitted buffer through the backend's host mapping API.
 /// @param samplingMode Smooth (0), nearest (1), or pixelated (2).
 /// @param sceneIndex Index into FilterImageScenes.
 template <typename DeviceType, typename Readback>
-void CheckFilterImageStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+void CheckFilterImageStorage(DeviceType& device, const shader::CompiledShaderView& shader,
                              Readback readbackBuffer, uint32_t samplingMode, size_t sceneIndex) {
   const auto scenes = FilterImageScenes(samplingMode);
   ASSERT_THAT(sceneIndex, testing::Lt(scenes.size()));
   const FilterImageTestParams params = scenes[sceneIndex];
-  const auto binding = [](shader::programs::FilterImageBinding value) {
-    return static_cast<uint32_t>(value);
-  };
-
-  auto shaderModule = device.createShaderModule(shaderDescriptor);
-  ASSERT_THAT(shaderModule, HasResult());
-  auto bindGroupLayout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
-      "image filter",
-      {{binding(shader::programs::FilterImageBinding::ImageTexture), ShaderStage::Compute,
-        BindingType::SampledTexture2dUnfilterableFloat},
-       {binding(shader::programs::FilterImageBinding::OutputTexture), ShaderStage::Compute,
-        BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA32Float},
-       {binding(shader::programs::FilterImageBinding::Params), ShaderStage::Compute,
-        BindingType::UniformBuffer}}});
-  ASSERT_THAT(bindGroupLayout, HasResult());
-  auto pipelineLayout = device.createPipelineLayout(
-      PipelineLayoutDescriptor{"image filter", {bindGroupLayout.result()}});
-  ASSERT_THAT(pipelineLayout, HasResult());
-  auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "image filter",
-      pipelineLayout.result(),
-      ComputeState{shaderModule.result(), RcString(shader::programs::kFilterImageEntryPoint)},
-      {shader::programs::kFilterImageWorkgroupSize, shader::programs::kFilterImageWorkgroupSize,
-       1}});
-  ASSERT_THAT(pipeline, HasResult());
+  ReflectedComputePipeline compute;
+  CreateReflectedComputePipeline(device, shader, "image filter", compute);
+  if (testing::Test::HasFatalFailure()) return;
 
   auto input =
       device.createTexture(TextureDescriptor{"image filter input",
@@ -226,15 +204,12 @@ void CheckFilterImageStorage(DeviceType& device, const ShaderModuleDescriptor& s
                                  std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&params),
                                                           sizeof(params))),
               IsOk());
-  auto bindGroup = device.createBindGroup(
-      BindGroupDescriptor{"image filter",
-                          bindGroupLayout.result(),
-                          {{binding(shader::programs::FilterImageBinding::ImageTexture),
-                            TextureViewBinding{inputView.result()}},
-                           {binding(shader::programs::FilterImageBinding::OutputTexture),
-                            TextureViewBinding{outputView.result()}},
-                           {binding(shader::programs::FilterImageBinding::Params),
-                            BufferBinding{uniform.result(), 0, sizeof(params)}}}});
+  auto bindGroup = device.createBindGroup(BindGroupDescriptor{
+      "image filter",
+      compute.layout,
+      {{ReflectedBinding(shader, "imageTexture"), TextureViewBinding{inputView.result()}},
+       {ReflectedBinding(shader, "outputTexture"), TextureViewBinding{outputView.result()}},
+       {ReflectedBinding(shader, "params"), BufferBinding{uniform.result(), 0, sizeof(params)}}}});
   ASSERT_THAT(bindGroup, HasResult());
 
   constexpr uint64_t kReadbackBytes = kFilterImageBytesPerRow * kFilterImageOutputHeight;
@@ -245,15 +220,10 @@ void CheckFilterImageStorage(DeviceType& device, const ShaderModuleDescriptor& s
   ASSERT_THAT(encoder, HasResult());
   auto pass = encoder.result()->beginComputePass(ComputePassDescriptor{"image filter"});
   ASSERT_THAT(pass, HasResult());
-  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setPipeline(compute.pipeline), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, bindGroup.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(
-                  (kFilterImageOutputWidth + shader::programs::kFilterImageWorkgroupSize - 1) /
-                      shader::programs::kFilterImageWorkgroupSize,
-                  (kFilterImageOutputHeight + shader::programs::kFilterImageWorkgroupSize - 1) /
-                      shader::programs::kFilterImageWorkgroupSize,
-                  1),
-              IsOk());
+  const auto groups = compute.groupsFor(kFilterImageOutputWidth, kFilterImageOutputHeight);
+  ASSERT_THAT(pass.result()->dispatchWorkgroups(groups[0], groups[1], groups[2]), IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(
                   TexelCopyTextureInfo{output.result()}, readback.result(),
@@ -294,10 +264,11 @@ void CheckFilterImageStorage(DeviceType& device, const ShaderModuleDescriptor& s
       }
     }
   }
-  editor::tests::CompareBitmapToBitmap(
-      actualBitmap, expectedBitmap,
-      "native_image_mode_" + std::to_string(samplingMode) + "_scene_" + std::to_string(sceneIndex),
-      editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap,
+                                       "native_image_mode_" + std::to_string(samplingMode) +
+                                           "_scene_" + std::to_string(sceneIndex) + "_" +
+                                           std::string(shader.entryPoints.front().name.view()),
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace donner::gpu::tests

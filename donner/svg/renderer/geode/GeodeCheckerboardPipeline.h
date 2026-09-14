@@ -9,6 +9,7 @@
 
 #include "donner/base/Vector2.h"
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 
 namespace donner::geode {
 
@@ -84,8 +85,8 @@ struct CheckerboardUnderlayParams {
  * device reuses one compiled pipeline per blend mode - the backend retains every
  * pipeline ever constructed, so per-consumer construction leaks (issue #575).
  *
- * Bind group layout:
- * - binding 0: uniform buffer (\ref Uniforms)
+ * The bind group layout holds one uniform buffer (\ref Uniforms) at the slot the
+ * precompiled artifact reflects; see \ref uniformBinding.
  *
  * The pipeline takes no vertex buffer - the shader emits a fullscreen triangle
  * from `@builtin(vertex_index)`. A draw call is `pass.draw(3, 1, 0, 0)`. The
@@ -111,17 +112,9 @@ public:
     DestinationOver,
   };
 
-  /// Uniform block consumed by the checkerboard shader.
-  struct Uniforms {
-    float targetSize[2];      //!< Render-target size in device pixels.
-    float devicePixelRatio;   //!< Device pixels per logical pixel.
-    float checkerSize;        //!< Checker cell size in logical pixels.
-    float darkColor[4];       //!< RGBA for odd cells.
-    float lightColor[4];      //!< RGBA for even cells.
-    float originOffsetPx[2];  //!< Device-pixel offset of the target's top-left from the anchor.
-    float padding[2];         //!< WGSL uniform struct tail padding; must be zero.
-  };
-  static_assert(sizeof(Uniforms) == 64);
+  /// Uniform block consumed by the checkerboard shader; its layout is verified against the
+  /// compiled artifact.
+  using Uniforms = gpu::shader::programs::CheckerboardParams;
 
   /**
    * Create the checkerboard pipeline for the given device and target format.
@@ -151,11 +144,15 @@ public:
   /// Bind group layout used by the pipeline.
   const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
+  /// Reflected binding of the \ref Uniforms buffer within group 0.
+  uint32_t uniformBinding() const { return uniformBinding_; }
+
 private:
   gpu::ShaderModule shaderModule_;
   gpu::BindGroupLayout bindGroupLayout_;
   gpu::PipelineLayout pipelineLayout_;
   gpu::RenderPipeline pipeline_;
+  uint32_t uniformBinding_ = 0;
 };
 
 /**

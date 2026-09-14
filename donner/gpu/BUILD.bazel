@@ -105,7 +105,6 @@ donner_cc_library(
         ":gpu_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:convolve_matrix_api",
-        "//donner/gpu/shader:program_bindings",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -121,7 +120,6 @@ donner_cc_library(
         ":gpu_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:offset_api",
-        "//donner/gpu/shader:program_bindings",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -165,6 +163,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "reflected_compute_slice",
+    testonly = 1,
+    hdrs = ["tests/ReflectedComputeSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/base",
+        "//donner/gpu/shader:compiled_shader",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "float_texture_slice",
     testonly = 1,
     hdrs = ["tests/FloatTextureSlice.h"],
@@ -184,6 +196,7 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -196,6 +209,7 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
@@ -225,8 +239,8 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "//donner/editor/tests:bitmap_golden_compare",
-        "//donner/gpu/shader:program_bindings",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -239,6 +253,7 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -251,6 +266,7 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
@@ -265,8 +281,9 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "//donner/editor/tests:bitmap_golden_compare",
-        "//donner/gpu/shader:program_bindings",
+        "//donner/gpu/shader:displacement_map_api",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -295,9 +312,10 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:compiled_shader",
-        "//donner/gpu/shader:program_bindings",
+        "//donner/gpu/shader:lighting_params",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -367,7 +385,11 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/base",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:checkerboard_api",
+        "//donner/gpu/shader:compiled_shader",
         "//donner/svg/renderer/geode:checkerboard_pipeline",
         "@com_google_gtest//:gtest",
     ],
@@ -459,6 +481,111 @@ donner_cc_library(
         "//donner/gpu/shader:filter_blend_api",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "flood_slice",
+    testonly = 1,
+    hdrs = ["tests/FloodSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:flood_api",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "merge_slice",
+    testonly = 1,
+    hdrs = ["tests/MergeSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/gpu/shader:compiled_shader",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "composite_slice",
+    testonly = 1,
+    hdrs = ["tests/CompositeSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:composite_api",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_slice",
+    testonly = 1,
+    hdrs = ["tests/FilterColorMatrixSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:filter_color_matrix_api",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "subregion_clip_slice",
+    testonly = 1,
+    hdrs = ["tests/SubregionClipSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:subregion_clip_api",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_slice",
+    testonly = 1,
+    hdrs = ["tests/SnapshotUnpremultiplySlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/gpu/shader:compiled_shader",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "color_space_convert_slice",
+    testonly = 1,
+    hdrs = ["tests/ColorSpaceConvertSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":reflected_compute_slice",
+        "//donner/gpu/shader:color_space_convert_api",
+        "//donner/gpu/shader:compiled_shader",
+        "@com_google_gtest//:gtest",
     ],
 )
 

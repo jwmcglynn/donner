@@ -354,9 +354,8 @@ donner_cc_library(
     ],
 )
 
-# Complete shader programs expressed in the IR: the solid-fill render family
-# (whose frozen pixel baseline is rendered by the Donner-owned slug_fill.wgsl
-# it re-expresses) and the color-matrix compute program.
+# Shader programs still expressed in the IR: the solid-fill render family and the color-matrix
+# compute program, both retained as emitter and native-execution fixtures.
 # Stage IO shapes the emitters must handle but no shipped program has. A library rather than a
 # plain header in each test's srcs, because the Metal slice in another package is held to the same
 # shapes through its device's runtime compiler.
@@ -368,72 +367,25 @@ donner_cc_library(
     deps = [":shader"],
 )
 
-# The bind group indices alone, with no dependency on the IR: a host creating a pipeline from
-# build-time emitted WGSL needs them and must not link the emitters to get them.
+# Turbulence table constants shared by the shader source and its host without the compiler.
 donner_cc_library(
     name = "program_bindings",
-    hdrs = [
-        "programs/ColorSpaceConvertBindings.h",
-        "programs/ComponentTransferBindings.h",
-        "programs/CompositeBindings.h",
-        "programs/DisplacementMapBindings.h",
-        "programs/DropShadowBindings.h",
-        "programs/FilterColorMatrixBindings.h",
-        "programs/FilterImageBindings.h",
-        "programs/FloodBindings.h",
-        "programs/LightingBindings.h",
-        "programs/MergeBindings.h",
-        "programs/MorphologyBindings.h",
-        "programs/SnapshotUnpremultiplyBindings.h",
-        "programs/SubregionClipBindings.h",
-        "programs/TileBindings.h",
-        "programs/TurbulenceBindings.h",
-    ],
+    hdrs = ["programs/TurbulenceBindings.h"],
     visibility = ["//visibility:public"],
 )
 
 donner_cc_library(
     name = "programs",
     srcs = [
-        "programs/Checkerboard.cc",
         "programs/ColorMatrix.cc",
-        "programs/ColorSpaceConvert.cc",
-        "programs/ComponentTransfer.cc",
-        "programs/Composite.cc",
-        "programs/DisplacementMap.cc",
-        "programs/DropShadow.cc",
-        "programs/FilterColorMatrix.cc",
-        "programs/FilterImage.cc",
-        "programs/Flood.cc",
-        "programs/Lighting.cc",
-        "programs/Merge.cc",
-        "programs/Morphology.cc",
         "programs/RoundHalfAwayFromZero.cc",
-        "programs/SnapshotUnpremultiply.cc",
         "programs/SolidFill.cc",
-        "programs/SubregionClip.cc",
-        "programs/Tile.cc",
     ],
     hdrs = [
-        "programs/Checkerboard.h",
         "programs/ColorMatrix.h",
-        "programs/ColorSpaceConvert.h",
-        "programs/ComponentTransfer.h",
-        "programs/Composite.h",
-        "programs/DisplacementMap.h",
-        "programs/DropShadow.h",
         "programs/ErrorLatch.h",
-        "programs/FilterColorMatrix.h",
-        "programs/FilterImage.h",
-        "programs/Flood.h",
-        "programs/Lighting.h",
-        "programs/Merge.h",
-        "programs/Morphology.h",
         "programs/RoundHalfAwayFromZero.h",
-        "programs/SnapshotUnpremultiply.h",
         "programs/SolidFill.h",
-        "programs/SubregionClip.h",
-        "programs/Tile.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -484,6 +436,7 @@ donner_cc_test(
         "tests/ShaderTestUtils.h",
         "tests/SnapshotUnpremultiplyProgram_tests.cc",
         "tests/SolidFillProgram_tests.cc",
+        "tests/SpecularLightingProgram_tests.cc",
         "tests/SpirvEmitter_tests.cc",
         "tests/SubregionClipProgram_tests.cc",
         "tests/TileProgram_tests.cc",
@@ -491,26 +444,56 @@ donner_cc_test(
         "tests/WgslEmitter_tests.cc",
     ],
     deps = [
+        ":checkerboard_api",
         ":checkerboard_artifact",
+        ":checkerboard_test_artifact",
+        ":color_space_convert_api",
+        ":color_space_convert_artifact",
+        ":color_space_convert_test_artifact",
+        ":component_transfer_api",
         ":component_transfer_artifact",
+        ":component_transfer_test_artifact",
+        ":composite_api",
+        ":composite_artifact",
+        ":composite_test_artifact",
         ":convolve_matrix_api",
         ":convolve_matrix_artifact",
         ":convolve_matrix_source",
         ":convolve_matrix_test_artifact",
+        ":diffuse_lighting_api",
+        ":diffuse_lighting_artifact",
+        ":diffuse_lighting_test_artifact",
+        ":displacement_map_api",
         ":displacement_map_artifact",
+        ":displacement_map_test_artifact",
+        ":drop_shadow_api",
         ":drop_shadow_artifact",
+        ":drop_shadow_test_artifact",
+        ":filter_color_matrix_api",
+        ":filter_color_matrix_artifact",
+        ":filter_color_matrix_test_artifact",
+        ":filter_image_api",
         ":filter_image_artifact",
+        ":filter_image_test_artifact",
         ":filter_resolve_api",
         ":filter_resolve_artifact",
         ":filter_resolve_source",
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
+        ":flood_api",
+        ":flood_artifact",
+        ":flood_test_artifact",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
         ":gaussian_blur_test_artifact",
         ":image_blit_test_artifact",
-        ":lighting_artifacts",
+        ":merge_api",
+        ":merge_artifact",
+        ":merge_test_artifact",
         ":module_interface",
+        ":morphology_api",
+        ":morphology_artifact",
+        ":morphology_test_artifact",
         ":msl_emitter",
         ":offset_api",
         ":offset_artifact",
@@ -518,12 +501,21 @@ donner_cc_test(
         ":offset_test_artifact",
         ":programs",
         ":shader",
+        ":snapshot_unpremultiply_api",
+        ":snapshot_unpremultiply_artifact",
+        ":snapshot_unpremultiply_test_artifact",
         ":specular_lighting_api",
         ":specular_lighting_artifact",
         ":specular_lighting_source",
         ":specular_lighting_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
+        ":subregion_clip_api",
+        ":subregion_clip_artifact",
+        ":subregion_clip_test_artifact",
+        ":tile_api",
+        ":tile_artifact",
+        ":tile_test_artifact",
         ":turbulence_api",
         ":turbulence_artifact",
         ":turbulence_source",
@@ -587,13 +579,25 @@ donner_cc_test(
     tags = ["requires_metal_toolchain"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":checkerboard_test_artifact",
+        ":color_space_convert_test_artifact",
+        ":component_transfer_test_artifact",
+        ":composite_test_artifact",
         ":convolve_matrix_test_artifact",
+        ":diffuse_lighting_test_artifact",
+        ":displacement_map_test_artifact",
+        ":drop_shadow_test_artifact",
         ":external_tool_gate",
         ":filter_blend_test_artifact",
+        ":filter_color_matrix_test_artifact",
+        ":filter_image_test_artifact",
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
+        ":flood_test_artifact",
         ":gaussian_blur_test_artifact",
         ":image_blit_test_artifact",
+        ":merge_test_artifact",
+        ":morphology_test_artifact",
         ":msl_emitter",
         ":offset_test_artifact",
         ":programs",
@@ -601,8 +605,11 @@ donner_cc_test(
         ":slug_fill_test_artifact",
         ":slug_gradient_test_artifact",
         ":slug_mask_test_artifact",
+        ":snapshot_unpremultiply_test_artifact",
         ":specular_lighting_test_artifact",
         ":stage_io_test_modules",
+        ":subregion_clip_test_artifact",
+        ":tile_test_artifact",
         ":turbulence_test_artifact",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
@@ -624,21 +631,36 @@ donner_cc_test(
     ],
     data = ["@spirv_tools//:spirv-val"],
     deps = [
+        ":checkerboard_test_artifact",
+        ":color_space_convert_test_artifact",
+        ":component_transfer_test_artifact",
+        ":composite_test_artifact",
         ":convolve_matrix_test_artifact",
+        ":diffuse_lighting_test_artifact",
+        ":displacement_map_test_artifact",
+        ":drop_shadow_test_artifact",
         ":filter_blend_test_artifact",
+        ":filter_color_matrix_test_artifact",
+        ":filter_image_test_artifact",
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
+        ":flood_test_artifact",
         ":gaussian_blur_test_artifact",
         ":image_blit_test_artifact",
+        ":merge_test_artifact",
+        ":morphology_test_artifact",
         ":offset_test_artifact",
         ":programs",
         ":shader",
         ":slug_fill_test_artifact",
         ":slug_gradient_test_artifact",
         ":slug_mask_test_artifact",
+        ":snapshot_unpremultiply_test_artifact",
         ":specular_lighting_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
+        ":subregion_clip_test_artifact",
+        ":tile_test_artifact",
         ":turbulence_test_artifact",
         "//donner/base:base_test_utils",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
@@ -662,13 +684,21 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":color_space_convert_api",
+        ":color_space_convert_artifact",
+        ":filter_color_matrix_api",
+        ":filter_color_matrix_artifact",
         ":filter_resolve_api",
         ":filter_resolve_artifact",
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
+        ":flood_api",
+        ":flood_artifact",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
         ":image_blit_test_artifact",
+        ":morphology_api",
+        ":morphology_artifact",
         ":offset_api",
         ":offset_artifact",
         ":programs",
@@ -676,6 +706,10 @@ donner_cc_test(
         ":specular_lighting_api",
         ":specular_lighting_artifact",
         ":specular_lighting_test_artifact",
+        ":subregion_clip_api",
+        ":subregion_clip_artifact",
+        ":tile_api",
+        ":tile_artifact",
         ":turbulence_api",
         ":turbulence_artifact",
         ":turbulence_test_artifact",
@@ -699,29 +733,13 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-genrule(
-    name = "checkerboard_generated",
-    outs = ["generated/CheckerboardShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) checkerboard " +
-          "$(location generated/CheckerboardShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-genrule(
-    name = "diffuse_lighting_generated",
-    outs = ["generated/DiffuseLightingShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) diffuse_lighting " +
-          "$(location generated/DiffuseLightingShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
 donner_cc_library(
     name = "specular_lighting_api",
     hdrs = ["programs/SpecularLighting.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",
-        ":program_bindings",
+        ":lighting_params",
     ],
 )
 
@@ -733,9 +751,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "specular_lighting_validation",
-    hdrs = ["programs/SpecularLightingArtifactValidation.h"],
-    deps = [":specular_lighting_api"],
+    name = "lighting_params",
+    hdrs = ["programs/LightingParams.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
+    name = "lighting_validation",
+    hdrs = ["programs/LightingArtifactValidation.h"],
+    deps = [
+        ":compiled_shader",
+        ":lighting_params",
+    ],
 )
 
 donner_cc_library(
@@ -743,9 +770,9 @@ donner_cc_library(
     srcs = ["programs/SpecularLighting.cc"],
     visibility = donner_internal_visibility(),
     deps = [
+        ":lighting_validation",
         ":specular_lighting_api",
         ":specular_lighting_source",
-        ":specular_lighting_validation",
     ],
 )
 
@@ -759,9 +786,9 @@ donner_cc_library(
     }),
     visibility = donner_internal_visibility(),
     deps = [
+        ":lighting_validation",
         ":specular_lighting_api",
         ":specular_lighting_source",
-        ":specular_lighting_validation",
     ],
 )
 
@@ -775,67 +802,6 @@ donner_cc_library(
         ":compiled_shader",
         ":specular_lighting_source",
     ],
-)
-
-donner_cc_library(
-    name = "lighting_artifacts",
-    hdrs = [
-        "generated/DiffuseLightingShader.h",
-    ],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-donner_cc_library(
-    name = "checkerboard_artifact",
-    hdrs = ["generated/CheckerboardShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "drop_shadow_generated",
-    outs = ["generated/DropShadowShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) drop_shadow " +
-          "$(location generated/DropShadowShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "drop_shadow_artifact",
-    hdrs = ["generated/DropShadowShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "component_transfer_generated",
-    outs = ["generated/ComponentTransferShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) component_transfer " +
-          "$(location generated/ComponentTransferShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "component_transfer_artifact",
-    hdrs = ["generated/ComponentTransferShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "displacement_map_generated",
-    outs = ["generated/DisplacementMapShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) displacement_map " +
-          "$(location generated/DisplacementMapShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "displacement_map_artifact",
-    hdrs = ["generated/DisplacementMapShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
 )
 
 donner_cc_library(
@@ -900,66 +866,6 @@ donner_cc_library(
     ],
 )
 
-genrule(
-    name = "filter_image_generated",
-    outs = ["generated/FilterImageShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_image " +
-          "$(location generated/FilterImageShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "filter_image_artifact",
-    hdrs = ["generated/FilterImageShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "snapshot_unpremultiply_generated",
-    outs = ["generated/SnapshotUnpremultiplyShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) snapshot_unpremultiply " +
-          "$(location generated/SnapshotUnpremultiplyShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "snapshot_unpremultiply_artifact",
-    hdrs = ["generated/SnapshotUnpremultiplyShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "flood_generated",
-    outs = ["generated/FloodShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) flood " +
-          "$(location generated/FloodShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "flood_artifact",
-    hdrs = ["generated/FloodShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "subregion_clip_generated",
-    outs = ["generated/SubregionClipShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) subregion_clip " +
-          "$(location generated/SubregionClipShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "subregion_clip_artifact",
-    hdrs = ["generated/SubregionClipShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
 donner_cc_library(
     name = "offset_api",
     hdrs = ["programs/Offset.h"],
@@ -1017,96 +923,6 @@ donner_cc_library(
         ":compiled_shader",
         ":offset_source",
     ],
-)
-
-genrule(
-    name = "color_space_convert_generated",
-    outs = ["generated/ColorSpaceConvertShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) color_space_convert " +
-          "$(location generated/ColorSpaceConvertShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "color_space_convert_artifact",
-    hdrs = ["generated/ColorSpaceConvertShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "filter_color_matrix_generated",
-    outs = ["generated/FilterColorMatrixShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_color_matrix " +
-          "$(location generated/FilterColorMatrixShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "filter_color_matrix_artifact",
-    hdrs = ["generated/FilterColorMatrixShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "merge_generated",
-    outs = ["generated/MergeShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) merge " +
-          "$(location generated/MergeShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "merge_artifact",
-    hdrs = ["generated/MergeShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "composite_generated",
-    outs = ["generated/CompositeShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) composite " +
-          "$(location generated/CompositeShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "composite_artifact",
-    hdrs = ["generated/CompositeShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "morphology_generated",
-    outs = ["generated/MorphologyShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) morphology " +
-          "$(location generated/MorphologyShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "morphology_artifact",
-    hdrs = ["generated/MorphologyShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
-)
-
-genrule(
-    name = "tile_generated",
-    outs = ["generated/TileShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) tile " +
-          "$(location generated/TileShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-donner_cc_library(
-    name = "tile_artifact",
-    hdrs = ["generated/TileShader.h"],
-    visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
 )
 
 donner_cc_library(
@@ -1173,32 +989,46 @@ donner_cc_library(
     testonly = 1,
     hdrs = ["tests/GeneratedProgramDescriptorTestCases.h"],
     deps = [
+        ":color_space_convert_api",
         ":color_space_convert_artifact",
         ":compiled_shader",
+        ":component_transfer_api",
         ":component_transfer_artifact",
+        ":composite_api",
         ":composite_artifact",
         ":convolve_matrix_api",
         ":convolve_matrix_artifact",
+        ":diffuse_lighting_api",
+        ":diffuse_lighting_artifact",
+        ":displacement_map_api",
         ":displacement_map_artifact",
+        ":drop_shadow_api",
         ":drop_shadow_artifact",
+        ":filter_blend_api",
+        ":filter_blend_artifact",
+        ":filter_color_matrix_api",
         ":filter_color_matrix_artifact",
+        ":filter_image_api",
         ":filter_image_artifact",
         ":filter_resolve_api",
         ":filter_resolve_artifact",
+        ":flood_api",
         ":flood_artifact",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
-        ":lighting_artifacts",
+        ":merge_api",
         ":merge_artifact",
+        ":morphology_api",
         ":morphology_artifact",
         ":offset_api",
         ":offset_artifact",
-        ":programs",
-        ":shader",
+        ":snapshot_unpremultiply_api",
         ":snapshot_unpremultiply_artifact",
         ":specular_lighting_api",
         ":specular_lighting_artifact",
+        ":subregion_clip_api",
         ":subregion_clip_artifact",
+        ":tile_api",
         ":tile_artifact",
         ":turbulence_api",
         ":turbulence_artifact",
@@ -1428,6 +1258,984 @@ donner_cc_library(
         ":filter_blend_api",
         ":filter_blend_source",
         ":filter_blend_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "flood_api",
+    hdrs = ["programs/Flood.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "flood_source",
+    hdrs = ["programs/FloodSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "flood_validation",
+    hdrs = ["programs/FloodArtifactValidation.h"],
+    deps = [
+        ":flood_api",
+    ],
+)
+
+donner_cc_library(
+    name = "flood_artifact",
+    srcs = ["programs/Flood.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":flood_api",
+        ":flood_source",
+        ":flood_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "flood_native_artifact",
+    srcs = ["programs/FloodNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":flood_api",
+        ":flood_source",
+        ":flood_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "flood_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledFlood.cc"],
+    hdrs = ["tests/CompiledFlood.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":flood_api",
+        ":flood_source",
+        ":flood_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "merge_api",
+    hdrs = ["programs/Merge.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "merge_source",
+    hdrs = ["programs/MergeSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "merge_validation",
+    hdrs = ["programs/MergeArtifactValidation.h"],
+    deps = [
+        ":merge_api",
+    ],
+)
+
+donner_cc_library(
+    name = "merge_artifact",
+    srcs = ["programs/Merge.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":merge_api",
+        ":merge_source",
+        ":merge_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "merge_native_artifact",
+    srcs = ["programs/MergeNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":merge_api",
+        ":merge_source",
+        ":merge_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "merge_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledMerge.cc"],
+    hdrs = ["tests/CompiledMerge.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":merge_api",
+        ":merge_source",
+        ":merge_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "composite_api",
+    hdrs = ["programs/Composite.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "composite_source",
+    hdrs = ["programs/CompositeSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "composite_validation",
+    hdrs = ["programs/CompositeArtifactValidation.h"],
+    deps = [
+        ":composite_api",
+    ],
+)
+
+donner_cc_library(
+    name = "composite_artifact",
+    srcs = ["programs/Composite.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":composite_api",
+        ":composite_source",
+        ":composite_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "composite_native_artifact",
+    srcs = ["programs/CompositeNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":composite_api",
+        ":composite_source",
+        ":composite_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "composite_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledComposite.cc"],
+    hdrs = ["tests/CompiledComposite.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":composite_api",
+        ":composite_source",
+        ":composite_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_api",
+    hdrs = ["programs/FilterColorMatrix.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_source",
+    hdrs = ["programs/FilterColorMatrixSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_validation",
+    hdrs = ["programs/FilterColorMatrixArtifactValidation.h"],
+    deps = [
+        ":filter_color_matrix_api",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_artifact",
+    srcs = ["programs/FilterColorMatrix.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_color_matrix_api",
+        ":filter_color_matrix_source",
+        ":filter_color_matrix_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_native_artifact",
+    srcs = ["programs/FilterColorMatrixNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_color_matrix_api",
+        ":filter_color_matrix_source",
+        ":filter_color_matrix_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_color_matrix_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledFilterColorMatrix.cc"],
+    hdrs = ["tests/CompiledFilterColorMatrix.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":filter_color_matrix_api",
+        ":filter_color_matrix_source",
+        ":filter_color_matrix_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "subregion_clip_api",
+    hdrs = ["programs/SubregionClip.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":filter_resolve_api",
+    ],
+)
+
+donner_cc_library(
+    name = "subregion_clip_source",
+    hdrs = ["programs/SubregionClipSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "subregion_clip_validation",
+    hdrs = ["programs/SubregionClipArtifactValidation.h"],
+    deps = [
+        ":subregion_clip_api",
+    ],
+)
+
+donner_cc_library(
+    name = "subregion_clip_artifact",
+    srcs = ["programs/SubregionClip.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":subregion_clip_api",
+        ":subregion_clip_source",
+        ":subregion_clip_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "subregion_clip_native_artifact",
+    srcs = ["programs/SubregionClipNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":subregion_clip_api",
+        ":subregion_clip_source",
+        ":subregion_clip_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "subregion_clip_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledSubregionClip.cc"],
+    hdrs = ["tests/CompiledSubregionClip.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":subregion_clip_api",
+        ":subregion_clip_source",
+        ":subregion_clip_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_api",
+    hdrs = ["programs/SnapshotUnpremultiply.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_source",
+    hdrs = ["programs/SnapshotUnpremultiplySource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_validation",
+    hdrs = ["programs/SnapshotUnpremultiplyArtifactValidation.h"],
+    deps = [
+        ":snapshot_unpremultiply_api",
+    ],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_artifact",
+    srcs = ["programs/SnapshotUnpremultiply.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":snapshot_unpremultiply_api",
+        ":snapshot_unpremultiply_source",
+        ":snapshot_unpremultiply_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_native_artifact",
+    srcs = ["programs/SnapshotUnpremultiplyNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":snapshot_unpremultiply_api",
+        ":snapshot_unpremultiply_source",
+        ":snapshot_unpremultiply_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "snapshot_unpremultiply_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledSnapshotUnpremultiply.cc"],
+    hdrs = ["tests/CompiledSnapshotUnpremultiply.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":snapshot_unpremultiply_api",
+        ":snapshot_unpremultiply_source",
+        ":snapshot_unpremultiply_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "tile_api",
+    hdrs = ["programs/Tile.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "tile_source",
+    hdrs = ["programs/TileSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "tile_validation",
+    hdrs = ["programs/TileArtifactValidation.h"],
+    deps = [
+        ":tile_api",
+    ],
+)
+
+donner_cc_library(
+    name = "tile_artifact",
+    srcs = ["programs/Tile.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":tile_api",
+        ":tile_source",
+        ":tile_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "tile_native_artifact",
+    srcs = ["programs/TileNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":tile_api",
+        ":tile_source",
+        ":tile_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "tile_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledTile.cc"],
+    hdrs = ["tests/CompiledTile.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":tile_api",
+        ":tile_source",
+        ":tile_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_api",
+    hdrs = ["programs/Checkerboard.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_source",
+    hdrs = ["programs/CheckerboardSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "checkerboard_validation",
+    hdrs = ["programs/CheckerboardArtifactValidation.h"],
+    deps = [
+        ":checkerboard_api",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_artifact",
+    srcs = ["programs/Checkerboard.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":checkerboard_api",
+        ":checkerboard_source",
+        ":checkerboard_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_native_artifact",
+    srcs = ["programs/CheckerboardNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":checkerboard_api",
+        ":checkerboard_source",
+        ":checkerboard_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "checkerboard_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledCheckerboard.cc"],
+    hdrs = ["tests/CompiledCheckerboard.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":checkerboard_api",
+        ":checkerboard_source",
+        ":checkerboard_validation",
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "color_space_convert_api",
+    hdrs = ["programs/ColorSpaceConvert.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "color_space_convert_source",
+    hdrs = ["programs/ColorSpaceConvertSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "color_space_convert_validation",
+    hdrs = ["programs/ColorSpaceConvertArtifactValidation.h"],
+    deps = [
+        ":color_space_convert_api",
+    ],
+)
+
+donner_cc_library(
+    name = "color_space_convert_artifact",
+    srcs = ["programs/ColorSpaceConvert.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":color_space_convert_api",
+        ":color_space_convert_source",
+        ":color_space_convert_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "color_space_convert_native_artifact",
+    srcs = ["programs/ColorSpaceConvertNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":color_space_convert_api",
+        ":color_space_convert_source",
+        ":color_space_convert_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "color_space_convert_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledColorSpaceConvert.cc"],
+    hdrs = ["tests/CompiledColorSpaceConvert.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":color_space_convert_api",
+        ":color_space_convert_source",
+        ":color_space_convert_validation",
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "morphology_api",
+    hdrs = ["programs/Morphology.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "morphology_source",
+    hdrs = ["programs/MorphologySource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "morphology_validation",
+    hdrs = ["programs/MorphologyArtifactValidation.h"],
+    deps = [
+        ":morphology_api",
+    ],
+)
+
+donner_cc_library(
+    name = "morphology_artifact",
+    srcs = ["programs/Morphology.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":morphology_api",
+        ":morphology_source",
+        ":morphology_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "morphology_native_artifact",
+    srcs = ["programs/MorphologyNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":morphology_api",
+        ":morphology_source",
+        ":morphology_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "morphology_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledMorphology.cc"],
+    hdrs = ["tests/CompiledMorphology.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":morphology_api",
+        ":morphology_source",
+        ":morphology_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "component_transfer_api",
+    hdrs = ["programs/ComponentTransfer.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "component_transfer_source",
+    hdrs = ["programs/ComponentTransferSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "component_transfer_validation",
+    hdrs = ["programs/ComponentTransferArtifactValidation.h"],
+    deps = [
+        ":component_transfer_api",
+    ],
+)
+
+donner_cc_library(
+    name = "component_transfer_artifact",
+    srcs = ["programs/ComponentTransfer.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":component_transfer_api",
+        ":component_transfer_source",
+        ":component_transfer_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "component_transfer_native_artifact",
+    srcs = ["programs/ComponentTransferNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":component_transfer_api",
+        ":component_transfer_source",
+        ":component_transfer_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "component_transfer_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledComponentTransfer.cc"],
+    hdrs = ["tests/CompiledComponentTransfer.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":component_transfer_api",
+        ":component_transfer_source",
+        ":component_transfer_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "displacement_map_api",
+    hdrs = ["programs/DisplacementMap.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "displacement_map_source",
+    hdrs = ["programs/DisplacementMapSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "displacement_map_validation",
+    hdrs = ["programs/DisplacementMapArtifactValidation.h"],
+    deps = [
+        ":displacement_map_api",
+    ],
+)
+
+donner_cc_library(
+    name = "displacement_map_artifact",
+    srcs = ["programs/DisplacementMap.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":displacement_map_api",
+        ":displacement_map_source",
+        ":displacement_map_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "displacement_map_native_artifact",
+    srcs = ["programs/DisplacementMapNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":displacement_map_api",
+        ":displacement_map_source",
+        ":displacement_map_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "displacement_map_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledDisplacementMap.cc"],
+    hdrs = ["tests/CompiledDisplacementMap.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":displacement_map_api",
+        ":displacement_map_source",
+        ":displacement_map_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "drop_shadow_api",
+    hdrs = ["programs/DropShadow.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "drop_shadow_source",
+    hdrs = ["programs/DropShadowSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "drop_shadow_validation",
+    hdrs = ["programs/DropShadowArtifactValidation.h"],
+    deps = [
+        ":drop_shadow_api",
+    ],
+)
+
+donner_cc_library(
+    name = "drop_shadow_artifact",
+    srcs = ["programs/DropShadow.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":drop_shadow_api",
+        ":drop_shadow_source",
+        ":drop_shadow_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "drop_shadow_native_artifact",
+    srcs = ["programs/DropShadowNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":drop_shadow_api",
+        ":drop_shadow_source",
+        ":drop_shadow_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "drop_shadow_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledDropShadow.cc"],
+    hdrs = ["tests/CompiledDropShadow.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":drop_shadow_api",
+        ":drop_shadow_source",
+        ":drop_shadow_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_image_api",
+    hdrs = ["programs/FilterImage.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_image_source",
+    hdrs = ["programs/FilterImageSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "filter_image_validation",
+    hdrs = ["programs/FilterImageArtifactValidation.h"],
+    deps = [
+        ":filter_image_api",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_image_artifact",
+    srcs = ["programs/FilterImage.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_image_api",
+        ":filter_image_source",
+        ":filter_image_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_image_native_artifact",
+    srcs = ["programs/FilterImageNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_image_api",
+        ":filter_image_source",
+        ":filter_image_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_image_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledFilterImage.cc"],
+    hdrs = ["tests/CompiledFilterImage.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":filter_image_api",
+        ":filter_image_source",
+        ":filter_image_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "diffuse_lighting_api",
+    hdrs = ["programs/DiffuseLighting.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":lighting_params",
+    ],
+)
+
+donner_cc_library(
+    name = "diffuse_lighting_source",
+    hdrs = ["programs/DiffuseLightingSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "diffuse_lighting_validation",
+    hdrs = ["programs/DiffuseLightingArtifactValidation.h"],
+    deps = [
+        ":diffuse_lighting_api",
+        ":lighting_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "diffuse_lighting_artifact",
+    srcs = ["programs/DiffuseLighting.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":diffuse_lighting_api",
+        ":diffuse_lighting_source",
+        ":diffuse_lighting_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "diffuse_lighting_native_artifact",
+    srcs = ["programs/DiffuseLightingNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":diffuse_lighting_api",
+        ":diffuse_lighting_source",
+        ":diffuse_lighting_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "diffuse_lighting_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledDiffuseLighting.cc"],
+    hdrs = ["tests/CompiledDiffuseLighting.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":diffuse_lighting_api",
+        ":diffuse_lighting_source",
+        ":diffuse_lighting_validation",
     ],
 )
 

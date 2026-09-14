@@ -1,83 +1,68 @@
 /// @file
-/// DropShadow interface and deterministic backend emission contracts.
+/// DropShadow frozen-artifact metadata and projection tests.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <optional>
+#include <array>
+#include <string_view>
 
-#include "donner/gpu/RecordingDevice.h"
-#include "donner/gpu/shader/ModuleInterface.h"
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
-#include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
-#include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/shader/tests/CompiledDropShadow.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-TEST(DropShadowProgramTests, EmitsDeterministically) {
-  const auto module = programs::BuildDropShadowModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
-  const auto repeatedWgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
-  ASSERT_THAT(repeatedWgsl, HasShaderResult());
-  EXPECT_THAT(repeatedWgsl.result(), testing::Eq(wgsl.result()));
-  const auto msl = EmitMsl(module.result());
-  const auto repeatedMsl = EmitMsl(module.result());
-  ASSERT_THAT(msl, HasShaderResult());
-  ASSERT_THAT(repeatedMsl, HasShaderResult());
-  EXPECT_THAT(repeatedMsl.result(), testing::Eq(msl.result()));
-  const auto spirv = EmitSpirv(module.result());
-  const auto repeatedSpirv = EmitSpirv(module.result());
-  ASSERT_THAT(spirv, HasShaderResult());
-  ASSERT_THAT(repeatedSpirv, HasShaderResult());
-  EXPECT_THAT(repeatedSpirv.result(), testing::Eq(spirv.result()));
+TEST(DropShadowProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
+  const CompiledShaderView& shader = tests::DropShadowAllProjections();
+
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(shader.msl, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.spirv, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().stage, ShaderStage::Compute);
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  ASSERT_THAT(shader.resources, testing::SizeIs(4));
+  ASSERT_NE(shader.resource("sourceTexture"), nullptr);
+  EXPECT_EQ(shader.resource("sourceTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("sourceTexture")->binding, 0u);
+  ASSERT_NE(shader.resource("blurredTexture"), nullptr);
+  EXPECT_EQ(shader.resource("blurredTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("blurredTexture")->binding, 1u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 2u);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->group, 0u);
+  EXPECT_EQ(shader.resource("params")->binding, 3u);
+  EXPECT_EQ(shader.resource("params")->minSizeBytes, sizeof(programs::DropShadowParams));
+  EXPECT_NE(shader.wgsl.find("struct DropShadowParams"), std::string_view::npos);
+  EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }
 
-TEST(DropShadowProgramTests, GeneratedDescriptorsPreserveShaderInterface) {
-  const auto module = programs::BuildDropShadowModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto bindings = BufferBindingsOf(module.result());
-  ASSERT_THAT(bindings, HasShaderResult());
-  const auto entryPoints = ComputeEntryPointsOf(module.result());
-  ASSERT_THAT(entryPoints, testing::SizeIs(1));
-  for (const auto kind : {ShaderSourceKind::Wgsl, ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
-    const auto descriptor = gpu::generated::drop_shadow::BuildDescriptor(kind);
-    EXPECT_EQ(descriptor.sourceKind, kind);
-    bool available = kind == ShaderSourceKind::Wgsl;
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-    available |= kind == ShaderSourceKind::Msl;
-#endif
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-    available |= kind == ShaderSourceKind::Spirv;
-#endif
-    if (!available) {
-      EXPECT_THAT(descriptor.sourceText, testing::IsEmpty());
-      EXPECT_THAT(descriptor.spirvWords, testing::IsEmpty());
-      EXPECT_THAT(descriptor.bufferBindings, testing::Eq(std::nullopt));
-      RecordingDevice device;
-      EXPECT_THAT(device.createShaderModule(descriptor),
-                  ::donner::gpu::IsGpuError(GpuErrorType::InvalidDescriptor));
-      continue;
-    }
-    ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
-    EXPECT_THAT(*descriptor.bufferBindings, testing::ElementsAreArray(bindings.result()));
-    ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
-    EXPECT_EQ(descriptor.computeEntryPoints.front().name, entryPoints.front().name);
-    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.x,
-              entryPoints.front().workgroupSize.x);
-    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.y,
-              entryPoints.front().workgroupSize.y);
-    EXPECT_EQ(descriptor.computeEntryPoints.front().workgroupSize.z,
-              entryPoints.front().workgroupSize.z);
-    EXPECT_EQ(descriptor.sourceText.empty(), kind == ShaderSourceKind::Spirv);
-    EXPECT_EQ(descriptor.spirvWords.empty(), kind != ShaderSourceKind::Spirv);
-  }
+TEST(DropShadowProgramTests, AdapterArtifactRetainsOnlyWgsl) {
+  const CompiledShaderView& adapter = programs::DropShadowShader();
+  EXPECT_EQ(adapter.wgsl, tests::DropShadowAllProjections().wgsl);
+  EXPECT_TRUE(adapter.msl.empty());
+  EXPECT_TRUE(adapter.spirv.empty());
+  EXPECT_EQ(adapter.resources.size(), tests::DropShadowAllProjections().resources.size());
+  EXPECT_EQ(adapter.entryPoints.size(), tests::DropShadowAllProjections().entryPoints.size());
+}
+
+TEST(DropShadowProgramTests, MutationControlReflectsChangedInterface) {
+  const CompiledShaderView& shader = tests::DropShadowMutatedAllProjections();
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_test");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  ASSERT_NE(shader.resource("sourceTexture"), nullptr);
+  EXPECT_EQ(shader.resource("sourceTexture")->binding, 6u);
+  ASSERT_NE(shader.resource("blurredTexture"), nullptr);
+  EXPECT_EQ(shader.resource("blurredTexture")->binding, 5u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 4u);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->binding, 7u);
 }
 
 }  // namespace

@@ -1,23 +1,19 @@
 #pragma once
 /// @file
-/// The flood compute program, expressed in the \c donner::gpu::shader IR.
+/// feFlood parameters and precompiled shader projections.
+#include <cstdint>
 
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/FloodBindings.h"
-
+#include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
-
-/**
- * Builds the flood compute program: one `@compute @workgroup_size(8, 8, 1)` entry point named
- * `cs_main` that writes one uniform color to every texel of a write-only storage texture.
- *
- * The program reads no texture, so the destination extent is the only thing that bounds it. The
- * color is written exactly as the uniform carries it: whether it is premultiplied is the caller's
- * decision, and nothing here re-associates it with the alpha channel.
- *
- * Invocations outside the destination extent return without writing, so a dispatch rounded up to
- * whole workgroups is safe.
- */
-ShaderResult<IrModule> BuildFloodModule();
-
+/// Uniform flood color. The bytes are stored exactly as supplied; the host premultiplies.
+struct alignas(16) FloodParams {
+  float color[4];  //!< Premultiplied RGBA written to every destination texel.
+};
+static_assert(sizeof(FloodParams) == 16);
+/// Returns the WGSL flood artifact, which writes one premultiplied color to every texel.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& FloodShader();
+/// Returns only the platform-native Flood projection.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& FloodNativeShader();
 }  // namespace donner::gpu::shader::programs

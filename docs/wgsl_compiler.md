@@ -1,11 +1,16 @@
 # WGSL shader compilation {#WgslCompiler}
 
-Gaussian/box blur, matrix convolution, Slug mask, offset, filter resolve, specular lighting,
-turbulence, image blit, Slug fill, dedicated gradients and feBlend are authored as inline WGSL in
-`donner/gpu/shader/programs/*Source.h`. The C++20 compiler validates each source, produces immutable
-shader projections and derives its resource interface during constant evaluation. Each artifact
+Every production shader is authored as inline WGSL in `donner/gpu/shader/programs/*Source.h`:
+Gaussian/box blur, matrix convolution, Slug mask, offset, filter resolve, specular and diffuse
+lighting, turbulence, image blit, Slug fill, dedicated gradients, feBlend, feFlood, feMerge,
+feComposite, feColorMatrix, feMorphology, feComponentTransfer, feDisplacementMap, feDropShadow,
+feImage, feTile, subregion clipping, color-space conversion, snapshot unpremultiply and the
+transparency checkerboard. The C++20 compiler validates each source, produces immutable shader
+projections and derives its resource interface during constant evaluation. Each artifact
 implementation checks the shared host parameter layout. Application code consumes frozen data
-through `CompiledShaderView`; it does not invoke a parser or shader emitter at runtime.
+through `CompiledShaderView`; it does not invoke a parser or shader emitter at runtime. The
+build-time shader IR remains only as an emitter and native-execution fixture (solid fill and the
+color-matrix test kernel); no production pipeline is generated from it.
 
 ## Authoring and ownership
 
@@ -272,3 +277,44 @@ ramps, unequal stop alphas, sixteen-stop arrays, empty/single-stop ramps, radial
 clipping, winding and declared ranges. Blend references cover all sixteen modes, premultiplied and
 transparent inputs, differently sized input textures and the default switch branch. Mutation
 controls change bindings, entry names and feBlend's workgroup to 4x2 on a 7x5 output.
+
+## Remaining production families
+
+The last fifteen production programs moved from IR builders and build-time generated descriptor
+headers to authored sources under the same contract as the earlier families. Each family has a
+WGSL-only artifact for the WebGPU adapter, a native-only artifact, an all-projection test control,
+a mutation control that renumbers every binding, renames the entry points and, for compute, changes
+the workgroup to 4x2, and three linked isolation probes. Host parameter layouts live next to the
+artifact accessors (`FloodParams`, `CompositeParams` with `CompositeOperator`,
+`FilterColorMatrixParams`, `TileParams`, `MorphologyParams`, `DisplacementMapParams`,
+`DropShadowParams`, `FilterImageParams`, `ColorSpaceConvertParams` with the shared
+`ColorTransferTable`, `CheckerboardParams`) or are shared: subregion clipping reuses
+`FilterResolveParams`, and diffuse lighting shares `LightingParams` and the complete 36-field
+`ValidateLightingArtifact` check with specular lighting. Component transfer keeps its packed
+read-only float array with `kComponentTransferHeaderWords` records before the tables.
+
+The Geode filter engine creates every program from reflection: the single-input helper resolves
+its authored input name (`imageTexture` for feImage), the two-input helper takes the authored
+source, backdrop, output and optional parameter names (feMerge has none), flood and turbulence use
+the plain reflected layout, and every dispatch derives its workgroup counts from the entry
+metadata. The legacy host-side binding enums, workgroup constants, generated descriptor headers
+and the build-time emitter tool are gone. The checkerboard render pipeline and the snapshot
+readback pipeline read entry names, binding slots and workgroup shape from their artifacts, and
+their pass code binds the reflected slot rather than a literal index.
+
+Two sources changed spelling without changing behavior to stay inside the portable profile. The
+snapshot half-alpha term uses unsigned division by two instead of a right shift, and the feImage
+cubic weight constant is the f32 literal `0.33333334f`, the same value `1f / 3f` folds to,
+because constant f32 arithmetic is outside the profile. Every other family compiled unchanged,
+including the morphology loops, the runtime component-transfer array, the 8,192-entry transfer
+table and the vertex/fragment checkerboard.
+
+Native acceptance runs every family on Metal and Vulkan from the native artifact and from the
+mutation control through reflected bindings. The new slices compare bit-exactly where the inputs
+are dyadic (flood, merge, every composite operator including an unknown index, the dyadic
+color-matrix cases, subregion clipping under identity, scaled, rotated and empty rectangles,
+snapshot unpremultiply against the host rounding formula, and both color-space directions through
+the shared table) and through the strict 8-bit comparator for the saturate, hue-rotate and
+luminance-to-alpha matrices. The checkerboard oracle also builds a replace-mode pipeline straight
+from the mutation artifact. Offline MSL and SPIR-V validators compile the production and mutated
+projections of all fifteen families.

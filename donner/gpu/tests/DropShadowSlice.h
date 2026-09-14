@@ -16,33 +16,21 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/ReflectedComputeSlice.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 
 namespace donner::gpu::tests {
 
 /// Composes a translucent blue shadow beneath a translucent red source at half-pixel offsets.
 /// @param device Native device with bounded wait/readback support.
-/// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
+/// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
 template <typename DeviceType, typename Readback>
-void CheckDropShadowStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView& shader,
                             Readback readbackBuffer) {
-  auto shader = device.createShaderModule(shaderDescriptor);
-  ASSERT_THAT(shader, HasResult());
-  auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
-      "float",
-      {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
-       {1, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
-       {2, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
-        TextureFormat::RGBA32Float},
-       {3, ShaderStage::Compute, BindingType::UniformBuffer}}});
-  ASSERT_THAT(layout, HasResult());
-  auto pipelineLayout =
-      device.createPipelineLayout(PipelineLayoutDescriptor{"float", {layout.result()}});
-  ASSERT_THAT(pipelineLayout, HasResult());
-  auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "float", pipelineLayout.result(), ComputeState{shader.result(), "cs_main"}, {8, 8, 1}});
-  ASSERT_THAT(pipeline, HasResult());
+  ReflectedComputePipeline compute;
+  CreateReflectedComputePipeline(device, shader, "drop shadow", compute);
+  if (testing::Test::HasFatalFailure()) return;
   const auto runCase = [&](bool aliasedInputs) {
     auto source =
         device.createTexture(TextureDescriptor{"shadow source",
@@ -111,12 +99,13 @@ void CheckDropShadowStorage(DeviceType& device, const ShaderModuleDescriptor& sh
                                                     sizeof(params))),
         IsOk());
     auto group = device.createBindGroup(BindGroupDescriptor{
-        "float",
-        layout.result(),
-        {{0, TextureViewBinding{sourceView.result()}},
-         {1, TextureViewBinding{aliasedInputs ? sourceView.result() : blurredView.result()}},
-         {2, TextureViewBinding{outputView.result()}},
-         {3, BufferBinding{uniform.result(), 0, 32}}}});
+        "drop shadow",
+        compute.layout,
+        {{ReflectedBinding(shader, "sourceTexture"), TextureViewBinding{sourceView.result()}},
+         {ReflectedBinding(shader, "blurredTexture"),
+          TextureViewBinding{aliasedInputs ? sourceView.result() : blurredView.result()}},
+         {ReflectedBinding(shader, "outputTexture"), TextureViewBinding{outputView.result()}},
+         {ReflectedBinding(shader, "params"), BufferBinding{uniform.result(), 0, 32}}}});
     ASSERT_THAT(group, HasResult());
     auto readback = device.createBuffer(
         BufferDescriptor{"shadow readback", 1024, BufferUsage::CopyDst | BufferUsage::MapRead});
@@ -125,9 +114,10 @@ void CheckDropShadowStorage(DeviceType& device, const ShaderModuleDescriptor& sh
     ASSERT_THAT(encoder, HasResult());
     auto pass = encoder.result()->beginComputePass(ComputePassDescriptor{"float"});
     ASSERT_THAT(pass, HasResult());
-    ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+    ASSERT_THAT(pass.result()->setPipeline(compute.pipeline), IsOk());
     ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-    ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+    const auto groups = compute.groupsFor(4, 4);
+    ASSERT_THAT(pass.result()->dispatchWorkgroups(groups[0], groups[1], groups[2]), IsOk());
     ASSERT_THAT(pass.result()->end(), IsOk());
     ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
                                                       readback.result(), {0, 256, 4}, {4, 4}),
@@ -174,7 +164,9 @@ void CheckDropShadowStorage(DeviceType& device, const ShaderModuleDescriptor& sh
         svg::RendererBitmap{
             Vector2i(4, 4),
             std::vector<uint8_t>(expectedPixels.data().begin(), expectedPixels.data().end()), 16},
-        aliasedInputs ? "drop_shadow_aliased_inputs" : "drop_shadow_distinct_inputs",
+        std::string(aliasedInputs ? "drop_shadow_aliased_inputs_"
+                                  : "drop_shadow_distinct_inputs_") +
+            std::string(shader.entryPoints.front().name.view()),
         editor::tests::PixelmatchIdentityParams());
   };
   runCase(true);

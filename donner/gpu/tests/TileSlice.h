@@ -12,31 +12,20 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/ReflectedComputeSlice.h"
 
 namespace donner::gpu::tests {
 
 /// Runs signed-origin tiling with differing source/output extents and checks float values exactly.
 /// @param device Native device with bounded wait/readback support.
-/// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
+/// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
 template <typename DeviceType, typename Readback>
-void CheckTileStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+void CheckTileStorage(DeviceType& device, const shader::CompiledShaderView& shader,
                       Readback readbackBuffer) {
-  auto shader = device.createShaderModule(shaderDescriptor);
-  ASSERT_THAT(shader, HasResult());
-  auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
-      "float",
-      {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
-       {1, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
-        TextureFormat::RGBA32Float},
-       {2, ShaderStage::Compute, BindingType::UniformBuffer}}});
-  ASSERT_THAT(layout, HasResult());
-  auto pipelineLayout =
-      device.createPipelineLayout(PipelineLayoutDescriptor{"float", {layout.result()}});
-  ASSERT_THAT(pipelineLayout, HasResult());
-  auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "float", pipelineLayout.result(), ComputeState{shader.result(), "cs_main"}, {8, 8, 1}});
-  ASSERT_THAT(pipeline, HasResult());
+  ReflectedComputePipeline compute;
+  CreateReflectedComputePipeline(device, shader, "tile", compute);
+  if (testing::Test::HasFatalFailure()) return;
   auto input =
       device.createTexture(TextureDescriptor{"tile input",
                                              {4, 2},
@@ -74,12 +63,12 @@ void CheckTileStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
                          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),
                                                   sizeof(params))),
       IsOk());
-  auto group =
-      device.createBindGroup(BindGroupDescriptor{"float",
-                                                 layout.result(),
-                                                 {{0, TextureViewBinding{inputView.result()}},
-                                                  {1, TextureViewBinding{outputView.result()}},
-                                                  {2, BufferBinding{uniform.result(), 0, 16}}}});
+  auto group = device.createBindGroup(BindGroupDescriptor{
+      "tile",
+      compute.layout,
+      {{ReflectedBinding(shader, "inputTexture"), TextureViewBinding{inputView.result()}},
+       {ReflectedBinding(shader, "outputTexture"), TextureViewBinding{outputView.result()}},
+       {ReflectedBinding(shader, "params"), BufferBinding{uniform.result(), 0, 16}}}});
   ASSERT_THAT(group, HasResult());
   auto readback = device.createBuffer(
       BufferDescriptor{"tile readback", 768, BufferUsage::CopyDst | BufferUsage::MapRead});
@@ -88,9 +77,10 @@ void CheckTileStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   ASSERT_THAT(encoder, HasResult());
   auto pass = encoder.result()->beginComputePass(ComputePassDescriptor{"float"});
   ASSERT_THAT(pass, HasResult());
-  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setPipeline(compute.pipeline), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(2, 1, 1), IsOk());
+  const auto groups = compute.groupsFor(13, 3);
+  ASSERT_THAT(pass.result()->dispatchWorkgroups(groups[0], groups[1], groups[2]), IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
                                                     readback.result(), {0, 256, 3}, {13, 3}),

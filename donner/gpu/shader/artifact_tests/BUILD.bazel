@@ -792,4 +792,1054 @@ py_test(
     target_compatible_with = _NATIVE,
 )
 
+donner_cc_binary(
+    name = "flood_wgsl_probe",
+    testonly = 1,
+    srcs = ["FloodWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:flood_api",
+        "//donner/gpu/shader:flood_artifact",
+    ],
+)
+
+py_test(
+    name = "flood_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=flood",
+        "--binary=$(rootpath :flood_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":flood_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "flood_native_probe",
+    testonly = 1,
+    srcs = ["FloodNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:flood_api",
+        "//donner/gpu/shader:flood_native_artifact",
+    ],
+)
+
+py_test(
+    name = "flood_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=flood",
+        "--binary=$(rootpath :flood_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":flood_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "flood_all_probe",
+    testonly = 1,
+    srcs = ["FloodAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:flood_source"],
+)
+
+py_test(
+    name = "flood_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=flood",
+        "--binary=$(rootpath :flood_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":flood_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "merge_wgsl_probe",
+    testonly = 1,
+    srcs = ["MergeWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:merge_api",
+        "//donner/gpu/shader:merge_artifact",
+    ],
+)
+
+py_test(
+    name = "merge_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=merge",
+        "--binary=$(rootpath :merge_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":merge_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "merge_native_probe",
+    testonly = 1,
+    srcs = ["MergeNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:merge_api",
+        "//donner/gpu/shader:merge_native_artifact",
+    ],
+)
+
+py_test(
+    name = "merge_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=merge",
+        "--binary=$(rootpath :merge_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":merge_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "merge_all_probe",
+    testonly = 1,
+    srcs = ["MergeAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:merge_source"],
+)
+
+py_test(
+    name = "merge_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=merge",
+        "--binary=$(rootpath :merge_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":merge_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "composite_wgsl_probe",
+    testonly = 1,
+    srcs = ["CompositeWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:composite_api",
+        "//donner/gpu/shader:composite_artifact",
+    ],
+)
+
+py_test(
+    name = "composite_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=composite",
+        "--binary=$(rootpath :composite_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":composite_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "composite_native_probe",
+    testonly = 1,
+    srcs = ["CompositeNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:composite_api",
+        "//donner/gpu/shader:composite_native_artifact",
+    ],
+)
+
+py_test(
+    name = "composite_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=composite",
+        "--binary=$(rootpath :composite_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":composite_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "composite_all_probe",
+    testonly = 1,
+    srcs = ["CompositeAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:composite_source"],
+)
+
+py_test(
+    name = "composite_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=composite",
+        "--binary=$(rootpath :composite_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":composite_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_color_matrix_wgsl_probe",
+    testonly = 1,
+    srcs = ["FilterColorMatrixWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_color_matrix_api",
+        "//donner/gpu/shader:filter_color_matrix_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_color_matrix_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_color_matrix",
+        "--binary=$(rootpath :filter_color_matrix_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":filter_color_matrix_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_color_matrix_native_probe",
+    testonly = 1,
+    srcs = ["FilterColorMatrixNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_color_matrix_api",
+        "//donner/gpu/shader:filter_color_matrix_native_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_color_matrix_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_color_matrix",
+        "--binary=$(rootpath :filter_color_matrix_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":filter_color_matrix_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_color_matrix_all_probe",
+    testonly = 1,
+    srcs = ["FilterColorMatrixAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:filter_color_matrix_source"],
+)
+
+py_test(
+    name = "filter_color_matrix_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_color_matrix",
+        "--binary=$(rootpath :filter_color_matrix_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":filter_color_matrix_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "subregion_clip_wgsl_probe",
+    testonly = 1,
+    srcs = ["SubregionClipWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:subregion_clip_api",
+        "//donner/gpu/shader:subregion_clip_artifact",
+    ],
+)
+
+py_test(
+    name = "subregion_clip_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=subregion_clip",
+        "--binary=$(rootpath :subregion_clip_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":subregion_clip_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "subregion_clip_native_probe",
+    testonly = 1,
+    srcs = ["SubregionClipNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:subregion_clip_api",
+        "//donner/gpu/shader:subregion_clip_native_artifact",
+    ],
+)
+
+py_test(
+    name = "subregion_clip_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=subregion_clip",
+        "--binary=$(rootpath :subregion_clip_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":subregion_clip_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "subregion_clip_all_probe",
+    testonly = 1,
+    srcs = ["SubregionClipAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:subregion_clip_source"],
+)
+
+py_test(
+    name = "subregion_clip_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=subregion_clip",
+        "--binary=$(rootpath :subregion_clip_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":subregion_clip_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "snapshot_unpremultiply_wgsl_probe",
+    testonly = 1,
+    srcs = ["SnapshotUnpremultiplyWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:snapshot_unpremultiply_api",
+        "//donner/gpu/shader:snapshot_unpremultiply_artifact",
+    ],
+)
+
+py_test(
+    name = "snapshot_unpremultiply_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=snapshot_unpremultiply",
+        "--binary=$(rootpath :snapshot_unpremultiply_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":snapshot_unpremultiply_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "snapshot_unpremultiply_native_probe",
+    testonly = 1,
+    srcs = ["SnapshotUnpremultiplyNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:snapshot_unpremultiply_api",
+        "//donner/gpu/shader:snapshot_unpremultiply_native_artifact",
+    ],
+)
+
+py_test(
+    name = "snapshot_unpremultiply_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=snapshot_unpremultiply",
+        "--binary=$(rootpath :snapshot_unpremultiply_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":snapshot_unpremultiply_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "snapshot_unpremultiply_all_probe",
+    testonly = 1,
+    srcs = ["SnapshotUnpremultiplyAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:snapshot_unpremultiply_source"],
+)
+
+py_test(
+    name = "snapshot_unpremultiply_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=snapshot_unpremultiply",
+        "--binary=$(rootpath :snapshot_unpremultiply_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":snapshot_unpremultiply_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "tile_wgsl_probe",
+    testonly = 1,
+    srcs = ["TileWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:tile_api",
+        "//donner/gpu/shader:tile_artifact",
+    ],
+)
+
+py_test(
+    name = "tile_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=tile",
+        "--binary=$(rootpath :tile_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":tile_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "tile_native_probe",
+    testonly = 1,
+    srcs = ["TileNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:tile_api",
+        "//donner/gpu/shader:tile_native_artifact",
+    ],
+)
+
+py_test(
+    name = "tile_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=tile",
+        "--binary=$(rootpath :tile_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":tile_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "tile_all_probe",
+    testonly = 1,
+    srcs = ["TileAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:tile_source"],
+)
+
+py_test(
+    name = "tile_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=tile",
+        "--binary=$(rootpath :tile_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":tile_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "checkerboard_wgsl_probe",
+    testonly = 1,
+    srcs = ["CheckerboardWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:checkerboard_api",
+        "//donner/gpu/shader:checkerboard_artifact",
+    ],
+)
+
+py_test(
+    name = "checkerboard_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=checkerboard",
+        "--binary=$(rootpath :checkerboard_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":checkerboard_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "checkerboard_native_probe",
+    testonly = 1,
+    srcs = ["CheckerboardNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:checkerboard_api",
+        "//donner/gpu/shader:checkerboard_native_artifact",
+    ],
+)
+
+py_test(
+    name = "checkerboard_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=checkerboard",
+        "--binary=$(rootpath :checkerboard_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":checkerboard_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "checkerboard_all_probe",
+    testonly = 1,
+    srcs = ["CheckerboardAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:checkerboard_source"],
+)
+
+py_test(
+    name = "checkerboard_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=checkerboard",
+        "--binary=$(rootpath :checkerboard_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":checkerboard_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "color_space_convert_wgsl_probe",
+    testonly = 1,
+    srcs = ["ColorSpaceConvertWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:color_space_convert_api",
+        "//donner/gpu/shader:color_space_convert_artifact",
+    ],
+)
+
+py_test(
+    name = "color_space_convert_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=color_space_convert",
+        "--binary=$(rootpath :color_space_convert_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":color_space_convert_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "color_space_convert_native_probe",
+    testonly = 1,
+    srcs = ["ColorSpaceConvertNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:color_space_convert_api",
+        "//donner/gpu/shader:color_space_convert_native_artifact",
+    ],
+)
+
+py_test(
+    name = "color_space_convert_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=color_space_convert",
+        "--binary=$(rootpath :color_space_convert_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":color_space_convert_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "color_space_convert_all_probe",
+    testonly = 1,
+    srcs = ["ColorSpaceConvertAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:color_space_convert_source"],
+)
+
+py_test(
+    name = "color_space_convert_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=color_space_convert",
+        "--binary=$(rootpath :color_space_convert_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":color_space_convert_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "morphology_wgsl_probe",
+    testonly = 1,
+    srcs = ["MorphologyWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:morphology_api",
+        "//donner/gpu/shader:morphology_artifact",
+    ],
+)
+
+py_test(
+    name = "morphology_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=morphology",
+        "--binary=$(rootpath :morphology_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":morphology_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "morphology_native_probe",
+    testonly = 1,
+    srcs = ["MorphologyNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:morphology_api",
+        "//donner/gpu/shader:morphology_native_artifact",
+    ],
+)
+
+py_test(
+    name = "morphology_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=morphology",
+        "--binary=$(rootpath :morphology_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":morphology_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "morphology_all_probe",
+    testonly = 1,
+    srcs = ["MorphologyAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:morphology_source"],
+)
+
+py_test(
+    name = "morphology_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=morphology",
+        "--binary=$(rootpath :morphology_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":morphology_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "component_transfer_wgsl_probe",
+    testonly = 1,
+    srcs = ["ComponentTransferWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:component_transfer_api",
+        "//donner/gpu/shader:component_transfer_artifact",
+    ],
+)
+
+py_test(
+    name = "component_transfer_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=component_transfer",
+        "--binary=$(rootpath :component_transfer_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":component_transfer_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "component_transfer_native_probe",
+    testonly = 1,
+    srcs = ["ComponentTransferNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:component_transfer_api",
+        "//donner/gpu/shader:component_transfer_native_artifact",
+    ],
+)
+
+py_test(
+    name = "component_transfer_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=component_transfer",
+        "--binary=$(rootpath :component_transfer_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":component_transfer_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "component_transfer_all_probe",
+    testonly = 1,
+    srcs = ["ComponentTransferAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:component_transfer_source"],
+)
+
+py_test(
+    name = "component_transfer_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=component_transfer",
+        "--binary=$(rootpath :component_transfer_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":component_transfer_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "displacement_map_wgsl_probe",
+    testonly = 1,
+    srcs = ["DisplacementMapWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:displacement_map_api",
+        "//donner/gpu/shader:displacement_map_artifact",
+    ],
+)
+
+py_test(
+    name = "displacement_map_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=displacement_map",
+        "--binary=$(rootpath :displacement_map_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":displacement_map_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "displacement_map_native_probe",
+    testonly = 1,
+    srcs = ["DisplacementMapNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:displacement_map_api",
+        "//donner/gpu/shader:displacement_map_native_artifact",
+    ],
+)
+
+py_test(
+    name = "displacement_map_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=displacement_map",
+        "--binary=$(rootpath :displacement_map_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":displacement_map_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "displacement_map_all_probe",
+    testonly = 1,
+    srcs = ["DisplacementMapAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:displacement_map_source"],
+)
+
+py_test(
+    name = "displacement_map_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=displacement_map",
+        "--binary=$(rootpath :displacement_map_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":displacement_map_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "drop_shadow_wgsl_probe",
+    testonly = 1,
+    srcs = ["DropShadowWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:drop_shadow_api",
+        "//donner/gpu/shader:drop_shadow_artifact",
+    ],
+)
+
+py_test(
+    name = "drop_shadow_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=drop_shadow",
+        "--binary=$(rootpath :drop_shadow_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":drop_shadow_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "drop_shadow_native_probe",
+    testonly = 1,
+    srcs = ["DropShadowNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:drop_shadow_api",
+        "//donner/gpu/shader:drop_shadow_native_artifact",
+    ],
+)
+
+py_test(
+    name = "drop_shadow_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=drop_shadow",
+        "--binary=$(rootpath :drop_shadow_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":drop_shadow_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "drop_shadow_all_probe",
+    testonly = 1,
+    srcs = ["DropShadowAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:drop_shadow_source"],
+)
+
+py_test(
+    name = "drop_shadow_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=drop_shadow",
+        "--binary=$(rootpath :drop_shadow_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":drop_shadow_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_image_wgsl_probe",
+    testonly = 1,
+    srcs = ["FilterImageWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_image_api",
+        "//donner/gpu/shader:filter_image_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_image_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_image",
+        "--binary=$(rootpath :filter_image_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":filter_image_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_image_native_probe",
+    testonly = 1,
+    srcs = ["FilterImageNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_image_api",
+        "//donner/gpu/shader:filter_image_native_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_image_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_image",
+        "--binary=$(rootpath :filter_image_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":filter_image_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_image_all_probe",
+    testonly = 1,
+    srcs = ["FilterImageAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:filter_image_source"],
+)
+
+py_test(
+    name = "filter_image_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_image",
+        "--binary=$(rootpath :filter_image_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":filter_image_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "diffuse_lighting_wgsl_probe",
+    testonly = 1,
+    srcs = ["DiffuseLightingWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:diffuse_lighting_api",
+        "//donner/gpu/shader:diffuse_lighting_artifact",
+    ],
+)
+
+py_test(
+    name = "diffuse_lighting_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=diffuse_lighting",
+        "--binary=$(rootpath :diffuse_lighting_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":diffuse_lighting_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "diffuse_lighting_native_probe",
+    testonly = 1,
+    srcs = ["DiffuseLightingNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:diffuse_lighting_api",
+        "//donner/gpu/shader:diffuse_lighting_native_artifact",
+    ],
+)
+
+py_test(
+    name = "diffuse_lighting_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=diffuse_lighting",
+        "--binary=$(rootpath :diffuse_lighting_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":diffuse_lighting_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "diffuse_lighting_all_probe",
+    testonly = 1,
+    srcs = ["DiffuseLightingAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:diffuse_lighting_source"],
+)
+
+py_test(
+    name = "diffuse_lighting_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=diffuse_lighting",
+        "--binary=$(rootpath :diffuse_lighting_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":diffuse_lighting_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
 donner_package()
