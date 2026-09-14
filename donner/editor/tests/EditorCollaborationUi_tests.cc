@@ -134,7 +134,8 @@ protected:
   }
   Json revision() {
     Json result = call("get_editor_state");
-    return {{"document_generation", result["document_generation"]},
+    return {{"session_id", result["session_id"]},
+            {"document_generation", result["document_generation"]},
             {"source_revision", result["source_revision"]}};
   }
 };

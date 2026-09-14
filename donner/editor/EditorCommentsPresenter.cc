@@ -3,11 +3,9 @@
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
-void EditorCommentsPresenter::beginComment(Vector2d point, std::optional<svg::SVGElement> element,
-                                           std::uint64_t documentGeneration) {
-  pendingPoint_ = point;
-  pendingElement_ = std::move(element);
-  pendingGeneration_ = documentGeneration;
+void EditorCommentsPresenter::beginComment(EditorCollaboration& collaboration, Vector2d point,
+                                           std::optional<svg::SVGElement> element) {
+  pendingAnchor_ = collaboration.captureCommentAnchor(point, element);
   visible_ = true;
   focusComposer_ = true;
   draft_.fill(0);
@@ -55,10 +53,11 @@ void EditorCommentsPresenter::drawPanel(EditorCollaboration& collaboration, bool
   ImGui::End();
 }
 void EditorCommentsPresenter::drawComposer(EditorCollaboration& collaboration, bool rendererIdle) {
-  if (!pendingPoint_) return;
+  if (!pendingAnchor_) return;
 
   ImGui::Separator();
-  ImGui::Text("New comment at %.1f, %.1f", pendingPoint_->x, pendingPoint_->y);
+  ImGui::Text("New comment at %.1f, %.1f", pendingAnchor_->documentPoint.x,
+              pendingAnchor_->documentPoint.y);
   if (focusComposer_) {
     ImGui::SetKeyboardFocusHere();
     focusComposer_ = false;
@@ -66,19 +65,15 @@ void EditorCommentsPresenter::drawComposer(EditorCollaboration& collaboration, b
   ImGui::InputTextMultiline("##comment_text", draft_.data(), draft_.size(), ImVec2(-1, 110));
   ImGui::BeginDisabled(!rendererIdle || draft_[0] == 0);
   if (ImGui::Button("Add Comment")) {
-    if (pendingGeneration_ != collaboration.documentGeneration()) {
-      error_ = "The document changed. Choose a new location before submitting this comment.";
-    } else if (collaboration.addComment(*pendingPoint_, pendingElement_, draft_.data(), &error_)) {
-      pendingPoint_.reset();
-      pendingElement_.reset();
+    if (collaboration.addAnchoredComment(*pendingAnchor_, draft_.data(), &error_)) {
+      pendingAnchor_.reset();
       draft_.fill(0);
     }
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   if (ImGui::Button("Cancel")) {
-    pendingPoint_.reset();
-    pendingElement_.reset();
+    pendingAnchor_.reset();
     error_.clear();
   }
   if (!error_.empty()) ImGui::TextWrapped("%s", error_.c_str());

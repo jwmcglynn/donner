@@ -32,7 +32,8 @@ protected:
   }
   Json revision() {
     Json state = body(call("get_editor_state"));
-    return {{"document_generation", state["document_generation"]},
+    return {{"session_id", state["session_id"]},
+            {"document_generation", state["document_generation"]},
             {"source_revision", state["source_revision"]}};
   }
   std::string source() { return body(call("get_svg_source"))["source"].get<std::string>(); }
@@ -89,6 +90,9 @@ TEST_F(EditorCollaborationTest, RejectsScriptsAndExternalResourceWrites) {
   for (const auto& edit :
        Json::array({{{"attribute", "onclick"}, {"value", "alert(1)"}},
                     {{"attribute", "href"}, {"value", "file:///secret"}},
+                    {{"attribute", "xml:base"}, {"value", "file:///private/"}},
+                    {{"attribute", "custom:href"}, {"value", "https://example.com/paint"}},
+                    {{"attribute", "fill"}, {"value", R"(u\72l(file:///private/paint))"}},
                     {{"attribute", "fill"}, {"value", "url(https://example.com/paint)"}},
                     {{"attribute", "id"}, {"value", "renamed"}}})) {
     const std::string before = source();
@@ -117,9 +121,10 @@ TEST_F(EditorCollaborationTest, CommentsDoNotAlterSvgAndCanBeResolved) {
   EXPECT_THAT(feedback["comments"].size(), Eq(1u));
   EXPECT_THAT(feedback["comments"][0]["text"], Eq("Sharpen this corner"));
   EXPECT_THAT(source(), Eq(before));
-  EXPECT_THAT(
-      call("resolve_comment", {{"comment_id", std::uint64_t(1)}, {"resolved", true}})["isError"],
-      Eq(false));
+  Json resolution = revision();
+  resolution["comment_id"] = std::uint64_t(1);
+  resolution["resolved"] = true;
+  EXPECT_THAT(call("resolve_comment", resolution)["isError"], Eq(false));
   EXPECT_THAT(body(call("get_comments"))["comments"][0]["resolved"], Eq(true));
 }
 
@@ -195,6 +200,70 @@ TEST_F(EditorCollaborationTest, RejectsOversizedCommentsAndMixedExternalPaintRef
                     {"attribute", "fill"},
                     {"value", "URL(#safe) url(https://example.com/unsafe)"}}};
   EXPECT_THAT(call("apply_edits", args)["isError"], Eq(true));
+}
+
+TEST_F(EditorCollaborationTest, RejectsAnEditFromAnEarlierEditorSession) {
+  Json args = revision();
+  args["edits"] = {{{"selector", "#box"}, {"attribute", "fill"}, {"value", "blue"}}};
+  EditorCollaboration another(app, {.flush = [this]() { return app.flushFrame(); }});
+  const auto response =
+      another.handleRequest({{"id", 1},
+                             {"method", "tools/call"},
+                             {"params", {{"name", "apply_edits"}, {"arguments", args}}}});
+  EXPECT_THAT(response["result"]["isError"], Eq(true));
+  EXPECT_THAT(source(), HasSubstr("fill=\"red\""));
+}
+
+TEST_F(EditorCollaborationTest, DraftFeedbackKeepsItsAnchorWhileTheElementMoves) {
+  std::optional<svg::SVGElement> element;
+  {
+    auto& doc = app.document().document();
+    auto access = doc.writeAccess();
+    element = doc.querySelector("#box");
+  }
+  auto draft = controller.captureCommentAnchor(Vector2d(10, 20), element);
+  ASSERT_THAT(draft.has_value(), Eq(true));
+  Json args = revision();
+  args["edits"] = {{{"selector", "#box"}, {"attribute", "transform"}, {"value", "translate(5 7)"}}};
+  ASSERT_THAT(call("apply_edits", args)["isError"], Eq(false));
+  std::string error;
+  ASSERT_THAT(controller.addAnchoredComment(*draft, "Comment written during the move", &error),
+              Eq(true));
+  controller.refreshCommentAnchors();
+  const auto feedback = body(call("get_comments"));
+  EXPECT_THAT(feedback["comments"][0]["x"], Eq(15.0));
+  EXPECT_THAT(feedback["comments"][0]["y"], Eq(27.0));
+}
+
+TEST_F(EditorCollaborationTest, FeedbackAndProtocolDiscoveryRemainAvailableWhileSvgIsBusy) {
+  EXPECT_THAT(EditorCollaboration::requiresIdleDocument({{"method", "initialize"}}), Eq(false));
+  for (const auto name : {"get_comments", "wait_for_comments", "resolve_comment"})
+    EXPECT_THAT(EditorCollaboration::requiresIdleDocument(
+                    {{"method", "tools/call"}, {"params", {{"name", name}}}}),
+                Eq(false));
+  for (const auto name : {"get_svg_source", "apply_edits", "pick_at", "save_document"})
+    EXPECT_THAT(EditorCollaboration::requiresIdleDocument(
+                    {{"method", "tools/call"}, {"params", {{"name", name}}}}),
+                Eq(true));
+}
+
+TEST_F(EditorCollaborationTest, ToolSchemasDescribeTheActualRequiredGuards) {
+  const auto response = controller.handleRequest({{"id", 1}, {"method", "tools/list"}});
+  ASSERT_THAT(response["result"]["tools"].is_array(), Eq(true));
+  EXPECT_THAT(response["result"]["tools"].size(), Eq(13u));
+  for (const auto& tool : response["result"]["tools"]) {
+    const auto& schema = tool["inputSchema"];
+    EXPECT_THAT(schema["type"], Eq("object"));
+    ASSERT_THAT(schema["properties"].is_object(), Eq(true));
+    ASSERT_THAT(schema["required"].is_array(), Eq(true));
+    for (const auto& required : schema["required"])
+      EXPECT_THAT(schema["properties"].contains(required.get<std::string>()), Eq(true))
+          << tool["name"];
+    if (tool["name"] == "apply_edits" || tool["name"] == "resolve_comment") {
+      EXPECT_THAT(schema["properties"].contains("session_id"), Eq(true));
+      EXPECT_THAT(schema["properties"].contains("document_generation"), Eq(true));
+    }
+  }
 }
 
 TEST_F(EditorCollaborationTest, RejectsMalformedRequestsWithoutChangingTheDocument) {

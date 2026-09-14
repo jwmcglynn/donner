@@ -44,8 +44,8 @@ bool EditorShell::initializeCollaboration() {
 }
 
 bool EditorShell::collaborationFrameReady() {
-  if (!editorControl_ || !editorControl_->hasPending() || selectTool_.isDragging() ||
-      penTool_.isDrafting() || renderCoordinator_.asyncRenderer().isBusy() ||
+  if (selectTool_.isDragging() || penTool_.isDrafting() ||
+      renderCoordinator_.asyncRenderer().isBusy() ||
       documentSyncController_.hasPendingWritebacks() || textEditor_.isTextChanged())
     return false;
   if (app_.hasDocument()) {
@@ -58,9 +58,12 @@ bool EditorShell::collaborationFrameReady() {
 }
 
 void EditorShell::processCollaboration() {
-  if (!collaborationFrameReady()) return;
-  collaboration_->refreshCommentAnchors();
+  if (!editorControl_ || !editorControl_->hasPending()) return;
   editorControl_->process([this](const nlohmann::json& request) -> std::optional<nlohmann::json> {
+    if (EditorCollaboration::requiresIdleDocument(request)) {
+      if (!collaborationFrameReady()) return std::nullopt;
+      collaboration_->refreshCommentAnchors();
+    }
     if (collaboration_->shouldWaitForFeedback(request)) return std::nullopt;
     return collaboration_->handleRequest(request);
   });
@@ -103,8 +106,8 @@ void EditorShell::renderCollaborationContextMenu(bool rendererBusy) {
   if (!collaboration_ || !renderContextMenuDocumentPoint_) return;
   ImGui::Separator();
   if (ImGui::MenuItem("Add Comment Here", nullptr, false, app_.hasDocument() && !rendererBusy)) {
-    commentsPresenter_.beginComment(*renderContextMenuDocumentPoint_, renderContextMenuHitElement_,
-                                    collaboration_->documentGeneration());
+    commentsPresenter_.beginComment(*collaboration_, *renderContextMenuDocumentPoint_,
+                                    renderContextMenuHitElement_);
   }
   if (ImGui::MenuItem("Show Comments", nullptr, commentsPresenter_.visible()))
     commentsPresenter_.setVisible(!commentsPresenter_.visible());

@@ -254,7 +254,8 @@ struct LocalEditorControl::Impl {
         if (pending == item) pending.reset();
         lock.unlock();
         sendReply(fd, RpcError(item->request.value("id", Json(nullptr)),
-                               "Editor unavailable; reread document state before retrying"));
+                               "Timed out waiting for an idle editor or changed feedback; reread "
+                               "state before retrying"));
         return;
       }
       Json response = std::move(item->response);

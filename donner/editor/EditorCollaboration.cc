@@ -2,8 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <utility>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/LockState.h"
@@ -50,16 +55,39 @@ bool Unsigned(const Json& value, std::string_view key) {
   auto it = value.find(std::string(key));
   return it != value.end() && it->is_number_unsigned();
 }
+std::string NewSessionId() {
+  static std::atomic<std::uint64_t> serial{0};
+  const auto now = std::chrono::system_clock::now().time_since_epoch().count();
+#if !defined(_WIN32)
+  const auto process = getpid();
+#else
+  constexpr int process = 0;
+#endif
+  return std::to_string(process) + ":" + std::to_string(now) + ":" +
+         std::to_string(serial.fetch_add(1));
+}
 bool SafeId(std::string_view value) {
   if (value.empty() || value.size() > 512) return false;
-  const unsigned char first = value.front();
-  if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_' ||
-        first == '-'))
-    return false;
   return std::all_of(value.begin(), value.end(), [](unsigned char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
-           c == '_' || c == '.';
+           c == '_' || c == '.' || c == ':';
   });
+}
+std::string ElementIdSelector(std::string_view id) {
+  std::string selector = "[id=\"";
+  constexpr char digits[] = "0123456789abcdef";
+  for (unsigned char c : id) {
+    if (c < 32 || c == 127) {
+      selector += '\\';
+      selector += digits[c >> 4];
+      selector += digits[c & 15];
+      selector += ' ';
+    } else {
+      if (c == '\"' || c == '\\') selector += '\\';
+      selector += static_cast<char>(c);
+    }
+  }
+  return selector + "\"]";
 }
 bool SafeAttribute(std::string_view name, std::string_view value, bool inserting = false) {
   if (name.empty() || name.size() > 128 || value.size() > 65536 ||
@@ -81,12 +109,17 @@ bool SafeAttribute(std::string_view name, std::string_view value, bool inserting
   if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_'))
     return false;
   const std::string lower = lowercase(name);
-  if (lower.starts_with("on") || lower == "style" || lower.starts_with("xmlns")) return false;
-  if (lower == "id") return SafeId(value);
-  if (lower == "href" || lower == "xlink:href")
-    return value.starts_with('#') && SafeId(value.substr(1));
+  const auto colon = lower.find(':');
+  if (colon != lower.rfind(':') || lower.ends_with(':')) return false;
+  const std::string_view local = colon == std::string::npos
+                                     ? std::string_view(lower)
+                                     : std::string_view(lower).substr(colon + 1);
+  if (local.starts_with("on") || local == "style" || local == "base" || lower.starts_with("xmlns"))
+    return false;
+  if (local == "id") return SafeId(value);
+  if (local == "href") return value.starts_with('#') && SafeId(value.substr(1));
   const std::string lowerValue = lowercase(value);
-  if (lowerValue.find("url") != std::string::npos) {
+  if (lowerValue.find("url(") != std::string::npos) {
     return lowerValue.starts_with("url(#") && lowerValue.ends_with(')') &&
            SafeId(value.substr(5, value.size() - 6));
   }
@@ -184,6 +217,9 @@ std::optional<EditorComment> ReadStoredComment(const Json& item) {
     if (!local->is_object() || !Point(*local)) return std::nullopt;
     comment.elementPoint = Point(*local);
   }
+  comment.createdSessionId = String(item, "created_session_id", 128).value_or("");
+  if (Unsigned(item, "created_source_revision"))
+    comment.createdSourceRevision = item["created_source_revision"].get<std::uint64_t>();
   return comment;
 }
 std::optional<svg::SVGElement> NewElement(svg::SVGDocument& doc, std::string_view tag) {
@@ -208,7 +244,7 @@ std::optional<svg::SVGElement> NewElement(svg::SVGDocument& doc, std::string_vie
 }  // namespace
 
 EditorCollaboration::EditorCollaboration(EditorApp& app, Callbacks callbacks)
-    : app_(app), callbacks_(std::move(callbacks)) {}
+    : app_(app), sessionId_(NewSessionId()), callbacks_(std::move(callbacks)) {}
 
 std::uint64_t EditorCollaboration::documentGeneration() const {
   return app_.document().documentGeneration();
@@ -243,11 +279,9 @@ Json EditorCollaboration::inspect(const svg::SVGElement& element) {
 }
 
 Json EditorCollaboration::state() {
-  Json result{{"document_generation", documentGeneration()},
-              {"has_document", app_.hasDocument()},
-              {"dirty", app_.isDirty()},
-              {"can_undo", app_.canUndo()},
-              {"can_redo", app_.canRedo()}};
+  Json result{{"session_id", sessionId_},           {"document_generation", documentGeneration()},
+              {"has_document", app_.hasDocument()}, {"dirty", app_.isDirty()},
+              {"can_undo", app_.canUndo()},         {"can_redo", app_.canRedo()}};
   if (app_.hasDocument()) {
     auto& doc = app_.document().document();
     auto access = doc.readAccess();
@@ -264,14 +298,22 @@ Json EditorCollaboration::state() {
   return result;
 }
 
-std::optional<std::string> EditorCollaboration::checkRevision(const Json& args) {
+std::optional<std::string> EditorCollaboration::checkContext(const Json& args) {
   if (!app_.hasDocument()) return "No document is open";
-  if (!Unsigned(args, "document_generation") || !Unsigned(args, "source_revision"))
-    return "document_generation and source_revision are required; read editor state first";
+  if (String(args, "session_id", 128) != sessionId_ || !Unsigned(args, "document_generation"))
+    return "Read editor state to obtain the current session_id and document_generation";
+  if (args["document_generation"].get<std::uint64_t>() != documentGeneration())
+    return "The editor document changed; read current state before retrying";
+  return std::nullopt;
+}
+
+std::optional<std::string> EditorCollaboration::checkRevision(const Json& args) {
+  if (auto error = checkContext(args)) return error;
+  if (!Unsigned(args, "source_revision"))
+    return "source_revision is required; read editor state first";
   auto& doc = app_.document().document();
   auto access = doc.readAccess();
-  if (args["document_generation"].get<std::uint64_t>() != documentGeneration() ||
-      args["source_revision"].get<std::uint64_t>() != doc.sourceVersion())
+  if (args["source_revision"].get<std::uint64_t>() != doc.sourceVersion())
     return "Document changed; read current state and reconcile before retrying";
   if (app_.document().hasPendingMutations())
     return "Editor has pending changes; retry after the frame";
@@ -312,7 +354,7 @@ Json EditorCollaboration::insertElement(const Json& args) {
     auto parent = doc.querySelector(spec->parent);
     if (!parent || IsLocked(*parent)) return Error("Parent is absent or locked");
     if (auto id = String(spec->attributes, "id")) {
-      if (doc.querySelector("#" + *id)) return Error("Element ID already exists");
+      if (doc.querySelector(ElementIdSelector(*id))) return Error("Element ID already exists");
     }
     app_.recordDocumentSourceUndoOnNextFlush("Insert SVG element", *parent,
                                              std::string(doc.source()));
@@ -334,20 +376,15 @@ bool EditorCollaboration::isCurrentComment(const EditorComment& comment) const {
   return comment.documentKey == documentKey();
 }
 
-bool EditorCollaboration::addComment(Vector2d point, std::optional<svg::SVGElement> element,
-                                     std::string text, std::string* error) {
-  if (!app_.hasDocument() || !ValidCommentInput(point, text) ||
-      comments_.size() >= kMaximumComments) {
-    *error =
-        "Comment requires a document, finite coordinates and 1-4096 text bytes (512 comments "
-        "maximum)";
-    return false;
-  }
-  EditorComment comment{.id = nextCommentId_++,
-                        .documentKey = documentKey(),
+std::optional<EditorComment> EditorCollaboration::captureCommentAnchor(
+    Vector2d point, std::optional<svg::SVGElement> element) {
+  if (!app_.hasDocument() || !ValidCommentInput(point, "anchor")) return std::nullopt;
+  EditorComment comment{.documentKey = documentKey(),
+                        .createdSessionId = sessionId_,
                         .documentPoint = point,
-                        .presentedPoint = point,
-                        .text = std::move(text)};
+                        .presentedPoint = point};
+  auto access = app_.document().document().writeAccess();
+  comment.createdSourceRevision = app_.document().document().sourceVersion();
   if (element) {
     auto access = app_.document().document().writeAccess();
     comment.elementId = std::string(element->id());
@@ -361,11 +398,35 @@ bool EditorCollaboration::addComment(Vector2d point, std::optional<svg::SVGEleme
         comment.elementPoint = documentFromElement.inverse().transformPosition(point);
     }
   }
-  comments_.push_back(std::move(comment));
+  return comment;
+}
+
+bool EditorCollaboration::addAnchoredComment(EditorComment anchor, std::string text,
+                                             std::string* error) {
+  if (!app_.hasDocument() || !ValidCommentInput(anchor.documentPoint, text) ||
+      comments_.size() >= kMaximumComments || anchor.documentKey != documentKey()) {
+    *error =
+        "Choose a location in the current document and enter 1-4096 bytes of feedback (512 "
+        "comments maximum)";
+    return false;
+  }
+  anchor.id = nextCommentId_++;
+  anchor.text = std::move(text);
+  comments_.push_back(std::move(anchor));
   anchorFrameVersion_.reset();
   feedbackDirty_ = true;
   ++feedbackRevision_;
   return true;
+}
+
+bool EditorCollaboration::addComment(Vector2d point, std::optional<svg::SVGElement> element,
+                                     std::string text, std::string* error) {
+  auto anchor = captureCommentAnchor(point, element);
+  if (!anchor) {
+    *error = "Choose a valid point in the open document";
+    return false;
+  }
+  return addAnchoredComment(std::move(*anchor), std::move(text), error);
 }
 
 void EditorCollaboration::refreshCommentAnchors() {
@@ -377,7 +438,7 @@ void EditorCollaboration::refreshCommentAnchors() {
   auto access = doc.writeAccess();
   for (auto& comment : comments_) {
     if (!isCurrentComment(comment) || comment.elementId.empty()) continue;
-    auto element = doc.querySelector("#" + comment.elementId);
+    auto element = doc.querySelector(ElementIdSelector(comment.elementId));
     comment.orphaned = !element.has_value();
     if (element && comment.elementPoint && element->isa<svg::SVGGraphicsElement>()) {
       const Vector2d point =
@@ -408,6 +469,8 @@ Json EditorCollaboration::feedbackArchive() const {
     if (c.documentKey.starts_with("untitled:")) continue;
     Json item{{"id", c.id},
               {"document", c.documentKey},
+              {"created_session_id", c.createdSessionId},
+              {"created_source_revision", c.createdSourceRevision},
               {"x", c.documentPoint.x},
               {"y", c.documentPoint.y},
               {"element_id", c.elementId},
@@ -431,10 +494,13 @@ Json EditorCollaboration::feedback() const {
                         {"element_id", c.elementId},
                         {"element_label", c.elementLabel},
                         {"orphaned", c.orphaned},
+                        {"created_session_id", c.createdSessionId},
+                        {"created_source_revision", c.createdSourceRevision},
                         {"text", c.text},
                         {"resolved", c.resolved}});
   }
   return {{"version", 1},
+          {"session_id", sessionId_},
           {"document_generation", documentGeneration()},
           {"feedback_revision", feedbackRevision_},
           {"comments", comments}};
@@ -465,6 +531,7 @@ bool EditorCollaboration::restoreFeedback(const Json& data) {
 }
 
 Json EditorCollaboration::resolveCommentTool(const Json& args) {
+  if (auto error = checkContext(args)) return Error(*error);
   auto resolved = args.find("resolved");
   if (!Unsigned(args, "comment_id") || resolved == args.end() || !resolved->is_boolean())
     return Error("comment_id and resolved are required");
@@ -474,6 +541,7 @@ Json EditorCollaboration::resolveCommentTool(const Json& args) {
 }
 
 Json EditorCollaboration::waitCommentsTool(const Json& args) {
+  if (auto error = checkContext(args)) return Error(*error);
   if (!Unsigned(args, "after_revision") ||
       args["after_revision"].get<std::uint64_t>() > feedbackRevision_)
     return Error("Read get_comments to obtain the current feedback revision");
@@ -499,7 +567,8 @@ Json EditorCollaboration::sourceTool(const Json&) {
   auto access = doc.readAccess();
   if (doc.source().size() > kMaximumSourceBytes)
     return Error("Source exceeds the 4 MiB response limit");
-  return Result({{"document_generation", documentGeneration()},
+  return Result({{"session_id", sessionId_},
+                 {"document_generation", documentGeneration()},
                  {"source_revision", doc.sourceVersion()},
                  {"source", std::string(doc.source())}});
 }
@@ -511,7 +580,8 @@ Json EditorCollaboration::pickTool(const Json& args) {
   auto hit = app_.hitTest(*point);
   auto& doc = app_.document().document();
   auto access = doc.readAccess();
-  return Result({{"document_generation", documentGeneration()},
+  return Result({{"session_id", sessionId_},
+                 {"document_generation", documentGeneration()},
                  {"source_revision", doc.sourceVersion()},
                  {"x", point->x},
                  {"y", point->y},
@@ -542,6 +612,20 @@ Json EditorCollaboration::selectionTool(const Json& args, bool deleting) {
   return Result(state());
 }
 
+bool EditorCollaboration::requiresIdleDocument(const Json& request) {
+  if (!request.is_object() || request.value("method", Json(nullptr)) != "tools/call") return false;
+  const auto params = request.find("params");
+  if (params == request.end() || !params->is_object()) return false;
+  auto name = String(*params, "name");
+  if (!name) return false;
+  static constexpr std::array<std::string_view, 10> documentTools = {
+      "get_editor_state",   "get_svg_source", "pick_at",
+      "select_by_selector", "apply_edits",    "insert_element",
+      "delete_element",     "undo",           "redo",
+      "save_document"};
+  return std::find(documentTools.begin(), documentTools.end(), *name) != documentTools.end();
+}
+
 bool EditorCollaboration::shouldWaitForFeedback(const Json& request) const {
   const auto params = request.find("params");
   if (request.value("method", Json(nullptr)) != "tools/call" || params == request.end() ||
@@ -550,7 +634,9 @@ bool EditorCollaboration::shouldWaitForFeedback(const Json& request) const {
   if (params->value("name", Json(nullptr)) != "wait_for_comments") return false;
   const auto args = params->find("arguments");
   if (args == params->end() || !args->is_object()) return false;
-  if (!Unsigned(*args, "after_revision")) return false;
+  if (!Unsigned(*args, "after_revision") || args->value("session_id", Json(nullptr)) != sessionId_)
+    return false;
+  if (args->value("document_generation", Json(nullptr)) != documentGeneration()) return false;
   return (*args)["after_revision"].get<std::uint64_t>() == feedbackRevision_;
 }
 
@@ -583,7 +669,8 @@ Json EditorCollaboration::callTool(std::string_view name, const Json& args) {
 
 Json EditorCollaboration::toolList() {
   const Json string{{"type", "string"}}, integer{{"type", "integer"}, {"minimum", 0}};
-  const Json revision{{"document_generation", integer}, {"source_revision", integer}};
+  const Json revision{
+      {"session_id", string}, {"document_generation", integer}, {"source_revision", integer}};
   Json tools = Json::array();
   auto add = [&](std::string name, std::string description, Json properties,
                  Json required = Json::array()) {
@@ -618,25 +705,30 @@ Json EditorCollaboration::toolList() {
   add("apply_edits",
       "Apply DOM attribute changes as one undoable edit; null removes an attribute. Stale "
       "revisions are rejected.",
-      editProps, {"document_generation", "source_revision", "edits"});
+      editProps, {"session_id", "document_generation", "source_revision", "edits"});
   Json insertProps = revision;
   insertProps["parent"] = string;
   insertProps["tag"] = string;
   insertProps["attributes"] = {{"type", "object"}, {"additionalProperties", string}};
   add("insert_element", "Insert a supported SVG element into the live DOM, with undo.", insertProps,
-      {"document_generation", "source_revision", "parent", "tag", "attributes"});
+      {"session_id", "document_generation", "source_revision", "parent", "tag", "attributes"});
   Json deleteProps = revision;
   deleteProps["selector"] = string;
   add("delete_element", "Remove an element through the editor's undoable DOM command queue.",
-      deleteProps, {"document_generation", "source_revision", "selector"});
+      deleteProps, {"session_id", "document_generation", "source_revision", "selector"});
   for (const auto name : {"undo", "redo", "save_document"})
     add(name, "Use the visible editor's history or save the current backing file.", revision,
-        {"document_generation", "source_revision"});
+        {"session_id", "document_generation", "source_revision"});
   add("wait_for_comments",
       "Wait up to 30 seconds for changed feedback without blocking the editor.",
-      {{"after_revision", integer}}, {"after_revision"});
+      {{"session_id", string}, {"document_generation", integer}, {"after_revision", integer}},
+      {"session_id", "document_generation", "after_revision"});
   add("resolve_comment", "Resolve or reopen feedback in the current document.",
-      {{"comment_id", integer}, {"resolved", {{"type", "boolean"}}}}, {"comment_id", "resolved"});
+      {{"session_id", string},
+       {"document_generation", integer},
+       {"comment_id", integer},
+       {"resolved", {{"type", "boolean"}}}},
+      {"session_id", "document_generation", "comment_id", "resolved"});
   return tools;
 }
 

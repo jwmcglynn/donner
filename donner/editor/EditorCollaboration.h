@@ -18,6 +18,8 @@ namespace donner::editor {
 struct EditorComment {
   std::uint64_t id = 0;
   std::string documentKey;
+  std::string createdSessionId;
+  std::uint64_t createdSourceRevision = 0;
   Vector2d documentPoint;
   Vector2d presentedPoint;
   std::optional<Vector2d> elementPoint;
@@ -44,6 +46,11 @@ public:
   nlohmann::json handleRequest(const nlohmann::json& request);
 
   /// Add feedback from the context menu. Returns an error for empty or oversized text.
+  /// Capture an immutable click anchor before a user starts composing feedback.
+  std::optional<EditorComment> captureCommentAnchor(Vector2d point,
+                                                    std::optional<svg::SVGElement> element);
+  /// Submit feedback against the captured click, preserving its local coordinates across edits.
+  bool addAnchoredComment(EditorComment anchor, std::string text, std::string* error);
   bool addComment(Vector2d point, std::optional<svg::SVGElement> element, std::string text,
                   std::string* error);
 
@@ -63,6 +70,8 @@ public:
   std::uint64_t feedbackRevision() const { return feedbackRevision_; }
   /// Whether a valid feedback wait should remain queued until another UI event.
   bool shouldWaitForFeedback(const nlohmann::json& request) const;
+  /// Whether this request reads or changes the live SVG and must wait for an idle frame.
+  static bool requiresIdleDocument(const nlohmann::json& request);
 
   /// Persistable feedback data, separate from SVG source and document undo history.
   nlohmann::json feedback() const;
@@ -79,6 +88,7 @@ private:
   nlohmann::json inspect(const svg::SVGElement& element);
   nlohmann::json applyEdits(const nlohmann::json& arguments);
   nlohmann::json insertElement(const nlohmann::json& arguments);
+  std::optional<std::string> checkContext(const nlohmann::json& arguments);
   std::optional<std::string> checkRevision(const nlohmann::json& arguments);
   nlohmann::json resolveCommentTool(const nlohmann::json& arguments);
   nlohmann::json waitCommentsTool(const nlohmann::json& arguments);
@@ -91,6 +101,7 @@ private:
   std::string documentKey() const;
 
   EditorApp& app_;
+  std::string sessionId_;
   Callbacks callbacks_;
   std::vector<EditorComment> comments_;
   std::uint64_t nextCommentId_ = 1;

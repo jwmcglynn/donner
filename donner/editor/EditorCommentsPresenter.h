@@ -17,8 +17,8 @@ namespace donner::editor {
 class EditorCommentsPresenter {
 public:
   /// Start a comment at an observed document point and optional element.
-  void beginComment(Vector2d point, std::optional<svg::SVGElement> element,
-                    std::uint64_t documentGeneration);
+  void beginComment(EditorCollaboration& collaboration, Vector2d point,
+                    std::optional<svg::SVGElement> element);
   /// Draw comment pins using the same viewport as the presented artwork.
   void drawPins(EditorCollaboration& collaboration, const ViewportState& viewport);
   /// Draw the non-modal comment composer and feedback list.
@@ -37,9 +37,7 @@ private:
   void drawCommentList(EditorCollaboration& collaboration);
   bool visible_ = false;
   bool focusComposer_ = false;
-  std::optional<Vector2d> pendingPoint_;
-  std::optional<svg::SVGElement> pendingElement_;
-  std::uint64_t pendingGeneration_ = 0;
+  std::optional<EditorComment> pendingAnchor_;
   std::array<char, 4097> draft_{};
   std::string error_;
   std::string persistenceError_;
