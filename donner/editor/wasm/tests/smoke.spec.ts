@@ -13,6 +13,7 @@ import { waitForAppliedPointer } from "./gesture-streams";
 
 declare global {
   interface Window {
+    __catalogFetchErrors?: { message: string; globalReceiver: boolean }[];
     __catalogFontTest?: {
       requests: { url: string; afterFirstFrame: boolean }[];
       requestsAtFirstFrame: number | null;
@@ -538,6 +539,7 @@ async function captureCatalogFontDiagnostics(
       workerStats: state.__donnerWorkerStats,
       interactionStats: state.__donnerInteractionStats,
       fontRequests: state.__catalogFontTest,
+      fetchErrors: state.__catalogFetchErrors,
       brokers: Array.from(state.__donnerCatalogBrokers ?? [], ([session, record]) => ({
         session,
         enabled: record.broker.enabled,
@@ -563,6 +565,27 @@ async function captureCatalogFontDiagnostics(
     timeout: 2000,
   });
 }
+
+test.beforeEach(async ({ page }, testInfo) => {
+  if (!/welcome picker paints before|WGPU diagnostics do not block/.test(testInfo.title)) return;
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch;
+    window.__catalogFetchErrors = [];
+    window.fetch = async function(input, init) {
+      try {
+        return await Reflect.apply(nativeFetch, this, [input, init]);
+      } catch (error) {
+        if (String(input).includes("/fonts/")) {
+          window.__catalogFetchErrors!.push({
+            message: String(error),
+            globalReceiver: this === window,
+          });
+        }
+        throw error;
+      }
+    };
+  });
+});
 
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;

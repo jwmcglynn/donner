@@ -60,6 +60,27 @@ function setup(t, overrides = {}) {
   return { broker, bytes, asset, calls, results, done: done.promise };
 }
 
+test("default browser fetch keeps its global receiver", async (t) => {
+  const globalReceiver = vm.runInContext("globalThis", context);
+  const { bytes } = fixture();
+  const receivers = [];
+  context.fetch = async function() {
+    receivers.push(this);
+    if (this !== globalReceiver) throw new TypeError("Illegal invocation");
+    return new Response(bytes, { headers: { "content-type": "font/woff2" } });
+  };
+  t.after(() => {
+    delete context.fetch;
+  });
+  const { broker, asset, done } = setup(t, { fetchImpl: undefined });
+  broker.request(asset.id, 1);
+  const result = await done;
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.bytes, bytes);
+  assert.equal(receivers.length, 1);
+  assert.equal(receivers[0], globalReceiver);
+});
+
 test("metadata construction makes no requests and resolves assets under the package subpath", async (t) => {
   const { broker, asset, bytes, calls, done } = setup(t);
   assert.equal(calls.length, 0);
