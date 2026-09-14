@@ -68,7 +68,7 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
 
 TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
   RendererSurfaceBudget byteBudget;
-  EXPECT_TRUE(byteBudget.reserve(4096, 4096, 4));
+  EXPECT_TRUE(byteBudget.reserve(8192, 8192, 4));
   EXPECT_FALSE(byteBudget.reserve(1, 1));
   EXPECT_EQ(byteBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
   EXPECT_TRUE(byteBudget.rejected());
@@ -95,15 +95,15 @@ TEST(RendererSurfaceBudgetTest, CapacityPreflightDoesNotPoisonLaterReservations)
 
 TEST(RendererSurfaceBudgetTest, ReleasedSurfacesRestoreActiveCapacity) {
   RendererSurfaceBudget budget;
-  EXPECT_TRUE(budget.reserve(4096, 4096, 4));
+  EXPECT_TRUE(budget.reserve(8192, 8192, 4));
   EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes);
   EXPECT_EQ(budget.surfaces(), 4u);
 
-  EXPECT_TRUE(budget.release(4096, 4096));
+  EXPECT_TRUE(budget.release(8192, 8192));
   EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes * 3u / 4u);
   EXPECT_EQ(budget.surfaces(), 3u);
 
-  EXPECT_TRUE(budget.reserve(4096, 4096));
+  EXPECT_TRUE(budget.reserve(8192, 8192));
   EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes);
   EXPECT_EQ(budget.surfaces(), 4u);
   EXPECT_FALSE(budget.rejected());

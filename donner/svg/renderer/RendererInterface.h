@@ -138,7 +138,7 @@ struct RendererReadbackStats {
 /** Aggregate budget for render targets, layers, masks, clips, and pattern tiles. */
 class RendererSurfaceBudget {
 public:
-  static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumBytes = 1024ULL * 1024 * 1024;
   static constexpr std::size_t kMaximumSurfaces = 256;
 
   struct Limits {
