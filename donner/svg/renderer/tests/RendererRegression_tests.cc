@@ -117,6 +117,40 @@ TEST_F(RendererRegressionTests, FontSizeAdjustMatchesExplicitUsedSize) {
   ExpectBitmapsIdentical(actual, expected, "font_size_adjust_used_size");
 }
 
+TEST_F(RendererRegressionTests, FontSizeAdjustDecorationMatchesExplicitDeclaringSize) {
+  for (const std::string decoration : {"underline", "overline", "line-through"}) {
+    for (bool childOverride : {false, true}) {
+      SCOPED_TRACE(decoration);
+      SCOPED_TRACE(childOverride);
+      const std::string content =
+          childOverride
+              ? "<tspan font-family='MPLUS 1p' font-size='20' font-size-adjust='none'>Text</tspan>"
+              : "Text";
+      const std::string start =
+          "<svg viewBox='0 0 200 200' font-family='Noto Sans'><text x='30' y='100' "
+          "text-decoration='" +
+          decoration + "' ";
+      SVGDocument adjusted = instantiateSubtree(
+          start + "font-size='64' font-size-adjust='0.3'>" + content + "</text></svg>", {},
+          Vector2i(500, 500));
+      SVGDocument explicitSize =
+          instantiateSubtree(start + "font-size='35.82089552238806'>" + content + "</text></svg>",
+                             {}, Vector2i(500, 500));
+      RegisterFontsFromDirectoryForTesting(adjusted, ResvgResourceRoot() / "fonts");
+      RegisterFontsFromDirectoryForTesting(explicitSize, ResvgResourceRoot() / "fonts");
+      const RendererBitmap actual = RenderDocumentWithBackend(adjusted, ActiveRendererBackend());
+      const RendererBitmap expected =
+          RenderDocumentWithBackend(explicitSize, ActiveRendererBackend());
+      ASSERT_THAT(actual.empty(), testing::IsFalse());
+      ASSERT_THAT(expected.empty(), testing::IsFalse());
+      const std::string label =
+          "adjusted_decoration_" + decoration + (childOverride ? "_child" : "_self");
+      ExpectVisibleBitmap(actual, label + "_visible");
+      ExpectBitmapsIdentical(actual, expected, label);
+    }
+  }
+}
+
 TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"(
     <svg viewBox="0 0 200 200">
