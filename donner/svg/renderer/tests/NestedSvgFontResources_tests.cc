@@ -75,7 +75,7 @@ std::string ImageSource(bool twoHosts = false, bool parentText = false) {
 std::string FilterSource() {
   return R"(<svg xmlns="http://www.w3.org/2000/svg" width="360" height="100"><defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="160" height="70"><feImage id="sourceImage" width="160" height="70" href=")" +
          ChildUri() +
-         R"("/></filter></defs><rect id="first" width="160" height="70" filter="url(#f)"/><rect id="unrelated" x="345" y="80" width="10" height="10"/></svg>)";
+         R"svg("/></filter></defs><rect id="first" width="160" height="70" filter="url(#f)"/><rect id="unrelated" x="345" y="80" width="10" height="10"/></svg>)svg";
 }
 
 SVGDocumentHandle ChildHandle(SVGDocument& document, std::string_view selector) {
@@ -415,7 +415,8 @@ TEST(NestedSvgFontResourcesTest, TwoStandaloneRangesCannotQualifyAWholeDocument)
   EXPECT_EQ(parsed->renderedFontResources().status, FontResourcePreflight::Status::NeedsRender);
   driver.drawEntityRangeIntoCurrentFrame(registry, unrelated, unrelated, viewport, Transform2d());
   EXPECT_EQ(parsed->renderedFontResources().status, FontResourcePreflight::Status::NeedsRender);
-  EXPECT_EQ(registry.ctx().get<components::RenderedFontResourceScope>().coverageRoot, entt::null);
+  EXPECT_EQ(registry.ctx().get<components::RenderedFontResourceScope>().coverageRoot,
+            Entity(entt::null));
 }
 
 TEST(NestedSvgFontResourcesTest, FragmentCoverageDoesNotQualifyAnotherTargetOrWholeDocument) {
