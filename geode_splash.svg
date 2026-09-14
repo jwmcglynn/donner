@@ -370,6 +370,9 @@
     <clipPath clipPathUnits="userSpaceOnUse" id="upper-face-clip">
       <polygon points="456 457 468 439 486 463 490 481 465 505 449 482" />
     </clipPath>
+    <clipPath clipPathUnits="userSpaceOnUse" id="purple-rim-light-clip">
+      <path d="M610.74 524.02         C612.1 531.13 607.2 539.41 606.17 547.1         C605.04 555.57 608.6 563.33 609.53 571.81         C610.5 580.71 608.57 590.42 601.43 596.25         C598.02 599.03 593.41 600.93 590.48 603.85         C587.66 606.66 586.38 610.41 584.53 614.11         C580.54 622.06 573.9 629.8 565.73 632.68         C557.66 635.53 548.1 633.66 539.78 635.33         C535.71 636.15 531.94 637.82 528.33 639.78         C524.93 641.62 521.67 643.72 517.78 645.47         C513.95 647.19 509.51 648.57 505.67 647.95         C501.41 647.26 497.89 644.13 494.23 641.73         C487.33 637.21 479.97 635.25 471.87 633.6         C464.79 632.15 457.15 630.93 450.91 627.64         C444.05 624.02 438.89 617.89 435.34 610.7         C432.27 604.5 430.4 597.51 424.71 593.52         C421.67 591.39 417.53 590.11 414.57 588.06         C411.89 586.21 410.17 583.73 407.82 581.52         C402.48 576.52 393.88 572.95 391.2 566.63         C388.53 560.34 391.72 551.33 390.78 543.86         C389.86 536.61 385.05 530.82 382.3 524.09         C379.31 516.76 378.76 508.32 381.53 501.12         C384.11 494.42 389.57 488.79 393.44 482.28         C395.44 478.91 397.01 475.3 397.68 471.66         C398.43 467.6 398.05 463.5 397.83 459.23         C397.36 450.13 397.62 440.31 402.66 432.87         C405.2 429.14 408.94 426 412.81 423.56         C416.31 421.35 419.92 419.7 423.16 417.13         C426.46 414.52 429.37 410.94 432.47 408.16         C435.7 405.26 439.13 403.23 443.25 402         C447.69 400.68 452.92 400.3 456.79 398.12         C461.28 395.61 463.93 390.69 466.81 385.49         C470.24 379.3 474 372.72 479.39 370.65         C483.63 369.02 488.87 370.18 493.79 372.07         C499.6 374.3 504.96 377.55 508.93 382.2         C513.02 386.98 515.64 393.24 519.73 397.69         C525.27 403.71 533.49 406.42 541.04 410.38         C545.03 412.48 548.83 414.93 551.32 418.5         C553.88 422.16 555.05 427 556.26 431.59         C557.37 435.82 558.51 439.83 560.51 443.39         C562.11 446.23 564.26 448.78 566.85 450.93         C572.5 455.64 580.25 458.45 584.92 463.83         C589.37 468.95 591.04 476.4 592.08 483.46         C593.13 490.68 593.52 497.47 597.13 503.63         C601.19 510.54 609.32 516.65 610.74 524.02         Z" />
+    </clipPath>
   </defs>
   <g id="background">
     <title>Background glow</title>
@@ -389,7 +392,7 @@
       <title>Rock shell</title>
       <desc>The full rock silhouette is a continuous shaded base. The masked surface facets add light and dark planes only to the exposed exterior.</desc>
       <use id="rock-silhouette" fill="url(#shell-shading)" href="#rock-contour" />
-      <g id="shell-facets" stroke-width=".45" stroke-linejoin="bevel" mask="url(#rock-surface-mask)" stroke-miterlimit="2">
+      <g id="shell-facets" stroke-width=".2" stroke-linejoin="miter" mask="url(#rock-surface-mask)" stroke-miterlimit="2">
         <title>Exterior surface facets</title>
         <desc>The rock-surface-mask includes the outer rock contour and excludes the quartz face. Facets may overlap beneath that mask without changing either edge.</desc>
         <polygon id="shell-facet-001" points="343 453 332.73 452.2 344 437" fill="#5a5c82" stroke="#5a5c82" />
@@ -489,7 +492,7 @@
         <polygon id="shell-facet-095" points="350 564 313 581 330 552" fill="#1a2137" stroke="#1a2137" />
         <polygon id="shell-facet-096" points="310.19 573.25 309 561 330 552" fill="#1a2036" stroke="#1a2036" />
         <polygon id="shell-facet-097" points="330 552 313 581 310.19 573.25" fill="#1a2138" stroke="#1a2138" />
-        <polygon id="shell-facet-098" points="621 599 624.06 592.08 619.22 611.68" fill="#716894" stroke="#716894" />
+        <polygon id="shell-facet-098" points="621 599 624.06 592.08 619.22 611.68" fill="#71798f" stroke="#71798f" />
         <polygon id="shell-facet-099" points="330 552 325 538 357 532" fill="#565a7c" stroke="#565a7c" />
         <polygon id="shell-facet-100" points="370 547 357 532 373 534" fill="#6e7090" stroke="#6e7090" />
         <polygon id="shell-facet-101" points="373 534 357 532 369.84 527.25" fill="#6c7090" stroke="#6c7090" />
@@ -511,7 +514,7 @@
         <polygon id="shell-facet-117" points="319.29 609.21 318.44 600.33 324 615" fill="#10192c" stroke="#10192c" />
         <polygon id="shell-facet-118" points="345 619 336.44 628.29 327.43 620.17" fill="#121a2d" stroke="#121a2d" />
         <polygon id="shell-facet-119" points="327.43 620.17 324 615 345 619" fill="#11192c" stroke="#11192c" />
-        <polygon id="shell-facet-120" points="583.56 444.76 580.35 440.62 585.95 445.46" fill="#9c84bf" stroke="#9c84bf" />
+        <polygon id="shell-facet-120" points="583.56 444.76 580.35 440.62 585.95 445.46" fill="#9496af" stroke="#9496af" />
         <polygon id="shell-facet-121" points="356 589 314.32 592.97 313 581" fill="#1e253c" stroke="#1e253c" />
         <polygon id="shell-facet-122" points="343.39 637.49 345 619 360 625" fill="#11182a" stroke="#11182a" />
         <polygon id="shell-facet-123" points="345 619 343.39 637.49 336.44 628.29" fill="#131a2c" stroke="#131a2c" />
@@ -525,7 +528,6 @@
         <polygon id="shell-facet-131" points="365 655 378 634 370.99 658.25" fill="#12182c" stroke="#12182c" />
         <polygon id="shell-facet-132" points="378 634 359 652.11 360 625" fill="#131a2d" stroke="#131a2d" />
         <polygon id="shell-facet-133" points="313 581 350 564 356 589" fill="#1b2137" stroke="#1b2137" />
-        <polygon id="shell-facet-134" points="593.63 452.23 586.18 445.66 593.33 451.84" fill="#a086c2" stroke="#a086c2" />
         <polygon id="shell-facet-135" points="377 565 361 557 376.53 559.91" fill="#9092b1" stroke="#9092b1" />
         <polygon id="shell-facet-136" points="376.53 559.91 379.82 573.65 377 565" fill="#c8cadb" stroke="#c8cadb" />
         <polygon id="shell-facet-137" points="379.82 573.65 386.79 583.43 381 586" fill="#9092ae" stroke="#9092ae" />
@@ -572,7 +574,6 @@
         <polygon id="shell-facet-178" points="417 641 425 620 428.83 624.35" fill="#686a8a" stroke="#686a8a" />
         <polygon id="shell-facet-179" points="403 623 411 610 425 620" fill="#5c5f7d" stroke="#5c5f7d" />
         <polygon id="shell-facet-180" points="368 578 377 565 379.82 573.65" fill="#9294b2" stroke="#9294b2" />
-        <polygon id="shell-facet-181" points="594.07 452.62 596.25 455.62 593.63 452.23" fill="#8e76b4" stroke="#8e76b4" />
         <polygon id="shell-facet-182" points="449.53 387.14 453 377 459.92 370.27" fill="#b4b2ca" stroke="#b4b2ca" />
         <polygon id="shell-facet-183" points="466 352 478.5 346.78 482 352" fill="#8a88ac" stroke="#8a88ac" />
         <polygon id="shell-facet-184" points="478.5 346.78 466 352 449.98 353.78" fill="#a6a0c8" stroke="#a6a0c8" />
@@ -585,7 +586,7 @@
         <polygon id="shell-facet-191" points="482 352 488.23 358.67 482.47 359.14" fill="#abaac3" stroke="#abaac3" />
         <polygon id="shell-facet-192" points="466 352 456 363 449.98 353.78" fill="#aaa6c8" stroke="#aaa6c8" />
         <polygon id="shell-facet-193" points="484.76 347.63 495 354 488.23 358.67" fill="#c4c4da" stroke="#c4c4da" />
-        <polygon id="shell-facet-194" points="495 354 484.76 347.63 512.5 361.61" fill="#a490c8" stroke="#a490c8" />
+        <polygon id="shell-facet-194" points="495 354 484.76 347.63 512.5 361.61" fill="#9ea1b8" stroke="#9ea1b8" />
         <polygon id="shell-facet-195" points="488.23 358.67 495 354 501.04 362.8" fill="#bebed4" stroke="#bebed4" />
         <polygon id="shell-facet-196" points="484.76 347.63 488.23 358.67 482 352" fill="#b4b3cc" stroke="#b4b3cc" />
         <polygon id="shell-facet-197" points="509.08 367.42 501.04 362.8 507 361" fill="#c9c8dc" stroke="#c9c8dc" />
@@ -600,7 +601,7 @@
         <polygon id="shell-facet-206" points="526.32 389.37 527 384 532.71 384.42" fill="#a4a6be" stroke="#a4a6be" />
         <polygon id="shell-facet-207" points="527 384 526.32 389.37 515.23 372.95" fill="#bec0d2" stroke="#bec0d2" />
         <polygon id="shell-facet-208" points="526.3 378.3 532.71 384.42 527 384" fill="#bab5d4" stroke="#bab5d4" />
-        <polygon id="shell-facet-209" points="516.33 365.13 526.3 378.3 520 371" fill="#9a7cc2" stroke="#9a7cc2" />
+        <polygon id="shell-facet-209" points="516.33 365.13 526.3 378.3 520 371" fill="#9698af" stroke="#9698af" />
         <polygon id="shell-facet-210" points="531.14 394.48 532.71 384.42 541 392" fill="#8d8eaa" stroke="#8d8eaa" />
         <polygon id="shell-facet-211" points="532.71 384.42 531.14 394.48 526.32 389.37" fill="#9898b2" stroke="#9898b2" />
         <polygon id="shell-facet-212" points="531.14 394.48 541 392 547.54 400.87" fill="#acacc3" stroke="#acacc3" />
@@ -610,7 +611,7 @@
         <polygon id="shell-facet-216" points="554.99 406.84 562.64 407.47 558.88 411.63" fill="#babcce" stroke="#babcce" />
         <polygon id="shell-facet-217" points="562.64 407.47 554.99 406.84 558.86 402.02" fill="#b7bace" stroke="#b7bace" />
         <polygon id="shell-facet-218" points="554 399 558.86 402.02 554.99 406.84" fill="#bbb7d2" stroke="#bbb7d2" />
-        <polygon id="shell-facet-219" points="558.86 402.02 554 399 532.71 384.42" fill="#ad97cf" stroke="#ad97cf" />
+        <polygon id="shell-facet-219" points="558.86 402.02 554 399 532.71 384.42" fill="#a7aabd" stroke="#a7aabd" />
         <polygon id="shell-facet-220" points="570 427 564.49 413.36 575.5 435.06" fill="#74758f" stroke="#74758f" />
         <polygon id="shell-facet-221" points="565.24 416.36 564.49 413.36 570 427" fill="#b4b6ce" stroke="#b4b6ce" />
         <polygon id="shell-facet-222" points="567.64 436.24 564.71 426.67 570 427" fill="#9b9fb6" stroke="#9b9fb6" />
@@ -619,22 +620,16 @@
         <polygon id="shell-facet-225" points="564.71 426.67 565.24 416.36 570 427" fill="#a9aec2" stroke="#a9aec2" />
         <polygon id="shell-facet-226" points="564.49 413.36 558.88 411.63 562.64 407.47" fill="#a7a6c0" stroke="#a7a6c0" />
         <polygon id="shell-facet-227" points="571.32 442.52 580.35 440.62 576.41 445.79" fill="#9f9eba" stroke="#9f9eba" />
-        <polygon id="shell-facet-228" points="585.96 445.46 586.18 445.66 585.95 445.46" fill="#9470b9" stroke="#9470b9" />
         <polygon id="shell-facet-229" points="576.41 445.79 580.35 440.62 583.56 444.76" fill="#a6a9bf" stroke="#a6a9bf" />
         <polygon id="shell-facet-230" points="564.49 413.36 562.64 407.47 575.5 435.06" fill="#85869e" stroke="#85869e" />
         <polygon id="shell-facet-231" points="580.35 440.62 571.32 442.52 575.5 435.06" fill="#646288" stroke="#646288" />
-        <polygon id="shell-facet-232" points="603.62 471.53 599.43 460.01 599.76 460.45" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-233" points="603.63 470.53 603.62 471.53 599.76 460.45" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-234" points="605 479.15 605.02 486.85 602.65 484.46" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-235" points="606.14 491.85 605.02 486.85 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-236" points="605.02 486.85 605 479.15 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-237" points="607.83 492.43 605 479.15 605.13 475.68" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-238" points="605 479.15 603.62 476.34 605.13 475.68" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-239" points="605.02 486.85 606.14 491.85 604.27 490.29" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-239" points="605.02 486.85 607.83 492.43 604.27 490.29" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-240" points="610 498 604.96 497.36 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-241" points="622.94 518.4 613.16 501.59 622.07 516.17" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-242" points="613.16 501.59 610 498 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-243" points="607.83 492.43 604.96 497.36 606.14 491.85" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-244" points="610 498 613.16 501.59 604.96 497.36" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-245" points="463.56 646.09 455 642 439.18 633.94" fill="#c4c7d4" stroke="#c4c7d4" />
         <polygon id="shell-facet-246" points="463.56 646.09 479.06 645.67 468 649" fill="#727594" stroke="#727594" />
@@ -665,7 +660,6 @@
         <polygon id="shell-facet-271" points="497.99 676.35 499 665 511.76 658.89" fill="#242a45" stroke="#242a45" />
         <polygon id="shell-facet-272" points="497.99 676.35 479 676 486 663" fill="#1c2239" stroke="#1c2239" />
         <polygon id="shell-facet-273" points="499 665 497.99 676.35 486 663" fill="#1a2136" stroke="#1a2136" />
-        <polygon id="shell-facet-274" points="596.25 455.62 599.25 459.5 599.43 460.01" fill="#9a80bf" stroke="#9a80bf" />
         <polygon id="shell-facet-275" points="494 655.71 511.76 658.89 499 665" fill="#6d708e" stroke="#6d708e" />
         <polygon id="shell-facet-276" points="471.09 677.28 450 654 473 662" fill="#1a2036" stroke="#1a2036" />
         <polygon id="shell-facet-277" points="528.48 673.36 511.76 658.89 517 658" fill="#2f324e" stroke="#2f324e" />
@@ -679,7 +673,6 @@
         <polygon id="shell-facet-285" points="517 658 538 650 529 663" fill="#606382" stroke="#606382" />
         <polygon id="shell-facet-286" points="511.76 658.89 528.48 673.36 497.99 676.35" fill="#262b45" stroke="#262b45" />
         <polygon id="shell-facet-287" points="575.3 640.11 588.81 654.5 568 655" fill="#747694" stroke="#747694" />
-        <polygon id="shell-facet-288" points="605.13 475.68 603.62 476.34 603.62 471.53" fill="#aaa0c6" stroke="#aaa0c6" />
         <polygon id="shell-facet-289" points="591 649 597.21 640.66 588.81 654.5" fill="#686788" stroke="#686788" />
         <polygon id="shell-facet-290" points="450 654 455 642 463.56 646.09" fill="#545876" stroke="#545876" />
         <polygon id="shell-facet-291" points="615.05 554.18 619.54 534.98 623 550" fill="#868aa4" stroke="#868aa4" />
@@ -690,10 +683,9 @@
         <polygon id="shell-facet-296" points="624.17 576.59 618.06 567.93 623.53 564.84" fill="#8b90a5" stroke="#8b90a5" />
         <polygon id="shell-facet-297" points="623.53 564.84 617 562 623.61 555.12" fill="#5e617f" stroke="#5e617f" />
         <polygon id="shell-facet-298" points="623.61 555.12 615.05 554.18 623 550" fill="#686d88" stroke="#686d88" />
-        <polygon id="shell-facet-299" points="624.24 521.73 624.22 520.59 625 536" fill="#74718e" stroke="#74718e" />
-        <polygon id="shell-facet-300" points="624.33 529.69 624.24 521.73 625 536" fill="#7b7892" stroke="#7b7892" />
+        <polygon id="shell-facet-300" points="624.33 529.69 624.22 520.59 625 536" fill="#7b7892" stroke="#7b7892" />
         <polygon id="shell-facet-301" points="624.33 529.69 625 536 619.54 534.98" fill="#868aa6" stroke="#868aa6" />
-        <polygon id="shell-facet-302" points="625.52 542.48 623.61 555.12 623 550" fill="#776c9c" stroke="#776c9c" />
+        <polygon id="shell-facet-302" points="625.52 542.48 623.61 555.12 623 550" fill="#747b91" stroke="#747b91" />
         <polygon id="shell-facet-303" points="625.52 542.48 625 536 624.22 520.59" fill="#77768f" stroke="#77768f" />
         <polygon id="shell-facet-304" points="625 536 625.52 542.48 619.54 534.98" fill="#8688a6" stroke="#8688a6" />
         <polygon id="shell-facet-305" points="623.53 564.84 625.39 586.67 624.17 576.59" fill="#77768e" stroke="#77768e" />
@@ -708,16 +700,11 @@
         <polygon id="shell-facet-314" points="600 628 599.33 610.83 612 623" fill="#525574" stroke="#525574" />
         <polygon id="shell-facet-315" points="611 610 616.19 619.47 612 623" fill="#505373" stroke="#505373" />
         <polygon id="shell-facet-316" points="600 628 586.22 630.09 599.33 610.83" fill="#727292" stroke="#727292" />
-        <polygon id="shell-facet-317" points="624.55 590.09 624.26 591.81 624.06 592.08" fill="#786c9a" stroke="#786c9a" />
-        <polygon id="shell-facet-318" points="625.39 586.67 625.14 586.55 623.39 580.26" fill="#9693b4" stroke="#9693b4" />
         <polygon id="shell-facet-319" points="609.77 605.07 615.98 595.85 621 599" fill="#8e90aa" stroke="#8e90aa" />
         <polygon id="shell-facet-320" points="611 610 619.22 611.68 616.19 619.47" fill="#6f7491" stroke="#6f7491" />
         <polygon id="shell-facet-321" points="624.06 592.08 621 599 622.7 593.88" fill="#807ea0" stroke="#807ea0" />
         <polygon id="shell-facet-322" points="619.22 611.68 609.77 605.07 621 599" fill="#747694" stroke="#747694" />
         <polygon id="shell-facet-323" points="615.98 595.85 622.7 593.88 621 599" fill="#9396b0" stroke="#9396b0" />
-        <polygon id="shell-facet-324" points="624.24 521.73 622.94 518.4 624.22 520.59" fill="#8674a4" stroke="#8674a4" />
-        <polygon id="shell-facet-325" points="625.14 586.55 625.39 586.67 624.55 590.09" fill="#79709e" stroke="#79709e" />
-        <polygon id="shell-facet-326" points="622.07 516.17 613.16 501.59 613.62 501.83" fill="#907eb3" stroke="#907eb3" />
         <polygon id="shell-facet-327" points="459.92 370.27 453 377 456 363" fill="#a09fba" stroke="#a09fba" />
       </g>
     </g>
@@ -734,9 +721,9 @@
           <title>Light across the cut face</title>
           <desc>Broad translucent planes light the mineral bands. The parent mineral-face-mask clips every plane to the shared white quartz contour; the solid cavity covers the center.</desc>
           <polygon id="agate-light-1" points="402 371 434 385 467 413 435 433 376 457" fill="#ffffff" fill-opacity="0.19" />
-          <polygon id="agate-light-2" points="471 343 488 359 500 405 526 435 480 428" fill="#5f2fa4" fill-opacity="0.13" />
+          <polygon id="agate-light-2" points="471 343 488 359 500 405 526 435 480 428" fill="#5f2fa4" fill-opacity="0.13" clip-path="url(#purple-rim-light-clip)" />
           <polygon id="agate-light-3" points="337 456 407 467 426 492 380 519 342 510" fill="#ffffff" fill-opacity="0.12" />
-          <polygon id="agate-light-4" points="365 530 414 549 441 578 400 586" fill="#633494" fill-opacity="0.11" />
+          <polygon id="agate-light-4" points="365 530 414 549 441 578 400 586" fill="#633494" fill-opacity="0.11" clip-path="url(#purple-rim-light-clip)" />
           <polygon id="agate-light-5" points="413 603 453 610 483 635 472 659 437 642" fill="#ffffff" fill-opacity="0.32" />
           <polygon id="agate-light-7" points="574 575 622 588 611 618 569 641 549 622" fill="#ffffff" fill-opacity="0.18" />
           <polygon id="agate-light-8" points="582 490 622 509 622 529 596 540 576 514" fill="#ffffff" fill-opacity="0.17" />
