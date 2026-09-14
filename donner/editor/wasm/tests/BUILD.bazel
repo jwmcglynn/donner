@@ -304,5 +304,7 @@ js_test(
         "//donner/editor/wasm:catalog-fonts.js",
     ],
     entry_point = "catalog-fonts.spec.mjs",
+    # Node Response initializes the llhttp WebAssembly module.
+    env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
 )
