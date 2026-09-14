@@ -61,7 +61,7 @@ struct Uniforms {
   // remains 16-byte (`vec4f`) aligned without explicit padding.
   maskBounds: vec4f,
   // SVG `mix-blend-mode` selector. `0` = plain source-over
-  // (or `maskMode` when set). `1..=16` map to the enumeration in
+  // (or `maskMode` when set). `1..=15` map to the enumeration in
   // `donner::svg::MixBlendMode` in the same order. When non-zero, the
   // fragment shader samples the `dstSnapshotTexture` at binding 4 and
   // composites the content through the matching W3C Compositing 1
@@ -338,35 +338,12 @@ fn sat_of(c: vec3f) -> f32 {
 }
 
 fn set_sat(c_in: vec3f, s: f32) -> vec3f {
-  // Sort channels and rewrite mid/max relative to the new saturation.
-  // This is the `SetSat` algorithm from section9.2 expressed without
-  // pointer-chasing: identify min/mid/max indices by successive
-  // min/max operations, then build the output componentwise.
-  let r = c_in.x;
-  let g = c_in.y;
-  let b = c_in.z;
-  let cmax = max(r, max(g, b));
-  let cmin = min(r, min(g, b));
-  let cmid = r + g + b - cmax - cmin;
-
-  var new_min = 0.0;
-  var new_mid = 0.0;
-  var new_max = 0.0;
+  let cmax = max(c_in.x, max(c_in.y, c_in.z));
+  let cmin = min(c_in.x, min(c_in.y, c_in.z));
   if (cmax > cmin) {
-    new_mid = ((cmid - cmin) * s) / (cmax - cmin);
-    new_max = s;
+    return (c_in - vec3f(cmin)) * (s / (cmax - cmin));
   }
-
-  // Rebuild componentwise by comparing each input channel to the
-  // identified extremes. Exact-equality checks match the W3C
-  // reference - ties preserve the input ordering.
-  var out: vec3f;
-  out.x = select(new_min, select(new_max, new_mid, r == cmid), r == cmax);
-  out.y = select(new_min, select(new_max, new_mid, g == cmid), g == cmax);
-  out.z = select(new_min, select(new_max, new_mid, b == cmid), b == cmax);
-  // `set_sat` is followed by `set_lum` so tiny ordering ambiguities
-  // get absorbed by the luminosity restoration step.
-  return out;
+  return vec3f(0.0);
 }
 
 fn blend_hue(cb: vec3f, cs: vec3f) -> vec3f {
