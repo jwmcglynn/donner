@@ -449,6 +449,25 @@ TEST(EditorAppTest, EmptySelectionMutatorsReturnFalseWithoutQueueingCommands) {
   EXPECT_EQ(app.document().queue().size(), 0u);
 }
 
+TEST(EditorAppTest, LockingTheSelectedElementDoesNotReadTheVacatedSelectionSlot) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  const auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+
+  // Passing `selectedElements().front()` hands in a reference that locking then erases.
+  // AddressSanitizer catches the resulting stale read; an unsanitized build usually cannot.
+  app.setElementLocked(app.selectedElements().front(), true);
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.selectedElements().empty());
+  EXPECT_THAT(std::string(app.document().document().source()),
+              ::testing::HasSubstr(kLockedAttributeName));
+}
+
 TEST(EditorAppTest, DeleteSelectionWithUndoKeepsLockedElementsSelected) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
