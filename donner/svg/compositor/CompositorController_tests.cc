@@ -134,6 +134,32 @@ protected:
   NiceMock<MockRendererInterface> renderer_;
 };
 
+TEST_F(CompositorControllerTest, SurfaceLimitRefusalAbandonsFrameAndAllowsRetry) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="32" height="32" fill="blue"/>
+    <g id="target" opacity="0.5"><rect width="16" height="16" fill="red"/></g>
+  )svg");
+  configureMockForTextureCaching();
+  ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([]() {
+    auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+    ON_CALL(*offscreen, requiresTextureSnapshotPresentation())
+        .WillByDefault(::testing::Return(true));
+    ON_CALL(*offscreen, resourceStats())
+        .WillByDefault(::testing::Return(RendererResourceStats{.surfaceBudgetRejected = true}));
+    return offscreen;
+  });
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  CancellationToken cancellation;
+  EXPECT_THAT(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, cancellation),
+              ::testing::Eq(false));
+  configureMockForTextureCaching();
+  EXPECT_THAT(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, cancellation),
+              ::testing::Eq(true));
+}
+
 TEST_F(CompositorControllerTest, ConstructsWithDocumentAndRenderer) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="10" height="10" fill="red" />
@@ -403,8 +429,7 @@ TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
          "to run every fast-path drag frame.";
 }
 
-TEST_F(CompositorControllerTest,
-       TextureBackedFlatComposeTranslatesReusedImmediateDragLayer) {
+TEST_F(CompositorControllerTest, TextureBackedFlatComposeTranslatesReusedImmediateDragLayer) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="100" height="100" fill="white" />
     <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
@@ -432,8 +457,8 @@ TEST_F(CompositorControllerTest,
   // flat direct-surface compose must therefore blit that payload with canvasFromBitmap instead of
   // direct-drawing the range as if the cached transform were still identity.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(5.0, 0.0)));
-  EXPECT_CALL(renderer_, drawTextureSnapshot(::testing::_, ::testing::_, ::testing::_,
-                                              ::testing::_))
+  EXPECT_CALL(renderer_,
+              drawTextureSnapshot(::testing::_, ::testing::_, ::testing::_, ::testing::_))
       .Times(2);
   compositor.renderFrame(viewport);
 }
