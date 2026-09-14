@@ -468,9 +468,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Embed the image-blit WGSL shader source. Used by the image-blit pipeline
-# (drawImage today, pattern tile sampling in Phase 2H).
-
 # feBlend W3C Compositing 1 blend-mode compute shader.
 embed_resources(
     name = "filter_blend_wgsl",

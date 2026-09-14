@@ -204,10 +204,6 @@ donner_cc_library(
 
 # The typed shader IR and each emitter have independent compilation dependencies.
 #
-# A typed immutable IR with a validating builder, host-shareable layout
-# computation per the WGSL specification's memory layout rules, deterministic
-# text serialization, and three emitters that consume the same binding and
-# layout metadata.
 donner_cc_library(
     name = "image_blit_api",
     hdrs = ["programs/ImageBlit.h"],

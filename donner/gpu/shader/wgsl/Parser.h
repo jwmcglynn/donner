@@ -3053,13 +3053,17 @@ private:
     }
   }
 
+  constexpr bool IsConstantProjection(ExpressionKind kind) const {
+    return kind == ExpressionKind::Unary || kind == ExpressionKind::Convert ||
+           kind == ExpressionKind::Swizzle || kind == ExpressionKind::Member;
+  }
+
   constexpr bool IsConstantSyntax(ArenaId expressionId) const {
     if (expressionId == kInvalidArenaId) return false;
     const Expression& expression = ExpressionAt(expressionId);
     if (expression.kind == ExpressionKind::Literal || expression.kind == ExpressionKind::Zero)
       return true;
-    if (expression.kind == ExpressionKind::Unary || expression.kind == ExpressionKind::Convert ||
-        expression.kind == ExpressionKind::Swizzle) {
+    if (IsConstantProjection(expression.kind)) {
       return IsConstantSyntax(expression.operands[0]);
     }
     if (expression.kind == ExpressionKind::Binary || expression.kind == ExpressionKind::Index) {
