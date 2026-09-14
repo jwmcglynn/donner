@@ -1570,20 +1570,22 @@ void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
   // ="false"` behind), so an unlocked element looks the same as one that was
   // never locked. This mutation is never lock-gated (see `IsLockGatedCommand`)
   // so a locked layer can always be unlocked.
+
+  // Copy first: `element` may alias the selection storage that the erase below mutates.
+  const svg::SVGElement target = element;
   if (locked) {
     const std::size_t previousSelectionSize = selection_.size();
-    std::erase_if(selection_, [&element](const svg::SVGElement& selected) {
-      return IsElementOrDescendant(element, selected);
+    std::erase_if(selection_, [&target](const svg::SVGElement& selected) {
+      return IsElementOrDescendant(target, selected);
     });
     if (selection_.size() != previousSelectionSize) {
       refreshFirstSelectionCache();
     }
 
-    applyMutation(EditorCommand::SetAttributeCommand(element, std::string(kLockedAttributeName),
+    applyMutation(EditorCommand::SetAttributeCommand(target, std::string(kLockedAttributeName),
                                                      std::string(kLockedAttributeValue)));
   } else {
-    applyMutation(
-        EditorCommand::RemoveAttributeCommand(element, std::string(kLockedAttributeName)));
+    applyMutation(EditorCommand::RemoveAttributeCommand(target, std::string(kLockedAttributeName)));
   }
 }
 
