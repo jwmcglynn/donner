@@ -472,6 +472,27 @@ TEST(SVGTextElementPublicApiTests, SelectSubstringIsNoOp) {
   EXPECT_DOUBLE_EQ(before, after);
 }
 
+TEST(SVGTextElementPublicApiTests, ZeroAdjustedSizePreservesAddressableCharacters) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="root" x="10" y="20" font-size="20" font-size-adjust="0">A<tspan id="span">BC</tspan></text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+  ASSERT_EQ(root.getNumberOfChars(), 3);
+  ASSERT_EQ(span.getNumberOfChars(), 2);
+  EXPECT_DOUBLE_EQ(root.getComputedTextLength(), 0.0);
+  EXPECT_DOUBLE_EQ(root.getSubStringLength(1, 2), 0.0);
+  for (long index = 0; index < 3; ++index) {
+    EXPECT_EQ(root.getStartPositionOfChar(index), Vector2d(10, 20));
+    EXPECT_EQ(root.getEndPositionOfChar(index), Vector2d(10, 20));
+    EXPECT_EQ(root.getExtentOfChar(index).size(), Vector2d::Zero());
+  }
+  EXPECT_EQ(span.getStartPositionOfChar(0), root.getStartPositionOfChar(1));
+}
+
 TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 120 40">

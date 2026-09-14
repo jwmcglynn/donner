@@ -1574,6 +1574,29 @@ TEST(TextEngineScriptedTest, HorizontalCrossSpanKernShiftsContinuationSpan) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(13.0))))));
 }
 
+TEST(TextEngineScriptedTest, CrossSpanKerningRequiresCompatibleShapingProperties) {
+  for (bool differentSize : {false, true}) {
+    SCOPED_TRACE(differentSize);
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan("A"));
+    auto continuation = MakeSpan("V");
+    continuation.startsNewChunk = false;
+    if (differentSize) {
+      continuation.fontSize = Lengthd(30.0, Lengthd::Unit::Px);
+    } else {
+      continuation.fontVariant = FontVariant::SmallCaps;
+    }
+    text.spans.push_back(std::move(continuation));
+    const auto runs = engine.layout(text, MakeTextParams(20.0));
+    ASSERT_THAT(runs, SizeIs(2));
+    ASSERT_EQ(runs[0].font, runs[1].font);
+    EXPECT_THAT(runs[1].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(10.0))));
+  }
+}
+
 TEST(TextEngineScriptedTest, ZeroUsedSizeDoesNotBridgeCrossSpanKerning) {
   Registry registry;
   FontManager fontManager(registry);

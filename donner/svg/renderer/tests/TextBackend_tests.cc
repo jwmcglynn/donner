@@ -323,6 +323,45 @@ TEST_P(TextBackendTest, FontVMetricsReturnsNonZeroValues) {
   EXPECT_LT(metrics.descent, 0);
 }
 
+TEST_P(TextBackendTest, MissingXHeightUsesTheSelectedGlyphMetric) {
+  std::vector<uint8_t> bytes = ReadResvgFontBytes("NotoSans-Regular.ttf");
+  ASSERT_GE(bytes.size(), 12u);
+  bool changed = false;
+  for (size_t i = 0; i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    ASSERT_LE(entry + 16, bytes.size());
+    if (ReadBe32(bytes, entry) == 0x4F532F32) {
+      const size_t offset = ReadBe32(bytes, entry + 8);
+      ASSERT_LE(offset + 88, bytes.size());
+      WriteBe16(&bytes, offset, 1);
+      WriteBe16(&bytes, offset + 86, 0);
+      changed = true;
+      break;
+    }
+  }
+  ASSERT_THAT(changed, testing::IsTrue());
+  const FontHandle font = fontManager_.loadFontData(bytes, FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const auto shaped = backend().shapeRun(font, 20.0f, "x", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(1));
+  const Path outline = backend().glyphOutline(font, shaped.glyphs.front().glyphIndex, 1.0f);
+  ASSERT_THAT(outline.empty(), testing::IsFalse());
+  const double actualXHeight = -outline.bounds().topLeft.y;
+  ASSERT_GT(actualXHeight, 0.0);
+  EXPECT_DOUBLE_EQ(backend().fontVMetrics(font).xHeight, actualXHeight);
+}
+
+TEST_P(TextBackendTest, CrossSpanKerningRequiresMatchingFaceAndSize) {
+  const FontHandle first = loadFont("NotoSans-Regular.ttf", "First");
+  const FontHandle other = loadFont("MPLUS1p-Regular.ttf", "Other");
+  ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(other), testing::IsTrue());
+  ASSERT_NE(first, other);
+  ASSERT_NE(backend().crossSpanKern(first, 20.0f, first, 20.0f, 'A', 'V', false), 0.0);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, other, 20.0f, 'A', 'V', false), 0.0);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, first, 30.0f, 'A', 'V', false), 0.0);
+}
+
 TEST_P(TextBackendTest, FontVMetricsReturnsZeroForInvalidFont) {
   const FontVMetrics metrics = backend().fontVMetrics(FontHandle{});
   EXPECT_EQ(metrics.ascent, 0);
