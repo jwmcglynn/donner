@@ -20,6 +20,7 @@
 #ifdef DONNER_TEXT_WOFF2_ENABLED
 #include "donner/base/fonts/Woff2Parser.h"
 #endif
+#include "donner/svg/resources/FontMetadata.h"
 #include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
@@ -61,6 +62,21 @@ std::string ToLowerAscii(std::string_view value) {
     }
   }
   return lowered;
+}
+
+/// Preserve only lossless names: the metadata decoder substitutes '?' for non-ASCII code points.
+std::string ActualFontFamily(std::span<const uint8_t> data) {
+  auto metadata = ParseFontMetadata(data);
+  if (!metadata || std::any_of(metadata->familyName.begin(), metadata->familyName.end(),
+                               [](char ch) { return ch < ' ' || ch >= 127 || ch == '?'; })) {
+    return {};
+  }
+  return std::move(metadata->familyName);
+}
+
+/// Check the complete charge without overflowing the byte-budget sum.
+bool FitsFontByteBudget(size_t rawBytes, size_t cachedBytes, size_t maximumBytes) {
+  return rawBytes <= maximumBytes && cachedBytes <= maximumBytes - rawBytes;
 }
 
 /// Read a uint32_t in big-endian from a byte pointer.
@@ -237,6 +253,7 @@ struct FontManager::LoadedFontComponent {
   std::vector<uint8_t> ownedData;                          // Owns reconstructed sfnt bytes.
   std::shared_ptr<const std::vector<uint8_t>> sharedData;  // Shares raw TTF/OTF bytes.
   fonts::SfntFont sfnt;
+  std::string actualFamily;  // Owning storage with capacity charged to the font budget.
   FontDataTrust trust = FontDataTrust::Untrusted;
   FontBudgetReservation reservation;
 
@@ -915,6 +932,15 @@ std::optional<std::span<const uint8_t>> FontManager::sfntTable(FontHandle handle
   return font ? font->sfnt.findTable(font->fontData(), tag) : std::nullopt;
 }
 
+bool FontManager::fontsShareFamily(FontHandle first, FontHandle second) const {
+  if (!isValidatedFont(first) || !isValidatedFont(second)) return false;
+  if (first == second) return true;
+  const auto& firstFamily = registry_.get<LoadedFontComponent>(first.entity()).actualFamily;
+  const auto& secondFamily = registry_.get<LoadedFontComponent>(second.entity()).actualFamily;
+  return !firstFamily.empty() && !secondFamily.empty() &&
+         StringUtils::Equals<StringComparison::IgnoreCase>(firstFamily, secondFamily);
+}
+
 bool FontManager::isValidatedFont(FontHandle handle) const {
   return isValidHandle(handle) && registry_.all_of<LoadedFontComponent>(handle.entity());
 }
@@ -1006,22 +1032,11 @@ bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontD
     return false;
   }
 
-  if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState)) {
-    // A face larger than the entire immutable registry budget cannot recover. Current retained
-    // pressure can; keep it distinct from malformed/unsupported immutable content.
-    if (retainedBudgetExceeded && data.size() <= budgetState->maximumBytes &&
-        sfnt->retainedBytes() <= budgetState->maximumBytes - data.size() &&
-        budgetState->maximumFonts != 0) {
-      *retainedBudgetExceeded = true;
-    }
-    return false;
-  }
-
   LoadedFontComponent font;
   font.ownedData = std::move(data);
   font.sfnt = std::move(*sfnt);
   font.trust = trust;
-  return storeLoadedFont(entity, std::move(font));
+  return storeLoadedFont(entity, std::move(font), retainedBudgetExceeded);
 }
 
 bool FontManager::setRawFontData(Entity entity,
@@ -1063,14 +1078,21 @@ std::shared_ptr<FontManager::FontBudgetState> FontManager::budgetStateForWrite()
   return candidateBudgetState_;
 }
 
-bool FontManager::storeLoadedFont(Entity entity, LoadedFontComponent font) {
+bool FontManager::storeLoadedFont(Entity entity, LoadedFontComponent font,
+                                  bool* retainedBudgetExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   const size_t rawBytes = font.fontData().size();
   const size_t indexBytes = font.sfnt.retainedBytes();
-  if (!canStoreLoadedFont(entity, rawBytes, indexBytes, budgetState)) {
+  font.actualFamily = ActualFontFamily(font.fontData());
+  const size_t familyCapacity = font.actualFamily.empty() ? 0 : font.actualFamily.capacity();
+  if (familyCapacity >= budgetState->maximumBytes) return false;
+  const size_t familyBytes = familyCapacity ? familyCapacity + 1 : 0;
+  if (indexBytes > budgetState->maximumBytes - familyBytes) return false;
+  const size_t cachedBytes = indexBytes + familyBytes;
+  if (!canStoreLoadedFont(entity, rawBytes, cachedBytes, budgetState, retainedBudgetExceeded)) {
     return false;
   }
-  const size_t chargeBytes = rawBytes + indexBytes;
+  const size_t chargeBytes = rawBytes + cachedBytes;
 
   if (registry_.all_of<LoadedFontComponent>(entity)) {
     registry_.remove<LoadedFontComponent>(entity);
@@ -1081,8 +1103,9 @@ bool FontManager::storeLoadedFont(Entity entity, LoadedFontComponent font) {
 }
 
 bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes,
-                                     const std::shared_ptr<FontBudgetState>& budgetState) const {
-  if (rawBytes > budgetState->maximumBytes || indexBytes > budgetState->maximumBytes - rawBytes) {
+                                     const std::shared_ptr<FontBudgetState>& budgetState,
+                                     bool* retainedBudgetExceeded) const {
+  if (!FitsFontByteBudget(rawBytes, indexBytes, budgetState->maximumBytes)) {
     return false;
   }
   const size_t chargeBytes = rawBytes + indexBytes;
@@ -1099,6 +1122,7 @@ bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t inde
   const size_t retainedFonts = budgetState->usedFonts - previousFonts;
   if (chargeBytes > budgetState->maximumBytes - retainedBytes ||
       retainedFonts >= budgetState->maximumFonts) {
+    if (retainedBudgetExceeded) *retainedBudgetExceeded = budgetState->maximumFonts != 0;
     return false;
   }
   return true;

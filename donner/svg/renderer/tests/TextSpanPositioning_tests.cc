@@ -66,6 +66,24 @@ TextLayoutParams MakeParams() {
   return params;
 }
 
+TEST(TextSpanPositioningTest, SizeAdjustUsesTheSelectedNotoSansFaceMetrics) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<TextBackendSimple>(fontManager, registry);
+  TextEngine engine(fontManager, registry, std::move(backend));
+  const FontHandle font = LoadNotoSans(fontManager);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  EXPECT_EQ(engine.fontVMetrics(font).xHeight, 536);
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("Text", true));
+  auto params = MakeParams();
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(testing::Field(&TextRun::glyphs, SizeIs(4))));
+  EXPECT_EQ(runs.front().font, font);
+  EXPECT_FLOAT_EQ(runs.front().usedFontSizePx, 64.0f * 0.3f / 0.536f);
+}
+
 TEST(TextSpanPositioningTest, SimpleBackendFallsBackFromUntrustedDocumentFont) {
   Registry registry;
   FontManager fontManager(registry);

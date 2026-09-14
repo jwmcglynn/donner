@@ -17,6 +17,7 @@
 #include "donner/svg/core/Cursor.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
@@ -343,6 +344,15 @@ public:
   Property<FontVariant, PropertyCascade::Inherit> fontVariant{
       "font-variant", []() -> std::optional<FontVariant> { return FontVariant::Normal; }};
 
+  /// `font-kerning` property. Inherited. `auto` and `normal` enable kerning; `none` disables it.
+  Property<FontKerning, PropertyCascade::Inherit> fontKerning{
+      "font-kerning", []() -> std::optional<FontKerning> { return FontKerning::Auto; }};
+
+  /// `font-size-adjust` property. Inherited. An empty value represents the initial `none` value.
+  Property<std::optional<double>, PropertyCascade::Inherit> fontSizeAdjust{
+      "font-size-adjust",
+      []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
+
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
@@ -447,9 +457,10 @@ public:
         stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
         strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, maskType, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
-        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
-        textDecoration, dominantBaseline, writingMode, inlineSize, letterSpacing, wordSpacing,
-        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
+        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, inlineSize,
+        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
+        imageRendering, paintOrder);
   }
 
   /**

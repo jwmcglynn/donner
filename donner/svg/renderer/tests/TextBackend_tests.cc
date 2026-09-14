@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <tuple>
 #include <vector>
@@ -322,11 +323,72 @@ TEST_P(TextBackendTest, FontVMetricsReturnsNonZeroValues) {
   EXPECT_LT(metrics.descent, 0);
 }
 
+TEST_P(TextBackendTest, MissingXHeightUsesTheSelectedGlyphMetric) {
+  std::vector<uint8_t> bytes = ReadResvgFontBytes("NotoSans-Regular.ttf");
+  ASSERT_GE(bytes.size(), 12u);
+  bool changed = false;
+  for (size_t i = 0; i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    ASSERT_LE(entry + 16, bytes.size());
+    if (ReadBe32(bytes, entry) == 0x4F532F32) {
+      const size_t offset = ReadBe32(bytes, entry + 8);
+      ASSERT_LE(offset + 88, bytes.size());
+      WriteBe16(&bytes, offset, 1);
+      WriteBe16(&bytes, offset + 86, 0);
+      changed = true;
+      break;
+    }
+  }
+  ASSERT_THAT(changed, testing::IsTrue());
+  const FontDataTrust trust = isSimple() ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
+  const FontHandle font = fontManager_.loadFontData(bytes, trust);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const auto shaped = backend().shapeRun(font, 20.0f, "x", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(1));
+  const Path outline = backend().glyphOutline(font, shaped.glyphs.front().glyphIndex, 1.0f);
+  ASSERT_THAT(outline.empty(), testing::IsFalse());
+  const double actualXHeight = -outline.bounds().topLeft.y;
+  ASSERT_GT(actualXHeight, 0.0);
+  EXPECT_DOUBLE_EQ(backend().fontVMetrics(font).xHeight, actualXHeight);
+  EXPECT_EQ(backend().fontVMetrics(font).unitsPerEm, 1000);
+}
+
+TEST_P(TextBackendTest, CrossSpanKerningPreservesActualFamilyAcrossFacesAndSizes) {
+  const FontHandle regular = loadFont("NotoSans-Regular.ttf", "First Alias");
+  const FontHandle bold = loadFont("NotoSans-Bold.ttf", "Different Alias");
+  ASSERT_THAT(static_cast<bool>(regular), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(bold), testing::IsTrue());
+  ASSERT_NE(regular, bold);
+  const double expected = backend().crossSpanKern(regular, 20.0f, regular, 20.0f, 'A', 'V', false);
+  ASSERT_LT(expected, 0.0);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(regular, 20.0f, regular, 30.0f, 'A', 'V', false),
+                   expected);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(regular, 20.0f, bold, 20.0f, 'A', 'V', false), expected);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(regular, 20.0f, bold, 30.0f, 'A', 'V', false), expected);
+}
+
+TEST_P(TextBackendTest, CrossSpanKerningRejectsUnrelatedFacesAndInvalidSizes) {
+  const FontHandle first = loadFont("NotoSans-Regular.ttf", "Shared Alias");
+  const FontHandle other = loadFont("MPLUS1p-Regular.ttf", "Shared Alias");
+  ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(other), testing::IsTrue());
+  ASSERT_NE(first, other);
+  ASSERT_LT(backend().crossSpanKern(first, 20.0f, first, 20.0f, 'A', 'V', false), 0.0);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, other, 20.0f, 'A', 'V', false), 0.0);
+  for (float size : {0.0f, -1.0f, std::numeric_limits<float>::infinity(),
+                     std::numeric_limits<float>::quiet_NaN()}) {
+    SCOPED_TRACE(size);
+    EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, size, first, 20.0f, 'A', 'V', false), 0.0);
+    EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, first, size, 'A', 'V', false), 0.0);
+  }
+}
+
 TEST_P(TextBackendTest, FontVMetricsReturnsZeroForInvalidFont) {
   const FontVMetrics metrics = backend().fontVMetrics(FontHandle{});
   EXPECT_EQ(metrics.ascent, 0);
   EXPECT_EQ(metrics.descent, 0);
   EXPECT_EQ(metrics.lineGap, 0);
+  EXPECT_EQ(metrics.unitsPerEm, 0);
 }
 
 TEST_P(TextBackendTest, ScaleForPixelHeightIsPositive) {
@@ -398,6 +460,40 @@ TEST_P(TextBackendTest, IsBitmapOnlyFalseForOutlineFont) {
 }
 
 // ── Shaping ─────────────────────────────────────────────────────────────────
+
+TEST_P(TextBackendTest, NonfiniteAndNegativeSizesAreRejectedBeforeShaping) {
+  const FontHandle font = fallbackFont();
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  for (float size :
+       {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(), -1.0f}) {
+    SCOPED_TRACE(size);
+    for (FontVariant variant : {FontVariant::Normal, FontVariant::SmallCaps}) {
+      EXPECT_THAT(backend().shapeRun(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+      EXPECT_THAT(backend().shapeRunNoKerning(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+    }
+    EXPECT_DOUBLE_EQ(backend().crossSpanKern(font, size, font, size, 'A', 'V', false), 0.0);
+  }
+}
+
+TEST(TextBackendFullCapabilities, UnrepresentableFixedPointSizesAreRejected) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+  const FontHandle font = fontManager.fallbackFont();
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  for (float size : {1e20f, std::numeric_limits<float>::max()}) {
+    SCOPED_TRACE(size);
+    for (FontVariant variant : {FontVariant::Normal, FontVariant::SmallCaps}) {
+      EXPECT_THAT(backend.shapeRun(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+      EXPECT_THAT(backend.shapeRunNoKerning(font, size, "aV", 0, 2, false, variant, false).glyphs,
+                  IsEmpty());
+    }
+    EXPECT_DOUBLE_EQ(backend.crossSpanKern(font, size, font, size, 'A', 'V', false), 0.0);
+  }
+}
 
 TEST_P(TextBackendTest, ShapeRunProducesGlyphsForLatinText) {
   const FontHandle font = fallbackFont();
@@ -641,6 +737,32 @@ TEST(TextBackendFullCapabilities, UntrustedBitmapFontIsRejectedBeforeFreeTypeSha
           .glyphs,
       IsEmpty());
   EXPECT_FALSE(backend.bitmapGlyph(font, 1, 1.0f).has_value());
+}
+
+TEST(TextBackendFullCapabilities, MissingXHeightRespectsUntrustedOutlineAdmission) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+  const auto fallback = fontManager.fallbackFont();
+  std::vector<uint8_t> bytes = AddEmptyGlyfTable(fontManager.fontData(fallback));
+  ASSERT_GE(bytes.size(), 12u);
+  for (size_t i = 0; i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    ASSERT_LE(entry + 16, bytes.size());
+    if (ReadBe32(bytes, entry) == 0x4F532F32) {
+      const size_t offset = ReadBe32(bytes, entry + 8);
+      ASSERT_LE(offset + 88, bytes.size());
+      WriteBe16(&bytes, offset, 1);
+      WriteBe16(&bytes, offset + 86, 0);
+    }
+  }
+  const auto font = fontManager.loadFontData(bytes, FontDataTrust::Untrusted);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const auto shaped = backend.shapeRun(font, 20.0f, "x", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
+  EXPECT_THAT(fontManager.glyphOutlineComplexity(font, shaped.glyphs.front().glyphIndex),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(backend.fontVMetrics(font).xHeight, 0);
 }
 
 TEST(TextBackendFullCapabilities, UntrustedOutlineDecodeRequiresValidatedComplexity) {

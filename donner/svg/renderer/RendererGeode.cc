@@ -6620,16 +6620,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
   impl_->admitTextRuns(runs);
 
-  const float textFontSizePx = static_cast<float>(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
   // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
   // has no bbox, so span gradient/pattern paint maps through this element-level
   // box - same computation as `RendererTinySkia::drawText` (shared helper). The
   // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
   // while the glyph outline is the *draw* path.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
-                                             params.fontMetrics, textFontSizePx);
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
   const Path textBoundsPath =
       textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();
 
@@ -6693,11 +6689,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       continue;
     }
 
-    float spanFontSizePx = textFontSizePx;
-    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
-      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
-          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float spanFontSizePx = run.usedFontSizePx;
 
     const float scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
     if (scale <= 0.0f) {
@@ -6983,24 +6975,26 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
 
-      const float decoFontSizePx =
-          span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
-      const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
-      const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
+      const ResolvedTextFont decorationFont =
+          span.decorationFont.value_or(ResolvedTextFont{run.font, spanFontSizePx});
+      const float decoScale =
+          textEngine.scaleForPixelHeight(decorationFont.font, decorationFont.usedSizePx);
+      const float decoEmScale =
+          textEngine.scaleForEmToPixels(decorationFont.font, decorationFont.usedSizePx);
 
-      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(decorationFont.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      if (auto ul = textEngine.underlineMetrics(run.font)) {
+      if (auto ul = textEngine.underlineMetrics(decorationFont.font)) {
         fontUnderlinePos = ul->position;
         fontUnderlineThick = ul->thickness;
       }
       double fontStrikePos = 0.0;
       double fontStrikeThick = 0.0;
-      if (auto strike = textEngine.strikeoutMetrics(run.font)) {
+      if (auto strike = textEngine.strikeoutMetrics(decorationFont.font)) {
         fontStrikePos = strike->position;
         fontStrikeThick = strike->thickness;
       }

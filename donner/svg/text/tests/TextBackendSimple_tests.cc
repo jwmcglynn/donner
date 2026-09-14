@@ -377,6 +377,7 @@ TEST_F(TextBackendSimpleTest, MetricsComeFromAuthoredTables) {
   EXPECT_EQ(metrics.descent, -200);
   EXPECT_EQ(metrics.lineGap, 100);
   EXPECT_EQ(metrics.xHeight, 480);
+  EXPECT_EQ(metrics.unitsPerEm, 1000);
 
   const auto underline = backend_.underlineMetrics(font);
   ASSERT_TRUE(underline.has_value());
@@ -430,6 +431,16 @@ TEST_F(TextBackendSimpleTest, ShapeRunAppliesHorizontalKerning) {
                         GlyphXKernIs(DoubleEq(0.0))),
                   AllOf(GlyphIndexIs(2), GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
                         GlyphXKernIs(DoubleNear(-10.0, 1e-4)), GlyphYKernIs(DoubleEq(0.0)))));
+}
+
+TEST_F(TextBackendSimpleTest, ShapeRunWithoutKerningSuppressesKerningAdjustments) {
+  const FontHandle font = loadFont(MakeTestFontData(true, 1, false));
+
+  const auto shaped =
+      backend_.shapeRunNoKerning(font, 100.0f, "AV", 0, 2, false, FontVariant::Normal, false);
+
+  ASSERT_EQ(shaped.glyphs.size(), 2u);
+  EXPECT_DOUBLE_EQ(shaped.glyphs[1].xKern, 0.0);
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalLatinUsesSidewaysAdvancesAndVerticalKern) {

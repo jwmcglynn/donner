@@ -106,6 +106,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "catalog_font_loading_test",
       "chromium_remote_smoke",
       "firefox_composited_invariants_test",
+      "font_reference_probe",
     ],
     "every playwright_test lane must be named and checked; update this contract when one is added",
   );
@@ -124,6 +125,12 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
         tags.sort(),
         ["manual", "no-local"],
         "extended Firefox diagnostics are opt-in",
+      );
+    } else if (laneName === "font_reference_probe") {
+      assert.deepEqual(
+        tags.sort(),
+        ["manual", "no-local"],
+        "native font reference evidence must remain opt-in and remote-only",
       );
     } else {
       assert.ok(
@@ -153,6 +160,32 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
         lane,
         /--grep/,
         "the composited lane must include the classifier controls",
+      );
+    }
+    if (laneName === "font_reference_probe") {
+      assert.deepEqual(specFiles, ["font-reference.spec.ts"]);
+      assert.match(lane, /--config=\$\(rootpath :playwright\.font-reference\.config\.js\)/);
+      for (
+        const dependency of [
+          "playwright.font-reference.config.js",
+          "//third_party/resvg-test-suite:fonts",
+          "@playwright//:chromium",
+          "@playwright//:firefox",
+        ]
+      ) {
+        assert.ok(
+          lane.includes(`"${dependency}"`),
+          `font reference probe is missing ${dependency}`,
+        );
+      }
+      assert.match(
+        lane,
+        /"DONNER_REFERENCE_FONT": "third_party\/resvg-test-suite\/fonts\/NotoSans-Regular\.ttf"/,
+      );
+      assert.match(lane, /"NODE_OPTIONS": ""/);
+      assert.match(
+        lane,
+        /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
       );
     }
     for (const specFile of specFiles) {
@@ -209,6 +242,19 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     /channel:\s*"chromium"/,
     "the regular Chromium build preserves WebGPU presentation without opening a window",
   );
+});
+
+test("default browser discovery excludes the manual font reference probe", () => {
+  const defaultConfig = require("./playwright.config.js");
+  const referenceConfig = readFileSync(
+    path.join(testDirectory, "playwright.font-reference.config.js"),
+    "utf8",
+  );
+  assert.ok(
+    defaultConfig.testIgnore.includes("font-reference.spec.ts"),
+    "default discovery must not load a manual probe that requires explicit font inputs",
+  );
+  assert.match(referenceConfig, /testMatch: "font-reference\.spec\.ts"/);
 });
 
 test("browser diagnostics do not manufacture fatal adapter failures", () => {

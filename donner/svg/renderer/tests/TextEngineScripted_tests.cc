@@ -60,13 +60,16 @@ public:
   bool reverseClusters = false;
   bool clusterCombiningMarks = false;
   std::optional<SubSuperMetrics> subSuper;
+  std::shared_ptr<float> shapedFontSizePx;
+  int xHeight = 500;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
     return FontVMetrics{
         .ascent = 1000,
         .descent = -200,
         .lineGap = 0,
-        .xHeight = 500,
+        .xHeight = xHeight,
+        .unitsPerEm = 1000,
     };
   }
 
@@ -108,9 +111,12 @@ public:
     return std::nullopt;
   }
 
-  ShapedRun shapeRun(FontHandle /*font*/, float /*fontSizePx*/, std::string_view spanText,
+  ShapedRun shapeRun(FontHandle /*font*/, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool /*isVertical*/,
                      FontVariant fontVariant, bool forceLogicalOrder) const override {
+    if (shapedFontSizePx) {
+      *shapedFontSizePx = fontSizePx;
+    }
     ShapedRun run;
     const size_t byteEnd = std::min(spanText.size(), byteOffset + byteLength);
     for (size_t pos = byteOffset; pos < byteEnd;) {
@@ -145,6 +151,18 @@ public:
 
     if (reverseClusters && !forceLogicalOrder) {
       std::reverse(run.glyphs.begin(), run.glyphs.end());
+    }
+    return run;
+  }
+
+  ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
+                              size_t byteOffset, size_t byteLength, bool isVertical,
+                              FontVariant fontVariant, bool forceLogicalOrder) const override {
+    ShapedRun run = shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                             fontVariant, forceLogicalOrder);
+    for (auto& glyph : run.glyphs) {
+      glyph.xKern = 0.0;
+      glyph.yKern = 0.0;
     }
     return run;
   }
@@ -1474,6 +1492,122 @@ TEST(TextEngineScriptedTest, BoldSpanResolvesFontThroughWeightAwareLookup) {
   EXPECT_EQ(runs[0].font, altFace);
 }
 
+TEST(TextEngineScriptedTest, UnrepresentableSizeAdjustmentDoesNotReachShaping) {
+  for (double adjustment : {1e40, 1e308}) {
+    SCOPED_TRACE(adjustment);
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan("AB"));
+    auto params = MakeTextParams(64.0);
+    params.fontSizeAdjust = adjustment;
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty())));
+    EXPECT_THAT(runs.front().usedFontSizePx, FloatEq(0.0f));
+  }
+}
+
+TEST(TextEngineScriptedTest, UnknownXHeightDoesNotGuessSizeAdjustment) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->xHeight = 0;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("x"));
+  auto params = MakeTextParams(20.0);
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  EXPECT_FLOAT_EQ(runs.front().usedFontSizePx, 20.0f);
+}
+
+TEST(TextEngineScriptedTest, ZeroAdjustmentDoesNotRequireAnXHeightMetric) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto shapedSize = std::make_shared<float>(-1.0f);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->xHeight = 0;
+  backend->shapedFontSizePx = shapedSize;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("x"));
+  auto params = MakeTextParams(20.0);
+  params.fontSizeAdjust = 0.0;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  EXPECT_EQ(runs.front().usedFontSizePx, 0.0f);
+  EXPECT_THAT(runs.front().glyphs, ElementsAre(GlyphXAdvanceIs(DoubleEq(0.0))));
+  EXPECT_EQ(*shapedSize, -1.0f);
+}
+
+TEST(TextEngineScriptedTest, SizeAdjustmentUsesExactDesignUnitAspect) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->xHeight = 536;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("Text"));
+  auto params = MakeTextParams(64.0);
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  const float expected = static_cast<float>(64.0 * 0.3 / (536.0 / 1000.0));
+  EXPECT_EQ(runs.front().usedFontSizePx, expected);
+}
+
+TEST(TextEngineScriptedTest, FontSizeAdjustChangesUsedFontSizeFromXHeight) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto shapedFontSizePx = std::make_shared<float>();
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->shapedFontSizePx = shapedFontSizePx;
+  TextEngine engine(fontManager, registry, std::move(backend));
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_FLOAT_EQ(*shapedFontSizePx, 12.0f);
+}
+
+TEST(TextEngineScriptedTest, SpanKerningCanOverrideDisabledParent) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.fontKerning = FontKerning::Normal;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontKerning = FontKerning::None;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)),
+                                                         GlyphXPositionIs(DoubleEq(11.0))))));
+}
+
+TEST(TextEngineScriptedTest, FontKerningNoneSuppressesWithinRunKerning) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)),
+                                                         GlyphXPositionIs(DoubleEq(10.0))))));
+}
+
 TEST(TextEngineScriptedTest, HorizontalCrossSpanKernShiftsContinuationSpan) {
   Registry registry;
   FontManager fontManager(registry);
@@ -1490,6 +1624,91 @@ TEST(TextEngineScriptedTest, HorizontalCrossSpanKernShiftsContinuationSpan) {
   // The continuation span's first glyph picks up the scripted 3px cross-span kern.
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(13.0))))));
+}
+
+TEST(TextEngineScriptedTest, CrossSpanKerningPreservesSizeChangesButRejectsVariantChanges) {
+  for (bool differentSize : {false, true}) {
+    SCOPED_TRACE(differentSize);
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan("A"));
+    auto continuation = MakeSpan("V");
+    continuation.startsNewChunk = false;
+    if (differentSize) {
+      continuation.fontSize = Lengthd(30.0, Lengthd::Unit::Px);
+    } else {
+      continuation.fontVariant = FontVariant::SmallCaps;
+    }
+    text.spans.push_back(std::move(continuation));
+    const auto runs = engine.layout(text, MakeTextParams(20.0));
+    ASSERT_THAT(runs, SizeIs(2));
+    ASSERT_EQ(runs[0].font, runs[1].font);
+    EXPECT_THAT(runs[1].glyphs,
+                ElementsAre(GlyphXPositionIs(DoubleEq(differentSize ? 13.0 : 10.0))));
+  }
+}
+
+TEST(TextEngineScriptedTest, ZeroUsedSizeDoesNotBridgeCrossSpanKerning) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  auto middle = MakeSpan("B");
+  middle.startsNewChunk = false;
+  middle.fontSizeAdjust.emplace(0.0);
+  text.spans.push_back(std::move(middle));
+  auto continuation = MakeSpan("V");
+  continuation.startsNewChunk = false;
+  text.spans.push_back(std::move(continuation));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_THAT(
+      runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(runs[0].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].usedFontSizePx, FloatEq(0.0f));
+  EXPECT_THAT(runs[2].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[2].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphXAdvanceIs(DoubleEq(10.0)))));
+  EXPECT_THAT(runs[1].glyphs,
+              ElementsAre(AllOf(GlyphIndexIs(Eq(0)), GlyphXPositionIs(DoubleEq(10.0)),
+                                GlyphXAdvanceIs(DoubleEq(0.0)))));
+  EXPECT_THAT(runs[2].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(10.0))));
+}
+
+TEST(TextEngineScriptedTest, EmptySpanPreservesCrossSpanKerning) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  auto middle = MakeSpan("");
+  middle.startsNewChunk = false;
+  middle.fontSizeAdjust.emplace(0.0);
+  text.spans.push_back(std::move(middle));
+  auto continuation = MakeSpan("V");
+  continuation.startsNewChunk = false;
+  text.spans.push_back(std::move(continuation));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  ASSERT_THAT(
+      runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(IsEmpty()), RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(runs[0].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].usedFontSizePx, FloatEq(0.0f));
+  EXPECT_THAT(runs[2].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(runs[1].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[2].font, Eq(runs[0].font));
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphXAdvanceIs(DoubleEq(10.0)))));
+  EXPECT_THAT(runs[2].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(13.0))));
 }
 
 TEST(TextEngineScriptedTest, VerticalCrossSpanKernShiftsContinuationSpan) {

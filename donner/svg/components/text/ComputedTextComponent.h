@@ -10,6 +10,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
@@ -19,6 +20,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/Visibility.h"
+#include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {
 
@@ -110,10 +112,20 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity.
     FontVariant fontVariant = FontVariant::Normal;
 
+    /// Resolved kerning policy; absent values use the text root layout parameters.
+    std::optional<FontKerning> fontKerning;
+
+    /// Resolved size adjustment; an absent outer value uses root parameters, while an empty
+    /// inner value explicitly disables adjustment (`font-size-adjust: none`).
+    std::optional<std::optional<double>> fontSizeAdjust;
+
     /// CSS font-size for this span. When different from the text element's font-size,
     /// the layout engine uses this to shape glyphs at the correct size.
     /// Populated by RendererDriver from sourceEntity.
     Lengthd fontSize;
+
+    /// CSS font-family list for this span.
+    SmallVector<RcString, 1> fontFamilies;
 
     /// Indicates whether baseline-shift was set via the `sub` or `super` keywords,
     /// which should be resolved from font OS/2 metrics at layout time.
@@ -178,8 +190,8 @@ struct ComputedTextComponent {
     /// CSS `stroke-opacity` resolved from the text element that provides decoration paint.
     double decorationStrokeOpacity = 1.0;
 
-    /// Font size (in pixels) from the declaring element, for computing decoration metrics.
-    float decorationFontSizePx = 0.0f;
+    /// Declaring element's resolved face and adjusted used size for decoration metrics.
+    std::optional<ResolvedTextFont> decorationFont;
 
     /// Stroke width from the declaring element, for stroking decoration lines.
     double decorationStrokeWidth = 0.0;

@@ -14,9 +14,11 @@ struct FontVMetrics {
   int ascent = 0;   ///< Positive, above baseline.
   int descent = 0;  ///< Negative, below baseline.
   int lineGap = 0;  ///< Extra spacing between lines.
-  /// x-height (OS/2 `sxHeight`), or 0 when the font does not provide it. Consumers should
-  /// fall back to 0.45 * (ascent - descent) when 0, matching Firefox and resvg.
+  /// x-height in design units, from OS/2 sxHeight or the lowercase x glyph's top bearing.
+  /// Zero means neither metric is available.
   int xHeight = 0;
+  /// Number of design units in one em, or zero when unavailable.
+  int unitsPerEm = 0;
 };
 
 /// Line decoration positioning metrics in font design units.
@@ -151,12 +153,27 @@ public:
                              size_t byteOffset, size_t byteLength, bool isVertical,
                              FontVariant fontVariant, bool forceLogicalOrder) const = 0;
 
+  /// Shape text with kerning disabled. Backends that cannot selectively disable kerning retain
+  /// their normal shaping behavior.
+  virtual ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
+                                      size_t byteOffset, size_t byteLength, bool isVertical,
+                                      FontVariant fontVariant, bool forceLogicalOrder) const {
+    return shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
+                    forceLogicalOrder);
+  }
+
   /// Compute cross-span kerning between the last codepoint of the previous span
   /// and the first codepoint of the current span.
   /// @return Kern adjustment in pixels (added to pen position).
   virtual double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
                                float curSizePx, uint32_t prevCodepoint, uint32_t curCodepoint,
                                bool isVertical) const = 0;
+
+  /// Compute cross-span kerning with kerning disabled.
+  virtual double crossSpanKernNoKerning(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
+                                        bool) const {
+    return 0.0;
+  }
 };
 
 }  // namespace donner::svg

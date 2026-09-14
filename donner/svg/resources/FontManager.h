@@ -270,7 +270,18 @@ public:
   /// Return true when @p handle has a cached validated sfnt directory.
   bool isValidatedFont(FontHandle handle) const;
 
-  /// Exact font-data and cached-index bytes currently charged to this registry's budget.
+  /**
+   * Compare the actual family names cached from two loaded fonts, independently of CSS aliases.
+   * Equal valid handles match even without a name; different handles with missing or lossy names
+   * do not. This performs no decoding or allocation.
+   *
+   * @param first First loaded font.
+   * @param second Second loaded font.
+   * @return Whether the handles identify the same face or a known common family.
+   */
+  bool fontsShareFamily(FontHandle first, FontHandle second) const;
+
+  /// Font-data, cached-index, and family-name storage bytes charged to this registry's budget.
   size_t loadedFontBytes() const;
 
   /// Number of loaded font components currently charged to this registry's budget.
@@ -378,8 +389,10 @@ private:
    */
   std::shared_ptr<FontBudgetState> budgetStateForWrite();
   bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes,
-                          const std::shared_ptr<FontBudgetState>& budgetState) const;
-  bool storeLoadedFont(Entity entity, LoadedFontComponent font);
+                          const std::shared_ptr<FontBudgetState>& budgetState,
+                          bool* retainedBudgetExceeded = nullptr) const;
+  bool storeLoadedFont(Entity entity, LoadedFontComponent font,
+                       bool* retainedBudgetExceeded = nullptr);
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data,
                                     FontDataTrust trust);

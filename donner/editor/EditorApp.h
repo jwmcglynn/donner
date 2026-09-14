@@ -196,7 +196,9 @@ public:
   /// Routes through `applyMutation` so the Layers panel eye button and
   /// context menu share one code path. Visibility toggles are intentionally
   /// NOT lock-gated.
-  void setElementVisible(const svg::SVGElement& element, bool visible);
+  /// Taken by value: this erases from `hiddenElementAuthorDisplay_` and then reuses the
+  /// element, so a caller passing a reference into that map would be reading a vacated entry.
+  void setElementVisible(svg::SVGElement element, bool visible);
 
   /// Lock or unlock @p element by toggling the `data-donner-locked` marker
   /// attribute (`"true"` to lock, `"false"` to unlock). Routes through
@@ -363,7 +365,9 @@ public:
    * Selection and hit testing are constrained to strict descendants until
    * \ref exitGroupEdit is called. Nested groups may become the new scope.
    */
-  bool enterGroupEdit(const svg::SVGElement& group);
+  /// Taken by value: this clears the selection, which would destroy the element a caller
+  /// passing `selectedElements().front()` is naming.
+  bool enterGroupEdit(svg::SVGElement group);
 
   /// Exit one isolated editing level and select the group that was being edited.
   bool exitGroupEdit();

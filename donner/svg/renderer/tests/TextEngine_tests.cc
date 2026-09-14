@@ -211,6 +211,7 @@ public:
         .descent = -200,
         .lineGap = 0,
         .xHeight = 500,
+        .unitsPerEm = 1000,
     };
   }
 

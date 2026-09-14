@@ -7,6 +7,12 @@
 
 namespace donner::svg {
 
+/// Resolved face and used font size for layout or declaring-element decoration metrics.
+struct ResolvedTextFont {
+  FontHandle font;
+  float usedSizePx = 0.0f;
+};
+
 /**
  * A single positioned glyph in a laid-out text run.
  *
@@ -31,6 +37,7 @@ struct TextGlyph {
  */
 struct TextRun {
   FontHandle font;                ///< Font handle for this run.
+  float usedFontSizePx = 0.0f;    ///< Font size used for shaping, including font-size-adjust.
   std::vector<TextGlyph> glyphs;  ///< Positioned glyphs.
   bool onPath = false;            ///< True if glyphs are positioned along a textPath.
   bool textLengthAppliedOnPath =

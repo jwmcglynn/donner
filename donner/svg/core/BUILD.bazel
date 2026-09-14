@@ -17,6 +17,7 @@ cc_library(
         "DominantBaseline.h",
         "Event.h",
         "FillRule.h",
+        "FontKerning.h",
         "FontStretch.h",
         "FontStyle.h",
         "FontVariant.h",

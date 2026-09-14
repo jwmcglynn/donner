@@ -1,12 +1,14 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
     [
-        "fuzzer_soak.py",
+        "fuzzer_soak.sh",
         "check_banned_patterns.py",
         "rules.bzl",
     ],
@@ -172,19 +174,19 @@ test_suite(
     tests = [":soak_probe_fuzzer_soak"],
 )
 
-py_test(
+sh_test(
     name = "fuzzer_soak_tests",
     size = "small",
-    srcs = [
-        "fuzzer_soak.py",
-        "fuzzer_soak_tests.py",
-    ],
-    imports = ["."],
+    srcs = ["fuzzer_soak_tests.sh"],
+    data = [":fuzzer_soak_runner"],
 )
 
-py_binary(
+# Shell, not Python: the launcher ends up in every soak target's runfiles, and a Python launcher
+# drags an interpreter that resolves its runtime library through an rpath relative to its own
+# location. That lookup does not survive execution from a relocated content-addressed runfiles
+# tree, which failed `number2d_parser_fuzzer_soak` before the fuzzer ever started.
+sh_binary(
     name = "fuzzer_soak_runner",
-    srcs = ["fuzzer_soak.py"],
-    main = "fuzzer_soak.py",
+    srcs = ["fuzzer_soak.sh"],
     visibility = ["//visibility:public"],
 )

@@ -1,11 +1,18 @@
+#include <gmock/gmock.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/SVGImageElement.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -36,7 +43,164 @@ ImageComparisonParams GoldenParams() {
   return params;
 }
 
+/// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result.
+void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label) {
+  RendererBitmap empty = bitmap;
+  std::fill(empty.pixels.begin(), empty.pixels.end(), 0);
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    ExpectBitmapsIdentical(bitmap, empty, label);
+  }
+  EXPECT_THAT(differences.size(), testing::Eq(1)) << "Expected visible rendered content";
+}
+
 class RendererRegressionTests : public ImageComparisonTestFixture {};
+
+TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
+  SVGDocument reduced = instantiateSubtree(R"(
+    <svg width="500" height="500" viewBox="0 0 200 200">
+      <path d="M 20 100 L 180 100 M 100 20 L 100 180" stroke="gray" stroke-width="0.5"/>
+    </svg>
+  )",
+                                           {}, Vector2i(500, 500));
+  SVGDocument styled = instantiateSubtree(R"(
+    <svg width="500" height="500" viewBox="0 0 200 200"
+         style="font:italic bold 200px serif; font-kerning:none; font-size-adjust:0.3">
+      <path d="M 20 100 L 180 100 M 100 20 L 100 180" stroke="gray" stroke-width="0.5"/>
+    </svg>
+  )",
+                                          {}, Vector2i(500, 500));
+  const auto pathOnly = RenderDocumentWithBackend(reduced, RendererBackend::TinySkia);
+  const auto withFonts = RenderDocumentWithBackend(styled, RendererBackend::TinySkia);
+  ASSERT_THAT(pathOnly.empty(), testing::IsFalse());
+  ASSERT_THAT(pathOnly.dimensions, testing::Eq(Vector2i(500, 500)));
+  ExpectVisibleBitmap(pathOnly, "crosshair_visible");
+  ExpectBitmapsIdentical(withFonts, pathOnly, "font_properties_path_independence");
+  std::cout << "Reduced crosshair alpha at (249,100)/(250,100): "
+            << static_cast<int>(pathOnly.pixels[100 * pathOnly.rowBytes + 249 * 4 + 3]) << "/"
+            << static_cast<int>(pathOnly.pixels[100 * pathOnly.rowBytes + 250 * 4 + 3]) << "\n";
+  if (const char* output = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const auto straight = pathOnly.alphaType == AlphaType::Premultiplied
+                              ? UnpremultiplyRgbaRows(pathOnly.pixels, 500, 500, pathOnly.rowBytes)
+                              : CopyTightRgbaRows(pathOnly.pixels, 500, 500, pathOnly.rowBytes);
+    const auto image = std::filesystem::path(output) / "font_crosshair_path_only.png";
+    ASSERT_THAT(
+        RendererImageIO::writeRgbaPixelsToPngFile(image.string().c_str(), straight, 500, 500),
+        testing::IsTrue());
+  }
+}
+
+TEST_F(RendererRegressionTests, FontSizeAdjustMatchesExplicitUsedSize) {
+  SVGDocument adjusted = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans" font-size="64">
+      <text x="100" y="100" text-anchor="middle" font-size-adjust="0.3">Text</text>
+    </svg>
+  )",
+                                            {}, Vector2i(500, 500));
+  SVGDocument explicitSize = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans" font-size="35.82089552238806">
+      <text x="100" y="100" text-anchor="middle">Text</text>
+    </svg>
+  )",
+                                                {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(adjusted, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(explicitSize, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(adjusted, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(explicitSize, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(500, 500)));
+  ExpectVisibleBitmap(actual, "font_size_adjust_visible");
+  // Noto Sans has 1000 units per em and an OS/2 x-height of 536: 64 * 0.3 / 0.536.
+  ExpectBitmapsIdentical(actual, expected, "font_size_adjust_used_size");
+}
+
+TEST_F(RendererRegressionTests, FontSizeAdjustDecorationMatchesExplicitDeclaringSize) {
+  for (const std::string decoration : {"underline", "overline", "line-through"}) {
+    for (bool childOverride : {false, true}) {
+      SCOPED_TRACE(decoration);
+      SCOPED_TRACE(childOverride);
+      const std::string content =
+          childOverride
+              ? "<tspan font-family='MPLUS 1p' font-size='20' font-size-adjust='none'>Text</tspan>"
+              : "Text";
+      const std::string start =
+          "<svg viewBox='0 0 200 200' font-family='Noto Sans'><text x='30' y='100' "
+          "text-decoration='" +
+          decoration + "' ";
+      SVGDocument adjusted = instantiateSubtree(
+          start + "font-size='64' font-size-adjust='0.3'>" + content + "</text></svg>", {},
+          Vector2i(500, 500));
+      SVGDocument explicitSize =
+          instantiateSubtree(start + "font-size='35.82089552238806'>" + content + "</text></svg>",
+                             {}, Vector2i(500, 500));
+      RegisterFontsFromDirectoryForTesting(adjusted, ResvgResourceRoot() / "fonts");
+      RegisterFontsFromDirectoryForTesting(explicitSize, ResvgResourceRoot() / "fonts");
+      const RendererBitmap actual = RenderDocumentWithBackend(adjusted, ActiveRendererBackend());
+      const RendererBitmap expected =
+          RenderDocumentWithBackend(explicitSize, ActiveRendererBackend());
+      ASSERT_THAT(actual.empty(), testing::IsFalse());
+      ASSERT_THAT(expected.empty(), testing::IsFalse());
+      const std::string label =
+          "adjusted_decoration_" + decoration + (childOverride ? "_child" : "_self");
+      ExpectVisibleBitmap(actual, label + "_visible");
+      ExpectBitmapsIdentical(actual, expected, label);
+    }
+  }
+}
+
+TEST_F(RendererRegressionTests, ZeroAdjustedDecorationDoesNotUseDescendantSize) {
+  SVGDocument decorated = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans">
+      <text x="30" y="100" font-size="64" font-size-adjust="0" text-decoration="underline">
+        <tspan font-size="20" font-size-adjust="none">Text</tspan>
+      </text>
+    </svg>
+  )",
+                                             {}, Vector2i(500, 500));
+  SVGDocument plain = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans">
+      <text x="30" y="100" font-size="20">Text</text>
+    </svg>
+  )",
+                                         {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(decorated, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(decorated, ActiveRendererBackend());
+  const auto expected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ExpectVisibleBitmap(actual, "zero_decoration_visible_text");
+  ExpectBitmapsIdentical(actual, expected, "zero_declaring_size_has_no_decoration");
+}
+
+TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
+  SVGDocument shorthand = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200">
+      <g style="font: italic bold 200px serif; font-kerning: none; font-size-adjust: 0.3">
+        <text x="55" y="100" style="font: 50px 'Noto Sans'">AVA</text>
+      </g>
+    </svg>
+  )",
+                                             {}, Vector2i(500, 500));
+  SVGDocument expanded = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200">
+      <text x="55" y="100" style="font-size:50px; font-family:'Noto Sans';
+          font-style:normal; font-weight:400; font-kerning:auto; font-size-adjust:none">AVA</text>
+    </svg>
+  )",
+                                            {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(expanded, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(500, 500)));
+  ExpectVisibleBitmap(actual, "font_shorthand_visible");
+  ExpectBitmapsIdentical(actual, expected, "font_shorthand_expansion");
+}
 
 TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport) {
   const char* svg = "donner/svg/renderer/testdata/marker_percent_nested_viewport.svg";
