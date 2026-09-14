@@ -353,15 +353,34 @@ TEST_P(TextBackendTest, MissingXHeightUsesTheSelectedGlyphMetric) {
   EXPECT_EQ(backend().fontVMetrics(font).unitsPerEm, 1000);
 }
 
-TEST_P(TextBackendTest, CrossSpanKerningRequiresMatchingFaceAndSize) {
-  const FontHandle first = loadFont("NotoSans-Regular.ttf", "First");
-  const FontHandle other = loadFont("MPLUS1p-Regular.ttf", "Other");
+TEST_P(TextBackendTest, CrossSpanKerningPreservesActualFamilyAcrossFacesAndSizes) {
+  const FontHandle regular = loadFont("NotoSans-Regular.ttf", "First Alias");
+  const FontHandle bold = loadFont("NotoSans-Bold.ttf", "Different Alias");
+  ASSERT_THAT(static_cast<bool>(regular), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(bold), testing::IsTrue());
+  ASSERT_NE(regular, bold);
+  const double expected = backend().crossSpanKern(regular, 20.0f, regular, 20.0f, 'A', 'V', false);
+  ASSERT_LT(expected, 0.0);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(regular, 20.0f, regular, 30.0f, 'A', 'V', false),
+                   expected);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(regular, 20.0f, bold, 20.0f, 'A', 'V', false), expected);
+  EXPECT_DOUBLE_EQ(backend().crossSpanKern(regular, 20.0f, bold, 30.0f, 'A', 'V', false), expected);
+}
+
+TEST_P(TextBackendTest, CrossSpanKerningRejectsUnrelatedFacesAndInvalidSizes) {
+  const FontHandle first = loadFont("NotoSans-Regular.ttf", "Shared Alias");
+  const FontHandle other = loadFont("MPLUS1p-Regular.ttf", "Shared Alias");
   ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
   ASSERT_THAT(static_cast<bool>(other), testing::IsTrue());
   ASSERT_NE(first, other);
-  ASSERT_NE(backend().crossSpanKern(first, 20.0f, first, 20.0f, 'A', 'V', false), 0.0);
+  ASSERT_LT(backend().crossSpanKern(first, 20.0f, first, 20.0f, 'A', 'V', false), 0.0);
   EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, other, 20.0f, 'A', 'V', false), 0.0);
-  EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, first, 30.0f, 'A', 'V', false), 0.0);
+  for (float size : {0.0f, -1.0f, std::numeric_limits<float>::infinity(),
+                     std::numeric_limits<float>::quiet_NaN()}) {
+    SCOPED_TRACE(size);
+    EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, size, first, 20.0f, 'A', 'V', false), 0.0);
+    EXPECT_DOUBLE_EQ(backend().crossSpanKern(first, 20.0f, first, size, 'A', 'V', false), 0.0);
+  }
 }
 
 TEST_P(TextBackendTest, FontVMetricsReturnsZeroForInvalidFont) {
