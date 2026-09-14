@@ -36,6 +36,45 @@ TEST(Language, RejectsFloorAndSignOutsideTheFloatingRuntimeProfile) {
   }
 }
 
+TEST(Language, AcceptsLargeArraysWithNamedAndArithmeticConstantBounds) {
+  for (const char* source : {
+           "const n: u32 = 8192u; struct T { data: array<f32,n>, }",
+           "const n: u32 = 4096u; struct T { data: array<f32,n * 2u>, }",
+           "const n: i32 = 8192i; struct T { data: array<f32,n>, }",
+           "const n = 4; struct T { data: array<f32,n>, } fn f(x:f32)->f32 { return x*n; }",
+       }) {
+    SCOPED_TRACE(source);
+    const auto parsed = Parse(source);
+    ASSERT_TRUE(parsed.hasResult()) << unsigned(parsed.diagnostic.code);
+    EXPECT_GT(parsed.module.structMembers[0].type.arrayCount, 0);
+  }
+}
+
+TEST(Language, RejectsNonconstantAndOutOfRangeArrayBounds) {
+  for (const char* source : {
+           "struct T { data: array<f32,8193>, }",
+           "struct T { data: array<f32,0>, }",
+           "const n = -1; struct T { data: array<f32,n>, }",
+           "const n = 1.5; struct T { data: array<f32,n>, }",
+           "fn f(n:u32) { var values:array<f32,n>; }",
+           "struct T { data: array<f32,4294967295u + 1u>, }",
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_FALSE(Parse(source).hasResult());
+  }
+}
+
+TEST(Language, AcceptsRgba8StorageDimensionsAndWrites) {
+  const auto parsed = Parse(R"wgsl(
+@group(0) @binding(0) var output:texture_storage_2d<rgba8unorm,write>;
+@compute @workgroup_size(1) fn cs_main(@builtin(global_invocation_id) gid:vec3u) {
+  let size = textureDimensions(output);
+  if (gid.x < size.x) { textureStore(output,vec2i(gid.xy),vec4f(0.5)); }
+}
+)wgsl");
+  EXPECT_TRUE(parsed.hasResult()) << unsigned(parsed.diagnostic.code);
+}
+
 TEST(Language, MaterializesAbstractConstantsAndPreservesExplicitTypes) {
   constexpr auto result = Parse(R"(
 const noBand: u32 = 0xFFFFFFFFu;
