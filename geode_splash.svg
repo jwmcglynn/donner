@@ -395,18 +395,18 @@
       <g id="shell-facets" stroke-width=".2" stroke-linejoin="miter" mask="url(#rock-surface-mask)" stroke-miterlimit="2">
         <title>Exterior surface facets</title>
         <desc>The rock-surface-mask includes the outer rock contour and excludes the quartz face. Facets may overlap beneath that mask without changing either edge.</desc>
-        <polygon id="shell-facet-001" points="343 453 332.73 452.2 344 437" fill="#5a5c82" stroke="#5a5c82" />
-        <polygon id="shell-facet-002" points="344 437 332.73 452.2 361.82 407.06" fill="#62588e" stroke="#62588e" />
-        <polygon id="shell-facet-003" points="360 423 344 437 361.82 407.06" fill="#56587a" stroke="#56587a" />
+        <polygon id="shell-facet-001" points="329.426864 451.042721 344 437 343 453 332.73 452.2" fill="#5a5c82" stroke="#5a5c82" />
+        <polygon id="shell-facet-002" points="329.426864 451.042721 359.252375 404.681492 361.82 407.06 344 437 332.73 452.2" fill="#62588e" stroke="#62588e" />
+        <polygon id="shell-facet-003" points="344 437 359.252375 404.681492 361.82 407.06 360 423" fill="#56587a" stroke="#56587a" />
         <polygon id="shell-facet-004" points="360 440 343 453 344 437" fill="#585a7e" stroke="#585a7e" />
-        <polygon id="shell-facet-005" points="328.32 463.7 332.08 458.58 338 466" fill="#303552" stroke="#303552" />
+        <polygon id="shell-facet-005" points="325.20854 462.097247 328.813673 457.322579 332.08 458.58 338 466 328.32 463.7" fill="#303552" stroke="#303552" />
         <polygon id="shell-facet-006" points="343 453 358 468 338 466" fill="#747596" stroke="#747596" />
-        <polygon id="shell-facet-007" points="343 453 338 466 332.08 458.58" fill="#76769a" stroke="#76769a" />
-        <polygon id="shell-facet-008" points="332.08 458.58 332.73 452.2 343 453" fill="#727298" stroke="#727298" />
-        <polygon id="shell-facet-009" points="328.32 463.7 338 466 346 483" fill="#2e3350" stroke="#2e3350" />
+        <polygon id="shell-facet-007" points="328.813673 457.322579 343 453 338 466" fill="#76769a" stroke="#76769a" />
+        <polygon id="shell-facet-008" points="328.813673 457.322579 329.426864 451.042721 343 453 332.08 458.58" fill="#727298" stroke="#727298" />
+        <polygon id="shell-facet-009" points="325.20854 462.097247 338 466 346 483" fill="#2e3350" stroke="#2e3350" />
         <polygon id="shell-facet-010" points="360 440 344 437 360 423" fill="#5a5a7e" stroke="#5a5a7e" />
-        <polygon id="shell-facet-011" points="365 411 361.82 407.06 368.03 402.35" fill="#8e8cad" stroke="#8e8cad" />
-        <polygon id="shell-facet-012" points="382 404 365 411 368.03 402.35" fill="#9a98ba" stroke="#9a98ba" />
+        <polygon id="shell-facet-011" points="359.252375 404.681492 366.213976 399.358001 368.03 402.35 365 411" fill="#8e8cad" stroke="#8e8cad" />
+        <polygon id="shell-facet-012" points="365 411 366.213976 399.358001 382 404" fill="#9a98ba" stroke="#9a98ba" />
         <polygon id="shell-facet-013" points="360 423 372 433 360 440" fill="#8684a8" stroke="#8684a8" />
         <polygon id="shell-facet-014" points="360 423 365 411 372 433" fill="#8282a6" stroke="#8282a6" />
         <polygon id="shell-facet-015" points="372 433 375 451 360 440" fill="#4b4c70" stroke="#4b4c70" />
@@ -414,18 +414,18 @@
         <polygon id="shell-facet-017" points="372 433 365 411 388 422" fill="#646489" stroke="#646489" />
         <polygon id="shell-facet-018" points="343 453 360 440 358 468" fill="#4e5173" stroke="#4e5173" />
         <polygon id="shell-facet-019" points="358 468 375 451 380 474" fill="#484a6c" stroke="#484a6c" />
-        <polygon id="shell-facet-020" points="365 411 360 423 361.82 407.06" fill="#515678" stroke="#515678" />
+        <polygon id="shell-facet-020" points="359.252375 404.681492 361.82 407.06 365 411 360 423" fill="#515678" stroke="#515678" />
         <polygon id="shell-facet-021" points="375 451 358 468 360 440" fill="#4c5072" stroke="#4c5072" />
         <polygon id="shell-facet-022" points="344 506 346 483 356 499" fill="#9092b2" stroke="#9092b2" />
-        <polygon id="shell-facet-023" points="346 483 344 506 313.16 509.77" fill="#2e344f" stroke="#2e344f" />
+        <polygon id="shell-facet-023" points="309.790616 508.822767 346 483 344 506 313.16 509.77" fill="#2e344f" stroke="#2e344f" />
         <polygon id="shell-facet-024" points="356 499 346 483 365 489" fill="#78789a" stroke="#78789a" />
         <polygon id="shell-facet-025" points="336 519 344 506 357 514" fill="#525476" stroke="#525476" />
-        <polygon id="shell-facet-026" points="325 538 310.45 528.81 310.2 522.4" fill="#343956" stroke="#343956" />
-        <polygon id="shell-facet-027" points="313.16 509.77 336 519 310.2 522.4" fill="#2e334e" stroke="#2e334e" />
-        <polygon id="shell-facet-028" points="336 519 313.16 509.77 344 506" fill="#303450" stroke="#303450" />
-        <polygon id="shell-facet-029" points="336 519 325 538 310.2 522.4" fill="#343854" stroke="#343854" />
+        <polygon id="shell-facet-026" points="306.715986 522.065864 310.2 522.4 325 538 306.976701 528.378497" fill="#343956" stroke="#343956" />
+        <polygon id="shell-facet-027" points="306.715986 522.065864 309.790616 508.822767 313.16 509.77 336 519 310.2 522.4" fill="#2e334e" stroke="#2e334e" />
+        <polygon id="shell-facet-028" points="309.790616 508.822767 344 506 336 519" fill="#303450" stroke="#303450" />
+        <polygon id="shell-facet-029" points="306.715986 522.065864 336 519 325 538" fill="#343854" stroke="#343854" />
         <polygon id="shell-facet-030" points="344 506 356 499 357 514" fill="#9292b3" stroke="#9292b3" />
-        <polygon id="shell-facet-031" points="313.16 509.77 328.32 463.7 346 483" fill="#323753" stroke="#323753" />
+        <polygon id="shell-facet-031" points="309.790616 508.822767 325.20854 462.097247 328.32 463.7 346 483 313.16 509.77" fill="#323753" stroke="#323753" />
         <polygon id="shell-facet-032" points="368.97 492.83 356 499 365 489" fill="#9190b1" stroke="#9190b1" />
         <polygon id="shell-facet-033" points="365 489 358 468 378.01 479.47" fill="#66688a" stroke="#66688a" />
         <polygon id="shell-facet-034" points="365 489 378.01 479.47 381.0401 481.2217 372.212 494.1489 368.97 492.83" fill="#aeaec6" stroke="#aeaec6" />
@@ -439,22 +439,22 @@
         <polygon id="shell-facet-042" points="365 489 346 483 358 468" fill="#8081a2" stroke="#8081a2" />
         <polygon id="shell-facet-043" points="338 466 358 468 346 483" fill="#737594" stroke="#737594" />
         <polygon id="shell-facet-044" points="368 522 369.84 527.25 357 532" fill="#6c6e90" stroke="#6c6e90" />
-        <polygon id="shell-facet-045" points="368.03 402.35 373.86 399.59 382 404" fill="#a09ebe" stroke="#a09ebe" />
-        <polygon id="shell-facet-046" points="408 384 402.42 374.56 411 371" fill="#9c98ba" stroke="#9c98ba" />
-        <polygon id="shell-facet-047" points="411 371 402.42 374.56 449.98 353.78" fill="#85849d" stroke="#85849d" />
-        <polygon id="shell-facet-048" points="431 364 411 371 449.98 353.78" fill="#666094" stroke="#666094" />
+        <polygon id="shell-facet-045" points="366.213976 399.358001 371.939318 396.664085 382 404 368.03 402.35" fill="#a09ebe" stroke="#a09ebe" />
+        <polygon id="shell-facet-046" points="400.543758 371.605391 411 371 408 384" fill="#9c98ba" stroke="#9c98ba" />
+        <polygon id="shell-facet-047" points="400.543758 371.605391 448.858093 350.464683 449.98 353.78 411 371 402.42 374.56" fill="#85849d" stroke="#85849d" />
+        <polygon id="shell-facet-048" points="411 371 448.858093 350.464683 449.98 353.78 431 364" fill="#666094" stroke="#666094" />
         <polygon id="shell-facet-049" points="425 385 411 371 431 364" fill="#716d95" stroke="#716d95" />
         <polygon id="shell-facet-050" points="395 404 384 391 395 382" fill="#525678" stroke="#525678" />
-        <polygon id="shell-facet-051" points="395 382 384 391 402.42 374.56" fill="#626781" stroke="#626781" />
+        <polygon id="shell-facet-051" points="384 391 400.543758 371.605391 402.42 374.56 395 382" fill="#626781" stroke="#626781" />
         <polygon id="shell-facet-052" points="395 404 395 382 408 384" fill="#6a688d" stroke="#6a688d" />
-        <polygon id="shell-facet-053" points="408 384 395 382 402.42 374.56" fill="#727095" stroke="#727095" />
+        <polygon id="shell-facet-053" points="395 382 400.543758 371.605391 402.42 374.56 408 384" fill="#727095" stroke="#727095" />
         <polygon id="shell-facet-054" points="411 371 425 385 408 384" fill="#9b98b9" stroke="#9b98b9" />
         <polygon id="shell-facet-055" points="425 385 422.61 392.52 408 384" fill="#585980" stroke="#585980" />
         <polygon id="shell-facet-056" points="431 364 436 378 425 385" fill="#767298" stroke="#767298" />
-        <polygon id="shell-facet-057" points="384 391 373.86 399.59 402.42 374.56" fill="#5a607b" stroke="#5a607b" />
+        <polygon id="shell-facet-057" points="371.939318 396.664085 400.543758 371.605391 402.42 374.56 384 391 373.86 399.59" fill="#5a607b" stroke="#5a607b" />
         <polygon id="shell-facet-058" points="453 377 443 358 456 363" fill="#8a8aa9" stroke="#8a8aa9" />
-        <polygon id="shell-facet-059" points="449.98 353.78 443 358 431 364" fill="#66608e" stroke="#66608e" />
-        <polygon id="shell-facet-060" points="456 363 443 358 449.98 353.78" fill="#606086" stroke="#606086" />
+        <polygon id="shell-facet-059" points="431 364 448.858093 350.464683 449.98 353.78 443 358" fill="#66608e" stroke="#66608e" />
+        <polygon id="shell-facet-060" points="443 358 448.858093 350.464683 456 363" fill="#606086" stroke="#606086" />
         <polygon id="shell-facet-061" points="443 358 453 377 436 378" fill="#8484a3" stroke="#8484a3" />
         <polygon id="shell-facet-062" points="436 378 439.51 389.12 425 385" fill="#cecde0" stroke="#cecde0" />
         <polygon id="shell-facet-063" points="436 378 447.28 388.31 448.2865 391.6622 440.2974 392.5303" fill="#cccbde" stroke="#cccbde" />
@@ -482,17 +482,17 @@
         <polygon id="shell-facet-085" points="395 404 382 404 384 391" fill="#545679" stroke="#545679" />
         <polygon id="shell-facet-086" points="422.61 392.52 419 397 408 384" fill="#56577c" stroke="#56577c" />
         <polygon id="shell-facet-087" points="378.01 479.47 380 474 385.12 464.88 388.5349 465.647 381.0401 481.2217" fill="#bcbed2" stroke="#bcbed2" />
-        <polygon id="shell-facet-088" points="384 391 382 404 373.86 399.59" fill="#54597a" stroke="#54597a" />
-        <polygon id="shell-facet-089" points="307.45 555.22 308.04 537 325 538" fill="#212840" stroke="#212840" />
-        <polygon id="shell-facet-090" points="308.04 537 310.45 528.81 325 538" fill="#1e243c" stroke="#1e243c" />
+        <polygon id="shell-facet-088" points="371.939318 396.664085 384 391 382 404 373.86 399.59" fill="#54597a" stroke="#54597a" />
+        <polygon id="shell-facet-089" points="303.956136 555.427156 304.584302 536.444884 325 538 307.45 555.22" fill="#212840" stroke="#212840" />
+        <polygon id="shell-facet-090" points="304.584302 536.444884 306.976701 528.378497 310.45 528.81 325 538 308.04 537" fill="#1e243c" stroke="#1e243c" />
         <polygon id="shell-facet-091" points="350 564 330 552 361 557" fill="#363b58" stroke="#363b58" />
-        <polygon id="shell-facet-092" points="307.45 555.22 325 538 330 552" fill="#1a2037" stroke="#1a2037" />
-        <polygon id="shell-facet-093" points="307.45 555.22 309 561 310.19 573.25" fill="#191a36" stroke="#191a36" />
-        <polygon id="shell-facet-094" points="307.45 555.22 330 552 309 561" fill="#1b2138" stroke="#1b2138" />
+        <polygon id="shell-facet-092" points="303.956136 555.427156 325 538 330 552 307.45 555.22" fill="#1a2037" stroke="#1a2037" />
+        <polygon id="shell-facet-093" points="303.956136 555.427156 307.45 555.22 309 561 310.19 573.25 306.745693 573.871891" fill="#191a36" stroke="#191a36" />
+        <polygon id="shell-facet-094" points="303.956136 555.427156 330 552 309 561" fill="#1b2138" stroke="#1b2138" />
         <polygon id="shell-facet-095" points="350 564 313 581 330 552" fill="#1a2137" stroke="#1a2137" />
-        <polygon id="shell-facet-096" points="310.19 573.25 309 561 330 552" fill="#1a2036" stroke="#1a2036" />
-        <polygon id="shell-facet-097" points="330 552 313 581 310.19 573.25" fill="#1a2138" stroke="#1a2138" />
-        <polygon id="shell-facet-098" points="621 599 624.06 592.08 619.22 611.68" fill="#71798f" stroke="#71798f" />
+        <polygon id="shell-facet-096" points="306.745693 573.871891 309 561 330 552 310.19 573.25" fill="#1a2036" stroke="#1a2036" />
+        <polygon id="shell-facet-097" points="306.745693 573.871891 330 552 313 581" fill="#1a2138" stroke="#1a2138" />
+        <polygon id="shell-facet-098" points="619.22 611.68 621 599 624.06 592.08 627.457932 592.919081 622.556858 612.736114" fill="#71798f" stroke="#71798f" />
         <polygon id="shell-facet-099" points="330 552 325 538 357 532" fill="#565a7c" stroke="#565a7c" />
         <polygon id="shell-facet-100" points="370 547 357 532 373 534" fill="#6e7090" stroke="#6e7090" />
         <polygon id="shell-facet-101" points="373 534 357 532 369.84 527.25" fill="#6c7090" stroke="#6c7090" />
@@ -507,26 +507,26 @@
         <polygon id="shell-facet-110" points="357 532 361 557 330 552" fill="#373c5a" stroke="#373c5a" />
         <polygon id="shell-facet-111" points="336 519 357 532 325 538" fill="#54587a" stroke="#54587a" />
         <polygon id="shell-facet-112" points="356 589 350 564 368 578" fill="#20263d" stroke="#20263d" />
-        <polygon id="shell-facet-113" points="314.32 592.97 356 589 318.44 600.33" fill="#20263c" stroke="#20263c" />
-        <polygon id="shell-facet-114" points="345 619 324 615 318.44 600.33" fill="#12182b" stroke="#12182b" />
-        <polygon id="shell-facet-115" points="313 581 314.32 592.97 310.19 573.25" fill="#262b43" stroke="#262b43" />
-        <polygon id="shell-facet-116" points="319.29 609.21 324 615 327.43 620.17" fill="#1b2033" stroke="#1b2033" />
-        <polygon id="shell-facet-117" points="319.29 609.21 318.44 600.33 324 615" fill="#10192c" stroke="#10192c" />
-        <polygon id="shell-facet-118" points="345 619 336.44 628.29 327.43 620.17" fill="#121a2d" stroke="#121a2d" />
-        <polygon id="shell-facet-119" points="327.43 620.17 324 615 345 619" fill="#11192c" stroke="#11192c" />
-        <polygon id="shell-facet-120" points="580.35 440.62 587.8471 445.7537 599.2626 457.388 599.2626 458.988 597.6626 458.988 583.312 448.2512" fill="#9496af" stroke="#9496af" />
-        <polygon id="shell-facet-121" points="356 589 314.32 592.97 313 581" fill="#1e253c" stroke="#1e253c" />
-        <polygon id="shell-facet-122" points="343.39 637.49 345 619 360 625" fill="#11182a" stroke="#11182a" />
-        <polygon id="shell-facet-123" points="345 619 343.39 637.49 336.44 628.29" fill="#131a2c" stroke="#131a2c" />
+        <polygon id="shell-facet-113" points="311.042375 594.19767 314.32 592.97 356 589 315.099311 601.373934" fill="#20263c" stroke="#20263c" />
+        <polygon id="shell-facet-114" points="315.099311 601.373934 318.44 600.33 345 619 324 615" fill="#12182b" stroke="#12182b" />
+        <polygon id="shell-facet-115" points="306.745693 573.871891 310.19 573.25 313 581 314.32 592.97 311.042375 594.19767" fill="#262b43" stroke="#262b43" />
+        <polygon id="shell-facet-116" points="316.023225 610.466256 319.29 609.21 324 615 327.43 620.17 324.840787 622.524989" fill="#1b2033" stroke="#1b2033" />
+        <polygon id="shell-facet-117" points="315.099311 601.373934 318.44 600.33 324 615 316.023225 610.466256" fill="#10192c" stroke="#10192c" />
+        <polygon id="shell-facet-118" points="324.840787 622.524989 327.43 620.17 345 619 336.44 628.29 333.860413 630.65553" fill="#121a2d" stroke="#121a2d" />
+        <polygon id="shell-facet-119" points="324 615 345 619 324.840787 622.524989" fill="#11192c" stroke="#11192c" />
+        <polygon id="shell-facet-120" points="580.35 440.62 582.832897 438.153176 589.824571 442.865862 602.7626 457.388 602.7626 458.988 597.6626 458.988 583.312 448.2512" fill="#9496af" stroke="#9496af" />
+        <polygon id="shell-facet-121" points="311.042375 594.19767 313 581 356 589" fill="#1e253c" stroke="#1e253c" />
+        <polygon id="shell-facet-122" points="340.925996 639.975696 345 619 360 625" fill="#11182a" stroke="#11182a" />
+        <polygon id="shell-facet-123" points="333.860413 630.65553 345 619 343.39 637.49 340.925996 639.975696" fill="#131a2c" stroke="#131a2c" />
         <polygon id="shell-facet-124" points="356 589 360 625 345 619" fill="#2e334f" stroke="#2e334f" />
         <polygon id="shell-facet-125" points="360 625 356 589 392 609" fill="#2d324e" stroke="#2d324e" />
-        <polygon id="shell-facet-126" points="345 619 318.44 600.33 356 589" fill="#20263d" stroke="#20263d" />
-        <polygon id="shell-facet-127" points="343.39 637.49 360 625 348.85 641.54" fill="#12182c" stroke="#12182c" />
-        <polygon id="shell-facet-128" points="348.85 641.54 360 625 359 652.11" fill="#13192c" stroke="#13192c" />
-        <polygon id="shell-facet-129" points="365 655 370.99 658.25 359 652.11" fill="#1a2032" stroke="#1a2032" />
-        <polygon id="shell-facet-130" points="365 655 359 652.11 378 634" fill="#13182c" stroke="#13182c" />
-        <polygon id="shell-facet-131" points="365 655 378 634 370.99 658.25" fill="#12182c" stroke="#12182c" />
-        <polygon id="shell-facet-132" points="378 634 359 652.11 360 625" fill="#131a2d" stroke="#131a2d" />
+        <polygon id="shell-facet-126" points="315.099311 601.373934 318.44 600.33 356 589 345 619" fill="#20263d" stroke="#20263d" />
+        <polygon id="shell-facet-127" points="340.925996 639.975696 343.39 637.49 360 625 348.85 641.54 346.537065 644.166848" fill="#12182c" stroke="#12182c" />
+        <polygon id="shell-facet-128" points="346.537065 644.166848 360 625 359 652.11 356.911303 654.918441" fill="#13192c" stroke="#13192c" />
+        <polygon id="shell-facet-129" points="356.911303 654.918441 359 652.11 365 655 370.99 658.25 369.54085 661.435901" fill="#1a2032" stroke="#1a2032" />
+        <polygon id="shell-facet-130" points="356.911303 654.918441 359 652.11 378 634 365 655" fill="#13182c" stroke="#13182c" />
+        <polygon id="shell-facet-131" points="365 655 378 634 370.99 658.25 369.54085 661.435901" fill="#12182c" stroke="#12182c" />
+        <polygon id="shell-facet-132" points="356.911303 654.918441 360 625 378 634" fill="#131a2d" stroke="#131a2d" />
         <polygon id="shell-facet-133" points="313 581 350 564 356 589" fill="#1b2137" stroke="#1b2137" />
         <polygon id="shell-facet-135" points="377 565 361 557 376.53 559.91" fill="#9092b1" stroke="#9092b1" />
         <polygon id="shell-facet-136" points="376.53 559.91 380.0016 559.4647 383.0056 572.2002 379.82 573.65 377 565" fill="#c8cadb" stroke="#c8cadb" />
@@ -552,13 +552,13 @@
         <polygon id="shell-facet-156" points="403 623 378 634 392 609" fill="#303350" stroke="#303350" />
         <polygon id="shell-facet-157" points="417 641 403 623 425 620" fill="#6a6d8c" stroke="#6a6d8c" />
         <polygon id="shell-facet-158" points="395 646 403 623 417 641" fill="#343856" stroke="#343856" />
-        <polygon id="shell-facet-159" points="386.29 664.37 395 646 417 658" fill="#101628" stroke="#101628" />
-        <polygon id="shell-facet-160" points="386.29 664.37 370.99 658.25 395 646" fill="#12182b" stroke="#12182b" />
-        <polygon id="shell-facet-161" points="413.97 671.39 417 658 435 673" fill="#13192c" stroke="#13192c" />
-        <polygon id="shell-facet-162" points="417 658 413.97 671.39 386.29 664.37" fill="#13192c" stroke="#13192c" />
+        <polygon id="shell-facet-159" points="385.207502 667.698393 386.29 664.37 395 646 417 658" fill="#101628" stroke="#101628" />
+        <polygon id="shell-facet-160" points="369.54085 661.435901 370.99 658.25 395 646 385.207502 667.698393" fill="#12182b" stroke="#12182b" />
+        <polygon id="shell-facet-161" points="413.289194 674.823148 413.97 671.39 417 658 435 673" fill="#13192c" stroke="#13192c" />
+        <polygon id="shell-facet-162" points="385.207502 667.698393 386.29 664.37 417 658 413.289194 674.823148" fill="#13192c" stroke="#13192c" />
         <polygon id="shell-facet-163" points="395 646 417 641 417 658" fill="#1c2137" stroke="#1c2137" />
         <polygon id="shell-facet-164" points="417 641 439 647 417 658" fill="#272a46" stroke="#272a46" />
-        <polygon id="shell-facet-165" points="395 646 370.99 658.25 378 634" fill="#12182a" stroke="#12182a" />
+        <polygon id="shell-facet-165" points="369.54085 661.435901 378 634 395 646" fill="#12182a" stroke="#12182a" />
         <polygon id="shell-facet-166" points="428.83 624.35 432 636 417 641" fill="#6a6c8c" stroke="#6a6c8c" />
         <polygon id="shell-facet-167" points="419.83 606.37 422.6593 604.3097 431.6294 622.2492 428.83 624.35 425 620" fill="#a3a2bc" stroke="#a3a2bc" />
         <polygon id="shell-facet-168" points="432 636 439.18 633.94 439 647" fill="#363b58" stroke="#363b58" />
@@ -566,71 +566,71 @@
         <polygon id="shell-facet-170" points="439 647 417 641 432 636" fill="#4c506f" stroke="#4c506f" />
         <polygon id="shell-facet-171" points="435 673 439 647 450 654" fill="#242842" stroke="#242842" />
         <polygon id="shell-facet-172" points="435 673 417 658 439 647" fill="#262b45" stroke="#262b45" />
-        <polygon id="shell-facet-173" points="441.86 675.41 450 654 471.09 677.28" fill="#20263e" stroke="#20263e" />
-        <polygon id="shell-facet-174" points="450 654 441.86 675.41 435 673" fill="#1f253e" stroke="#1f253e" />
+        <polygon id="shell-facet-173" points="441.498327 678.891263 441.86 675.41 450 654 471.09 677.28 471.038675 680.779624" fill="#20263e" stroke="#20263e" />
+        <polygon id="shell-facet-174" points="435 673 450 654 441.498327 678.891263" fill="#1f253e" stroke="#1f253e" />
         <polygon id="shell-facet-175" points="450 654 439 647 455 642" fill="#525673" stroke="#525673" />
-        <polygon id="shell-facet-176" points="435 673 441.86 675.41 413.97 671.39" fill="#12152a" stroke="#12152a" />
+        <polygon id="shell-facet-176" points="413.289194 674.823148 413.97 671.39 435 673 441.86 675.41 441.498327 678.891263" fill="#12152a" stroke="#12152a" />
         <polygon id="shell-facet-177" points="455 642 439 647 439.18 633.94" fill="#4e5270" stroke="#4e5270" />
         <polygon id="shell-facet-178" points="417 641 425 620 428.83 624.35" fill="#686a8a" stroke="#686a8a" />
         <polygon id="shell-facet-179" points="403 623 411 610 425 620" fill="#5c5f7d" stroke="#5c5f7d" />
         <polygon id="shell-facet-180" points="368 578 377 565 379.82 573.65" fill="#9294b2" stroke="#9294b2" />
         <polygon id="shell-facet-182" points="449.53 387.14 453 377 459.92 370.27 462.6677 372.438 451.9136 389.7029" fill="#b4b2ca" stroke="#b4b2ca" />
-        <polygon id="shell-facet-183" points="466 352 478.5 346.78 482 352" fill="#8a88ac" stroke="#8a88ac" />
-        <polygon id="shell-facet-184" points="478.5 346.78 466 352 449.98 353.78" fill="#a6a0c8" stroke="#a6a0c8" />
-        <polygon id="shell-facet-185" points="482 352 478.5 346.78 484.76 347.63" fill="#acaec6" stroke="#acaec6" />
+        <polygon id="shell-facet-183" points="466 352 478.315065 343.284889 482 352" fill="#8a88ac" stroke="#8a88ac" />
+        <polygon id="shell-facet-184" points="448.858093 350.464683 478.315065 343.284889 478.5 346.78 466 352 449.98 353.78" fill="#a6a0c8" stroke="#a6a0c8" />
+        <polygon id="shell-facet-185" points="478.315065 343.284889 485.797283 344.28724 484.76 347.63 482 352 478.5 346.78" fill="#acaec6" stroke="#acaec6" />
         <polygon id="shell-facet-186" points="466 352 482 352 469.92 362.85" fill="#b6b5cd" stroke="#b6b5cd" />
         <polygon id="shell-facet-187" points="456 363 463.43 366.75 465.5868 369.5065 462.6677 372.438 459.92 370.27" fill="#a6a4be" stroke="#a6a4be" />
         <polygon id="shell-facet-188" points="456 363 466 352 463.43 366.75" fill="#aeaac6" stroke="#aeaac6" />
         <polygon id="shell-facet-189" points="463.43 366.75 466 352 471.3288 366.0539 465.5868 369.5065" fill="#bcb7d0" stroke="#bcb7d0" />
         <polygon id="shell-facet-190" points="469.92 362.85 482 352 483.1118 362.5806 471.3288 366.0539" fill="#b6b4cc" stroke="#b6b4cc" />
         <polygon id="shell-facet-191" points="482 352 488.23 358.67 487.8276 362.1468 483.1118 362.5806 482.47 359.14" fill="#abaac3" stroke="#abaac3" />
-        <polygon id="shell-facet-192" points="466 352 456 363 449.98 353.78" fill="#aaa6c8" stroke="#aaa6c8" />
-        <polygon id="shell-facet-193" points="484.76 347.63 495 354 488.23 358.67" fill="#c4c4da" stroke="#c4c4da" />
-        <polygon id="shell-facet-194" points="495 354 484.76 347.63 512.5 361.61" fill="#9ea1b8" stroke="#9ea1b8" />
+        <polygon id="shell-facet-192" points="448.858093 350.464683 466 352 456 363 449.98 353.78" fill="#aaa6c8" stroke="#aaa6c8" />
+        <polygon id="shell-facet-193" points="484.76 347.63 485.797283 344.28724 495 354 488.23 358.67" fill="#c4c4da" stroke="#c4c4da" />
+        <polygon id="shell-facet-194" points="484.76 347.63 485.797283 344.28724 514.490755 358.731304 512.5 361.61 495 354" fill="#9ea1b8" stroke="#9ea1b8" />
         <polygon id="shell-facet-195" points="487.8276 362.1468 488.23 358.67 495 354 501.04 362.8 499.6233 366.0005" fill="#bebed4" stroke="#bebed4" />
-        <polygon id="shell-facet-196" points="484.76 347.63 488.23 358.67 482 352" fill="#b4b3cc" stroke="#b4b3cc" />
+        <polygon id="shell-facet-196" points="482 352 485.797283 344.28724 488.23 358.67" fill="#b4b3cc" stroke="#b4b3cc" />
         <polygon id="shell-facet-197" points="499.6233 366.0005 501.04 362.8 507 361 509.08 367.42 507.0266 370.2544" fill="#c9c8dc" stroke="#c9c8dc" />
         <polygon id="shell-facet-198" points="507 361 501.04 362.8 495 354" fill="#9c9ab8" stroke="#9c9ab8" />
-        <polygon id="shell-facet-199" points="507 361 512.5 361.61 509.08 367.42" fill="#c8cade" stroke="#c8cade" />
-        <polygon id="shell-facet-200" points="507 361 495 354 512.5 361.61" fill="#a3a7be" stroke="#a3a7be" />
-        <polygon id="shell-facet-201" points="512.5 361.61 516.33 365.13 509.08 367.42" fill="#c9cade" stroke="#c9cade" />
-        <polygon id="shell-facet-202" points="515.23 372.95 516.33 365.13 520 371" fill="#bcbcd3" stroke="#bcbcd3" />
-        <polygon id="shell-facet-203" points="507.0266 370.2544 509.08 367.42 516.33 365.13 515.23 372.95 512.59 375.2479" fill="#c6c4da" stroke="#c6c4da" />
-        <polygon id="shell-facet-204" points="515.23 372.95 526.3 378.3 527 384" fill="#babbd0" stroke="#babbd0" />
-        <polygon id="shell-facet-205" points="526.3 378.3 515.23 372.95 520 371" fill="#b8bbce" stroke="#b8bbce" />
-        <polygon id="shell-facet-206" points="526.32 389.37 527 384 532.71 384.42" fill="#a4a6be" stroke="#a4a6be" />
+        <polygon id="shell-facet-199" points="507 361 514.490755 358.731304 509.08 367.42" fill="#c8cade" stroke="#c8cade" />
+        <polygon id="shell-facet-200" points="495 354 514.490755 358.731304 512.5 361.61 507 361" fill="#a3a7be" stroke="#a3a7be" />
+        <polygon id="shell-facet-201" points="509.08 367.42 512.5 361.61 514.490755 358.731304 518.919907 362.775773 516.33 365.13" fill="#c9cade" stroke="#c9cade" />
+        <polygon id="shell-facet-202" points="515.23 372.95 516.33 365.13 518.919907 362.775773 520 371" fill="#bcbcd3" stroke="#bcbcd3" />
+        <polygon id="shell-facet-203" points="507.0266 370.2544 509.08 367.42 518.919907 362.775773 515.23 372.95 512.59 375.2479" fill="#c6c4da" stroke="#c6c4da" />
+        <polygon id="shell-facet-204" points="515.23 372.95 528.912168 375.970499 527 384" fill="#babbd0" stroke="#babbd0" />
+        <polygon id="shell-facet-205" points="515.23 372.95 520 371 528.912168 375.970499 526.3 378.3" fill="#b8bbce" stroke="#b8bbce" />
+        <polygon id="shell-facet-206" points="526.32 389.37 527 384 534.903501 381.692629 532.71 384.42" fill="#a4a6be" stroke="#a4a6be" />
         <polygon id="shell-facet-207" points="512.59 375.2479 515.23 372.95 527 384 526.32 389.37 523.5878 391.5574" fill="#bec0d2" stroke="#bec0d2" />
-        <polygon id="shell-facet-208" points="526.3 378.3 532.71 384.42 527 384" fill="#bab5d4" stroke="#bab5d4" />
-        <polygon id="shell-facet-209" points="516.33 365.13 526.3 378.3 520 371" fill="#9698af" stroke="#9698af" />
-        <polygon id="shell-facet-210" points="531.14 394.48 532.71 384.42 541 392" fill="#8d8eaa" stroke="#8d8eaa" />
-        <polygon id="shell-facet-211" points="523.5878 391.5574 526.32 389.37 532.71 384.42 531.14 394.48 529.1838 397.3823" fill="#9898b2" stroke="#9898b2" />
+        <polygon id="shell-facet-208" points="526.3 378.3 528.912168 375.970499 534.903501 381.692629 532.71 384.42 527 384" fill="#bab5d4" stroke="#bab5d4" />
+        <polygon id="shell-facet-209" points="516.33 365.13 518.919907 362.775773 528.912168 375.970499 526.3 378.3 520 371" fill="#9698af" stroke="#9698af" />
+        <polygon id="shell-facet-210" points="531.14 394.48 532.71 384.42 534.903501 381.692629 541 392" fill="#8d8eaa" stroke="#8d8eaa" />
+        <polygon id="shell-facet-211" points="523.5878 391.5574 534.903501 381.692629 531.14 394.48 529.1838 397.3823" fill="#9898b2" stroke="#9898b2" />
         <polygon id="shell-facet-212" points="529.1838 397.3823 531.14 394.48 541 392 547.54 400.87 545.7902 403.9012" fill="#acacc3" stroke="#acacc3" />
-        <polygon id="shell-facet-213" points="554 399 541 392 532.71 384.42" fill="#8a84ae" stroke="#8a84ae" />
+        <polygon id="shell-facet-213" points="532.71 384.42 534.903501 381.692629 554 399 541 392" fill="#8a84ae" stroke="#8a84ae" />
         <polygon id="shell-facet-214" points="547.54 400.87 541 392 554 399" fill="#b8b9d0" stroke="#b8b9d0" />
         <polygon id="shell-facet-215" points="545.7902 403.9012 547.54 400.87 554 399 554.99 406.84 552.5232 409.3229" fill="#bcbad4" stroke="#bcbad4" />
-        <polygon id="shell-facet-216" points="552.5232 409.3229 554.99 406.84 562.64 407.47 556.9213 414.5306" fill="#babcce" stroke="#babcce" />
-        <polygon id="shell-facet-217" points="562.64 407.47 554.99 406.84 558.86 402.02" fill="#b7bace" stroke="#b7bace" />
-        <polygon id="shell-facet-218" points="554 399 558.86 402.02 554.99 406.84" fill="#bbb7d2" stroke="#bbb7d2" />
-        <polygon id="shell-facet-219" points="558.86 402.02 554 399 532.71 384.42" fill="#a7aabd" stroke="#a7aabd" />
-        <polygon id="shell-facet-220" points="570 427 564.49 413.36 575.5 435.06" fill="#74758f" stroke="#74758f" />
-        <polygon id="shell-facet-221" points="561.7564 416.6983 561.949 415.767 564.49 413.36 570 427" fill="#b4b6ce" stroke="#b4b6ce" />
-        <polygon id="shell-facet-222" points="561.2364 427.099 564.71 426.67 570 427 567.64 436.24 564.4351 437.6466" fill="#9b9fb6" stroke="#9b9fb6" />
-        <polygon id="shell-facet-223" points="564.4351 437.6466 567.64 436.24 575.5 435.06 571.32 442.52 568.7949 444.9436" fill="#9899b2" stroke="#9899b2" />
-        <polygon id="shell-facet-224" points="575.5 435.06 567.64 436.24 570 427" fill="#777796" stroke="#777796" />
-        <polygon id="shell-facet-225" points="561.2364 427.099 561.7564 416.6983 565.24 416.36 570 427" fill="#a9aec2" stroke="#a9aec2" />
-        <polygon id="shell-facet-226" points="556.9213 414.5306 558.88 411.63 562.64 407.47 564.49 413.36 561.949 415.767" fill="#a7a6c0" stroke="#a7a6c0" />
-        <polygon id="shell-facet-227" points="568.7949 444.9436 571.32 442.52 580.35 440.62 575.6668 449.2102" fill="#9f9eba" stroke="#9f9eba" />
-        <polygon id="shell-facet-229" points="575.6668 449.2102 576.41 445.79 580.35 440.62 583.56 444.76 583.312 448.2512" fill="#a6a9bf" stroke="#a6a9bf" />
-        <polygon id="shell-facet-230" points="564.49 413.36 562.64 407.47 575.5 435.06" fill="#85869e" stroke="#85869e" />
-        <polygon id="shell-facet-231" points="580.35 440.62 571.32 442.52 575.5 435.06" fill="#646288" stroke="#646288" />
-        <polygon id="shell-facet-234" points="599.208 485.0944 601.5898 478.3621 605 479.15 605.02 486.85 601.6595 487.8282" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-236" points="605.02 486.85 605 479.15 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-237" points="601.5898 478.3621 601.6325 475.549 603.5726 474.7237 605.1726 474.7237 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-239" points="601.0565 491.6769 601.6595 487.8282 605.02 486.85 607.83 492.43 604.4398 493.2999" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-240" points="601.5999 498.3396 604.4398 493.2999 607.83 492.43 610 498" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-241" points="610.7486 504.1268 613.16 501.59 622.07 516.17 622.94 518.4 619.9148 520.1601" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-242" points="613.16 501.59 610 498 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
-        <polygon id="shell-facet-244" points="601.5999 498.3396 604.96 497.36 610 498 613.16 501.59 610.7486 504.1268" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-216" points="552.5232 409.3229 554.99 406.84 565.675127 405.727013 556.9213 414.5306" fill="#babcce" stroke="#babcce" />
+        <polygon id="shell-facet-217" points="554.99 406.84 558.86 402.02 561.317488 399.527862 565.675127 405.727013 562.64 407.47" fill="#b7bace" stroke="#b7bace" />
+        <polygon id="shell-facet-218" points="554 399 561.317488 399.527862 554.99 406.84" fill="#bbb7d2" stroke="#bbb7d2" />
+        <polygon id="shell-facet-219" points="532.71 384.42 534.903501 381.692629 561.317488 399.527862 558.86 402.02 554 399" fill="#a7aabd" stroke="#a7aabd" />
+        <polygon id="shell-facet-220" points="564.49 413.36 573.194864 425.570719 578.433866 433.151484 575.5 435.06 570 427" fill="#74758f" stroke="#74758f" />
+        <polygon id="shell-facet-221" points="561.7564 416.6983 561.949 415.767 564.49 413.36 573.194864 425.570719 570 427" fill="#b4b6ce" stroke="#b4b6ce" />
+        <polygon id="shell-facet-222" points="561.2364 427.099 573.194864 425.570719 567.64 436.24 564.4351 437.6466" fill="#9b9fb6" stroke="#9b9fb6" />
+        <polygon id="shell-facet-223" points="564.4351 437.6466 567.64 436.24 578.433866 433.151484 571.32 442.52 568.7949 444.9436" fill="#9899b2" stroke="#9899b2" />
+        <polygon id="shell-facet-224" points="567.64 436.24 570 427 573.194864 425.570719 578.433866 433.151484 575.5 435.06" fill="#777796" stroke="#777796" />
+        <polygon id="shell-facet-225" points="561.2364 427.099 561.7564 416.6983 568.434864 414.930719 573.194864 425.570719 570 427" fill="#a9aec2" stroke="#a9aec2" />
+        <polygon id="shell-facet-226" points="556.9213 414.5306 558.88 411.63 562.64 407.47 565.675127 405.727013 564.49 413.36 561.949 415.767" fill="#a7a6c0" stroke="#a7a6c0" />
+        <polygon id="shell-facet-227" points="568.7949 444.9436 571.32 442.52 582.832897 438.153176 575.6668 449.2102" fill="#9f9eba" stroke="#9f9eba" />
+        <polygon id="shell-facet-229" points="575.6668 449.2102 576.41 445.79 580.35 440.62 582.832897 438.153176 586.325967 442.615373 583.312 448.2512" fill="#a6a9bf" stroke="#a6a9bf" />
+        <polygon id="shell-facet-230" points="562.64 407.47 565.675127 405.727013 578.433866 433.151484 575.5 435.06 564.49 413.36" fill="#85869e" stroke="#85869e" />
+        <polygon id="shell-facet-231" points="571.32 442.52 575.5 435.06 578.433866 433.151484 582.832897 438.153176 580.35 440.62" fill="#646288" stroke="#646288" />
+        <polygon id="shell-facet-234" points="599.208 485.0944 601.5898 478.3621 608.423136 478.420521 605.02 486.85 601.6595 487.8282" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-236" points="605 479.15 608.423136 478.420521 611.178991 491.413016 607.83 492.43 605.02 486.85" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-237" points="601.5898 478.3621 601.6325 475.549 603.5726 471.2237 607.456441 472.071517 611.178991 491.413016 607.83 492.43" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-239" points="601.0565 491.6769 601.6595 487.8282 605.02 486.85 611.178991 491.413016 607.83 492.43 604.4398 493.2999" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-240" points="601.5999 498.3396 604.4398 493.2999 611.178991 491.413016 610 498" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-241" points="610.7486 504.1268 613.16 501.59 616.185141 499.829738 622.94 518.4 619.9148 520.1601" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-242" points="607.83 492.43 611.178991 491.413016 616.185141 499.829738 613.16 501.59 610 498" fill="#898ba3" stroke="#898ba3" />
+        <polygon id="shell-facet-244" points="601.5999 498.3396 604.96 497.36 610 498 616.185141 499.829738 610.7486 504.1268" fill="#898ba3" stroke="#898ba3" />
         <polygon id="shell-facet-245" points="439.18 633.94 441.1701 631.0609 464.3157 642.6726 463.56 646.09 455 642" fill="#c4c7d4" stroke="#c4c7d4" />
         <polygon id="shell-facet-246" points="463.56 646.09 464.3157 642.6726 480.035 642.3085 479.06 645.67 468 649" fill="#727594" stroke="#727594" />
         <polygon id="shell-facet-247" points="463.56 646.09 468 649 450 654" fill="#535675" stroke="#535675" />
@@ -649,62 +649,62 @@
         <polygon id="shell-facet-260" points="561.0238 642.7962 573.557 637.0749 575.3 640.11 568 655 561.75 646.22" fill="#737494" stroke="#737494" />
         <polygon id="shell-facet-261" points="573.557 637.0749 578.0204 633.8991 580.34 636.52 591 649 575.3 640.11" fill="#717391" stroke="#717391" />
         <polygon id="shell-facet-262" points="546 661 542.1 646.11 557 648" fill="#3c405e" stroke="#3c405e" />
-        <polygon id="shell-facet-263" points="588 635 597.21 640.66 591 649" fill="#575a78" stroke="#575a78" />
-        <polygon id="shell-facet-264" points="575.3 640.11 591 649 588.81 654.5" fill="#636684" stroke="#636684" />
+        <polygon id="shell-facet-263" points="588 635 597.21 640.66 599.857648 642.949096 591 649" fill="#575a78" stroke="#575a78" />
+        <polygon id="shell-facet-264" points="575.3 640.11 591 649 591.163189 657.090849" fill="#636684" stroke="#636684" />
         <polygon id="shell-facet-265" points="482 650 486 663 473 662" fill="#565a78" stroke="#565a78" />
         <polygon id="shell-facet-266" points="486 663 482 650 494 655.71" fill="#6e7190" stroke="#6e7190" />
         <polygon id="shell-facet-267" points="486 663 494 655.71 499 665" fill="#727593" stroke="#727593" />
         <polygon id="shell-facet-268" points="473 662 486 663 479 676" fill="#262c46" stroke="#262c46" />
-        <polygon id="shell-facet-269" points="471.09 677.28 479 676 497.99 676.35" fill="#13142b" stroke="#13142b" />
-        <polygon id="shell-facet-270" points="471.09 677.28 473 662 479 676" fill="#282d47" stroke="#282d47" />
-        <polygon id="shell-facet-271" points="497.99 676.35 499 665 511.76 658.89" fill="#242a45" stroke="#242a45" />
-        <polygon id="shell-facet-272" points="497.99 676.35 479 676 486 663" fill="#1c2239" stroke="#1c2239" />
-        <polygon id="shell-facet-273" points="499 665 497.99 676.35 486 663" fill="#1a2136" stroke="#1a2136" />
+        <polygon id="shell-facet-269" points="471.038675 680.779624 471.09 677.28 479 676 497.99 676.35 498.221376 679.842344" fill="#13142b" stroke="#13142b" />
+        <polygon id="shell-facet-270" points="471.038675 680.779624 471.09 677.28 473 662 479 676" fill="#282d47" stroke="#282d47" />
+        <polygon id="shell-facet-271" points="497.99 676.35 499 665 511.76 658.89 498.221376 679.842344" fill="#242a45" stroke="#242a45" />
+        <polygon id="shell-facet-272" points="479 676 486 663 497.99 676.35 498.221376 679.842344" fill="#1c2239" stroke="#1c2239" />
+        <polygon id="shell-facet-273" points="486 663 499 665 498.221376 679.842344" fill="#1a2136" stroke="#1a2136" />
         <polygon id="shell-facet-275" points="494 655.71 495.3126 652.4655 511.3732 655.4114 511.76 658.89 499 665" fill="#6d708e" stroke="#6d708e" />
-        <polygon id="shell-facet-276" points="471.09 677.28 450 654 473 662" fill="#1a2036" stroke="#1a2036" />
-        <polygon id="shell-facet-277" points="528.48 673.36 511.76 658.89 517 658" fill="#2f324e" stroke="#2f324e" />
+        <polygon id="shell-facet-276" points="450 654 473 662 471.038675 680.779624" fill="#1a2036" stroke="#1a2036" />
+        <polygon id="shell-facet-277" points="511.76 658.89 517 658 528.48 673.36 528.978955 676.824252" fill="#2f324e" stroke="#2f324e" />
         <polygon id="shell-facet-278" points="538 650 546 661 529 663" fill="#3b405c" stroke="#3b405c" />
-        <polygon id="shell-facet-279" points="568 655 563.58 666.67 557 648" fill="#262c46" stroke="#262c46" />
-        <polygon id="shell-facet-280" points="563.58 666.67 568 655 588.81 654.5" fill="#232840" stroke="#232840" />
-        <polygon id="shell-facet-281" points="528.48 673.36 529 663 546 661" fill="#383c58" stroke="#383c58" />
-        <polygon id="shell-facet-282" points="529 663 528.48 673.36 517 658" fill="#2e334e" stroke="#2e334e" />
-        <polygon id="shell-facet-283" points="546 661 563.58 666.67 528.48 673.36" fill="#2e314c" stroke="#2e314c" />
-        <polygon id="shell-facet-284" points="546 661 557 648 563.58 666.67" fill="#4e5170" stroke="#4e5170" />
+        <polygon id="shell-facet-279" points="557 648 568 655 564.67729 669.993545" fill="#262c46" stroke="#262c46" />
+        <polygon id="shell-facet-280" points="563.58 666.67 568 655 588.81 654.5 591.163189 657.090849 564.67729 669.993545" fill="#232840" stroke="#232840" />
+        <polygon id="shell-facet-281" points="528.48 673.36 529 663 546 661 528.978955 676.824252" fill="#383c58" stroke="#383c58" />
+        <polygon id="shell-facet-282" points="517 658 529 663 528.978955 676.824252" fill="#2e334e" stroke="#2e334e" />
+        <polygon id="shell-facet-283" points="528.48 673.36 546 661 563.58 666.67 564.67729 669.993545 528.978955 676.824252" fill="#2e314c" stroke="#2e314c" />
+        <polygon id="shell-facet-284" points="546 661 557 648 563.58 666.67 564.67729 669.993545" fill="#4e5170" stroke="#4e5170" />
         <polygon id="shell-facet-285" points="517 658 538 650 529 663" fill="#606382" stroke="#606382" />
-        <polygon id="shell-facet-286" points="511.76 658.89 528.48 673.36 497.99 676.35" fill="#262b45" stroke="#262b45" />
-        <polygon id="shell-facet-287" points="575.3 640.11 588.81 654.5 568 655" fill="#747694" stroke="#747694" />
-        <polygon id="shell-facet-289" points="591 649 597.21 640.66 588.81 654.5" fill="#686788" stroke="#686788" />
+        <polygon id="shell-facet-286" points="497.99 676.35 511.76 658.89 528.48 673.36 528.978955 676.824252 498.221376 679.842344" fill="#262b45" stroke="#262b45" />
+        <polygon id="shell-facet-287" points="568 655 575.3 640.11 588.81 654.5 591.163189 657.090849" fill="#747694" stroke="#747694" />
+        <polygon id="shell-facet-289" points="588.81 654.5 591 649 597.21 640.66 599.857648 642.949096 591.163189 657.090849" fill="#686788" stroke="#686788" />
         <polygon id="shell-facet-290" points="450 654 455 642 463.56 646.09" fill="#545876" stroke="#545876" />
         <polygon id="shell-facet-291" points="611.5501 554.1551 616.44 533.3551 619.54 534.98 623 550 615.05 554.18" fill="#868aa4" stroke="#868aa4" />
-        <polygon id="shell-facet-292" points="623 550 619.54 534.98 625.52 542.48" fill="#8486a4" stroke="#8486a4" />
-        <polygon id="shell-facet-293" points="617 562 615.05 554.18 623.61 555.12" fill="#5e637d" stroke="#5e637d" />
+        <polygon id="shell-facet-292" points="619.54 534.98 629.016405 542.638592 623 550" fill="#8486a4" stroke="#8486a4" />
+        <polygon id="shell-facet-293" points="615.05 554.18 627.099056 555.396567 617 562" fill="#5e637d" stroke="#5e637d" />
         <polygon id="shell-facet-294" points="611.5501 554.1551 615.05 554.18 617 562 618.06 567.93 614.8571 569.3411" fill="#979db0" stroke="#979db0" />
-        <polygon id="shell-facet-295" points="618.06 567.93 617 562 623.53 564.84" fill="#858da1" stroke="#858da1" />
-        <polygon id="shell-facet-296" points="614.8571 569.3411 623.53 564.84 624.17 576.59 620.7415 577.2939" fill="#8b90a5" stroke="#8b90a5" />
-        <polygon id="shell-facet-297" points="623.53 564.84 617 562 623.61 555.12" fill="#5e617f" stroke="#5e617f" />
-        <polygon id="shell-facet-298" points="623.61 555.12 615.05 554.18 623 550" fill="#686d88" stroke="#686d88" />
-        <polygon id="shell-facet-300" points="620.7203 520.6323 624.22 520.59 625.5437 523.9516 625.8012 524.7141 626.0789 526.3051 626.0789 527.9051 625 536 621.0567 528.4509" fill="#7b7892" stroke="#7b7892" />
-        <polygon id="shell-facet-301" points="616.44 533.3551 621.0567 528.4509 624.33 529.69 625 536 619.54 534.98" fill="#868aa6" stroke="#868aa6" />
-        <polygon id="shell-facet-302" points="625.52 542.48 623.61 555.12 623 550" fill="#747b91" stroke="#747b91" />
-        <polygon id="shell-facet-303" points="625.52 542.48 625 536 624.22 520.59" fill="#77768f" stroke="#77768f" />
-        <polygon id="shell-facet-304" points="625 536 625.52 542.48 619.54 534.98" fill="#8688a6" stroke="#8688a6" />
-        <polygon id="shell-facet-305" points="623.53 564.84 625.39 586.67 624.17 576.59" fill="#77768e" stroke="#77768e" />
-        <polygon id="shell-facet-306" points="619.8938 580.4227 620.7415 577.2939 624.17 576.59 625.39 586.67 622.0489 587.7125" fill="#9390b4" stroke="#9390b4" />
+        <polygon id="shell-facet-295" points="617 562 627.027422 564.705688 618.06 567.93" fill="#858da1" stroke="#858da1" />
+        <polygon id="shell-facet-296" points="614.8571 569.3411 623.53 564.84 627.027422 564.705688 624.17 576.59 620.7415 577.2939" fill="#8b90a5" stroke="#8b90a5" />
+        <polygon id="shell-facet-297" points="617 562 623.61 555.12 627.099056 555.396567 627.027422 564.705688 623.53 564.84" fill="#5e617f" stroke="#5e617f" />
+        <polygon id="shell-facet-298" points="615.05 554.18 623 550 627.099056 555.396567 623.61 555.12" fill="#686d88" stroke="#686d88" />
+        <polygon id="shell-facet-300" points="620.7203 520.6323 627.63775 519.835689 628.831021 522.750135 629.193049 523.850758 629.565844 526.00307 629.571222 528.136806 628.499688 536.046752 625 536 621.0567 528.4509" fill="#7b7892" stroke="#7b7892" />
+        <polygon id="shell-facet-301" points="616.44 533.3551 621.0567 528.4509 627.810435 529.320445 628.499688 536.046752 625 536 619.54 534.98" fill="#868aa6" stroke="#868aa6" />
+        <polygon id="shell-facet-302" points="623 550 625.52 542.48 629.016405 542.638592 627.099056 555.396567 623.61 555.12" fill="#747b91" stroke="#747b91" />
+        <polygon id="shell-facet-303" points="624.22 520.59 627.63775 519.835689 629.016405 542.638592 625.52 542.48 625 536" fill="#77768f" stroke="#77768f" />
+        <polygon id="shell-facet-304" points="619.54 534.98 628.499688 536.046752 629.016405 542.638592 625.52 542.48" fill="#8688a6" stroke="#8688a6" />
+        <polygon id="shell-facet-305" points="623.53 564.84 627.027422 564.705688 628.877364 586.372863 625.39 586.67 624.17 576.59" fill="#77768e" stroke="#77768e" />
+        <polygon id="shell-facet-306" points="619.8938 580.4227 620.7415 577.2939 624.17 576.59 628.877364 586.372863 622.0489 587.7125" fill="#9390b4" stroke="#9390b4" />
         <polygon id="shell-facet-307" points="596.9735 608.2422 607.4071 602.488 609.77 605.07 611 610 599.33 610.83" fill="#555874" stroke="#555874" />
-        <polygon id="shell-facet-308" points="611 610 609.77 605.07 619.22 611.68" fill="#767895" stroke="#767895" />
+        <polygon id="shell-facet-308" points="609.77 605.07 622.556858 612.736114 611 610" fill="#767895" stroke="#767895" />
         <polygon id="shell-facet-309" points="599.33 610.83 611 610 612 623" fill="#525473" stroke="#525473" />
-        <polygon id="shell-facet-310" points="588 635 601.41 637.19 597.21 640.66" fill="#525574" stroke="#525574" />
-        <polygon id="shell-facet-311" points="588 635 600 628 601.41 637.19" fill="#545876" stroke="#545876" />
-        <polygon id="shell-facet-312" points="601.41 637.19 612 623 616.19 619.47" fill="#454860" stroke="#454860" />
-        <polygon id="shell-facet-313" points="612 623 601.41 637.19 600 628" fill="#30364e" stroke="#30364e" />
+        <polygon id="shell-facet-310" points="588 635 601.41 637.19 603.879083 639.670651 599.857648 642.949096" fill="#525574" stroke="#525574" />
+        <polygon id="shell-facet-311" points="588 635 600 628 603.879083 639.670651" fill="#545876" stroke="#545876" />
+        <polygon id="shell-facet-312" points="601.41 637.19 612 623 616.19 619.47 619.204383 621.248622 603.879083 639.670651" fill="#454860" stroke="#454860" />
+        <polygon id="shell-facet-313" points="600 628 612 623 603.879083 639.670651 601.41 637.19" fill="#30364e" stroke="#30364e" />
         <polygon id="shell-facet-314" points="600 628 599.33 610.83 612 623" fill="#525574" stroke="#525574" />
-        <polygon id="shell-facet-315" points="611 610 616.19 619.47 612 623" fill="#505373" stroke="#505373" />
+        <polygon id="shell-facet-315" points="611 610 619.204383 621.248622 612 623" fill="#505373" stroke="#505373" />
         <polygon id="shell-facet-316" points="583.4749 627.9188 596.9735 608.2422 599.33 610.83 600 628 586.22 630.09" fill="#727292" stroke="#727292" />
-        <polygon id="shell-facet-319" points="607.4071 602.488 613.9134 593.0252 621 599 609.77 605.07" fill="#8e90aa" stroke="#8e90aa" />
-        <polygon id="shell-facet-320" points="611 610 619.22 611.68 616.19 619.47" fill="#6f7491" stroke="#6f7491" />
-        <polygon id="shell-facet-321" points="620.7109 591.0002 621.2675 589.9701 623.4474 589.6343 625.0474 589.6343 625.0474 591.2343 624.8868 593.1473 621 599" fill="#807ea0" stroke="#807ea0" />
-        <polygon id="shell-facet-322" points="619.22 611.68 609.77 605.07 621 599" fill="#747694" stroke="#747694" />
-        <polygon id="shell-facet-323" points="613.9134 593.0252 620.7109 591.0002 622.7 593.88 621 599 615.98 595.85" fill="#9396b0" stroke="#9396b0" />
+        <polygon id="shell-facet-319" points="607.4071 602.488 613.9134 593.0252 624.146367 600.533093 609.77 605.07" fill="#8e90aa" stroke="#8e90aa" />
+        <polygon id="shell-facet-320" points="611 610 619.22 611.68 622.556858 612.736114 619.204383 621.248622 616.19 619.47" fill="#6f7491" stroke="#6f7491" />
+        <polygon id="shell-facet-321" points="620.7109 591.0002 621.2675 589.9701 623.4474 589.6343 628.5474 589.6343 628.544331 591.380829 628.192247 594.297962 624.146367 600.533093 621 599" fill="#807ea0" stroke="#807ea0" />
+        <polygon id="shell-facet-322" points="609.77 605.07 621 599 624.146367 600.533093 622.556858 612.736114 619.22 611.68" fill="#747694" stroke="#747694" />
+        <polygon id="shell-facet-323" points="613.9134 593.0252 620.7109 591.0002 626.021687 594.982904 624.146367 600.533093 621 599 615.98 595.85" fill="#9396b0" stroke="#9396b0" />
         <polygon id="shell-facet-327" points="459.92 370.27 453 377 456 363" fill="#a09fba" stroke="#a09fba" />
       </g>
     </g>
@@ -840,9 +840,8 @@
           <polygon id="cavity-facet-098" points="458 562 455 570 440 574" fill="#1b025a" stroke="#1b025a" />
           <polygon id="cavity-facet-099" points="419 522 421 517 444 506" fill="#4818a0" stroke="#4818a0" />
           <polygon id="cavity-facet-100" points="472 526 463 519.571429 479 511" fill="#0d0136" stroke="#0d0136" />
-          <polygon id="cavity-facet-101" points="465 565 469 568 483 580" fill="#b385f7" stroke="#b385f7" />
           <polygon id="cavity-facet-102" points="472 547 465 565 458 562" fill="#2c047e" stroke="#2c047e" />
-          <polygon id="cavity-facet-103" points="483 563 469 568 465 565" fill="#381386" stroke="#381386" />
+          <polygon id="cavity-facet-103" points="483 563 469 568.333333 465 565" fill="#381386" stroke="#381386" />
           <polygon id="cavity-facet-104" points="478 546 475 530 481 550" fill="#3a069a" stroke="#3a069a" />
           <polygon id="cavity-facet-105" points="479 511 475 530 472 526" fill="#0c0138" stroke="#0c0138" />
           <polygon id="cavity-facet-106" points="475 530 478 546 472 547" fill="#460dae" stroke="#460dae" />
@@ -852,8 +851,7 @@
           <polygon id="cavity-facet-110" points="472 547 483 563 465 565" fill="#2d0481" stroke="#2d0481" />
           <polygon id="cavity-facet-111" points="475 530 479 511 486 500" fill="#380b8b" stroke="#380b8b" />
           <polygon id="cavity-facet-112" points="475 530 472 547 472 526" fill="#4a0eb0" stroke="#4a0eb0" />
-          <polygon id="cavity-facet-114" points="469 568 483 563 482 575" fill="#28086a" stroke="#28086a" />
-          <polygon id="cavity-facet-115" points="483 580 469 568 482 575" fill="#b386f2" stroke="#b386f2" />
+          <polygon id="cavity-facet-114" points="469 568.333333 483 563 483 580" fill="#28086a" stroke="#28086a" />
           <polygon id="cavity-facet-116" points="458.46 607.74 469 607 481 612" fill="#18044f" stroke="#18044f" />
           <polygon id="cavity-facet-117" points="469 607 458.46 607.74 457 598" fill="#140146" stroke="#140146" />
           <polygon id="cavity-facet-118" points="485 605 481 612 469 607" fill="#2e067c" stroke="#2e067c" />
@@ -861,7 +859,6 @@
           <polygon id="cavity-facet-120" points="469 607 482 594 485 605" fill="#2d047e" stroke="#2d047e" />
           <polygon id="cavity-facet-121" points="457 598 458.46 607.74 454.2 602.12" fill="#1e0263" stroke="#1e0263" />
           <polygon id="cavity-facet-122" points="498 577 487 599 482 594" fill="#2c0680" stroke="#2c0680" />
-          <polygon id="cavity-facet-123" points="498 577 483 580 482 575" fill="#140048" stroke="#140048" />
           <polygon id="cavity-facet-124" points="487 599 485 605 482 594" fill="#300686" stroke="#300686" />
           <polygon id="cavity-facet-125" points="485 605 491 615 486.03 615.14" fill="#400ca4" stroke="#400ca4" />
           <polygon id="cavity-facet-126" points="485 605 487 599 498 577" fill="#5e23c5" stroke="#5e23c5" />
@@ -869,7 +866,7 @@
           <polygon id="cavity-facet-128" points="485 605 486.03 615.14 481 612" fill="#3e0ca0" stroke="#3e0ca0" />
           <polygon id="cavity-facet-129" points="498 577 503 575 514 572" fill="#b88ce8" stroke="#b88ce8" />
           <polygon id="cavity-facet-130" points="482 594 483 580 498 577" fill="#350a88" stroke="#350a88" />
-          <polygon id="cavity-facet-131" points="482 575 483 563 498 577" fill="#1d025a" stroke="#1d025a" />
+          <polygon id="cavity-facet-131" points="483 580 483 563 498 577" fill="#1d025a" stroke="#1d025a" />
           <polygon id="cavity-facet-132" points="483 563 481 550 502 570" fill="#33058a" stroke="#33058a" />
           <polygon id="cavity-facet-133" points="465 565 455 570 458 562" fill="#2c0a7c" stroke="#2c0a7c" />
           <polygon id="cavity-facet-134" points="465 505 479 511 463 519.571429" fill="#0d0034" stroke="#0d0034" />
