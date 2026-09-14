@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 
+#include "donner/base/Box.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -252,6 +253,14 @@ TEST(GeodeStrokeTolerance, DerivedToleranceBoundsDeviceChordErrorAtEveryScale) {
     EXPECT_LE(MaxDeviceFacetError(stroked, reference, scale), kStrokeFlattenDevicePixels)
         << "Stroke outline faceting exceeded the device-pixel bound at scale " << scale;
   }
+}
+
+TEST(GeodeStrokeTolerance, FacetErrorIsInvariantUnderPositiveRectanglePartition) {
+  const Path rectangle = PathBuilder().addRect(Box2d({0, 0}, {4, 2})).build();
+  const Path partition =
+      PathBuilder().addRect(Box2d({0, 0}, {2, 2})).addRect(Box2d({2, 0}, {4, 2})).build();
+  EXPECT_DOUBLE_EQ(MaxDeviceFacetError(rectangle, partition, 1.0), 0.0);
+  EXPECT_DOUBLE_EQ(MaxDeviceFacetError(partition, rectangle, 1.0), 0.0);
 }
 
 /// Companion to the test above: it records WHY the derivation is needed. A
