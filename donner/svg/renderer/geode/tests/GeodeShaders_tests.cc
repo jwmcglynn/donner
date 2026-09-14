@@ -614,6 +614,14 @@ TEST_F(SlugEndpointTest, MaskRetainsFlatTangentCrossings) {
   expectFlatTangentCancellation(EndpointShader::Mask);
 }
 
+TEST_F(SlugEndpointTest, TypedFillNonzeroRayEvents) {
+  expectNonzeroRayEvents(EndpointShader::TypedFill);
+}
+
+TEST_F(SlugEndpointTest, TypedFillBoundedRayEvents) {
+  expectBoundedRayEvents(EndpointShader::TypedFill);
+}
+
 TEST_F(SlugEndpointTest, FillNonzeroRayEvents) {
   expectNonzeroRayEvents(EndpointShader::Fill);
 }
