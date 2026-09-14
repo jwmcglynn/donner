@@ -1522,6 +1522,41 @@ TEST(TextEngineScriptedTest, UnknownXHeightDoesNotGuessSizeAdjustment) {
   EXPECT_FLOAT_EQ(runs.front().usedFontSizePx, 20.0f);
 }
 
+TEST(TextEngineScriptedTest, ZeroAdjustmentDoesNotRequireAnXHeightMetric) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto shapedSize = std::make_shared<float>(-1.0f);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->xHeight = 0;
+  backend->shapedFontSizePx = shapedSize;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("x"));
+  auto params = MakeTextParams(20.0);
+  params.fontSizeAdjust = 0.0;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  EXPECT_EQ(runs.front().usedFontSizePx, 0.0f);
+  EXPECT_THAT(runs.front().glyphs, ElementsAre(GlyphXAdvanceIs(DoubleEq(0.0))));
+  EXPECT_EQ(*shapedSize, -1.0f);
+}
+
+TEST(TextEngineScriptedTest, SizeAdjustmentUsesExactDesignUnitAspect) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->xHeight = 536;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("Text"));
+  auto params = MakeTextParams(64.0);
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  const float expected = static_cast<float>(64.0 * 0.3 / (536.0 / 1000.0));
+  EXPECT_EQ(runs.front().usedFontSizePx, expected);
+}
+
 TEST(TextEngineScriptedTest, FontSizeAdjustChangesUsedFontSizeFromXHeight) {
   Registry registry;
   FontManager fontManager(registry);
