@@ -493,6 +493,23 @@ TEST(SVGTextElementPublicApiTests, ZeroAdjustedSizePreservesAddressableCharacter
   EXPECT_EQ(span.getStartPositionOfChar(0), root.getStartPositionOfChar(1));
 }
 
+TEST(SVGTextElementPublicApiTests, ZeroAdjustedSizeFollowsAnchoringAndLengthAdjustment) {
+  for (const std::string& length :
+       {std::string(), std::string("textLength='40' lengthAdjust='spacingAndGlyphs'")}) {
+    SCOPED_TRACE(length);
+    SVGDocument doc = instantiateSubtree(
+        "<svg viewBox='0 0 120 40'><text id='root' x='80' y='20' text-anchor='end' font-size='20'>"
+        "<tspan " +
+            length + ">A</tspan><tspan font-size-adjust='0'>B</tspan></text></svg>",
+        kExperimentalOptions);
+    auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+    ASSERT_EQ(root.getNumberOfChars(), 2);
+    EXPECT_NEAR(root.getEndPositionOfChar(0).x, 80.0, 1e-6);
+    EXPECT_EQ(root.getStartPositionOfChar(1), root.getEndPositionOfChar(0));
+    EXPECT_EQ(root.getEndPositionOfChar(1), root.getEndPositionOfChar(0));
+  }
+}
+
 TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 120 40">

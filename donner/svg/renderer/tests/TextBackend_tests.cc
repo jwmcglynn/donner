@@ -340,7 +340,7 @@ TEST_P(TextBackendTest, MissingXHeightUsesTheSelectedGlyphMetric) {
     }
   }
   ASSERT_THAT(changed, testing::IsTrue());
-  const FontHandle font = fontManager_.loadFontData(bytes, FontDataTrust::Trusted);
+  const FontHandle font = fontManager_.loadFontData(bytes, FontDataTrust::Untrusted);
   ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
   const auto shaped = backend().shapeRun(font, 20.0f, "x", 0, 1, false, FontVariant::Normal, false);
   ASSERT_THAT(shaped.glyphs, SizeIs(1));
@@ -715,6 +715,32 @@ TEST(TextBackendFullCapabilities, UntrustedBitmapFontIsRejectedBeforeFreeTypeSha
           .glyphs,
       IsEmpty());
   EXPECT_FALSE(backend.bitmapGlyph(font, 1, 1.0f).has_value());
+}
+
+TEST(TextBackendFullCapabilities, MissingXHeightRespectsUntrustedOutlineAdmission) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+  const auto fallback = fontManager.fallbackFont();
+  std::vector<uint8_t> bytes = AddEmptyGlyfTable(fontManager.fontData(fallback));
+  ASSERT_GE(bytes.size(), 12u);
+  for (size_t i = 0; i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    ASSERT_LE(entry + 16, bytes.size());
+    if (ReadBe32(bytes, entry) == 0x4F532F32) {
+      const size_t offset = ReadBe32(bytes, entry + 8);
+      ASSERT_LE(offset + 88, bytes.size());
+      WriteBe16(&bytes, offset, 1);
+      WriteBe16(&bytes, offset + 86, 0);
+    }
+  }
+  const auto font = fontManager.loadFontData(bytes, FontDataTrust::Untrusted);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const auto shaped = backend.shapeRun(font, 20.0f, "x", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
+  EXPECT_THAT(fontManager.glyphOutlineComplexity(font, shaped.glyphs.front().glyphIndex),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(backend.fontVMetrics(font).xHeight, 0);
 }
 
 TEST(TextBackendFullCapabilities, UntrustedOutlineDecodeRequiresValidatedComplexity) {
