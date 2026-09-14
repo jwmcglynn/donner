@@ -6839,7 +6839,6 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 }
 
 void EditorShell::prepareFrame() {
-  processCollaboration();
   const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
   if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
@@ -7149,6 +7148,9 @@ void EditorShell::runFrame() {
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
   applyPendingHistoryActions();
+  // Polling releases the completed-render document gate. Dispatch before selection/overlay work
+  // can schedule another render, so a steady stream of preview frames cannot starve MCP.
+  processCollaboration();
   if (samplePresentationPending_ && viewportInitialized_ && app_.hasDocument() &&
       renderCoordinator_.displayedDocVersionForDiagnostics() ==
           app_.document().currentFrameVersion()) {

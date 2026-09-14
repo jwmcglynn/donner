@@ -1284,6 +1284,9 @@ void AsyncRenderer::workerLoop() {
       // `!desiredEntities.empty()` protects requests without editor selection/drag promotion:
       // `desiredPromotionIncomplete` is vacuously false when nothing is requested, but skipping the
       // main compose would leave diagnostic snapshots stale.
+      compositor_->setMainCompositionRequired(
+          request.overviewInfillOnly || request.captureCpuSnapshot ||
+          !requestRenderer.requiresTextureSnapshotPresentation());
       compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
                                                  !desiredEntities.empty() &&
                                                  !request.captureCpuSnapshot);

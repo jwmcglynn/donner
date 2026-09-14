@@ -109,7 +109,7 @@ protected:
   Json exchange(Json request) {
     const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return Json::object();
-    timeval timeout{.tv_sec = 5, .tv_usec = 0};
+    timeval timeout{.tv_sec = 3, .tv_usec = 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
@@ -140,7 +140,7 @@ protected:
                        {"method", "tools/call"},
                        {"params", {{"name", name}, {"arguments", args}}}};
     auto reply = std::async(std::launch::async, [this, request]() { return exchange(request); });
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (reply.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
            std::chrono::steady_clock::now() < deadline) {
       window->waitEventsTimeout(0.01);
@@ -179,6 +179,22 @@ protected:
     pixel.rowBytes = 4;
     pixel.pixels.assign(bitmap.pixels.begin() + offset, bitmap.pixels.begin() + offset + 4);
     return pixel;
+  }
+  void addComment(Vector2d point, const char* text) {
+    EditorCollaborationUiTestAccess::OpenContextMenu(*shell, point);
+    frame();
+    ASSERT_THAT(GImGui->OpenPopupStack.empty(), Eq(false));
+    ImGuiWindow* menu = GImGui->OpenPopupStack.back().Window;
+    ASSERT_THAT(menu != nullptr, Eq(true));
+    ImGui::ActivateItemByID(menu->GetID("Add Comment Here"));
+    frame();
+    frame();
+    ImGuiWindow* comments = ImGui::FindWindowByName("Comments");
+    ASSERT_THAT(comments != nullptr, Eq(true));
+    ImGui::GetIO().AddInputCharactersUTF8(text);
+    frame();
+    ImGui::ActivateItemByID(comments->GetID("Add Comment"));
+    frame();
   }
   Json revision() {
     Json result = call("get_editor_state");
@@ -255,25 +271,19 @@ TEST_F(EditorCollaborationUiTest, McpEditsTheVisibleDocumentAndUndoRestoresIt) {
 
 TEST_F(EditorCollaborationUiTest, ContextMenuCommentReachesMcpAndDrawsAnAnchoredPin) {
   call("get_editor_state");
-  EditorCollaborationUiTestAccess::OpenContextMenu(*shell, Vector2d(40, 40));
-  frame();
-  ASSERT_THAT(GImGui->OpenPopupStack.empty(), Eq(false));
-  ImGuiWindow* menu = GImGui->OpenPopupStack.back().Window;
-  ASSERT_THAT(menu != nullptr, Eq(true));
-  ImGui::ActivateItemByID(menu->GetID("Add Comment Here"));
-  frame();
-  frame();
-  ImGuiWindow* comments = ImGui::FindWindowByName("Comments");
-  ASSERT_THAT(comments != nullptr, Eq(true));
-  ImGui::GetIO().AddInputCharactersUTF8("Make this face more angular");
-  frame();
-  ImGui::ActivateItemByID(comments->GetID("Add Comment"));
-  frame();
+  addComment(Vector2d(40, 40), "Make this face more angular");
   const Json feedback = call("get_comments");
   ASSERT_THAT(feedback["comments"].size(), Eq(1u)) << feedback.dump();
   EXPECT_THAT(feedback["comments"][0]["text"], Eq("Make this face more angular"));
   EXPECT_THAT(feedback["comments"][0]["element_id"], Eq("face"));
   EXPECT_THAT(feedback["comments"][0]["x"], Eq(40.0));
+  addComment(Vector2d(100, 85), "Lighten this face");
+  const Json secondFeedback = call("get_comments");
+  ASSERT_THAT(secondFeedback["comments"].size(), Eq(2u));
+  EXPECT_THAT(secondFeedback["comments"][1]["text"], Eq("Lighten this face"));
+  EXPECT_THAT(secondFeedback["comments"][1]["x"], Eq(100.0));
+  EXPECT_THAT(secondFeedback["comments"][1]["y"], Eq(85.0));
+
   frame();
   const auto screen = shell->viewportForReadback().documentToScreen(Vector2d(40, 40));
   EXPECT_THAT(EditorCollaborationUiTestAccess::PinCaptures(*shell, screen), Eq(true));

@@ -1011,6 +1011,12 @@ public:
   /// the caller must disable the skip for a settle render that refreshes it.
   void setSkipMainComposeDuringSplit(bool skip) { skipMainComposeDuringSplit_ = skip; }
 
+  /// Whether the consumer needs a flattened image in the main renderer in addition to the tiles.
+  /// Direct GPU tile presentation disables this to avoid an unused full-viewport allocation.
+  /// Explicit snapshot consumers and pixel-identity verification still require composition.
+  /// @param required True when the caller will read the main renderer's composed output.
+  void setMainCompositionRequired(bool required) { mainCompositionRequired_ = required; }
+
   /// Enumerate every cacheable unit (static segments + promoted layer
   /// bitmaps) interleaved in paint order. Each tile carries a
   /// `generation` counter that advances only when the tile's pixel
@@ -1387,6 +1393,9 @@ private:
   /// compose and only skip on subsequent drag frames, preserving the cached
   /// non-split frame without ever producing a transparent bitmap.
   bool mainRendererHasCachedFrame_ = false;
+
+  /// Snapshot consumers need flat output by default; tile-only consumers opt out explicitly.
+  bool mainCompositionRequired_ = true;
 
   FastPathCounters fastPathCounters_;
 

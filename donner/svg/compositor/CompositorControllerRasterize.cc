@@ -816,6 +816,13 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
 
 void CompositorController::composeLayers(const RenderViewport& viewport,
                                          const Transform2d& surfaceFromCanvas) {
+  if (!mainCompositionRequired_ && !config_.verifyPixelIdentity) {
+    // The published tile set already carries this frame. Mark flat output stale so a later
+    // snapshot request cannot use the drag skip-compose shortcut with an older image.
+    mainRendererHasCachedFrame_ = false;
+    return;
+  }
+
   ZoneScopedN("Compositor::composeLayersImpl");
 
   // Split path: bg/fg already composite segments + non-drag promoted
