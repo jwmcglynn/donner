@@ -11,6 +11,50 @@
 namespace donner::gpu::shader::wgsl {
 namespace {
 
+TEST(Language, AcceptsEightArgumentHelpersAndMaterializesEveryOperand) {
+  const auto parsed = Parse(R"wgsl(
+fn weighted(a:f32,b:f32,c:f32,d:f32,e:f32,f:f32,g:f32,h:f32)->f32 {
+  return a+b+c+d+e+f+g+h;
+}
+fn caller(x:f32)->f32 { return weighted(x,2,3,4,5,6,7,8); }
+)wgsl");
+  ASSERT_TRUE(parsed.hasResult()) << unsigned(parsed.diagnostic.code);
+  const Expression* call = nullptr;
+  for (uint16_t i = 0; i < parsed.module.expressionCount; ++i)
+    if (parsed.module.expressions[i].kind == ExpressionKind::FunctionCall)
+      call = &parsed.module.expressions[i];
+  ASSERT_NE(call, nullptr);
+  ASSERT_EQ(call->operandCount, 8);
+  for (uint8_t i = 0; i < call->operandCount; ++i) {
+    ASSERT_LT(call->operands[i], parsed.module.expressionCount);
+    EXPECT_EQ(parsed.module.expressions[call->operands[i]].type, (Type{TypeKind::F32}));
+  }
+}
+TEST(Language, RejectsHelperDeclarationsBeyondTheAdmittedArity) {
+  EXPECT_EQ(Parse("fn wide(a:f32,b:f32,c:f32,d:f32,e:f32,f:f32,g:f32,h:f32,i:f32)->f32{return a;}")
+                .diagnostic.code,
+            ErrorCode::UnsupportedConstruct);
+}
+TEST(Language, RejectsWrongArityAndTypeInExtendedCalls) {
+  const std::string prefix =
+      "fn wide(a:f32,b:f32,c:f32,d:f32,e:f32,f:f32,g:f32,h:f32)->f32{return h;}";
+  for (const char* call :
+       {"wide(1,2,3,4,5,6,7)", "wide(1,2,3,4,5,6,7,8,9)", "wide(1,2,3,4,5,6,7,true)"}) {
+    SCOPED_TRACE(call);
+    EXPECT_EQ(Parse(prefix + "fn caller()->f32{return " + call + ";}").diagnostic.code,
+              ErrorCode::InvalidCall);
+  }
+}
+
+TEST(Language, RejectsWideBuiltinAndConstructorCalls) {
+  for (const char* source : {"fn caller(x:f32)->f32{return pow(x,x,x,x,x,x,x,x);}",
+                             "fn caller(x:f32)->vec4f{return vec4f(x,x,x,x,x,x,x,x);}",
+                             "fn caller(x:vec2f)->mat2x2f{return mat2x2f(x,x,x,x,x,x,x,x);}"}) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::InvalidCall);
+  }
+}
+
 TEST(Language, AcceptsFloatingFloorAndSignWithScalarAndVectorShapes) {
   for (const char* source : {
            "fn f(x:f32)->f32 { return floor(x); }",
