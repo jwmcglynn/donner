@@ -91,6 +91,25 @@ TEST(CatalogEncodedFontStoreTest, FailureRequiresExplicitRetryAndRejectsOldAttem
   EXPECT_EQ(store.publishVerified(id, second, InterBytes()), true);
 }
 
+TEST(CatalogEncodedFontStoreTest, AdoptionWakesTasksCreatedAfterPublication) {
+  CatalogEncodedFontStore store;
+  const auto& id = InterAsset().contentId;
+  ASSERT_EQ(store.publishVerified(id, QueueAndStart(store), InterBytes()), true);
+  const auto stagedWake = store.wakeRevision();
+  ASSERT_EQ(store.availability(id).state, FontAssetState::Fetching);
+  std::vector<FontAssetState> observed;
+  store.setWakeCallback([&] { observed.push_back(store.availability(id).state); });
+
+  ASSERT_EQ(store.adoptReadyAssets(), true);
+  EXPECT_GT(store.wakeRevision(), stagedWake);
+  EXPECT_THAT(observed, ElementsAre(FontAssetState::Ready));
+  const auto adoptedWake = store.wakeRevision();
+  EXPECT_EQ(store.adoptReadyAssets(), false);
+  EXPECT_EQ(store.wakeRevision(), adoptedWake);
+  EXPECT_THAT(observed, ElementsAre(FontAssetState::Ready));
+  store.setWakeCallback({});
+}
+
 TEST(CatalogEncodedFontStoreTest, EvictionCannotInvalidateALeaseAndRefillPreservesIdentity) {
   CatalogEncodedFontStore store;
   const auto& id = InterAsset().contentId;

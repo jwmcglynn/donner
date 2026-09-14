@@ -109,7 +109,7 @@ playwright_bin.playwright_test(
         "test",
         "$(rootpath :smoke.spec.ts)",
         "--config=$(rootpath :playwright.bazel.config.js)",
-        "--grep=catalog font loading adopts deferred WOFF2 without authored edits",
+        "--grep=catalog font loading|welcome picker paints before|WGPU diagnostics do not block",
     ],
     copy_data_to_bin = False,
     data = [

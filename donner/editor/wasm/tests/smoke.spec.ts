@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test, type TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
@@ -511,6 +511,67 @@ test("loading handoff publishes ordered startup timings", async ({ page }) => {
   console.log(`wasm-startup=${JSON.stringify(startup)}`);
   console.log(`wasm-startup-device-logs=${JSON.stringify(startupDeviceLogs)}`);
   expect(fatalMessages).toEqual([]);
+});
+
+async function captureCatalogFontDiagnostics(
+  page: Page,
+  testInfo: TestInfo,
+  networkRequests: readonly string[] = [],
+) {
+  const diagnostic = await page.evaluate(() => {
+    const state = window as Window & {
+      __donnerCatalogBrokers?: Map<number, {
+        broker: {
+          enabled: boolean;
+          closed: boolean;
+          running: number;
+          assets: Map<string, unknown>;
+          requests: Map<string, { state: string; token: number }>;
+        };
+      }>;
+    };
+    return {
+      firstFrame: state.__donnerFirstFramePresented,
+      frameCount: state.__donnerMainLoopRenderedFrames,
+      activeSample: document.querySelector("canvas")?.getAttribute("data-active-sample-id"),
+      sampleStats: state.__donnerSampleThumbnailStats,
+      workerStats: state.__donnerWorkerStats,
+      interactionStats: state.__donnerInteractionStats,
+      fontRequests: state.__catalogFontTest,
+      brokers: Array.from(state.__donnerCatalogBrokers ?? [], ([session, record]) => ({
+        session,
+        enabled: record.broker.enabled,
+        closed: record.broker.closed,
+        running: record.broker.running,
+        assetCount: record.broker.assets.size,
+        requests: Array.from(record.broker.requests, ([id, request]) => ({
+          id,
+          state: request.state,
+          token: request.token,
+        })),
+      })),
+    };
+  });
+  const diagnosticPath = testInfo.outputPath("catalog-font-final.json");
+  await writeFile(diagnosticPath, JSON.stringify({ diagnostic, networkRequests }, null, 2));
+  await testInfo.attach("catalog-font-final", {
+    path: diagnosticPath,
+    contentType: "application/json",
+  });
+  await page.locator("canvas#canvas").screenshot({
+    path: testInfo.outputPath("catalog-font-final.png"),
+    timeout: 2000,
+  });
+}
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  if (!/welcome picker paints before|WGPU diagnostics do not block/.test(testInfo.title)) return;
+  try {
+    await captureCatalogFontDiagnostics(page, testInfo);
+  } catch (error) {
+    console.error(`catalog font diagnostic capture failed: ${String(error)}`);
+  }
 });
 
 test("welcome picker does not render a hidden document", async ({ page }) => {
@@ -1217,50 +1278,7 @@ test(
       expect(fatalMessages).toEqual([]);
     } finally {
       try {
-        const diagnostic = await page.evaluate(() => {
-          const state = window as Window & {
-            __donnerCatalogBrokers?: Map<number, {
-              broker: {
-                enabled: boolean;
-                closed: boolean;
-                running: number;
-                assets: Map<string, unknown>;
-                requests: Map<string, { state: string; token: number }>;
-              };
-            }>;
-          };
-          return {
-            firstFrame: state.__donnerFirstFramePresented,
-            frameCount: state.__donnerMainLoopRenderedFrames,
-            activeSample: document.querySelector("canvas")?.getAttribute("data-active-sample-id"),
-            sampleStats: state.__donnerSampleThumbnailStats,
-            workerStats: state.__donnerWorkerStats,
-            interactionStats: state.__donnerInteractionStats,
-            fontRequests: state.__catalogFontTest,
-            brokers: Array.from(state.__donnerCatalogBrokers ?? [], ([session, record]) => ({
-              session,
-              enabled: record.broker.enabled,
-              closed: record.broker.closed,
-              running: record.broker.running,
-              assetCount: record.broker.assets.size,
-              requests: Array.from(record.broker.requests, ([id, request]) => ({
-                id,
-                state: request.state,
-                token: request.token,
-              })),
-            })),
-          };
-        });
-        const diagnosticPath = testInfo.outputPath("catalog-font-final.json");
-        await writeFile(diagnosticPath, JSON.stringify({ diagnostic, networkRequests }, null, 2));
-        await testInfo.attach("catalog-font-final", {
-          path: diagnosticPath,
-          contentType: "application/json",
-        });
-        await page.locator("canvas#canvas").screenshot({
-          path: testInfo.outputPath("catalog-font-final.png"),
-          timeout: 2000,
-        });
+        await captureCatalogFontDiagnostics(page, testInfo, networkRequests);
       } catch (error) {
         console.error(`catalog font diagnostic capture failed: ${String(error)}`);
       } finally {
