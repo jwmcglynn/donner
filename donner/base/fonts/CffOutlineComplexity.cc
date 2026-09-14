@@ -416,7 +416,10 @@ std::optional<std::vector<uint16_t>> ParseFdSelect(std::span<const uint8_t> tabl
     offset += glyphBytes;
     const uint16_t fd = fdBytes == 1 ? table[offset] : ReadBe16(table.data() + offset);
     offset += fdBytes;
-    if ((range == 0 && first != 0) || (range != 0 && first <= previousFirst) || fd >= fdCount) {
+    // The sentinel bounding the last range is only checked after this loop, so a start above
+    // `glyphCount` would fill past the end of `result` before anything rejected it.
+    if ((range == 0 && first != 0) || (range != 0 && first <= previousFirst) ||
+        first >= glyphCount || fd >= fdCount) {
       return std::nullopt;
     }
     for (std::size_t glyph = previousFirst; range != 0 && glyph < first; ++glyph) {

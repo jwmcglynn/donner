@@ -54,15 +54,19 @@ struct FormatBarFontFamily {
   /// Donner-rendered label in this family's own face. An unavailable preview
   /// falls back to UI text while the bounded worker request is in flight.
   FormatBarFontPreview preview;
-  /// Origin of this family in the catalog. The picker lists the Embedded group
+  /// Origin of this family in the catalog. The picker lists the Bundled group
   /// before the System group and shows a header at each group boundary.
-  svg::FontSource source = svg::FontSource::Embedded;
+  svg::FontSource source = svg::FontSource::Bundled;
+  /// Nonblocking delivery status; decoded previews remain separate from encoded availability.
+  svg::FontAssetState availability = svg::FontAssetState::Ready;
+  /// The available bytes could not be decoded by the preview consumer.
+  bool previewFailed = false;
 };
 
 /**
  * Build the picker's family list from a catalog listing.
  *
- * `FontCatalog::families()` already orders Embedded before System and sorts within each group.
+ * `FontCatalog::families()` already orders Bundled before System and sorts within each group.
  * Each entry keeps its CSS family name and source; `preview` is filled for families already
  * rendered by the bounded preview worker. Families the catalog lacks remain reachable through the
  * free-text box, so this list is additive rather than a whitelist.
@@ -117,6 +121,10 @@ struct FormatBarActions {
   bool toggleUnderline = false;
   /// Visible dropdown rows whose family-name previews are not cached yet.
   std::vector<std::string> requestFontPreviews;
+  /// All currently visible rows, including rows whose preview is already cached.
+  std::vector<std::string> visibleFontFamilies;
+  /// Explicit retry actions; the transport broker enforces its per-asset cooldown.
+  std::vector<std::string> retryFontFamilies;
 };
 
 /// Common font-size presets offered by the size combo (document units).

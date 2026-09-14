@@ -13,15 +13,32 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/base/HeapSizeHistogram.h"
 #include "donner/base/MemoryAttribution.h"
+#include "donner/svg/resources/CatalogEncodedFontStore.h"
 
 namespace donner::editor::whole_app_worker {
 
 namespace {
+
+struct CatalogSessions {
+  std::mutex mutex;
+  uint32_t nextId = 1;
+  std::unordered_map<uint32_t, std::weak_ptr<svg::CatalogEncodedFontStore>> stores;
+};
+
+CatalogSessions& FontSessions() {
+  static CatalogSessions sessions;
+  return sessions;
+}
 
 /// Shared-memory mirror of main-thread-only browser state.
 ///
@@ -29,12 +46,12 @@ namespace {
 /// JS indexes `HEAP32` and `HEAPF64` directly off this object's address. Keep
 /// the layout, the `alignas(8)`, and the JS index arithmetic in sync.
 struct alignas(8) BrowserMirror {
-  std::int32_t cssWidth;          // +0
-  std::int32_t cssHeight;         // +4
-  std::int32_t frameRequested;    // +8
-  std::int32_t zoomModifierHeld;  // +12
-  double devicePixelRatio;        // +16
-  double mouseDownEpochMs;        // +24
+  std::int32_t cssWidth;             // +0
+  std::int32_t cssHeight;            // +4
+  std::int32_t frameRequested;       // +8
+  std::int32_t zoomModifierHeld;     // +12
+  double devicePixelRatio;           // +16
+  double mouseDownEpochMs;           // +24
   std::int32_t mouseDownSeq;         // +32
   std::int32_t readbackRequestId;    // +36 (page writes, worker reads)
   std::int32_t readbackCompletedId;  // +40 (worker writes)
@@ -1097,7 +1114,7 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         // once. Probes read the pair to measure how promptly a completed
         // result reached the canvas without racing their own poll cadence.
         const workerStats = window['__donnerWorkerStats'];
-        if (workerStats && workerStats['presentedAtMs'] === undefined) {
+        if (workerStats && Object.is(workerStats['presentedAtMs'], undefined)) {
           workerStats['presentedAtMs'] = performance.now();
         }
         window['__donnerMainLoopRenderedFrames'] =
@@ -1184,6 +1201,145 @@ void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset,
         });
       },
       zoomModifierHeld ? 1 : 0, xoffset, yoffset, physicalKeyHeld ? 1 : 0);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void donner_catalog_font_complete(
+    uint32_t session, uint32_t assetIndex, double requestToken, const uint8_t* bytes, size_t size) {
+  constexpr double kMaximumExactJsInteger = 9007199254740991.0;
+  const auto assets = svg::CatalogFontAssets();
+  if (assetIndex >= assets.size() || !std::isfinite(requestToken) || requestToken < 1 ||
+      requestToken > kMaximumExactJsInteger || std::floor(requestToken) != requestToken) {
+    return;
+  }
+  std::shared_ptr<svg::CatalogEncodedFontStore> store;
+  {
+    auto& sessions = FontSessions();
+    std::lock_guard lock(sessions.mutex);
+    const auto found = sessions.stores.find(session);
+    if (found == sessions.stores.end()) return;
+    store = found->second.lock();
+  }
+  if (!store) return;
+  const auto& asset = assets[assetIndex];
+  const uint64_t token = static_cast<uint64_t>(requestToken);
+  if (!bytes || size != asset.encodedBytes ||
+      size > svg::CatalogEncodedFontStore::kMaximumAssetBytes) {
+    store->fail(asset.contentId, token);
+    return;
+  }
+  // The application-owned JS broker has checked the exact compiled digest before this callback.
+  // The store independently checks token, manifest identity, byte length, and the WOFF2 header.
+  if (!store->publishVerified(asset.contentId, token, std::vector<uint8_t>(bytes, bytes + size))) {
+    store->fail(asset.contentId, token);
+  }
+}
+
+uint32_t InstallCatalogFonts(std::shared_ptr<svg::CatalogEncodedFontStore> store) {
+  if (!store) return 0;
+  uint32_t session;
+  {
+    auto& sessions = FontSessions();
+    std::lock_guard lock(sessions.mutex);
+    if (sessions.nextId == 0) return 0;
+    session = sessions.nextId++;
+    sessions.stores.emplace(session, store);
+  }
+  std::string manifest = "[";
+  for (const auto& asset : svg::CatalogFontAssets()) {
+    if (manifest.size() > 1) manifest += ',';
+    // Paths and hashes are restricted ASCII generated from the pinned catalog, never user text.
+    manifest += "{\"id\":\"" + asset.contentId + "\",\"path\":\"" + asset.packagePath +
+                "\",\"encodedBytes\":" + std::to_string(asset.encodedBytes) +
+                ",\"decodedBytes\":" + std::to_string(asset.decodedBytes) + "}";
+  }
+  manifest += ']';
+  char* ownedManifest = static_cast<char*>(std::malloc(manifest.size() + 1));
+  if (!ownedManifest) {
+    UninstallCatalogFonts(session);
+    return 0;
+  }
+  std::memcpy(ownedManifest, manifest.c_str(), manifest.size() + 1);
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+    const session = $0;
+    let assets;
+    try {
+      assets = JSON.parse(UTF8ToString($1));
+    } finally {
+      _free($1);
+    }
+    const brokers = window['__donnerCatalogBrokers'] || new Map();
+    window['__donnerCatalogBrokers'] = brokers;
+    const ids = assets.map(function(asset) { return asset.id; });
+        const broker = new window['DonnerCatalogFontBroker']({
+          baseUrl: window['__donnerCatalogPackageUrl'], assets: assets,
+          enabled: !!window['__donnerFirstFramePresented'],
+          onResult: function(result) {
+            if (brokers.get(session)?.broker !== broker) return;
+            const index = ids.indexOf(result.id);
+            if (index < 0) return;
+            let pointer = 0;
+            try {
+      if (result.bytes) {
+        pointer = _malloc(result.bytes.byteLength);
+        if (pointer) HEAPU8.set(result.bytes, pointer);
+      }
+      _donner_catalog_font_complete(session, index, result.token, pointer,
+                                    pointer ? result.bytes.byteLength : 0);
+            } finally {
+      if (pointer) _free(pointer);
+            }
+          }
+});
+const start = function() {
+  broker.start();
+};
+brokers.set(session, ({broker : broker, ids : ids, start : start}));
+if (!window['__donnerFirstFramePresented']) {
+  window.addEventListener('donner:first-frame-presented', start, ({once : true}));
+}
+},
+      session, ownedManifest);
+return session;
+}
+
+void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t requestToken,
+                        int priority, bool explicitRetry) {
+  const auto assets = svg::CatalogFontAssets();
+  const auto found = std::find_if(assets.begin(), assets.end(),
+                                  [&](const auto& asset) { return asset.contentId == contentId; });
+  if (!session || found == assets.end()) return;
+  const size_t index = static_cast<size_t>(found - assets.begin());
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const record = window['__donnerCatalogBrokers'] ?.get($0);
+        const accepted = record && ($4 ? record.broker.retry(record.ids[$1], $2)
+                                       : record.broker.request(record.ids[$1], $2, $3));
+        if (!accepted) {
+          _donner_catalog_font_complete($0, $1, $2, 0, 0);
+        }
+      },
+      session, index, static_cast<double>(requestToken), priority, explicitRetry ? 1 : 0);
+}
+
+void UninstallCatalogFonts(uint32_t session) {
+  if (!session) return;
+  {
+    auto& sessions = FontSessions();
+    std::lock_guard lock(sessions.mutex);
+    sessions.stores.erase(session);
+  }
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const brokers = window['__donnerCatalogBrokers'];
+        const record = brokers ?.get($0);
+        brokers                ?.delete($0);
+        if (record) {
+          window.removeEventListener('donner:first-frame-presented', record.start);
+          record.broker.close();
+        }
+      },
+      session);
 }
 
 }  // namespace donner::editor::whole_app_worker

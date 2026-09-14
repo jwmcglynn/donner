@@ -14,6 +14,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/ScopedRenderInvalidationRestore.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -54,17 +55,6 @@ struct SubtreeRenderSpan {
   Entity firstEntity = entt::null;
   Entity lastEntity = entt::null;
   std::optional<Box2d> worldBounds;
-};
-
-struct DirtyFlagsSnapshot {
-  Entity entity = entt::null;
-  uint16_t flags = components::DirtyFlagsComponent::None;
-};
-
-struct RenderInvalidationSnapshot {
-  bool hadRenderTreeState = false;
-  components::RenderTreeState renderTreeState;
-  std::vector<DirtyFlagsSnapshot> dirtyFlags;
 };
 
 std::optional<Box2d> IntersectBoxes(const Box2d& lhs, const Box2d& rhs) {
@@ -224,53 +214,7 @@ bool PathCanHaveStrokeJoin(const Path& path) {
   return false;
 }
 
-RenderInvalidationSnapshot CaptureRenderInvalidation(Registry& registry) {
-  RenderInvalidationSnapshot snapshot;
-  if (const auto* state = registry.ctx().find<components::RenderTreeState>()) {
-    snapshot.hadRenderTreeState = true;
-    snapshot.renderTreeState = *state;
-  }
-
-  for (const Entity entity : registry.view<components::DirtyFlagsComponent>()) {
-    const auto& dirty = registry.get<components::DirtyFlagsComponent>(entity);
-    snapshot.dirtyFlags.push_back(DirtyFlagsSnapshot{
-        .entity = entity,
-        .flags = dirty.flags,
-    });
-  }
-  return snapshot;
-}
-
-void RestoreRenderInvalidation(Registry& registry, const RenderInvalidationSnapshot& snapshot) {
-  registry.clear<components::DirtyFlagsComponent>();
-  for (const DirtyFlagsSnapshot& dirty : snapshot.dirtyFlags) {
-    if (!registry.valid(dirty.entity)) {
-      continue;
-    }
-    registry.emplace_or_replace<components::DirtyFlagsComponent>(dirty.entity).flags = dirty.flags;
-  }
-
-  if (snapshot.hadRenderTreeState) {
-    if (registry.ctx().contains<components::RenderTreeState>()) {
-      registry.ctx().erase<components::RenderTreeState>();
-    }
-    registry.ctx().emplace<components::RenderTreeState>(snapshot.renderTreeState);
-  } else if (registry.ctx().contains<components::RenderTreeState>()) {
-    registry.ctx().erase<components::RenderTreeState>();
-  }
-}
-
-class ScopedRenderInvalidationRestore {
-public:
-  explicit ScopedRenderInvalidationRestore(Registry& registry)
-      : registry_(registry), snapshot_(CaptureRenderInvalidation(registry)) {}
-
-  ~ScopedRenderInvalidationRestore() { RestoreRenderInvalidation(registry_, snapshot_); }
-
-private:
-  Registry& registry_;
-  RenderInvalidationSnapshot snapshot_;
-};
+using components::ScopedRenderInvalidationRestore;
 
 /// True when walking the tree parent chain from @p entity reaches an entity in
 /// @p subtreeEntities. Rendering instances for shadow-tree content (e.g. the

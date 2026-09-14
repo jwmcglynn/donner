@@ -71,7 +71,7 @@ public:
   std::vector<FontFamilyInfo> families() const override {
     std::vector<FontFamilyInfo> out;
     for (const std::string& name : families_) {
-      out.push_back(FontFamilyInfo{name, FontSource::Embedded, FontCategory::SansSerif});
+      out.push_back(FontFamilyInfo{name, FontSource::Bundled, FontCategory::SansSerif});
     }
     return out;
   }
@@ -124,7 +124,7 @@ public:
   }
 
   std::vector<FontFamilyInfo> families() const override {
-    return {FontFamilyInfo{family_, FontSource::Embedded, FontCategory::SansSerif}};
+    return {FontFamilyInfo{family_, FontSource::Bundled, FontCategory::SansSerif}};
   }
 
   bool hasFamily(std::string_view family) const override { return family == family_; }

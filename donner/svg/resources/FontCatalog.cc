@@ -22,8 +22,15 @@ std::string toLower(std::string_view value) {
 }  // namespace
 
 FontCatalog::FontCatalog() {
-  // Order defines precedence: Embedded before System.
-  providers_.push_back(std::make_unique<EmbeddedFontProvider>());
+  auto bundled = std::make_unique<EmbeddedFontProvider>();
+  store_ = bundled->encodedStore();
+  providers_.push_back(std::move(bundled));
+  providers_.push_back(std::make_unique<SystemFontProvider>());
+}
+
+FontCatalog::FontCatalog(std::shared_ptr<CatalogEncodedFontStore> store)
+    : store_(std::move(store)) {
+  providers_.push_back(std::make_unique<EmbeddedFontProvider>(store_));
   providers_.push_back(std::make_unique<SystemFontProvider>());
 }
 
@@ -59,15 +66,38 @@ bool FontCatalog::hasFamily(std::string_view family) const {
 
 std::vector<uint8_t> FontCatalog::loadFamilyData(std::string_view family,
                                                  const FontFaceRequest& request) const {
+  bool skippedSynchronousProvider = false;
   for (const auto& provider : providers_) {
     if (provider->hasFamily(family)) {
-      std::vector<uint8_t> data = provider->loadFamilyData(family, request);
-      if (!data.empty()) {
-        return data;
-      }
+      const bool immutable = !provider->availability(family, request).contentId.empty();
+      // Metadata and admission selected the first claimant. Legacy empty-byte fallback may only
+      // reach another synchronous provider; crossing into immutable assets would bypass their
+      // identity, readiness, decode reservation, and stricter resource limits.
+      if (skippedSynchronousProvider && immutable) return {};
+      // Readiness must not change bundled source precedence. Preserve the historic empty-byte
+      // fallback for synchronous custom providers, whose metadata has no immutable content ID.
+      auto data = provider->loadFamilyData(family, request);
+      if (!data.empty() || immutable) return data;
+      skippedSynchronousProvider = true;
     }
   }
   return {};
+}
+
+FontFaceAvailability FontCatalog::availability(std::string_view family,
+                                               const FontFaceRequest& request) const {
+  for (const auto& provider : providers_) {
+    if (provider->hasFamily(family)) return provider->availability(family, request);
+  }
+  return {};
+}
+
+FontFaceAdmission FontCatalog::tryAcquireFace(std::string_view family,
+                                              const FontFaceRequest& request) const {
+  for (const auto& provider : providers_) {
+    if (provider->hasFamily(family)) return provider->tryAcquireFace(family, request);
+  }
+  return {.state = FontFaceLoadState::Failed};
 }
 
 std::optional<FontFamilyInfo> FontCatalog::find(std::string_view family) const {

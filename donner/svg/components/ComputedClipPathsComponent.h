@@ -4,6 +4,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::svg::components {
 
@@ -34,6 +35,9 @@ struct ComputedClipPathsComponent {
 
   /// All clip paths, in order they need to be applied based on their layer.
   std::vector<ClipPath> clipPaths;
+  /// Faces whose accepted glyph/shape paths formed this consumer's clip, including nested clips.
+  std::vector<FontFaceDependency> fontDependencies;
+  uint64_t fontResourceRevision = 0;
 };
 
 }  // namespace donner::svg::components

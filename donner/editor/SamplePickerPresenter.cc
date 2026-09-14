@@ -29,6 +29,9 @@ void DrawSampleButton(const EditorSample& sample, std::string_view description,
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::PushID(static_cast<int>(index));
   const bool clicked = ImGui::InvisibleButton("##sample", ImVec2(width, height));
+  if (ImGui::IsItemVisible()) {
+    actions->visibleSampleIndices.push_back(index);
+  }
   const ImVec2 min = ImGui::GetItemRectMin();
   const ImVec2 max = ImGui::GetItemRectMax();
   const bool hovered = ImGui::IsItemHovered();

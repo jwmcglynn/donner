@@ -5,6 +5,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/Vector2.h"
 #include "donner/editor/EditorSampleCatalog.h"
@@ -58,6 +59,8 @@ struct SamplePickerActions {
   bool loadSample = false;
   std::string sampleId;
   bool openGitHub = false;
+  /// Cards whose actual ImGui rectangles intersect the current clip region.
+  std::vector<std::size_t> visibleSampleIndices;
 };
 
 /// Donner-rendered sample artwork uploaded to a texture the picker can blit.

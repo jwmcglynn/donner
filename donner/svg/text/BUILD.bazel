@@ -72,8 +72,10 @@ donner_cc_library(
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
         "//donner/svg/components/layout:layout_system",
+        "//donner/svg/components/shape:components",
         "//donner/svg/components/style:components",
         "//donner/svg/components/text:components",
+        "//donner/svg/components/text:text_invalidation",
         "//donner/svg/components/text:text_system",
         "//donner/svg/resources:font_manager",
     ] + select({

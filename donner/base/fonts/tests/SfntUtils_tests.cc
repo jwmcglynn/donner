@@ -271,6 +271,48 @@ std::vector<uint8_t> MakeCff2WithCharString(std::vector<uint8_t> charString,
   return result;
 }
 
+std::vector<uint8_t> MakeCff2WithFdSelect(size_t glyphCount, size_t fdCount,
+                                          std::vector<uint8_t> fdSelect) {
+  EXPECT_GT(glyphCount, 0u);
+  EXPECT_GT(fdCount, 1u);
+  const std::vector<uint8_t> globalIndex = MakeCffIndex({}, true);
+  const std::vector<uint8_t> charStrings = MakeCffIndex(
+      std::vector<std::vector<uint8_t>>(glyphCount, {139, 139, 21, 149, 139, 5}), true);
+  const std::vector<uint8_t> fdArray =
+      MakeCffIndex(std::vector<std::vector<uint8_t>>(fdCount, {139, 139, 18}), true);
+
+  std::vector<uint8_t> topDict;
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    const size_t charStringsOffset = 5 + topDict.size() + globalIndex.size();
+    const size_t fdArrayOffset = charStringsOffset + charStrings.size();
+    const size_t fdSelectOffset = fdArrayOffset + fdArray.size();
+    std::vector<uint8_t> nextTop = EncodeDictInteger(charStringsOffset);
+    nextTop.push_back(17);
+    const std::vector<uint8_t> encodedFdArrayOffset = EncodeDictInteger(fdArrayOffset);
+    nextTop.insert(nextTop.end(), encodedFdArrayOffset.begin(), encodedFdArrayOffset.end());
+    nextTop.push_back(12);
+    nextTop.push_back(36);
+    const std::vector<uint8_t> encodedFdSelectOffset = EncodeDictInteger(fdSelectOffset);
+    nextTop.insert(nextTop.end(), encodedFdSelectOffset.begin(), encodedFdSelectOffset.end());
+    nextTop.push_back(12);
+    nextTop.push_back(37);
+    if (nextTop == topDict) {
+      break;
+    }
+    topDict = std::move(nextTop);
+  }
+  // The CFF2 header below writes the top DICT length as a single low byte.
+  EXPECT_LE(topDict.size(), 255u);
+
+  std::vector<uint8_t> result{2, 0, 5, 0, static_cast<uint8_t>(topDict.size())};
+  result.insert(result.end(), topDict.begin(), topDict.end());
+  result.insert(result.end(), globalIndex.begin(), globalIndex.end());
+  result.insert(result.end(), charStrings.begin(), charStrings.end());
+  result.insert(result.end(), fdArray.begin(), fdArray.end());
+  result.insert(result.end(), fdSelect.begin(), fdSelect.end());
+  return result;
+}
+
 std::vector<uint8_t> MakeCff1() {
   constexpr size_t kCharStringsOffset = 21;
   return {
@@ -1010,6 +1052,41 @@ TEST(SfntUtils, Cff2DoesNotAcceptCff1ArithmeticExtensions) {
     EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff2WithCharString(program), true, 1).status,
               CffOutlineValidationStatus::Invalid);
   }
+}
+
+TEST(SfntUtils, Cff2AcceptsWellFormedFdSelectFormats3And4) {
+  const std::vector<uint8_t> format3 =
+      MakeCff2WithFdSelect(3, 2, {3, 0, 2, 0, 0, 0, 0, 1, 1, 0, 3});
+  const CffOutlineValidationResult format3Result = ValidateCffOutlineComplexities(format3, true, 3);
+  ASSERT_EQ(format3Result.status, CffOutlineValidationStatus::Complete);
+  EXPECT_EQ(format3Result.glyphs.size(), 3u);
+
+  const std::vector<uint8_t> format4 =
+      MakeCff2WithFdSelect(3, 2, {4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 3});
+  const CffOutlineValidationResult format4Result = ValidateCffOutlineComplexities(format4, true, 3);
+  ASSERT_EQ(format4Result.status, CffOutlineValidationStatus::Complete);
+  EXPECT_EQ(format4Result.glyphs.size(), 3u);
+}
+
+TEST(SfntUtils, Cff2FdSelectRejectsRangeStartsAboveTheGlyphCount) {
+  // The sentinel is only read after every range has been filled, so a range starting above the
+  // glyph count fills past the end of the glyph-to-FD mapping before anything rejects it. Both
+  // crafted starts are bounded: 65535 for format 3 and 65536 for format 4.
+  const std::vector<uint8_t> wellFormed =
+      MakeCff2WithFdSelect(2, 2, {3, 0, 2, 0, 0, 0, 0, 1, 1, 0, 2});
+  ASSERT_EQ(ValidateCffOutlineComplexities(wellFormed, true, 2).status,
+            CffOutlineValidationStatus::Complete)
+      << "This shape must parse, otherwise the rejections below prove nothing";
+
+  const std::vector<uint8_t> format3 =
+      MakeCff2WithFdSelect(2, 2, {3, 0, 2, 0, 0, 0, 0xFF, 0xFF, 1, 0, 2});
+  EXPECT_EQ(ValidateCffOutlineComplexities(format3, true, 2).status,
+            CffOutlineValidationStatus::Invalid);
+
+  const std::vector<uint8_t> format4 =
+      MakeCff2WithFdSelect(2, 2, {4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2});
+  EXPECT_EQ(ValidateCffOutlineComplexities(format4, true, 2).status,
+            CffOutlineValidationStatus::Invalid);
 }
 
 }  // namespace donner::fonts

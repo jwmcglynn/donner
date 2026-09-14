@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -20,6 +21,7 @@
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/core/ProcessingMode.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
@@ -31,6 +33,25 @@ class DocumentResourceFamilyBudget;
 class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
 class SVGDocumentMutation;
+
+/// Readiness of catalog-dependent geometry or pixels for an explicit element target.
+struct FontResourcePreflight {
+  enum class Status {
+    Ready,          ///< Every known catalog dependency is resolved.
+    PendingFonts,   ///< Bytes or decode admission are still pending.
+    Unavailable,    ///< A known catalog face failed permanently for its current content.
+    NeedsRender,    ///< Render preparation or lazy referenced content must run before retrying.
+    InvalidTarget,  ///< The target is foreign, stale, or no longer attached to this document.
+    ResourceLimit,  ///< A bounded dependency traversal or font resource limit was exceeded.
+  };
+
+  Status status = Status::NeedsRender;
+  std::vector<FontFaceDependency> dependencies;  ///< Full face identities and current states.
+};
+
+inline std::ostream& operator<<(std::ostream& os, FontResourcePreflight::Status status) {
+  return os << "FontResourcePreflight::Status(" << static_cast<int>(status) << ")";
+}
 
 /**
  * Represents a parsed SVG document containing a tree of \ref SVGElement nodes.
@@ -208,6 +229,36 @@ public:
    * canvas renderer.
    */
   bool hasPendingRenderInvalidation() const;
+
+  /// Adopt newly available fonts and invalidate affected geometry/paint without changing source.
+  /// Call only at a frame boundary, before rendering begins. Returns whether rendering changed.
+  bool refreshFontResources();
+
+  /// Resolution revision owned by this document's font manager, independent of XML source edits.
+  uint64_t fontResourceRevision() const;
+
+  /// True when font dependency tracking exceeded the document's configured resource budget.
+  /// Output operations must fail instead of treating an incomplete dependency list as ready.
+  bool fontResourcesExceeded() const;
+  /// Cheap readiness query for frame scheduling; does not traverse the render graph.
+  bool hasUnresolvedFontResources() const;
+
+  /// Current font dependencies used by the prepared render tree. Unresolved metrics cannot prove
+  /// a root is outside the viewport, so these represent conservative visible-document demand.
+  /// Unused definitions and catalog enumeration do not create dependencies here.
+  FontResourcePreflight renderedFontResources() const;
+
+  /// Dependency-only compatibility view; an empty result does not establish readiness.
+  std::vector<FontFaceDependency> renderedFontDependencies() const;
+
+  /// Current dependency values for an element and its prepared rendering references.
+  /// An empty list does not establish output readiness; use preflightFontResourcesForElement.
+  std::vector<FontFaceDependency> fontDependenciesForElement(const SVGElement& element) const;
+
+  /// Prepare a target's text and follow its actual rendering references without changing source.
+  /// Pending canvas invalidation is preserved and returns NeedsRender; lazy fragment images also
+  /// require a render before readiness can be established. Does not request network bytes.
+  FontResourcePreflight preflightFontResourcesForElement(const SVGElement& element);
 
   /// Return the number of SVG element entities currently owned by the document.
   std::size_t elementCount() const;

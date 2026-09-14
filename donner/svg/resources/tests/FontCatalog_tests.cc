@@ -43,7 +43,7 @@ public:
 
   std::vector<uint8_t> loadFamilyData(std::string_view family,
                                       const FontFaceRequest& /*request*/) const override {
-    if (!hasFamily(family)) {
+    if (!hasFamily(family) || marker_ == 0) {
       return {};
     }
     return std::vector<uint8_t>{marker_};
@@ -77,10 +77,10 @@ TEST(EmbeddedFontProviderTest, EnumeratesCuratedSet) {
                                  "Playfair Display", "Roboto Mono"));
 }
 
-TEST(EmbeddedFontProviderTest, AllFamiliesReportEmbeddedSource) {
+TEST(EmbeddedFontProviderTest, AllFamiliesReportBundledSource) {
   EmbeddedFontProvider provider;
   for (const FontFamilyInfo& info : provider.families()) {
-    EXPECT_EQ(info.source, FontSource::Embedded) << info.family;
+    EXPECT_EQ(info.source, FontSource::Bundled) << info.family;
   }
 }
 
@@ -96,16 +96,16 @@ TEST(EmbeddedFontProviderTest, SetSpansMultipleCategories) {
   EXPECT_THAT(categories, Contains(FontCategory::Display));
 }
 
-TEST(EmbeddedFontProviderTest, EveryAdvertisedFamilyLoadsValidSfntBytes) {
+TEST(EmbeddedFontProviderTest, EveryAdvertisedFamilySuppliesEncodedWoff2Bytes) {
   EmbeddedFontProvider provider;
   for (const FontFamilyInfo& info : provider.families()) {
     const std::vector<uint8_t> data = provider.loadFamilyData(info.family, FontFaceRequest{});
     ASSERT_GE(data.size(), 4u) << info.family;
-    // Every curated source is a TrueType sfnt with magic 0x00010000.
-    EXPECT_EQ(data[0], 0x00) << info.family;
-    EXPECT_EQ(data[1], 0x01) << info.family;
-    EXPECT_EQ(data[2], 0x00) << info.family;
-    EXPECT_EQ(data[3], 0x00) << info.family;
+    EXPECT_THAT(std::span(data).first(4), ElementsAre('w', 'O', 'F', '2')) << info.family;
+    const auto availability = provider.availability(info.family, {});
+    EXPECT_EQ(availability.state, FontAssetState::Ready);
+    EXPECT_EQ(availability.format, FontFileFormat::Woff2);
+    EXPECT_EQ(availability.encodedBytes, data.size());
   }
 }
 
@@ -119,10 +119,58 @@ TEST(EmbeddedFontProviderTest, LookupIsCaseInsensitive) {
 
 // --- FontCatalog aggregation + precedence -----------------------------------------------------
 
+TEST(FontCatalogTest, PendingBundledFamilyDoesNotResolveToSameNamedSystemFont) {
+  auto store = std::make_shared<CatalogEncodedFontStore>();
+  std::vector<std::unique_ptr<FontFamilyProvider>> providers;
+  providers.push_back(std::make_unique<EmbeddedFontProvider>(store));
+  providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"Inter"},
+                                                       FontSource::System, 0x22));
+  FontCatalog catalog(std::move(providers));
+  EXPECT_EQ(catalog.availability("Inter", {}).state, FontAssetState::Absent);
+  EXPECT_THAT(catalog.loadFamilyData("Inter", {}), IsEmpty());
+}
+
+TEST(FontCatalogTest, SynchronousCustomProviderRetainsEmptyByteFallback) {
+  std::vector<std::unique_ptr<FontFamilyProvider>> providers;
+  providers.push_back(
+      std::make_unique<MarkerProvider>(std::vector<std::string>{"Shared"}, FontSource::Bundled, 0));
+  providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"Shared"},
+                                                       FontSource::System, 0x22));
+  FontCatalog catalog(std::move(providers));
+  EXPECT_THAT(catalog.loadFamilyData("Shared", {}), ElementsAre(0x22));
+}
+
+TEST(FontCatalogTest, LegacyFallbackCannotBypassImmutableAssetAdmission) {
+  class CountingBundledProvider : public EmbeddedFontProvider {
+  public:
+    std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                        const FontFaceRequest& request) const override {
+      ++loads;
+      return EmbeddedFontProvider::loadFamilyData(family, request);
+    }
+    mutable size_t loads = 0;
+  };
+  std::vector<std::unique_ptr<FontFamilyProvider>> providers;
+  providers.push_back(
+      std::make_unique<MarkerProvider>(std::vector<std::string>{"Inter"}, FontSource::System, 0));
+  auto bundled = std::make_unique<CountingBundledProvider>();
+  const auto* probe = bundled.get();
+  providers.push_back(std::move(bundled));
+  FontCatalog catalog(std::move(providers));
+  ASSERT_THAT(catalog.availability("Inter", {}).contentId, IsEmpty());
+  EXPECT_THAT(catalog.loadFamilyData("Inter", {}), IsEmpty());
+  Registry registry;
+  FontManager manager(registry);
+  manager.setFontProvider(&catalog);
+  EXPECT_EQ(manager.findFont("Inter"), manager.fallbackFont());
+  EXPECT_EQ(probe->loads, 0u);
+  EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 0u);
+}
+
 TEST(FontCatalogTest, GroupsEmbeddedBeforeSystem) {
   std::vector<std::unique_ptr<FontFamilyProvider>> providers;
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"EmbeddedOnly"},
-                                                       FontSource::Embedded, 0x11));
+                                                       FontSource::Bundled, 0x11));
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"SystemOnly"},
                                                        FontSource::System, 0x22));
   FontCatalog catalog(std::move(providers));
@@ -130,7 +178,7 @@ TEST(FontCatalogTest, GroupsEmbeddedBeforeSystem) {
   const std::vector<FontFamilyInfo> all = catalog.families();
   ASSERT_EQ(all.size(), 2u);
   // Embedded group is emitted first.
-  EXPECT_EQ(all[0].source, FontSource::Embedded);
+  EXPECT_EQ(all[0].source, FontSource::Bundled);
   EXPECT_EQ(all[0].family, "EmbeddedOnly");
   EXPECT_EQ(all[1].source, FontSource::System);
   EXPECT_EQ(all[1].family, "SystemOnly");
@@ -139,7 +187,7 @@ TEST(FontCatalogTest, GroupsEmbeddedBeforeSystem) {
 TEST(FontCatalogTest, EmbeddedShadowsSystemForDuplicateFamily) {
   std::vector<std::unique_ptr<FontFamilyProvider>> providers;
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"Shared"},
-                                                       FontSource::Embedded, 0xAB));
+                                                       FontSource::Bundled, 0xAB));
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"Shared"},
                                                        FontSource::System, 0xCD));
   FontCatalog catalog(std::move(providers));
@@ -147,7 +195,7 @@ TEST(FontCatalogTest, EmbeddedShadowsSystemForDuplicateFamily) {
   // Only one "Shared" survives, tagged Embedded.
   const std::vector<FontFamilyInfo> all = catalog.families();
   ASSERT_EQ(all.size(), 1u);
-  EXPECT_EQ(all[0].source, FontSource::Embedded);
+  EXPECT_EQ(all[0].source, FontSource::Bundled);
 
   // And loadFace resolves to the embedded provider's bytes.
   const std::vector<uint8_t> data = catalog.loadFace("Shared");
@@ -158,12 +206,12 @@ TEST(FontCatalogTest, EmbeddedShadowsSystemForDuplicateFamily) {
 TEST(FontCatalogTest, FamiliesBySourceFilters) {
   std::vector<std::unique_ptr<FontFamilyProvider>> providers;
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"E1", "E2"},
-                                                       FontSource::Embedded, 0x01));
+                                                       FontSource::Bundled, 0x01));
   providers.push_back(
       std::make_unique<MarkerProvider>(std::vector<std::string>{"S1"}, FontSource::System, 0x02));
   FontCatalog catalog(std::move(providers));
 
-  EXPECT_THAT(familyNames(catalog.familiesBySource(FontSource::Embedded)),
+  EXPECT_THAT(familyNames(catalog.familiesBySource(FontSource::Bundled)),
               ::testing::ElementsAre("E1", "E2"));
   EXPECT_THAT(familyNames(catalog.familiesBySource(FontSource::System)),
               ::testing::ElementsAre("S1"));
@@ -172,7 +220,7 @@ TEST(FontCatalogTest, FamiliesBySourceFilters) {
 TEST(FontCatalogTest, DefaultCatalogContainsEmbeddedFamilies) {
   FontCatalog catalog;
   EXPECT_TRUE(catalog.hasFamily("Inter"));
-  const std::vector<FontFamilyInfo> embedded = catalog.familiesBySource(FontSource::Embedded);
+  const std::vector<FontFamilyInfo> embedded = catalog.familiesBySource(FontSource::Bundled);
   EXPECT_GE(embedded.size(), 8u);
 }
 

@@ -140,17 +140,18 @@ donner_cc_library(
     }),
 )
 
-# Concrete font catalog: curated embedded Google Fonts + macOS system fonts (stub
-# elsewhere). This is the surface the editor's font picker (Design 0013 W2)
-# consumes, and what the editor installs on FontManager as the default provider.
+# Concrete font catalog: curated bundled fonts plus platform system fonts. The editor installs
+# this provider on FontManager; Wasm excludes the compiled catalog payload dependency.
 donner_cc_library(
     name = "font_catalog",
     srcs = [
+        "CatalogEncodedFontStore.cc",
         "EmbeddedFontProvider.cc",
         "FontCatalog.cc",
         "SystemFontProvider.cc",
     ],
     hdrs = [
+        "CatalogEncodedFontStore.h",
         "EmbeddedFontProvider.h",
         "FontCatalog.h",
         "SystemFontProvider.h",
@@ -179,8 +180,10 @@ donner_cc_library(
         ":font_catalog_types",
         "//donner/base",
         "//third_party/google_fonts:google_fonts_catalog_inc",
-        "//third_party/google_fonts:google_fonts_data",
-    ],
+    ] + select({
+        "@platforms//os:emscripten": [],
+        "//conditions:default": ["//third_party/google_fonts:google_fonts_data"],
+    }),
 )
 
 donner_cc_test(
@@ -210,6 +213,21 @@ donner_cc_test(
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",
+    ],
+)
+
+donner_cc_test(
+    name = "catalog_encoded_font_store_tests",
+    srcs = ["tests/CatalogEncodedFontStore_tests.cc"],
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":font_catalog",
+        ":font_manager",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 

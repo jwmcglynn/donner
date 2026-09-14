@@ -86,30 +86,117 @@ ResolvedPaint resolvePaint(const svg::SVGElement& element) {
 
   ResolvedPaint paint;
   paint.fill = serializePaint(
-      style.fill.getOr(svg::PaintServer(svg::PaintServer::Solid(css::Color(kBlack)))), currentColor);
-  paint.fillRule = style.fillRule.getOr(FillRule::NonZero) == FillRule::EvenOdd ? "evenodd"
-                                                                                : "nonzero";
+      style.fill.getOr(svg::PaintServer(svg::PaintServer::Solid(css::Color(kBlack)))),
+      currentColor);
+  paint.fillRule =
+      style.fillRule.getOr(FillRule::NonZero) == FillRule::EvenOdd ? "evenodd" : "nonzero";
   paint.fillOpacity = detail::FormatNumberForSVG(style.fillOpacity.getOr(1.0));
   paint.stroke =
       serializePaint(style.stroke.getOr(svg::PaintServer(svg::PaintServer::None())), currentColor);
-  paint.strokeWidth =
-      std::string(std::string_view(style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None))
-                                       .toRcString()));
+  paint.strokeWidth = std::string(
+      std::string_view(style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None)).toRcString()));
   paint.strokeOpacity = detail::FormatNumberForSVG(style.strokeOpacity.getOr(1.0));
   return paint;
 }
 
-}  // namespace
-
-ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
+std::optional<std::string> preflightOutlineTarget(svg::SVGDocument& document,
                                                   const svg::SVGElement& textElement) {
-  ConvertTextToOutlinesResult result;
-
-  // The conversion only applies to `<text>` elements.
-  if (textElement.tagName().name != svg::SVGTextElement::Tag) {
-    result.error = "Convert to outlines failed: selection is not a <text> element.";
-    return result;
+  const auto preflight = document.preflightFontResourcesForElement(textElement);
+  using Status = svg::FontResourcePreflight::Status;
+  switch (preflight.status) {
+    case Status::Ready: break;
+    case Status::InvalidTarget:
+      return "Convert to outlines failed: target is not attached to this document.";
+    case Status::ResourceLimit:
+      return "Convert to outlines failed: the font resource limit was exceeded.";
+    case Status::NeedsRender:
+      return "Convert to outlines is waiting for render preparation. Try again after the next "
+             "frame.";
+    default:
+      return "The selected text's font is not ready. Load or retry the font, then try again.";
   }
+  if (textElement.tagName().name != svg::SVGTextElement::Tag) {
+    return "Convert to outlines failed: selection is not a <text> element.";
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> validateOutlineGlyphs(svg::SVGDocument& document,
+                                                 const svg::SVGElement& textElement,
+                                                 std::span<const svg::TextGlyphOutline> glyphs) {
+  if (document.fontResourcesExceeded()) {
+    return "Convert to outlines failed: the font resource limit was exceeded.";
+  }
+
+  for (const auto& face : document.fontDependenciesForElement(textElement)) {
+    if (face.state != svg::FontFaceLoadState::Loaded) {
+      return "The selected text's font is not ready. Load or retry the font, then try again.";
+    }
+  }
+
+  // Empty outlines (missing font, layout failure, empty text) fail the whole conversion without
+  // mutating.
+  if (glyphs.empty()) {
+    return "Convert to outlines failed: <text> produced no glyph outlines.";
+  }
+  bool anyNonEmpty = false;
+  for (const svg::TextGlyphOutline& glyph : glyphs) {
+    if (!glyph.path.empty()) {
+      anyNonEmpty = true;
+      break;
+    }
+  }
+  if (!anyNonEmpty) {
+    return "Convert to outlines failed: <text> produced only empty glyph outlines.";
+  }
+
+  return std::nullopt;
+}
+
+void applyPaintOverrides(svg::SVGElement& pathElement, const ResolvedPaint& runPaint,
+                         const ResolvedPaint& groupPaint) {
+  if (runPaint.fill != groupPaint.fill) {
+    pathElement.setAttribute("fill", runPaint.fill);
+  }
+  if (runPaint.fillRule != groupPaint.fillRule) {
+    pathElement.setAttribute("fill-rule", runPaint.fillRule);
+  }
+  if (runPaint.fillOpacity != groupPaint.fillOpacity) {
+    pathElement.setAttribute("fill-opacity", runPaint.fillOpacity);
+  }
+  if (runPaint.stroke != groupPaint.stroke) {
+    pathElement.setAttribute("stroke", runPaint.stroke);
+  }
+  if (runPaint.hasStroke()) {
+    if (runPaint.strokeWidth != groupPaint.strokeWidth) {
+      pathElement.setAttribute("stroke-width", runPaint.strokeWidth);
+    }
+    if (runPaint.strokeOpacity != groupPaint.strokeOpacity) {
+      pathElement.setAttribute("stroke-opacity", runPaint.strokeOpacity);
+    }
+  }
+}
+
+void applyGroupPaint(svg::SVGElement& groupElement, const ResolvedPaint& groupPaint) {
+  groupElement.setAttribute("fill", groupPaint.fill);
+  if (groupPaint.fillRule != "nonzero") {
+    groupElement.setAttribute("fill-rule", groupPaint.fillRule);
+  }
+  if (groupPaint.fillOpacity != "1") {
+    groupElement.setAttribute("fill-opacity", groupPaint.fillOpacity);
+  }
+  if (groupPaint.hasStroke()) {
+    groupElement.setAttribute("stroke", groupPaint.stroke);
+    groupElement.setAttribute("stroke-width", groupPaint.strokeWidth);
+    if (groupPaint.strokeOpacity != "1") {
+      groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
+    }
+  }
+}
+
+ConvertTextToOutlinesResult buildDetachedTextOutlines(svg::SVGDocument& document,
+                                                      const svg::SVGElement& textElement) {
+  ConvertTextToOutlinesResult result;
 
   // Resolve placed glyph outlines via the renderer-facing text geometry, retaining the source
   // element that painted each glyph. This routes through `TextEngine::computedGlyphOutlines()` -
@@ -120,21 +207,8 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
   svg::SVGTextElement text = textElement.cast<svg::SVGTextElement>();
   const std::vector<svg::TextGlyphOutline> glyphs = text.convertToOutlineGlyphs();
 
-  // Empty outlines (missing font, layout failure, empty text) fail the whole conversion without
-  // mutating.
-  if (glyphs.empty()) {
-    result.error = "Convert to outlines failed: <text> produced no glyph outlines.";
-    return result;
-  }
-  bool anyNonEmpty = false;
-  for (const svg::TextGlyphOutline& glyph : glyphs) {
-    if (!glyph.path.empty()) {
-      anyNonEmpty = true;
-      break;
-    }
-  }
-  if (!anyNonEmpty) {
-    result.error = "Convert to outlines failed: <text> produced only empty glyph outlines.";
+  if (auto error = validateOutlineGlyphs(document, textElement, glyphs)) {
+    result.error = std::move(*error);
     return result;
   }
 
@@ -154,20 +228,7 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
   svg::SVGElement groupElement = group;
 
   const ResolvedPaint groupPaint = resolvePaint(textElement);
-  groupElement.setAttribute("fill", groupPaint.fill);
-  if (groupPaint.fillRule != "nonzero") {
-    groupElement.setAttribute("fill-rule", groupPaint.fillRule);
-  }
-  if (groupPaint.fillOpacity != "1") {
-    groupElement.setAttribute("fill-opacity", groupPaint.fillOpacity);
-  }
-  if (groupPaint.hasStroke()) {
-    groupElement.setAttribute("stroke", groupPaint.stroke);
-    groupElement.setAttribute("stroke-width", groupPaint.strokeWidth);
-    if (groupPaint.strokeOpacity != "1") {
-      groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
-    }
-  }
+  applyGroupPaint(groupElement, groupPaint);
   // `opacity` is a (non-inherited) group property, and `transform` positions the outlined geometry;
   // carry both from the text element so the group sits and composites exactly as the text did.
   const std::string opacity =
@@ -199,27 +260,7 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
       }
       const ResolvedPaint& runPaint = cachedPaint;
 
-      svg::SVGElement pathAsElement = pathElement;
-      if (runPaint.fill != groupPaint.fill) {
-        pathAsElement.setAttribute("fill", runPaint.fill);
-      }
-      if (runPaint.fillRule != groupPaint.fillRule) {
-        pathAsElement.setAttribute("fill-rule", runPaint.fillRule);
-      }
-      if (runPaint.fillOpacity != groupPaint.fillOpacity) {
-        pathAsElement.setAttribute("fill-opacity", runPaint.fillOpacity);
-      }
-      if (runPaint.stroke != groupPaint.stroke) {
-        pathAsElement.setAttribute("stroke", runPaint.stroke);
-      }
-      if (runPaint.hasStroke()) {
-        if (runPaint.strokeWidth != groupPaint.strokeWidth) {
-          pathAsElement.setAttribute("stroke-width", runPaint.strokeWidth);
-        }
-        if (runPaint.strokeOpacity != groupPaint.strokeOpacity) {
-          pathAsElement.setAttribute("stroke-opacity", runPaint.strokeOpacity);
-        }
-      }
+      applyPaintOverrides(pathElement, runPaint, groupPaint);
     }
 
     result.outlinePaths.push_back(pathElement);
@@ -229,6 +270,40 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
   result.ok = true;
   result.outlineGroup = groupElement;
   return result;
+}
+
+}  // namespace
+
+ConvertTextsToOutlinesResult convertTextsToOutlines(svg::SVGDocument& document,
+                                                    std::span<const svg::SVGElement> textElements) {
+  [[maybe_unused]] const auto access = document.writeAccess();
+  ConvertTextsToOutlinesResult batch;
+  // Detached construction shares storage with the live tree and may mark it dirty.
+  for (const auto& element : textElements) {
+    if (auto error = preflightOutlineTarget(document, element)) {
+      batch.error = std::move(*error);
+      return batch;
+    }
+  }
+  batch.conversions.reserve(textElements.size());
+  for (const auto& element : textElements) {
+    auto result = buildDetachedTextOutlines(document, element);
+    if (!result.ok) {
+      batch.error = std::move(result.error);
+      batch.conversions.clear();
+      return batch;
+    }
+    batch.conversions.push_back(std::move(result));
+  }
+  batch.ok = true;
+  return batch;
+}
+
+ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
+                                                  const svg::SVGElement& textElement) {
+  auto batch = convertTextsToOutlines(document, std::span(&textElement, 1));
+  if (!batch.ok) return {.error = std::move(batch.error)};
+  return std::move(batch.conversions.front());
 }
 
 }  // namespace donner::editor

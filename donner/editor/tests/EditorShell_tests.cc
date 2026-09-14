@@ -4,6 +4,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -886,6 +887,7 @@ public:
   static const TextEditor& Source(const EditorShell& shell) { return shell.textEditor_; }
 
   static void RequestFontPreviews(EditorShell& shell, std::vector<std::string> families) {
+    shell.visibleFontPreviewFamilies_.insert(families.begin(), families.end());
     shell.requestFontPreviews(families);
   }
 
@@ -901,6 +903,43 @@ public:
     return shell.fontPreviewBitmaps_.size();
   }
 
+  static SampleThumbnailRenderResult PendingSampleFontResult(EditorShell& shell,
+                                                             svg::FontFaceDependency dependency,
+                                                             std::uint64_t wakeRevision) {
+    shell.showSamplePicker_ = true;
+    shell.visibleSamplePreviewIndices_.insert(0);
+    shell.sampleThumbnailInFlightIndex_ = 0;
+    return {.kind = AuxiliaryPreviewKind::Sample,
+            .key = 0,
+            .taskGeneration = shell.previewTaskGeneration_,
+            .fontWakeRevision = wakeRevision,
+            .fontDependencies = {std::move(dependency)},
+            .outcome = SampleThumbnailRenderOutcome::FontsPending};
+  }
+
+  static void ConsumePreviewResult(EditorShell& shell, SampleThumbnailRenderResult result) {
+    shell.handleAuxiliaryPreviewResult(std::move(result));
+  }
+
+  static void RetryPendingFontPreviews(EditorShell& shell) { shell.retryPendingFontPreviews(); }
+  static void UpdateVisiblePreviewTasks(EditorShell& shell) { shell.updateVisiblePreviewTasks(); }
+  static void CancelPreviews(EditorShell& shell) { shell.cancelSampleThumbnailGeneration(); }
+  static std::size_t PendingSampleFontCount(const EditorShell& shell) {
+    return shell.waitingSamplePreviews_.size();
+  }
+  static std::size_t FinishedSampleCount(const EditorShell& shell) {
+    return shell.finishedSamplePreviewIndices_.size();
+  }
+
+  static void RememberOutputFonts(EditorShell& shell,
+                                  std::span<const svg::FontFaceDependency> dependencies) {
+    shell.rememberOutputFontDemand(dependencies);
+  }
+  static void DrainOutputFonts(EditorShell& shell) { shell.drainOutputFontDemand(); }
+  static std::size_t OutputFontDemandCount(const EditorShell& shell) {
+    return shell.outputFontDemand_.size();
+  }
+
   static bool TryOpenPath(EditorShell& shell, std::string_view path, std::string* error) {
     return shell.tryOpenPath(path, error);
   }
@@ -913,6 +952,10 @@ public:
 
   static std::size_t SampleThumbnailCursor(const EditorShell& shell) {
     return shell.sampleThumbnailGenerationCursor_;
+  }
+
+  static std::size_t VisibleSamplePreviewCount(const EditorShell& shell) {
+    return shell.visibleSamplePreviewIndices_.size();
   }
 
   static std::size_t SampleThumbnailSlotCount(const EditorShell& shell) {
@@ -3292,6 +3335,108 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
   EXPECT_FLOAT_EQ(compactPalette.width(), 156.0f);
 }
 
+TEST(EditorShellTest, PendingPreviewRetriesWhenAdmissionWakePrecedesResultPolling) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  const auto store = shell.fontCatalog().encodedStore();
+  ASSERT_NE(store, nullptr);
+  ASSERT_FALSE(svg::CatalogFontAssets().empty());
+  const auto& asset = svg::CatalogFontAssets().front();
+  auto admission = store->tryAcquireDecode(asset.contentId);
+  ASSERT_EQ(admission.state, svg::FontFaceLoadState::Resolving);
+  const auto requestWake = store->wakeRevision();
+  auto result = EditorShellTestAccess::PendingSampleFontResult(
+      shell,
+      {.family = asset.family,
+       .availability = shell.fontCatalog().availability(asset.family, {}),
+       .state = svg::FontFaceLoadState::WaitingForAdmission},
+      requestWake);
+
+  // The preview document has already returned; only its copied result survives this release.
+  admission.reservation.reset();
+  ASSERT_GT(store->wakeRevision(), requestWake);
+  EditorShellTestAccess::ConsumePreviewResult(shell, std::move(result));
+  ASSERT_EQ(EditorShellTestAccess::PendingSampleFontCount(shell), 1u);
+  EXPECT_EQ(EditorShellTestAccess::FinishedSampleCount(shell), 0u);
+  EditorShellTestAccess::RetryPendingFontPreviews(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleFontCount(shell), 0u);
+  EXPECT_EQ(EditorShellTestAccess::FinishedSampleCount(shell), 0u)
+      << "Admission eligibility schedules another attempt; it never marks fallback final";
+}
+
+TEST(EditorShellTest, HiddenPreviewCancelsItsWaitBeforeAdmissionRelease) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  const auto store = shell.fontCatalog().encodedStore();
+  ASSERT_FALSE(svg::CatalogFontAssets().empty());
+  const auto& asset = svg::CatalogFontAssets().front();
+  auto admission = store->tryAcquireDecode(asset.contentId);
+  EditorShellTestAccess::ConsumePreviewResult(
+      shell, EditorShellTestAccess::PendingSampleFontResult(
+                 shell,
+                 {.family = asset.family,
+                  .availability = shell.fontCatalog().availability(asset.family, {}),
+                  .state = svg::FontFaceLoadState::WaitingForAdmission},
+                 store->wakeRevision()));
+  ASSERT_EQ(EditorShellTestAccess::PendingSampleFontCount(shell), 1u);
+  EditorShellTestAccess::SetShowSamplePicker(shell, false);
+  EditorShellTestAccess::UpdateVisiblePreviewTasks(shell);
+  admission.reservation.reset();
+  EditorShellTestAccess::RetryPendingFontPreviews(shell);
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleFontCount(shell), 0u);
+  EXPECT_EQ(EditorShellTestAccess::FinishedSampleCount(shell), 0u);
+}
+
+TEST(EditorShellTest, CancelledPreviewGenerationRejectsLateResultForTheSameCard) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  auto oldResult = EditorShellTestAccess::PendingSampleFontResult(
+      shell, {.family = "Inter", .state = svg::FontFaceLoadState::WaitingForBytes}, 0);
+  EditorShellTestAccess::CancelPreviews(shell);
+  auto currentResult = EditorShellTestAccess::PendingSampleFontResult(
+      shell, {.family = "Inter", .state = svg::FontFaceLoadState::WaitingForBytes}, 0);
+  EditorShellTestAccess::ConsumePreviewResult(shell, std::move(oldResult));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleFontCount(shell), 0u);
+  EditorShellTestAccess::ConsumePreviewResult(shell, std::move(currentResult));
+  EXPECT_EQ(EditorShellTestAccess::PendingSampleFontCount(shell), 1u);
+  EXPECT_EQ(EditorShellTestAccess::FinishedSampleCount(shell), 0u);
+}
+
+TEST(EditorShellTest, OutputFontDemandDeduplicatesAssetsAndCancelsAfterSourceMutation) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_FALSE(svg::CatalogFontAssets().empty());
+  const auto& asset = svg::CatalogFontAssets().front();
+  const auto availability = shell.fontCatalog().availability(asset.family, {});
+  const std::array<svg::FontFaceDependency, 2> faces = {
+      svg::FontFaceDependency{
+          .family = asset.family, .request = {.weight = 400}, .availability = availability},
+      svg::FontFaceDependency{
+          .family = asset.family, .request = {.weight = 700}, .availability = availability},
+  };
+  EditorShellTestAccess::RememberOutputFonts(shell, faces);
+  EXPECT_EQ(EditorShellTestAccess::OutputFontDemandCount(shell), 1u);
+  auto& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target);
+  app.setSelection(*target);
+  ASSERT_TRUE(app.setAttributeOnSelection("fill", "red"));
+  ASSERT_TRUE(app.flushFrame());
+  EditorShellTestAccess::DrainOutputFonts(shell);
+  EXPECT_EQ(EditorShellTestAccess::OutputFontDemandCount(shell), 0u);
+  const auto fill = app.document().document().querySelector("#target")->getAttribute("fill");
+  ASSERT_TRUE(fill);
+  EXPECT_EQ(std::string_view(*fill), "red");
+}
+
 TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -3958,6 +4103,38 @@ TEST(EditorShellTest, ConvertSelectedTextToOutlinesReplacesTextWithPathGroup) {
   EXPECT_TRUE(EditorShellTestAccess::LastConvertTextError(shell).empty());
 }
 
+TEST(EditorShellTest, ConvertMultipleTextElementsToOutlinesUsesOneUndoEntry) {
+  constexpr std::string_view source = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="90">
+  <text id="first" x="10" y="30">First</text>
+  <text id="second" x="10" y="65">Second</text>
+</svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_EQ(window.valid(), true);
+  EditorShell shell(window, OptionsWithSource(source, "multiple-text.svg"));
+  ASSERT_EQ(shell.valid(), true);
+  auto& app = EditorShellTestAccess::App(shell);
+  auto& document = app.document().document();
+  svg::Renderer renderer;
+  renderer.draw(document);
+  app.setSelection({*document.querySelector("#first"), *document.querySelector("#second")});
+  const std::string sourceBefore(document.source());
+
+  EditorShellTestAccess::ConvertSelectedTextToOutlines(shell);
+  ASSERT_THAT(EditorShellTestAccess::LastConvertTextError(shell), testing::IsEmpty());
+  ASSERT_EQ(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell), true);
+  EXPECT_EQ(document.querySelector("text").has_value(), false);
+  EXPECT_EQ(document.querySelector("#first_outlines").has_value(), true);
+  EXPECT_EQ(document.querySelector("#second_outlines").has_value(), true);
+  EXPECT_THAT(app.selectedElements(), testing::SizeIs(2));
+  ASSERT_EQ(app.canUndo(), true);
+
+  app.undo();
+  ASSERT_EQ(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell), true);
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+  EXPECT_EQ(app.canUndo(), false);
+}
+
 TEST(EditorShellTest, RenderPaneDeferredEmptyClickStartsMarqueeAfterHold) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -4584,7 +4761,13 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
 }
 
 TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames) {
-  gui::EditorWindow window = MakeHiddenWindow();
+  // Every card must be visible before this test requires every thumbnail.
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Donner complete sample picker test",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+  });
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
@@ -4608,6 +4791,7 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
   shell.runFrame();
   window.endFrame();
 
+  ASSERT_EQ(EditorShellTestAccess::VisibleSamplePreviewCount(shell), sampleCount);
   EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);

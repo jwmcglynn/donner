@@ -1,6 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//build_defs:rules.bzl", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_test")
 
 cc_library(
     name = "components",
@@ -21,6 +21,7 @@ cc_library(
     visibility = [
         "//donner/svg/components:__subpackages__",
         "//donner/svg/properties:__pkg__",
+        "//donner/svg/text:__pkg__",
     ],
     deps = [
         "//donner/base",

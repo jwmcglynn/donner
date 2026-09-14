@@ -1,7 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//tools/http:serve_http.bzl", "serve_http")
@@ -226,12 +226,14 @@ wasm_cc_binary(
 web_package(
     name = "wasm_web_package",
     srcs = [
+        "catalog-fonts.js",
         "editor.css",
         "editor-bootstrap.js",
         "enable-threads.js",
         "index.html",
         "//:donner_icon.svg",
     ],
+    asset_trees = ["//third_party/google_fonts:google_fonts_woff2_assets"],
     tags = [
         "manual",
         "wasm",
@@ -258,6 +260,7 @@ configured_dependency_audit_test(
     size = "small",
     forbidden = [
         "//donner/svg/renderer:renderer_tiny_skia",
+        "//third_party/google_fonts:google_fonts_data",
         "@tracy//:tracy_client",
     ],
     forbidden_packages = [
@@ -267,8 +270,33 @@ configured_dependency_audit_test(
     required = [
         "//donner/editor/wasm:_editor_wasm_binary",
         "//donner/svg/renderer:renderer_geode",
+        "//third_party/google_fonts:google_fonts_catalog_inc",
+        "//third_party/public-sans:public-sans",
+        "//third_party/roboto:roboto",
+        "//third_party/fira-code:fira-code",
     ],
     target = ":_wasm_web_package_for_serve",
+)
+
+py_test(
+    name = "catalog_package_integrity_test",
+    srcs = ["catalog_package_integrity_test.py"],
+    args = [
+        "--package",
+        "$(rootpath :_wasm_web_package_for_serve)",
+        "--native-notices",
+        "$(rootpath //third_party/google_fonts:catalog_notices)",
+    ],
+    data = [
+        ":_wasm_web_package_for_serve",
+        "//third_party/google_fonts:catalog_notices",
+    ],
+)
+
+py_test(
+    name = "catalog_package_validation_tests",
+    srcs = ["catalog_package_integrity_test.py"],
+    main = "catalog_package_integrity_test.py",
 )
 
 serve_http(
@@ -321,88 +349,23 @@ py_test(
     args = [
         "--package-dir",
         "$(rootpath :wasm_web_package)",
-        # Single-canvas retune: set from the measured single-canvas package with
-        # about 1 percent headroom, not carried over from the pre-deletion
-        # budget. Measured on the reference machine at the commit that made the
-        # whole-app worker the default: wasm 11,124,823 raw / 4,443,900 gzip,
-        # js 168,939 raw / 47,708 gzip, package 11,335,146 raw. A gate with
-        # megabytes of slack does not catch the regression it exists for.
-        #
-        # Geode perf stack retune: the GPU-side snapshot readback adds
-        # deliberate renderer code to the editor package, and the emscripten
-        # glue grows with it. Measured at this layer: js 170,862 raw /
-        # 48,316 gzip (main measured 48,284 gzip, 16 bytes under the old
-        # budget, so the gate could no longer absorb intended growth).
-        # Instance-record retune: the record slab and batch machinery add
-        # deliberate renderer code; measured wasm gzip at this layer is
-        # 4,490,183 (183 bytes over the previous budget), and the budget
-        # keeps about 1 percent headroom over that measurement.
-        #
-        # Review-hardening retune: the cross-submit guard, bounded readback
-        # pool, and clip-fold range checks add deliberate renderer code.
-        # Measured at this layer: package 11,451,583 raw, 1,583 bytes over
-        # the previous total budget; the total keeps about 1 percent
-        # headroom over that measurement.
-        #
-        # Budgets keep about 1 percent headroom over the measured values
-        # for BOTH the gzip and raw js gates: retuning only the gzip gate
-        # would leave the raw gate at 138 bytes of headroom over the
-        # measured 170,862 raw, making it the one that flips red on the
-        # next incidental change.
-        #
-        # Geode perf stack retune: the resident-slab packet adds deliberate
-        # renderer code to the editor package. Measured at this layer:
-        # wasm 11,243,015 raw and package 11,455,433 raw. Budgets keep about
-        # 1 percent headroom over the measured values.
-        #
-        # Full-text editor retune: length-aware document-font decoding adds
-        # FreeType, HarfBuzz, WOFF2, and Brotli to the browser product.
-        # Measured at this layer: wasm 12,780,770 raw / 5,076,932 gzip,
-        # js 174,075 raw / 49,060 gzip, and package 12,996,401 raw. Each
-        # transfer and decode budget keeps about 1 percent headroom.
-        #
-        # Editor security-controls retune: bounded replay/MCP execution,
-        # focus traversal, GL capability isolation, and the Firefox worker
-        # handoff add deliberate shipped code. Measured at this layer: wasm
-        # 12,911,112 raw / 5,120,158 gzip, js 174,731 raw / 49,206 gzip,
-        # and package 13,127,399 raw. Budgets retain about 1 percent headroom.
-        #
-        # Filter security-controls retune: graph retention, backend execution
-        # accounting, and numeric admission add deliberate renderer code.
-        # Measured at this layer: wasm 12,946,259 raw / 5,134,972 gzip,
-        # js 174,773 raw / 49,217 gzip, and package 13,162,588 raw. Budgets
-        # retain about 1 percent headroom.
-        #
-        # GPU runtime retune: the typed device, its validation, its command
-        # recording and the Geode adapter over the backend are deliberate
-        # shipped code, and the renderer records through them. Measured at the
-        # layer that finishes that move: wasm 13,315,197 raw / 5,237,419 gzip,
-        # js 175,205 raw / 49,318 gzip, and package 13,531,958 raw. Budgets
-        # retain about 1 percent headroom over that measurement.
-        #
-        # GPU binding-validation retune: shader buffer facts, use-time bind
-        # group revalidation, and active buffer range checks run on the path
-        # the renderer records through, so they are shipped code. Measured at
-        # this layer: wasm 13,452,374 raw / 5,279,367 gzip, js 175,446 raw /
-        # 49,395 gzip, and package 13,669,376 raw. The wasm gzip gate had
-        # fallen to 0.20 percent headroom, so it is retuned alongside the two
-        # raw gates it would otherwise have flipped red before; the js gates
-        # are untouched because this layer adds no JavaScript. Budgets retain
-        # about 1 percent headroom over that measurement.
+        # Measured catalog-delivery package: Wasm 9,105,242 raw / 3,026,849 gzip;
+        # JS 175,960 raw / 49,695 gzip; complete package 11,156,939 raw bytes.
+        # Keep about one percent growth room around the approximately 3 MB module goal.
         "--max-wasm-raw-bytes",
-        "13586000",
+        "9200000",
         "--max-wasm-gzip-bytes",
-        "5332000",
+        "3060000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
         "64",
         "--max-js-raw-bytes",
-        "176600",
+        "177800",
         "--max-js-gzip-bytes",
-        "49710",
+        "50200",
         "--max-total-raw-bytes",
-        "13806000",
+        "11270000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
@@ -459,3 +422,17 @@ py_test(
 )
 
 donner_package()
+
+py_binary(
+    name = "package_web_files",
+    srcs = ["package_web_files.py"],
+)
+
+py_test(
+    name = "package_web_files_test",
+    srcs = [
+        "package_web_files.py",
+        "package_web_files_test.py",
+    ],
+    imports = ["."],
+)

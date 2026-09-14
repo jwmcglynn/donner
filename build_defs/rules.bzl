@@ -157,6 +157,15 @@ _renderer_backend_transition = transition(
     outputs = ["//donner/svg/renderer:renderer_backend"],
 )
 
+def _transitioned_fixed_args(ctx):
+    result = []
+    for arg in getattr(ctx.attr, "fixed_args", []):
+        if "$(locations " in arg:
+            fail("Pass file groups through file_args so each path remains a separate argument")
+        result.append(ctx.expand_location(arg, targets = ctx.attr.argument_files))
+    result += [file.short_path for file in getattr(ctx.files, "file_args", [])]
+    return " ".join([_shell_quote(arg) for arg in result])
+
 def _donner_transitioned_executable_impl(ctx):
     dep_target = ctx.attr.dep
     if type(dep_target) == "list":
@@ -245,8 +254,11 @@ if [[ -n "$library_path" ]]; then
   export DYLD_LIBRARY_PATH="$library_path${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}}"
   export LD_LIBRARY_PATH="$library_path${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 fi
-exec "$impl" "$@"
-""".format(logical_impl = launcher_target)
+exec "$impl" {fixed_args} "$@"
+""".format(
+        logical_impl = launcher_target,
+        fixed_args = _transitioned_fixed_args(ctx),
+    )
     ctx.actions.write(executable, launcher, is_executable = True)
 
     providers = [
@@ -313,24 +325,22 @@ donner_transitioned_cc_test = rule(
 )
 
 def _multi_transition_impl(settings, attr):
-    if settings["//build_defs:disable_backend_test_transition"]:
-        return {
-            "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
-            "//donner/svg/renderer:text": settings["//donner/svg/renderer:text"],
-            "//donner/svg/renderer:text_full": settings["//donner/svg/renderer:text_full"],
-            "//donner/svg/renderer/geode:enable_geode": settings["//donner/svg/renderer/geode:enable_geode"],
-        }
-
-    # Selecting the geode backend implies turning on Dawn: the
-    # `:renderer_geode` library gates its sources behind the
-    # `enable_geode` flag, so the transition must set it to keep the
-    # dependency graph buildable without the user also passing
-    # `--config=geode` on the command line.
+    disabled = settings["//build_defs:disable_backend_test_transition"]
+    preserve_backend = disabled or attr.renderer_backend == "inherit"
+    backend = settings["//donner/svg/renderer:renderer_backend"] if preserve_backend else attr.renderer_backend
+    text = settings["//donner/svg/renderer:text"]
+    text_full = settings["//donner/svg/renderer:text_full"]
+    if attr.full_text_only:
+        text = True
+        text_full = True
+    elif not disabled:
+        text = attr.text == "true" or attr.text_full == "true"
+        text_full = attr.text_full == "true"
     return {
-        "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
-        "//donner/svg/renderer:text": attr.text == "true" or attr.text_full == "true",
-        "//donner/svg/renderer:text_full": attr.text_full == "true",
-        "//donner/svg/renderer/geode:enable_geode": attr.renderer_backend == "geode",
+        "//donner/svg/renderer:renderer_backend": backend,
+        "//donner/svg/renderer:text": text,
+        "//donner/svg/renderer:text_full": text_full,
+        "//donner/svg/renderer/geode:enable_geode": settings["//donner/svg/renderer/geode:enable_geode"] if preserve_backend else backend == "geode",
     }
 
 _multi_transition = transition(
@@ -354,6 +364,9 @@ _donner_multi_transitioned_test = rule(
     implementation = _donner_transitioned_executable_impl,
     test = True,
     attrs = {
+        "fixed_args": attr.string_list(),
+        "file_args": attr.label_list(allow_files = True),
+        "argument_files": attr.label_list(allow_files = True),
         "dep": attr.label(
             mandatory = True,
             executable = True,
@@ -361,8 +374,9 @@ _donner_multi_transitioned_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["tiny_skia", "geode"],
+            values = ["tiny_skia", "geode", "inherit"],
         ),
+        "full_text_only": attr.bool(default = False),
         "text": attr.string(
             default = "false",
             values = ["true", "false"],
@@ -386,7 +400,7 @@ def donner_multi_transitioned_test(
     Args:
       name: Rule name.
       dep: The underlying test target to transition.
-      renderer_backend: "tiny_skia" or "geode".
+      renderer_backend: "tiny_skia", "geode", or "inherit" to preserve the caller backend.
       opens_gpu_device: True when the test actually instantiates a GPU
         device/adapter. Only those tests get `exclusive-if-local`, which makes
         Bazel drain them one at a time so a device loss in one process cannot
@@ -445,8 +459,9 @@ donner_multi_transitioned_binary = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["tiny_skia", "geode"],
+            values = ["tiny_skia", "geode", "inherit"],
         ),
+        "full_text_only": attr.bool(default = False),
         "text": attr.string(
             default = "false",
             values = ["true", "false"],
@@ -810,7 +825,7 @@ _fuzzer_routing_manifest = rule(
     outputs = {"out": "%{name}.txt"},
 )
 
-def _fuzzer_shell_quote(value):
+def _shell_quote(value):
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 def _fuzzer_soak_test_impl(ctx):
@@ -818,8 +833,8 @@ def _fuzzer_soak_test_impl(ctx):
     files = [ctx.executable._runner, ctx.executable.binary] + ctx.files.corpus
     arguments = []
     for file in files:
-        arguments.append('"${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + _fuzzer_shell_quote(file.short_path))
-    flags = [_fuzzer_shell_quote(flag) for flag in ctx.attr.fuzz_args]
+        arguments.append('"${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + _shell_quote(file.short_path))
+    flags = [_shell_quote(flag) for flag in ctx.attr.fuzz_args]
     command = arguments[:2] + flags + arguments[2:] + ['"$@"']
     ctx.actions.write(
         executable,
@@ -855,6 +870,7 @@ def donner_cc_fuzzer(
         per_input_timeout_seconds = 2,
         tags = [],
         routing_manifest = None,
+        full_text_only = False,
         **kwargs):
     """
     Create a libfuzzer-based fuzz target.
@@ -865,6 +881,7 @@ def donner_cc_fuzzer(
       deps: List of dependencies.
       per_input_timeout_seconds: Maximum time for one generated input in the timed fuzz test.
       tags: Additional Bazel tags used to select configuration-specific corpus and soak lanes.
+      full_text_only: Keep the corpus, raw binary, and soak on the full-text configuration.
       routing_manifest: Optional target name for a dependency-free manifest of the exact tags
         assigned to each generated fuzzer target.
       **kwargs: Additional arguments, matching the implementation of cc_test.
@@ -906,16 +923,29 @@ def donner_cc_fuzzer(
             fuzzer_name = name,
         )
 
+    binary_name = name + "_bin_impl" if full_text_only else name + "_bin"
+    corpus_test_name = name + "_impl" if full_text_only else name
+    implementation_tags = ["manual"] if full_text_only else common_target_tags
     cc_binary(
-        name = name + "_bin",
+        name = binary_name,
         additional_linker_inputs = fuzzer_additional_linker_inputs,
         linkopts = fuzzer_runtime_linkopts,
         linkstatic = 1,
         deps = deps + libc_compat_deps(),
         target_compatible_with = fuzzer_compatible_with(),
-        tags = common_target_tags,
+        tags = implementation_tags,
         **kwargs
     )
+
+    if full_text_only:
+        donner_multi_transitioned_binary(
+            name = name + "_bin",
+            dep = ":" + binary_name,
+            renderer_backend = "inherit",
+            full_text_only = True,
+            tags = common_target_tags,
+            target_compatible_with = fuzzer_compatible_with(),
+        )
 
     # The time budget is a flag, not a literal. The corpus replay is what makes
     # this a regression test, and libFuzzer always runs the whole seed corpus
@@ -946,7 +976,7 @@ def donner_cc_fuzzer(
     )
 
     donner_cc_test(
-        name = name,
+        name = corpus_test_name,
         additional_linker_inputs = fuzzer_additional_linker_inputs,
         linkopts = fuzzer_runtime_linkopts,
         args = ["$(locations %s)" % corpus_name],
@@ -957,9 +987,21 @@ def donner_cc_fuzzer(
             "//conditions:default": [],
         }),
         target_compatible_with = fuzzer_compatible_with(),
-        tags = corpus_tags,
+        tags = ["manual"] if full_text_only else corpus_tags,
         **kwargs
     )
+
+    if full_text_only:
+        donner_multi_transitioned_test(
+            name = name,
+            dep = ":" + corpus_test_name,
+            renderer_backend = "inherit",
+            full_text_only = True,
+            file_args = [corpus_name],
+            tags = corpus_tags,
+            target_compatible_with = fuzzer_compatible_with(),
+            **{key: kwargs[key] for key in _VARIANT_FORWARDED_ATTRS if key in kwargs and key != "target_compatible_with"}
+        )
 
 def _force_opt_transition_impl(settings, _attr):
     if settings["//build_defs:disable_perf_opt_transition"]:

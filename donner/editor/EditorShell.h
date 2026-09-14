@@ -6,10 +6,13 @@
 #include <deque>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/editor/CanvasScrollbars.h"
@@ -487,6 +490,24 @@ private:
   void renderFillStrokeToolbarWidget();
   void renderCompactTopBar();
   void renderSidebars();
+  /// Poll every auxiliary result through one lifetime/generation-aware handler.
+  void pollAuxiliaryPreviewResult();
+  void handleAuxiliaryPreviewResult(SampleThumbnailRenderResult result);
+  void handleFontPreviewResult(SampleThumbnailRenderResult result, bool pending, bool rendered);
+  void handleSamplePreviewResult(SampleThumbnailRenderResult result, bool pending, bool rendered);
+  void invalidateChangedFontPreviews();
+  void advanceVisiblePreviews();
+  void installCatalogFonts();
+  void retryPendingFontPreviews();
+  void updateVisiblePreviewTasks();
+  void adoptCatalogFontResources();
+  void requestCatalogFonts(std::span<const svg::FontFaceDependency> dependencies, int priority,
+                           bool explicitRetry = false);
+  bool requireCatalogFontsForSelection();
+  bool requireCatalogFontsForElement(const svg::SVGElement& element, std::string* error);
+  void retryCatalogFont(std::string_view family);
+  void rememberOutputFontDemand(std::span<const svg::FontFaceDependency> dependencies);
+  void drainOutputFontDemand();
   void ensureSampleThumbnails();
   void publishSampleThumbnailStats() const;
   void cancelSampleThumbnailGeneration();
@@ -637,7 +658,38 @@ private:
   std::unordered_map<std::string, std::optional<svg::RendererBitmap>> fontPreviewBitmaps_;
   std::deque<std::string> pendingFontPreviews_;
   std::optional<std::string> fontPreviewInFlight_;
-  /// Embedded + system font catalog. It is declared before the render coordinator so it outlives
+  /// Pending attempts survive their temporary preview document and FontManager.
+  struct PendingPreviewFonts {
+    std::vector<svg::FontFaceDependency> dependencies;
+    std::uint64_t wakeRevision = 0;
+    std::uint64_t taskGeneration = 0;
+  };
+  struct PreviewFontIdentity {
+    std::uint64_t resourceRevision = 0;
+    std::vector<svg::FontFaceDependency> dependencies;
+  };
+  std::unordered_map<std::string, PendingPreviewFonts> waitingFontPreviews_;
+  std::unordered_map<std::size_t, PendingPreviewFonts> waitingSamplePreviews_;
+  std::unordered_map<std::string, PreviewFontIdentity> fontPreviewIdentities_;
+  std::unordered_map<std::size_t, PreviewFontIdentity> samplePreviewIdentities_;
+  std::unordered_set<std::string> visibleFontPreviewFamilies_;
+  std::unordered_set<std::size_t> visibleSamplePreviewIndices_;
+  std::unordered_set<std::size_t> finishedSamplePreviewIndices_;
+  std::uint64_t previewTaskGeneration_ = 1;
+  /// Only immutable asset IDs survive an output preflight; no output action is retained.
+  std::unordered_map<std::string, svg::FontFaceDependency> outputFontDemand_;
+  std::unordered_set<std::string> explicitFontRetries_;
+  std::uint64_t outputFontDocumentGeneration_ = 0;
+  std::uint64_t outputFontSourceVersion_ = 0;
+  std::uint64_t outputFontAuthoredFrameVersion_ = 0;
+  /// The mutex synchronizes copied store callbacks against shell teardown.
+  struct CatalogFontWakeTarget {
+    std::mutex mutex;
+    gui::EditorWindow* window = nullptr;
+  };
+  std::shared_ptr<CatalogFontWakeTarget> catalogFontWakeTarget_;
+  std::uint32_t catalogFontSession_ = 0;
+  /// Bundled + system font catalog. It is declared before the render coordinator so it outlives
   /// every worker-side FontManager and offscreen renderer during reverse-order destruction.
   svg::FontCatalog fontCatalog_;
   RenderCoordinator renderCoordinator_;

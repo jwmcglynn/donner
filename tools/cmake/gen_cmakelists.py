@@ -1175,6 +1175,10 @@ def generate_root() -> None:
             "FetchContent_Declare(woff2\n"
             "  GIT_REPOSITORY https://github.com/google/woff2.git\n"
             f"  GIT_TAG        {woff2_commit}\n"
+            "  PATCH_COMMAND ${CMAKE_COMMAND}\n"
+            "    \"-DSOURCE_DIR=<SOURCE_DIR>\"\n"
+            "    \"-DPATCH_FILE=${CMAKE_CURRENT_SOURCE_DIR}/third_party/woff2_bounded_decode.patch\"\n"
+            "    -P \"${CMAKE_CURRENT_SOURCE_DIR}/tools/cmake/apply_woff2_patch.cmake\"\n"
             ")\n"
         )
         f.write("FetchContent_MakeAvailable(woff2)\n")

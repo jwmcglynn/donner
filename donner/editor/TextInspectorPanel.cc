@@ -58,6 +58,27 @@ std::optional<svg::SVGElement> SingleSelectedText(EditorApp& app) {
   return selection.front();
 }
 
+/// Shows the resolved family and whether rendering currently uses fallback glyphs.
+void RenderFontAvailability(const svg::FontCatalog* fontCatalog, std::string_view typedFamily) {
+  if (fontCatalog != nullptr) {
+    if (!typedFamily.empty()) {
+      if (const std::optional<svg::FontFamilyInfo> resolved = fontCatalog->find(typedFamily)) {
+        const auto availability = fontCatalog->availability(typedFamily, {});
+        if (availability.state == svg::FontAssetState::Failed) {
+          ImGui::TextDisabled("%s unavailable - using fallback", resolved->family.c_str());
+        } else if (availability.state != svg::FontAssetState::Ready) {
+          ImGui::TextDisabled("Loading %s - using fallback", resolved->family.c_str());
+        } else {
+          ImGui::TextDisabled("Available: %s (%s)", resolved->family.c_str(),
+                              resolved->source == svg::FontSource::Bundled ? "bundled" : "system");
+        }
+      } else {
+        ImGui::TextDisabled("Not installed - falls back to Public Sans");
+      }
+    }
+  }
+}
+
 }  // namespace internal
 
 using internal::AssignBuffer;
@@ -157,19 +178,7 @@ bool TextInspectorPanel::render(EditorApp* liveApp, double nowSeconds,
         liveApp->setAttributeOnSelection("font-family", fontFamilyBuffer_.data()) || queuedMutation;
   }
 
-  // Resolve the free-text family through the catalog so the operator sees how it will render:
-  // an Embedded or System font, or the Public Sans fallback for a family the viewer lacks.
-  if (fontCatalog != nullptr) {
-    const std::string_view typedFamily(fontFamilyBuffer_.data());
-    if (!typedFamily.empty()) {
-      if (const std::optional<svg::FontFamilyInfo> resolved = fontCatalog->find(typedFamily)) {
-        ImGui::TextDisabled("Resolves to %s (%s)", resolved->family.c_str(),
-                            resolved->source == svg::FontSource::Embedded ? "embedded" : "system");
-      } else {
-        ImGui::TextDisabled("Not installed - falls back to Public Sans");
-      }
-    }
-  }
+  internal::RenderFontAvailability(fontCatalog, fontFamilyBuffer_.data());
 
   // Font size.
   ImGui::InputText("Font size", fontSizeBuffer_.data(), fontSizeBuffer_.size(),

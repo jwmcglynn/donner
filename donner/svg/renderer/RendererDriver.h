@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/FontResourceGraph.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -54,6 +55,7 @@ public:
     std::uint64_t preparedFilterPayloadBytes = 0;
     std::size_t preparedFilterShadowEntities = 0;
     bool filterPreparationRejected = false;
+    components::FontResourceGraphCache::Stats nestedFontResources;
   };
 
   /**
@@ -320,16 +322,21 @@ private:
                                   const components::RenderingInstanceComponent& instance) const;
   void drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                        const PreserveAspectRatio& aspectRatio, double opacity,
-                       const Transform2d& parentAbsoluteTransform);
+                       const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
+                       Entity hostEntity);
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                              const Transform2d& parentAbsoluteTransform, double opacity);
-  void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry);
+                              const Transform2d& parentAbsoluteTransform, double opacity,
+                              Registry& hostRegistry, Entity hostEntity);
+  bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
+                                     Entity hostEntity);
+  void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
+                            Entity hostEntity);
   void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
                                  Entity hostEntity, const std::optional<Box2d>& filterRegion);
-  static void setSubDocumentContextPaint(SVGDocument& subDocument,
-                                         const components::ResolvedPaintServer& contextFill,
-                                         const components::ResolvedPaintServer& contextStroke);
-  static void clearSubDocumentContextPaint(SVGDocument& subDocument);
+  void setSubDocumentContextPaint(SVGDocument& subDocument,
+                                  const components::ResolvedPaintServer& contextFill,
+                                  const components::ResolvedPaintServer& contextStroke);
+  void clearSubDocumentContextPaint(SVGDocument& subDocument);
 
   struct DeferredPop {
     Entity lastEntity{};
@@ -354,6 +361,13 @@ private:
     Transform2d surfaceFromStrokeContextTransform;
   };
 
+  components::FontResourceGraphCache& fontCollectionCache();
+  void recordChildFontDependencies(SVGDocument& child, Entity target, Registry& hostRegistry,
+                                   Entity host);
+  void prepareSubDocument(SVGDocument& document);
+  std::shared_ptr<components::FontResourceGraphCache> fontCollectionCache_;
+  std::shared_ptr<std::unordered_set<const DocumentState*>> activeFontSubDocuments_;
+  std::shared_ptr<std::unordered_set<const DocumentState*>> visitedFontSubDocuments_;
   RendererInterface& renderer_;
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;

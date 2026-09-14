@@ -53,6 +53,11 @@ public:
   /// Prepare text dependencies for the text root containing \p handle.
   void prepareForElement(EntityHandle handle, ParseWarningSink& warningSink);
 
+  /// Adopt pending face resolutions under serialized document access and invalidate only the
+  /// text roots whose cached runs used a changed face. Call before the renderer's dirty snapshot.
+  std::vector<Entity> refreshFontResources();
+  bool needsFontResourceRefresh() const;
+
   /// Lay out all spans, returning positioned glyph runs.
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,
                               const TextLayoutParams& params);
@@ -78,7 +83,8 @@ public:
                                                       float scale) const;
 
   /// Measure the `ch` unit in ems for the given font-family cascade.
-  std::optional<double> measureChUnitInEm(std::span<const RcString> fontFamilies);
+  std::optional<double> measureChUnitInEm(std::span<const RcString> fontFamilies,
+                                          Entity geometryOwner = entt::null);
 
   /// Resolve per-span layout-affecting style state on a computed text tree.
   void resolvePerSpanLayoutStyles(EntityHandle textRootHandle,
@@ -137,6 +143,7 @@ private:
   Registry& registry_;
   std::unique_ptr<TextBackend> backend_;
   size_t registeredFontFaceCount_ = 0;
+  uint64_t observedFontResourceRevision_ = 0;
 };
 
 }  // namespace donner::svg
