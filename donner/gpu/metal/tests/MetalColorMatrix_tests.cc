@@ -601,6 +601,15 @@ TEST_F(MetalColorMatrixTest, WgslLoopSwitch) {
       {23.125f, 23.25f, 23.5f, 23.75f});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
+TEST_F(MetalColorMatrixTest, WgslStructConstruction) {
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::StructConstructionAllProjections(),
+                                   device_->shaderSourceKind(), "structure construction"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, {0.125f, 0.25f, 0.5f, 0.75f},
+      {0.125f, 0.25f, 0.5f, 0.75f});
+}
+
 TEST_F(MetalColorMatrixTest, WgslVectorMix) {
   gpu::tests::CheckFloatTextureStorage(
       *device_,

@@ -1,6 +1,7 @@
 # WGSL shader compilation {#WgslCompiler}
 
-Gaussian/box blur, matrix convolution, Slug mask, offset and filter resolve are authored as inline WGSL in
+Gaussian/box blur, matrix convolution, Slug mask, offset, filter resolve, specular lighting,
+turbulence and image blit are authored as inline WGSL in
 `donner/gpu/shader/programs/*Source.h`. The C++20 compiler validates each source, produces immutable
 shader projections and derives its resource interface during constant evaluation. Each artifact
 implementation checks the shared host parameter layout. Application code consumes frozen data
@@ -69,8 +70,9 @@ guard and shares its 144-byte storage layout with diffuse lighting; all 36 field
 calls are outside this profile and fail explicitly. Offset retains its half-away-from-zero
 rounding helper; replacing it with WGSL `round` changes exact half-pixel shifts.
 
-Unsupported language constructs fail explicitly. Fixed arrays have 1 through 8,192 elements, with integer constant-expression extents; local, parameter, return and nested arrays are outside
-this profile. Constant out-of-range indices
+Unsupported language constructs fail explicitly. Fixed arrays have 1 through 8,192 elements, with integer constant-expression extents; fixed numeric local arrays support zero construction, up to eight explicit constructor arguments,
+whole local copies and indexed writes. Array parameters, array returns, nested arrays and whole
+buffer-array copies remain outside this profile. Constant out-of-range indices
 fail compilation. Native dynamic indices are clamped before memory access; authored convolution
 also clamps its coefficient index explicitly for consistent WebGPU execution. Buffer layouts that
 MSL cannot represent, including unsupported vec3 packing, fail projection instead of changing
@@ -130,8 +132,7 @@ constructors and constant matrix arithmetic remain unsupported.
 Runtime storage arrays are supported at binding roots with numeric or flat structure elements.
 Fixed numeric arrays may appear in buffers; uniform arrays require a stride divisible by 16.
 Reflection carries runtime element stride and a minimum range containing one element into the
-existing device buffer-requirement contract. Nested/member runtime arrays, array aliases and array
-writes remain unsupported.
+existing device buffer-requirement contract. Nested/member runtime arrays, array aliases and writes to buffer arrays remain unsupported.
 
 Metal reads the existing reserved table of exact declared buffer lengths, converts bytes to element
 counts using the reflected stride, and guards empty/clamped reads. SPIR-V emits buffer-block
@@ -168,14 +169,15 @@ metadata retention can hide or exaggerate a change in payload bytes. Cross-linke
 proves byte retention; native driver execution remains a separate validation step.
 
 The numeric/control profile also covers the Slug mask's scalar abstract arithmetic, module constants,
-`break`, `continue`, `discard`, bitwise AND, vector math and derivatives. `fwidth` is restricted to
-straight-line fragment-entry code before any conditional or loop and outside short-circuit operands;
-this conservative profile does not claim general uniformity analysis. Module constants cannot call
+`break`, `continue`, `discard`, bitwise AND, vector math and derivatives. `fwidth` and implicit-LOD `textureSample` require uniform fragment control, including through helper
+calls. A bounded dependency graph follows parameters, mutable values, branches, switches,
+short-circuit operands and loop-carried state. Complete branch reconvergence restores uniform
+control; divergent early returns and loop exits retain their dependencies. Partial aggregate
+writes conservatively taint the whole value. This profile does not claim full WGSL conformance. Module constants cannot call
 runtime helpers. Logical/bitwise grouping and relational non-associativity are validated explicitly.
 MSL helpers receive only the resources in their validated transitive use masks. Immutable parse and
 emission phases are shared by source/projection template instances before freezing the exact-sized
-artifact. No compiler phase executes at runtime. The complete production Slug caller migration and
-its performance qualification are still pending.
+artifact. No compiler phase executes at runtime. The production Slug mask caller consumes the frozen artifact and reflected interface.
 
 WGSL `discard` retains the source-level Next behavior, so it does not satisfy a value-returning
 function's authored return requirement. The accepted profile disallows derivatives after discard
@@ -188,5 +190,29 @@ edges, binary coverage, nested clip values, both winding rules, and deliberately
 buffer ranges than the underlying allocations. They use the existing strict bitmap comparator.
 These cases are the execution gate for the mask, not a claim that every supported platform has
 already passed. The adapter pipeline reads entry names and binding slots from the frozen interface.
-The Slug target's positive Clang evaluator budget is emitted in CMake only for Clang/AppleClang;
+The Slug and image-blit targets' positive Clang evaluator budgets is emitted in CMake only for Clang/AppleClang;
 other compilers retain their own evaluator defaults.
+
+## Image sampling and local control flow
+
+Image blit uses a shared 176-byte `ImageBlitParams` block. Each retained artifact verifies every
+authored member against the host layout. Its live caller derives all six bindings and both entry
+names from reflection. Filtered textures are distinct from textures used only for texel reads; the
+unused clip sampler is removed from the shader and host layout.
+
+`textureSample` and `textureSampleLevel` support 2D float textures, a regular sampler and vec2f
+coordinates; explicit LOD adds an f32 level. Optional offsets and other sampling overloads are
+outside this profile. Explicit LOD permits varying control. Neither implicit sampling nor
+derivatives may follow a possible discard, including helper and loop-carried paths.
+
+`mix` accepts f32 scalar/vector operands and a matching or scalar factor. Numeric scalar/vector
+addition and subtraction support both operand orders. Switches have one integer selector per
+clause, distinct constant cases and exactly one default. Their breaks leave the switch; continues
+still target the enclosing loop. Constructor and call argument lists accept trailing commas.
+Flat structure constructors accept zero arguments or one typed value per member, up to eight
+arguments. Array-bearing structure values remain unsupported.
+
+Native image tests compare nearest/linear/pixelated sampling, alpha handling, masks and all CSS
+blend modes with existing CPU references through the strict bitmap comparator. Separate controls
+change entry names and binding numbers and exercise explicit-LOD sampling under varying control.
+Platform-only linked probes verify that unused WGSL/MSL/SPIR-V payloads remain excluded.

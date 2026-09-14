@@ -121,4 +121,26 @@ const CompiledShaderView& VectorMixAllProjections() {
   return kVectorMixView;
 }
 
+namespace {
+constexpr wgsl::SourceText kStructConstructionSource{R"wgsl(
+struct Color { rg:vec2f, b:f32, a:f32, }
+struct Scalar { value:f32, }
+@group(0) @binding(0) var inputTexture:texture_2d<f32>;
+@group(0) @binding(1) var outputTexture:texture_storage_2d<rgba32float,write>;
+@compute @workgroup_size(1,1,1)
+fn cs_main(@builtin(global_invocation_id) gid:vec3u) {
+  let v=textureLoad(inputTexture,vec2i(gid.xy),0);
+  let c=Color(v.xy,v.z,v.w,);
+  let zero=Color();
+  let scalar=Scalar(c.a);
+  textureStore(outputTexture,vec2i(gid.xy),vec4f(c.rg,c.b,scalar.value)+vec4f(zero.b));
+}
+)wgsl"};
+constexpr auto kStructConstructionArtifact =
+    wgsl::Compile<kStructConstructionSource, wgsl::Projection::All>();
+constexpr CompiledShaderView kStructConstructionView = kStructConstructionArtifact.view();
+}  // namespace
+const CompiledShaderView& StructConstructionAllProjections() {
+  return kStructConstructionView;
+}
 }  // namespace donner::gpu::shader::tests

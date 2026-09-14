@@ -2071,7 +2071,38 @@ private:
                          false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
+  constexpr ExpressionInfo ParseStructConstruction(Token name, Type type) {
+    if (!IsValueType(type) || currentFunctionId_ >= module_.functionCount) {
+      Fail(ErrorCode::UnsupportedConstruct, name.span);
+      return ErrorExpression(name.span);
+    }
+    std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
+    const uint8_t count = ParseArguments(arguments);
+    const auto end = Expect(TokenKind::RightParen).span;
+    if (count == 0)
+      return AddExpression(Expression{ExpressionKind::Zero, type, {name.span.begin, end.end}},
+                           false, kInvalidArenaId, INT32_MAX);
+    const Struct& structure = module_.structs[type.structId];
+    if (count != structure.memberCount) {
+      Fail(ErrorCode::InvalidCall, name.span);
+      return ErrorExpression(name.span);
+    }
+    std::array<ArenaId, Expression::kMaxOperands> operands{};
+    for (uint8_t i = 0; i < count; ++i) {
+      const Type member = module_.structMembers[structure.firstMember + i].type;
+      arguments[i] = Materialize(arguments[i], member);
+      if (ExpressionAt(arguments[i].id).type != member) Fail(ErrorCode::TypeMismatch, name.span);
+      operands[i] = arguments[i].id;
+    }
+    return AddExpression(
+        Expression{ExpressionKind::Construct, type, {name.span.begin, end.end}, operands, count},
+        false, kInvalidArenaId, INT32_MAX);
+  }
+
   constexpr ExpressionInfo ParseCall(Token name) {
+    for (uint16_t i = 0; i < module_.structCount; ++i)
+      if (SameName(module_.structs[i].name, name))
+        return ParseStructConstruction(name, Type{TypeKind::Struct, 1, i});
     std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
     const uint8_t count = ParseArguments(arguments);
     const SourceSpan end = token_.span;

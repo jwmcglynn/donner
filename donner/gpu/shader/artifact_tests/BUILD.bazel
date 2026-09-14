@@ -509,4 +509,75 @@ py_test(
     target_compatible_with = _NATIVE,
 )
 
+donner_cc_binary(
+    name = "image_blit_wgsl_probe",
+    testonly = 1,
+    srcs = ["ImageBlitWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:image_blit_artifact",
+    ],
+)
+
+py_test(
+    name = "image_blit_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=image_blit",
+        "--binary=$(rootpath :image_blit_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":image_blit_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "image_blit_native_probe",
+    testonly = 1,
+    srcs = ["ImageBlitNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:image_blit_native_artifact",
+    ],
+)
+
+py_test(
+    name = "image_blit_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=image_blit",
+        "--binary=$(rootpath :image_blit_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":image_blit_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "image_blit_all_probe",
+    testonly = 1,
+    srcs = ["ImageBlitAllProbe.cc"],
+    copts = ["-fconstexpr-steps=2097152"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:image_blit_source"],
+)
+
+py_test(
+    name = "image_blit_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=image_blit",
+        "--binary=$(rootpath :image_blit_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":image_blit_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
 donner_package()

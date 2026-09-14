@@ -463,6 +463,15 @@ TEST_F(VulkanColorMatrixTest, WgslLoopSwitch) {
       [this](const Buffer& b) { return device_->readBackBuffer(b); }, {0.125f, 0.25f, 0.5f, 0.75f},
       {23.125f, 23.25f, 23.5f, 23.75f});
 }
+TEST_F(VulkanColorMatrixTest, WgslStructConstruction) {
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::StructConstructionAllProjections(),
+                                   device_->shaderSourceKind(), "structure construction"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, {0.125f, 0.25f, 0.5f, 0.75f},
+      {0.125f, 0.25f, 0.5f, 0.75f});
+}
+
 TEST_F(VulkanColorMatrixTest, WgslVectorMix) {
   gpu::tests::CheckFloatTextureStorage(
       *device_,

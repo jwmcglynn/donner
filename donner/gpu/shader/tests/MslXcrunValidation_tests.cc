@@ -380,6 +380,12 @@ TEST(MslXcrunValidation, LoopSwitch) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(tests::LoopSwitchAllProjections().msl, "LoopSwitch");
 }
+TEST(MslXcrunValidation, StructConstruction) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::StructConstructionAllProjections().msl,
+                                  "StructConstruction");
+}
+
 TEST(MslXcrunValidation, VectorMix) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(tests::VectorMixAllProjections().msl, "VectorMix");

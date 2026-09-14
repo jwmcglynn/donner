@@ -437,6 +437,11 @@ TEST(SpirvValValidation, LoopSwitch) {
   ExpectWordsValidateForVulkan11(SpirvVal(), tests::LoopSwitchAllProjections().spirv,
                                  "LoopSwitch.spv");
 }
+TEST(SpirvValValidation, StructConstruction) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::StructConstructionAllProjections().spirv,
+                                 "StructConstruction.spv");
+}
+
 TEST(SpirvValValidation, VectorMix) {
   ExpectWordsValidateForVulkan11(SpirvVal(), tests::VectorMixAllProjections().spirv,
                                  "VectorMix.spv");

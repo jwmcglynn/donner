@@ -82,6 +82,26 @@ fn f()->f32 {var a:array<f32,2>; a=array<f32,2>(1,2); let b=array<f32,2>(); retu
   EXPECT_EQ(parsed.diagnostic.code, ErrorCode::None) << parsed.diagnostic.span.begin;
 }
 
+TEST(WgslImageFeatures, StructureMembersRetainConstantExpressionClassification) {
+  for (const char* source : {"struct S{x:f32,} fn f()->f32{return S(1f).x / 0f;}",
+                             "struct S{x:f32,} fn f()->f32{return S().x / 0f;}"}) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::InvalidConstantExpression);
+  }
+  EXPECT_EQ(Parse("struct S{x:f32,} fn f(x:f32)->f32{return S(x).x / 2f;}").diagnostic.code,
+            ErrorCode::None);
+}
+
+TEST(WgslImageFeatures, RejectsInvalidStructureConstructors) {
+  for (const char* source :
+       {"struct S{x:f32,y:f32,} fn f(){let s=S(1);}", "struct S{x:f32,} fn f(){let s=S(1,2);}",
+        "struct S{x:f32,} fn f(){let s=S(1u);}", "struct S{x:array<f32,2>,} fn f(){let s=S();}",
+        "struct S{x:f32,} const c=S(1);"}) {
+    SCOPED_TRACE(source);
+    EXPECT_THAT(Parse(source).hasResult(), testing::IsFalse());
+  }
+}
+
 TEST(WgslImageFeatures, RejectsUnsupportedOrInvalidArrayAndSwitchForms) {
   const std::string_view sources[] = {
       R"(fn f()->f32 {let a=array<f32,3>(1,2);return a[0];})",

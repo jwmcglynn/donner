@@ -663,6 +663,46 @@
       ],
       "structs": []
     },
+    "donner/gpu/shader/tests/CompiledImageBlit.cc#inline3": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "let",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "Color",
+        "Scalar"
+      ]
+    },
     "donner/gpu/shader/tests/CompiledOffset.cc#inline0": {
       "bindings": [
         {

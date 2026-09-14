@@ -728,19 +728,20 @@ private:
   }
 
   constexpr void emitConstruct(const Expression& node) {
-    if (node.type.kind != TypeKind::Array && node.operandCount == 1 &&
+    const bool aggregate = node.type.kind == TypeKind::Array || node.type.kind == TypeKind::Struct;
+    if (!aggregate && node.operandCount == 1 &&
         module_.expressions[node.operands[0]].type.lanes == node.type.lanes &&
         module_.expressions[node.operands[0]].type.kind != node.type.kind) {
       emitConversion(node);
       return;
     }
     type(node.type);
-    character(node.type.kind == TypeKind::Array ? '{' : '(');
+    character(aggregate ? '{' : '(');
     for (uint8_t index = 0; index < node.operandCount; ++index) {
       if (index != 0) text(", ");
       emitChild(node, index);
     }
-    character(node.type.kind == TypeKind::Array ? '}' : ')');
+    character(aggregate ? '}' : ')');
     return;
   }
 

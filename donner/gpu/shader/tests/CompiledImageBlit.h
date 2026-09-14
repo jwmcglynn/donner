@@ -15,4 +15,6 @@ const CompiledShaderView& ArraySwitchAllProjections();
 const CompiledShaderView& LoopSwitchAllProjections();
 /// Returns the VectorMix native compiler acceptance fixture.
 const CompiledShaderView& VectorMixAllProjections();
+/// Returns zero, scalar-member and vector-member structure construction.
+const CompiledShaderView& StructConstructionAllProjections();
 }  // namespace donner::gpu::shader::tests
