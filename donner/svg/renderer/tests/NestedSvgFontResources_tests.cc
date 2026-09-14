@@ -277,8 +277,9 @@ TEST(NestedSvgFontResourcesTest, UncachedBackendLayoutPublishesPendingFontDepend
   ASSERT_TRUE(parsed.has_value());
   testing::NiceMock<tests::MockRendererInterface> backend;
   EXPECT_CALL(backend, drawText(testing::_, testing::_, testing::_))
-      .WillOnce([](Registry& registry, const components::ComputedTextComponent& text,
-                   const TextParams& params) {
+      .Times(3)
+      .WillRepeatedly([](Registry& registry, const components::ComputedTextComponent& text,
+                         const TextParams& params) {
         TextLayoutParams layout;
         layout.fontFamilies = params.fontFamilies;
         layout.fontSize = params.fontSize;
@@ -295,8 +296,23 @@ TEST(NestedSvgFontResourcesTest, UncachedBackendLayoutPublishesPendingFontDepend
   const auto fonts = parsed->renderedFontResources();
   EXPECT_EQ(fonts.status, FontResourcePreflight::Status::PendingFonts);
   EXPECT_THAT(fonts.dependencies, testing::ElementsAre(pending[0]));
-  const auto label = *parsed->querySelector("#label");
+  auto label = *parsed->querySelector("#label");
   EXPECT_THAT(parsed->fontDependenciesForElement(label), testing::ElementsAre(pending[0]));
+  auto& registry = parsed->registry();
+  const Entity entity = label.unsafeEntityHandle().entity();
+  const auto* paint = registry.try_get<components::FontPaintDependenciesComponent>(entity);
+  ASSERT_THAT(paint, Not(testing::IsNull()));
+  EXPECT_EQ(paint->prepared, false);
+  const auto epoch = registry.ctx().get<components::FontResourcePreparationState>().epoch;
+  driver.draw(*parsed);
+  EXPECT_EQ(registry.ctx().get<components::FontResourcePreparationState>().epoch, epoch);
+  EXPECT_THAT(parsed->renderedFontResources().dependencies, testing::ElementsAre(pending[0]));
+
+  label.setAttribute("font-family", "sans-serif");
+  driver.draw(*parsed);
+  EXPECT_EQ(parsed->renderedFontResources().status, FontResourcePreflight::Status::Ready);
+  EXPECT_THAT(parsed->renderedFontResources().dependencies, IsEmpty());
+  EXPECT_THAT(parsed->fontDependenciesForElement(label), IsEmpty());
 }
 
 TEST(NestedSvgFontResourcesTest, MissingOffscreenRendererPreservesUnpreparedChildStatus) {

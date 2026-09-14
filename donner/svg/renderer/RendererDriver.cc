@@ -61,23 +61,26 @@ namespace donner::svg {
 
 namespace {
 
-class CaptureFragmentFontDependencies {
+class CapturePaintFontDependencies {
 public:
-  CaptureFragmentFontDependencies(Registry& registry, Entity host)
-      : registry_(registry), host_(host), manager_(registry.ctx().find<FontManager>()) {
+  CapturePaintFontDependencies(Registry& registry, Entity host, bool preparesReferences)
+      : registry_(registry),
+        host_(host),
+        manager_(registry.ctx().find<FontManager>()),
+        preparesReferences_(preparesReferences) {
     if (manager_) capture_.emplace(*manager_, dependencies_);
   }
 
-  ~CaptureFragmentFontDependencies() {
+  ~CapturePaintFontDependencies() {
     capture_.reset();
     if (!registry_.valid(host_)) return;
     auto& paint = registry_.get_or_emplace<components::FontPaintDependenciesComponent>(host_);
-    if (!paint.prepared || !dependencies_.empty()) {
+    const bool preparationChanged = preparesReferences_ && !paint.prepared;
+    if (preparationChanged || !dependencies_.empty()) {
       paint.fontResourceRevision = manager_ ? manager_->fontResourceRevision() : 0;
     }
     const auto before = paint.fontDependencies;
-    const bool wasPrepared = paint.prepared;
-    paint.prepared = true;
+    paint.prepared |= preparesReferences_;
     for (const auto& dependency : dependencies_) {
       const auto existing = std::find_if(
           paint.fontDependencies.begin(), paint.fontDependencies.end(), [&](const auto& face) {
@@ -88,7 +91,7 @@ public:
       else
         *existing = dependency;
     }
-    if (!wasPrepared || before != paint.fontDependencies) {
+    if (preparationChanged || before != paint.fontDependencies) {
       components::InvalidateFontResourcePreparation(registry_);
     }
   }
@@ -97,6 +100,7 @@ private:
   Registry& registry_;
   Entity host_;
   FontManager* manager_;
+  bool preparesReferences_;
   std::vector<FontFaceDependency> dependencies_;
   std::optional<FontManager::DependencyCapture> capture_;
 };
@@ -1668,6 +1672,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2079,7 +2085,8 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
     }
     // Even an empty/unsupported URL graph has completed its preparation attempt. Preserve any
     // referenced-font dependencies until the render tree or prepared pixels are invalidated.
-    const CaptureFragmentFontDependencies captureFontDependencies(registry, entity);
+    const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                               /*preparesReferences=*/true);
     const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
 
     const Box2d filterViewBox =
@@ -2259,6 +2266,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2344,6 +2353,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         }
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2535,6 +2546,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2588,6 +2601,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         }
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
