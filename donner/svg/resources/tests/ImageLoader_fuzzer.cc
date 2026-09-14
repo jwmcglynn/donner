@@ -35,7 +35,14 @@ private:
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::vector<uint8_t> bytes(data, data + size);
 
-  size_t maximumDecodedImageSize = ImageLoader::kDefaultMaximumDecodedImageSize;
+  // libFuzzer allows each input about two seconds. The product's default decode limit permits
+  // 64 MiB of RGBA, and a 77-byte GIF can declare a canvas that fills it, so an input left on the
+  // default spends its whole budget inside one decode rather than exploring parser paths, and tips
+  // this target over its per-input timeout on a slower machine. Bound every input instead, keeping
+  // a range wide enough to reach both sides of the decoded-size check. The product limit itself is
+  // unchanged and is covered by ImageLoader_tests.
+  constexpr size_t kMaximumFuzzDecodedImageSize = 1u << 20;
+  size_t maximumDecodedImageSize = kMaximumFuzzDecodedImageSize;
   if (size >= 2 && (data[size - 1] & 1u) != 0) {
     maximumDecodedImageSize = 4u * (static_cast<size_t>(data[size - 2]) + 1u);
   }
