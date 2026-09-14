@@ -63,7 +63,6 @@ constexpr ProgramEntry kPrograms[] = {
     {"filter_image", 1, &programs::BuildFilterImageModule},
     {"flood", 1, &programs::BuildFloodModule},
     {"diffuse_lighting", 1, &programs::BuildDiffuseLightingModule},
-    {"specular_lighting", 1, &programs::BuildSpecularLightingModule},
     {"merge", 1, &programs::BuildMergeModule},
     {"morphology", 1, &programs::BuildMorphologyModule},
     {"composite", 1, &programs::BuildCompositeModule},

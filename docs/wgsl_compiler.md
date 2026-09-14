@@ -42,7 +42,7 @@ Native GPU tools still perform their normal final compilation.
 
 `MakeShaderDescriptor` selects precompiled bytes for the device and supplies compute-entry and
 buffer-range metadata. `MakeBindingLayout` derives layout entries and stage visibility from the same resource
-records. Gaussian, convolution, offset and filter-resolve dispatch resolve their input, output and parameter bindings by
+records. Gaussian, convolution, offset, filter-resolve and specular-lighting dispatch resolve their input, output and parameter bindings by
 their authored names; changing a binding number changes the layout and resource entries together.
 
 `GaussianBlurParams` is the host parameter type. Its implementation checks the resource's total
@@ -63,7 +63,9 @@ numeric literals and abstract scalar constants, scalar/vector expressions and co
 incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
 textures; texture writes occur in the compute entry. Mutable local declarations may omit an initializer and receive a zero value; immutable declarations require one.
-`floor` and `sign` support runtime f32 scalar/vector operands. Integer `sign` and constant builtin
+`floor`, `sign`, `sin`, `cos` and `pow` support runtime f32 scalar/vector operands.
+`pow` requires matching operand shapes. Specular lighting retains the explicit zero-exponent
+guard and shares its 144-byte storage layout with diffuse lighting; all 36 fields are verified. Integer `sign` and constant builtin
 calls are outside this profile and fail explicitly. Offset retains its half-away-from-zero
 rounding helper; replacing it with WGSL `round` changes exact half-pixel shifts.
 

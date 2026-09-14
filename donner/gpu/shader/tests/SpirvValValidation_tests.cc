@@ -44,6 +44,7 @@
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
+#include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -333,8 +334,10 @@ TEST(SpirvValValidation, EmittedLightingComputesPassVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildDiffuseLightingModule(),
                              "diffuse_lighting.spv");
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildSpecularLightingModule(),
-                             "specular_lighting.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::LightingMathAllProjections().spirv,
+                                 "lighting_vector_math.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::SpecularLightingAllProjections().spirv,
+                                 "specular_lighting.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {

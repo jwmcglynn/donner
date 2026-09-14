@@ -8,11 +8,6 @@
 namespace donner::gpu::shader::programs {
 namespace {
 
-enum class LightingModel {
-  Diffuse,
-  Specular,
-};
-
 IrExpr Vec2i(ErrorLatch& e, const IrExpr& x, const IrExpr& y) {
   return e(ConstructVector(IrType::Vec2i(), {x, y}));
 }
@@ -48,25 +43,6 @@ ShaderStatus AddSafeNormalize(ModuleBuilder& builder) {
   e.ok(fn.returnValue(e(CallBuiltin(BuiltinFn::Normalize, {value}))));
   e.ok(fn.endIf());
   e.ok(fn.returnValue(Zero3f(e)));
-  e.ok(fn.finish());
-  return e.error ? ShaderStatus(*e.error) : OkShaderStatus();
-}
-
-ShaderStatus AddSvgPow(ModuleBuilder& builder) {
-  ErrorLatch e;
-  ShaderResult<FunctionBuilder> result = builder.createFunction(
-      "svgPow", {IrParam{"base", IrType::F32()}, IrParam{"exponent", IrType::F32()}},
-      IrType::F32());
-  if (result.hasError()) {
-    return std::move(result).error();
-  }
-  FunctionBuilder fn = std::move(result).result();
-  const IrExpr base = e(fn.ref("base"));
-  const IrExpr exponent = e(fn.ref("exponent"));
-  e.ok(fn.beginIf(e(Eq(exponent, LiteralF32(0.0f)))));
-  e.ok(fn.returnValue(LiteralF32(1.0f)));
-  e.ok(fn.endIf());
-  e.ok(fn.returnValue(e(CallBuiltin(BuiltinFn::Pow, {base, exponent}))));
   e.ok(fn.finish());
   return e.error ? ShaderStatus(*e.error) : OkShaderStatus();
 }
@@ -352,7 +328,7 @@ IrType LightingParamsType(ErrorLatch& e) {
                                              IrType::Member{"sampleMaxY", IrType::I32()}}));
 }
 
-ShaderResult<IrModule> BuildLightingModule(LightingModel model) {
+ShaderResult<IrModule> BuildLightingModule() {
   ErrorLatch e;
   ModuleBuilder builder;
   const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
@@ -368,9 +344,6 @@ ShaderResult<IrModule> BuildLightingModule(LightingModel model) {
   e.ok(AddComputeNormal(builder));
   e.ok(AddComputeLightDirection(builder));
   e.ok(AddSpotLightFactor(builder));
-  if (model == LightingModel::Specular) {
-    e.ok(AddSvgPow(builder));
-  }
 
   ShaderResult<FunctionBuilder> result = builder.createComputeEntryPoint(
       RcString(kLightingEntryPoint),
@@ -413,19 +386,9 @@ ShaderResult<IrModule> BuildLightingModule(LightingModel model) {
   const IrExpr spot =
       e(fn.addLet("spot", e(fn.callFunction("spotLightFactor", {coord, alpha, lightDirection}))));
 
-  IrExpr response = LiteralF32(0.0f);
-  if (model == LightingModel::Diffuse) {
-    response =
-        e(CallBuiltin(BuiltinFn::Max, {e(CallBuiltin(BuiltinFn::Dot, {normal, lightDirection})),
-                                       LiteralF32(0.0f)}));
-  } else {
-    const IrExpr eye = Vec3f(e, LiteralF32(0.0f), LiteralF32(0.0f), LiteralF32(1.0f));
-    const IrExpr halfway =
-        e(fn.addLet("halfway", e(fn.callFunction("safeNormalize", {e(Add(lightDirection, eye))}))));
-    const IrExpr normalDotHalf = e(CallBuiltin(
-        BuiltinFn::Max, {e(CallBuiltin(BuiltinFn::Dot, {normal, halfway})), LiteralF32(0.0f)}));
-    response = e(fn.callFunction("svgPow", {normalDotHalf, e(Member(params, "specularExponent"))}));
-  }
+  const IrExpr response =
+      e(CallBuiltin(BuiltinFn::Max,
+                    {e(CallBuiltin(BuiltinFn::Dot, {normal, lightDirection})), LiteralF32(0.0f)}));
   const IrExpr intensity = e(fn.addLet(
       "intensity", e(Mul(e(Mul(e(Member(params, "lightingConstant")), response)), spot))));
   const auto litChannel = [&](const char* member) {
@@ -435,11 +398,7 @@ ShaderResult<IrModule> BuildLightingModule(LightingModel model) {
   const IrExpr red = e(fn.addLet("red", litChannel("lightR")));
   const IrExpr green = e(fn.addLet("green", litChannel("lightG")));
   const IrExpr blue = e(fn.addLet("blue", litChannel("lightB")));
-  IrExpr outputAlpha = LiteralF32(1.0f);
-  if (model == LightingModel::Specular) {
-    outputAlpha =
-        e(CallBuiltin(BuiltinFn::Max, {red, e(CallBuiltin(BuiltinFn::Max, {green, blue}))}));
-  }
+  const IrExpr outputAlpha = LiteralF32(1.0f);
   e.ok(fn.textureStore(output, coord, Vec4f(e, red, green, blue, outputAlpha)));
   e.ok(fn.finish());
   if (e.error) {
@@ -451,11 +410,7 @@ ShaderResult<IrModule> BuildLightingModule(LightingModel model) {
 }  // namespace
 
 ShaderResult<IrModule> BuildDiffuseLightingModule() {
-  return BuildLightingModule(LightingModel::Diffuse);
-}
-
-ShaderResult<IrModule> BuildSpecularLightingModule() {
-  return BuildLightingModule(LightingModel::Specular);
+  return BuildLightingModule();
 }
 
 }  // namespace donner::gpu::shader::programs

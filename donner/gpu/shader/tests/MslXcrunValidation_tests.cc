@@ -42,6 +42,7 @@
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
+#include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -327,7 +328,8 @@ TEST(MslXcrunValidation, EmittedMorphologyComputeCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, EmittedLightingComputesCompileWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildDiffuseLightingModule(), "diffuse_lighting");
-  ExpectCompilesWithMetalCompiler(programs::BuildSpecularLightingModule(), "specular_lighting");
+  ExpectCompilesWithMetalCompiler(tests::LightingMathAllProjections().msl, "lighting_vector_math");
+  ExpectCompilesWithMetalCompiler(tests::SpecularLightingAllProjections().msl, "specular_lighting");
 }
 
 TEST(MslXcrunValidation, FloatStorageTextureCompilesWithMetalCompiler) {

@@ -219,6 +219,9 @@ enum class Builtin : uint8_t {
   TextureStore,       //!< `textureStore`.
   Floor,              //!< Floating-point `floor`.
   Sign,               //!< Floating-point `sign`.
+  Sin,                //!< Floating-point sine.
+  Cos,                //!< Floating-point cosine.
+  Pow,                //!< Floating-point power.
 };
 
 /// Kind of a typed expression node.

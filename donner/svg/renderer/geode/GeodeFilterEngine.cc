@@ -32,7 +32,6 @@
 #include "donner/gpu/shader/generated/FloodShader.h"
 #include "donner/gpu/shader/generated/MergeShader.h"
 #include "donner/gpu/shader/generated/MorphologyShader.h"
-#include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/SubregionClipShader.h"
 #include "donner/gpu/shader/generated/TileShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
@@ -51,6 +50,7 @@
 #include "donner/gpu/shader/programs/MergeBindings.h"
 #include "donner/gpu/shader/programs/MorphologyBindings.h"
 #include "donner/gpu/shader/programs/Offset.h"
+#include "donner/gpu/shader/programs/SpecularLighting.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/gpu/shader/programs/TileBindings.h"
 #include "donner/gpu/shader/programs/TurbulenceBindings.h"
@@ -1691,19 +1691,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
                                       gpu::BindingType::ReadOnlyStorageBuffer}});
   }
 
-  // --- feSpecularLighting pipeline, through the GPU runtime ---
-  {
-    using gpu::shader::programs::LightingBinding;
-    const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
-    specularLightingProgram_ =
-        CreateRuntimeComputeProgram(device_.adapterDevice(),
-                                    gpu::generated::specular_lighting::BuildDescriptor(
-                                        device_.adapterDevice().shaderSourceKind()),
-                                    {SampledInputEntry(binding(LightingBinding::InputTexture)),
-                                     StorageOutputEntry(binding(LightingBinding::OutputTexture)),
-                                     {binding(LightingBinding::Params), gpu::ShaderStage::Compute,
-                                      gpu::BindingType::ReadOnlyStorageBuffer}});
-  }
+  specularLightingProgram_ = CreateReflectedFilterProgram(
+      device_.adapterDevice(), gpu::shader::programs::SpecularLightingShader(), "SpecularLighting");
 
   // Shadow composition shares the runtime command stream with its blur passes.
   {

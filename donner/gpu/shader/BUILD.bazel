@@ -453,6 +453,10 @@ donner_cc_test(
         ":offset_test_artifact",
         ":programs",
         ":shader",
+        ":specular_lighting_api",
+        ":specular_lighting_artifact",
+        ":specular_lighting_source",
+        ":specular_lighting_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
         ":turbulence_artifact",
@@ -525,6 +529,7 @@ donner_cc_test(
         ":programs",
         ":shader",
         ":slug_mask_test_artifact",
+        ":specular_lighting_test_artifact",
         ":stage_io_test_modules",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
@@ -554,6 +559,7 @@ donner_cc_test(
         ":programs",
         ":shader",
         ":slug_mask_test_artifact",
+        ":specular_lighting_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
         "//donner/base:base_test_utils",
@@ -588,6 +594,9 @@ donner_cc_test(
         ":offset_artifact",
         ":programs",
         ":shader",
+        ":specular_lighting_api",
+        ":specular_lighting_artifact",
+        ":specular_lighting_test_artifact",
         ":wgsl_emitter",
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
@@ -624,19 +633,72 @@ genrule(
     tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
 )
 
-genrule(
-    name = "specular_lighting_generated",
-    outs = ["generated/SpecularLightingShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) specular_lighting " +
-          "$(location generated/SpecularLightingShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+donner_cc_library(
+    name = "specular_lighting_api",
+    hdrs = ["programs/SpecularLighting.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":program_bindings",
+    ],
+)
+
+donner_cc_library(
+    name = "specular_lighting_source",
+    hdrs = ["programs/SpecularLightingSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "specular_lighting_validation",
+    hdrs = ["programs/SpecularLightingArtifactValidation.h"],
+    deps = [":specular_lighting_api"],
+)
+
+donner_cc_library(
+    name = "specular_lighting_artifact",
+    srcs = ["programs/SpecularLighting.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":specular_lighting_api",
+        ":specular_lighting_source",
+        ":specular_lighting_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "specular_lighting_native_artifact",
+    srcs = ["programs/SpecularLightingNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":specular_lighting_api",
+        ":specular_lighting_source",
+        ":specular_lighting_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "specular_lighting_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledSpecularLighting.cc"],
+    hdrs = ["tests/CompiledSpecularLighting.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":specular_lighting_source",
+    ],
 )
 
 donner_cc_library(
     name = "lighting_artifacts",
     hdrs = [
         "generated/DiffuseLightingShader.h",
-        "generated/SpecularLightingShader.h",
     ],
     visibility = donner_internal_visibility(),
     deps = ["//donner/gpu:descriptors"],
@@ -1005,6 +1067,8 @@ donner_cc_library(
         ":programs",
         ":shader",
         ":snapshot_unpremultiply_artifact",
+        ":specular_lighting_api",
+        ":specular_lighting_artifact",
         ":subregion_clip_artifact",
         ":tile_artifact",
         ":turbulence_artifact",

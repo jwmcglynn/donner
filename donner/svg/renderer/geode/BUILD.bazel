@@ -377,6 +377,8 @@ donner_cc_library(
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:snapshot_unpremultiply_artifact",
+        "//donner/gpu/shader:specular_lighting_api",
+        "//donner/gpu/shader:specular_lighting_artifact",
         "//donner/gpu/shader:subregion_clip_artifact",
         "//donner/gpu/shader:tile_artifact",
         "//donner/gpu/shader:turbulence_artifact",

@@ -1951,6 +1951,9 @@ private:
     Builtin kind;
   };
   inline static constexpr BuiltinEntry kBuiltinEntries[] = {
+      {"sin", Builtin::Sin},
+      {"cos", Builtin::Cos},
+      {"pow", Builtin::Pow},
       {"floor", Builtin::Floor},
       {"sign", Builtin::Sign},
       {"any", Builtin::Any},
@@ -1982,9 +1985,10 @@ private:
   }
 
   constexpr bool IsUnaryFloatBuiltin(Builtin builtin) const {
-    constexpr Builtin kBuiltins[] = {
-        Builtin::Abs,    Builtin::Round, Builtin::Sqrt, Builtin::Saturate, Builtin::Fract,
-        Builtin::Fwidth, Builtin::Ceil,  Builtin::Exp,  Builtin::Floor,    Builtin::Sign};
+    constexpr Builtin kBuiltins[] = {Builtin::Abs,      Builtin::Round, Builtin::Sqrt,
+                                     Builtin::Saturate, Builtin::Fract, Builtin::Fwidth,
+                                     Builtin::Ceil,     Builtin::Exp,   Builtin::Floor,
+                                     Builtin::Sign,     Builtin::Sin,   Builtin::Cos};
     for (Builtin candidate : kBuiltins) {
       if (candidate == builtin) return true;
     }
@@ -2006,6 +2010,15 @@ private:
     return true;
   }
 
+  constexpr bool ValidatePowBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
+                                    Type* result) const {
+    const Type value = BuiltinArgumentType(arguments, 0);
+    if (count != 2 || value.kind != TypeKind::F32 || value != BuiltinArgumentType(arguments, 1))
+      return false;
+    *result = value;
+    return true;
+  }
+
   constexpr bool ValidateValueBuiltin(Builtin builtin,
                                       const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
                                       Type* result) const {
@@ -2014,6 +2027,7 @@ private:
       case Builtin::Any: return ValidateAnyBuiltin(arguments, count, result);
       case Builtin::Clamp: return ValidateClampBuiltin(arguments, count, result);
       case Builtin::Select: return ValidateSelectBuiltin(arguments, count, result);
+      case Builtin::Pow: return ValidatePowBuiltin(arguments, count, result);
       case Builtin::Max:
       case Builtin::Min: return ValidateMinBuiltin(arguments, count, result);
       default: return false;

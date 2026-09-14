@@ -17,7 +17,6 @@
 #include "donner/gpu/shader/generated/MergeShader.h"
 #include "donner/gpu/shader/generated/MorphologyShader.h"
 #include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
-#include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/SubregionClipShader.h"
 #include "donner/gpu/shader/generated/TileShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
@@ -37,6 +36,7 @@
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
+#include "donner/gpu/shader/programs/SpecularLighting.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
@@ -95,8 +95,11 @@ inline const Program kPrograms[] = {
     {"turbulence", programs::BuildTurbulenceModule, generated::turbulence::BuildDescriptor, true},
     {"diffuse_lighting", programs::BuildDiffuseLightingModule,
      generated::diffuse_lighting::BuildDescriptor, true},
-    {"specular_lighting", programs::BuildSpecularLightingModule,
-     generated::specular_lighting::BuildDescriptor, true},
+    {"specular_lighting", nullptr,
+     [](ShaderSourceKind kind) {
+       return MakeShaderDescriptor(programs::SpecularLightingShader(), kind, "SpecularLighting");
+     },
+     true, programs::SpecularLightingShader},
 };
 
 inline void PrintTo(const Program& program, std::ostream* stream) {

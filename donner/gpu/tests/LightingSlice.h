@@ -16,6 +16,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/programs/LightingBindings.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "tiny_skia/filter/FloatPixmap.h"
@@ -218,12 +219,38 @@ inline shader::programs::LightingParams MakeParams(bool specular, uint32_t light
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
 /// @param specular Selects the specular output contract instead of diffuse.
 /// @param lightType Zero distant, one point, two spot.
+/// @param metadata Optional reflected interface for authored WGSL artifacts.
+/// @param overrideParams Optional parameters for numeric boundary cases.
 template <typename DeviceType, typename Readback>
 void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                          Readback readbackBuffer, bool specular, uint32_t lightType) {
+                          Readback readbackBuffer, bool specular, uint32_t lightType,
+                          const shader::CompiledShaderView* metadata = nullptr,
+                          const shader::programs::LightingParams* overrideParams = nullptr) {
   using namespace lighting_detail;
   using shader::programs::LightingBinding;
-  const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
+  const auto binding = [metadata](LightingBinding value) {
+    if (!metadata) return static_cast<uint32_t>(value);
+    const char* name = value == LightingBinding::InputTexture    ? "inputTexture"
+                       : value == LightingBinding::OutputTexture ? "outputTexture"
+                                                                 : "params";
+    return metadata->resource(name)->binding;
+  };
+  RcString entryPoint(shader::programs::kLightingEntryPoint);
+  WorkgroupSize workgroup{shader::programs::kLightingWorkgroupSize,
+                          shader::programs::kLightingWorkgroupSize, 1};
+  if (metadata) {
+    ASSERT_NE(metadata->resource("inputTexture"), nullptr);
+    ASSERT_NE(metadata->resource("outputTexture"), nullptr);
+    ASSERT_NE(metadata->resource("params"), nullptr);
+    ASSERT_THAT(metadata->entryPoints, testing::SizeIs(1));
+    const auto& entry = metadata->entryPoints.front();
+    ASSERT_EQ(entry.stage, ShaderStage::Compute);
+    entryPoint = RcString(entry.name.view());
+    workgroup = {entry.workgroupSize[0], entry.workgroupSize[1], entry.workgroupSize[2]};
+  }
+  ASSERT_GT(workgroup.x, 0u);
+  ASSERT_GT(workgroup.y, 0u);
+  ASSERT_EQ(workgroup.z, 1u);
   auto shaderModule = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shaderModule, HasResult());
   auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
@@ -238,11 +265,9 @@ void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shad
   auto pipelineLayout =
       device.createPipelineLayout(PipelineLayoutDescriptor{"lighting", {layout.result()}});
   ASSERT_THAT(pipelineLayout, HasResult());
-  auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "lighting",
-      pipelineLayout.result(),
-      ComputeState{shaderModule.result(), RcString(shader::programs::kLightingEntryPoint)},
-      {shader::programs::kLightingWorkgroupSize, shader::programs::kLightingWorkgroupSize, 1}});
+  auto pipeline = device.createComputePipeline(
+      ComputePipelineDescriptor{"lighting", pipelineLayout.result(),
+                                ComputeState{shaderModule.result(), entryPoint}, workgroup});
   ASSERT_THAT(pipeline, HasResult());
   auto input =
       device.createTexture(TextureDescriptor{"lighting input",
@@ -278,7 +303,8 @@ void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shad
       device.writeTexture(input.result(), upload, {0, kBytesPerRow, kHeight}, {kWidth, kHeight}),
       IsOk());
 
-  const shader::programs::LightingParams params = MakeParams(specular, lightType);
+  const shader::programs::LightingParams params =
+      overrideParams ? *overrideParams : MakeParams(specular, lightType);
   auto paramsBuffer = device.createBuffer(BufferDescriptor{
       "lighting parameters", sizeof(params), BufferUsage::Storage | BufferUsage::CopyDst});
   ASSERT_THAT(paramsBuffer, HasResult());
@@ -303,7 +329,9 @@ void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shad
   ASSERT_THAT(pass, HasResult());
   ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+  ASSERT_THAT(pass.result()->dispatchWorkgroups((kWidth + workgroup.x - 1) / workgroup.x,
+                                                (kHeight + workgroup.y - 1) / workgroup.y, 1),
+              IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
                                                     readback.result(), {0, kBytesPerRow, kHeight},

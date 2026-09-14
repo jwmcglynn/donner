@@ -229,6 +229,76 @@ py_test(
 )
 
 donner_cc_binary(
+    name = "specular_lighting_wgsl_probe",
+    testonly = 1,
+    srcs = ["SpecularLightingWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:specular_lighting_api",
+        "//donner/gpu/shader:specular_lighting_artifact",
+    ],
+)
+
+py_test(
+    name = "specular_lighting_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=specular_lighting",
+        "--binary=$(rootpath :specular_lighting_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":specular_lighting_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "specular_lighting_native_probe",
+    testonly = 1,
+    srcs = ["SpecularLightingNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:specular_lighting_api",
+        "//donner/gpu/shader:specular_lighting_native_artifact",
+    ],
+)
+
+py_test(
+    name = "specular_lighting_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=specular_lighting",
+        "--binary=$(rootpath :specular_lighting_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":specular_lighting_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "specular_lighting_all_probe",
+    testonly = 1,
+    srcs = ["SpecularLightingAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:specular_lighting_source"],
+)
+
+py_test(
+    name = "specular_lighting_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=specular_lighting",
+        "--binary=$(rootpath :specular_lighting_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":specular_lighting_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
     name = "filter_resolve_wgsl_probe",
     testonly = 1,
     srcs = ["FilterResolveWgslProbe.cc"],

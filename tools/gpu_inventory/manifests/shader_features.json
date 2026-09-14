@@ -350,6 +350,63 @@
         "VertexOutput"
       ]
     },
+    "donner/gpu/shader/programs/SpecularLightingSource.h#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "LightingParams"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "clamp",
+        "cos",
+        "dot",
+        "if",
+        "let",
+        "max",
+        "normalize",
+        "pow",
+        "return",
+        "select",
+        "sin",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "LightingParams"
+      ]
+    },
     "donner/gpu/shader/tests/CompiledOffset.cc#inline0": {
       "bindings": [
         {
@@ -382,6 +439,47 @@
       "features": [
         "floor",
         "let",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
+    },
+    "donner/gpu/shader/tests/CompiledSpecularLighting.cc#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "cos",
+        "floor",
+        "let",
+        "pow",
+        "sin",
         "textureLoad",
         "textureStore",
         "var"

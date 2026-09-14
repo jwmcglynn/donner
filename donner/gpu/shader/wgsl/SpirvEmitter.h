@@ -1034,7 +1034,7 @@ constexpr uint32_t Emitter::UnaryBuiltinOpcode(Builtin builtin) {
   constexpr Encoding kEncodings[] = {
       {Builtin::Abs, 4},        {Builtin::Round, 2},  {Builtin::Sqrt, 31}, {Builtin::Length, 66},
       {Builtin::Normalize, 69}, {Builtin::Fract, 10}, {Builtin::Ceil, 9},  {Builtin::Exp, 27},
-      {Builtin::Floor, 8},      {Builtin::Sign, 6},
+      {Builtin::Floor, 8},      {Builtin::Sign, 6},   {Builtin::Sin, 13},  {Builtin::Cos, 14},
   };
   for (const Encoding& encoding : kEncodings) {
     if (encoding.builtin == builtin) return encoding.opcode;
@@ -1049,6 +1049,7 @@ constexpr uint32_t Emitter::emitBuiltin(const Expression& node) {
   if (const uint32_t opcode = UnaryBuiltinOpcode(builtin))
     return extended(opcode, node.type, args[0]);
   switch (builtin) {
+    case Builtin::Pow: return extended(26, node.type, args[0], args[1]);
     case Builtin::Max:
       return extended(NumericOpcode(node.type.kind, 40, 42, 41), node.type, args[0], args[1]);
     case Builtin::Min:

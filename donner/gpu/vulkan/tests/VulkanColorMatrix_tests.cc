@@ -24,16 +24,17 @@
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
-#include "donner/gpu/shader/generated/SpecularLightingShader.h"
 #include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
+#include "donner/gpu/shader/programs/SpecularLighting.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
+#include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
@@ -310,17 +311,54 @@ TEST_F(VulkanColorMatrixTest, TurbulencePreservesSeedsOctavesTransformsAndStitch
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(VulkanColorMatrixTest, WgslLightingMathPreservesVectorLanes) {
+  // Quantization isolates lane/opcode correctness from backend transcendental approximation.
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::LightingMathAllProjections(),
+                                   device_->shaderSourceKind(), "lighting vector math"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      {0.125f, 0.25f, 0.625f, 0.875f}, {1.6875f, 1.75f, 2.8125f, 4.9375f});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanColorMatrixTest, SpecularLightingUsesReflectedBindingAndWorkgroup) {
+  const auto& shader = shader::tests::SpecularLightingMutatedAllProjections();
+  const auto descriptor =
+      shader::MakeShaderDescriptor(shader, device_->shaderSourceKind(), "mutated lighting");
+  gpu::tests::CheckLightingStorage(
+      *device_, descriptor,
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true, 2, &shader);
+}
+
+TEST_F(VulkanColorMatrixTest, SpecularLightingDefinesZeroToZeroAsOne) {
+  const auto& shader = shader::programs::SpecularLightingNativeShader();
+  auto params = gpu::tests::lighting_detail::MakeParams(true, 1);
+  params.surfaceScale = 0;
+  params.lightX = 2;
+  params.lightY = 2;
+  params.lightZ = -2;
+  params.specularExponent = 0;
+  const auto descriptor =
+      shader::MakeShaderDescriptor(shader, device_->shaderSourceKind(), "zero exponent lighting");
+  gpu::tests::CheckLightingStorage(
+      *device_, descriptor,
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true, 1, &shader,
+      &params);
+}
+
 TEST_F(VulkanColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatStorage) {
   for (bool specular : {false, true}) {
     const ShaderModuleDescriptor descriptor =
-        specular ? generated::specular_lighting::BuildDescriptor(device_->shaderSourceKind())
+        specular ? shader::MakeShaderDescriptor(shader::programs::SpecularLightingNativeShader(),
+                                                device_->shaderSourceKind(), "specular lighting")
                  : generated::diffuse_lighting::BuildDescriptor(device_->shaderSourceKind());
     for (uint32_t lightType : {0u, 1u, 2u}) {
       SCOPED_TRACE(testing::Message() << "specular=" << specular << " light=" << lightType);
       gpu::tests::CheckLightingStorage(
           *device_, descriptor,
           [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, specular,
-          lightType);
+          lightType, specular ? &shader::programs::SpecularLightingNativeShader() : nullptr);
     }
   }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
