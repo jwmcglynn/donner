@@ -1,0 +1,1170 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024">
+  <title id="title">Geode</title>
+  <desc id="description">A faceted amethyst geode and a lavender Geode wordmark on a deep violet glow.</desc>
+  <defs>
+    <path id="cavity-contour" d="M592.91 576.59         L588.69 583.17         L574.46 593.94         L564.25 610.76         L554.04 616.45         L530.51 616.67         L504.82 626.98         L486.03 615.14         L458.46 607.74         L442.31 579.43         L421.88 566.48         L417.19 541.03         L402.64 518.41         L403.56 511.29         L416.98 489.71         L419.46 478.32         L418.66 460.78         L423.36 446.91         L438.26 434.8         L451.33 434.53         L467.01 423.27         L475.56 407.58         L490.78 401.07         L499.26 403.51         L514.78 421.87         L533.78 427.97         L538.91 433.93         L542.41 449.46         L546.93 457.46         L574.15 478.65         L577.91 503.86         L592.27 528.29         L587.78 551.78 Z" />
+    <path id="quartz-contour" d="M624.54 524.02         C624.62 526.2 624.07 528.38 623.17 530.38         C622.09 532.78 620.49 534.94 619.3 537.32         C617.57 540.78 616.7 544.72 616.08 548.78         C615.43 553.11 615.06 557.58 616.04 561.56         C617.47 567.35 621.77 572.09 623.84 577.94         C625.73 583.3 625.76 589.58 622.21 593.03         C620.21 594.97 617.09 596.01 614.97 598.23         C613.6 599.66 612.65 601.58 611.33 603.11         C608.23 606.69 603.11 608.14 599.49 611.12         C596.17 613.87 594.11 617.9 591.8 621.74         C586.81 630.02 580.63 637.39 572.25 642.14         C568.21 644.43 563.65 646.11 559.06 646.46         C554.15 646.83 549.2 645.68 544.44 646.11         C535.78 646.9 527.76 652.94 519.57 655.97         C515.52 657.47 511.43 658.23 507.01 658.34         C502.62 658.44 497.91 657.9 493.93 655.82         C489.19 653.34 485.48 648.67 480.88 646.97         C477.34 645.66 473.27 646.12 469.29 645.91         C461.35 645.48 453.79 642.36 446.64 638.37         C439.28 634.28 432.36 629.26 427.83 622.37         C423.55 615.85 421.41 607.64 416.15 601.91         C410.57 595.83 401.49 592.54 393.96 590.4         C391.22 589.63 388.69 589 387.32 587.02         C386.42 585.72 386.02 583.82 385.23 582.01         C383.65 578.41 380.49 575.2 378.77 571.6         C375.18 564.08 377.8 554.87 376.78 546.71         C375.78 538.74 371.29 531.79 368.53 524.09         C365.54 515.74 364.59 506.51 367.13 498.29         C369.53 490.53 375.02 483.67 379.58 476.47         C381.95 472.73 384.07 468.89 384.82 464.8         C385.67 460.16 384.76 455.19 384.71 450.23         C384.62 440.62 387.79 431.03 393.4 423.36         C399.15 415.5 407.46 409.64 413.97 402.9         C415.85 400.95 417.58 398.93 419.33 397.01         C420.77 395.42 422.23 393.9 424.06 393.01         C426.36 391.9 429.23 391.77 432.1 391.26         C434.19 390.89 436.29 390.32 438.46 389.93         C441.12 389.46 443.91 389.27 446.11 388.3         C448.6 387.21 450.35 385.13 451.98 382.82         C455.65 377.64 458.76 371.35 463.57 366.94         C471.44 359.72 483.86 357.56 494.28 360.13         C506.45 363.13 515.9 372.59 522.84 383.43         C525.84 388.11 528.38 393.06 533.07 395.48         C536.76 397.38 541.78 397.72 545.66 399.62         C549.97 401.73 552.85 405.78 556.67 408.62         C558.66 410.11 560.91 411.27 562.35 412.77         C563.84 414.34 564.46 416.27 564.79 418.52         C565.53 423.44 564.91 429.87 566.88 435.4         C568.21 439.11 570.69 442.42 573.82 444.03         C578.27 446.31 584 445.17 588.54 447.36         C591.87 448.97 594.56 452.38 596.82 455.89         C601.43 463.04 604.27 470.62 604.28 478.01         C604.29 480.45 603.99 482.86 604.03 485.17         C604.06 487.29 604.38 489.32 604.68 491.36         C604.97 493.27 605.24 495.19 606.29 496.67         C607.62 498.57 610.21 499.75 612.33 501.48         C615.47 504.06 617.57 507.85 619.79 511.79         C622.03 515.77 624.4 519.89 624.54 524.02         Z" />
+    <path id="rock-contour" d="M624.77 523.89         C625.79 528.31 625.63 533.08 625.24 537.8         C624.89 542.14 624.35 546.43 624.1 550.66         C623.56 559.8 624.37 568.66 624.55 577.9         C624.77 588.45 624.17 599.49 620.4 609.1         C616.78 618.29 610.26 626.18 604.14 634.08         C600.69 638.55 597.36 643.01 593.73 647.32         C590.36 651.31 586.73 655.16 582.57 658.15         C574.45 663.98 564.27 666.55 554.08 668.69         C534.07 672.91 514.01 675.48 493.95 676.42         C473.3 677.38 452.65 676.6 431.87 674.14         C408.11 671.33 384.18 666.31 364.08 654.09         C358.46 650.67 353.13 646.69 348.42 642.1         C344.08 637.87 340.25 633.12 336.03 628.62         C331.69 623.98 326.93 619.59 323.62 614.61         C320.17 609.44 318.27 603.64 316.4 597.58         C312.72 585.67 309.13 572.79 308.04 560.05         C307.01 547.92 308.23 535.91 310.39 523.99         C314.57 500.87 322.25 478.07 331.89 456.84         C336.72 446.18 342.05 435.92 348.5 426.01         C354.67 416.54 361.88 407.39 370.68 400.51         C375.42 396.81 380.63 393.76 385.34 389.89         C389.63 386.37 393.51 382.16 397.83 378.66         C406.5 371.61 416.95 367.38 427.34 363.13         C438.22 358.68 449.04 354.19 460.37 350.68         C465.85 348.98 471.45 347.5 476.92 347.53         C482.77 347.55 488.46 349.29 494.15 351.57         C500.15 353.98 506.15 356.99 510.98 361.13         C515.98 365.42 519.72 370.92 524.16 375.74         C530.89 383.06 539.23 388.84 547.75 394.34         C551.94 397.04 556.17 399.68 559.34 403.26         C562.57 406.91 564.7 411.54 566.68 416.24         C570.1 424.33 573.09 432.62 578.84 439.03         C584.28 445.1 592.18 449.49 596.96 455.93         C601.56 462.12 603.28 470.22 605.07 477.96         C606.94 486.06 608.89 493.77 612.72 500.97         C616.75 508.56 622.86 515.59 624.77 523.89         Z" />
+    <radialGradient id="background-glow" gradientUnits="userSpaceOnUse" cx="461.27" cy="429.2" r="1600" gradientTransform="translate(0 -22.75) scale(1 1.05)">
+      <stop offset="0.00000" stop-color="#6c12b1" />
+      <stop offset="0.04375" stop-color="#6410ab" />
+      <stop offset="0.09375" stop-color="#500a91" />
+      <stop offset="0.14375" stop-color="#3b0672" />
+      <stop offset="0.19375" stop-color="#290456" />
+      <stop offset="0.25000" stop-color="#1a033d" />
+      <stop offset="0.31875" stop-color="#0e0229" />
+      <stop offset="0.40000" stop-color="#07011e" />
+      <stop offset="0.50000" stop-color="#040119" />
+      <stop offset="0.65625" stop-color="#010015" />
+      <stop offset="1.00000" stop-color="#010114" />
+    </radialGradient>
+    <linearGradient id="wordmark-fill" gradientUnits="userSpaceOnUse" x1="0" y1="450" x2="0" y2="613">
+      <stop offset="0" stop-color="#fcf8ff" />
+      <stop offset="0.38" stop-color="#f4e8fc" />
+      <stop offset="0.63" stop-color="#d4aff0" />
+      <stop offset="1" stop-color="#9845e8" />
+    </linearGradient>
+    <radialGradient id="ground-fade">
+      <stop offset="0" stop-color="#000009" stop-opacity="0.9" />
+      <stop offset="0.5" stop-color="#000009" stop-opacity="0.7" />
+      <stop offset="0.78" stop-color="#000009" stop-opacity="0.26" />
+      <stop offset="1" stop-color="#000009" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="shell-shading" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#9691ad" />
+      <stop offset="0.4" stop-color="#535970" />
+      <stop offset="1" stop-color="#191c2c" />
+    </linearGradient>
+    <linearGradient id="rim-white" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfaff" />
+      <stop offset="0.5" stop-color="#f4f0ff" />
+      <stop offset="1" stop-color="#ffffff" />
+    </linearGradient>
+    <linearGradient id="rim-lavender" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#cbb2ff" />
+      <stop offset="0.6" stop-color="#b892ee" />
+      <stop offset="1" stop-color="#d2bbfc" />
+    </linearGradient>
+    <linearGradient id="rim-amethyst" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ab7bed" />
+      <stop offset="0.5" stop-color="#8d55d7" />
+      <stop offset="1" stop-color="#9764e8" />
+    </linearGradient>
+    <radialGradient id="cavity-illumination" gradientUnits="userSpaceOnUse" cx="507" cy="522" r="135">
+      <stop offset="0" stop-color="#9022ff" stop-opacity=".09" />
+      <stop offset="1" stop-color="#280064" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="central-body-light-1" gradientUnits="userSpaceOnUse" x1="486" y1="500" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#5310a8" />
+      <stop offset="1.0" stop-color="#6920c2" />
+    </linearGradient>
+    <linearGradient id="central-body-light-2" gradientUnits="userSpaceOnUse" x1="515" y1="532" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#6920c2" />
+      <stop offset="1.0" stop-color="#4b0b99" />
+    </linearGradient>
+    <linearGradient id="central-body-light-3" gradientUnits="userSpaceOnUse" x1="556" y1="515" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#4b0b99" />
+      <stop offset="1.0" stop-color="#390780" />
+    </linearGradient>
+    <linearGradient id="central-body-light-4" gradientUnits="userSpaceOnUse" x1="546" y1="544" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#390780" />
+      <stop offset="1.0" stop-color="#5010a5" />
+    </linearGradient>
+    <linearGradient id="central-body-light-5" gradientUnits="userSpaceOnUse" x1="527" y1="560" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#5010a5" />
+      <stop offset="1.0" stop-color="#4b0b98" />
+    </linearGradient>
+    <linearGradient id="central-body-light-6" gradientUnits="userSpaceOnUse" x1="502" y1="570" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#4b0b98" />
+      <stop offset="1.0" stop-color="#6111b8" />
+    </linearGradient>
+    <linearGradient id="central-body-light-7" gradientUnits="userSpaceOnUse" x1="481" y1="550" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#6111b8" />
+      <stop offset="1.0" stop-color="#6d1ecd" />
+    </linearGradient>
+    <linearGradient id="central-body-light-8" gradientUnits="userSpaceOnUse" x1="475" y1="530" x2="503" y2="544">
+      <stop offset="0.0" stop-color="#6d1ecd" />
+      <stop offset="1.0" stop-color="#5310a8" />
+    </linearGradient>
+    <linearGradient id="left-body-light-1" gradientUnits="userSpaceOnUse" x1="419" y1="522" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#5011ad" />
+      <stop offset="1.0" stop-color="#5912b0" />
+    </linearGradient>
+    <linearGradient id="left-body-light-2" gradientUnits="userSpaceOnUse" x1="443" y1="539" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#5912b0" />
+      <stop offset="1.0" stop-color="#43108c" />
+    </linearGradient>
+    <linearGradient id="left-body-light-3" gradientUnits="userSpaceOnUse" x1="472" y1="526" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#43108c" />
+      <stop offset="1.0" stop-color="#340769" />
+    </linearGradient>
+    <linearGradient id="left-body-light-4" gradientUnits="userSpaceOnUse" x1="476" y1="547" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#340769" />
+      <stop offset="1.0" stop-color="#48119a" />
+    </linearGradient>
+    <linearGradient id="left-body-light-5" gradientUnits="userSpaceOnUse" x1="458" y1="562" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#48119a" />
+      <stop offset="1.0" stop-color="#351077" />
+    </linearGradient>
+    <linearGradient id="left-body-light-6" gradientUnits="userSpaceOnUse" x1="440" y1="574" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#351077" />
+      <stop offset="1.0" stop-color="#491091" />
+    </linearGradient>
+    <linearGradient id="left-body-light-7" gradientUnits="userSpaceOnUse" x1="424" y1="557" x2="445" y2="554">
+      <stop offset="0.0" stop-color="#491091" />
+      <stop offset="1.0" stop-color="#5011ad" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-1" gradientUnits="userSpaceOnUse" x1="498" y1="577" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#6116be" />
+      <stop offset="1.0" stop-color="#51119d" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-2" gradientUnits="userSpaceOnUse" x1="516" y1="600" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#51119d" />
+      <stop offset="1.0" stop-color="#400881" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-3" gradientUnits="userSpaceOnUse" x1="533" y1="590" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#400881" />
+      <stop offset="1.0" stop-color="#300666" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-4" gradientUnits="userSpaceOnUse" x1="534" y1="609" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#300666" />
+      <stop offset="1.0" stop-color="#3d0789" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-5" gradientUnits="userSpaceOnUse" x1="512" y1="628" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#3d0789" />
+      <stop offset="1.0" stop-color="#4a0b98" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-6" gradientUnits="userSpaceOnUse" x1="488" y1="619" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#4a0b98" />
+      <stop offset="1.0" stop-color="#6c25bd" />
+    </linearGradient>
+    <linearGradient id="lower-body-light-7" gradientUnits="userSpaceOnUse" x1="482" y1="607" x2="508" y2="609">
+      <stop offset="0.0" stop-color="#6c25bd" />
+      <stop offset="1.0" stop-color="#6116be" />
+    </linearGradient>
+    <linearGradient id="right-body-light-1" gradientUnits="userSpaceOnUse" x1="541" y1="555" x2="550" y2="584">
+      <stop offset="0.0" stop-color="#5d13ae" />
+      <stop offset="1.0" stop-color="#49118b" />
+    </linearGradient>
+    <linearGradient id="right-body-light-2" gradientUnits="userSpaceOnUse" x1="554" y1="577" x2="550" y2="584">
+      <stop offset="0.0" stop-color="#49118b" />
+      <stop offset="1.0" stop-color="#340568" />
+    </linearGradient>
+    <linearGradient id="right-body-light-3" gradientUnits="userSpaceOnUse" x1="576" y1="568" x2="550" y2="584">
+      <stop offset="0.0" stop-color="#340568" />
+      <stop offset="1.0" stop-color="#330770" />
+    </linearGradient>
+    <linearGradient id="right-body-light-4" gradientUnits="userSpaceOnUse" x1="573" y1="582" x2="550" y2="584">
+      <stop offset="0.0" stop-color="#330770" />
+      <stop offset="1.0" stop-color="#451083" />
+    </linearGradient>
+    <linearGradient id="right-body-light-5" gradientUnits="userSpaceOnUse" x1="553" y1="598" x2="550" y2="584">
+      <stop offset="0.0" stop-color="#451083" />
+      <stop offset="1.0" stop-color="#6624b4" />
+    </linearGradient>
+    <linearGradient id="right-body-light-6" gradientUnits="userSpaceOnUse" x1="532" y1="586" x2="550" y2="584">
+      <stop offset="0.0" stop-color="#6624b4" />
+      <stop offset="1.0" stop-color="#5d13ae" />
+    </linearGradient>
+    <linearGradient id="small-body-light-1" gradientUnits="userSpaceOnUse" x1="452" y1="574" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#491085" />
+      <stop offset="1.0" stop-color="#4b0d95" />
+    </linearGradient>
+    <linearGradient id="small-body-light-2" gradientUnits="userSpaceOnUse" x1="467" y1="589" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#4b0d95" />
+      <stop offset="1.0" stop-color="#320464" />
+    </linearGradient>
+    <linearGradient id="small-body-light-3" gradientUnits="userSpaceOnUse" x1="483" y1="580" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#320464" />
+      <stop offset="1.0" stop-color="#36096f" />
+    </linearGradient>
+    <linearGradient id="small-body-light-4" gradientUnits="userSpaceOnUse" x1="486" y1="595" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#36096f" />
+      <stop offset="1.0" stop-color="#39067d" />
+    </linearGradient>
+    <linearGradient id="small-body-light-5" gradientUnits="userSpaceOnUse" x1="470" y1="611" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#39067d" />
+      <stop offset="1.0" stop-color="#4e1199" />
+    </linearGradient>
+    <linearGradient id="small-body-light-6" gradientUnits="userSpaceOnUse" x1="455" y1="601" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#4e1199" />
+      <stop offset="1.0" stop-color="#6520b9" />
+    </linearGradient>
+    <linearGradient id="small-body-light-7" gradientUnits="userSpaceOnUse" x1="447" y1="585" x2="465" y2="600">
+      <stop offset="0.0" stop-color="#6520b9" />
+      <stop offset="1.0" stop-color="#491085" />
+    </linearGradient>
+    <linearGradient id="upper-body-light-1" gradientUnits="userSpaceOnUse" x1="456" y1="457" x2="468" y2="488">
+      <stop offset="0.0" stop-color="#5715a9" />
+      <stop offset="1.0" stop-color="#4b1191" />
+    </linearGradient>
+    <linearGradient id="upper-body-light-2" gradientUnits="userSpaceOnUse" x1="470" y1="470" x2="468" y2="488">
+      <stop offset="0.0" stop-color="#4b1191" />
+      <stop offset="1.0" stop-color="#310570" />
+    </linearGradient>
+    <linearGradient id="upper-body-light-3" gradientUnits="userSpaceOnUse" x1="486" y1="463" x2="468" y2="488">
+      <stop offset="0.0" stop-color="#310570" />
+      <stop offset="1.0" stop-color="#250459" />
+    </linearGradient>
+    <linearGradient id="upper-body-light-4" gradientUnits="userSpaceOnUse" x1="490" y1="481" x2="468" y2="488">
+      <stop offset="0.0" stop-color="#250459" />
+      <stop offset="1.0" stop-color="#3d097c" />
+    </linearGradient>
+    <linearGradient id="upper-body-light-5" gradientUnits="userSpaceOnUse" x1="465" y1="505" x2="468" y2="488">
+      <stop offset="0.0" stop-color="#3d097c" />
+      <stop offset="1.0" stop-color="#5e18b1" />
+    </linearGradient>
+    <linearGradient id="upper-body-light-6" gradientUnits="userSpaceOnUse" x1="449" y1="482" x2="468" y2="488">
+      <stop offset="0.0" stop-color="#5e18b1" />
+      <stop offset="1.0" stop-color="#5715a9" />
+    </linearGradient>
+    <linearGradient id="central-crown-light-1" gradientUnits="userSpaceOnUse" x1="486" y1="500" x2="518" y2="511">
+      <stop offset="0.0" stop-color="#b782f5" />
+      <stop offset="1.0" stop-color="#d2affb" />
+    </linearGradient>
+    <linearGradient id="central-crown-light-2" gradientUnits="userSpaceOnUse" x1="523" y1="481" x2="518" y2="511">
+      <stop offset="0.0" stop-color="#d2affb" />
+      <stop offset="1.0" stop-color="#e3c9ff" />
+    </linearGradient>
+    <linearGradient id="central-crown-light-3" gradientUnits="userSpaceOnUse" x1="556" y1="515" x2="518" y2="511">
+      <stop offset="0.0" stop-color="#e3c9ff" />
+      <stop offset="1.0" stop-color="#b986f5" />
+    </linearGradient>
+    <linearGradient id="central-crown-light-4" gradientUnits="userSpaceOnUse" x1="515" y1="532" x2="518" y2="511">
+      <stop offset="0.0" stop-color="#b986f5" />
+      <stop offset="1.0" stop-color="#b782f5" />
+    </linearGradient>
+    <linearGradient id="left-crown-light-1" gradientUnits="userSpaceOnUse" x1="419" y1="522" x2="445" y2="521">
+      <stop offset="0.0" stop-color="#7132d5" />
+      <stop offset="1.0" stop-color="#b488f2" />
+    </linearGradient>
+    <linearGradient id="left-crown-light-2" gradientUnits="userSpaceOnUse" x1="444" y1="506" x2="445" y2="521">
+      <stop offset="0.0" stop-color="#b488f2" />
+      <stop offset="1.0" stop-color="#d4b6f8" />
+    </linearGradient>
+    <linearGradient id="left-crown-light-3" gradientUnits="userSpaceOnUse" x1="472" y1="526" x2="445" y2="521">
+      <stop offset="0.0" stop-color="#d4b6f8" />
+      <stop offset="1.0" stop-color="#a36fea" />
+    </linearGradient>
+    <linearGradient id="left-crown-light-4" gradientUnits="userSpaceOnUse" x1="443" y1="539" x2="445" y2="521">
+      <stop offset="0.0" stop-color="#a36fea" />
+      <stop offset="1.0" stop-color="#7132d5" />
+    </linearGradient>
+    <linearGradient id="lower-crown-light-1" gradientUnits="userSpaceOnUse" x1="498" y1="577" x2="516" y2="590">
+      <stop offset="0.0" stop-color="#9e6bea" />
+      <stop offset="1.0" stop-color="#c8a4f7" />
+    </linearGradient>
+    <linearGradient id="lower-crown-light-2" gradientUnits="userSpaceOnUse" x1="514" y1="572" x2="516" y2="590">
+      <stop offset="0.0" stop-color="#c8a4f7" />
+      <stop offset="1.0" stop-color="#d4b4f9" />
+    </linearGradient>
+    <linearGradient id="lower-crown-light-3" gradientUnits="userSpaceOnUse" x1="533" y1="590" x2="516" y2="590">
+      <stop offset="0.0" stop-color="#d4b4f9" />
+      <stop offset="1.0" stop-color="#9e69e9" />
+    </linearGradient>
+    <linearGradient id="lower-crown-light-4" gradientUnits="userSpaceOnUse" x1="516" y1="600" x2="516" y2="590">
+      <stop offset="0.0" stop-color="#9e69e9" />
+      <stop offset="1.0" stop-color="#9e6bea" />
+    </linearGradient>
+    <linearGradient id="right-crown-light-1" gradientUnits="userSpaceOnUse" x1="541" y1="555" x2="554" y2="566">
+      <stop offset="0.0" stop-color="#9f6be8" />
+      <stop offset="1.0" stop-color="#c5a4f5" />
+    </linearGradient>
+    <linearGradient id="right-crown-light-2" gradientUnits="userSpaceOnUse" x1="561" y1="551" x2="554" y2="566">
+      <stop offset="0.0" stop-color="#c5a4f5" />
+      <stop offset="1.0" stop-color="#ddc1fb" />
+    </linearGradient>
+    <linearGradient id="right-crown-light-3" gradientUnits="userSpaceOnUse" x1="576" y1="568" x2="554" y2="566">
+      <stop offset="0.0" stop-color="#ddc1fb" />
+      <stop offset="1.0" stop-color="#aa7aed" />
+    </linearGradient>
+    <linearGradient id="right-crown-light-4" gradientUnits="userSpaceOnUse" x1="554" y1="577" x2="554" y2="566">
+      <stop offset="0.0" stop-color="#aa7aed" />
+      <stop offset="1.0" stop-color="#9f6be8" />
+    </linearGradient>
+    <linearGradient id="small-crown-light-1" gradientUnits="userSpaceOnUse" x1="452" y1="574" x2="467" y2="582">
+      <stop offset="0.0" stop-color="#8042d0" />
+      <stop offset="1.0" stop-color="#be95ed" />
+    </linearGradient>
+    <linearGradient id="small-crown-light-2" gradientUnits="userSpaceOnUse" x1="465" y1="565" x2="467" y2="582">
+      <stop offset="0.0" stop-color="#be95ed" />
+      <stop offset="1.0" stop-color="#d7b9f9" />
+    </linearGradient>
+    <linearGradient id="small-crown-light-3" gradientUnits="userSpaceOnUse" x1="483" y1="580" x2="467" y2="582">
+      <stop offset="0.0" stop-color="#d7b9f9" />
+      <stop offset="1.0" stop-color="#a06ade" />
+    </linearGradient>
+    <linearGradient id="small-crown-light-4" gradientUnits="userSpaceOnUse" x1="467" y1="589" x2="467" y2="582">
+      <stop offset="0.0" stop-color="#a06ade" />
+      <stop offset="1.0" stop-color="#8042d0" />
+    </linearGradient>
+    <linearGradient id="upper-crown-light-1" gradientUnits="userSpaceOnUse" x1="456" y1="457" x2="469" y2="456">
+      <stop offset="0.0" stop-color="#8950da" />
+      <stop offset="1.0" stop-color="#b88dea" />
+    </linearGradient>
+    <linearGradient id="upper-crown-light-2" gradientUnits="userSpaceOnUse" x1="468" y1="439" x2="469" y2="456">
+      <stop offset="0.0" stop-color="#b88dea" />
+      <stop offset="1.0" stop-color="#d0a7f2" />
+    </linearGradient>
+    <linearGradient id="upper-crown-light-3" gradientUnits="userSpaceOnUse" x1="486" y1="463" x2="469" y2="456">
+      <stop offset="0.0" stop-color="#d0a7f2" />
+      <stop offset="1.0" stop-color="#a368e9" />
+    </linearGradient>
+    <linearGradient id="upper-crown-light-4" gradientUnits="userSpaceOnUse" x1="470" y1="470" x2="469" y2="456">
+      <stop offset="0.0" stop-color="#a368e9" />
+      <stop offset="1.0" stop-color="#8950da" />
+    </linearGradient>
+    <filter id="contact-blur" x="-.2" y="-1" width="1.4" height="3" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="5" />
+    </filter>
+    <linearGradient id="central-body-fill" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#6c20c4" />
+      <stop offset="1" stop-color="#27065c" />
+    </linearGradient>
+    <linearGradient id="left-body-fill" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#6c20c4" />
+      <stop offset="1" stop-color="#27065c" />
+    </linearGradient>
+    <linearGradient id="lower-body-fill" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#6c20c4" />
+      <stop offset="1" stop-color="#27065c" />
+    </linearGradient>
+    <linearGradient id="right-body-fill" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#6c20c4" />
+      <stop offset="1" stop-color="#27065c" />
+    </linearGradient>
+    <linearGradient id="small-body-fill" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#6c20c4" />
+      <stop offset="1" stop-color="#27065c" />
+    </linearGradient>
+    <linearGradient id="upper-body-fill" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#6c20c4" />
+      <stop offset="1" stop-color="#27065c" />
+    </linearGradient>
+    <mask id="rock-surface-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="300" y="340" width="340" height="350">
+      <use href="#rock-contour" fill="#fff" />
+      <use href="#quartz-contour" fill="#000" />
+    </mask>
+    <mask id="cavity-surface-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="395" y="393" width="212" height="244">
+      <use href="#cavity-contour" fill="#ffffff" />
+    </mask>
+    <mask id="mineral-face-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="360" y="352" width="272" height="317">
+      <use href="#quartz-contour" fill="#ffffff" />
+    </mask>
+  </defs>
+  <g id="background">
+    <title>Background glow</title>
+    <desc>A radial violet atmosphere. Hide this group to export the artwork on transparency.</desc>
+    <rect width="1536" height="1024" fill="url(#background-glow)" />
+  </g>
+  <g id="ground-shadow">
+    <title>Ground shadow</title>
+    <desc>A wide transparent floor fade and a softer contact shadow anchor the rock to the ground.</desc>
+    <ellipse cx="474" cy="671" rx="158" ry="27" fill="url(#ground-fade)" />
+    <ellipse id="contact-shadow" cx="476" cy="672" rx="108" ry="8" fill="#000009" filter="url(#contact-blur)" fill-opacity=".65" />
+  </g>
+  <g id="geode">
+    <title>Geode cutaway</title>
+    <desc>Paint order: full rock body, mineral faces, recessed crystal bed, then individual foreground crystals.</desc>
+    <g id="rock-shell">
+      <title>Rock shell</title>
+      <desc>The full rock silhouette is a continuous shaded base. The masked surface facets add light and dark planes only to the exposed exterior.</desc>
+      <use id="rock-silhouette" fill="url(#shell-shading)" href="#rock-contour" />
+      <g id="shell-facets" stroke-width=".8" stroke-linejoin="miter" mask="url(#rock-surface-mask)" stroke-miterlimit="2">
+        <title>Exterior surface facets</title>
+        <desc>The rock-surface-mask includes the outer rock contour and excludes the quartz face. Facets may overlap beneath that mask without changing either edge.</desc>
+        <polygon id="shell-facet-001" points="343 453 332.73 452.2 344 437" fill="#5a5c82" stroke="#5a5c82" />
+        <polygon id="shell-facet-002" points="344 437 332.73 452.2 361.82 407.06" fill="#62588e" stroke="#62588e" />
+        <polygon id="shell-facet-003" points="360 423 344 437 361.82 407.06" fill="#56587a" stroke="#56587a" />
+        <polygon id="shell-facet-004" points="360 440 343 453 344 437" fill="#585a7e" stroke="#585a7e" />
+        <polygon id="shell-facet-005" points="328.32 463.7 332.08 458.58 338 466" fill="#303552" stroke="#303552" />
+        <polygon id="shell-facet-006" points="343 453 358 468 338 466" fill="#747596" stroke="#747596" />
+        <polygon id="shell-facet-007" points="343 453 338 466 332.08 458.58" fill="#76769a" stroke="#76769a" />
+        <polygon id="shell-facet-008" points="332.08 458.58 332.73 452.2 343 453" fill="#727298" stroke="#727298" />
+        <polygon id="shell-facet-009" points="328.32 463.7 338 466 346 483" fill="#2e3350" stroke="#2e3350" />
+        <polygon id="shell-facet-010" points="360 440 344 437 360 423" fill="#5a5a7e" stroke="#5a5a7e" />
+        <polygon id="shell-facet-011" points="365 411 361.82 407.06 368.03 402.35" fill="#8e8cad" stroke="#8e8cad" />
+        <polygon id="shell-facet-012" points="382 404 365 411 368.03 402.35" fill="#9a98ba" stroke="#9a98ba" />
+        <polygon id="shell-facet-013" points="360 423 372 433 360 440" fill="#8684a8" stroke="#8684a8" />
+        <polygon id="shell-facet-014" points="360 423 365 411 372 433" fill="#8282a6" stroke="#8282a6" />
+        <polygon id="shell-facet-015" points="372 433 375 451 360 440" fill="#4b4c70" stroke="#4b4c70" />
+        <polygon id="shell-facet-016" points="384.87 443.25 375 451 372 433" fill="#aca9c7" stroke="#aca9c7" />
+        <polygon id="shell-facet-017" points="372 433 365 411 388 422" fill="#646489" stroke="#646489" />
+        <polygon id="shell-facet-018" points="343 453 360 440 358 468" fill="#4e5173" stroke="#4e5173" />
+        <polygon id="shell-facet-019" points="358 468 375 451 380 474" fill="#484a6c" stroke="#484a6c" />
+        <polygon id="shell-facet-020" points="365 411 360 423 361.82 407.06" fill="#515678" stroke="#515678" />
+        <polygon id="shell-facet-021" points="375 451 358 468 360 440" fill="#4c5072" stroke="#4c5072" />
+        <polygon id="shell-facet-022" points="344 506 346 483 356 499" fill="#9092b2" stroke="#9092b2" />
+        <polygon id="shell-facet-023" points="346 483 344 506 313.16 509.77" fill="#2e344f" stroke="#2e344f" />
+        <polygon id="shell-facet-024" points="356 499 346 483 365 489" fill="#78789a" stroke="#78789a" />
+        <polygon id="shell-facet-025" points="336 519 344 506 357 514" fill="#525476" stroke="#525476" />
+        <polygon id="shell-facet-026" points="325 538 310.45 528.81 310.2 522.4" fill="#343956" stroke="#343956" />
+        <polygon id="shell-facet-027" points="313.16 509.77 336 519 310.2 522.4" fill="#2e334e" stroke="#2e334e" />
+        <polygon id="shell-facet-028" points="336 519 313.16 509.77 344 506" fill="#303450" stroke="#303450" />
+        <polygon id="shell-facet-029" points="336 519 325 538 310.2 522.4" fill="#343854" stroke="#343854" />
+        <polygon id="shell-facet-030" points="344 506 356 499 357 514" fill="#9292b3" stroke="#9292b3" />
+        <polygon id="shell-facet-031" points="313.16 509.77 328.32 463.7 346 483" fill="#323753" stroke="#323753" />
+        <polygon id="shell-facet-032" points="368.97 492.83 356 499 365 489" fill="#9190b1" stroke="#9190b1" />
+        <polygon id="shell-facet-033" points="365 489 358 468 378.01 479.47" fill="#66688a" stroke="#66688a" />
+        <polygon id="shell-facet-034" points="378.01 479.47 368.97 492.83 365 489" fill="#aeaec6" stroke="#aeaec6" />
+        <polygon id="shell-facet-035" points="378.01 479.47 358 468 380 474" fill="#4d5070" stroke="#4d5070" />
+        <polygon id="shell-facet-036" points="365.19 513.86 356 499 368.97 492.83" fill="#9090b0" stroke="#9090b0" />
+        <polygon id="shell-facet-037" points="357 514 365.19 513.86 368 522" fill="#5a5d7a" stroke="#5a5d7a" />
+        <polygon id="shell-facet-038" points="357 514 356 499 365.19 513.86" fill="#9190b1" stroke="#9190b1" />
+        <polygon id="shell-facet-039" points="357 514 368 522 357 532" fill="#6c6e8e" stroke="#6c6e8e" />
+        <polygon id="shell-facet-040" points="368 522 365.19 513.86 369.84 527.25" fill="#bbbed0" stroke="#bbbed0" />
+        <polygon id="shell-facet-041" points="336 519 357 514 357 532" fill="#525476" stroke="#525476" />
+        <polygon id="shell-facet-042" points="365 489 346 483 358 468" fill="#8081a2" stroke="#8081a2" />
+        <polygon id="shell-facet-043" points="338 466 358 468 346 483" fill="#737594" stroke="#737594" />
+        <polygon id="shell-facet-044" points="368 522 369.84 527.25 357 532" fill="#6c6e90" stroke="#6c6e90" />
+        <polygon id="shell-facet-045" points="368.03 402.35 373.86 399.59 382 404" fill="#a09ebe" stroke="#a09ebe" />
+        <polygon id="shell-facet-046" points="408 384 402.42 374.56 411 371" fill="#9c98ba" stroke="#9c98ba" />
+        <polygon id="shell-facet-047" points="411 371 402.42 374.56 449.98 353.78" fill="#7a62a6" stroke="#7a62a6" />
+        <polygon id="shell-facet-048" points="431 364 411 371 449.98 353.78" fill="#666094" stroke="#666094" />
+        <polygon id="shell-facet-049" points="425 385 411 371 431 364" fill="#716d95" stroke="#716d95" />
+        <polygon id="shell-facet-050" points="395 404 384 391 395 382" fill="#525678" stroke="#525678" />
+        <polygon id="shell-facet-051" points="395 382 384 391 402.42 374.56" fill="#5a3292" stroke="#5a3292" />
+        <polygon id="shell-facet-052" points="395 404 395 382 408 384" fill="#6a688d" stroke="#6a688d" />
+        <polygon id="shell-facet-053" points="408 384 395 382 402.42 374.56" fill="#727095" stroke="#727095" />
+        <polygon id="shell-facet-054" points="411 371 425 385 408 384" fill="#9b98b9" stroke="#9b98b9" />
+        <polygon id="shell-facet-055" points="425 385 422.61 392.52 408 384" fill="#585980" stroke="#585980" />
+        <polygon id="shell-facet-056" points="431 364 436 378 425 385" fill="#767298" stroke="#767298" />
+        <polygon id="shell-facet-057" points="384 391 373.86 399.59 402.42 374.56" fill="#582892" stroke="#582892" />
+        <polygon id="shell-facet-058" points="453 377 443 358 456 363" fill="#8a8aa9" stroke="#8a8aa9" />
+        <polygon id="shell-facet-059" points="449.98 353.78 443 358 431 364" fill="#66608e" stroke="#66608e" />
+        <polygon id="shell-facet-060" points="456 363 443 358 449.98 353.78" fill="#606086" stroke="#606086" />
+        <polygon id="shell-facet-061" points="443 358 453 377 436 378" fill="#8484a3" stroke="#8484a3" />
+        <polygon id="shell-facet-062" points="436 378 439.51 389.12 425 385" fill="#cecde0" stroke="#cecde0" />
+        <polygon id="shell-facet-063" points="439.51 389.12 436 378 447.28 388.31" fill="#cccbde" stroke="#cccbde" />
+        <polygon id="shell-facet-064" points="449.53 387.14 447.28 388.31 436 378" fill="#b8b7cf" stroke="#b8b7cf" />
+        <polygon id="shell-facet-065" points="436 378 453 377 449.53 387.14" fill="#b0afc8" stroke="#b0afc8" />
+        <polygon id="shell-facet-066" points="443 358 436 378 431 364" fill="#5b5a80" stroke="#5b5a80" />
+        <polygon id="shell-facet-067" points="429.92 392.62 425 385 439.51 389.12" fill="#cacade" stroke="#cacade" />
+        <polygon id="shell-facet-068" points="388 422 389.08 431.17 372 433" fill="#aeabc8" stroke="#aeabc8" />
+        <polygon id="shell-facet-069" points="388 422 382 404 395 404" fill="#8a86a9" stroke="#8a86a9" />
+        <polygon id="shell-facet-070" points="389.08 431.17 388 422 394.01 422.25" fill="#acacc8" stroke="#acacc8" />
+        <polygon id="shell-facet-071" points="372 433 389.08 431.17 385 438" fill="#acaac8" stroke="#acaac8" />
+        <polygon id="shell-facet-072" points="375 451 385.12 464.88 380 474" fill="#a8a8c6" stroke="#a8a8c6" />
+        <polygon id="shell-facet-073" points="375 451 384.87 443.25 385.12 464.88" fill="#b0b0ca" stroke="#b0b0ca" />
+        <polygon id="shell-facet-074" points="389.08 431.17 384.87 443.25 385 438" fill="#c2c2d8" stroke="#c2c2d8" />
+        <polygon id="shell-facet-075" points="385 438 384.87 443.25 372 433" fill="#acaac8" stroke="#acaac8" />
+        <polygon id="shell-facet-076" points="365 411 382 404 388 422" fill="#9b97b6" stroke="#9b97b6" />
+        <polygon id="shell-facet-077" points="419 397 422.61 392.52 416.37 402.15" fill="#b0b1c4" stroke="#b0b1c4" />
+        <polygon id="shell-facet-078" points="419 397 416.37 402.15 410.51 404.77" fill="#4d4c72" stroke="#4d4c72" />
+        <polygon id="shell-facet-079" points="429.92 392.62 422.61 392.52 425 385" fill="#cfd0e1" stroke="#cfd0e1" />
+        <polygon id="shell-facet-080" points="408 384 419 397 410.51 404.77" fill="#57587e" stroke="#57587e" />
+        <polygon id="shell-facet-081" points="394.01 422.25 395 404 408.39 408.31" fill="#aeaac8" stroke="#aeaac8" />
+        <polygon id="shell-facet-082" points="395 404 394.01 422.25 388 422" fill="#b1aeca" stroke="#b1aeca" />
+        <polygon id="shell-facet-083" points="410.51 404.77 408.39 408.31 395 404" fill="#a8a5c4" stroke="#a8a5c4" />
+        <polygon id="shell-facet-084" points="408 384 410.51 404.77 395 404" fill="#68668c" stroke="#68668c" />
+        <polygon id="shell-facet-085" points="395 404 382 404 384 391" fill="#545679" stroke="#545679" />
+        <polygon id="shell-facet-086" points="422.61 392.52 419 397 408 384" fill="#56577c" stroke="#56577c" />
+        <polygon id="shell-facet-087" points="378.01 479.47 380 474 385.12 464.88" fill="#bcbed2" stroke="#bcbed2" />
+        <polygon id="shell-facet-088" points="384 391 382 404 373.86 399.59" fill="#54597a" stroke="#54597a" />
+        <polygon id="shell-facet-089" points="307.45 555.22 308.04 537 325 538" fill="#212840" stroke="#212840" />
+        <polygon id="shell-facet-090" points="308.04 537 310.45 528.81 325 538" fill="#1e243c" stroke="#1e243c" />
+        <polygon id="shell-facet-091" points="350 564 330 552 361 557" fill="#363b58" stroke="#363b58" />
+        <polygon id="shell-facet-092" points="307.45 555.22 325 538 330 552" fill="#1a2037" stroke="#1a2037" />
+        <polygon id="shell-facet-093" points="307.45 555.22 309 561 310.19 573.25" fill="#191a36" stroke="#191a36" />
+        <polygon id="shell-facet-094" points="307.45 555.22 330 552 309 561" fill="#1b2138" stroke="#1b2138" />
+        <polygon id="shell-facet-095" points="350 564 313 581 330 552" fill="#1a2137" stroke="#1a2137" />
+        <polygon id="shell-facet-096" points="310.19 573.25 309 561 330 552" fill="#1a2036" stroke="#1a2036" />
+        <polygon id="shell-facet-097" points="330 552 313 581 310.19 573.25" fill="#1a2138" stroke="#1a2138" />
+        <polygon id="shell-facet-098" points="621 599 624.06 592.08 619.22 611.68" fill="#716894" stroke="#716894" />
+        <polygon id="shell-facet-099" points="330 552 325 538 357 532" fill="#565a7c" stroke="#565a7c" />
+        <polygon id="shell-facet-100" points="370 547 357 532 373 534" fill="#6e7090" stroke="#6e7090" />
+        <polygon id="shell-facet-101" points="373 534 357 532 369.84 527.25" fill="#6c7090" stroke="#6c7090" />
+        <polygon id="shell-facet-102" points="369.84 527.25 376.14 540.56 373 534" fill="#a2a4bb" stroke="#a2a4bb" />
+        <polygon id="shell-facet-103" points="370 547 373 534 376.14 540.56" fill="#5d6080" stroke="#5d6080" />
+        <polygon id="shell-facet-104" points="361 557 368 578 350 564" fill="#292e48" stroke="#292e48" />
+        <polygon id="shell-facet-105" points="377 565 368 578 361 557" fill="#9294b3" stroke="#9294b3" />
+        <polygon id="shell-facet-106" points="370 547 376.53 559.91 361 557" fill="#8e8fae" stroke="#8e8fae" />
+        <polygon id="shell-facet-107" points="376.53 559.91 370 547 376.14 540.56" fill="#8a8aa8" stroke="#8a8aa8" />
+        <polygon id="shell-facet-108" points="361 557 357 532 370 547" fill="#646886" stroke="#646886" />
+        <polygon id="shell-facet-109" points="368 578 381 586 356 589" fill="#2d304c" stroke="#2d304c" />
+        <polygon id="shell-facet-110" points="357 532 361 557 330 552" fill="#373c5a" stroke="#373c5a" />
+        <polygon id="shell-facet-111" points="336 519 357 532 325 538" fill="#54587a" stroke="#54587a" />
+        <polygon id="shell-facet-112" points="356 589 350 564 368 578" fill="#20263d" stroke="#20263d" />
+        <polygon id="shell-facet-113" points="314.32 592.97 356 589 318.44 600.33" fill="#20263c" stroke="#20263c" />
+        <polygon id="shell-facet-114" points="345 619 324 615 318.44 600.33" fill="#12182b" stroke="#12182b" />
+        <polygon id="shell-facet-115" points="313 581 314.32 592.97 310.19 573.25" fill="#2a1852" stroke="#2a1852" />
+        <polygon id="shell-facet-116" points="319.29 609.21 324 615 327.43 620.17" fill="#1a0f3d" stroke="#1a0f3d" />
+        <polygon id="shell-facet-117" points="319.29 609.21 318.44 600.33 324 615" fill="#10192c" stroke="#10192c" />
+        <polygon id="shell-facet-118" points="345 619 336.44 628.29 327.43 620.17" fill="#121a2d" stroke="#121a2d" />
+        <polygon id="shell-facet-119" points="327.43 620.17 324 615 345 619" fill="#11192c" stroke="#11192c" />
+        <polygon id="shell-facet-120" points="583.56 444.76 580.35 440.62 585.95 445.46" fill="#9c84bf" stroke="#9c84bf" />
+        <polygon id="shell-facet-121" points="356 589 314.32 592.97 313 581" fill="#1e253c" stroke="#1e253c" />
+        <polygon id="shell-facet-122" points="343.39 637.49 345 619 360 625" fill="#11182a" stroke="#11182a" />
+        <polygon id="shell-facet-123" points="345 619 343.39 637.49 336.44 628.29" fill="#131a2c" stroke="#131a2c" />
+        <polygon id="shell-facet-124" points="356 589 360 625 345 619" fill="#2e334f" stroke="#2e334f" />
+        <polygon id="shell-facet-125" points="360 625 356 589 392 609" fill="#2d324e" stroke="#2d324e" />
+        <polygon id="shell-facet-126" points="345 619 318.44 600.33 356 589" fill="#20263d" stroke="#20263d" />
+        <polygon id="shell-facet-127" points="343.39 637.49 360 625 348.85 641.54" fill="#12182c" stroke="#12182c" />
+        <polygon id="shell-facet-128" points="348.85 641.54 360 625 359 652.11" fill="#13192c" stroke="#13192c" />
+        <polygon id="shell-facet-129" points="365 655 370.99 658.25 359 652.11" fill="#1e0f44" stroke="#1e0f44" />
+        <polygon id="shell-facet-130" points="365 655 359 652.11 378 634" fill="#13182c" stroke="#13182c" />
+        <polygon id="shell-facet-131" points="365 655 378 634 370.99 658.25" fill="#12182c" stroke="#12182c" />
+        <polygon id="shell-facet-132" points="378 634 359 652.11 360 625" fill="#131a2d" stroke="#131a2d" />
+        <polygon id="shell-facet-133" points="313 581 350 564 356 589" fill="#1b2137" stroke="#1b2137" />
+        <polygon id="shell-facet-134" points="593.63 452.23 586.18 445.66 593.33 451.84" fill="#a086c2" stroke="#a086c2" />
+        <polygon id="shell-facet-135" points="377 565 361 557 376.53 559.91" fill="#9092b1" stroke="#9092b1" />
+        <polygon id="shell-facet-136" points="376.53 559.91 379.82 573.65 377 565" fill="#c8cadb" stroke="#c8cadb" />
+        <polygon id="shell-facet-137" points="379.82 573.65 386.79 583.43 381 586" fill="#9092ae" stroke="#9092ae" />
+        <polygon id="shell-facet-138" points="379.82 573.65 381 586 368 578" fill="#9495b3" stroke="#9495b3" />
+        <polygon id="shell-facet-139" points="392 609 381 586 386.78 588.42" fill="#262c46" stroke="#262c46" />
+        <polygon id="shell-facet-140" points="386.78 588.42 381 586 386.79 583.43" fill="#9c9cb7" stroke="#9c9cb7" />
+        <polygon id="shell-facet-141" points="388.74 589.78 392 594 386.78 588.42" fill="#6e6f89" stroke="#6e6f89" />
+        <polygon id="shell-facet-142" points="395.59 590.38 392 594 388.74 589.78" fill="#4d5072" stroke="#4d5072" />
+        <polygon id="shell-facet-143" points="392 609 386.78 588.42 392 594" fill="#222842" stroke="#222842" />
+        <polygon id="shell-facet-144" points="392 609 356 589 381 586" fill="#2a304a" stroke="#2a304a" />
+        <polygon id="shell-facet-145" points="404 599 395.59 590.38 404.58 593.86" fill="#464a69" stroke="#464a69" />
+        <polygon id="shell-facet-146" points="404 599 404.58 593.86 412.24 598.92" fill="#545877" stroke="#545877" />
+        <polygon id="shell-facet-147" points="392 609 404 599 411 610" fill="#3d4160" stroke="#3d4160" />
+        <polygon id="shell-facet-148" points="392 609 392 594 404 599" fill="#484c6c" stroke="#484c6c" />
+        <polygon id="shell-facet-149" points="411 610 419.83 606.37 425 620" fill="#8688a6" stroke="#8688a6" />
+        <polygon id="shell-facet-150" points="411 610 404 599 412.24 598.92" fill="#8282a0" stroke="#8282a0" />
+        <polygon id="shell-facet-151" points="412.24 598.92 419.83 606.37 411 610" fill="#8384a3" stroke="#8384a3" />
+        <polygon id="shell-facet-152" points="392 609 411 610 403 623" fill="#383c58" stroke="#383c58" />
+        <polygon id="shell-facet-153" points="404 599 392 594 395.59 590.38" fill="#4a4e6e" stroke="#4a4e6e" />
+        <polygon id="shell-facet-154" points="392 609 378 634 360 625" fill="#2d314d" stroke="#2d314d" />
+        <polygon id="shell-facet-155" points="395 646 378 634 403 623" fill="#2f3450" stroke="#2f3450" />
+        <polygon id="shell-facet-156" points="403 623 378 634 392 609" fill="#303350" stroke="#303350" />
+        <polygon id="shell-facet-157" points="417 641 403 623 425 620" fill="#6a6d8c" stroke="#6a6d8c" />
+        <polygon id="shell-facet-158" points="395 646 403 623 417 641" fill="#343856" stroke="#343856" />
+        <polygon id="shell-facet-159" points="386.29 664.37 395 646 417 658" fill="#101628" stroke="#101628" />
+        <polygon id="shell-facet-160" points="386.29 664.37 370.99 658.25 395 646" fill="#12182b" stroke="#12182b" />
+        <polygon id="shell-facet-161" points="413.97 671.39 417 658 435 673" fill="#13192c" stroke="#13192c" />
+        <polygon id="shell-facet-162" points="417 658 413.97 671.39 386.29 664.37" fill="#13192c" stroke="#13192c" />
+        <polygon id="shell-facet-163" points="395 646 417 641 417 658" fill="#1c2137" stroke="#1c2137" />
+        <polygon id="shell-facet-164" points="417 641 439 647 417 658" fill="#272a46" stroke="#272a46" />
+        <polygon id="shell-facet-165" points="395 646 370.99 658.25 378 634" fill="#12182a" stroke="#12182a" />
+        <polygon id="shell-facet-166" points="428.83 624.35 432 636 417 641" fill="#6a6c8c" stroke="#6a6c8c" />
+        <polygon id="shell-facet-167" points="425 620 419.83 606.37 428.83 624.35" fill="#a3a2bc" stroke="#a3a2bc" />
+        <polygon id="shell-facet-168" points="432 636 439.18 633.94 439 647" fill="#363b58" stroke="#363b58" />
+        <polygon id="shell-facet-169" points="439.18 633.94 432 636 428.83 624.35" fill="#363758" stroke="#363758" />
+        <polygon id="shell-facet-170" points="439 647 417 641 432 636" fill="#4c506f" stroke="#4c506f" />
+        <polygon id="shell-facet-171" points="435 673 439 647 450 654" fill="#242842" stroke="#242842" />
+        <polygon id="shell-facet-172" points="435 673 417 658 439 647" fill="#262b45" stroke="#262b45" />
+        <polygon id="shell-facet-173" points="441.86 675.41 450 654 471.09 677.28" fill="#20263e" stroke="#20263e" />
+        <polygon id="shell-facet-174" points="450 654 441.86 675.41 435 673" fill="#1f253e" stroke="#1f253e" />
+        <polygon id="shell-facet-175" points="450 654 439 647 455 642" fill="#525673" stroke="#525673" />
+        <polygon id="shell-facet-176" points="435 673 441.86 675.41 413.97 671.39" fill="#12152a" stroke="#12152a" />
+        <polygon id="shell-facet-177" points="455 642 439 647 439.18 633.94" fill="#4e5270" stroke="#4e5270" />
+        <polygon id="shell-facet-178" points="417 641 425 620 428.83 624.35" fill="#686a8a" stroke="#686a8a" />
+        <polygon id="shell-facet-179" points="403 623 411 610 425 620" fill="#5c5f7d" stroke="#5c5f7d" />
+        <polygon id="shell-facet-180" points="368 578 377 565 379.82 573.65" fill="#9294b2" stroke="#9294b2" />
+        <polygon id="shell-facet-181" points="594.07 452.62 596.25 455.62 593.63 452.23" fill="#8e76b4" stroke="#8e76b4" />
+        <polygon id="shell-facet-182" points="449.53 387.14 453 377 459.92 370.27" fill="#b4b2ca" stroke="#b4b2ca" />
+        <polygon id="shell-facet-183" points="466 352 478.5 346.78 482 352" fill="#8a88ac" stroke="#8a88ac" />
+        <polygon id="shell-facet-184" points="478.5 346.78 466 352 449.98 353.78" fill="#a6a0c8" stroke="#a6a0c8" />
+        <polygon id="shell-facet-185" points="482 352 478.5 346.78 484.76 347.63" fill="#acaec6" stroke="#acaec6" />
+        <polygon id="shell-facet-186" points="466 352 482 352 469.92 362.85" fill="#b6b5cd" stroke="#b6b5cd" />
+        <polygon id="shell-facet-187" points="456 363 463.43 366.75 459.92 370.27" fill="#a6a4be" stroke="#a6a4be" />
+        <polygon id="shell-facet-188" points="456 363 466 352 463.43 366.75" fill="#aeaac6" stroke="#aeaac6" />
+        <polygon id="shell-facet-189" points="463.43 366.75 466 352 469.92 362.85" fill="#bcb7d0" stroke="#bcb7d0" />
+        <polygon id="shell-facet-190" points="482 352 482.47 359.14 469.92 362.85" fill="#b6b4cc" stroke="#b6b4cc" />
+        <polygon id="shell-facet-191" points="482 352 488.23 358.67 482.47 359.14" fill="#abaac3" stroke="#abaac3" />
+        <polygon id="shell-facet-192" points="466 352 456 363 449.98 353.78" fill="#aaa6c8" stroke="#aaa6c8" />
+        <polygon id="shell-facet-193" points="484.76 347.63 495 354 488.23 358.67" fill="#c4c4da" stroke="#c4c4da" />
+        <polygon id="shell-facet-194" points="495 354 484.76 347.63 512.5 361.61" fill="#a490c8" stroke="#a490c8" />
+        <polygon id="shell-facet-195" points="488.23 358.67 495 354 501.04 362.8" fill="#bebed4" stroke="#bebed4" />
+        <polygon id="shell-facet-196" points="484.76 347.63 488.23 358.67 482 352" fill="#b4b3cc" stroke="#b4b3cc" />
+        <polygon id="shell-facet-197" points="509.08 367.42 501.04 362.8 507 361" fill="#c9c8dc" stroke="#c9c8dc" />
+        <polygon id="shell-facet-198" points="507 361 501.04 362.8 495 354" fill="#9c9ab8" stroke="#9c9ab8" />
+        <polygon id="shell-facet-199" points="507 361 512.5 361.61 509.08 367.42" fill="#c8cade" stroke="#c8cade" />
+        <polygon id="shell-facet-200" points="507 361 495 354 512.5 361.61" fill="#a3a7be" stroke="#a3a7be" />
+        <polygon id="shell-facet-201" points="512.5 361.61 516.33 365.13 509.08 367.42" fill="#c9cade" stroke="#c9cade" />
+        <polygon id="shell-facet-202" points="515.23 372.95 516.33 365.13 520 371" fill="#bcbcd3" stroke="#bcbcd3" />
+        <polygon id="shell-facet-203" points="509.08 367.42 516.33 365.13 515.23 372.95" fill="#c6c4da" stroke="#c6c4da" />
+        <polygon id="shell-facet-204" points="515.23 372.95 526.3 378.3 527 384" fill="#babbd0" stroke="#babbd0" />
+        <polygon id="shell-facet-205" points="526.3 378.3 515.23 372.95 520 371" fill="#b8bbce" stroke="#b8bbce" />
+        <polygon id="shell-facet-206" points="526.32 389.37 527 384 532.71 384.42" fill="#a4a6be" stroke="#a4a6be" />
+        <polygon id="shell-facet-207" points="527 384 526.32 389.37 515.23 372.95" fill="#bec0d2" stroke="#bec0d2" />
+        <polygon id="shell-facet-208" points="526.3 378.3 532.71 384.42 527 384" fill="#bab5d4" stroke="#bab5d4" />
+        <polygon id="shell-facet-209" points="516.33 365.13 526.3 378.3 520 371" fill="#9a7cc2" stroke="#9a7cc2" />
+        <polygon id="shell-facet-210" points="531.14 394.48 532.71 384.42 541 392" fill="#8d8eaa" stroke="#8d8eaa" />
+        <polygon id="shell-facet-211" points="532.71 384.42 531.14 394.48 526.32 389.37" fill="#9898b2" stroke="#9898b2" />
+        <polygon id="shell-facet-212" points="531.14 394.48 541 392 547.54 400.87" fill="#acacc3" stroke="#acacc3" />
+        <polygon id="shell-facet-213" points="554 399 541 392 532.71 384.42" fill="#8a84ae" stroke="#8a84ae" />
+        <polygon id="shell-facet-214" points="547.54 400.87 541 392 554 399" fill="#b8b9d0" stroke="#b8b9d0" />
+        <polygon id="shell-facet-215" points="547.54 400.87 554 399 554.99 406.84" fill="#bcbad4" stroke="#bcbad4" />
+        <polygon id="shell-facet-216" points="554.99 406.84 562.64 407.47 558.88 411.63" fill="#babcce" stroke="#babcce" />
+        <polygon id="shell-facet-217" points="562.64 407.47 554.99 406.84 558.86 402.02" fill="#b7bace" stroke="#b7bace" />
+        <polygon id="shell-facet-218" points="554 399 558.86 402.02 554.99 406.84" fill="#bbb7d2" stroke="#bbb7d2" />
+        <polygon id="shell-facet-219" points="558.86 402.02 554 399 532.71 384.42" fill="#ad97cf" stroke="#ad97cf" />
+        <polygon id="shell-facet-220" points="570 427 564.49 413.36 575.5 435.06" fill="#6c4e98" stroke="#6c4e98" />
+        <polygon id="shell-facet-221" points="565.24 416.36 564.49 413.36 570 427" fill="#b4b6ce" stroke="#b4b6ce" />
+        <polygon id="shell-facet-222" points="567.64 436.24 564.71 426.67 570 427" fill="#9b9fb6" stroke="#9b9fb6" />
+        <polygon id="shell-facet-223" points="567.64 436.24 575.5 435.06 571.32 442.52" fill="#9899b2" stroke="#9899b2" />
+        <polygon id="shell-facet-224" points="575.5 435.06 567.64 436.24 570 427" fill="#777796" stroke="#777796" />
+        <polygon id="shell-facet-225" points="564.71 426.67 565.24 416.36 570 427" fill="#a9aec2" stroke="#a9aec2" />
+        <polygon id="shell-facet-226" points="564.49 413.36 558.88 411.63 562.64 407.47" fill="#a7a6c0" stroke="#a7a6c0" />
+        <polygon id="shell-facet-227" points="571.32 442.52 580.35 440.62 576.41 445.79" fill="#9f9eba" stroke="#9f9eba" />
+        <polygon id="shell-facet-228" points="585.96 445.46 586.18 445.66 585.95 445.46" fill="#9470b9" stroke="#9470b9" />
+        <polygon id="shell-facet-229" points="576.41 445.79 580.35 440.62 583.56 444.76" fill="#a6a9bf" stroke="#a6a9bf" />
+        <polygon id="shell-facet-230" points="564.49 413.36 562.64 407.47 575.5 435.06" fill="#7e5bac" stroke="#7e5bac" />
+        <polygon id="shell-facet-231" points="580.35 440.62 571.32 442.52 575.5 435.06" fill="#646288" stroke="#646288" />
+        <polygon id="shell-facet-232" points="603.62 471.53 599.43 460.01 599.76 460.45" fill="#8876b0" stroke="#8876b0" />
+        <polygon id="shell-facet-233" points="603.63 470.53 603.62 471.53 599.76 460.45" fill="#846eac" stroke="#846eac" />
+        <polygon id="shell-facet-234" points="605 479.15 605.02 486.85 602.65 484.46" fill="#9094a8" stroke="#9094a8" />
+        <polygon id="shell-facet-235" points="606.14 491.85 605.02 486.85 607.83 492.43" fill="#8884a7" stroke="#8884a7" />
+        <polygon id="shell-facet-236" points="605.02 486.85 605 479.15 607.83 492.43" fill="#8c88a8" stroke="#8c88a8" />
+        <polygon id="shell-facet-237" points="607.83 492.43 605 479.15 605.13 475.68" fill="#7e67a2" stroke="#7e67a2" />
+        <polygon id="shell-facet-238" points="605 479.15 603.62 476.34 605.13 475.68" fill="#a39eba" stroke="#a39eba" />
+        <polygon id="shell-facet-239" points="605.02 486.85 606.14 491.85 604.27 490.29" fill="#8a8ca3" stroke="#8a8ca3" />
+        <polygon id="shell-facet-240" points="610 498 604.96 497.36 607.83 492.43" fill="#8888a3" stroke="#8888a3" />
+        <polygon id="shell-facet-241" points="622.94 518.4 613.16 501.59 622.07 516.17" fill="#9384b2" stroke="#9384b2" />
+        <polygon id="shell-facet-242" points="613.16 501.59 610 498 607.83 492.43" fill="#8a7cac" stroke="#8a7cac" />
+        <polygon id="shell-facet-243" points="607.83 492.43 604.96 497.36 606.14 491.85" fill="#8988a3" stroke="#8988a3" />
+        <polygon id="shell-facet-244" points="610 498 613.16 501.59 604.96 497.36" fill="#9698ac" stroke="#9698ac" />
+        <polygon id="shell-facet-245" points="463.56 646.09 455 642 439.18 633.94" fill="#c4c7d4" stroke="#c4c7d4" />
+        <polygon id="shell-facet-246" points="463.56 646.09 479.06 645.67 468 649" fill="#727594" stroke="#727594" />
+        <polygon id="shell-facet-247" points="463.56 646.09 468 649 450 654" fill="#535675" stroke="#535675" />
+        <polygon id="shell-facet-248" points="468 649 482 650 473 662" fill="#4e5270" stroke="#4e5270" />
+        <polygon id="shell-facet-249" points="468 649 479.06 645.67 482 650" fill="#4d5270" stroke="#4d5270" />
+        <polygon id="shell-facet-250" points="546 661 538 650 542.1 646.11" fill="#3e4260" stroke="#3e4260" />
+        <polygon id="shell-facet-251" points="479.06 645.67 494 655.71 482 650" fill="#8e8ea8" stroke="#8e8ea8" />
+        <polygon id="shell-facet-252" points="517 658 511.76 658.89 542.1 646.11" fill="#81849c" stroke="#81849c" />
+        <polygon id="shell-facet-253" points="538 650 517 658 542.1 646.11" fill="#555876" stroke="#555876" />
+        <polygon id="shell-facet-254" points="450 654 468 649 473 662" fill="#525672" stroke="#525672" />
+        <polygon id="shell-facet-255" points="580.34 636.52 586.22 630.09 588 635" fill="#646682" stroke="#646682" />
+        <polygon id="shell-facet-256" points="588 635 586.22 630.09 600 628" fill="#5e627e" stroke="#5e627e" />
+        <polygon id="shell-facet-257" points="580.34 636.52 588 635 591 649" fill="#707390" stroke="#707390" />
+        <polygon id="shell-facet-258" points="568 655 557 648 561.75 646.22" fill="#8186a2" stroke="#8186a2" />
+        <polygon id="shell-facet-259" points="542.1 646.11 561.75 646.22 557 648" fill="#75788a" stroke="#75788a" />
+        <polygon id="shell-facet-260" points="561.75 646.22 575.3 640.11 568 655" fill="#737494" stroke="#737494" />
+        <polygon id="shell-facet-261" points="591 649 575.3 640.11 580.34 636.52" fill="#717391" stroke="#717391" />
+        <polygon id="shell-facet-262" points="546 661 542.1 646.11 557 648" fill="#3c405e" stroke="#3c405e" />
+        <polygon id="shell-facet-263" points="588 635 597.21 640.66 591 649" fill="#575a78" stroke="#575a78" />
+        <polygon id="shell-facet-264" points="575.3 640.11 591 649 588.81 654.5" fill="#636684" stroke="#636684" />
+        <polygon id="shell-facet-265" points="482 650 486 663 473 662" fill="#565a78" stroke="#565a78" />
+        <polygon id="shell-facet-266" points="486 663 482 650 494 655.71" fill="#6e7190" stroke="#6e7190" />
+        <polygon id="shell-facet-267" points="486 663 494 655.71 499 665" fill="#727593" stroke="#727593" />
+        <polygon id="shell-facet-268" points="473 662 486 663 479 676" fill="#262c46" stroke="#262c46" />
+        <polygon id="shell-facet-269" points="471.09 677.28 479 676 497.99 676.35" fill="#13142b" stroke="#13142b" />
+        <polygon id="shell-facet-270" points="471.09 677.28 473 662 479 676" fill="#282d47" stroke="#282d47" />
+        <polygon id="shell-facet-271" points="497.99 676.35 499 665 511.76 658.89" fill="#242a45" stroke="#242a45" />
+        <polygon id="shell-facet-272" points="497.99 676.35 479 676 486 663" fill="#1c2239" stroke="#1c2239" />
+        <polygon id="shell-facet-273" points="499 665 497.99 676.35 486 663" fill="#1a2136" stroke="#1a2136" />
+        <polygon id="shell-facet-274" points="596.25 455.62 599.25 459.5 599.43 460.01" fill="#9a80bf" stroke="#9a80bf" />
+        <polygon id="shell-facet-275" points="494 655.71 511.76 658.89 499 665" fill="#6d708e" stroke="#6d708e" />
+        <polygon id="shell-facet-276" points="471.09 677.28 450 654 473 662" fill="#1a2036" stroke="#1a2036" />
+        <polygon id="shell-facet-277" points="528.48 673.36 511.76 658.89 517 658" fill="#2f324e" stroke="#2f324e" />
+        <polygon id="shell-facet-278" points="538 650 546 661 529 663" fill="#3b405c" stroke="#3b405c" />
+        <polygon id="shell-facet-279" points="568 655 563.58 666.67 557 648" fill="#262c46" stroke="#262c46" />
+        <polygon id="shell-facet-280" points="563.58 666.67 568 655 588.81 654.5" fill="#232840" stroke="#232840" />
+        <polygon id="shell-facet-281" points="528.48 673.36 529 663 546 661" fill="#383c58" stroke="#383c58" />
+        <polygon id="shell-facet-282" points="529 663 528.48 673.36 517 658" fill="#2e334e" stroke="#2e334e" />
+        <polygon id="shell-facet-283" points="546 661 563.58 666.67 528.48 673.36" fill="#2e314c" stroke="#2e314c" />
+        <polygon id="shell-facet-284" points="546 661 557 648 563.58 666.67" fill="#4e5170" stroke="#4e5170" />
+        <polygon id="shell-facet-285" points="517 658 538 650 529 663" fill="#606382" stroke="#606382" />
+        <polygon id="shell-facet-286" points="511.76 658.89 528.48 673.36 497.99 676.35" fill="#262b45" stroke="#262b45" />
+        <polygon id="shell-facet-287" points="575.3 640.11 588.81 654.5 568 655" fill="#747694" stroke="#747694" />
+        <polygon id="shell-facet-288" points="605.13 475.68 603.62 476.34 603.62 471.53" fill="#aaa0c6" stroke="#aaa0c6" />
+        <polygon id="shell-facet-289" points="591 649 597.21 640.66 588.81 654.5" fill="#686788" stroke="#686788" />
+        <polygon id="shell-facet-290" points="450 654 455 642 463.56 646.09" fill="#545876" stroke="#545876" />
+        <polygon id="shell-facet-291" points="615.05 554.18 619.54 534.98 623 550" fill="#868aa4" stroke="#868aa4" />
+        <polygon id="shell-facet-292" points="623 550 619.54 534.98 625.52 542.48" fill="#8486a4" stroke="#8486a4" />
+        <polygon id="shell-facet-293" points="617 562 615.05 554.18 623.61 555.12" fill="#5e637d" stroke="#5e637d" />
+        <polygon id="shell-facet-294" points="617 562 618.06 567.93 615.05 554.18" fill="#979db0" stroke="#979db0" />
+        <polygon id="shell-facet-295" points="618.06 567.93 617 562 623.53 564.84" fill="#858da1" stroke="#858da1" />
+        <polygon id="shell-facet-296" points="624.17 576.59 618.06 567.93 623.53 564.84" fill="#8b90a5" stroke="#8b90a5" />
+        <polygon id="shell-facet-297" points="623.53 564.84 617 562 623.61 555.12" fill="#5e617f" stroke="#5e617f" />
+        <polygon id="shell-facet-298" points="623.61 555.12 615.05 554.18 623 550" fill="#686d88" stroke="#686d88" />
+        <polygon id="shell-facet-299" points="624.24 521.73 624.22 520.59 625 536" fill="#553c88" stroke="#553c88" />
+        <polygon id="shell-facet-300" points="624.33 529.69 624.24 521.73 625 536" fill="#5e498c" stroke="#5e498c" />
+        <polygon id="shell-facet-301" points="624.33 529.69 625 536 619.54 534.98" fill="#868aa6" stroke="#868aa6" />
+        <polygon id="shell-facet-302" points="625.52 542.48 623.61 555.12 623 550" fill="#776c9c" stroke="#776c9c" />
+        <polygon id="shell-facet-303" points="625.52 542.48 625 536 624.22 520.59" fill="#604c8e" stroke="#604c8e" />
+        <polygon id="shell-facet-304" points="625 536 625.52 542.48 619.54 534.98" fill="#8688a6" stroke="#8688a6" />
+        <polygon id="shell-facet-305" points="623.53 564.84 625.39 586.67 624.17 576.59" fill="#6a5c91" stroke="#6a5c91" />
+        <polygon id="shell-facet-306" points="623.39 580.26 624.17 576.59 625.39 586.67" fill="#9390b4" stroke="#9390b4" />
+        <polygon id="shell-facet-307" points="599.33 610.83 609.77 605.07 611 610" fill="#555874" stroke="#555874" />
+        <polygon id="shell-facet-308" points="611 610 609.77 605.07 619.22 611.68" fill="#767895" stroke="#767895" />
+        <polygon id="shell-facet-309" points="599.33 610.83 611 610 612 623" fill="#525473" stroke="#525473" />
+        <polygon id="shell-facet-310" points="588 635 601.41 637.19 597.21 640.66" fill="#525574" stroke="#525574" />
+        <polygon id="shell-facet-311" points="588 635 600 628 601.41 637.19" fill="#545876" stroke="#545876" />
+        <polygon id="shell-facet-312" points="601.41 637.19 612 623 616.19 619.47" fill="#34275b" stroke="#34275b" />
+        <polygon id="shell-facet-313" points="612 623 601.41 637.19 600 628" fill="#30364e" stroke="#30364e" />
+        <polygon id="shell-facet-314" points="600 628 599.33 610.83 612 623" fill="#525574" stroke="#525574" />
+        <polygon id="shell-facet-315" points="611 610 616.19 619.47 612 623" fill="#505373" stroke="#505373" />
+        <polygon id="shell-facet-316" points="600 628 586.22 630.09 599.33 610.83" fill="#727292" stroke="#727292" />
+        <polygon id="shell-facet-317" points="624.55 590.09 624.26 591.81 624.06 592.08" fill="#786c9a" stroke="#786c9a" />
+        <polygon id="shell-facet-318" points="625.39 586.67 625.14 586.55 623.39 580.26" fill="#9693b4" stroke="#9693b4" />
+        <polygon id="shell-facet-319" points="609.77 605.07 615.98 595.85 621 599" fill="#8e90aa" stroke="#8e90aa" />
+        <polygon id="shell-facet-320" points="611 610 619.22 611.68 616.19 619.47" fill="#6f7491" stroke="#6f7491" />
+        <polygon id="shell-facet-321" points="624.06 592.08 621 599 622.7 593.88" fill="#807ea0" stroke="#807ea0" />
+        <polygon id="shell-facet-322" points="619.22 611.68 609.77 605.07 621 599" fill="#747694" stroke="#747694" />
+        <polygon id="shell-facet-323" points="615.98 595.85 622.7 593.88 621 599" fill="#9396b0" stroke="#9396b0" />
+        <polygon id="shell-facet-324" points="624.24 521.73 622.94 518.4 624.22 520.59" fill="#8674a4" stroke="#8674a4" />
+        <polygon id="shell-facet-325" points="625.14 586.55 625.39 586.67 624.55 590.09" fill="#79709e" stroke="#79709e" />
+        <polygon id="shell-facet-326" points="622.07 516.17 613.16 501.59 613.62 501.83" fill="#907eb3" stroke="#907eb3" />
+        <polygon id="shell-facet-327" points="459.92 370.27 453 377 456 363" fill="#a09fba" stroke="#a09fba" />
+      </g>
+    </g>
+    <g id="agate-faces">
+      <title>Solid mineral faces</title>
+      <desc>Quartz, lavender, and amethyst are successively smaller solid filled shapes. Their overlap creates the visible rings without hollow outlines or gaps.</desc>
+      <use id="quartz-face" fill="url(#rim-white)" href="#quartz-contour" />
+      <g id="colored-mineral-faces" mask="url(#mineral-face-mask)">
+        <title>Colored layers inside the quartz boundary</title>
+        <desc>The lavender and amethyst solid faces and their light facets overlap the white quartz base. One quartz-contour mask contains every colored layer and highlight.</desc>
+        <path id="lavender-face" d="M610.74 524.02         C612.1 531.13 607.2 539.41 606.17 547.1         C605.04 555.57 608.6 563.33 609.53 571.81         C610.5 580.71 608.57 590.42 601.43 596.25         C598.02 599.03 593.41 600.93 590.48 603.85         C587.66 606.66 586.38 610.41 584.53 614.11         C580.54 622.06 573.9 629.8 565.73 632.68         C557.66 635.53 548.1 633.66 539.78 635.33         C535.71 636.15 531.94 637.82 528.33 639.78         C524.93 641.62 521.67 643.72 517.78 645.47         C513.95 647.19 509.51 648.57 505.67 647.95         C501.41 647.26 497.89 644.13 494.23 641.73         C487.33 637.21 479.97 635.25 471.87 633.6         C464.79 632.15 457.15 630.93 450.91 627.64         C444.05 624.02 438.89 617.89 435.34 610.7         C432.27 604.5 430.4 597.51 424.71 593.52         C421.67 591.39 417.53 590.11 414.57 588.06         C411.89 586.21 410.17 583.73 407.82 581.52         C402.48 576.52 393.88 572.95 391.2 566.63         C388.53 560.34 391.72 551.33 390.78 543.86         C389.86 536.61 385.05 530.82 382.3 524.09         C379.31 516.76 378.76 508.32 381.53 501.12         C384.11 494.42 389.57 488.79 393.44 482.28         C395.44 478.91 397.01 475.3 397.68 471.66         C398.43 467.6 398.05 463.5 397.83 459.23         C397.36 450.13 397.62 440.31 402.66 432.87         C405.2 429.14 408.94 426 412.81 423.56         C416.31 421.35 419.92 419.7 423.16 417.13         C426.46 414.52 429.37 410.94 432.47 408.16         C435.7 405.26 439.13 403.23 443.25 402         C447.69 400.68 452.92 400.3 456.79 398.12         C461.28 395.61 463.93 390.69 466.81 385.49         C470.24 379.3 474 372.72 479.39 370.65         C483.63 369.02 488.87 370.18 493.79 372.07         C499.6 374.3 504.96 377.55 508.93 382.2         C513.02 386.98 515.64 393.24 519.73 397.69         C525.27 403.71 533.49 406.42 541.04 410.38         C545.03 412.48 548.83 414.93 551.32 418.5         C553.88 422.16 555.05 427 556.26 431.59         C557.37 435.82 558.51 439.83 560.51 443.39         C562.11 446.23 564.26 448.78 566.85 450.93         C572.5 455.64 580.25 458.45 584.92 463.83         C589.37 468.95 591.04 476.4 592.08 483.46         C593.13 490.68 593.52 497.47 597.13 503.63         C601.19 510.54 609.32 516.65 610.74 524.02         Z" fill="url(#rim-lavender)" />
+        <path id="amethyst-face" d="M602.54 524.1         C603.78 530.69 598.98 538.31 597.92 545.41         C596.75 553.31 600.19 560.58 601.3 568.5         C602.46 576.83 601.03 585.88 594.25 591.23         C591.02 593.78 586.57 595.49 583.58 598.17         C580.78 600.67 579.26 604.02 577.52 607.36         C575.52 611.19 573.23 615.01 570.19 618.12         C567.47 620.9 564.15 623.12 560.45 624.37         C552.73 626.96 543.38 625.31 537.73 628.97         C535.91 630.15 534.48 631.88 532.47 632.18         C530.61 632.46 528.26 631.51 525.94 631.61         C522.41 631.77 518.96 634.36 515.47 635.71         C508.19 638.52 500.75 635.95 494.02 632.46         C487.42 629.03 481.5 624.72 474.18 622.67         C467.72 620.87 460.16 620.82 454.72 617.96         C443.7 612.16 441.35 594.79 431.49 586.37         C426.76 582.33 420.3 580.35 414.9 576.58         C409.58 572.87 405.29 567.43 403.58 561.37         C401.82 555.12 402.81 548.22 401.33 542.01         C399.84 535.74 395.84 530.17 393.49 523.96         C390.99 517.36 390.37 510.03 393.13 503.64         C395.73 497.62 401.34 492.43 404.55 486.73         C408.05 480.53 408.7 473.73 408.77 466.4         C408.85 457.98 408.16 448.86 411.82 441.91         C415.29 435.33 422.65 430.68 429.57 426.43         C436.25 422.32 442.5 418.58 448.54 414.26         C455.64 409.18 462.44 403.29 469.67 397.74         C477.01 392.08 484.8 386.77 493.7 387.84         C498.84 388.46 504.35 391.21 507.92 395.27         C511.63 399.5 513.24 405.14 517.1 408.62         C522.46 413.46 532.18 414.11 538.25 418.14         C545.32 422.83 547.45 432.1 550.6 440.47         C552.96 446.75 555.89 452.53 561 456.73         C563.66 458.91 566.91 460.66 570 462.48         C573.02 464.24 575.89 466.06 578.06 468.46         C582.27 473.12 583.83 479.99 584.84 486.53         C585.85 493.17 586.29 499.46 589.71 505.16         C593.58 511.61 601.26 517.31 602.54 524.1         Z" fill="url(#rim-amethyst)" />
+        <g id="agate-light-facets">
+          <title>Light across the cut face</title>
+          <desc>Broad translucent planes light the mineral bands. The parent mineral-face-mask clips every plane to the shared white quartz contour; the solid cavity covers the center.</desc>
+          <polygon id="agate-light-1" points="402 371 434 385 467 413 435 433 376 457" fill="#ffffff" fill-opacity="0.19" />
+          <polygon id="agate-light-2" points="471 343 488 359 500 405 526 435 480 428" fill="#5f2fa4" fill-opacity="0.13" />
+          <polygon id="agate-light-3" points="337 456 407 467 426 492 380 519 342 510" fill="#ffffff" fill-opacity="0.12" />
+          <polygon id="agate-light-4" points="365 530 414 549 441 578 400 586" fill="#633494" fill-opacity="0.11" />
+          <polygon id="agate-light-5" points="413 603 453 610 483 635 472 659 437 642" fill="#ffffff" fill-opacity="0.32" />
+          <polygon id="agate-light-6" points="489 624 532 622 544 654 513 660" fill="#7140b3" fill-opacity="0.16" />
+          <polygon id="agate-light-7" points="574 575 622 588 611 618 569 641 549 622" fill="#ffffff" fill-opacity="0.18" />
+          <polygon id="agate-light-8" points="582 490 622 509 622 529 596 540 576 514" fill="#ffffff" fill-opacity="0.17" />
+        </g>
+      </g>
+    </g>
+    <g id="crystal-cavity">
+      <title>Recessed amethyst cavity</title>
+      <desc>A continuous dark base supports the fractured crystal bed. The larger foreground crystals sit above it as independently editable objects.</desc>
+      <use id="cavity-outline" fill="#250465" href="#cavity-contour" />
+      <g id="cavity-artwork" mask="url(#cavity-surface-mask)">
+        <title>Masked crystal surfaces</title>
+        <desc>A single shared cavity mask contains the fractured bed and all six angular crystals above the solid recess.</desc>
+        <g id="crystal-facets" stroke-width=".8" stroke-linejoin="miter" stroke-miterlimit="2">
+          <title>Fractures in the crystal bed</title>
+          <desc>Subdued shared-edge planes describe the recessed wall behind the six principal crystals.</desc>
+          <polygon id="cavity-facet-001" points="423 452 432 440 439 462" fill="#21026c" stroke="#21026c" />
+          <polygon id="cavity-facet-002" points="438.26 434.8 432 440 423.36 446.91" fill="#5032a0" stroke="#5032a0" />
+          <polygon id="cavity-facet-003" points="418.66 460.78 423.36 446.91 423 452" fill="#210479" stroke="#210479" />
+          <polygon id="cavity-facet-004" points="423 452 423.36 446.91 432 440" fill="#260578" stroke="#260578" />
+          <polygon id="cavity-facet-005" points="439 462 418.66 460.78 423 452" fill="#2e0285" stroke="#2e0285" />
+          <polygon id="cavity-facet-006" points="449 451 432 440 438.26 434.8" fill="#22026a" stroke="#22026a" />
+          <polygon id="cavity-facet-007" points="447.91 435.46 451.33 434.53 449 451" fill="#280476" stroke="#280476" />
+          <polygon id="cavity-facet-008" points="456 457 449 451 461 449" fill="#3e08a4" stroke="#3e08a4" />
+          <polygon id="cavity-facet-009" points="449 451 439 462 432 440" fill="#28027d" stroke="#28027d" />
+          <polygon id="cavity-facet-010" points="439 462 456 457 444 473" fill="#10013d" stroke="#10013d" />
+          <polygon id="cavity-facet-011" points="456 457 439 462 449 451" fill="#1a025b" stroke="#1a025b" />
+          <polygon id="cavity-facet-012" points="444 473 456 457 449 482" fill="#16004c" stroke="#16004c" />
+          <polygon id="cavity-facet-013" points="418.66 460.78 439 462 424 476" fill="#300489" stroke="#300489" />
+          <polygon id="cavity-facet-014" points="449 451 451.33 434.53 459 437" fill="#3e0aa2" stroke="#3e0aa2" />
+          <polygon id="cavity-facet-015" points="449 451 438.26 434.8 447.91 435.46" fill="#24036d" stroke="#24036d" />
+          <polygon id="cavity-facet-016" points="424 476 439 462 444 473" fill="#6426ca" stroke="#6426ca" />
+          <polygon id="cavity-facet-017" points="419.46 478.32 424 476 416.99 484.76" fill="#290e77" stroke="#290e77" />
+          <polygon id="cavity-facet-018" points="424 476 419.46 478.32 418.66 460.78" fill="#2b0684" stroke="#2b0684" />
+          <polygon id="cavity-facet-019" points="403.56 511.29 416.98 489.71 412 501" fill="#281474" stroke="#281474" />
+          <polygon id="cavity-facet-020" points="436 495 416.98 489.71 416.99 484.76" fill="#2d0384" stroke="#2d0384" />
+          <polygon id="cavity-facet-021" points="428 504 412 501 416.98 489.71" fill="#2c0488" stroke="#2c0488" />
+          <polygon id="cavity-facet-022" points="436 495 416.99 484.76 424 476" fill="#290282" stroke="#290282" />
+          <polygon id="cavity-facet-023" points="436 495 449 482 450 487" fill="#a066f2" stroke="#a066f2" />
+          <polygon id="cavity-facet-024" points="436 495 424 476 444 473" fill="#884de7" stroke="#884de7" />
+          <polygon id="cavity-facet-025" points="436 495 450 487 449 504" fill="#340793" stroke="#340793" />
+          <polygon id="cavity-facet-026" points="436 495 444 506 428 504" fill="#260470" stroke="#260470" />
+          <polygon id="cavity-facet-027" points="444 506 436 495 449 504" fill="#280476" stroke="#280476" />
+          <polygon id="cavity-facet-028" points="463 516 444 506 449 504" fill="#935ce6" stroke="#935ce6" />
+          <polygon id="cavity-facet-029" points="428 504 444 506 421 517" fill="#260472" stroke="#260472" />
+          <polygon id="cavity-facet-030" points="449 504 450 487 461 500" fill="#38079a" stroke="#38079a" />
+          <polygon id="cavity-facet-031" points="436 495 428 504 416.98 489.71" fill="#32058e" stroke="#32058e" />
+          <polygon id="cavity-facet-032" points="444 473 449 482 436 495" fill="#975bf2" stroke="#975bf2" />
+          <polygon id="cavity-facet-033" points="412 501 428 504 421 517" fill="#370899" stroke="#370899" />
+          <polygon id="cavity-facet-034" points="467.01 423.27 475 413 473 430" fill="#160150" stroke="#160150" />
+          <polygon id="cavity-facet-035" points="475 413 467.01 423.27 475.56 407.58" fill="#1a0a5c" stroke="#1a0a5c" />
+          <polygon id="cavity-facet-036" points="459 437 473 430 468 439" fill="#350696" stroke="#350696" />
+          <polygon id="cavity-facet-037" points="473 430 459 437 467.01 423.27" fill="#200266" stroke="#200266" />
+          <polygon id="cavity-facet-038" points="468 439 473 430 483 440" fill="#100042" stroke="#100042" />
+          <polygon id="cavity-facet-039" points="459 437 468 439 461 449" fill="#4e12b6" stroke="#4e12b6" />
+          <polygon id="cavity-facet-040" points="475 413 486 428 473 430" fill="#270374" stroke="#270374" />
+          <polygon id="cavity-facet-041" points="459 437 451.33 434.53 467.01 423.27" fill="#28077a" stroke="#28077a" />
+          <polygon id="cavity-facet-042" points="487 415 475.56 407.58 490.78 401.07" fill="#260276" stroke="#260276" />
+          <polygon id="cavity-facet-043" points="487 415 490.78 401.07 499.26 403.51" fill="#190255" stroke="#190255" />
+          <polygon id="cavity-facet-044" points="486 428 483 440 473 430" fill="#2e0588" stroke="#2e0588" />
+          <polygon id="cavity-facet-045" points="475 413 487 415 486 428" fill="#360891" stroke="#360891" />
+          <polygon id="cavity-facet-046" points="505 415 486 428 487 415" fill="#2b057b" stroke="#2b057b" />
+          <polygon id="cavity-facet-047" points="500 434 497 449 483 440" fill="#4e11ba" stroke="#4e11ba" />
+          <polygon id="cavity-facet-048" points="500 434 483 440 486 428" fill="#280678" stroke="#280678" />
+          <polygon id="cavity-facet-049" points="475 413 475.56 407.58 487 415" fill="#200268" stroke="#200268" />
+          <polygon id="cavity-facet-050" points="468 439 483 440 478 451" fill="#120046" stroke="#120046" />
+          <polygon id="cavity-facet-051" points="478 451 486 463 468 439" fill="#421a92" stroke="#421a92" />
+          <polygon id="cavity-facet-052" points="449 482 461 500 450 487" fill="#160152" stroke="#160152" />
+          <polygon id="cavity-facet-053" points="465 505 461 500 449 482" fill="#160049" stroke="#160049" />
+          <polygon id="cavity-facet-054" points="461 500 465 505 449 504" fill="#150146" stroke="#150146" />
+          <polygon id="cavity-facet-055" points="478 451 489 459 486 463" fill="#15044c" stroke="#15044c" />
+          <polygon id="cavity-facet-056" points="468 439 456 457 461 449" fill="#4e12b8" stroke="#4e12b8" />
+          <polygon id="cavity-facet-057" points="495 473 489 459 505 464" fill="#260274" stroke="#260274" />
+          <polygon id="cavity-facet-058" points="497 449 489 459 478 451" fill="#32068a" stroke="#32068a" />
+          <polygon id="cavity-facet-059" points="507 488 490 481 495 473" fill="#120044" stroke="#120044" />
+          <polygon id="cavity-facet-060" points="495 473 490 481 486 463" fill="#120046" stroke="#120046" />
+          <polygon id="cavity-facet-061" points="486 500 490 481 495 492" fill="#2c037d" stroke="#2c037d" />
+          <polygon id="cavity-facet-062" points="465 505 490 481 486 500" fill="#1a0255" stroke="#1a0255" />
+          <polygon id="cavity-facet-063" points="507 488 495 492 490 481" fill="#12013e" stroke="#12013e" />
+          <polygon id="cavity-facet-064" points="495 492 507 488 486 500" fill="#38255a" stroke="#38255a" />
+          <polygon id="cavity-facet-065" points="486 463 489 459 495 473" fill="#14004a" stroke="#14004a" />
+          <polygon id="cavity-facet-066" points="483 440 497 449 478 451" fill="#260572" stroke="#260572" />
+          <polygon id="cavity-facet-067" points="465 505 486 500 479 511" fill="#17014e" stroke="#17014e" />
+          <polygon id="cavity-facet-068" points="489 459 497 449 505 464" fill="#31068c" stroke="#31068c" />
+          <polygon id="cavity-facet-069" points="461 449 449 451 459 437" fill="#3c08a2" stroke="#3c08a2" />
+          <polygon id="cavity-facet-070" points="463 516 449 504 465 505" fill="#1a0246" stroke="#1a0246" />
+          <polygon id="cavity-facet-071" points="405.25 524 402.64 518.41 419 522" fill="#0d0032" stroke="#0d0032" />
+          <polygon id="cavity-facet-072" points="405.25 524 410 528 417.19 541.03" fill="#220e63" stroke="#220e63" />
+          <polygon id="cavity-facet-073" points="419 522 410 528 405.25 524" fill="#0d0034" stroke="#0d0034" />
+          <polygon id="cavity-facet-074" points="419 522 417.19 541.03 410 528" fill="#1c015e" stroke="#1c015e" />
+          <polygon id="cavity-facet-075" points="403.56 511.29 421 517 402.64 518.41" fill="#160150" stroke="#160150" />
+          <polygon id="cavity-facet-076" points="417.19 541.03 423 551 419.35 547.54" fill="#1c0e58" stroke="#1c0e58" />
+          <polygon id="cavity-facet-077" points="421 517 419 522 402.64 518.41" fill="#1c025a" stroke="#1c025a" />
+          <polygon id="cavity-facet-078" points="423 551 417.19 541.03 419 522" fill="#1a015a" stroke="#1a015a" />
+          <polygon id="cavity-facet-079" points="419.35 547.54 424 557 420.47 563.09" fill="#100344" stroke="#100344" />
+          <polygon id="cavity-facet-080" points="424 557 419.35 547.54 423 551" fill="#11004b" stroke="#11004b" />
+          <polygon id="cavity-facet-081" points="420.47 563.09 424 557 421.88 566.48" fill="#120248" stroke="#120248" />
+          <polygon id="cavity-facet-082" points="424 557 423 551 419 522" fill="#180155" stroke="#180155" />
+          <polygon id="cavity-facet-083" points="412 501 421 517 403.56 511.29" fill="#1e0262" stroke="#1e0262" />
+          <polygon id="cavity-facet-084" points="421.88 566.48 424 557 426.34 570.5" fill="#14024d" stroke="#14024d" />
+          <polygon id="cavity-facet-085" points="435 573 440 574 442.31 579.43" fill="#0a022e" stroke="#0a022e" />
+          <polygon id="cavity-facet-086" points="440 574 435 573 424 557" fill="#180052" stroke="#180052" />
+          <polygon id="cavity-facet-087" points="442.31 579.43 440 574 452 574" fill="#1e0265" stroke="#1e0265" />
+          <polygon id="cavity-facet-088" points="435 573 442.31 579.43 426.34 570.5" fill="#341d71" stroke="#341d71" />
+          <polygon id="cavity-facet-089" points="424 557 435 573 426.34 570.5" fill="#150150" stroke="#150150" />
+          <polygon id="cavity-facet-090" points="457 598 452 596 447 585" fill="#20016e" stroke="#20016e" />
+          <polygon id="cavity-facet-091" points="447 585 446.54 585.85 442.31 579.43" fill="#5c34b6" stroke="#5c34b6" />
+          <polygon id="cavity-facet-092" points="455 570 452 574 440 574" fill="#280874" stroke="#280874" />
+          <polygon id="cavity-facet-093" points="452 596 446.54 585.85 447 585" fill="#2a1477" stroke="#2a1477" />
+          <polygon id="cavity-facet-094" points="457 598 454.2 602.12 452 596" fill="#1c026a" stroke="#1c026a" />
+          <polygon id="cavity-facet-095" points="454.2 602.12 446.54 585.85 452 596" fill="#341686" stroke="#341686" />
+          <polygon id="cavity-facet-096" points="452 574 455 570 465 565" fill="#5818c6" stroke="#5818c6" />
+          <polygon id="cavity-facet-097" points="447 585 442.31 579.43 452 574" fill="#3e0aa5" stroke="#3e0aa5" />
+          <polygon id="cavity-facet-098" points="458 562 455 570 440 574" fill="#1b025a" stroke="#1b025a" />
+          <polygon id="cavity-facet-099" points="419 522 421 517 444 506" fill="#4818a0" stroke="#4818a0" />
+          <polygon id="cavity-facet-100" points="472 526 463 516 479 511" fill="#0d0136" stroke="#0d0136" />
+          <polygon id="cavity-facet-101" points="465 565 469 568 483 580" fill="#b385f7" stroke="#b385f7" />
+          <polygon id="cavity-facet-102" points="472 547 465 565 458 562" fill="#2c047e" stroke="#2c047e" />
+          <polygon id="cavity-facet-103" points="483 563 469 568 465 565" fill="#381386" stroke="#381386" />
+          <polygon id="cavity-facet-104" points="478 546 475 530 481 550" fill="#3a069a" stroke="#3a069a" />
+          <polygon id="cavity-facet-105" points="479 511 475 530 472 526" fill="#0c0138" stroke="#0c0138" />
+          <polygon id="cavity-facet-106" points="475 530 478 546 472 547" fill="#460dae" stroke="#460dae" />
+          <polygon id="cavity-facet-107" points="472 547 481 550 483 563" fill="#2e0484" stroke="#2e0484" />
+          <polygon id="cavity-facet-108" points="481 550 472 547 478 546" fill="#2c0482" stroke="#2c0482" />
+          <polygon id="cavity-facet-109" points="502 570 498 577 483 563" fill="#200264" stroke="#200264" />
+          <polygon id="cavity-facet-110" points="472 547 483 563 465 565" fill="#2d0481" stroke="#2d0481" />
+          <polygon id="cavity-facet-111" points="475 530 479 511 486 500" fill="#380b8b" stroke="#380b8b" />
+          <polygon id="cavity-facet-112" points="475 530 472 547 472 526" fill="#4a0eb0" stroke="#4a0eb0" />
+          <polygon id="cavity-facet-113" points="472 526 444 506 463 516" fill="#bc92f5" stroke="#bc92f5" />
+          <polygon id="cavity-facet-114" points="469 568 483 563 482 575" fill="#28086a" stroke="#28086a" />
+          <polygon id="cavity-facet-115" points="483 580 469 568 482 575" fill="#b386f2" stroke="#b386f2" />
+          <polygon id="cavity-facet-116" points="458.46 607.74 469 607 481 612" fill="#18044f" stroke="#18044f" />
+          <polygon id="cavity-facet-117" points="469 607 458.46 607.74 457 598" fill="#140146" stroke="#140146" />
+          <polygon id="cavity-facet-118" points="485 605 481 612 469 607" fill="#2e067c" stroke="#2e067c" />
+          <polygon id="cavity-facet-119" points="458.46 607.74 481 612 486.03 615.14" fill="#2a0675" stroke="#2a0675" />
+          <polygon id="cavity-facet-120" points="469 607 482 594 485 605" fill="#2d047e" stroke="#2d047e" />
+          <polygon id="cavity-facet-121" points="457 598 458.46 607.74 454.2 602.12" fill="#1e0263" stroke="#1e0263" />
+          <polygon id="cavity-facet-122" points="498 577 487 599 482 594" fill="#2c0680" stroke="#2c0680" />
+          <polygon id="cavity-facet-123" points="498 577 483 580 482 575" fill="#140048" stroke="#140048" />
+          <polygon id="cavity-facet-124" points="487 599 485 605 482 594" fill="#300686" stroke="#300686" />
+          <polygon id="cavity-facet-125" points="485 605 491 615 486.03 615.14" fill="#400ca4" stroke="#400ca4" />
+          <polygon id="cavity-facet-126" points="485 605 487 599 498 577" fill="#5e23c5" stroke="#5e23c5" />
+          <polygon id="cavity-facet-127" points="486.03 615.14 491 615 500.19 625.15" fill="#2a0b78" stroke="#2a0b78" />
+          <polygon id="cavity-facet-128" points="485 605 486.03 615.14 481 612" fill="#3e0ca0" stroke="#3e0ca0" />
+          <polygon id="cavity-facet-129" points="498 577 503 575 514 572" fill="#b88ce8" stroke="#b88ce8" />
+          <polygon id="cavity-facet-130" points="482 594 483 580 498 577" fill="#350a88" stroke="#350a88" />
+          <polygon id="cavity-facet-131" points="482 575 483 563 498 577" fill="#1d025a" stroke="#1d025a" />
+          <polygon id="cavity-facet-132" points="483 563 481 550 502 570" fill="#33058a" stroke="#33058a" />
+          <polygon id="cavity-facet-133" points="465 565 455 570 458 562" fill="#2c0a7c" stroke="#2c0a7c" />
+          <polygon id="cavity-facet-134" points="465 505 479 511 463 516" fill="#0d0034" stroke="#0d0034" />
+          <polygon id="cavity-facet-135" points="499.26 403.51 505 415 487 415" fill="#1c015c" stroke="#1c015c" />
+          <polygon id="cavity-facet-136" points="505 415 509.95 417.29 500 434" fill="#140047" stroke="#140047" />
+          <polygon id="cavity-facet-137" points="505 415 499.26 403.51 509.95 417.29" fill="#200668" stroke="#200668" />
+          <polygon id="cavity-facet-138" points="511 443 500 434 519 425" fill="#2c067f" stroke="#2c067f" />
+          <polygon id="cavity-facet-139" points="514.78 421.87 500 434 509.95 417.29" fill="#15014c" stroke="#15014c" />
+          <polygon id="cavity-facet-140" points="519 425 500 434 514.78 421.87" fill="#280374" stroke="#280374" />
+          <polygon id="cavity-facet-141" points="511 443 505 464 497 449" fill="#8448e6" stroke="#8448e6" />
+          <polygon id="cavity-facet-142" points="505 415 500 434 486 428" fill="#24026e" stroke="#24026e" />
+          <polygon id="cavity-facet-143" points="526 440 519 425 533.78 427.97" fill="#3e0ca5" stroke="#3e0ca5" />
+          <polygon id="cavity-facet-144" points="533.78 427.97 519 425 514.78 421.87" fill="#3f1496" stroke="#3f1496" />
+          <polygon id="cavity-facet-145" points="526 440 533.78 427.97 538.91 433.93" fill="#400da3" stroke="#400da3" />
+          <polygon id="cavity-facet-146" points="529 456 526 440 540 445" fill="#3a089c" stroke="#3a089c" />
+          <polygon id="cavity-facet-147" points="540 445 526 440 538.91 433.93" fill="#28087e" stroke="#28087e" />
+          <polygon id="cavity-facet-148" points="542.41 449.46 540 445 538.91 433.93" fill="#3c1894" stroke="#3c1894" />
+          <polygon id="cavity-facet-149" points="511 443 526 440 517 459" fill="#450bac" stroke="#450bac" />
+          <polygon id="cavity-facet-150" points="519 425 526 440 511 443" fill="#2e0885" stroke="#2e0885" />
+          <polygon id="cavity-facet-151" points="542.41 449.46 529 456 540 445" fill="#410ba6" stroke="#410ba6" />
+          <polygon id="cavity-facet-152" points="505 464 517 459 518 480" fill="#18014e" stroke="#18014e" />
+          <polygon id="cavity-facet-153" points="517 459 505 464 511 443" fill="#8a4ee9" stroke="#8a4ee9" />
+          <polygon id="cavity-facet-154" points="507 488 518 480 523 481" fill="#452476" stroke="#452476" />
+          <polygon id="cavity-facet-155" points="507 488 495 473 518 480" fill="#140144" stroke="#140144" />
+          <polygon id="cavity-facet-156" points="533 469 523 481 518 480" fill="#290471" stroke="#290471" />
+          <polygon id="cavity-facet-157" points="533 487 546 500 523 481" fill="#160253" stroke="#160253" />
+          <polygon id="cavity-facet-158" points="518 480 517 459 533 469" fill="#25026b" stroke="#25026b" />
+          <polygon id="cavity-facet-159" points="495 473 505 464 518 480" fill="#170052" stroke="#170052" />
+          <polygon id="cavity-facet-160" points="529 456 546.93 457.46 533 469" fill="#39079a" stroke="#39079a" />
+          <polygon id="cavity-facet-161" points="546.93 457.46 529 456 542.41 449.46" fill="#400ca3" stroke="#400ca3" />
+          <polygon id="cavity-facet-162" points="544 481 533 469 554 466" fill="#16004c" stroke="#16004c" />
+          <polygon id="cavity-facet-163" points="533 469 533 487 523 481" fill="#2c0578" stroke="#2c0578" />
+          <polygon id="cavity-facet-164" points="533 487 544 481 546 500" fill="#1c005d" stroke="#1c005d" />
+          <polygon id="cavity-facet-165" points="544 481 533 487 533 469" fill="#2c047c" stroke="#2c047c" />
+          <polygon id="cavity-facet-166" points="555 486 546 500 544 481" fill="#100038" stroke="#100038" />
+          <polygon id="cavity-facet-167" points="546 500 556 515 523 481" fill="#967abc" stroke="#967abc" />
+          <polygon id="cavity-facet-168" points="551.05 461.74 533 469 546.93 457.46" fill="#300584" stroke="#300584" />
+          <polygon id="cavity-facet-169" points="533 469 517 459 529 456" fill="#1e0262" stroke="#1e0262" />
+          <polygon id="cavity-facet-170" points="517 459 526 440 529 456" fill="#150050" stroke="#150050" />
+          <polygon id="cavity-facet-171" points="486 500 507 488 523 481" fill="#b692dc" stroke="#b692dc" />
+          <polygon id="cavity-facet-172" points="554 466 555 486 544 481" fill="#26026e" stroke="#26026e" />
+          <polygon id="cavity-facet-173" points="554 466 551.05 461.74 571.6 475.51" fill="#200a6c" stroke="#200a6c" />
+          <polygon id="cavity-facet-174" points="555 486 567 486 562 501" fill="#601cce" stroke="#601cce" />
+          <polygon id="cavity-facet-175" points="571.6 475.51 567 486 555 486" fill="#340a8c" stroke="#340a8c" />
+          <polygon id="cavity-facet-176" points="562 501 567 486 576.56 497.18" fill="#4e12b4" stroke="#4e12b4" />
+          <polygon id="cavity-facet-177" points="562 501 556 515 546 500" fill="#28026e" stroke="#28026e" />
+          <polygon id="cavity-facet-178" points="555 486 554 466 571.6 475.51" fill="#270472" stroke="#270472" />
+          <polygon id="cavity-facet-179" points="562 501 546 500 555 486" fill="#230270" stroke="#230270" />
+          <polygon id="cavity-facet-180" points="574.15 478.65 576.38 486.46 567 486" fill="#400f9e" stroke="#400f9e" />
+          <polygon id="cavity-facet-181" points="576.38 486.46 576.56 497.18 567 486" fill="#4612a8" stroke="#4612a8" />
+          <polygon id="cavity-facet-182" points="562 501 577.91 503.86 571 513" fill="#360790" stroke="#360790" />
+          <polygon id="cavity-facet-183" points="577.91 503.86 562 501 576.56 497.18" fill="#380b94" stroke="#380b94" />
+          <polygon id="cavity-facet-184" points="571.6 475.51 574.15 478.65 567 486" fill="#2c0780" stroke="#2c0780" />
+          <polygon id="cavity-facet-185" points="571 513 577.91 503.86 581.2 510.19" fill="#24046d" stroke="#24046d" />
+          <polygon id="cavity-facet-186" points="556 515 571 513 557 522" fill="#1a0056" stroke="#1a0056" />
+          <polygon id="cavity-facet-187" points="571 513 556 515 562 501" fill="#1a0158" stroke="#1a0158" />
+          <polygon id="cavity-facet-188" points="557 522 572 537 560 538" fill="#140148" stroke="#140148" />
+          <polygon id="cavity-facet-189" points="572 537 557 522 571 513" fill="#140148" stroke="#140148" />
+          <polygon id="cavity-facet-190" points="561 551 560 538 572 537" fill="#11003b" stroke="#11003b" />
+          <polygon id="cavity-facet-191" points="557 522 546 544 556 515" fill="#1c065e" stroke="#1c065e" />
+          <polygon id="cavity-facet-192" points="571 513 585 527 572 537" fill="#24046e" stroke="#24046e" />
+          <polygon id="cavity-facet-193" points="584 515 590.22 522.32 585 527" fill="#1f0368" stroke="#1f0368" />
+          <polygon id="cavity-facet-194" points="590.22 522.32 584 515 581.2 510.19" fill="#462398" stroke="#462398" />
+          <polygon id="cavity-facet-195" points="585 527 590.22 522.32 592.27 528.29" fill="#3c0a9a" stroke="#3c0a9a" />
+          <polygon id="cavity-facet-196" points="584 515 585 527 571 513" fill="#1e035c" stroke="#1e035c" />
+          <polygon id="cavity-facet-197" points="585 527 592.34 532.6 589 539" fill="#571cc1" stroke="#571cc1" />
+          <polygon id="cavity-facet-198" points="592.34 532.6 585 527 592.27 528.29" fill="#410da0" stroke="#410da0" />
+          <polygon id="cavity-facet-199" points="589 539 592.34 532.6 587.78 551.78" fill="#4d1eac" stroke="#4d1eac" />
+          <polygon id="cavity-facet-200" points="585 527 589 539 572 537" fill="#5819c4" stroke="#5819c4" />
+          <polygon id="cavity-facet-201" points="571 513 581.2 510.19 584 515" fill="#1e045c" stroke="#1e045c" />
+          <polygon id="cavity-facet-202" points="580 548 572 537 589 539" fill="#3c0a9c" stroke="#3c0a9c" />
+          <polygon id="cavity-facet-203" points="533 469 551.05 461.74 554 466" fill="#14014e" stroke="#14014e" />
+          <polygon id="cavity-facet-204" points="546 544 557 522 560 538" fill="#130046" stroke="#130046" />
+          <polygon id="cavity-facet-205" points="502 570 527 560 514 572" fill="#2e067e" stroke="#2e067e" />
+          <polygon id="cavity-facet-206" points="546 544 541 555 527 560" fill="#250474" stroke="#250474" />
+          <polygon id="cavity-facet-207" points="514 572 532 586 533 590" fill="#bf9cf7" stroke="#bf9cf7" />
+          <polygon id="cavity-facet-208" points="514 572 503 575 502 570" fill="#2d087e" stroke="#2d087e" />
+          <polygon id="cavity-facet-209" points="519 571 514 572 527 560" fill="#320784" stroke="#320784" />
+          <polygon id="cavity-facet-210" points="532 586 514 572 519 571" fill="#c09cf8" stroke="#c09cf8" />
+          <polygon id="cavity-facet-211" points="527 560 533 578 519 571" fill="#28066e" stroke="#28066e" />
+          <polygon id="cavity-facet-212" points="527 560 541 555 533 560" fill="#220268" stroke="#220268" />
+          <polygon id="cavity-facet-213" points="545 551 541 555 546 544" fill="#260476" stroke="#260476" />
+          <polygon id="cavity-facet-214" points="533 560 541 555 533 578" fill="#3c089d" stroke="#3c089d" />
+          <polygon id="cavity-facet-215" points="533 590 532 586 544 597" fill="#1f0264" stroke="#1f0264" />
+          <polygon id="cavity-facet-216" points="532 586 519 571 533 578" fill="#51289a" stroke="#51289a" />
+          <polygon id="cavity-facet-217" points="533 578 541 555 532 586" fill="#34098e" stroke="#34098e" />
+          <polygon id="cavity-facet-218" points="533 578 527 560 533 560" fill="#1c025c" stroke="#1c025c" />
+          <polygon id="cavity-facet-219" points="501 620 510 621 504.82 626.98" fill="#26046d" stroke="#26046d" />
+          <polygon id="cavity-facet-220" points="510 621 501 620 491 615" fill="#1e025e" stroke="#1e025e" />
+          <polygon id="cavity-facet-221" points="501 620 504.82 626.98 500.19 625.15" fill="#200664" stroke="#200664" />
+          <polygon id="cavity-facet-222" points="504.82 626.98 510 621 510.13 625.81" fill="#2a0675" stroke="#2a0675" />
+          <polygon id="cavity-facet-223" points="510 621 520.59 619.88 510.13 625.81" fill="#300882" stroke="#300882" />
+          <polygon id="cavity-facet-224" points="500.19 625.15 491 615 501 620" fill="#260472" stroke="#260472" />
+          <polygon id="cavity-facet-225" points="532 607 544 597 538 608" fill="#0f013a" stroke="#0f013a" />
+          <polygon id="cavity-facet-226" points="538 608 544 597 553 598" fill="#140046" stroke="#140046" />
+          <polygon id="cavity-facet-227" points="532 607 538 608 530.51 616.67" fill="#1a0158" stroke="#1a0158" />
+          <polygon id="cavity-facet-228" points="520.59 619.88 525 617 530.51 616.67" fill="#301867" stroke="#301867" />
+          <polygon id="cavity-facet-229" points="520.59 619.88 510 621 525 617" fill="#2c067f" stroke="#2c067f" />
+          <polygon id="cavity-facet-230" points="530.51 616.67 525 617 532 607" fill="#120344" stroke="#120344" />
+          <polygon id="cavity-facet-231" points="538 608 546.87 617.45 530.51 616.67" fill="#1c025c" stroke="#1c025c" />
+          <polygon id="cavity-facet-232" points="525 617 510 621 532 607" fill="#32068a" stroke="#32068a" />
+          <polygon id="cavity-facet-233" points="533 590 544 597 532 607" fill="#220364" stroke="#220364" />
+          <polygon id="cavity-facet-234" points="541 555 545 551 561 551" fill="#865fc4" stroke="#865fc4" />
+          <polygon id="cavity-facet-235" points="502 570 503 575 498 577" fill="#572c8c" stroke="#572c8c" />
+          <polygon id="cavity-facet-236" points="546 544 560 538 561 551" fill="#0e0034" stroke="#0e0034" />
+          <polygon id="cavity-facet-237" points="575 573 573 582 576 568" fill="#340a8d" stroke="#340a8d" />
+          <polygon id="cavity-facet-238" points="575 573 576 568 593.13 570.22" fill="#2a0579" stroke="#2a0579" />
+          <polygon id="cavity-facet-239" points="584 585 573 582 575 573" fill="#24046a" stroke="#24046a" />
+          <polygon id="cavity-facet-240" points="561 551 580 548 576 568" fill="#140248" stroke="#140248" />
+          <polygon id="cavity-facet-241" points="553 598 568 588 558 596" fill="#24066d" stroke="#24066d" />
+          <polygon id="cavity-facet-242" points="580 548 587.78 551.78 583 561" fill="#340a8c" stroke="#340a8c" />
+          <polygon id="cavity-facet-243" points="587.78 551.78 580 548 589 539" fill="#300586" stroke="#300586" />
+          <polygon id="cavity-facet-244" points="583 561 587.78 551.78 593.13 570.22" fill="#2a047f" stroke="#2a047f" />
+          <polygon id="cavity-facet-245" points="580 548 583 561 576 568" fill="#110142" stroke="#110142" />
+          <polygon id="cavity-facet-246" points="592.91 576.59 588.69 583.17 575 573" fill="#27046d" stroke="#27046d" />
+          <polygon id="cavity-facet-247" points="575 573 593.13 570.22 592.91 576.59" fill="#270570" stroke="#270570" />
+          <polygon id="cavity-facet-248" points="576 568 583 561 593.13 570.22" fill="#300586" stroke="#300586" />
+          <polygon id="cavity-facet-249" points="572 537 580 548 561 551" fill="#160151" stroke="#160151" />
+          <polygon id="cavity-facet-250" points="584 585 575 573 588.69 583.17" fill="#25056b" stroke="#25056b" />
+          <polygon id="cavity-facet-251" points="553 598 558 596 564.25 610.76" fill="#5418bb" stroke="#5418bb" />
+          <polygon id="cavity-facet-252" points="544 597 532 586 553 598" fill="#1e015f" stroke="#1e015f" />
+          <polygon id="cavity-facet-253" points="564.25 610.76 558 596 568.47 605.27" fill="#3e0c9e" stroke="#3e0c9e" />
+          <polygon id="cavity-facet-254" points="553 598 564.25 610.76 559.64 614.34" fill="#450ea8" stroke="#450ea8" />
+          <polygon id="cavity-facet-255" points="553 598 554.04 616.45 546.87 617.45" fill="#3c0b98" stroke="#3c0b98" />
+          <polygon id="cavity-facet-256" points="554.04 616.45 553 598 559.64 614.34" fill="#3a0a92" stroke="#3a0a92" />
+          <polygon id="cavity-facet-257" points="546.87 617.45 538 608 553 598" fill="#370690" stroke="#370690" />
+          <polygon id="cavity-facet-258" points="573 582 578.49 590.01 568 588" fill="#340688" stroke="#340688" />
+          <polygon id="cavity-facet-259" points="578.49 590.01 573 582 584 585" fill="#38098f" stroke="#38098f" />
+          <polygon id="cavity-facet-260" points="584 585 588.69 583.17 578.49 590.01" fill="#421497" stroke="#421497" />
+          <polygon id="cavity-facet-261" points="568 588 578.49 590.01 574.46 593.94" fill="#2e0480" stroke="#2e0480" />
+          <polygon id="cavity-facet-262" points="568.47 605.27 570 600 574.46 593.94" fill="#5429a2" stroke="#5429a2" />
+          <polygon id="cavity-facet-263" points="568.47 605.27 558 596 570 600" fill="#3c1094" stroke="#3c1094" />
+          <polygon id="cavity-facet-264" points="574.46 593.94 570 600 568 588" fill="#16024a" stroke="#16024a" />
+          <polygon id="cavity-facet-265" points="570 600 558 596 568 588" fill="#100137" stroke="#100137" />
+          <polygon id="cavity-facet-266" points="568 588 553 598 573 582" fill="#270670" stroke="#270670" />
+          <polygon id="cavity-facet-267" points="545 551 546 544 561 551" fill="#0d0230" stroke="#0d0230" />
+          <polygon id="cavity-facet-268" points="511 443 497 449 500 434" fill="#7536e0" stroke="#7536e0" />
+        </g>
+        <path id="cavity-light" d="M592.91 576.59         L588.69 583.17         L574.46 593.94         L564.25 610.76         L554.04 616.45         L530.51 616.67         L504.82 626.98         L486.03 615.14         L458.46 607.74         L442.31 579.43         L421.88 566.48         L417.19 541.03         L402.64 518.41         L403.56 511.29         L416.98 489.71         L419.46 478.32         L418.66 460.78         L423.36 446.91         L438.26 434.8         L451.33 434.53         L467.01 423.27         L475.56 407.58         L490.78 401.07         L499.26 403.51         L514.78 421.87         L533.78 427.97         L538.91 433.93         L542.41 449.46         L546.93 457.46         L574.15 478.65         L577.91 503.86         L592.27 528.29         L587.78 551.78 Z" fill="url(#cavity-illumination)" />
+        <g id="feature-crystals" stroke-width=".8" stroke-linejoin="miter" stroke-miterlimit="2">
+          <title>Foreground crystals</title>
+          <desc>Each crystal has a solid silhouette, darker planar sides, and a pale polygonal crown. All faces use straight edges and sharp joins; the shared cavity mask contains the cluster.</desc>
+          <g id="central-crystal">
+            <title>Central crystal</title>
+            <desc>The solid silhouette establishes the complete crystal; body planes and the crown overlap it to add volume and reflected light.</desc>
+            <polygon id="central-silhouette" points="486 500 523 481 556 515 546 544 527 560 502 570 481 550 475 530" fill="url(#central-body-fill)" stroke="none" />
+            <g id="central-crystal-body">
+              <title>Body planes</title>
+              <desc>Darker side planes descend from the crown into the cavity.</desc>
+              <polygon id="central-body-face-1" points="486 500 515 532 503 544" fill="url(#central-body-light-1)" stroke="url(#central-body-light-1)" />
+              <polygon id="central-body-face-2" points="515 532 556 515 503 544" fill="url(#central-body-light-2)" stroke="url(#central-body-light-2)" />
+              <polygon id="central-body-face-3" points="556 515 546 544 503 544" fill="url(#central-body-light-3)" stroke="url(#central-body-light-3)" />
+              <polygon id="central-body-face-4" points="546 544 527 560 503 544" fill="url(#central-body-light-4)" stroke="url(#central-body-light-4)" />
+              <polygon id="central-body-face-5" points="527 560 502 570 503 544" fill="url(#central-body-light-5)" stroke="url(#central-body-light-5)" />
+              <polygon id="central-body-face-6" points="502 570 481 550 503 544" fill="url(#central-body-light-6)" stroke="url(#central-body-light-6)" />
+              <polygon id="central-body-face-7" points="481 550 475 530 503 544" fill="url(#central-body-light-7)" stroke="url(#central-body-light-7)" />
+              <polygon id="central-body-face-8" points="475 530 486 500 503 544" fill="url(#central-body-light-8)" stroke="url(#central-body-light-8)" />
+            </g>
+            <g id="central-crystal-crown">
+              <title>Crown highlights</title>
+              <desc>The pale upper faces share their corner vertices and catch the light from above.</desc>
+              <polygon id="central-crown-face-1" points="486 500 523 481 518 511" fill="url(#central-crown-light-1)" stroke="url(#central-crown-light-1)" />
+              <polygon id="central-crown-face-2" points="523 481 556 515 518 511" fill="url(#central-crown-light-2)" stroke="url(#central-crown-light-2)" />
+              <polygon id="central-crown-face-3" points="556 515 515 532 518 511" fill="url(#central-crown-light-3)" stroke="url(#central-crown-light-3)" />
+              <polygon id="central-crown-face-4" points="515 532 486 500 518 511" fill="url(#central-crown-light-4)" stroke="url(#central-crown-light-4)" />
+            </g>
+          </g>
+          <g id="left-crystal">
+            <title>Left crystal</title>
+            <desc>The solid silhouette establishes the complete crystal; body planes and the crown overlap it to add volume and reflected light.</desc>
+            <polygon id="left-silhouette" points="419 522 444 506 472 526 472 547 458 562 440 574 424 557" fill="url(#left-body-fill)" stroke="none" />
+            <g id="left-crystal-body">
+              <title>Body planes</title>
+              <desc>Darker side planes descend from the crown into the cavity.</desc>
+              <polygon id="left-body-face-1" points="419 522 443 539 445 554" fill="url(#left-body-light-1)" stroke="url(#left-body-light-1)" />
+              <polygon id="left-body-face-2" points="443 539 472 526 445 554" fill="url(#left-body-light-2)" stroke="url(#left-body-light-2)" />
+              <polygon id="left-body-face-3" points="472 526 472 547 445 554" fill="url(#left-body-light-3)" stroke="url(#left-body-light-3)" />
+              <polygon id="left-body-face-4" points="472 547 458 562 445 554" fill="url(#left-body-light-4)" stroke="url(#left-body-light-4)" />
+              <polygon id="left-body-face-5" points="458 562 440 574 445 554" fill="url(#left-body-light-5)" stroke="url(#left-body-light-5)" />
+              <polygon id="left-body-face-6" points="440 574 424 557 445 554" fill="url(#left-body-light-6)" stroke="url(#left-body-light-6)" />
+              <polygon id="left-body-face-7" points="424 557 419 522 445 554" fill="url(#left-body-light-7)" stroke="url(#left-body-light-7)" />
+            </g>
+            <g id="left-crystal-crown">
+              <title>Crown highlights</title>
+              <desc>The pale upper faces share their corner vertices and catch the light from above.</desc>
+              <polygon id="left-crown-face-1" points="419 522 444 506 445 521" fill="url(#left-crown-light-1)" stroke="url(#left-crown-light-1)" />
+              <polygon id="left-crown-face-2" points="444 506 472 526 445 521" fill="url(#left-crown-light-2)" stroke="url(#left-crown-light-2)" />
+              <polygon id="left-crown-face-3" points="472 526 443 539 445 521" fill="url(#left-crown-light-3)" stroke="url(#left-crown-light-3)" />
+              <polygon id="left-crown-face-4" points="443 539 419 522 445 521" fill="url(#left-crown-light-4)" stroke="url(#left-crown-light-4)" />
+            </g>
+          </g>
+          <g id="lower-crystal">
+            <title>Lower crystal</title>
+            <desc>The solid silhouette establishes the complete crystal; body planes and the crown overlap it to add volume and reflected light.</desc>
+            <polygon id="lower-silhouette" points="498 577 514 572 533 590 532 607 510 621 491 615 485 605" fill="url(#lower-body-fill)" stroke="none" />
+            <g id="lower-crystal-body">
+              <title>Body planes</title>
+              <desc>Darker side planes descend from the crown into the cavity.</desc>
+              <polygon id="lower-body-face-1" points="498 577 516 600 508 609" fill="url(#lower-body-light-1)" stroke="url(#lower-body-light-1)" />
+              <polygon id="lower-body-face-2" points="516 600 533 590 508 609" fill="url(#lower-body-light-2)" stroke="url(#lower-body-light-2)" />
+              <polygon id="lower-body-face-3" points="533 590 532 607 508 609" fill="url(#lower-body-light-3)" stroke="url(#lower-body-light-3)" />
+              <polygon id="lower-body-face-4" points="532 607 510 621 508 609" fill="url(#lower-body-light-4)" stroke="url(#lower-body-light-4)" />
+              <polygon id="lower-body-face-5" points="510 621 491 615 508 609" fill="url(#lower-body-light-5)" stroke="url(#lower-body-light-5)" />
+              <polygon id="lower-body-face-6" points="491 615 485 605 508 609" fill="url(#lower-body-light-6)" stroke="url(#lower-body-light-6)" />
+              <polygon id="lower-body-face-7" points="485 605 498 577 508 609" fill="url(#lower-body-light-7)" stroke="url(#lower-body-light-7)" />
+            </g>
+            <g id="lower-crystal-crown">
+              <title>Crown highlights</title>
+              <desc>The pale upper faces share their corner vertices and catch the light from above.</desc>
+              <polygon id="lower-crown-face-1" points="498 577 514 572 516 590" fill="url(#lower-crown-light-1)" stroke="url(#lower-crown-light-1)" />
+              <polygon id="lower-crown-face-2" points="514 572 533 590 516 590" fill="url(#lower-crown-light-2)" stroke="url(#lower-crown-light-2)" />
+              <polygon id="lower-crown-face-3" points="533 590 516 600 516 590" fill="url(#lower-crown-light-3)" stroke="url(#lower-crown-light-3)" />
+              <polygon id="lower-crown-face-4" points="516 600 498 577 516 590" fill="url(#lower-crown-light-4)" stroke="url(#lower-crown-light-4)" />
+            </g>
+          </g>
+          <g id="right-crystal">
+            <title>Right crystal</title>
+            <desc>The solid silhouette establishes the complete crystal; body planes and the crown overlap it to add volume and reflected light.</desc>
+            <polygon id="right-silhouette" points="541 555 561 551 576 568 573 582 553 598 532 586" fill="url(#right-body-fill)" stroke="none" />
+            <g id="right-crystal-body">
+              <title>Body planes</title>
+              <desc>Darker side planes descend from the crown into the cavity.</desc>
+              <polygon id="right-body-face-1" points="541 555 554 577 550 584" fill="url(#right-body-light-1)" stroke="url(#right-body-light-1)" />
+              <polygon id="right-body-face-2" points="554 577 576 568 550 584" fill="url(#right-body-light-2)" stroke="url(#right-body-light-2)" />
+              <polygon id="right-body-face-3" points="576 568 573 582 550 584" fill="url(#right-body-light-3)" stroke="url(#right-body-light-3)" />
+              <polygon id="right-body-face-4" points="573 582 553 598 550 584" fill="url(#right-body-light-4)" stroke="url(#right-body-light-4)" />
+              <polygon id="right-body-face-5" points="553 598 532 586 550 584" fill="url(#right-body-light-5)" stroke="url(#right-body-light-5)" />
+              <polygon id="right-body-face-6" points="532 586 541 555 550 584" fill="url(#right-body-light-6)" stroke="url(#right-body-light-6)" />
+            </g>
+            <g id="right-crystal-crown">
+              <title>Crown highlights</title>
+              <desc>The pale upper faces share their corner vertices and catch the light from above.</desc>
+              <polygon id="right-crown-face-1" points="541 555 561 551 554 566" fill="url(#right-crown-light-1)" stroke="url(#right-crown-light-1)" />
+              <polygon id="right-crown-face-2" points="561 551 576 568 554 566" fill="url(#right-crown-light-2)" stroke="url(#right-crown-light-2)" />
+              <polygon id="right-crown-face-3" points="576 568 554 577 554 566" fill="url(#right-crown-light-3)" stroke="url(#right-crown-light-3)" />
+              <polygon id="right-crown-face-4" points="554 577 541 555 554 566" fill="url(#right-crown-light-4)" stroke="url(#right-crown-light-4)" />
+            </g>
+          </g>
+          <g id="small-crystal">
+            <title>Lower left crystal</title>
+            <desc>The solid silhouette establishes the complete crystal; body planes and the crown overlap it to add volume and reflected light.</desc>
+            <polygon id="small-silhouette" points="452 574 465 565 483 580 482 594 469 607 457 598 447 585" fill="url(#small-body-fill)" stroke="none" />
+            <g id="small-crystal-body">
+              <title>Body planes</title>
+              <desc>Darker side planes descend from the crown into the cavity.</desc>
+              <polygon id="small-body-face-1" points="452 574 467 589 465 600" fill="url(#small-body-light-1)" stroke="url(#small-body-light-1)" />
+              <polygon id="small-body-face-2" points="467 589 483 580 465 600" fill="url(#small-body-light-2)" stroke="url(#small-body-light-2)" />
+              <polygon id="small-body-face-3" points="483 580 482 594 465 600" fill="url(#small-body-light-3)" stroke="url(#small-body-light-3)" />
+              <polygon id="small-body-face-4" points="482 594 469 607 465 600" fill="url(#small-body-light-4)" stroke="url(#small-body-light-4)" />
+              <polygon id="small-body-face-5" points="469 607 457 598 465 600" fill="url(#small-body-light-5)" stroke="url(#small-body-light-5)" />
+              <polygon id="small-body-face-6" points="457 598 447 585 465 600" fill="url(#small-body-light-6)" stroke="url(#small-body-light-6)" />
+              <polygon id="small-body-face-7" points="447 585 452 574 465 600" fill="url(#small-body-light-7)" stroke="url(#small-body-light-7)" />
+            </g>
+            <g id="small-crystal-crown">
+              <title>Crown highlights</title>
+              <desc>The pale upper faces share their corner vertices and catch the light from above.</desc>
+              <polygon id="small-crown-face-1" points="452 574 465 565 467 582" fill="url(#small-crown-light-1)" stroke="url(#small-crown-light-1)" />
+              <polygon id="small-crown-face-2" points="465 565 483 580 467 582" fill="url(#small-crown-light-2)" stroke="url(#small-crown-light-2)" />
+              <polygon id="small-crown-face-3" points="483 580 467 589 467 582" fill="url(#small-crown-light-3)" stroke="url(#small-crown-light-3)" />
+              <polygon id="small-crown-face-4" points="467 589 452 574 467 582" fill="url(#small-crown-light-4)" stroke="url(#small-crown-light-4)" />
+            </g>
+          </g>
+          <g id="upper-crystal">
+            <title>Upper crystal</title>
+            <desc>The solid silhouette establishes the complete crystal; body planes and the crown overlap it to add volume and reflected light.</desc>
+            <polygon id="upper-silhouette" points="456 457 468 439 486 463 490 481 465 505 449 482" fill="url(#upper-body-fill)" stroke="none" />
+            <g id="upper-crystal-body">
+              <title>Body planes</title>
+              <desc>Darker side planes descend from the crown into the cavity.</desc>
+              <polygon id="upper-body-face-1" points="456 457 470 470 468 488" fill="url(#upper-body-light-1)" stroke="url(#upper-body-light-1)" />
+              <polygon id="upper-body-face-2" points="470 470 486 463 468 488" fill="url(#upper-body-light-2)" stroke="url(#upper-body-light-2)" />
+              <polygon id="upper-body-face-3" points="486 463 490 481 468 488" fill="url(#upper-body-light-3)" stroke="url(#upper-body-light-3)" />
+              <polygon id="upper-body-face-4" points="490 481 465 505 468 488" fill="url(#upper-body-light-4)" stroke="url(#upper-body-light-4)" />
+              <polygon id="upper-body-face-5" points="465 505 449 482 468 488" fill="url(#upper-body-light-5)" stroke="url(#upper-body-light-5)" />
+              <polygon id="upper-body-face-6" points="449 482 456 457 468 488" fill="url(#upper-body-light-6)" stroke="url(#upper-body-light-6)" />
+            </g>
+            <g id="upper-crystal-crown">
+              <title>Crown highlights</title>
+              <desc>The pale upper faces share their corner vertices and catch the light from above.</desc>
+              <polygon id="upper-crown-face-1" points="456 457 468 439 469 456" fill="url(#upper-crown-light-1)" stroke="url(#upper-crown-light-1)" />
+              <polygon id="upper-crown-face-2" points="468 439 486 463 469 456" fill="url(#upper-crown-light-2)" stroke="url(#upper-crown-light-2)" />
+              <polygon id="upper-crown-face-3" points="486 463 470 470 469 456" fill="url(#upper-crown-light-3)" stroke="url(#upper-crown-light-3)" />
+              <polygon id="upper-crown-face-4" points="470 470 456 457 469 456" fill="url(#upper-crown-light-4)" stroke="url(#upper-crown-light-4)" />
+            </g>
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+  <g id="wordmark" fill="url(#wordmark-fill)" fill-rule="evenodd">
+    <title>Geode wordmark</title>
+    <desc>Five outlined glyphs share a single vertical lavender gradient. Each letter remains independently selectable.</desc>
+    <path id="letter-G" d="M834.62 592.62         L834.62 521.88         C814.07 521 792.81 521.19 771.79 521.12         L772.12 548.12         L804.12 548.12         C805.18 556.58 804.68 565.91 804.92 574.85         C789.78 584.96 766.89 586.56 750.23 577.79         C732.47 568.43 721.79 547.29 722.73 526.61         C723.7 505.4 736.9 484.68 756.34 477.56         C774.67 470.85 798.54 476.21 811.5 491.01         L828.62 467.62         C807.69 445.16 768.9 439.05 739.99 451.64         C709.74 464.82 690.31 498.49 691.01 532.53         C691.34 548.59 696.16 564.74 704.84 577.87         C714.56 592.58 729.15 603.5 745.85 608.92         C775.39 618.51 811.57 610.89 834.22 592.5         Z" />
+    <path id="letter-e-first" d="M952.12 597.38         C948.76 590.85 943.92 585.13 940.35 578.95         C923.09 595.01 881.82 592.05 880.47 560.67         L954.38 561.38         C957.51 548.71 955.95 535.25 950.27 524.08         C943.63 511.04 931.38 501.12 917.4 497.59         C905.3 494.54 891.9 496.29 880.79 502.31         C867.95 509.27 858.15 521.93 853.91 536.03         C846.18 561.73 856.88 592.22 879.01 605.42         C900.91 618.47 933.99 614.6 951.9 597.04         Z         M927.38 541.38         L881.62 541.62         C881.11 528.51 893.04 519.71 904.95 519.55         C916.6 519.39 928.24 527.5 927.57 542.3         Z" />
+    <path id="letter-o" d="M1080.5 555         A56.5 58 0 1 1 967.5 555         A56.5 58 0 1 1 1080.5 555 Z         M1051.5 555         A27.5 32.5 0 1 1 996.5 555         A27.5 32.5 0 1 1 1051.5 555 Z" fill-rule="evenodd">
+      <desc>Concentric elliptical outlines keep the letter smooth and symmetric.</desc>
+    </path>
+    <path id="letter-d" d="M1171.88 448.88         L1171.62 509.88         C1157.46 492.55 1132.71 492.74 1115.88 503.35         C1098.7 514.18 1089.79 535.88 1090.52 557.08         C1091.25 578.42 1101.75 599.27 1119.77 608.18         C1137.27 616.84 1161.85 614.26 1173.25 594.56         C1173.14 600.94 1172.7 606.42 1173.55 610.16         L1200.12 610.12         L1200.38 446.12         C1191 445.9 1181.71 448.12 1171.7 448.47         Z         M1145.14 521.53         C1153 520.95 1161.29 524.88 1166.29 531.17         C1170.85 536.93 1172.67 544.67 1172.92 552.56         C1173.17 560.4 1171.88 568.38 1167.96 574.6         C1163.62 581.5 1156.05 586.23 1148.18 586.72         C1140.57 587.19 1132.67 583.7 1127.56 577.87         C1122.58 572.19 1120.24 564.3 1119.89 556.32         C1119.55 548.6 1121.08 540.8 1125.11 534.46         C1129.58 527.4 1137.14 522.13 1145.14 521.53         Z" />
+    <path id="letter-e-last" d="M1314.12 597.38         C1310.33 591.09 1306.11 585.09 1302.26 578.7         C1285.55 595.12 1243.51 591.76 1243.43 560.88         L1316.38 561.12         C1319.1 548.59 1317.57 535.21 1312 524.06         C1305.54 511.13 1293.65 501.2 1279.9 497.67         C1267.9 494.58 1254.48 496.37 1243.47 502.29         C1230.95 509.04 1221.55 521.14 1217.26 534.85         C1209.26 560.4 1218.99 591.56 1241.16 605.06         C1262.84 618.26 1296.41 614.57 1313.54 596.97         Z         M1289.88 540.88         C1274.99 541.82 1259.59 541.5 1244.39 541.66         C1243.6 528.57 1255.39 519.75 1267.22 519.48         C1278.77 519.21 1290.37 527.09 1289.53 541.81         Z" />
+  </g>
+</svg>
