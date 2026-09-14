@@ -159,6 +159,13 @@ bool AsyncSVGDocument::flushFrame() {
   return true;
 }
 
+bool AsyncSVGDocument::refreshFontResources() {
+  if (!document_ || !document_->refreshFontResources()) return false;
+  ++fontResourceRevision_;
+  frameVersion_.fetch_add(1, std::memory_order_release);
+  return true;
+}
+
 void AsyncSVGDocument::remapCommandTargets(EditorCommand* command,
                                            const std::unordered_map<Entity, Entity>& remap) {
   if (!document_.has_value() || command == nullptr) {

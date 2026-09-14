@@ -1,17 +1,32 @@
 exports_files(["LICENSE"])
 
+WOFF2_COPTS = [
+    "-Wno-unused-parameter",
+    "-Wno-unused-variable",
+    "-Wno-unused-const-variable",
+]
+
+filegroup(
+    name = "codec_provenance_sources",
+    srcs = ["BUILD.bazel"] + glob([
+        "include/woff2/*.h",
+        "src/*.cc",
+        "src/*.h",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
 cc_library(
-    name = "woff2_decode",
+    name = "woff2_common",
     srcs = [
         "src/table_tags.cc",
         "src/variable_length.cc",
         "src/woff2_common.cc",
-        "src/woff2_dec.cc",
-        "src/woff2_out.cc",
     ],
-    hdrs = [
-        "include/woff2/decode.h",
-        "include/woff2/output.h",
+    copts = WOFF2_COPTS,
+    includes = [
+        "include",
+        "src",
     ],
     textual_hdrs = [
         "src/buffer.h",
@@ -22,17 +37,50 @@ cc_library(
         "src/variable_length.h",
         "src/woff2_common.h",
     ],
-    copts = [
-        "-Wno-unused-parameter",
-        "-Wno-unused-variable",
-        "-Wno-unused-const-variable",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "woff2_decode",
+    srcs = [
+        "src/woff2_dec.cc",
+        "src/woff2_out.cc",
     ],
-    includes = [
-        "include",
-        "src",
+    hdrs = [
+        "include/woff2/decode.h",
+        "include/woff2/output.h",
+    ],
+    copts = WOFF2_COPTS,
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":woff2_common",
+        "@brotli//:brotlidec",
+    ],
+)
+
+# Only host asset-generation tools depend on the encoder.
+cc_library(
+    name = "woff2_encode",
+    srcs = [
+        "src/font.cc",
+        "src/glyph.cc",
+        "src/normalize.cc",
+        "src/transform.cc",
+        "src/woff2_enc.cc",
+    ],
+    hdrs = ["include/woff2/encode.h"],
+    copts = WOFF2_COPTS,
+    includes = ["include"],
+    textual_hdrs = [
+        "src/font.h",
+        "src/glyph.h",
+        "src/normalize.h",
+        "src/transform.h",
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "@brotli//:brotlidec",
+        ":woff2_common",
+        "@brotli//:brotlienc",
     ],
 )

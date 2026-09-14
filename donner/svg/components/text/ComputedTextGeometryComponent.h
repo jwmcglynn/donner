@@ -7,6 +7,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {
@@ -19,6 +20,10 @@ namespace donner::svg::components {
  * duplicating text layout logic.
  */
 struct ComputedTextGeometryComponent {
+  /// Faces used to compute these runs, including pending fallback resolutions. A second root
+  /// keeps its own dependency even when the manager reused an existing face lookup.
+  std::vector<FontFaceDependency> fontDependencies;
+  uint64_t fontResourceRevision = 0;
   /**
    * Outline geometry for a single rendered glyph.
    */

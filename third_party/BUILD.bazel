@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 
 exports_files(
     # buildifier: keep sorted
@@ -11,6 +11,7 @@ exports_files(
         # versions of deps that are hidden from BCR consumers behind a
         # dev_dependency module extension.
         "bazel/non_bcr_deps.bzl",
+        "woff2_bounded_decode.patch",
     ],
 )
 

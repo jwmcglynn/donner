@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 
+#include "donner/svg/resources/CatalogEncodedFontStore.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::svg {
@@ -14,25 +15,34 @@ namespace donner::svg {
  *
  * A default-constructed catalog contains an embedded provider (curated Google Fonts) followed by a
  * system provider (CoreText on macOS; a no-op stub elsewhere). Providers are consulted in order, so
- * resolution and `loadFace()` prefer **Embedded** families over **System** families, and
- * `families()` lists the Embedded group before the System group.
+ * resolution and `loadFace()` prefer **Bundled** families over **System** families, and
+ * `families()` lists the Bundled group before the System group.
  *
  * The catalog implements \ref FontFamilyProvider, so it can be installed directly on a \ref
  * FontManager (via `setFontProvider()` or `SetDefaultFontProvider()`).
  *
- * ### Picker contract (Design 0013 W2 consumes this)
+ * ### Picker contract
  * - `families()` / `familiesBySource()` enumerate available families, grouped and sorted, each
- *   tagged with its \ref FontSource (Embedded vs System) and best-effort \ref FontCategory.
+ *   tagged with its \ref FontSource (Bundled vs System) and best-effort \ref FontCategory.
  * - `hasFamily()` reports whether a typed family resolves through the catalog.
- * - `loadFace()` returns raw sfnt bytes for a family, suitable for building an ImGui/preview font
- *   or for `FontManager::loadFontData()`.
+ * - `loadFace()` returns encoded font-file bytes for a family, suitable for the full-text
+ * `FontManager` used by catalog previews. These bytes are not raw TTF for ImGui.
  */
 class FontCatalog : public FontFamilyProvider {
 public:
   /// Construct with the default providers: embedded fonts, then platform system fonts.
   FontCatalog();
 
+  /// Use a session-owned deferred catalog store followed by the platform system provider.
+  explicit FontCatalog(std::shared_ptr<CatalogEncodedFontStore> store);
+
+  /// The default bundled provider's delivery/admission store; null for an explicit custom list.
+  std::shared_ptr<CatalogEncodedFontStore> encodedStore() const { return store_; }
+
   /// Test/advanced constructor: supply the ordered provider list explicitly (first wins on ties).
+  /// Empty-byte fallback between legacy synchronous providers is supported. An immutable asset
+  /// provider must precede synchronous claimants for the same family; it cannot be their fallback
+  /// because doing so would separate its bytes from the selected metadata/admission contract.
   explicit FontCatalog(std::vector<std::unique_ptr<FontFamilyProvider>> providers);
 
   ~FontCatalog() override;
@@ -43,8 +53,8 @@ public:
   // FontFamilyProvider:
 
   /**
-   * All available families, Embedded group first then System group, each group sorted by name. If
-   * the same family name appears in both groups the Embedded one wins and the System duplicate is
+   * All available families, Bundled group first then System group, each group sorted by name. If
+   * the same family name appears in both groups the Bundled one wins and the System duplicate is
    * dropped (case-insensitive).
    */
   std::vector<FontFamilyInfo> families() const override;
@@ -56,17 +66,23 @@ public:
    * Resolve \p family (case-insensitive) to its catalog entry, or `std::nullopt` if no provider
    * supplies it (in which case a document naming this family renders through the Public Sans
    * fallback). The returned \ref FontFamilyInfo::source tells the caller whether it resolved to an
-   * Embedded or System font, mirroring `findFont()` precedence.
+   * Bundled or System font, mirroring `findFont()` precedence.
    */
   std::optional<FontFamilyInfo> find(std::string_view family) const;
 
-  /// Raw sfnt bytes for \p family from the first provider that has it (Embedded before System).
+  /// Encoded font-file bytes for \p family from the first provider that has it (Bundled before
+  /// System).
   std::vector<uint8_t> loadFamilyData(std::string_view family,
                                       const FontFaceRequest& request) const override;
 
+  FontFaceAvailability availability(std::string_view family,
+                                    const FontFaceRequest& request) const override;
+  FontFaceAdmission tryAcquireFace(std::string_view family,
+                                   const FontFaceRequest& request) const override;
+
   // Picker conveniences:
 
-  /// Families from a single source (Embedded or System), sorted by name.
+  /// Families from a single source (Bundled or System), sorted by name.
   std::vector<FontFamilyInfo> familiesBySource(FontSource source) const;
 
   /// Alias for `loadFamilyData()`, named for the picker's preview use. Previews show the family's
@@ -77,6 +93,7 @@ public:
 
 private:
   std::vector<std::unique_ptr<FontFamilyProvider>> providers_;
+  std::shared_ptr<CatalogEncodedFontStore> store_;
 };
 
 }  // namespace donner::svg

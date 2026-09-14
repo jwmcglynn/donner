@@ -74,6 +74,8 @@ donner_cc_library(
         "DocumentResourceFamilyBudget.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
+        "FontMetricDependenciesComponent.h",
+        "FontPaintDependenciesComponent.h",
         "GeometryPreparationResourceBudget.h",
         "HyperlinkComponent.h",
         "NodeLifetimeCollector.h",
@@ -82,6 +84,7 @@ donner_cc_library(
         "PreserveAspectRatioComponent.h",
         "RenderingBehaviorComponent.h",
         "RenderingInstanceComponent.h",
+        "ScopedRenderInvalidationRestore.h",
         "StylesheetComponent.h",
         "TreeMutation.h",
     ],
@@ -101,6 +104,25 @@ donner_cc_library(
         "//donner/svg/components/style:components",
         "//donner/svg/parser:parser_core",
         "//donner/svg/properties:property_parsing",
+        "//donner/svg/resources:font_catalog_types",
+    ],
+)
+
+donner_cc_library(
+    name = "font_resource_graph",
+    srcs = ["FontResourceGraph.cc"],
+    hdrs = ["FontResourceGraph.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":components_core",
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/components/resources:components",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/components/text:components",
+        "//donner/svg/resources:font_catalog_types",
+        "//donner/svg/resources:font_manager",
     ],
 )
 

@@ -50,6 +50,66 @@ std::optional<double> ParseLeadingNumber(std::string_view value) {
   return result.result().number;
 }
 
+/// Draws the loaded preview or its pending/failure label inside the current font row.
+void DrawFontFamilyPreview(const FormatBarFontFamily& family, const ImVec2& rowMin,
+                           const ImVec2& rowMax, bool rowVisible, FormatBarActions& actions) {
+  if (family.preview.available()) {
+    const float renderedWidth = std::min(family.preview.width, rowMax.x - rowMin.x);
+    const float renderedHeight = std::min(family.preview.height, rowMax.y - rowMin.y);
+    const ImVec2 previewMin(rowMin.x, rowMin.y + (rowMax.y - rowMin.y - renderedHeight) * 0.5f);
+    const ImVec2 previewMax(previewMin.x + renderedWidth, previewMin.y + renderedHeight);
+    ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(family.preview.texture),
+                                         previewMin, previewMax, ImVec2(0.0f, 0.0f),
+                                         ImVec2(family.preview.uvMaxX, family.preview.uvMaxY),
+                                         ImGui::GetColorU32(ImGuiCol_Text));
+  } else {
+    const std::string label =
+        family.name + (family.previewFailed || family.availability == svg::FontAssetState::Failed
+                           ? " (unavailable)"
+                           : " (loading...)");
+    ImGui::GetWindowDrawList()->AddText(
+        ImVec2(rowMin.x, rowMin.y + (rowMax.y - rowMin.y - ImGui::GetTextLineHeight()) * 0.5f),
+        ImGui::GetColorU32(ImGuiCol_Text), label.c_str());
+    if (rowVisible && family.availability != svg::FontAssetState::Failed && !family.previewFailed) {
+      actions.requestFontPreviews.push_back(family.name);
+    }
+  }
+}
+
+/// Shows status and explicit retry actions after drawing the font row.
+void RenderFontFamilyFeedback(const FormatBarFontFamily& family, bool rowVisible,
+                              FormatBarActions& actions) {
+  if (rowVisible && ImGui::IsItemHovered() && !family.preview.available()) {
+    ImGui::SetTooltip(family.previewFailed ? "Font preview could not be decoded."
+                      : family.availability == svg::FontAssetState::Failed
+                          ? "Font unavailable. Use Retry font to try again."
+                          : "Loading font preview...");
+  }
+  if (family.availability == svg::FontAssetState::Failed) {
+    ImGui::TextDisabled("Font unavailable");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Retry font")) actions.retryFontFamilies.push_back(family.name);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Retries are limited to once every 30 seconds.");
+  }
+}
+
+/// Renders one selectable family and reports its visibility and font-loading actions.
+bool RenderFontFamilyRow(const FormatBarFontFamily& family, bool selected,
+                         FormatBarActions& actions) {
+  ImGui::PushID(family.name.c_str());
+  const float rowHeight = std::max(ImGui::GetTextLineHeight(), family.preview.height);
+  const bool chosen = ImGui::Selectable("##font_family", selected, ImGuiSelectableFlags_None,
+                                        ImVec2(0.0f, rowHeight));
+  const ImVec2 rowMin = ImGui::GetItemRectMin();
+  const ImVec2 rowMax = ImGui::GetItemRectMax();
+  const bool rowVisible = ImGui::IsItemVisible();
+  if (rowVisible) actions.visibleFontFamilies.push_back(family.name);
+  DrawFontFamilyPreview(family, rowMin, rowMax, rowVisible, actions);
+  RenderFontFamilyFeedback(family, rowVisible, actions);
+  ImGui::PopID();
+  return chosen;
+}
+
 }  // namespace internal
 
 using internal::AssignBuffer;
@@ -133,7 +193,7 @@ std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
     const std::function<FormatBarFontPreview(const svg::FontFamilyInfo&)>& previewForFamily) {
   std::vector<FormatBarFontFamily> families;
   families.reserve(catalogFamilies.size());
-  // Preserve the catalog's ordering (Embedded group first, then System, sorted
+  // Preserve the catalog's ordering (Bundled group first, then System, sorted
   // within each), so the picker shows the same grouping the header separators
   // key off of.
   for (const svg::FontFamilyInfo& info : catalogFamilies) {
@@ -214,40 +274,15 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
         if (!ContainsCaseInsensitive(family.name, filter)) {
           continue;
         }
-        // Header at each Embedded/System boundary. Because `state.families` is
-        // grouped (Embedded then System), the source changes at most once among
+        // Header at each Bundled/System boundary. Because `state.families` is
+        // grouped (Bundled then System), the source changes at most once among
         // the filtered rows, so this prints one header per non-empty group.
         if (!shownGroup.has_value() || *shownGroup != family.source) {
-          ImGui::TextDisabled(family.source == svg::FontSource::Embedded ? "Embedded" : "System");
+          ImGui::TextDisabled(family.source == svg::FontSource::Bundled ? "Bundled" : "System");
           shownGroup = family.source;
         }
-        const bool selected = family.name == state.fontFamily;
-        ImGui::PushID(family.name.c_str());
-        const float rowHeight = std::max(ImGui::GetTextLineHeight(), family.preview.height);
-        const bool chosen = ImGui::Selectable("##font_family", selected, ImGuiSelectableFlags_None,
-                                              ImVec2(0.0f, rowHeight));
-        const ImVec2 rowMin = ImGui::GetItemRectMin();
-        const ImVec2 rowMax = ImGui::GetItemRectMax();
-        if (family.preview.available()) {
-          const float renderedWidth = std::min(family.preview.width, rowMax.x - rowMin.x);
-          const float renderedHeight = std::min(family.preview.height, rowMax.y - rowMin.y);
-          const ImVec2 previewMin(rowMin.x,
-                                  rowMin.y + (rowMax.y - rowMin.y - renderedHeight) * 0.5f);
-          const ImVec2 previewMax(previewMin.x + renderedWidth, previewMin.y + renderedHeight);
-          ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(family.preview.texture),
-                                               previewMin, previewMax, ImVec2(0.0f, 0.0f),
-                                               ImVec2(family.preview.uvMaxX, family.preview.uvMaxY),
-                                               ImGui::GetColorU32(ImGuiCol_Text));
-        } else {
-          ImGui::GetWindowDrawList()->AddText(
-              ImVec2(rowMin.x,
-                     rowMin.y + (rowMax.y - rowMin.y - ImGui::GetTextLineHeight()) * 0.5f),
-              ImGui::GetColorU32(ImGuiCol_Text), family.name.c_str());
-          if (ImGui::IsItemVisible()) {
-            actions.requestFontPreviews.push_back(family.name);
-          }
-        }
-        ImGui::PopID();
+        const bool chosen =
+            internal::RenderFontFamilyRow(family, family.name == state.fontFamily, actions);
         if (chosen) {
           actions.setFontFamily = true;
           actions.fontFamily = family.name;

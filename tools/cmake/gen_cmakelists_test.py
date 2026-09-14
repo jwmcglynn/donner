@@ -264,6 +264,10 @@ class GeneratedRootCmakeTest(unittest.TestCase):
         for revision in re.findall(r"GIT_TAG\s+(\S+)", contents):
             self.assertRegex(revision, r"^[0-9a-f]{40}$")
         self.assertNotIn("examples/cmake_consumer", contents)
+        self.assertIn("PATCH_COMMAND ${CMAKE_COMMAND}", contents)
+        self.assertIn("-DSOURCE_DIR=<SOURCE_DIR>", contents)
+        self.assertIn("third_party/woff2_bounded_decode.patch", contents)
+        self.assertIn("tools/cmake/apply_woff2_patch.cmake", contents)
 
 
 class ConditionDerivationTest(unittest.TestCase):

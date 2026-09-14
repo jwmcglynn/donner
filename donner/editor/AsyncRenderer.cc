@@ -23,7 +23,35 @@
 
 namespace donner::editor {
 
+SampleThumbnailRenderOutcome ClassifyTemporaryFontResources(
+    std::span<const svg::FontFaceDependency> dependencies,
+    svg::FontResourcePreflight::Status status) {
+  switch (status) {
+    case svg::FontResourcePreflight::Status::ResourceLimit:
+      return SampleThumbnailRenderOutcome::ResourceLimit;
+    case svg::FontResourcePreflight::Status::Ready:
+    case svg::FontResourcePreflight::Status::PendingFonts: break;
+    default: return SampleThumbnailRenderOutcome::RenderError;
+  }
+  if (std::any_of(dependencies.begin(), dependencies.end(), [](const auto& face) {
+        return face.waitReason == svg::FontFaceWaitReason::RetainedBudget;
+      }))
+    return SampleThumbnailRenderOutcome::ResourceLimit;
+  if (std::any_of(dependencies.begin(), dependencies.end(),
+                  [](const auto& face) { return face.state == svg::FontFaceLoadState::Failed; }))
+    return SampleThumbnailRenderOutcome::RenderError;
+  if (std::any_of(dependencies.begin(), dependencies.end(),
+                  [](const auto& face) { return face.state != svg::FontFaceLoadState::Loaded; }))
+    return SampleThumbnailRenderOutcome::FontsPending;
+  return SampleThumbnailRenderOutcome::Rendered;
+}
+
 namespace {
+
+std::vector<svg::FontFaceDependency> UnresolvedFontDependencies(const svg::SVGDocument& document) {
+  if (!document.hasUnresolvedFontResources()) return {};
+  return document.renderedFontDependencies();
+}
 
 // ---------------------------------------------------------------------------
 // WEBKIT BITMAP BRIDGE - RETAINED PENDING THE DEFERRED WEBKIT DECISION
@@ -210,6 +238,8 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
   SampleThumbnailRenderResult result{
       .kind = request.kind,
       .key = request.key,
+      .taskGeneration = request.taskGeneration,
+      .fontWakeRevision = request.fontWakeRevision,
       .outcome = SampleThumbnailRenderOutcome::RenderError,
   };
   if (request.dimensions.x <= 0 || request.dimensions.y <= 0) {
@@ -248,6 +278,13 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
     result.outcome = SampleThumbnailRenderOutcome::Cancelled;
     return result;
   }
+
+  result.fontWakeRevision = request.fontWakeRevision;
+  result.fontResourceRevision = document.fontResourceRevision();
+  auto fontResources = document.renderedFontResources();
+  result.fontDependencies = std::move(fontResources.dependencies);
+  result.outcome = ClassifyTemporaryFontResources(result.fontDependencies, fontResources.status);
+  if (result.outcome != SampleThumbnailRenderOutcome::Rendered) return result;
 
   result.bitmap =
       renderer.takeSnapshotInterruptibly([&cancellation] { return cancellation.isCancelled(); });
@@ -415,6 +452,13 @@ bool AsyncRenderer::workerStateRenderInFlight(const WorkerState& state) {
 bool AsyncRenderer::isBusy() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return workerStateBusy(workerState_) || pendingCompositorWarmup_ || compositorWarmupActive_;
+}
+
+bool AsyncRenderer::isFontResourceAdoptionSafe() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return !workerStateBusy(workerState_) && !pendingCompositorWarmup_ && !compositorWarmupActive_ &&
+         !pendingSampleThumbnail_ && !sampleThumbnailActive_ && !sampleThumbnailResult_ &&
+         !sampleThumbnailRendererCreationActive_;
 }
 
 bool AsyncRenderer::hasRenderInFlightForTesting() const {
@@ -894,6 +938,8 @@ void AsyncRenderer::workerLoop() {
       if (offscreenRenderer == nullptr) {
         result.kind = sampleThumbnailStorage->kind;
         result.key = sampleThumbnailStorage->key;
+        result.taskGeneration = sampleThumbnailStorage->taskGeneration;
+        result.fontWakeRevision = sampleThumbnailStorage->fontWakeRevision;
         result.outcome = SampleThumbnailRenderOutcome::RendererUnavailable;
       } else {
         const std::chrono::milliseconds delay(
@@ -1707,6 +1753,7 @@ void AsyncRenderer::workerLoop() {
       AddTransientBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
     }
 
+    auto fontDependencies = UnresolvedFontDependencies(requestDocument);
     // All document reads for this iteration are done; release write access before taking `mutex_`
     // to avoid a lock-order inversion against UI-thread DOM reads.
     releaseDocumentAccess();
@@ -1728,6 +1775,8 @@ void AsyncRenderer::workerLoop() {
           done.result.overviewInfillOnly = request.overviewInfillOnly;
           done.result.version = request.version;
           done.result.documentGeneration = request.documentGeneration;
+          done.result.fontResourceRevision = request.fontResourceRevision;
+          done.result.fontDependencies = std::move(fontDependencies);
           done.presentationHoldPollsRemaining = replayResultHoldFramesForTesting_;
           lastFastPathCounters_ = compositor_ != nullptr
                                       ? compositor_->fastPathCountersForTesting()

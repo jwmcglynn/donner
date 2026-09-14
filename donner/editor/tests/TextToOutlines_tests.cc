@@ -2,10 +2,8 @@
 /// Unit tests for the "Convert Text to Outlines" conversion: outline
 /// generation, error handling, performance, and undo/selection behavior.
 ///
-/// These run in the DEFAULT basic-text (stb_truetype) configuration: the test
-/// `<text>` uses the engine's embedded fallback font (Public Sans), so glyph
-/// outlines are produced hermetically with no checked-in font and no
-/// `--config=text-full` requirement.
+/// These use the editor's full-text configuration and embedded Public Sans fallback,
+/// so outline generation is hermetic and needs no external font files.
 
 #include "donner/editor/TextToOutlines.h"
 
@@ -76,7 +74,8 @@ std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
   std::optional<svg::SVGElement> parent = text.parentElement();
   EXPECT_TRUE(parent.has_value());
   EXPECT_TRUE(result.outlineGroup.has_value());
-  xml::ApplySourceEditResult groupInsert = document.insertElement(*parent, *result.outlineGroup, text);
+  xml::ApplySourceEditResult groupInsert =
+      document.insertElement(*parent, *result.outlineGroup, text);
   EXPECT_FALSE(groupInsert.diagnostic.has_value())
       << groupInsert.diagnostic.value_or(ParseDiagnostic()).reason;
   for (svg::SVGElement& path : result.outlinePaths) {

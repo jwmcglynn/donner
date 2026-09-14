@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrity test for the embedded Google Fonts pin table (Design 0013 W3).
+"""Integrity test for the bundled Google Fonts pin table.
 
 Validates the generated manifest (from GOOGLE_FONTS in fonts.bzl) without any
 network access: every family must be commit-pinned to a single google/fonts
@@ -12,10 +12,11 @@ import sys
 import unittest
 
 _MANIFEST_PATH = sys.argv[1] if len(sys.argv) > 1 else None
+_REFERENCE_PATH = sys.argv[2] if len(sys.argv) > 2 else None
 
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_VAR = re.compile(r"^kGF[A-Za-z0-9]+Ttf$")
+_VAR = re.compile(r"^kGF[A-Za-z0-9]+Woff2$")
 _REPO = re.compile(r"^gfont_[a-z0-9_]+$")
 _ALLOWED_CATEGORIES = {"SansSerif", "Serif", "Monospace", "Display", "Handwriting"}
 
@@ -36,6 +37,15 @@ class GoogleFontsIntegrityTest(unittest.TestCase):
 
     def test_curated_set_size(self):
         self.assertEqual(len(self.fonts), 12)
+
+    def test_exact_source_pins(self):
+        with open(_REFERENCE_PATH, encoding="utf-8") as handle:
+            reference = json.load(handle)
+        keys = ("family", "repo", "file", "var", "url", "sha256", "bytes")
+        self.assertEqual(
+            [{key: font[key] for key in keys} for font in self.fonts],
+            [{key: font[key] for key in keys} for font in reference],
+        )
 
     def test_entries_are_wellformed(self):
         for font in self.fonts:
@@ -70,6 +80,5 @@ class GoogleFontsIntegrityTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # Strip the manifest path arg so unittest does not treat it as a test name.
-    argv = [sys.argv[0]] + sys.argv[2:]
+    argv = [sys.argv[0]] + sys.argv[3:]
     unittest.main(argv=argv)

@@ -18,6 +18,49 @@ filegroup(
 )
 
 donner_cc_test(
+    name = "nested_svg_font_resources_tests_impl",
+    srcs = ["NestedSvgFontResources_tests.cc"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":mock_renderer_interface",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components:font_resource_graph",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "nested_svg_font_resources_tests",
+    dep = ":nested_svg_font_resources_tests_impl",
+    full_text_only = True,
+    renderer_backend = "tiny_skia",
+    text = "true",
+    text_full = "true",
+)
+
+donner_multi_transitioned_test(
+    name = "nested_svg_font_resources_tests_geode",
+    dep = ":nested_svg_font_resources_tests_impl",
+    full_text_only = True,
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    text = "true",
+    text_full = "true",
+)
+
+donner_cc_test(
     name = "pixel_format_utils_tests",
     srcs = ["PixelFormatUtils_tests.cc"],
     deps = [

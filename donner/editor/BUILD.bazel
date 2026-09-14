@@ -16,7 +16,7 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
-load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL")
+load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL", "editor_full_text_compatible_with", "editor_full_text_guard")
 
 #Editor libraries are public so the  // examples:svg_viewer target (in the
 #separate examples Bazel module) can depend on `: text_editor`.BCR
@@ -24,6 +24,11 @@ load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "ED
 #imgui / glfw / tracy are `dev_dependency = True` in MODULE.bazel and won't
 #resolve outside dev builds.
 package(default_visibility = ["//visibility:public"])
+
+editor_full_text_guard(
+    name = "requires_text_true_and_text_full_true",
+    target_compatible_with = editor_full_text_compatible_with(),
+)
 
 config_setting(
     name = "wasm_geode_enabled",
@@ -78,7 +83,10 @@ donner_cc_library(
         ":whole_app_worker_config",
         "//donner/base:asyncify_suspend_probe",
         "//donner/base:memory_attribution",
-    ],
+    ] + select({
+        "@platforms//os:emscripten": ["//donner/svg/resources:font_catalog"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
@@ -1096,6 +1104,7 @@ donner_cc_library(
         ":pinch_zoom_policy",
         ":render_coordinator",
         ":render_pane_presenter",
+        ":requires_text_true_and_text_full_true",
         ":rotate_cursor_set",
         ":sample_picker_controller",
         ":sample_picker_presenter",
@@ -1119,6 +1128,7 @@ donner_cc_library(
         ":undo_timeline",
         ":viewport_interaction_controller",
         ":viewport_svg_export",
+        ":whole_app_worker_bridge",
         ":xml_autocomplete",
         "//donner/base",
         "//donner/base:memory_attribution",
@@ -1186,6 +1196,7 @@ donner_cc_library(
         ":attribute_writeback",
         ":command_queue",
         ":lock_state",
+        ":requires_text_true_and_text_full_true",
         ":undo_timeline",
         "//donner/base",
         "//donner/svg",
@@ -1495,6 +1506,7 @@ donner_cc_binary(
 donner_multi_transitioned_binary(
     name = "editor",
     dep = ":editor_impl",
+    full_text_only = True,
     renderer_backend = EDITOR_RENDERER_BACKEND,
     tags = ["codeql_default"],
     target_compatible_with = select({

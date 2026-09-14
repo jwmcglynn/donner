@@ -25,6 +25,12 @@ namespace donner::editor {
 
 namespace {
 
+bool IsCurrentRenderResult(const std::optional<RenderResult>& result, EditorApp& app) {
+  if (!result || !app.hasDocument()) return false;
+  return result->documentGeneration == app.document().documentGeneration() &&
+         result->fontResourceRevision == app.document().fontResourceRevision();
+}
+
 #ifdef __EMSCRIPTEN__
 /// Stable wire name for a published GPU wait site. These strings are what the
 /// browser test harness prints, so a failing run names the wait that hung
@@ -46,53 +52,78 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
 // per process. The wait-site name rides a separate argument as a pointer to a
 // string literal, which has static storage and so outlives the proxy hop too.
 void PublishWorkerTimingStats(
-    double workerMs, const RenderResult::WorkerTimingBreakdown& timing,
+    const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
-  constexpr std::size_t kValueCount = 26;
+  const auto& timing = result.workerTiming;
+  constexpr std::size_t kValueCount = 31;
   static double buffer[kValueCount];
-  const double values[kValueCount] = {workerMs,
-                                      timing.queueWaitMs,
-                                      timing.dequeueToStartMs,
-                                      timing.setupMs,
-                                      timing.renderFrameMs,
-                                      timing.buildPreviewMs,
-                                      timing.finalSnapshotMs,
-                                      timing.diagnosticsMs,
-                                      timing.pollDelayMs,
-                                      timing.wakeToPollMs,
-                                      compositorStats.firstFrameDrawMs,
-                                      compositorStats.firstFramePlanningMs,
-                                      compositorStats.firstFrameWarmupMs,
-                                      compositorStats.immediateRasterizeMs,
-                                      compositorStats.cachedRasterizeMs,
-                                      static_cast<double>(compositorStats.immediateTileCount),
-                                      static_cast<double>(compositorStats.cachedTileCount),
-                                      static_cast<double>(compositorStats.offscreenCreateCount),
-                                      static_cast<double>(compositorStats.offscreenRecycleCount),
-                                      static_cast<double>(compositorStats.offscreenCreateTotal),
-                                      static_cast<double>(compositorStats.offscreenRecycleTotal),
-                                      static_cast<double>(timing.readbackCount),
-                                      static_cast<double>(timing.readbackPollIterations),
-                                      timing.usedTimedWaitAny ? 1.0 : 0.0,
-                                      timing.deviceLost ? 1.0 : 0.0,
-                                      static_cast<double>(timing.timedOutWaitMs)};
+  const double values[kValueCount] = {
+      result.workerMs,
+      timing.queueWaitMs,
+      timing.dequeueToStartMs,
+      timing.setupMs,
+      timing.renderFrameMs,
+      timing.buildPreviewMs,
+      timing.finalSnapshotMs,
+      timing.diagnosticsMs,
+      timing.pollDelayMs,
+      timing.wakeToPollMs,
+      compositorStats.firstFrameDrawMs,
+      compositorStats.firstFramePlanningMs,
+      compositorStats.firstFrameWarmupMs,
+      compositorStats.immediateRasterizeMs,
+      compositorStats.cachedRasterizeMs,
+      static_cast<double>(compositorStats.immediateTileCount),
+      static_cast<double>(compositorStats.cachedTileCount),
+      static_cast<double>(compositorStats.offscreenCreateCount),
+      static_cast<double>(compositorStats.offscreenRecycleCount),
+      static_cast<double>(compositorStats.offscreenCreateTotal),
+      static_cast<double>(compositorStats.offscreenRecycleTotal),
+      static_cast<double>(timing.readbackCount),
+      static_cast<double>(timing.readbackPollIterations),
+      timing.usedTimedWaitAny ? 1.0 : 0.0,
+      timing.deviceLost ? 1.0 : 0.0,
+      static_cast<double>(timing.timedOutWaitMs),
+      static_cast<double>(result.documentGeneration),
+      static_cast<double>(result.version),
+      static_cast<double>(result.fontResourceRevision),
+      static_cast<double>(app.document().document().sourceVersion()),
+      static_cast<double>(app.undoTimeline().entryCount())};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const b = $0 >> 3;
         const heap = HEAPF64;
         const names = ([
-          'workerMs', 'queueWaitMs', 'dequeueToStartMs', 'setupMs', 'renderFrameMs',
-          'buildPreviewMs', 'finalSnapshotMs', 'diagnosticsMs', 'pollDelayMs', 'wakeToPollMs',
-          'firstFrameDrawMs', 'firstFramePlanningMs', 'firstFrameWarmupMs', 'immediateRasterizeMs',
-          'cachedRasterizeMs', 'immediateTileCount', 'cachedTileCount', 'offscreenCreateCount',
-          'offscreenRecycleCount', 'offscreenCreateTotal', 'offscreenRecycleTotal', 'readbackCount',
+          'workerMs',
+          'queueWaitMs',
+          'dequeueToStartMs',
+          'setupMs',
+          'renderFrameMs',
+          'buildPreviewMs',
+          'finalSnapshotMs',
+          'diagnosticsMs',
+          'pollDelayMs',
+          'wakeToPollMs',
+          'firstFrameDrawMs',
+          'firstFramePlanningMs',
+          'firstFrameWarmupMs',
+          'immediateRasterizeMs',
+          'cachedRasterizeMs',
+          'immediateTileCount',
+          'cachedTileCount',
+          'offscreenCreateCount',
+          'offscreenRecycleCount',
+          'offscreenCreateTotal',
+          'offscreenRecycleTotal',
+          'readbackCount',
           'readbackPollIterations'
         ]);
         const previous = window['__donnerWorkerStats'];
         const stats = ({
           'completedResults' : previous ? previous['completedResults'] + 1 : 1,
           'publishedAtMs' : performance.now(),
+          'acceptedForPresentation' : false,
         });
         for (let index = 0; index < names.length; ++index) {
           stats[names[index]] = heap[b + index];
@@ -101,10 +132,29 @@ void PublishWorkerTimingStats(
         stats['deviceLost'] = heap[b + 24] > 0;
         stats['gpuWaitTimeoutSite'] = UTF8ToString($1);
         stats['gpuWaitTimeoutMs'] = heap[b + 25];
+        stats['documentGeneration'] = heap[b + 26];
+        stats['frameVersion'] = heap[b + 27];
+        stats['fontResourceRevision'] = heap[b + 28];
+        stats['sourceVersion'] = heap[b + 29];
+        stats['undoEntryCount'] = heap[b + 30];
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
       buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite));
+}
+
+/// Marks only the matching result whose textures passed the presentation admission gates.
+void PublishAcceptedWorkerResult(const RenderResult& result) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const stats = window['__donnerWorkerStats'];
+        if (stats && Object.is(stats['documentGeneration'], $0) &&
+            Object.is(stats['frameVersion'], $1) && Object.is(stats['fontResourceRevision'], $2)) {
+          stats['acceptedForPresentation'] = true;
+        }
+      },
+      static_cast<double>(result.documentGeneration), static_cast<double>(result.version),
+      static_cast<double>(result.fontResourceRevision));
 }
 
 // Publish a GPU-wait failure that produced no frame.
@@ -874,14 +924,14 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     }
   }
 #endif
-  if (!resultOpt.has_value()) {
+  if (!IsCurrentRenderResult(resultOpt, app)) {
     return;
   }
 
   const auto& result = *resultOpt;
   const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
 #ifdef __EMSCRIPTEN__
-  PublishWorkerTimingStats(result.workerMs, result.workerTiming, compositorStats);
+  PublishWorkerTimingStats(result, app, compositorStats);
 #endif
   lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
   // Forward the worker-measured presentation latency to the frame history so
@@ -901,6 +951,9 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
     pendingDocumentMutationOverviewRefresh_ = false;
     displayedDocVersion_ = result.version;
+#ifdef __EMSCRIPTEN__
+    PublishAcceptedWorkerResult(result);
+#endif
     return;
   }
   if (!RasterViewportCanPresentCurrentViewport(result.rasterViewport, rasterViewport)) {
@@ -948,6 +1001,9 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   displayedDocVersion_ = result.version;
+#ifdef __EMSCRIPTEN__
+  PublishAcceptedWorkerResult(result);
+#endif
   renderScheduler_.noteRenderCompleted(result.version, resultCanvasSize, result.rasterViewport);
   if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
       compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
@@ -1088,6 +1144,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   RenderRequest req(renderWorker_.renderer, app.document().document());
   req.version = currentVersion;
   req.documentGeneration = app.document().documentGeneration();
+  req.fontResourceRevision = app.document().fontResourceRevision();
   req.rasterViewport = requestRasterViewport;
   // The presenter places the accepted surface with this transform, so it must be
   // the exact viewport `requestRasterViewport` was derived from.

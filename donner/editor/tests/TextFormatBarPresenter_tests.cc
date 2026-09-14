@@ -299,11 +299,11 @@ TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThen
       .height = 20.0f,
   };
 
-  // Mirror FontCatalog::families(): the Embedded group first, then System, each
+  // Mirror FontCatalog::families(): the Bundled group first, then System, each
   // already sorted within its group.
   const std::vector<svg::FontFamilyInfo> catalog = {
-      {"Fira Code", svg::FontSource::Embedded, svg::FontCategory::Monospace},
-      {"Roboto", svg::FontSource::Embedded, svg::FontCategory::SansSerif},
+      {"Fira Code", svg::FontSource::Bundled, svg::FontCategory::Monospace},
+      {"Roboto", svg::FontSource::Bundled, svg::FontCategory::SansSerif},
       {"Helvetica", svg::FontSource::System, svg::FontCategory::SansSerif},
   };
 
@@ -319,13 +319,13 @@ TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThen
       });
 
   ASSERT_EQ(built.size(), 3u);
-  // Grouping/order is preserved so the picker's Embedded/System headers land on
+  // Grouping/order is preserved so the picker's Bundled/System headers land on
   // the right rows.
   EXPECT_EQ(built[0].name, "Fira Code");
-  EXPECT_EQ(built[0].source, svg::FontSource::Embedded);
+  EXPECT_EQ(built[0].source, svg::FontSource::Bundled);
   EXPECT_EQ(built[0].preview.texture, codePreview.texture);
   EXPECT_EQ(built[1].name, "Roboto");
-  EXPECT_EQ(built[1].source, svg::FontSource::Embedded);
+  EXPECT_EQ(built[1].source, svg::FontSource::Bundled);
   EXPECT_EQ(built[1].preview.texture, robotoPreview.texture);
   EXPECT_EQ(built[2].name, "Helvetica");
   EXPECT_EQ(built[2].source, svg::FontSource::System);
@@ -335,7 +335,7 @@ TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThen
 
 TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesToleratesNullPreviewResolver) {
   const std::vector<svg::FontFamilyInfo> catalog = {
-      {"Roboto", svg::FontSource::Embedded, svg::FontCategory::SansSerif},
+      {"Roboto", svg::FontSource::Bundled, svg::FontCategory::SansSerif},
   };
   const std::vector<FormatBarFontFamily> built = BuildFormatBarFamilies(catalog, {});
   ASSERT_EQ(built.size(), 1u);
@@ -481,8 +481,8 @@ protected:
     // Two Embedded families followed by one System family: the picker prints
     // one header per group and no header between same-group rows.
     state.families = {
-        FormatBarFontFamily{.name = "Roboto", .source = svg::FontSource::Embedded},
-        FormatBarFontFamily{.name = "Fira Code", .source = svg::FontSource::Embedded},
+        FormatBarFontFamily{.name = "Roboto", .source = svg::FontSource::Bundled},
+        FormatBarFontFamily{.name = "Fira Code", .source = svg::FontSource::Bundled},
         FormatBarFontFamily{.name = "Zilla Slab", .source = svg::FontSource::System},
     };
     return state;

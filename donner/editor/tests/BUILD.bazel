@@ -1,14 +1,16 @@
 load("//build_defs:package.bzl", "donner_package")
 load(
     "//build_defs:rules.bzl",
-    "donner_cc_binary",
-    "donner_cc_fuzzer",
     "donner_cc_library",
-    "donner_cc_test",
-    "donner_multi_transitioned_test",
-    "donner_perf_cc_test",
 )
-load("//donner/editor:editor_product_config.bzl", "EDITOR_TEXT", "EDITOR_TEXT_FULL")
+load(
+    "//donner/editor:editor_product_config.bzl",
+    donner_cc_binary = "editor_cc_binary",
+    donner_cc_fuzzer = "editor_cc_fuzzer",
+    donner_cc_test = "editor_cc_test",
+    donner_perf_cc_test = "editor_perf_cc_test",
+)
+load("//donner/editor:editor_product_dependency_tests.bzl", "editor_product_dependency_tests")
 
 donner_cc_library(
     name = "bitmap_golden_compare",
@@ -80,11 +82,10 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "editor_embedded_font_render_test_impl",
+    name = "editor_embedded_font_render_tests",
     srcs = ["EditorEmbeddedFontRender_tests.cc"],
     data = ["//donner/svg/renderer/testdata"],
-    tags = ["manual"],
-    visibility = ["//visibility:private"],
+    renderer_backend = "tiny_skia",
     deps = [
         ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
@@ -95,12 +96,32 @@ donner_cc_test(
     ],
 )
 
-donner_multi_transitioned_test(
-    name = "editor_embedded_font_render_tests",
-    dep = ":editor_embedded_font_render_test_impl",
+donner_cc_test(
+    name = "catalog_font_resources_tests",
+    srcs = ["CatalogFontResources_tests.cc"],
+    opens_gpu_device = True,
     renderer_backend = "tiny_skia",
-    text = EDITOR_TEXT,
-    text_full = EDITOR_TEXT_FULL,
+    variants = ["geode"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:editor_app",
+        "//donner/editor:text_to_outlines",
+        "//donner/svg/renderer",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "temporary_font_resources_tests",
+    srcs = ["TemporaryFontResources_tests.cc"],
+    deps = [
+        "//donner/editor:async_renderer",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_cc_test(
@@ -114,6 +135,7 @@ donner_cc_test(
         "//donner/editor:editor_shell",
         "//donner/editor/gui:editor_window",
         "//donner/svg/renderer",
+        "//donner/svg/resources:font_catalog",
         "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
@@ -1389,3 +1411,5 @@ donner_cc_test(
 )
 
 donner_package()
+
+editor_product_dependency_tests()

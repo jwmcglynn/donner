@@ -163,15 +163,15 @@ protected:
   /// Render one picker frame in a host window of the given width.
   SamplePickerActions Frame(const SamplePickerState& state,
                             const SamplePickerThumbnailProvider& provider, float hostWidth,
-                            const ImVec2& mouse = ImVec2(-100.0f, -100.0f),
-                            bool mouseDown = false) {
+                            const ImVec2& mouse = ImVec2(-100.0f, -100.0f), bool mouseDown = false,
+                            float hostHeight = 760.0f) {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(1200.0f, 800.0f);
     io.AddMousePosEvent(mouse.x, mouse.y);
     io.AddMouseButtonEvent(0, mouseDown);
     ImGui::NewFrame();
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(hostWidth, 760.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(hostWidth, hostHeight), ImGuiCond_Always);
     ImGui::Begin("##sample_picker_host", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
@@ -249,6 +249,17 @@ TEST_F(SamplePickerPresenterImGuiTest,
   constexpr int kVerticesPerImageQuad = 4;
   EXPECT_EQ(lastVertexCount_ + static_cast<int>(visibleCount) * kVerticesPerImageQuad,
             thumbnailVertexCount);
+}
+
+TEST_F(SamplePickerPresenterImGuiTest, ReportsOnlyCardsIntersectingTheCurrentClipRegion) {
+  SamplePickerState state;
+  Frame(state, {}, 480.0f, ImVec2(-100.0f, -100.0f), false, 320.0f);
+  const auto clipped = Frame(state, {}, 480.0f, ImVec2(-100.0f, -100.0f), false, 320.0f);
+  ASSERT_FALSE(clipped.visibleSampleIndices.empty());
+  EXPECT_LT(clipped.visibleSampleIndices.size(), GetEditorSampleCatalog().size());
+  EXPECT_EQ(clipped.visibleSampleIndices.front(), 0u);
+  state.visible = false;
+  EXPECT_TRUE(Frame(state, {}, 480.0f).visibleSampleIndices.empty());
 }
 
 TEST_F(SamplePickerPresenterImGuiTest, ClickingDismissButtonEmitsDismiss) {

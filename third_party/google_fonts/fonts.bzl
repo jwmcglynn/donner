@@ -1,6 +1,6 @@
-"""Curated Google Fonts set embedded into Donner at build time.
+"""Pinned source fonts for the Donner catalog.
 
-SOURCE OF TRUTH for the embedded web-font catalog (Design 0013 W3).
+Source of truth for the bundled font catalog.
 Each entry is fetched at build time via `http_file` with a pinned URL + sha256,
 so builds are deterministic and work offline after the first fetch. The font
 bytes are NOT checked into the repo; only the pins live here.
@@ -16,12 +16,12 @@ GOOGLE_FONTS_COMMIT = "e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe"
 
 # Curated starter set: 12 families spanning sans / serif / display / mono / script.
 # Fields: family (display + CSS match name), category (FontCategory enum leaf),
-# var (embed_resources C++ symbol), repo (http_file repo name), file, url, sha256, bytes.
+# var (native WOFF2 span symbol), repo (http_file repo name), file, url, sha256, bytes.
 GOOGLE_FONTS = [
     struct(
         family = "Inter",
         category = "SansSerif",
-        var = "kGFInterTtf",
+        var = "kGFInterWoff2",
         repo = "gfont_inter",
         file = "Inter[opsz,wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
@@ -31,7 +31,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Open Sans",
         category = "SansSerif",
-        var = "kGFOpenSansTtf",
+        var = "kGFOpenSansWoff2",
         repo = "gfont_open_sans",
         file = "OpenSans[wdth,wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf",
@@ -41,7 +41,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Lato",
         category = "SansSerif",
-        var = "kGFLatoTtf",
+        var = "kGFLatoWoff2",
         repo = "gfont_lato",
         file = "Lato-Regular.ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/lato/Lato-Regular.ttf",
@@ -51,7 +51,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Montserrat",
         category = "SansSerif",
-        var = "kGFMontserratTtf",
+        var = "kGFMontserratWoff2",
         repo = "gfont_montserrat",
         file = "Montserrat[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/montserrat/Montserrat%5Bwght%5D.ttf",
@@ -61,7 +61,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Bitter",
         category = "Serif",
-        var = "kGFBitterTtf",
+        var = "kGFBitterWoff2",
         repo = "gfont_bitter",
         file = "Bitter[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/bitter/Bitter%5Bwght%5D.ttf",
@@ -71,7 +71,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Lora",
         category = "Serif",
-        var = "kGFLoraTtf",
+        var = "kGFLoraWoff2",
         repo = "gfont_lora",
         file = "Lora[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/lora/Lora%5Bwght%5D.ttf",
@@ -81,7 +81,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Playfair Display",
         category = "Serif",
-        var = "kGFPlayfairDisplayTtf",
+        var = "kGFPlayfairDisplayWoff2",
         repo = "gfont_playfair_display",
         file = "PlayfairDisplay[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf",
@@ -91,7 +91,7 @@ GOOGLE_FONTS = [
     struct(
         family = "JetBrains Mono",
         category = "Monospace",
-        var = "kGFJetbrainsMonoTtf",
+        var = "kGFJetbrainsMonoWoff2",
         repo = "gfont_jetbrains_mono",
         file = "JetBrainsMono[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf",
@@ -101,7 +101,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Roboto Mono",
         category = "Monospace",
-        var = "kGFRobotoMonoTtf",
+        var = "kGFRobotoMonoWoff2",
         repo = "gfont_roboto_mono",
         file = "RobotoMono[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/robotomono/RobotoMono%5Bwght%5D.ttf",
@@ -111,7 +111,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Oswald",
         category = "Display",
-        var = "kGFOswaldTtf",
+        var = "kGFOswaldWoff2",
         repo = "gfont_oswald",
         file = "Oswald[wght].ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/oswald/Oswald%5Bwght%5D.ttf",
@@ -121,7 +121,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Bebas Neue",
         category = "Display",
-        var = "kGFBebasNeueTtf",
+        var = "kGFBebasNeueWoff2",
         repo = "gfont_bebas_neue",
         file = "BebasNeue-Regular.ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/bebasneue/BebasNeue-Regular.ttf",
@@ -131,7 +131,7 @@ GOOGLE_FONTS = [
     struct(
         family = "Pacifico",
         category = "Handwriting",
-        var = "kGFPacificoTtf",
+        var = "kGFPacificoWoff2",
         repo = "gfont_pacifico",
         file = "Pacifico-Regular.ttf",
         url = "https://raw.githubusercontent.com/google/fonts/e4572de925a4c3be12f1f9983ee0adbe1eb6e9fe/ofl/pacifico/Pacifico-Regular.ttf",
@@ -154,10 +154,6 @@ def _google_fonts_impl(_mctx):
 # consumers never fetch these. When donner is the root module (local dev / CI)
 # the extension runs and fetches every family exactly once, cached thereafter.
 google_fonts = module_extension(implementation = _google_fonts_impl)
-
-def embedded_resources_dict():
-    """Return the {C++ var name: http_file label} map for embed_resources()."""
-    return {f.var: "@" + f.repo + "//file" for f in GOOGLE_FONTS}
 
 def _manifest_json_impl(ctx):
     entries = [
@@ -182,28 +178,4 @@ google_fonts_manifest = rule(
     implementation = _manifest_json_impl,
     attrs = {"out": attr.output(mandatory = True)},
     doc = "Write the GOOGLE_FONTS pin table to JSON for the integrity test.",
-)
-
-def _catalog_inc_impl(ctx):
-    lines = [
-        "// GENERATED by //third_party/google_fonts:google_fonts_catalog_inc. DO NOT EDIT.",
-        "// Source of truth: third_party/google_fonts/fonts.bzl (GOOGLE_FONTS).",
-        "// Consumed by donner/svg/resources/EmbeddedFontProvider.cc via the",
-        "// DONNER_GF_ENTRY(family, category, span) x-macro.",
-        "",
-    ]
-    for f in GOOGLE_FONTS:
-        lines.append(
-            "DONNER_GF_ENTRY(\"{family}\", {category}, ::donner::embedded::{var})".format(
-                family = f.family,
-                category = f.category,
-                var = f.var,
-            ),
-        )
-    ctx.actions.write(output = ctx.outputs.out, content = "\n".join(lines) + "\n")
-
-google_fonts_catalog_inc = rule(
-    implementation = _catalog_inc_impl,
-    attrs = {"out": attr.output(mandatory = True)},
-    doc = "Generate the DONNER_GF_ENTRY x-macro table for the embedded font provider.",
 )

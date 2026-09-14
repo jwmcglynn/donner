@@ -26,6 +26,11 @@ public:
 
   std::vector<FontFamilyInfo> families() const override;
   bool hasFamily(std::string_view family) const override;
+  FontFaceAvailability availability(std::string_view family,
+                                    const FontFaceRequest&) const override {
+    return {.state = hasFamily(family) ? FontAssetState::Ready : FontAssetState::Unavailable,
+            .format = FontFileFormat::Sfnt};
+  }
   std::vector<uint8_t> loadFamilyData(std::string_view family,
                                       const FontFaceRequest& request) const override;
 

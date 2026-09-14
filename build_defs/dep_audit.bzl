@@ -94,7 +94,7 @@ def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
 _ConfiguredDepsInfo = provider(fields = ["labels"])
 
 # Follow binary/library dependencies and the wrappers used to package Wasm.
-_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps"]
+_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps", "dir"]
 
 def _configured_deps_impl(target, ctx):
     transitive = []
@@ -112,8 +112,35 @@ _configured_deps = aspect(
     attr_aspects = _CONFIGURED_DEP_ATTRS,
 )
 
+def _audit_configuration_impl(settings, attr):
+    text = settings["//donner/svg/renderer:text"]
+    text_full = settings["//donner/svg/renderer:text_full"]
+    if attr.text_configuration != "inherit":
+        text = attr.text_configuration != "none"
+        text_full = attr.text_configuration == "full"
+    return {
+        "//donner/svg/renderer:text": text,
+        "//donner/svg/renderer:text_full": text_full,
+        "//build_defs:disable_backend_test_transition": True if attr.disable_backend_transitions else settings["//build_defs:disable_backend_test_transition"],
+    }
+
+_audit_configuration = transition(
+    implementation = _audit_configuration_impl,
+    inputs = [
+        "//donner/svg/renderer:text",
+        "//donner/svg/renderer:text_full",
+        "//build_defs:disable_backend_test_transition",
+    ],
+    outputs = [
+        "//donner/svg/renderer:text",
+        "//donner/svg/renderer:text_full",
+        "//build_defs:disable_backend_test_transition",
+    ],
+)
+
 def _configured_dependency_audit_impl(ctx):
-    labels = ctx.attr.target[_ConfiguredDepsInfo].labels.to_list()
+    target = ctx.attr.target[0] if type(ctx.attr.target) == "list" else ctx.attr.target
+    labels = target[_ConfiguredDepsInfo].labels.to_list()
     forbidden = [Label(label) for label in ctx.attr.forbidden]
     missing = [label for label in ctx.attr.required if Label(label) not in labels]
     found = sorted([str(label) for label in labels if label in forbidden])
@@ -127,7 +154,7 @@ def _configured_dependency_audit_impl(ctx):
                 label.package.startswith(package_label.package + "/"))
         ])
 
-    messages = ["Configured dependency audit: " + str(ctx.attr.target.label)]
+    messages = ["Configured dependency audit: " + str(target.label)]
     messages += ["Forbidden dependency: " + label for label in found]
     messages += ["Missing required dependency: " + label for label in missing]
     if not found and not missing:
@@ -146,7 +173,10 @@ _configured_dependency_audit = rule(
     implementation = _configured_dependency_audit_impl,
     executable = True,
     attrs = {
-        "target": attr.label(mandatory = True, aspects = [_configured_deps]),
+        "target": attr.label(mandatory = True, aspects = [_configured_deps], cfg = _audit_configuration),
+        "text_configuration": attr.string(default = "inherit", values = ["inherit", "none", "basic", "full"]),
+        "disable_backend_transitions": attr.bool(default = False),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
         "forbidden": attr.string_list(),
         "forbidden_packages": attr.string_list(),
         "required": attr.string_list(),
@@ -154,7 +184,7 @@ _configured_dependency_audit = rule(
     doc = "Audits selected dependency edges after select() and platform transitions, without compiling.",
 )
 
-def configured_dependency_audit_test(name, target, forbidden = [], forbidden_packages = [], required = [], **kwargs):
+def configured_dependency_audit_test(name, target, forbidden = [], forbidden_packages = [], required = [], text_configuration = "inherit", disable_backend_transitions = False, **kwargs):
     """Audit the configured binary graph using an ordinary shell test.
 
     Args:
@@ -163,12 +193,16 @@ def configured_dependency_audit_test(name, target, forbidden = [], forbidden_pac
       forbidden: Labels that must not be reachable through binary dependencies.
       forbidden_packages: Packages (and subpackages) that must not be reachable.
       required: Labels that must be visited, guarding traversal through wrappers.
+      text_configuration: Ambient core text tier applied before product transitions.
+      disable_backend_transitions: Exercise the backend-transition bypass flag.
       **kwargs: Standard sh_test attributes.
     """
     checker = name + "_checker"
     _configured_dependency_audit(
         name = checker,
         target = target,
+        text_configuration = text_configuration,
+        disable_backend_transitions = disable_backend_transitions,
         forbidden = forbidden,
         forbidden_packages = forbidden_packages,
         required = required,

@@ -41,6 +41,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -146,6 +147,8 @@ struct RenderRequest {
   /// entity-keyed compositor state without treating every frame mutation as a
   /// replacement.
   std::uint64_t documentGeneration = 0;
+  /// Font adoption identity captured before the worker's dirty-region snapshot.
+  std::uint64_t fontResourceRevision = 0;
   /// Entity remap for structurally equivalent document replacement. When
   /// present, the worker remaps compositor state instead of fully resetting
   /// layer bitmaps and static segments.
@@ -365,6 +368,9 @@ struct RenderResult {
   std::uint64_t version = 0;
   /// Document generation captured by the render request.
   std::uint64_t documentGeneration = 0;
+  std::uint64_t fontResourceRevision = 0;
+  /// Pending faces make an interactive fallback frame unsuitable for a final pixel export.
+  std::vector<svg::FontFaceDependency> fontDependencies;
   /// Wall-clock milliseconds spent in the worker iteration after a request is
   /// dequeued, including `CompositorController::renderFrame`, final
   /// snapshot/readback work, and diagnostic snapshots that gate presentation.
@@ -379,11 +385,19 @@ struct RenderResult {
 /// Terminal outcome for one low-priority sample-thumbnail render attempt.
 enum class SampleThumbnailRenderOutcome : std::uint8_t {
   Rendered,
+  FontsPending,
+  ResourceLimit,
   Cancelled,
   ParseError,
   RenderError,
   RendererUnavailable,
 };
+
+/// Classify a temporary document's font result before destroying it. Retained-budget pressure
+/// cannot be repaired by recreating the same preview on another consumer's decode-slot wake.
+SampleThumbnailRenderOutcome ClassifyTemporaryFontResources(
+    std::span<const svg::FontFaceDependency> dependencies,
+    svg::FontResourcePreflight::Status status);
 
 /// Consumer of one bounded low-priority SVG preview render.
 enum class AuxiliaryPreviewKind : std::uint8_t {
@@ -396,6 +410,9 @@ struct SampleThumbnailRenderRequest {
   AuxiliaryPreviewKind kind = AuxiliaryPreviewKind::Sample;
   /// Caller-defined key copied into the result (the sample-catalog index in `EditorShell`).
   std::uint64_t key = 0;
+  std::uint64_t taskGeneration = 0;
+  /// Shared store wake counter when this stable coordinator task issued the attempt.
+  std::uint64_t fontWakeRevision = 0;
   /// Complete SVG source. The request owns its copy until the worker finishes parsing it.
   std::string source;
   /// Output bitmap dimensions in device pixels.
@@ -411,6 +428,10 @@ struct SampleThumbnailRenderRequest {
 struct SampleThumbnailRenderResult {
   AuxiliaryPreviewKind kind = AuxiliaryPreviewKind::Sample;
   std::uint64_t key = 0;
+  std::uint64_t taskGeneration = 0;
+  std::uint64_t fontWakeRevision = 0;
+  std::uint64_t fontResourceRevision = 0;
+  std::vector<svg::FontFaceDependency> fontDependencies;
   SampleThumbnailRenderOutcome outcome = SampleThumbnailRenderOutcome::RenderError;
   svg::RendererBitmap bitmap;
 };
@@ -480,6 +501,10 @@ public:
   /// The UI thread must not touch the `Renderer` or mutate the `SVGDocument` while this returns
   /// true.
   [[nodiscard]] bool isBusy() const;
+
+  /// True only when no document, warmup, or auxiliary preview can observe a changed font store.
+  /// Pending results must be consumed before adoption so they retain their original font epoch.
+  [[nodiscard]] bool isFontResourceAdoptionSafe() const;
 
   /// Returns true only while the worker may still be computing or cancelling a render.
   /// Unlike `isBusy()`, a staged result waiting in `DoneState` is not in flight.

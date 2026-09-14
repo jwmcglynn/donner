@@ -20,7 +20,10 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/FontPaintDependenciesComponent.h"
+#include "donner/svg/components/FontResourceGraph.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
@@ -57,6 +60,87 @@
 namespace donner::svg {
 
 namespace {
+
+class CapturePaintFontDependencies {
+public:
+  CapturePaintFontDependencies(Registry& registry, Entity host, bool preparesReferences)
+      : registry_(registry),
+        host_(host),
+        manager_(registry.ctx().find<FontManager>()),
+        preparesReferences_(preparesReferences) {
+    if (manager_) capture_.emplace(*manager_, dependencies_);
+  }
+
+  ~CapturePaintFontDependencies() {
+    capture_.reset();
+    if (!registry_.valid(host_)) return;
+    auto& paint = registry_.get_or_emplace<components::FontPaintDependenciesComponent>(host_);
+    const bool preparationChanged = preparesReferences_ && !paint.prepared;
+    if (preparationChanged || !dependencies_.empty()) {
+      paint.fontResourceRevision = manager_ ? manager_->fontResourceRevision() : 0;
+    }
+    const auto before = paint.fontDependencies;
+    paint.prepared |= preparesReferences_;
+    for (const auto& dependency : dependencies_) {
+      const auto existing = std::find_if(
+          paint.fontDependencies.begin(), paint.fontDependencies.end(), [&](const auto& face) {
+            return face.family == dependency.family && face.request == dependency.request;
+          });
+      if (existing == paint.fontDependencies.end())
+        paint.fontDependencies.push_back(dependency);
+      else
+        *existing = dependency;
+    }
+    if (preparationChanged || before != paint.fontDependencies) {
+      components::InvalidateFontResourcePreparation(registry_);
+    }
+  }
+
+private:
+  Registry& registry_;
+  Entity host_;
+  FontManager* manager_;
+  bool preparesReferences_;
+  std::vector<FontFaceDependency> dependencies_;
+  std::optional<FontManager::DependencyCapture> capture_;
+};
+
+static_assert(components::kMaximumFontChildDocuments ==
+              components::SubDocumentCache::Limits{}.maximumDocuments);
+
+class ActiveFontSubDocument {
+public:
+  ActiveFontSubDocument(std::unordered_set<const DocumentState*>& active,
+                        const DocumentState* document)
+      : active_(active), document_(document) {}
+  ~ActiveFontSubDocument() { active_.erase(document_); }
+  ActiveFontSubDocument(const ActiveFontSubDocument&) = delete;
+  ActiveFontSubDocument& operator=(const ActiveFontSubDocument&) = delete;
+
+private:
+  std::unordered_set<const DocumentState*>& active_;
+  const DocumentState* document_;
+};
+
+bool HasCompleteFragmentRange(const Registry& registry, Entity target,
+                              const components::RenderingInstanceComponent& instance) {
+  if (instance.subtreeInfo) {
+    return instance.subtreeInfo->firstRenderedEntity == target &&
+           registry.valid(instance.subtreeInfo->lastRenderedEntity);
+  }
+  // A text root draws its own complete span layout without traversing child instances.
+  if (registry.all_of<components::ComputedTextComponent>(instance.dataEntity)) return true;
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(target);
+  return tree && tree->firstChild() == entt::null;
+}
+
+bool SameChildFontEvidence(const components::ChildFontPaintDependencies& a,
+                           const components::ChildFontPaintDependencies& b) {
+  return a.fontDependencies == b.fontDependencies &&
+         a.renderedFontDependencies == b.renderedFontDependencies &&
+         a.needsRender == b.needsRender && a.renderedNeedsRender == b.renderedNeedsRender &&
+         a.resourceLimit == b.resourceLimit && a.renderedResourceLimit == b.renderedResourceLimit;
+}
 
 /// Device-pixel threshold below which a draw call is skipped as "too small to
 /// meaningfully influence the render". At 0.25 px per axis, the entire shape
@@ -1224,6 +1308,9 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
                                        const Transform2d& surfaceFromCanvas,
                                        const std::function<bool()>& shouldCancel) {
   DocumentWriteAccess access = document.writeAccess();
+  components::ScopedFontResourceRender fontRenderScope(
+      document.registry(),
+      document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
 
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
@@ -1247,12 +1334,15 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
     renderer_.beginFrame(viewport);
     syncFilterPreparationStats();
     renderer_.endFrame();
+    fontRenderScope.finish();
     return true;
   }
 
-  return drawEntityRangeInterruptibly(document.registry(), mainEntities.front(),
-                                      mainEntities.back(), viewport, surfaceFromCanvas,
-                                      shouldCancel);
+  const bool completed =
+      drawEntityRangeInterruptibly(document.registry(), mainEntities.front(), mainEntities.back(),
+                                   viewport, surfaceFromCanvas, shouldCancel);
+  fontRenderScope.finish(completed);
+  return completed;
 }
 
 RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
@@ -1279,6 +1369,9 @@ RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
 
 void RendererDriver::draw(const RenderSnapshot& snapshot) {
   snapshot.replay(renderer_);
+  fontCollectionCache_.reset();
+  activeFontSubDocuments_.reset();
+  visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
@@ -1293,6 +1386,9 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
+  components::ScopedFontResourceRender fontRenderScope(
+      document.registry(),
+      document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -1333,7 +1429,11 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   RenderingInstanceView view(document.registry(), mainEntities);
   traverse(view, document.registry());
   renderer_.endFrame();
+  fontRenderScope.finish(true);
   surfaceFromCanvasTransform_ = Transform2d();
+  fontCollectionCache_.reset();
+  activeFontSubDocuments_.reset();
+  visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
@@ -1341,6 +1441,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
+  components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -1349,7 +1450,11 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   syncFilterPreparationStats();
   (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
   renderer_.endFrame();
+  fontRenderScope.finish(true);
   surfaceFromCanvasTransform_ = Transform2d();
+  fontCollectionCache_.reset();
+  activeFontSubDocuments_.reset();
+  visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
@@ -1358,6 +1463,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
+  components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -1366,7 +1472,11 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   syncFilterPreparationStats();
   const bool completed = drawPreparedEntityRange(registry, firstEntity, lastEntity, shouldCancel);
   renderer_.endFrame();
+  fontRenderScope.finish(completed);
   surfaceFromCanvasTransform_ = Transform2d();
+  fontCollectionCache_.reset();
+  activeFontSubDocuments_.reset();
+  visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
   return completed;
@@ -1402,11 +1512,16 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
+  components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
+  fontRenderScope.finish(true);
   surfaceFromCanvasTransform_ = Transform2d();
+  fontCollectionCache_.reset();
+  activeFontSubDocuments_.reset();
+  visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
@@ -1557,6 +1672,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -1966,6 +2083,10 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
     if (!instance) {
       continue;
     }
+    // Even an empty/unsupported URL graph has completed its preparation attempt. Preserve any
+    // referenced-font dependencies until the render tree or prepared pixels are invalidated.
+    const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                               /*preparesReferences=*/true);
     const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
 
     const Box2d filterViewBox =
@@ -1999,7 +2120,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         // These calls may mutate `RenderingInstanceComponent` storage (shadow-tree creation +
         // global sort inside `createFeImageShadowTree`). We do NOT hold the `instance` reference
         // across them - the next iteration of this loop re-fetches via `storage.get(entity)`.
-        preRenderSvgFeImages(*filterGraph, registry);
+        preRenderSvgFeImages(*filterGraph, registry, entity);
         preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
       }
       if (!reservePreparedFilterMaterialization(*filterGraph)) {
@@ -2137,6 +2258,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       }
     }
 
+    components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
@@ -2144,6 +2266,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2172,7 +2296,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio, opacity,
-                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
+                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_,
+                            registry, entity);
           }
         }
       } else if (const auto* externalUse =
@@ -2186,13 +2311,14 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const Transform2d parentAbsoluteTransform =
                 instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
             drawSubDocumentElement(subDoc, externalUse->fragment, parentAbsoluteTransform,
-                                   style.properties->opacity.get().value());
+                                   style.properties->opacity.get().value(), registry, entity);
           } else {
             const Vector2i subDocSize = subDoc.canvasSize();
             const Box2d viewportBounds = Box2d::WithSize(Vector2d(subDocSize.x, subDocSize.y));
             drawSubDocument(subDoc, viewportBounds, PreserveAspectRatio::Default(),
                             style.properties->opacity.get().value(),
-                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
+                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_,
+                            registry, entity);
           }
 
           clearSubDocumentContextPaint(subDoc);
@@ -2227,6 +2353,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         }
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2410,6 +2538,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       }
     }
 
+    components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
@@ -2417,6 +2546,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -2435,9 +2566,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                                    : PreserveAspectRatio::Default();
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
-            drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
-                            style.properties->opacity.get().value(),
-                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
+            drawSubDocument(
+                subDoc, sizedElement->bounds, aspectRatio, style.properties->opacity.get().value(),
+                instance.worldFromEntityTransform * surfaceFromCanvasTransform_, registry, entity);
           }
         }
       } else if (const auto* image =
@@ -2470,6 +2601,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         }
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                                   /*preparesReferences=*/false);
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
@@ -3094,12 +3227,101 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 }
 
+components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
+  if (!fontCollectionCache_) {
+    if (securityStats_) securityStats_->nestedFontResources = {};
+    fontCollectionCache_ = std::make_shared<components::FontResourceGraphCache>(
+        securityStats_ ? &securityStats_->nestedFontResources : nullptr);
+  }
+  return *fontCollectionCache_;
+}
+
+void RendererDriver::prepareSubDocument(SVGDocument& document) {
+  Registry& registry = document.registry();
+  const auto* state = registry.ctx().find<components::RenderTreeState>();
+  if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
+    components::InvalidateFontResourcePreparation(registry);
+  }
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+}
+
+void RendererDriver::recordChildFontDependencies(SVGDocument& child, Entity target,
+                                                 Registry& hostRegistry, Entity host) {
+  if (!hostRegistry.valid(host)) return;
+  auto& paint = hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(host);
+  paint.prepared = true;
+  const auto handle = child.handle();
+  const auto previous = std::find_if(
+      paint.children.begin(), paint.children.end(),
+      [&](const auto& entry) { return entry.document.lock() == handle && entry.target == target; });
+  if (previous == paint.children.end() &&
+      paint.children.size() >= components::kMaximumFontChildDocuments) {
+    paint.resourceLimit = true;
+    components::InvalidateFontResourcePreparation(hostRegistry);
+    return;
+  }
+  auto full = fontCollectionCache().collect(handle, target);
+  auto rendered = fontCollectionCache().collect(
+      handle, target, components::FontResourceGraph::Purpose::RenderedFrame);
+  components::ChildFontPaintDependencies snapshot{
+      .document = handle,
+      .target = target,
+      .preparationEpoch =
+          child.registry().ctx().emplace<components::FontResourcePreparationState>().epoch,
+      .renderScopeToken =
+          child.registry().ctx().emplace<components::RenderedFontResourceScope>().token,
+      .fontDependencies = std::move(full.dependencies),
+      .renderedFontDependencies = std::move(rendered.dependencies),
+      .renderedNeedsRender = rendered.needsRender,
+      .renderedResourceLimit = rendered.resourceLimit,
+      .fontResourceRevision = child.fontResourceRevision(),
+      .needsRender = full.needsRender,
+      .resourceLimit = full.resourceLimit,
+  };
+  const bool changed =
+      previous == paint.children.end() || !SameChildFontEvidence(*previous, snapshot);
+  if (previous == paint.children.end())
+    paint.children.push_back(std::move(snapshot));
+  else
+    *previous = std::move(snapshot);
+  if (changed) components::InvalidateFontResourcePreparation(hostRegistry);
+}
+
+bool RendererDriver::beginSubDocumentFontTraversal(const SVGDocumentHandle& child,
+                                                   Registry& hostRegistry, Entity hostEntity) {
+  if (!activeFontSubDocuments_) {
+    activeFontSubDocuments_ = std::make_shared<std::unordered_set<const DocumentState*>>();
+    visitedFontSubDocuments_ = std::make_shared<std::unordered_set<const DocumentState*>>();
+  }
+  if (!child || &child->registry() == &hostRegistry ||
+      activeFontSubDocuments_->contains(child.get()) ||
+      (!visitedFontSubDocuments_->contains(child.get()) &&
+       visitedFontSubDocuments_->size() >= components::kMaximumFontChildDocuments)) {
+    auto& paint =
+        hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity);
+    paint.prepared = true;
+    paint.resourceLimit = true;
+    return false;
+  }
+  visitedFontSubDocuments_->insert(child.get());
+  activeFontSubDocuments_->insert(child.get());
+  return true;
+}
+
 void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                                      const PreserveAspectRatio& aspectRatio, double opacity,
-                                     const Transform2d& parentAbsoluteTransform) {
+                                     const Transform2d& parentAbsoluteTransform,
+                                     Registry& hostRegistry, Entity hostEntity) {
+  const auto child = subDocument.handle();
+  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) return;
+  const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
+  const auto childAccess = subDocument.writeAccess();
   // Prepare the sub-document's render tree (styles, layout, resources).
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(subDocument, verbose_, disabledSink);
+  prepareSubDocument(subDocument);
+  components::ScopedFontResourceRender fontRenderScope(
+      subDocument.registry(),
+      subDocument.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
 
   // Determine the sub-document's intrinsic size for preserveAspectRatio mapping.
   const Vector2i subDocSize = subDocument.canvasSize();
@@ -3139,6 +3361,10 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
   // Traverse the sub-document's render tree, emitting draw calls to the same renderer.
   RenderingInstanceView subView(subDocument.registry());
   traverse(subView, subDocument.registry());
+  fontRenderScope.finish();
+  recordChildFontDependencies(
+      subDocument, subDocument.registry().ctx().get<components::SVGDocumentContext>().rootEntity,
+      hostRegistry, hostEntity);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
@@ -3151,15 +3377,24 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
 
 void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                                             const Transform2d& parentAbsoluteTransform,
-                                            double opacity) {
+                                            double opacity, Registry& hostRegistry,
+                                            Entity hostEntity) {
+  const auto child = subDocument.handle();
+  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) return;
+  const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
+  const auto childAccess = subDocument.writeAccess();
+  hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =
+      true;
   // Prepare the sub-document's render tree.
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(subDocument, verbose_, disabledSink);
+  prepareSubDocument(subDocument);
+  components::ScopedFontResourceRender fontRenderScope(subDocument.registry());
 
   // Find the referenced element by ID.
   const Entity targetEntity =
       components::FindAttachedEntityById(subDocument.registry(), RcString(fragmentId));
   if (targetEntity == entt::null) {
+    fontRenderScope.finish();
+    recordChildFontDependencies(subDocument, entt::null, hostRegistry, hostEntity);
     if (verbose_) {
       std::cerr << "[drawSubDocumentElement] Fragment '" << fragmentId << "' not found\n";
     }
@@ -3170,11 +3405,17 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   const auto* targetInstance =
       subDocument.registry().try_get<components::RenderingInstanceComponent>(targetEntity);
   if (targetInstance == nullptr) {
+    fontRenderScope.finish();
+    recordChildFontDependencies(subDocument, entt::null, hostRegistry, hostEntity);
     if (verbose_) {
       std::cerr << "[drawSubDocumentElement] No RenderingInstanceComponent for fragment '"
                 << fragmentId << "'\n";
     }
     return;
+  }
+
+  if (HasCompleteFragmentRange(subDocument.registry(), targetEntity, *targetInstance)) {
+    fontRenderScope.setCoverageRoot(targetEntity);
   }
 
   // Determine the subtree range: from the target entity to its last descendant.
@@ -3201,6 +3442,8 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   // Traverse only the target element's subtree from the sub-document's render tree.
   RenderingInstanceView subView(subDocument.registry());
   traverseRange(subView, subDocument.registry(), targetEntity, lastEntity);
+  fontRenderScope.finish();
+  recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
@@ -3212,6 +3455,7 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
 void RendererDriver::setSubDocumentContextPaint(
     SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
     const components::ResolvedPaintServer& contextStroke) {
+  components::InvalidateFontResourcePreparation(subDocument.registry());
   if (!subDocument.registry().ctx().contains<components::RenderingContext>()) {
     subDocument.registry().ctx().emplace<components::RenderingContext>(subDocument.registry());
   }
@@ -3220,13 +3464,14 @@ void RendererDriver::setSubDocumentContextPaint(
 }
 
 void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
+  components::InvalidateFontResourcePreparation(subDocument.registry());
   if (subDocument.registry().ctx().contains<components::RenderingContext>()) {
     subDocument.registry().ctx().get<components::RenderingContext>().clearInitialContextPaint();
   }
 }
 
-void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph,
-                                          Registry& registry) {
+void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
+                                          Entity hostEntity) {
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
     if (!imageNode || !imageNode->svgSubDocument || imageNode->hasImageData()) {
@@ -3238,6 +3483,8 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph,
     const Vector2i targetSize = renderSize.value_or(subDoc.canvasSize());
     const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(targetSize);
     if (!imageBytes.has_value()) {
+      auto& paint = registry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity);
+      paint.resourceLimit = true;
       imageNode->svgSubDocument.reset();
       continue;
     }
@@ -3261,8 +3508,17 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph,
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
     subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
     subDriver.securityStats_ = securityStats_;
+    (void)fontCollectionCache();
+    subDriver.fontCollectionCache_ = fontCollectionCache_;
+    if (!activeFontSubDocuments_) {
+      activeFontSubDocuments_ = std::make_shared<std::unordered_set<const DocumentState*>>();
+      visitedFontSubDocuments_ = std::make_shared<std::unordered_set<const DocumentState*>>();
+    }
+    subDriver.activeFontSubDocuments_ = activeFontSubDocuments_;
+    subDriver.visitedFontSubDocuments_ = visitedFontSubDocuments_;
     subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
-                              imageNode->preserveAspectRatio, 1.0, Transform2d());
+                              imageNode->preserveAspectRatio, 1.0, Transform2d(), registry,
+                              hostEntity);
     offscreen->endFrame();
 
     // Capture the rendered pixels.
@@ -3409,6 +3665,8 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
     subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
     subDriver.securityStats_ = securityStats_;
+    (void)fontCollectionCache();
+    subDriver.fontCollectionCache_ = fontCollectionCache_;
 
     // The fragment is rendered at its natural position in the document coordinate system
     // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space

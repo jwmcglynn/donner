@@ -19,6 +19,11 @@
 //     `donner/editor/WholeAppWorkerBridge.h`).
 
 const canvas = document.getElementById("canvas");
+// Capture the actual application script URL before creating workers. Font paths never resolve
+// against a document-selected SVG URL or a pthread's blob URL.
+window.__donnerCatalogPackageUrl = document.currentScript
+  ? new URL(".", document.currentScript.src).href
+  : null;
 const loadingScreen = document.getElementById("loading-screen");
 const status = document.getElementById("status");
 const loadingProgress = document.getElementById("loading-progress");

@@ -29,8 +29,26 @@
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 
 #include <cstdint>
+#include <memory>
+#include <string_view>
+
+namespace donner::svg {
+class CatalogEncodedFontStore;
+}
 
 namespace donner::editor::whole_app_worker {
+
+/// Register a session's immutable catalog with the main-thread browser broker. No assets load.
+/// Returns an opaque session ID; callbacks never carry document or provider pointers.
+uint32_t InstallCatalogFonts(std::shared_ptr<svg::CatalogEncodedFontStore> store);
+
+/// Dispatch a coordinator-approved store request. Priority zero is document/output demand and
+/// priority one is a visible auxiliary preview. The store must already have issued requestToken.
+void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t requestToken,
+                        int priority, bool explicitRetry = false);
+
+/// Unregister the C++ session before aborting browser work, making late callbacks harmless.
+void UninstallCatalogFonts(uint32_t session);
 
 /**
  * Give the app pthread's JS context the `window` and `document` globals the

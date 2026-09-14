@@ -179,6 +179,7 @@ struct FontManager::FontBudgetState {
   size_t compressedFontDecompressionAttempts = 0;
   std::unordered_map<const std::vector<uint8_t>*, std::weak_ptr<const std::vector<uint8_t>>>
       validationRejectedSources;
+  uint64_t retainedRevision = 0;
 };
 
 struct FontManager::FontBudgetContext {
@@ -195,6 +196,7 @@ struct FontManager::FontBudgetReservation {
     assert(state->usedFonts < state->maximumFonts);
     state->usedBytes += bytes;
     ++state->usedFonts;
+    ++state->retainedRevision;
   }
 
   FontBudgetReservation(const FontBudgetReservation&) = delete;
@@ -222,6 +224,7 @@ struct FontManager::FontBudgetReservation {
     assert(state->usedFonts != 0);
     state->usedBytes -= bytes;
     --state->usedFonts;
+    ++state->retainedRevision;
     state.reset();
     bytes = 0;
   }
@@ -276,7 +279,161 @@ size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) 
   for (const int field : {key.weight, key.style, key.stretch}) {
     hash ^= std::hash<int>{}(field) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
   }
+  hash ^=
+      std::hash<std::string>{}(key.contentId) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+  hash ^= std::hash<uint64_t>{}(key.contentGeneration) + 0x9e3779b97f4a7c15ULL + (hash << 6) +
+          (hash >> 2);
   return hash;
+}
+
+FontManager::DependencyCapture::DependencyCapture(FontManager& manager,
+                                                  std::vector<FontFaceDependency>& output)
+    : manager_(manager), previous_(manager.dependencyCapture_) {
+  output.clear();
+  manager_.dependencyCapture_ = &output;
+}
+
+FontManager::DependencyCapture::~DependencyCapture() {
+  auto* completed = manager_.dependencyCapture_;
+  manager_.dependencyCapture_ = previous_;
+  if (previous_) {
+    for (const auto& dependency : *completed) {
+      const ProviderFontKey key{dependency.family, dependency.request.weight,
+                                static_cast<int>(dependency.request.style),
+                                static_cast<int>(dependency.request.stretch)};
+      manager_.recordDependency(key);
+    }
+  }
+}
+
+void FontManager::recordDependency(const ProviderFontKey& key) {
+  if (!dependencyCapture_) return;
+  const auto it = providerDependencies_.find(key);
+  if (it == providerDependencies_.end()) return;
+  const auto existing = std::find_if(dependencyCapture_->begin(), dependencyCapture_->end(),
+                                     [&](const FontFaceDependency& dependency) {
+                                       return dependency.family == it->second.family &&
+                                              dependency.request == it->second.request;
+                                     });
+  if (existing != dependencyCapture_->end()) {
+    *existing = it->second;
+  } else if (dependencyCapture_->size() < budgetStateForRead()->maximumFonts) {
+    dependencyCapture_->push_back(it->second);
+  } else {
+    fontDependenciesOverflowed_ = true;
+  }
+}
+
+void FontManager::recordDependencies(std::span<const FontFaceDependency> dependencies) {
+  for (const auto& dependency : dependencies) {
+    recordDependency({dependency.family, dependency.request.weight,
+                      static_cast<int>(dependency.request.style),
+                      static_cast<int>(dependency.request.stretch)});
+  }
+}
+
+void FontManager::rememberDependency(const ProviderFontKey& key, const FontFaceRequest& request,
+                                     const FontFaceAvailability& availability,
+                                     FontFaceLoadState state, FontFaceWaitReason waitReason) {
+  if (availability.contentId.empty()) return;
+  if (!providerDependencies_.contains(key) &&
+      providerDependencies_.size() >= budgetStateForRead()->maximumFonts) {
+    fontDependenciesOverflowed_ = true;
+    return;
+  }
+  if (const auto previous = providerDependencies_.find(key);
+      previous != providerDependencies_.end() &&
+      (previous->second.availability.contentId != availability.contentId ||
+       previous->second.availability.contentGeneration != availability.contentGeneration)) {
+    ProviderFontKey obsolete = key;
+    obsolete.contentId = previous->second.availability.contentId;
+    obsolete.contentGeneration = previous->second.availability.contentGeneration;
+    providerFailures_.erase(obsolete);
+  }
+  providerDependencies_[key] = {key.family,
+                                request,
+                                availability,
+                                state,
+                                waitReason,
+                                waitReason == FontFaceWaitReason::RetainedBudget
+                                    ? budgetStateForRead()->retainedRevision
+                                    : 0};
+  recordDependency(key);
+}
+
+std::vector<FontFaceDependency> FontManager::faceDependencies() const {
+  std::vector<FontFaceDependency> result;
+  result.reserve(providerDependencies_.size());
+  for (const auto& [key, dependency] : providerDependencies_) result.push_back(dependency);
+  return result;
+}
+
+bool FontManager::refreshPendingFonts() {
+  const uint64_t revision = fontResourceRevision_;
+  const bool previousRefreshing = refreshingFonts_;
+  refreshingFonts_ = true;
+  // A retry updates the map; do not retain map iterators across resolution.
+  const auto dependencies = faceDependencies();
+  for (const auto& dependency : dependencies) {
+    const auto current = provider_ ? provider_->availability(dependency.family, dependency.request)
+                                   : FontFaceAvailability{};
+    if (dependency.waitReason == FontFaceWaitReason::RetainedBudget &&
+        dependency.consumerBudgetRevision == budgetStateForRead()->retainedRevision &&
+        current == dependency.availability)
+      continue;
+    if (dependency.state != FontFaceLoadState::Loaded ||
+        current.contentId != dependency.availability.contentId ||
+        current.contentGeneration != dependency.availability.contentGeneration) {
+      findFont(dependency.family, dependency.request.weight,
+               static_cast<int>(dependency.request.style),
+               static_cast<int>(dependency.request.stretch));
+    }
+  }
+  refreshingFonts_ = previousRefreshing;
+  return revision != fontResourceRevision_;
+}
+
+bool FontManager::hasUnresolvedDependencies() const {
+  return fontDependenciesOverflowed_ ||
+         std::any_of(
+             providerDependencies_.begin(), providerDependencies_.end(),
+             [](const auto& entry) { return entry.second.state != FontFaceLoadState::Loaded; });
+}
+
+bool FontManager::admissionCanProgress(const FontFaceDependency& dependency,
+                                       const FontFaceAvailability& current) const {
+  return current != dependency.availability ||
+         dependency.waitReason != FontFaceWaitReason::RetainedBudget ||
+         dependency.consumerBudgetRevision != budgetStateForRead()->retainedRevision;
+}
+
+bool FontManager::dependencyNeedsResourceRefresh(const ProviderFontKey& key,
+                                                 const FontFaceDependency& dependency) const {
+  const auto current = provider_->availability(dependency.family, dependency.request);
+  if (current.contentId != dependency.availability.contentId ||
+      current.contentGeneration != dependency.availability.contentGeneration)
+    return true;
+  if (dependency.state == FontFaceLoadState::WaitingForAdmission) {
+    // A ready global asset does not make an unchanged retained budget eligible.
+    return admissionCanProgress(dependency, current);
+  }
+  if (current.state == FontAssetState::Failed && dependency.state != FontFaceLoadState::Failed)
+    return true;
+  if (current.state == FontAssetState::Ready && dependency.state != FontFaceLoadState::Loaded) {
+    auto contentKey = key;
+    contentKey.contentId = current.contentId;
+    contentKey.contentGeneration = current.contentGeneration;
+    return !providerFailures_.contains(contentKey);
+  }
+  return false;
+}
+
+bool FontManager::needsResourceRefresh() const {
+  if (!provider_) return false;
+  for (const auto& [key, dependency] : providerDependencies_) {
+    if (dependencyNeedsResourceRefresh(key, dependency)) return true;
+  }
+  return false;
 }
 
 void FontManager::addFontFace(const css::FontFace& face) {
@@ -343,14 +500,17 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     family = it->second;
   }
 
+  const ProviderFontKey dependencyKey{ToLowerAscii(family), weight, style, stretch};
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
+  invalidateChangedProviderAnswer(family, dependencyKey, cacheKey);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {
     // A cached answer outlives many lookups, so confirm the entity behind it is still a live,
     // loaded font rather than handing back a handle to a destroyed or emptied one. Every answer
     // this function caches has loaded bytes, so anything else means the entity changed underneath
     // the cache and the query has to be resolved again.
     if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
+      recordDependency(dependencyKey);
       return it->second;
     }
     cache_.erase(it);
@@ -418,6 +578,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
 
   if (bestEntity != entt::null) {
     if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
+      providerDependencies_.erase(dependencyKey);
       FontHandle handle(bestEntity);
       cache_[cacheKey] = handle;
       return handle;
@@ -430,6 +591,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
         const FontDataTrust trust =
             source.trusted ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
         if (loadFontDataSharedIntoEntity(bestEntity, dataPtr, trust)) {
+          providerDependencies_.erase(dependencyKey);
           FontHandle handle(bestEntity);
           cache_[cacheKey] = handle;
           return handle;
@@ -446,45 +608,183 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     return handle;
   };
 
-  // No document @font-face matched. Consult the external provider (embedded/system catalog) before
-  // falling back to Public Sans. The provider itself orders Embedded before System.
   if (provider_ != nullptr && provider_->hasFamily(family)) {
-    const FontFaceRequest request{.weight = weight,
-                                  .style = static_cast<FontStyle>(style),
-                                  .stretch = static_cast<FontStretch>(stretch)};
-    const ProviderFontKey providerKey{ToLowerAscii(family), weight, style, stretch};
-
-    if (auto it = providerFonts_.find(providerKey); it != providerFonts_.end()) {
-      if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
-        // A provider answers per requested face, so this memo is keyed on the whole request. The
-        // same request resolving again reuses the entity already holding those bytes instead of
-        // loading a duplicate copy onto a new identity.
-        return cacheUnlessRetryable(it->second);
-      }
-      providerFonts_.erase(it);
-    }
-
-    std::vector<uint8_t> data = provider_->loadFamilyData(family, request);
-    if (!data.empty()) {
-      const Entity entity = registry_.create();
-      if (loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted)) {
-        FontHandle handle(entity);
-        providerFonts_[providerKey] = handle;
-        return cacheUnlessRetryable(handle);
-      }
-      registry_.destroy(entity);
-    }
-
-    // The provider claims this family but nothing loadable came back for the requested face, which
-    // a full aggregate budget alone is enough to cause. Same reasoning as a document face that
-    // failed to load: the answer below stands in for this request until the load can succeed, so
-    // it must not stick. Only this request is affected; the family's other faces resolve on their
-    // own and are not held back by it.
-    matchedSourceFailedToLoad = true;
+    return findProviderFont(family, dependencyKey, cacheKey, matchedSourceFailedToLoad);
   }
 
   // Fall back to the embedded Public Sans font.
   return cacheUnlessRetryable(fallbackFont());
+}
+
+void FontManager::invalidateChangedProviderAnswer(std::string_view family,
+                                                  const ProviderFontKey& key,
+                                                  const std::string& cacheKey) {
+  if (!provider_) return;
+  const auto dependency = providerDependencies_.find(key);
+  if (dependency == providerDependencies_.end()) return;
+  const auto current = provider_->availability(family, dependency->second.request);
+  if (current.contentId != dependency->second.availability.contentId ||
+      current.contentGeneration != dependency->second.availability.contentGeneration) {
+    cache_.erase(cacheKey);
+  }
+}
+
+void FontManager::rememberProviderDependency(const ProviderLookup& lookup, FontFaceLoadState state,
+                                             FontFaceWaitReason waitReason) {
+  rememberDependency(lookup.dependencyKey, lookup.request, lookup.availability, state, waitReason);
+}
+
+FontHandle FontManager::cachedProviderFont(const ProviderLookup& lookup) {
+  const auto it = providerFonts_.find(lookup.contentKey);
+  if (it == providerFonts_.end()) return {};
+  if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
+    rememberProviderDependency(lookup, FontFaceLoadState::Loaded);
+    return it->second;
+  }
+  providerFonts_.erase(it);
+  return {};
+}
+
+bool FontManager::awaitsExplicitResourceRefresh(const ProviderFontKey& key) const {
+  if (refreshingFonts_) return false;
+  const auto previous = providerDependencies_.find(key);
+  return previous != providerDependencies_.end() &&
+         (previous->second.state == FontFaceLoadState::WaitingForBytes ||
+          previous->second.state == FontFaceLoadState::WaitingForAdmission);
+}
+
+bool FontManager::shouldDeferCatalogLookup(const ProviderLookup& lookup) {
+  if (!lookup.isCatalog()) return false;
+  if (const auto failure = providerFailures_.find(lookup.contentKey);
+      failure != providerFailures_.end()) {
+    rememberProviderDependency(lookup, FontFaceLoadState::Failed, failure->second);
+    return true;
+  }
+  if (awaitsExplicitResourceRefresh(lookup.dependencyKey)) {
+    // A running render retains its observed fallback until explicit serialized adoption.
+    recordDependency(lookup.dependencyKey);
+    return true;
+  }
+  if (lookup.availability.state != FontAssetState::Ready) {
+    const bool failed = lookup.availability.state == FontAssetState::Failed ||
+                        lookup.availability.state == FontAssetState::Unavailable;
+    rememberProviderDependency(
+        lookup, failed ? FontFaceLoadState::Failed : FontFaceLoadState::WaitingForBytes);
+    return true;
+  }
+  return false;
+}
+
+bool FontManager::catalogFaceFitsConsumer(const ProviderLookup& lookup) {
+  if (!lookup.isCatalog()) return true;
+  const auto budget = budgetStateForRead();
+  if (!providerDependencies_.contains(lookup.dependencyKey) &&
+      providerDependencies_.size() >= budget->maximumFonts) {
+    fontDependenciesOverflowed_ = true;
+    return false;
+  }
+  if (lookup.availability.decodedBytes > budget->maximumBytes || budget->maximumFonts == 0) {
+    providerFailures_[lookup.contentKey] = FontFaceWaitReason::RetainedBudget;
+    rememberProviderDependency(lookup, FontFaceLoadState::Failed,
+                               FontFaceWaitReason::RetainedBudget);
+    return false;
+  }
+  if (lookup.availability.decodedBytes > budget->maximumBytes - budget->usedBytes ||
+      budget->usedFonts >= budget->maximumFonts) {
+    rememberProviderDependency(lookup, FontFaceLoadState::WaitingForAdmission,
+                               FontFaceWaitReason::RetainedBudget);
+    return false;
+  }
+  return true;
+}
+
+bool FontManager::acceptProviderAdmission(const ProviderLookup& lookup,
+                                          const FontFaceAdmission& admission) {
+  if (admission.state == FontFaceLoadState::Resolving) return true;
+  const auto reason = admission.state == FontFaceLoadState::WaitingForAdmission &&
+                              admission.waitReason == FontFaceWaitReason::None
+                          ? FontFaceWaitReason::SharedDecodeSlot
+                          : admission.waitReason;
+  rememberProviderDependency(lookup, admission.state, reason);
+  return false;
+}
+
+bool FontManager::providerBytesMatch(const ProviderLookup& lookup,
+                                     std::span<const uint8_t> data) const {
+  return !lookup.isCatalog() ||
+         (lookup.availability.format == FontFileFormat::Woff2 && data.size() >= 4 &&
+          readBE32(data.data()) == kWoff2Magic && data.size() == lookup.availability.encodedBytes);
+}
+
+FontHandle FontManager::loadProviderFont(const ProviderLookup& lookup,
+                                         std::span<const uint8_t> data) {
+  if (data.empty()) return {};
+  bool retainedBudgetExceeded = false;
+  const Entity entity = registry_.create();
+  if (providerBytesMatch(lookup, data) &&
+      loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted,
+                             lookup.isCatalog() ? &lookup.availability : nullptr,
+                             &retainedBudgetExceeded)) {
+    const FontHandle font(entity);
+    providerFonts_[lookup.contentKey] = font;
+    rememberProviderDependency(lookup, FontFaceLoadState::Loaded);
+    if (lookup.isCatalog()) ++fontResourceRevision_;
+    return font;
+  }
+  registry_.destroy(entity);
+  if (lookup.isCatalog()) {
+    if (retainedBudgetExceeded) {
+      rememberProviderDependency(lookup, FontFaceLoadState::WaitingForAdmission,
+                                 FontFaceWaitReason::RetainedBudget);
+    } else {
+      providerFailures_[lookup.contentKey] = FontFaceWaitReason::None;
+      rememberProviderDependency(lookup, FontFaceLoadState::Failed);
+    }
+  }
+  return {};
+}
+
+FontHandle FontManager::cacheProviderFont(const std::string& cacheKey, FontHandle font,
+                                          bool documentSourceFailed) {
+  if (!documentSourceFailed) cache_[cacheKey] = font;
+  return font;
+}
+
+FontHandle FontManager::findProviderFont(std::string_view family,
+                                         const ProviderFontKey& dependencyKey,
+                                         const std::string& cacheKey, bool documentSourceFailed) {
+  const FontFaceRequest request{.weight = dependencyKey.weight,
+                                .style = static_cast<FontStyle>(dependencyKey.style),
+                                .stretch = static_cast<FontStretch>(dependencyKey.stretch)};
+  auto availability = provider_->availability(family, request);
+  const ProviderLookup lookup{
+      .family = family,
+      .dependencyKey = dependencyKey,
+      .contentKey = {dependencyKey.family, dependencyKey.weight, dependencyKey.style,
+                     dependencyKey.stretch, availability.contentId, availability.contentGeneration},
+      .request = request,
+      .availability = std::move(availability),
+  };
+  if (const auto font = cachedProviderFont(lookup))
+    return cacheProviderFont(cacheKey, font, documentSourceFailed);
+  if (shouldDeferCatalogLookup(lookup) || !catalogFaceFitsConsumer(lookup)) return fallbackFont();
+
+  {
+    // Admission spans the provider copy, decode and transfer into retained ownership. The encoded
+    // vector is destroyed before admission release on every path, just as on the inline path.
+    auto admission = provider_->tryAcquireFace(lookup.family, lookup.request);
+    if (!acceptProviderAdmission(lookup, admission)) return fallbackFont();
+    rememberProviderDependency(lookup, FontFaceLoadState::Resolving);
+    const std::vector<uint8_t> data = provider_->loadFamilyData(lookup.family, lookup.request);
+    if (lookup.isCatalog() && data.empty()) {
+      // Encoded-store eviction can race the availability read. This remains a pending face.
+      rememberProviderDependency(lookup, FontFaceLoadState::WaitingForBytes);
+      return fallbackFont();
+    }
+    if (const auto font = loadProviderFont(lookup, data))
+      return cacheProviderFont(cacheKey, font, documentSourceFailed);
+  }
+  return fallbackFont();
 }
 
 FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust) {
@@ -699,10 +999,21 @@ std::optional<fonts::SfntFont> FontManager::validateSfntForLoad(
 }
 
 bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust,
-                                 bool* validationWorkLimitExceeded) {
+                                 bool* validationWorkLimitExceeded, bool* retainedBudgetExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   auto sfnt = validateSfntForLoad(entity, data, trust, budgetState, validationWorkLimitExceeded);
   if (!sfnt) {
+    return false;
+  }
+
+  if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState)) {
+    // A face larger than the entire immutable registry budget cannot recover. Current retained
+    // pressure can; keep it distinct from malformed/unsupported immutable content.
+    if (retainedBudgetExceeded && data.size() <= budgetState->maximumBytes &&
+        sfnt->retainedBytes() <= budgetState->maximumBytes - data.size() &&
+        budgetState->maximumFonts != 0) {
+      *retainedBudgetExceeded = true;
+    }
     return false;
   }
 
@@ -811,7 +1122,10 @@ bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDa
 }
 
 bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data,
-                                         FontDataTrust trust) {
+                                         FontDataTrust trust, const FontFaceAvailability* catalog,
+                                         bool* retainedBudgetExceeded) {
+  (void)catalog;
+  (void)retainedBudgetExceeded;
   if (data.size() < 4) {
     return false;
   }
@@ -831,7 +1145,7 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 
   if (magic == kWoff2Magic) {
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-    return loadWoff2(entity, data, trust);
+    return loadWoff2(entity, data, trust, nullptr, catalog, retainedBudgetExceeded);
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
                  "Build with --config=text-full to enable.\n";
@@ -856,18 +1170,32 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
 bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
-                            bool* validationWorkLimitExceeded) {
+                            bool* validationWorkLimitExceeded, const FontFaceAvailability* catalog,
+                            bool* retainedBudgetExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   ++budgetState->compressedFontDecompressionAttempts;
   fonts::Woff2Parser::Options options;
   options.maximumOutputSize = std::min(options.maximumOutputSize, budgetState->maximumBytes);
+  if (catalog) {
+    options.maximumInputSize = std::min(size_t(2 * 1024 * 1024), catalog->encodedBytes);
+    options.maximumOutputSize =
+        std::min({options.maximumOutputSize, size_t(2 * 1024 * 1024), catalog->decodedBytes});
+    options.maximumIntermediateSize = 2 * 1024 * 1024;
+    options.maximumTransformedGlyfSize = 512 * 1024;
+    options.maximumTableCount = 64;
+    options.expectedOutputSize = catalog->decodedBytes;
+    options.maximumBrotliMemory = 8 * 1024 * 1024;
+    options.requireTrueTypeOutlines = true;
+  }
   auto result = fonts::Woff2Parser::Decompress(data, options);
   if (result.hasError()) {
     std::cerr << "FontManager: WOFF2 decompression failed: " << result.error().reason << "\n";
     return false;
   }
 
-  return setRawFontData(entity, std::move(result.result()), trust, validationWorkLimitExceeded);
+  if (catalog && result.result().size() != catalog->decodedBytes) return false;
+  return setRawFontData(entity, std::move(result.result()), trust, validationWorkLimitExceeded,
+                        retainedBudgetExceeded);
 }
 #endif
 

@@ -258,6 +258,58 @@ TEST(Woff2ParserTest, CorpusRegressionSeedsRetainExpectedPreflightFailures) {
   }
 }
 
+TEST(Woff2ParserTest, ExactOutputAndScopedBrotliBudget) {
+  const auto bytes = readFile("donner/base/fonts/testdata/valid-001.woff2");
+  const auto generic = Woff2Parser::Decompress(bytes);
+  ASSERT_EQ(generic.hasError(), false);
+  Woff2Parser::Options options;
+  options.expectedOutputSize = generic.result().size();
+  options.maximumBrotliMemory = 8 * 1024 * 1024;
+  const auto bounded = Woff2Parser::Decompress(bytes, options);
+  ASSERT_EQ(bounded.hasError(), false);
+  EXPECT_THAT(bounded.result(), testing::ElementsAreArray(generic.result()));
+  options.maximumBrotliMemory = 1;
+  const auto denied = Woff2Parser::Decompress(bytes, options);
+  ASSERT_EQ(denied.hasError(), true);
+  EXPECT_THAT(denied.error().reason, testing::Eq("WOFF2: bounded decompression failed"));
+  // Failed instance admission cannot consume another decode's budget or affect the generic path.
+  options.maximumBrotliMemory = 8 * 1024 * 1024;
+  EXPECT_EQ(Woff2Parser::Decompress(bytes, options).hasError(), false);
+  options.expectedOutputSize += 1;
+  const auto wrongSize = Woff2Parser::Decompress(bytes, options);
+  ASSERT_EQ(wrongSize.hasError(), true);
+  EXPECT_THAT(wrongSize.error().reason,
+              testing::Eq("WOFF2: declared size differs from expected output size"));
+}
+
+TEST(Woff2ParserTest, CatalogLimitsRejectIntermediateAndGlyfWorkBeforeDecode) {
+  Woff2Parser::Options options;
+  options.maximumIntermediateSize = 2 * 1024 * 1024;
+  options.maximumTransformedGlyfSize = 512 * 1024;
+  auto intermediate =
+      Woff2Parser::Decompress(woff2WithIntermediateSize(2 * 1024 * 1024 + 1), options);
+  ASSERT_EQ(intermediate.hasError(), true);
+  EXPECT_THAT(intermediate.error().reason,
+              testing::Eq("WOFF2: intermediate decompressed size exceeds limit"));
+  auto glyf = Woff2Parser::Decompress(woff2WithTransformedGlyfSize(512 * 1024 + 1), options);
+  ASSERT_EQ(glyf.hasError(), true);
+  EXPECT_THAT(glyf.error().reason, testing::Eq("WOFF2: transformed glyf size exceeds limit"));
+}
+
+TEST(Woff2ParserTest, CatalogTableLimitDoesNotChangeTheGenericDefault) {
+  auto bytes = woff2WithIntermediateSize(1);
+  bytes[12] = 0;
+  bytes[13] = 65;  // Below the generic limit, above the catalog limit.
+  Woff2Parser::Options options;
+  options.maximumTableCount = 64;
+  const auto catalog = Woff2Parser::Decompress(bytes, options);
+  ASSERT_EQ(catalog.hasError(), true);
+  EXPECT_THAT(catalog.error().reason, testing::Eq("WOFF2: table count exceeds limit"));
+  const auto generic = Woff2Parser::Decompress(bytes);
+  ASSERT_EQ(generic.hasError(), true);
+  EXPECT_THAT(generic.error().reason, testing::Ne("WOFF2: table count exceeds limit"));
+}
+
 TEST(Woff2ParserTest, RejectsOversizedIntermediateBufferBeforeDecoderEntry) {
   auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(16u * 1024u * 1024u + 1u));
   ASSERT_TRUE(result.hasError());

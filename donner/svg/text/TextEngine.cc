@@ -9,13 +9,18 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/FontMetricDependenciesComponent.h"
+#include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -1303,6 +1308,26 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
   return result;
 }
 
+template <typename Geometry>
+bool FontDependenciesChanged(Geometry& geometry, uint64_t revision,
+                             std::span<const FontFaceDependency> resolved) {
+  if (geometry.fontResourceRevision == revision) return false;
+  geometry.fontResourceRevision = revision;
+  for (const auto& dependency : geometry.fontDependencies) {
+    const auto current = std::find_if(resolved.begin(), resolved.end(), [&](const auto& face) {
+      return face.family == dependency.family && face.request == dependency.request;
+    });
+    if (current == resolved.end() ||
+        (current->state == FontFaceLoadState::Loaded &&
+         (dependency.state != FontFaceLoadState::Loaded ||
+          dependency.availability.contentId != current->availability.contentId ||
+          dependency.availability.contentGeneration != current->availability.contentGeneration))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 TextEngine::TextEngine(FontManager& fontManager, Registry& registry)
@@ -1319,6 +1344,61 @@ TextEngine::TextEngine(FontManager& fontManager, Registry& registry,
     : fontManager_(fontManager), registry_(registry), backend_(std::move(backend)) {}
 
 TextEngine::~TextEngine() = default;
+
+bool TextEngine::needsFontResourceRefresh() const {
+  return fontManager_.fontResourceRevision() != observedFontResourceRevision_ ||
+         fontManager_.needsResourceRefresh();
+}
+
+std::vector<Entity> TextEngine::refreshFontResources() {
+  fontManager_.refreshPendingFonts();
+  const uint64_t revision = fontManager_.fontResourceRevision();
+  const auto resolved = fontManager_.faceDependencies();
+
+  std::vector<Entity> changedRoots;
+  for (auto view = registry_.view<components::ComputedTextGeometryComponent>();
+       const Entity root : view) {
+    if (FontDependenciesChanged(view.get<components::ComputedTextGeometryComponent>(root), revision,
+                                resolved))
+      changedRoots.push_back(root);
+  }
+  for (const Entity root : changedRoots) {
+    components::InvalidateTextLayout(EntityHandle(registry_, root));
+  }
+  for (auto view = registry_.view<components::FontMetricDependenciesComponent>();
+       const Entity entity : view) {
+    if (!FontDependenciesChanged(view.get<components::FontMetricDependenciesComponent>(entity),
+                                 revision, resolved))
+      continue;
+    registry_.remove<components::ComputedPathComponent>(entity);
+    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
+        components::DirtyFlagsComponent::Shape | components::DirtyFlagsComponent::LayoutCascade |
+        components::DirtyFlagsComponent::RenderInstance);
+    changedRoots.push_back(entity);
+  }
+  for (auto view = registry_.view<components::ComputedClipPathsComponent>();
+       const Entity entity : view) {
+    if (!FontDependenciesChanged(view.get<components::ComputedClipPathsComponent>(entity), revision,
+                                 resolved))
+      continue;
+    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
+        components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Paint |
+        components::DirtyFlagsComponent::RenderInstance);
+    changedRoots.push_back(entity);
+  }
+  for (auto view = registry_.view<components::FontPaintDependenciesComponent>();
+       const Entity entity : view) {
+    if (!FontDependenciesChanged(view.get<components::FontPaintDependenciesComponent>(entity),
+                                 revision, resolved))
+      continue;
+    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
+        components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Filter |
+        components::DirtyFlagsComponent::RenderInstance);
+    changedRoots.push_back(entity);
+  }
+  observedFontResourceRevision_ = revision;
+  return changedRoots;
+}
 
 void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWarnings) {
   UTILS_RELEASE_ASSERT(handle.registry() == &registry_);
@@ -1975,26 +2055,40 @@ std::optional<TextBackend::BitmapGlyph> TextEngine::bitmapGlyph(FontHandle font,
   return backend_->bitmapGlyph(font, glyphIndex, scale);
 }
 
-std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fontFamilies) {
-  FontHandle font;
-  for (const auto& family : fontFamilies) {
-    font = fontManager_.findFont(family);
-    if (font) {
-      break;
+std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fontFamilies,
+                                                    Entity geometryOwner) {
+  std::vector<FontFaceDependency> dependencies;
+  const auto measured = [&]() -> std::optional<double> {
+    const auto capture = fontManager_.captureDependencies(dependencies);
+    FontHandle font;
+    for (const auto& family : fontFamilies) {
+      font = fontManager_.findFont(family);
+      if (font) {
+        break;
+      }
+    }
+    if (!font) {
+      font = fontManager_.fallbackFont();
+    }
+
+    TextBackendSimple measurementBackend(fontManager_, registry_);
+    font = selectBackendSafeFont(measurementBackend, fontManager_, font);
+    const auto shaped =
+        measurementBackend.shapeRun(font, 1.0f, "0", 0, 1, false, FontVariant::Normal, false);
+    if (shaped.glyphs.empty()) {
+      return std::nullopt;
+    }
+    return shaped.glyphs.front().xAdvance;
+  }();
+  if (geometryOwner != entt::null) {
+    if (dependencies.empty()) {
+      registry_.remove<components::FontMetricDependenciesComponent>(geometryOwner);
+    } else {
+      registry_.emplace_or_replace<components::FontMetricDependenciesComponent>(
+          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision());
     }
   }
-  if (!font) {
-    font = fontManager_.fallbackFont();
-  }
-
-  TextBackendSimple measurementBackend(fontManager_, registry_);
-  font = selectBackendSafeFont(measurementBackend, fontManager_, font);
-  const auto shaped =
-      measurementBackend.shapeRun(font, 1.0f, "0", 0, 1, false, FontVariant::Normal, false);
-  if (shaped.glyphs.empty()) {
-    return std::nullopt;
-  }
-  return shaped.glyphs.front().xAdvance;
+  return measured;
 }
 
 const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(
@@ -2005,6 +2099,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   // Return cached component if it already exists.
   if (const auto* existing =
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
+    fontManager_.recordDependencies(existing->fontDependencies);
     return *existing;
   }
 
@@ -2024,9 +2119,13 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   const TextLayoutParams params = buildTextLayoutParams(registry_, rootHandle, *style, *textComp);
   ResolvePerSpanLayoutStyles(registry_, styledText, params.viewBox, params.fontMetrics);
 
-  const std::vector<TextRun> runs = const_cast<TextEngine*>(this)->layout(styledText, params);
-
   components::ComputedTextGeometryComponent cache;
+  std::vector<TextRun> runs;
+  {
+    const auto capture = fontManager_.captureDependencies(cache.fontDependencies);
+    runs = const_cast<TextEngine*>(this)->layout(styledText, params);
+  }
+  cache.fontResourceRevision = fontManager_.fontResourceRevision();
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
 

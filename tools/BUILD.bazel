@@ -197,6 +197,7 @@ py_test(
         "//:.github/workflows/editor_wasm.yml",
         "//:.github/workflows/lint.yml",
         "//:.github/workflows/main.yml",
+        "//donner/editor/wasm:catalog_package_integrity_test.py",
         "//tools:coverage.sh",
     ],
     deps = ["@rules_python//python/runfiles"],

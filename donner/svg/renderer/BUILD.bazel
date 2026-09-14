@@ -197,6 +197,7 @@ donner_perf_sensitive_cc_library(
         "//donner/gpu/shader:program_bindings",
         "//donner/svg",
         "//donner/svg/components:attached_id_lookup",
+        "//donner/svg/components:font_resource_graph",
         "//donner/svg/components/filter:computed_filter_resource_budget",
         "//donner/svg/renderer/common",
     ] + select({
