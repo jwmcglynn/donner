@@ -150,7 +150,7 @@ std::cout << "Size: " << renderer.width() << "x" << renderer.height() << "\n";
 ```
 
 See \ref BuildingDonner for details on choosing between tiny_skia (the compact CPU default) and
-Geode (the WebGPU backend).
+Geode (the GPU backend).
 
 ## Third-Party License Attribution
 

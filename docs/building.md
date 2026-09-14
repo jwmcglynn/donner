@@ -1,6 +1,6 @@
 # Building Donner {#BuildingDonner}
 
-Donner is a hobby project built against the latest C++ standard, so a toolchain that supports it is often not pre-installed.
+Donner builds with Bazel, which downloads a pinned LLVM toolchain on the first build, so no separate compiler installation is needed.
 
 ## Requirements
 
@@ -185,7 +185,7 @@ for the external-consumer setup.
 
 | Config / Flag          | Description                                                                                                                                   |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--config=geode`       | Use the Geode GPU backend (WebGPU/Dawn + Slug; the editor's default renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
+| `--config=geode`       | Use the Geode GPU backend (the editor's default renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
 | `--config=text-full`   | Enable HarfBuzz text shaping + WOFF2 (advanced text layout)                                                                                   |
 | `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer                                                                                                           |
 | `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                                         |
@@ -257,7 +257,7 @@ Donner builds everything from source. The tiny-skia backend stays relatively fas
 
 ### How do I build the editor?
 
-The full native editor lives at `//donner/editor:editor` and uses Geode/WebGPU
+The full native editor lives at `//donner/editor:editor` and uses Geode
 by default without requiring `--config=geode`:
 
 ```sh
@@ -265,7 +265,7 @@ bazel run //donner/editor -- donner_splash.svg
 bazel run //donner/editor -- path/to/file.svg
 ```
 
-The browser editor package uses Geode/WebGPU by default. The package target accepts the explicit
+The browser editor package uses Geode by default. The package target accepts the explicit
 configuration for build automation, while the local server applies that configuration through a
 build transition:
 

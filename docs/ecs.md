@@ -112,8 +112,6 @@ This continues for the **Computed tree** and **Render tree**.
 
 This step must happen _after_ the styling phase to ensure SVG2 presentation attributes are properly propagated.
 
-\note `PathSpline` has been replaced by \ref donner::Path "Path" (immutable, in `donner/base/Path.h`) and \ref donner::PathBuilder "PathBuilder" (mutable builder). `Path` is constructed through `PathBuilder::build()`.
-
 For example, shape properties can be specified entirely in CSS:
 
 ```xml

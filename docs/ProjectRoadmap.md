@@ -1,7 +1,7 @@
 # Project Roadmap {#DonnerProjectRoadmap}
 
 **Status:** Active
-**Updated:** 2026-08-13
+**Updated:** 2026-09-14
 
 ## Summary
 
@@ -196,33 +196,49 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 Production editor scope: a hybrid structured/freeform SVG editor workflow beyond the v0.8 showcase.
 
-- [ ] **Import donner-editor**: Move the `donner-editor` project into this repository and polish
-      for release.
-- [ ] **Structured editing API**: Programmatic DOM mutations that propagate through ECS with
-      incremental re-render (building on composited rendering + interactivity).
-- [ ] **Partial re-parsing**: Parser support for updating a document in-place from modified SVG
-      source. When a user edits source text, parse only the changed region and splice updates into
-      the live document.
-- [ ] **Reverse serialization**: From interactive editor operations, surgically splice updated
-      SVG content back into the source text, preserving surrounding structure and formatting. Enables
-      round-trip editing: source -> DOM -> visual edit -> source.
-- [ ] **Invalid-region tolerance**: Graceful handling of temporarily invalid SVG during freeform
-      text editing. The editor should not crash or lose state when the user is mid-keystroke. This is
-      a hybrid approach: not a "true" structured editor, but a text editor with syntax-aware support.
+- [x] **Import donner-editor**: Shipped in #529. The editor lives in-tree at `donner/editor`
+      (`EditorApp`, `donner/editor/app`) with its own test suite under `donner/editor/tests`.
+- [x] **Structured editing API**: Shipped in #598. `SVGDocument::setElementAttribute`,
+      `insertElement`, `removeElement`, and `setElementTextContent` return an
+      `ApplySourceEditResult` whose `XMLMutation` stream drives incremental re-render through the
+      ECS (`donner/svg/tests/SVGInvalidation_tests.cc`).
+- [x] **Partial re-parsing**: Shipped in #598. `XMLIncrementalParser` and
+      `XMLDocument::applySourceEdit` reparse the smallest affected subtree
+      (`ReparseScope::Subtree`) and splice the result into the live document, widening to a
+      document-scoped reparse only when the local parse fails.
+- [x] **Reverse serialization**: Shipped in #598. Canvas and DOM operations emit byte-level
+      `XMLSourceDelta`s through `XMLSourceStore`, and
+      `DocumentSyncController::mirrorSourceDeltas` replays them into the source pane in place,
+      preserving the surrounding text and formatting. See
+      [structured_source_editing](structured_source_editing.md).
+- [x] **Invalid-region tolerance**: Shipped in #531. `DocumentSyncController::syncParseErrorMarkers`
+      surfaces parse diagnostics as source-pane markers, and selection and document state survive
+      transiently invalid source, covered by
+      `DocumentSyncControllerTest.PartialOpeningTagEditPreservesSelectionWhileInvalid` and the
+      editor state-machine fuzzer.
 
 ### Parser Improvements
 
-- [ ] **`ParseWarning` type**: Introduce a dedicated `ParseWarning` type (or `ParseWarnings`
-      container) replacing the current `vector<ParseError>` pattern. Warnings vs errors should be
-      distinct at the type level.
-- [ ] **Source location audit**: Review all current parse errors to verify correct source
-      locations are reported.
-- [ ] **Full source ranges**: Extend parse errors/warnings to carry full source ranges
-      (start + end), not only the start index.
+- [x] **`ParseWarning` type**: Shipped in #459. `ParseDiagnostic` carries a `DiagnosticSeverity`
+      (`Warning`/`Error`) and non-fatal warnings flow through the zero-cost `ParseWarningSink`;
+      the `vector<ParseError>` pattern and the `ParseError` type are gone. See
+      [parser_diagnostics](parser_diagnostics.md).
+- [x] **Source location audit**: Shipped in #459
+      ([#442](https://github.com/jwmcglynn/donner/issues/442)). Every parser entry point takes an
+      explicit warning sink, subparser ranges are remapped into parent coordinates by
+      `ParseWarningSink::mergeFromSubparser`, and range correctness is covered by per-parser tests
+      plus `DiagnosticRenderer` caret/tilde output.
+- [x] **Full source ranges**: Shipped in #459. `SourceRange` (`donner/base/FileOffset.h`) is a
+      half-open `[start, end)` span of `FileOffset` values carried by every `ParseDiagnostic`.
 - [ ] **CSS parser update**: Consider making the CSS parser streaming, potentially using C++20
       coroutines (`co_await`). Reduce places where we tokenize to a vector. Add support for source
-      ranges and incremental updates matching the XML parser's capabilities.
-- [ ] **XML parser conformance**: Fix bugs like non-conforming `Name` token acceptance
+      ranges and incremental updates matching the XML parser's capabilities. Partially shipped:
+      the tokenizer is pull-based with no `vector<Token>` materialization and declarations and
+      rules carry `SourceRange`s
+      ([0019](design_docs/0019-css_token_stream.md), which rejected coroutine token generation by
+      measurement); incremental CSS updates are not implemented.
+- [x] **XML parser conformance**: Shipped in #462. `Name` tokens are validated against the XML
+      1.0 `NameStartChar`/`NameChar` productions in `XMLParser.cc`
       ([#304](https://github.com/jwmcglynn/donner/issues/304)).
 - [ ] **CSS3 gap closure**: Audit CSS3 property and selector support against the properties
       used by SVG2. Close gaps in selectors, cascading, specificity, shorthand expansion, and
@@ -230,9 +246,11 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 
 ### Entity Lifecycle
 
-- [ ] **Node removal cleanup**: Implement proper cleanup for nodes removed from the document
-      graph. Currently removed entities are leaked in the ECS registry. Add destruction hooks that
-      tear down components, release resources, and remove entities from spatial indices and caches.
+- [x] **Node removal cleanup**: Shipped in #596. `NodeLifetimeComponent` tracks detached-root
+      metadata and `NodeLifetimeCollector` destroys detached subtrees once no public handle or
+      render snapshot retains them, with detached-node diagnostics counters and the
+      `//donner/benchmarks:dom_lifetime_perf_capture` budget. See
+      [dom_element_lifetime](dom_element_lifetime.md).
 
 ### DOM Support
 
@@ -263,11 +281,13 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 
 ### SVG Feature Gaps
 
-- [ ] **`<symbol>` refX/refY units**: Support `<length>` values and keyword tokens
-      (left/center/right, top/center/bottom) per SVG2 spec
+- [x] **`<symbol>` refX/refY units**: Shipped in #638. `SymbolComponent` stores refX/refY as
+      `Lengthd`, and the left/center/right and top/center/bottom keywords map to 0%/50%/100%
+      resolved against the symbol's viewBox
       ([#318](https://github.com/jwmcglynn/donner/issues/318)).
-- [ ] **`<marker>` attribute units**: Support `<length-percentage>`, `<number>`, and keyword
-      tokens for refX/refY/markerWidth/markerHeight per SVG2
+- [x] **`<marker>` attribute units**: Shipped in #636. `MarkerComponent` stores
+      refX/refY/markerWidth/markerHeight as unresolved `Lengthd` so percentages and keywords
+      resolve against the referencing viewport at render time
       ([#316](https://github.com/jwmcglynn/donner/issues/316)).
 - [x] **`<clipPath>` `<use>` support**: Shipped in v0.5. `<use>` children referencing path/shape
       elements inside `<clipPath>` now resolve correctly per CSS Masking spec
@@ -275,10 +295,15 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 
 ### Security
 
-- [ ] **AI-assisted security pass**: Comprehensive security audit using AI-assisted analysis.
-      Add new fuzzers for under-covered parser surfaces (CSS, filter parameters, animation timing,
-      edit/patch paths). Scan for vulnerabilities across all input-handling code (XML, CSS, SVG
-      attributes, external references).
+- [x] **AI-assisted security pass**: Shipped across the input-bounding series (#1033, #1035,
+      #1036, #1037, #1038, #1044, #1053), which bounded base parsing, CSS parsing and selector
+      work, SVG runtime payloads and reference work, external resource admission, glyph decoding,
+      CLI input, and renderer geometry materialization. Fuzzers now cover the surfaces called out
+      here, including CSS, animation timing (`ClockValueParser`, `AnimateValue`,
+      `AnimateTransformValue`), edit/patch paths (`XMLParser_structured`, `EditorStateMachine`,
+      `ShapeClipboardPaste`, `ViewportSvgExportRoundTrip`), and external references (`UrlLoader`,
+      `SandboxedFileResourceLoader`, `ImageLoader`); `.github/workflows/fuzz.yml` runs a scheduled
+      sanitizer-backed mutation lane on top of per-PR corpus replay.
 
 ### Optional Extensions
 

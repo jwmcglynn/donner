@@ -204,8 +204,8 @@ codebase consistent and portable.
 - **Avoid typographic punctuation in source**: use ASCII hyphens and quotes instead of smart
   hyphens, em dashes, en dashes, and smart quotes. Use ordinary ASCII whitespace in source files;
   spell intentional Unicode whitespace in literals with escaped code points.
-- **No new `wgpu::Device::createRenderPipeline` / `createComputePipeline` calls**: wgpu-native
-  retains every pipeline it ever constructs internally: `wgpuDevicePoll(wait=true)` does not
+- **No new `wgpu::Device::createRenderPipeline` / `createComputePipeline` calls**: the GPU
+  runtime retains every pipeline it ever constructs internally, and polling the device does not
   drain the pending-destroy queue for pipelines. Per-frame or per-renderer construction silently
   leaks ~100 KB each until the driver's `maxMemoryAllocationCount` trips (Mesa lavapipe panics on
   the next texture allocation) or the process hangs progressively (Mesa llvmpipe). See issue #575

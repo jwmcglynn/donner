@@ -5,7 +5,7 @@
 Donner implements all 17 SVG filter primitives from the
 [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec, plus CSS shorthand
 filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.). Filters run on both shipping
-backends, TinySkia (CPU) and Geode (WebGPU); the removed full-Skia backend had its own native
+backends, TinySkia (CPU) and Geode (GPU); the removed full-Skia backend had its own native
 lowering path.
 
 **Guarantees:**

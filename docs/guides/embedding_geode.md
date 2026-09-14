@@ -23,10 +23,6 @@ canvas) without creating a second device.
   `bazel build --config=geode //your:target` (the config sets
   `--//donner/svg/renderer/geode:enable_geode=true`).
 
-Geode is verified against the wgpu-native backend that ships in
-`third_party/webgpu-cpp`. The Dawn C++ wrapper exposes the same C++ API
-surface, but a few status enumerants differ (see Troubleshooting below).
-
 ## Embedding walkthrough
 
 ### 1. Describe the embedding
@@ -147,8 +143,8 @@ The example handles the full host lifecycle:
 
 Defining `GLFW_EXPOSE_NATIVE_X11` pulls in `<X11/Xlib.h>`, which
 `#define`s `None`, `True`, `False`, and `Status`. All four collide with C++
-names used elsewhere (for example `wgpu::Status`, an enum class in
-`third_party/webgpu-cpp/webgpu.hpp`). Two fixes, in order of preference:
+names used elsewhere (for example the `wgpu::Status` enum class). Two fixes, in
+order of preference:
 
 1. **Isolate the GLFW-native call in its own translation unit** that
    includes only `webgpu.hpp` plus `GLFW/glfw3native.h` and `#undef`s the
@@ -159,18 +155,13 @@ names used elsewhere (for example `wgpu::Status`, an enum class in
    for small prototypes, but the macros will re-trip anyone who later adds
    an include above the `#undef`s.
 
-### wgpu-native vs. Dawn surface-texture API drift
+### Surface-texture status values
 
 `wgpu::Surface::getCurrentTexture` writes status into
-`WGPUSurfaceTexture::status`, and the **success** enumerant on wgpu-native
-is `SuccessOptimal` (not `Success`). Treat both `SuccessOptimal` and
+`WGPUSurfaceTexture::status`, and the **success** enumerant is
+`SuccessOptimal` (not `Success`). Treat both `SuccessOptimal` and
 `SuccessSuboptimal` as renderable; skip the frame on `Timeout`, `Outdated`,
-`Lost`, and reconfigure the surface on `Outdated`. Similarly,
-`Instance::requestAdapter` and `Adapter::requestDevice` are callback-based
-in the C API; the webgpu-cpp wrapper provides synchronous overloads that
-work on wgpu-native because the callback fires before the call returns.
-Dawn requires driving the future explicitly; the wrapper handles that as well,
-but the synchronous wrapper calls remain a wgpu-native-specific convenience.
+`Lost`, and reconfigure the surface on `Outdated`.
 
 If `surface.getCurrentTexture` always reports `Outdated`, the surface
 dimensions probably do not match the `SurfaceConfiguration`; call
