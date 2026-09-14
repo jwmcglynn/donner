@@ -244,6 +244,19 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   );
 });
 
+test("default browser discovery excludes the manual font reference probe", () => {
+  const defaultConfig = require("./playwright.config.js");
+  const referenceConfig = readFileSync(
+    path.join(testDirectory, "playwright.font-reference.config.js"),
+    "utf8",
+  );
+  assert.ok(
+    defaultConfig.testIgnore.includes("font-reference.spec.ts"),
+    "default discovery must not load a manual probe that requires explicit font inputs",
+  );
+  assert.match(referenceConfig, /testMatch: "font-reference\.spec\.ts"/);
+});
+
 test("browser diagnostics do not manufacture fatal adapter failures", () => {
   const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
   assert.doesNotMatch(
