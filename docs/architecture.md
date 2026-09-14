@@ -4,16 +4,16 @@
 
 ## Why Is Donner Different?
 
-At its core, Donner is an SVG "engine". Instead of treating SVGs as static images, they are dynamic scenes which can be modified, animated, or transformed.
+Donner is an SVG engine. Instead of treating SVG files as static images, it treats them as dynamic scenes that can be modified, animated, or transformed.
 
-Many SVG libraries load an SVG, and render and image as an output, but browsers are different: SVG in browsers is a graphical version of HTML, and HTML isn't static: It can be queried, modified, and styled.
+Many SVG libraries load an SVG and render an image as output. Browsers work differently: SVG in a browser is a graphical counterpart to HTML, and HTML is not static. It can be queried, modified, and styled.
 
 Donner intends to provide browser-level functionality as a standalone C++ library:
 
-- Instead of simply rendering `.svg` files, Donner constructs a DOM tree that allows inspecting and modifying the file contents in-memory.
+- Instead of only rendering `.svg` files, Donner constructs a DOM tree that allows inspecting and modifying the file contents in memory.
 - Donner transforms the document tree into an efficient in-memory representation that can be repeatedly rendered.
 
-Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the library/CLI default, a lightweight software rasterizer vendored from Rust's `tiny-skia` library — no external dependencies) and **Geode** (a GPU backend built on WebGPU + Slug; the editor's default renderer, gated behind `--config=geode` for the library so default builds don't pull in the WebGPU runtime).
+Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the library and CLI default, a compact software rasterizer vendored from Rust's `tiny-skia` library, with no external dependencies) and **Geode** (a GPU backend built on WebGPU and Slug; the editor's default renderer, gated behind `--config=geode` for the library, so default builds do not pull in the WebGPU runtime).
 
 ## System Context
 
@@ -25,7 +25,7 @@ Donner consists of a core library and a renderer, which are built with separatio
 
 ![Container diagram, Donner SVG Library](/docs/img/arch_container.svg)
 
-Each component of Donner is designed to be used in isolation, with minimal dependencies on other components. This allows for easy testing and integration with other systems.
+Each component of Donner is designed to be used in isolation, with minimal dependencies on the other components. This keeps each component testable on its own and usable from other systems.
 
 ### Parser Suite
 
@@ -40,7 +40,7 @@ The parser suite consists of parsers in three layers:
 
 ### CSS
 
-Provides a fully-featured CSS3 toolkit, which can be used to parse CSS stylesheets, style strings, or selectors, and match those selectors against a document tree.
+A CSS3 toolkit for parsing CSS stylesheets, style strings, and selectors, and for matching those selectors against a document tree.
 
 See \ref UsingTheCssApi for more details.
 
@@ -49,7 +49,7 @@ The CSS layer parses stylesheets into lists of \ref donner::css::SelectorRule "S
 - A \ref donner::css::Selector "Selector" object, which contains a matching pattern that can be used to match against a document tree.
 - A list of \ref donner::css::Declaration "Declaration" objects, which correspond to the key-value pairs such as `color: red`
 
-At this layer, the style information has no semantics, it contains raw parsed data and the ability to cascade it to the document tree. This raw data is consumed by the **Styling** component to parse these values into meaningful styling information.
+At this layer the style information has no semantics: it holds raw parsed data along with the machinery to cascade it onto the document tree. The **Styling** component consumes that raw data and parses the values into meaningful styling information.
 
 ### Styling
 
@@ -71,25 +71,25 @@ Consumes information from the CSS parser and implements the SVG style model. Thi
 
 #### Data Model
 
-Style information is held on each entity inside \ref donner::svg::components::StyleComponent. During the rendering process, CSS cascading and inheritance is performed and cached on \ref donner::svg::components::ComputedStyleComponent.
+Style information is held on each entity inside \ref donner::svg::components::StyleComponent. During the rendering process, CSS cascading and inheritance are performed and cached on \ref donner::svg::components::ComputedStyleComponent.
 
 - \ref donner::svg::components::ComputedStyleComponent "ComputedStyleComponent" contains absolute styling information for each entity at render time.
 
 ### API Frontend
 
-Donner provides a high-level API for interacting with the SVG document model. This API is designed to be easy to use and understand, while still providing access to the full power of the underlying document model.
+Donner provides a high-level API for interacting with the SVG document model. It aims to be simple to use while still exposing the whole underlying document model.
 
-The API takes a principled approach, focusing on:
+The API focuses on:
 
 - Minimal memory allocations
-- Clean error propagation (`std::expected`-inspired)
-- High usability with C++20 features such as concepts
+- Explicit error propagation (`std::expected`-inspired)
+- Usability, built on C++20 features such as concepts
 
 See \ref DonnerAPI for more details.
 
 ### Document Model
 
-The Document Model is built on top of the [EnTT](https://github.com/skypjack/entt) Entity-Component-System (ECS), which is used to build a tree of entities, components, and systems that represent the SVG document. It is designed to be efficient and flexible, allowing for easy modification and rendering of SVG documents.
+The Document Model is built on top of the [EnTT](https://github.com/skypjack/entt) Entity-Component-System (ECS), which is used to build a tree of entities, components, and systems that represent the SVG document. It is designed for efficient modification and rendering of SVG documents.
 
 - See \ref EcsArchitecture for more details.
 - See \ref ecs_systems for a list of systems.
@@ -111,7 +111,7 @@ must be scoped through document read/write access in concurrent mode.
 
 The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then consumed by the selected renderer (tiny-skia by default, or Geode with `--config=geode`).
 
-Rendering components are attached to the same entities as the document model components, allowing for easy synchronization between the document model and the rendering backend. When the document model is modified, the associated rendering components are invalidated.
+Rendering components are attached to the same entities as the document model components, which keeps the document model and the rendering backend in sync. When the document model is modified, the associated rendering components are invalidated.
 
 For normal `SVGDocument` rendering, `RendererDriver` first captures a
 `RenderSnapshot`: an immutable renderer command stream with snapshot-owned
@@ -131,7 +131,7 @@ The `//donner/base` library contains common utility code used by the other libra
 
 This library also contains common parsers such as \ref donner::parser::NumberParser "NumberParser", which can parse a string into a number.
 
-The base library has minimal dependencies and the types within it may be suitable for other libraries, however the base library is not publicly exported.
+The base library has minimal dependencies and the types within it may be suitable for other libraries; however, it is not publicly exported.
 
 ## Testing Strategy
 
@@ -196,7 +196,8 @@ Since SVG and CSS require a large collection of parsers, fuzz tests are individu
 
 - In CI the fuzzers are executed with a small corpus containing interesting inputs for bugs which have been previously fixed.
 
-- Note that the fuzzers are not currently run automatically, but may be onboarded to [OSS-Fuzz](https://google.github.io/oss-fuzz/) in the future.
+- The fuzzers also run on a daily schedule under AddressSanitizer. Onboarding to
+  [OSS-Fuzz](https://google.github.io/oss-fuzz/) remains a possible future step.
 
 <div class="section_buttons">
 

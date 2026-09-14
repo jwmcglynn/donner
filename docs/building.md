@@ -1,6 +1,6 @@
 # Building Donner {#BuildingDonner}
 
-Donner is intended as a hobby project with the latest C++ spec, so it is likely that toolchains that support it won't be pre-installed.
+Donner is a hobby project built against the latest C++ standard, so a toolchain that supports it is often not pre-installed.
 
 ## Requirements
 
@@ -15,17 +15,17 @@ Donner is intended as a hobby project with the latest C++ spec, so it is likely 
 
 ### Installing Bazel
 
-The recommended way to use Bazel is to install **Bazelisk**, which will automatically download Bazel as required. To install:
+The recommended way to use Bazel is to install **Bazelisk**, which downloads the required Bazel version automatically. To install it:
 
 1. Navigate to the Bazelisk releases page: https://github.com/bazelbuild/bazelisk/releases
-2. Download the latest releases, and install it as `~/bin/bazel`
+2. Download the latest release and install it as `~/bin/bazel`
 3. `chmod +x ~/bin/bazel`
 4. Update your `~/.bashrc` (or equivalent) to add this directory to your path:
    ```sh
    export PATH=$PATH:$HOME/bin
    ```
 
-## That's it!
+## First build
 
 Verify that you can build with
 
@@ -35,7 +35,7 @@ bazel build //donner/...
 
 All other dependencies will be downloaded on-demand.
 
-The first build downloads LLVM and other external dependencies, and builds all dependencies from source. With the default tiny-skia backend, clean build times are reasonable. After dependencies are downloaded, clean build times are:
+The first build downloads LLVM and the other external dependencies and builds them from source. Once the dependencies are downloaded, a clean build with the default tiny-skia backend takes:
 
 - **Apple Silicon M1**: ~2 minutes
 
@@ -84,8 +84,8 @@ When saving to `docs/build_report.md` the script automatically switches to
   from the Doxygen site alike.
 - The lcov HTML tree from `coverage-report/` is repacked into a single
   `docs/reports/coverage.zip` (a few MB compressed instead of ~26 MB
-  spread over hundreds of files, which keeps the working tree light and
-  fuzzy file-name search clean). The build report's coverage link points
+  spread over hundreds of files, which keeps the working tree small and
+  fuzzy file-name search usable). The build report's coverage link points
   at the absolute docs-site URL, since the zip can't render directly
   from a GitHub web view.
 
@@ -112,8 +112,7 @@ interval for local debugging.
 
 `tools/coverage.sh` runs Bazel coverage, filters excluded LCOV records, validates that the
 filtered report is non-empty, and then prints the same line buckets Codecov uses for the project
-percentage. The important distinction is that Codecov does not use raw LCOV line coverage as its
-project percentage:
+percentage. Codecov does not use raw LCOV line coverage as its project percentage:
 
 - Raw LCOV line coverage counts every `DA:<line>,<hits>` record with `hits > 0` as covered.
 - Codecov line coverage has three buckets: hits, misses, and partials.
@@ -126,7 +125,7 @@ project percentage:
 - Codecov's project UI displays that percentage as a rounded whole number, while
   `tools/lcov_metrics.py` also prints the exact local value.
 
-That means local raw LCOV line coverage can be several points higher than Codecov when many
+Local raw LCOV line coverage can therefore be several points higher than Codecov's when many
 conditionals have only one branch covered. Use `tools/lcov_metrics.py` or the summary printed by
 `tools/coverage.sh` when comparing against Codecov's project target:
 
@@ -149,7 +148,7 @@ tools/lcov_metrics.py coverage-report/filtered_report.dat \
 ## CMake build {#cmake-build}
 
 Bazel is the primary build system, but CMake support is also available through a Bazel-to-CMake
-converter. This is for users who want to integrate Donner into their CMake-based projects.
+converter, for projects that build with CMake.
 
 ```sh
 python3 tools/cmake/gen_cmakelists.py
@@ -165,7 +164,7 @@ cmake --build build
 ctest --test-dir build
 ```
 
-This fetches dependencies via `FetchContent` and builds the libraries. Unit tests are
+This fetches dependencies with `FetchContent` and builds the libraries. Unit tests are
 not built by default and can be enabled with the `DONNER_BUILD_TESTS` option.
 
 The standalone CMake consumer example under `examples/cmake_consumer/` is a getting-started project
@@ -222,15 +221,15 @@ lanes revert to cache-less builds with no other change.
 
 ### On macOS: bazel crashed due to an internal error
 
-That indicates that xcode is not installed, the bad error message is a known bazel issue: https://github.com/bazelbuild/bazel/issues/23111
+That indicates Xcode is not installed. The unhelpful error message is a known Bazel issue: https://github.com/bazelbuild/bazel/issues/23111
 
-Validate that xcode is installed with:
+Check that Xcode is installed with:
 
 ```sh
 xcodebuild -version
 ```
 
-If it is not installed, install it from the App Store. Once this is complete clean bazel state and retry:
+If it is not installed, install it from the App Store. Once that is done, clean the Bazel state and retry:
 
 ```sh
 bazel clean --expunge
@@ -254,7 +253,7 @@ dependency onto CI images that already link fine. See
 
 ### What's with the build times?
 
-Donner builds everything from source. The tiny-skia backend stays relatively fast because it has no large external rendering dependency. Incremental builds are fast due to Bazel's caching.
+Donner builds everything from source. The tiny-skia backend stays relatively fast because it has no large external rendering dependency, and incremental builds benefit from Bazel's caching.
 
 ### How do I build the editor?
 

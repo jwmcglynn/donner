@@ -4,10 +4,11 @@
 
 Donner implements all 17 SVG filter primitives from the
 [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec, plus CSS shorthand
-filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.). Filters currently ship on the
-TinySkia rendering backend; the removed full-Skia backend had its own native lowering path.
+filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.). Filters run on both shipping
+backends, TinySkia (CPU) and Geode (WebGPU); the removed full-Skia backend had its own native
+lowering path.
 
-**Key guarantees:**
+**Guarantees:**
 - All 17 primitives render correctly with `in`/`result` named buffer routing.
 - `filterUnits` (objectBoundingBox, userSpaceOnUse) and `primitiveUnits` are fully supported.
 - `color-interpolation-filters` (linearRGB/sRGB) is handled per-primitive.
@@ -30,7 +31,7 @@ SVG DOM                    Filter System              Renderer
                              filterRegion              ... render source graphic ...
                              primitiveUnits            renderer.popFilterLayer()
                            }                             ├─ TinySkia: FilterGraphExecutor
-                                                         └─ Skia: buildNativeSkiaFilterDAG
+                                                         └─ Geode: GeodeFilterEngine
 ```
 
 ### Component Layers
@@ -70,13 +71,13 @@ FilterNode {
 **TinySkia backend** (`FilterGraphExecutor.cc`):
 - Allocates `FloatPixmap` buffers for each intermediate result.
 - Executes nodes in document order, delegating pixel math to the tiny-skia-cpp filter library.
-- Handles linearRGB/sRGB conversion, primitive subregion clipping (rotation-aware via
+- Handles linearRGB/sRGB conversion, primitive subregion clipping (rotation-aware through
   `filterFromDevice`), and named buffer routing.
 
 **Historical full-Skia backend** (removed in 2026-04, archived at `origin/skia_archive`):
 - Built an `SkImageFilter` tree for all 17 primitives.
 - Captured the source graphic into a raster `SkSurface`.
-- Applied the filter DAG with rotation-aware region clipping via `SkPath`.
+- Applied the filter DAG with rotation-aware region clipping through `SkPath`.
 - Fell back to the shared `FilterGraphExecutor` for transformed blur chains and rotated `feTile`.
 
 ### feImage Fragment References
@@ -84,7 +85,7 @@ FilterNode {
 `feImage` with `href="#elementId"` renders a same-document element into the filter output:
 
 1. `preRenderFeImageFragments()` creates an offscreen renderer and renders the referenced element.
-   Elements in `<defs>` get shadow rendering instances via
+   Elements in `<defs>` get shadow rendering instances from
    `RenderingContext::createFeImageShadowTree`. A recursion guard (`feImageFragmentGuard_`)
    prevents infinite loops.
 2. The fragment is rendered at its natural document position (no surfaceFromCanvasTransform_ offset).
@@ -152,11 +153,11 @@ Shorthand functions map to equivalent filter graph nodes internally.
   External `href` follows the existing resource loading policy.
 - **`feDisplacementMap`:** Cross-origin `in2` produces transparent black per spec.
 - **Numeric overflow:** Intermediate pixel values are clamped to [0, 1] at each pipeline stage.
-- **Parsing:** Filter attribute parsers are fuzz-tested via the SVG parser fuzzing harness.
+- **Parsing:** Filter attribute parsers are fuzz-tested through the SVG parser fuzzing harness.
 
 ## Performance Notes
 
-- **Blur:** Uses 3-pass box blur approximation for sigma >= 2.0 (O(w*h) per pass via running sum).
+- **Blur:** Uses 3-pass box blur approximation for sigma >= 2.0 (O(w*h) per pass, using a running sum).
   Small sigma uses discrete Gaussian kernel.
 - **Morphology:** Currently O(w*h*rx*ry). Could use van Herk/Gil-Werman for O(w*h).
 - **ConvolveMatrix:** Full 2D convolution, O(w*h*orderX*orderY). Not separable.
@@ -170,8 +171,8 @@ Shorthand functions map to equivalent filter graph nodes internally.
 
 | Target | Backend | Description |
 |---|---|---|
-| `//donner/svg/renderer/tests:resvg_test_suite_tiny_skia` | TinySkia | Full resvg golden image suite |
-| `//donner/svg/renderer/tests:renderer_tests_tiny_skia` | TinySkia | Deterministic golden tests |
+| `//donner/svg/renderer/tests:resvg_test_suite_default_text` | TinySkia | Full resvg golden image suite |
+| `//donner/svg/renderer/tests:renderer_tests` | TinySkia | Deterministic golden tests |
 | `//donner/svg/renderer/tests:filter_graph_executor_tests` | TinySkia | Unit tests for executor |
 | `third_party/tiny-skia-cpp/...` | N/A | Per-primitive pixel math unit tests |
 
@@ -212,7 +213,7 @@ transform traces, and filter pipeline debug logging.
 | `feSpecularLighting` | `filter::specularLighting` | CPU rasterization | Phong model |
 
 Light sources (`feDistantLight`, `fePointLight`, `feSpotLight`) are children of lighting
-primitives. Point/spot light coordinates are scaled from user space to pixel space via
+primitives. Point/spot light coordinates are scaled from user space to pixel space through
 `deviceFromFilter`. Z coordinates use the RMS scale factor.
 
 ### RasterizeTransformedImagePremultiplied
@@ -236,4 +237,4 @@ produce transparent pixels (no edge clamping) to prevent images from bleeding be
 - CSS `backdrop-filter` is not supported.
 - Filter parameter animation is not supported (separate animation milestone).
 - Color space in mixed `url()` + CSS filter chains (`filter: url(#f) grayscale()`) has ambiguous
-  spec behavior — currently uses the SVG default (linearRGB) for the `url()` portion.
+  spec behavior; Donner currently uses the SVG default (linearRGB) for the `url()` portion.

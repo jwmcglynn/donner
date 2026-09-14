@@ -32,7 +32,7 @@ test boundary.
 
 ## Repro Workflow
 
-Start by proving the actual pixels. Logs and inspector text are useful, but they
+Start with the pixels themselves. Logs and inspector text are useful, but they
 are not enough for one-frame visual bugs.
 
 1. Record or find a `.rnr` repro that includes the bad interaction.
@@ -96,9 +96,9 @@ the response so the crop cannot hide the UI regression being investigated.
 
 For timing-sensitive failures, run both paced and unpaced replays:
 
-- `--pace` / paced replay is closer to manual interaction and worker timing.
-- Unpaced replay is faster and more deterministic, but it can hide races that
-  need realistic frame spacing.
+- Paced replay, the default, is closer to manual interaction and worker timing.
+- Unpaced replay (`--no-pace`) is faster and more deterministic, but it can hide
+  races that need realistic frame spacing.
 
 ## Tooling
 
@@ -279,8 +279,8 @@ Useful proof:
 
 Use this sequence for new bugs:
 
-1. **Classify the visual failure.** Is it wrong geometry, stale payload, missing
-   payload, or backend binding?
+1. **Classify the visual failure.** Decide whether it is wrong geometry, a stale
+   payload, a missing payload, or a backend binding problem.
 2. **Identify the freshest correct layer.** If diagnostics show correct tile
    geometry but pixels are impossible, move down to texture/backend lifetime.
 3. **Find the first stale handoff.** Look for a result that changes ownership:

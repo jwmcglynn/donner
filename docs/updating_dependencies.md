@@ -14,7 +14,7 @@ git_override(
 )
 ```
 
-To locally test changes, assuming repro is cloned locally next to the `donner` directory:
+To test changes locally, with `toolchains_llvm` cloned next to the `donner` directory:
 
 ```diff
 - git_override(

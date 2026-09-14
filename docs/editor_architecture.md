@@ -37,9 +37,9 @@ Guarantees callers can rely on:
   guard. A render in flight therefore either defers a queued flush or makes source dispatch wait
   until guarded access is available. That blocking source-edit handoff is a known contention point,
   not an asynchronous queue.
-- **The interactive editor renders in-process.** The removed process-isolation
-  prototype is no longer a layer the GUI editor can route through; v1.0 sandboxing
-  is expected to be a replacement design.
+- **The interactive editor renders in-process.** The process-isolation prototype
+  has been removed, so the GUI editor can no longer route through it; a
+  replacement sandbox is planned for v1.0.
 
 ## C4 Architecture Views
 
@@ -228,22 +228,22 @@ points.
 - **`main()`** (`donner/editor/main.cc`) parses argv (a positional SVG path,
   `--save-repro <path>`), constructs `gui::EditorWindow` (GLFW + OpenGL/WebGPU +
   ImGui, `donner/editor/gui/EditorWindow.h`) and `EditorShell`, then runs the
-  event-driven loop: `waitEvents(timeout)` → `window.beginFrame()` →
-  `shell.runFrame()` → `window.endFrame()`. The timeout comes from
+  event-driven loop: `waitEvents(timeout)` -> `window.beginFrame()` ->
+  `shell.runFrame()` -> `window.endFrame()`. The timeout comes from
   `EditorShell::nextIdleWakeSeconds()` so throttled UI work still wakes the loop.
 - **`EditorShell`** (`donner/editor/EditorShell.h`) is the stateful frontend that
-  owns essentially all long-lived orchestration state: `EditorApp`, the tools,
+  owns nearly all of the long-lived orchestration state: `EditorApp`, the tools,
   `TextEditor`, its purpose-specific `GlTextureCache` instances, `RenderCoordinator`,
   `DocumentSyncController`,
   the viewport/input controllers, and the presenters.
 - **`EditorShell::runFrame()`** each frame: (1) poll the latest async render into
-  GL textures via `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`, flush
-  queued edits (`EditorApp::flushFrame`) and refresh selection bounds; (3) sync
-  parse-error markers and apply pending canvas→source writebacks through
+  GL textures through `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`,
+  flush queued edits (`EditorApp::flushFrame`) and refresh selection bounds; (3) sync
+  parse-error markers and apply pending canvas-to-source writebacks through
   `DocumentSyncController`; (4) compute the adaptive UI profile and pane layout,
   handle shortcuts, and render the desktop menu bar or compact command bar; (5)
-  render the panes; (6) if `!isBusy()`, request the next render
-  via `RenderCoordinator::maybeRequestRender`; (7) collect a `FrameCostBreakdown`
+  render the panes; (6) if `!isBusy()`, request the next render through
+  `RenderCoordinator::maybeRequestRender`; (7) collect a `FrameCostBreakdown`
   and emit frame-miss/resource telemetry. Queued canvas-text characters are
   coalesced before the mutation flush, so one UI frame performs one text-content
   synchronization rather than one synchronization per queued codepoint.
@@ -287,7 +287,7 @@ Attached live-DOM writes enter through two explicit, guarded paths:
   `Structural` and the remap rides the next render request so the compositor
   preserves cached layer bitmaps instead of resetting them.
 - **Undo/redo** goes through `UndoTimeline`; restored transforms are re-applied as
-  commands. Canvas→source writebacks (transform, element removal) are queued on
+  commands. Canvas-to-source writebacks (transform, element removal) are queued on
   `EditorApp` and drained each frame by `DocumentSyncController`.
 
 ### Async rendering and threading
@@ -358,7 +358,7 @@ describes the editor's consumption of it.
   handles select / marquee / move / resize / rotate (emitting `SetTransform` commands); `PenTool`
   is a prototype path-authoring tool. Input is dispatched inside the render pane, mapping ImGui
   mouse state through `ViewportInteractionController::screenToDocument` to the active tool.
-- **Source ↔ canvas sync** is handled by `DocumentSyncController` and documented in
+- **Source-to-canvas and canvas-to-source sync** is handled by `DocumentSyncController` and documented in
   \ref StructuredSourceEditing.
 - **Source style annotations** are computed from an immutable source copy on a
   separate worker. The worker owns an isolated parsed document and returns cascade
@@ -413,11 +413,11 @@ entry points are:
 - `EditorApp::applyMutation(EditorCommand)` - queued canvas, tool, and application commands.
 - `AsyncSVGDocument::applySourceEdit(XMLEditIntent)` - guarded incremental source-pane edits.
 - `EditorApp::loadFromString(std::string_view)` / `AsyncSVGDocument::flushFrame()`
-  / `currentFrameVersion()` — document lifecycle used by the frame loop.
-- `EditorShell::runFrame()` / `nextIdleWakeSeconds()` — the per-frame tick.
+  / `currentFrameVersion()` - document lifecycle used by the frame loop.
+- `EditorShell::runFrame()` / `nextIdleWakeSeconds()` - the per-frame tick.
 - `ComputeEditorAdaptiveUiLayout()` - pure desktop/compact profile selection and
   sheet geometry.
-- `AsyncRenderer::requestRender()` / `pollResult()` / `isBusy()` — the render
+- `AsyncRenderer::requestRender()` / `pollResult()` / `isBusy()` - the render
   handoff; plus the replay-only test hooks documented in
   \ref DeterministicReplayTesting.
 
@@ -478,8 +478,8 @@ surfaced for both the live layers panel and the replay/readback harnesses.
 
 - The GUI editor renders untrusted input in-process until the v1.0 sandbox redesign
   lands.
-- `PenTool` is a prototype path-authoring tool; richer path editing and boolean
-  operations are tracked in their own design docs.
+- `PenTool` is a prototype path-authoring tool; more complete path editing and
+  boolean operations are tracked in their own design docs.
 - Compact touch mode intentionally omits source editing, paint controls, the
   contextual text format bar, canvas scrollbars, and compositor diagnostics. It
   is a canvas-first editing subset, not a compressed copy of every desktop panel.

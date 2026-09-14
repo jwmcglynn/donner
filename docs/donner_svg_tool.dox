@@ -17,10 +17,10 @@
  *
  * `donner-svg` always renders with Donner's CPU (tiny-skia) backend, under
  * every build configuration. A one-shot command-line render cannot amortize
- * the GPU backend's fixed device and shader setup cost, so the CPU backend
- * is strictly better for single-frame output. The GPU (Geode) backend is
- * Donner's interactive renderer, used by long-lived surfaces such as the
- * editor where that setup cost is paid once across many frames.
+ * the GPU backend's fixed device and shader setup cost, so the CPU path is
+ * faster for single-frame output. The GPU (Geode) backend is Donner's
+ * interactive renderer, used by long-lived surfaces such as the editor,
+ * where that setup cost is paid once across many frames.
  *
  * @section DonnerSvgToolFlags Common flags
  *
@@ -48,19 +48,19 @@
  *
  * @note `tools/donner-svg` is a thin shell wrapper that invokes
  *       `bazel run //donner/svg/tool:donner-svg -- <args>` with Bazel's progress/info output
- *       suppressed so the tool behaves like a normal CLI. You can invoke the underlying Bazel
- *       target directly if you prefer.
+ *       suppressed so the tool behaves like a normal CLI. The underlying Bazel target can also
+ *       be invoked directly.
  *
  * @section DonnerSvgToolPreview Terminal preview
  *
- * `--preview` renders the SVG directly in your terminal using Unicode quadrant block characters
- * with 24-bit truecolor foreground/background, giving 2×2 sub-pixels per character cell.
+ * `--preview` renders the SVG directly in the terminal using Unicode quadrant block characters
+ * with 24-bit truecolor foreground and background, giving 2x2 sub-pixels per character cell.
  *
  * @image html donner_svg_preview_icon.svg width=640
  *
  * @section DonnerSvgToolInteractive Interactive mode
  *
- * `--interactive` implies `--preview` and additionally enables mouse-driven selection: hover
- * over the terminal image to see the element under the cursor, and click to lock the selection.
+ * `--interactive` implies `--preview` and adds mouse-driven selection: hover over the terminal
+ * image to see the element under the cursor, and click to lock the selection.
  * The right-hand pane shows the DOM path and computed style of the selected element.
  */

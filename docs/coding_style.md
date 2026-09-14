@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-As a baseline, Donner SVG aligns with the [Google C++ coding style](https://google.github.io/styleguide/cppguide.html), with modifications to more closely align with naming conventions in the SVG standard. Additionally, since Donner SVG is designed as an experiment in C++20, coding standards that exist to support backward compatibility with older standards may be replaced.
+Donner SVG follows the [Google C++ coding style](https://google.github.io/styleguide/cppguide.html) as a baseline, with modifications that match the naming conventions in the SVG standard. Donner SVG is also an experiment in C++20, so rules that exist to support backward compatibility with older standards may be replaced.
 
 ## Files
 
@@ -205,18 +205,18 @@ codebase consistent and portable.
   hyphens, em dashes, en dashes, and smart quotes. Use ordinary ASCII whitespace in source files;
   spell intentional Unicode whitespace in literals with escaped code points.
 - **No new `wgpu::Device::createRenderPipeline` / `createComputePipeline` calls**: wgpu-native
-  retains every pipeline it ever constructs internally — `wgpuDevicePoll(wait=true)` does not
+  retains every pipeline it ever constructs internally: `wgpuDevicePoll(wait=true)` does not
   drain the pending-destroy queue for pipelines. Per-frame or per-renderer construction silently
   leaks ~100 KB each until the driver's `maxMemoryAllocationCount` trips (Mesa lavapipe panics on
   the next texture allocation) or the process hangs progressively (Mesa llvmpipe). See issue #575
   for the incident history. All Geode pipelines must be owned by `GeodeDevice` and shared across
   renderers; `GeodePipeline.cc`, `GeodeImagePipeline.cc`, and `GeodeFilterEngine.cc` are the only
   files that may call these APIs. If you need a new pipeline class, add ownership to
-  `GeodeDevice::Impl` and expose it via a `GeodeDevice` accessor.
+  `GeodeDevice::Impl` and expose it through a `GeodeDevice` accessor.
 
 ## Tests
 
-Tests are placed in a `tests/` directory near the file they are testing. Test files should have the suffix of `_tests.cc`.
+Tests are placed in a `tests/` directory near the file they are testing. Test files use the `_tests.cc` suffix.
 
 ## Code Conventions
 
@@ -224,7 +224,7 @@ Tests are placed in a `tests/` directory near the file they are testing. Test fi
 
 #### "DestinationFromSource" Notation
 
-When working with transformation matrices in the context of SVG and 2D graphics, it's crucial to maintain clarity in how coordinate systems are transformed. Donner SVG adopts the **"destinationFromSource"** notation for transformation matrices. This notation explicitly indicates the source and destination coordinate systems, improving readability and reducing errors in matrix operations.
+Transformation matrices in SVG and 2D graphics are easy to get wrong when the coordinate systems involved are left implicit. Donner SVG uses the **"destinationFromSource"** notation for transformation matrices, which names the source and destination coordinate systems explicitly and reduces errors in matrix operations.
 
 - **Notation**: `destinationFromSource`
 - **Interpretation**: Transforms coordinates from the **source** coordinate system to the **destination** coordinate system.
@@ -237,7 +237,7 @@ In SVG, common coordinate systems include:
 - **User Space**: The coordinate system established by the SVG viewport.
 - **Viewport Coordinate System**: The coordinate system of the rendering surface (e.g., screen or canvas).
 
-Suppose we have an SVG element that needs to be transformed from its local coordinate system to user space, and then from user space to the viewport.
+Consider an SVG element that is transformed from its local coordinate system to user space, and then from user space to the viewport.
 
 ```cpp
 // Transform from user space to local coordinate system
@@ -266,9 +266,9 @@ In this notation, transformations are applied from right to left, corresponding 
 
 #### Importance of Consistent Notation
 
-- **Clarity**: By explicitly stating the source and destination coordinate systems, the code becomes self-documenting.
-- **Correctness**: Ensures that transformations are applied in the correct order, reducing bugs related to matrix operations.
-- **Maintainability**: Makes it easier for other developers to understand and modify the code.
+- **Clarity**: Stating the source and destination coordinate systems makes the code self-documenting.
+- **Correctness**: Transformations are applied in the correct order, which avoids a common class of matrix bugs.
+- **Maintainability**: Other developers can follow and modify the code without reconstructing the coordinate systems from context.
 
 #### Applying the Notation in Code
 
@@ -602,8 +602,8 @@ UTILS_RELEASE_ASSERT_MSG(str.size() < 100, "String is too long");
 
 ### Implicit Constructors
 
-- Use `/* implicit */` comment to indicate intentional implicit constructors, especially when they take a single argument.
-- This clarifies the intent and aids in code reviews.
+- Use a `/* implicit */` comment to mark intentional implicit constructors, especially single-argument ones.
+- This states the intent for readers and reviewers.
 
 **Example:**
 

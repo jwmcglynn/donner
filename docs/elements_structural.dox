@@ -1,8 +1,8 @@
 /**
 @page elements_structural Elements: Structural
 
-\details Structural elements define the structure of the document, such as the root element, groups,
-and containers.
+\details Structural elements organize the document, and include the root element, groups, and
+containers.
 
 - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html
 

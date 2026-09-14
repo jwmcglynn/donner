@@ -2,11 +2,11 @@
 
 \tableofcontents
 
-Donner uses a data-oriented Entity Component System (ECS) design pattern to store and manipulate the SVG document. This is a common pattern in game development, since it optimizes for performance via cache-friendly data structures and parallelism.
+Donner uses a data-oriented Entity Component System (ECS) design pattern to store and manipulate the SVG document. This is a common pattern in game development, since it optimizes for performance through cache-friendly data structures and parallelism.
 
 ## Entities
 
-Entities are the primary data structure in ECS. They are simply a unique identifier for a set of components. In Donner, entities are represented by a 32-bit unsigned integer, using a typedef for `entt::entity`.
+Entities are the primary data structure in ECS. They are a unique identifier for a set of components. In Donner, entities are represented by a 32-bit unsigned integer, using a typedef for `entt::entity`.
 
 ```cpp
 using Entity = entt::entity;
@@ -26,7 +26,7 @@ EntityHandle CreateEntity(SVGDocument& document, const XMLQualifiedNameRef& tagN
 
 ## Components
 
-Components are the data associated with an entity, which are efficiently stored to allow for both fast lookup and iteration.
+Components are the data associated with an entity, stored so that both lookup and iteration are fast.
 
 ```cpp
 // Get an entity's component by reference.
@@ -38,7 +38,7 @@ for (auto entity : registry.view<components::TransformComponent>()) {
 }
 ```
 
-Each component may only have one instance per entity, and each entity has an independent list of components. For example, it's easy to add a component to an entity to tag them or add data.
+Each component may only have one instance per entity, and each entity has an independent list of components. For example, a component can be added to an entity to tag it or to attach data.
 
 ```cpp
 struct InvalidateRenderTree {};
@@ -47,7 +47,7 @@ struct InvalidateRenderTree {};
 registry.emplace<InvalidateRenderTree>(entity);
 ```
 
-For a real-world example, here is how the `ViewBoxComponent` is created for SVG elements.
+For a concrete example, here is the `ViewBoxComponent` used by SVG elements.
 
 ```cpp
 struct ViewBoxComponent {
@@ -56,11 +56,11 @@ struct ViewBoxComponent {
 };
 ```
 
-The same system is used to implement the tree structure, where a \ref donner::components::TreeComponent "TreeComponent" is added to each entity that contains `Entity` references to its parent and children.
+The tree structure uses the same mechanism: each entity is given a \ref donner::components::TreeComponent "TreeComponent" holding `Entity` references to its parent and children.
 
 ## Systems
 
-Systems are singletons within the `Registry`, and are used to hold global state and operate on the component-system. Donner calls these contexts, for example \ref donner::svg::components::SVGDocumentContext "SVGDocumentContext" and \ref donner::svg::components::RenderingContext "RenderingContext".
+Systems are singletons within the `Registry` that hold global state and operate on the components. Donner calls these contexts, for example \ref donner::svg::components::SVGDocumentContext "SVGDocumentContext" and \ref donner::svg::components::RenderingContext "RenderingContext".
 
 There are also systems that are stateless, such as \ref donner::svg::components::LayoutSystem "LayoutSystem", which is instantiated on-demand to manipulate the ECS state.
 
@@ -112,7 +112,7 @@ This continues for the **Computed tree** and **Render tree**.
 
 This step must happen _after_ the styling phase to ensure SVG2 presentation attributes are properly propagated.
 
-\note `PathSpline` has been replaced by \ref donner::Path "Path" (immutable, in `donner/base/Path.h`) and \ref donner::PathBuilder "PathBuilder" (mutable builder). `Path` is constructed via `PathBuilder::build()`.
+\note `PathSpline` has been replaced by \ref donner::Path "Path" (immutable, in `donner/base/Path.h`) and \ref donner::PathBuilder "PathBuilder" (mutable builder). `Path` is constructed through `PathBuilder::build()`.
 
 For example, shape properties can be specified entirely in CSS:
 
@@ -144,11 +144,11 @@ circle {
 
 This is a new feature in SVG2 which strongly influences this pipeline.
 
-The details above have been simplified, see \ref donner::svg::components::RenderingContext "RenderingContext" as the source of truth and full list of operations.
+The details above are simplified; see \ref donner::svg::components::RenderingContext "RenderingContext" for the source of truth and the full list of operations.
 
 ## Render Tree Instantiation
 
-The final transformation occurs to instantiate the render tree, which occurs within \ref donner::svg::components::RenderingContext::instantiateRenderTree "RenderingContext::instantiateRenderTree".
+The final transformation instantiates the render tree, within \ref donner::svg::components::RenderingContext::instantiateRenderTree "RenderingContext::instantiateRenderTree".
 
 This step traverses the tree and produces a sorted list of \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent" corresponding to the draw order.
 

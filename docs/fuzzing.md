@@ -1,6 +1,7 @@
 # Fuzzing {#Fuzzing}
 
-Parsers and subparsers within Donner SVG have fuzzers in order to harden the implementation and detect new edge cases. Fuzzing is performed with [libFuzzer](https://llvm.org/docs/LibFuzzer.html).
+The parsers and subparsers in Donner SVG have fuzzers that harden the implementation and surface
+new edge cases. Fuzzing uses [libFuzzer](https://llvm.org/docs/LibFuzzer.html).
 
 ## Running a Fuzzer
 
@@ -10,20 +11,22 @@ To run a fuzzer, first build it with `--config=asan-fuzzer`:
 bazel build --config=asan-fuzzer //donner/css/parser:declaration_list_parser_fuzzer
 ```
 
-Then run it and pass it a directory to use for building the corpus. This will run indefinitely, until either a crash has been encountered or it is terminated with a Ctrl-C.
+Then run it, passing a directory to hold the corpus. It runs until it hits a crash or is stopped
+with Ctrl-C.
 
 ```sh
 mkdir ~/declcorpus
 bazel-bin/donner/css/parser/declaration_list_parser_fuzzer ~/declcorpus/
 ```
 
-To maximum throughput, run with multiple simultaneous jobs:
+To raise throughput, run several jobs at once:
 
 ```sh
 bazel-bin/donner/css/parser/declaration_list_parser_fuzzer ~/declcorpus/ -jobs=8
 ```
 
-When a failure occurs, a repro file is saved out. To guard against future crashes, copy the file to the corpus directory in-tree. This will then be validated during normal `bazel test //...` runs.
+When a failure occurs, libFuzzer writes a repro file. Copy it into the in-tree corpus directory to
+guard against regressions; corpus files are checked during normal `bazel test //...` runs.
 
 ```sh
 mv ./crash-0f6f12d023e0ad5ed83b29763cd67315e0ee0c6b donner/css/parser/tests/declaration_list_parser_corpus/
@@ -38,9 +41,9 @@ bazel test --config=asan-fuzzer --test_tag_filters=fuzz_target //...
 # Continuous Fuzzing {#ContinuousFuzzing}
 
 Donner includes a continuous fuzzing harness that runs all fuzzer targets for extended periods,
-stops when coverage plateaus, manages corpus across runs, and reports crashes.
+stops when coverage plateaus, manages the corpus across runs, and reports crashes.
 
-See the [design doc](design_docs/0012-continuous_fuzzing.md) for full architecture details.
+See the [design doc](design_docs/0012-continuous_fuzzing.md) for the architecture.
 
 ## Quick Start
 
@@ -60,9 +63,9 @@ python3 tools/fuzzing/run_continuous_fuzz.py --minimize
 
 ## Plateau Detection
 
-Fuzzers automatically stop when edge coverage stops growing. The `--plateau-timeout` flag
-(default: 10 minutes) sets how long to wait after the last new coverage before terminating.
-This avoids wasting compute on saturated fuzzers.
+Fuzzers stop automatically when edge coverage stops growing. The `--plateau-timeout` flag
+(default: 10 minutes) sets how long to wait after the last new coverage before terminating,
+so a saturated fuzzer does not keep consuming compute.
 
 ## Corpus Management
 
@@ -99,7 +102,7 @@ python3 tools/fuzzing/dashboard.py --json    # Machine-readable output
 
 ## Automated Runs (Docker)
 
-The harness runs in a Docker container via docker-compose:
+The harness runs in a Docker container with docker compose:
 
 ```sh
 cd tools/fuzzing
