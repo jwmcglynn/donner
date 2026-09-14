@@ -140,15 +140,20 @@ bool CatalogEncodedFontStore::publishVerified(std::string_view contentId, uint64
 }
 
 bool CatalogEncodedFontStore::adoptReadyAssets() {
-  const std::lock_guard lock(state_->mutex);
+  std::function<void()> wake;
   bool adopted = false;
-  for (auto& entry : state_->entries) {
-    if (entry.staged) {
-      entry.state = FontAssetState::Ready;
-      entry.staged = false;
-      adopted = true;
+  {
+    const std::lock_guard lock(state_->mutex);
+    for (auto& entry : state_->entries) {
+      if (entry.staged) {
+        entry.state = FontAssetState::Ready;
+        entry.staged = false;
+        adopted = true;
+      }
     }
+    if (adopted) wake = state_->changed();
   }
+  if (wake) wake();
   return adopted;
 }
 

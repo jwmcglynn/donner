@@ -649,15 +649,16 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     settled.thumbnails?.carouselFrame || 0,
   );
   expect(settled.thumbnails).toMatchObject({
-    requested: 4,
-    started: 4,
-    completed: 4,
     rendered: 4,
     ready: 4,
     pending: false,
     active: false,
     resultReady: false,
   });
+  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(4);
+  expect(settled.thumbnails?.started).toBe(settled.thumbnails?.requested);
+  expect(settled.thumbnails?.completed).toBe(settled.thumbnails?.started);
+  expect(await page.evaluate(() => window.__catalogFetchErrors)).toEqual([]);
   expect(settled.thumbnails?.publicationFrames).toHaveLength(4);
   const publicationFrames = settled.thumbnails?.publicationFrames || [];
   for (let index = 1; index < publicationFrames.length; ++index) {

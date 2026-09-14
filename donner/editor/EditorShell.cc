@@ -4880,9 +4880,11 @@ void EditorShell::retryPendingFontPreviews() {
   const auto mayRetry = [&](const PendingPreviewFonts& task) {
     if (task.wakeRevision == wakeRevision) return false;
     return std::ranges::any_of(task.dependencies, [&](const auto& dependency) {
-      return dependency.state == svg::FontFaceLoadState::WaitingForAdmission ||
-             fontCatalog_.availability(dependency.family, dependency.request) !=
-                 dependency.availability;
+      if (dependency.state == svg::FontFaceLoadState::WaitingForAdmission) return true;
+      if (dependency.state != svg::FontFaceLoadState::WaitingForBytes) return false;
+      const auto current = fontCatalog_.availability(dependency.family, dependency.request);
+      return current != dependency.availability && (current.state == svg::FontAssetState::Ready ||
+                                                    current.state == svg::FontAssetState::Failed);
     });
   };
   for (auto it = waitingFontPreviews_.begin(); it != waitingFontPreviews_.end();) {

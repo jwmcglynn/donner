@@ -85,7 +85,7 @@
         baseUrl,
         assets,
         onResult,
-        fetchImpl = globalThis.fetch,
+        fetchImpl = globalThis.fetch.bind(globalThis),
         storage = globalThis.caches,
         cryptoImpl = globalThis.crypto,
         lockManager = globalThis.navigator?.locks,
