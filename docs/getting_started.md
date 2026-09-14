@@ -4,7 +4,8 @@
 
 ## Adding to Your Bazel Project
 
-Add the following to your `MODULE.bazel` (bazel 7.0.0 required):
+Add the following to your `MODULE.bazel`. Donner is built and tested against the Bazel version
+pinned in its `.bazelversion` (currently 8.8.0).
 
 ```py
 bazel_dep(name = "donner", version = "0.0.0")
@@ -17,7 +18,7 @@ git_override(
 
 ## Adding a Dependency
 
-Donner with the default renderer is available through the `@donner` dependency, add to your rule like so:
+Donner with the default renderer is available as the `@donner` dependency. Add it to your rule's `deps`:
 
 ```py
 donner_cc_binary(
@@ -94,7 +95,7 @@ First include the core SVG module with:
 #include "donner/svg/SVG.h"
 ```
 
-Use SVGParser to load an SVG from a string, which may be loaded from a file. Note that the string needs to be mutable as it is modified by the parser.
+Use `SVGParser` to load an SVG from a string, which may have been read from a file:
 
 \snippet svg_tree_interaction.cc svg_string
 
@@ -108,14 +109,14 @@ Then get the `SVGDocument` and start using it. For example, to get the `SVGEleme
 
 \snippet svg_tree_interaction.cc get_path
 
-The document tree can be traversed via the Donner API, and the SVG can be modified in-memory:
+The document tree can be traversed and modified in memory:
 
 \snippet svg_tree_interaction.cc path_set_style
 
 For multi-threaded DOM access and removed-element lifetime behavior, see
 \ref SvgDomThreadingAndLifetime.
 
-Outputs
+The snippet above prints:
 
 ```
 Computed style: PropertyRegistry {
@@ -126,7 +127,7 @@ Computed style: PropertyRegistry {
 
 ## Rendering an SVG
 
-Use the backend-agnostic `Renderer` class, which resolves to the active build backend:
+Use the `Renderer` class, which resolves to the backend selected at build time:
 
 ```cpp
 #include "donner/svg/renderer/Renderer.h"
@@ -135,51 +136,50 @@ donner::svg::Renderer renderer;
 renderer.draw(document);
 ```
 
-Outputs can be saved to a PNG file:
+The output can be saved to a PNG file:
 
 ```cpp
 const bool success = renderer.save("output.png");
 ```
 
-Or pixel data can be accessed via snapshot:
+Pixel data can also be read back with a snapshot:
 
 ```cpp
 donner::svg::RendererBitmap snapshot = renderer.takeSnapshot();
 std::cout << "Size: " << renderer.width() << "x" << renderer.height() << "\n";
 ```
 
-The backend is selected at build time. See \ref BuildingDonner for details on choosing between
-TinySkia (lightweight default) and Skia (full-featured).
+See \ref BuildingDonner for details on choosing between tiny_skia (the compact CPU default) and
+Geode (the WebGPU backend).
 
 ## Third-Party License Attribution
 
 Donner bundles several third-party libraries (EnTT, stb, tiny-skia-cpp, zlib, libpng, FreeType,
-HarfBuzz, woff2, brotli, Skia). Most are under permissive licenses that require you to reproduce
-their copyright notice and license text when redistributing binaries built from Donner. To make
-this painless, Donner ships a `donner_notice_file` rule that aggregates every required license
-into a single `NOTICE.txt` you can embed in your application.
+HarfBuzz, woff2, brotli). Most are under permissive licenses that require you to reproduce
+their copyright notice and license text when redistributing binaries built from Donner. Donner
+ships a `donner_notice_file` rule that aggregates every required license into a single
+`NOTICE.txt` that you can embed in your application.
 
 Pick the variant that matches your build configuration:
 
-| Variant                            | Bazel target                                            |
-| ---------------------------------- | ------------------------------------------------------- |
-| Default (TinySkia)                 | `@donner//third_party/licenses:notice_default`          |
-| TinySkia + `--config=text-full`    | `@donner//third_party/licenses:notice_text_full`        |
-| Skia + `--config=text-full`        | `@donner//third_party/licenses:notice_skia_text_full`   |
+| Variant                          | Bazel target                                     |
+| -------------------------------- | ------------------------------------------------ |
+| Default (tiny-skia)              | `@donner//third_party/licenses:notice_default`   |
+| tiny-skia + `--config=text-full` | `@donner//third_party/licenses:notice_text_full` |
 
 ### Previewing the aggregated notice
 
-To see exactly what text your users will receive, build the variant target and print its output.
+To see the exact text your users will receive, build the variant target and print its output.
 When Donner is a dependency of your project the files land under
 `bazel-bin/external/donner+/third_party/licenses/`:
 
 ```sh
-# Default (TinySkia) variant:
+# Default (tiny-skia) variant:
 bazel build @donner//third_party/licenses:notice_default
 cat bazel-bin/external/donner+/third_party/licenses/notice_default.txt
 ```
 
-When working inside the Donner repo itself, drop the `external/donner+` prefix:
+Inside the Donner repository itself, drop the `external/donner+` prefix:
 
 ```sh
 bazel build //third_party/licenses:notice_default
@@ -188,22 +188,21 @@ cat bazel-bin/third_party/licenses/notice_default.txt
 
 Each variant produces two files next to each other:
 
-  - `notice_<variant>.txt` — the concatenated NOTICE you embed in your app.
-  - `notice_<variant>.json` — a machine-readable manifest (package name, version, SPDX
-    identifier, upstream URL, license text path) in case you need to drive your own formatting.
+  - `notice_<variant>.txt`: the concatenated NOTICE to embed in your application.
+  - `notice_<variant>.json`: a machine-readable manifest (package name, version, SPDX
+    identifier, upstream URL, license text path) for producing your own formatting.
 
 ### Embedding the NOTICE into your application
 
-Wire the notice target into your own binary as a data dependency, then load it at runtime. The
-`donner_notice_file` rule exposes its NOTICE.txt under an `output_group = "notice"`, so you can
-pick it out cleanly with `filegroup` and feed it through `//tools:embed_resources` (a helper
-Donner already exposes) to produce a linkable C++ symbol:
+The `donner_notice_file` rule exposes its `NOTICE.txt` under `output_group = "notice"`. Select it
+with a `filegroup` and pass it through Donner's `//tools:embed_resources` helper to produce a
+linkable C++ symbol:
 
 ```py
 load("@donner//build_defs:rules.bzl", "donner_cc_binary")
 
-# Pull just the NOTICE.txt out of the notice target (it also produces a
-# .json manifest we don't need at runtime).
+# Select only NOTICE.txt from the notice target; the .json manifest is not
+# needed at runtime.
 filegroup(
     name = "notice_txt",
     srcs = ["@donner//third_party/licenses:notice_default"],
@@ -243,12 +242,12 @@ donner_cc_binary(
 )
 ```
 
-The generated `.cpp` filename mirrors the input filename with non-alphanumerics turned into
-underscores (so `notice_default.txt` becomes `notice_default_txt.cpp`).
+The generated `.cpp` filename is the input filename with non-alphanumeric characters replaced by
+underscores, so `notice_default.txt` becomes `notice_default_txt.cpp`.
 
 `embed_resources` generates a header that exposes each resource as a
-`std::span<const unsigned char>` inside the `donner::embedded` namespace, so you can surface it
-behind an `--about` flag or a menu item:
+`std::span<const unsigned char>` in the `donner::embedded` namespace. The application can then
+show it behind an `--about` flag or a menu item:
 
 ```cpp
 #include "embedded/notice_embedded.h"
@@ -263,16 +262,15 @@ std::string_view thirdPartyLicenses() {
 }
 ```
 
-If you prefer a simpler approach, you can also declare the notice target as a `data` dependency
-on your binary and read the file at runtime via Bazel runfiles — whichever fits your
-distribution model.
+Alternatively, declare the notice target as a `data` dependency of your binary and read the file
+at runtime through Bazel runfiles.
 
 ### Keeping the attribution in sync
 
 The variant lists live in
 [`third_party/licenses/BUILD.bazel`](https://github.com/jwmcglynn/donner/blob/main/third_party/licenses/BUILD.bazel)
 and are kept in sync with Donner's `//examples:svg_to_png` dependency graph. When you change
-build configs (enabling `--config=text-full`, switching to Skia), update your consumer BUILD
+build configuration (for example, enabling `--config=text-full`), update your consumer BUILD
 files to reference the matching `notice_*` target. The
 [build report](build_report.md#external-dependencies) enumerates every third-party dep per
 variant alongside its SPDX identifier and upstream link.
