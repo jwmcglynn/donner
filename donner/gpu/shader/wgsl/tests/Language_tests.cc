@@ -90,6 +90,29 @@ TEST(Language, NativeEmittersRejectUnknownStorageFormats) {
   EXPECT_EQ(EmitSpirv(parsed.module, words).error, SpirvEmitError::UnsupportedType);
 }
 
+TEST(Language, AcceptsLightingTranscendentalsWithFloatingShapes) {
+  for (const char* source : {
+           "fn f(x:f32)->f32 { return sin(x)+cos(x); }",
+           "fn f(x:vec4f)->vec4f { return sin(x)+cos(x); }",
+           "fn f(x:f32,y:f32)->f32 { return pow(x,y); }",
+           "fn f(x:vec2f,y:vec2f)->vec2f { return pow(x,y); }",
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
+  }
+}
+TEST(Language, RejectsMalformedLightingBuiltinCalls) {
+  for (const char* source : {
+           "fn f(x:f32)->f32 { return pow(x); }",
+           "fn f(x:i32)->i32 { return sin(x); }",
+           "fn f(x:vec2f,y:f32)->vec2f { return pow(x,y); }",
+           "fn f(x:f32)->f32 { return cos(x,x); }",
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::InvalidCall);
+  }
+}
+
 TEST(Language, MaterializesAbstractConstantsAndPreservesExplicitTypes) {
   constexpr auto result = Parse(R"(
 const noBand: u32 = 0xFFFFFFFFu;
