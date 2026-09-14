@@ -92,6 +92,7 @@ TEST(CatalogFontResourcesTest, FontReadyReplacesFallbackWithoutSourceMutation) {
   AttachProvider(document, catalog);
   svg::Renderer renderer;
   renderer.draw(document);
+  app.document().refreshFontResources();
   auto first = document.querySelector("#first")->cast<svg::SVGTextElement>();
   auto second = document.querySelector("#second")->cast<svg::SVGTextElement>();
   const double fallbackLength = first.getComputedTextLength();
@@ -100,6 +101,7 @@ TEST(CatalogFontResourcesTest, FontReadyReplacesFallbackWithoutSourceMutation) {
   ASSERT_THAT(document.fontDependenciesForElement(second), SizeIs(1));
   const std::string sourceBefore(document.source());
   const auto frameBefore = app.document().currentFrameVersion();
+  const auto fontRevisionBefore = app.document().fontResourceRevision();
   const auto generationBefore = app.document().documentGeneration();
   const auto unchanged = document.querySelector("#unchanged")->cast<svg::SVGTextElement>();
   const double unchangedLength = unchanged.getComputedTextLength();
@@ -111,7 +113,7 @@ TEST(CatalogFontResourcesTest, FontReadyReplacesFallbackWithoutSourceMutation) {
   ASSERT_EQ(app.document().refreshFontResources(), true);
 
   EXPECT_EQ(app.document().currentFrameVersion(), frameBefore + 1);
-  EXPECT_EQ(app.document().fontResourceRevision(), 1u);
+  EXPECT_EQ(app.document().fontResourceRevision(), fontRevisionBefore + 1);
   EXPECT_EQ(app.document().documentGeneration(), generationBefore);
   EXPECT_EQ(document.source(), sourceBefore);
   EXPECT_EQ(app.canUndo(), false);

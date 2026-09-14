@@ -157,6 +157,7 @@ py_test(
         "catalog_generate.py",
         "catalog_generate_test.py",
     ],
+    imports = ["."],
     main = "catalog_generate_test.py",
 )
 

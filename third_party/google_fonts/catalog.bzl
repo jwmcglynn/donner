@@ -113,6 +113,7 @@ def catalog_asset_tests(target_compatible_with):
             size = "small",
             srcs = ["catalog_generate.py", "catalog_woff2_assets_test.py"],
             main = "catalog_woff2_assets_test.py",
+            imports = ["."],
             args = [
                 "--manifest",
                 "$(rootpath :catalog_manifest)",
