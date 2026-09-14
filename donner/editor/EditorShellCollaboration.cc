@@ -1,5 +1,6 @@
 /// @file
 /// Native collaboration shares the editor's frame, source synchronization and undo path.
+#include <algorithm>
 #include <cstdio>
 
 #include "donner/editor/EditorCollaboration.h"
@@ -83,7 +84,13 @@ void EditorShell::persistCollaborationFeedback() {
 void EditorShell::renderCollaborationPanel() {
   if (!collaboration_) return;
   const auto previousRevision = collaboration_->feedbackRevision();
-  commentsPresenter_.drawPanel(*collaboration_, !renderCoordinator_.asyncRenderer().isBusy());
+  const auto windowSize = window_.windowSize();
+  const Box2d bounds =
+      Box2d::FromXYWH(std::max(8.0f, static_cast<float>(windowSize.x) - rightPaneWidth_ + 8.0f),
+                      42.0, std::max(200.0f, rightPaneWidth_ - 16.0f),
+                      std::clamp(static_cast<double>(windowSize.y) - 52.0, 200.0, 430.0));
+  commentsPresenter_.drawPanel(*collaboration_, !renderCoordinator_.asyncRenderer().isBusy(),
+                               bounds);
   if (collaboration_->feedbackRevision() != previousRevision) window_.wakeEventLoop();
   persistCollaborationFeedback();
 }

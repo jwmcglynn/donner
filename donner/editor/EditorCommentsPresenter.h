@@ -22,7 +22,7 @@ public:
   /// Draw comment pins using the same viewport as the presented artwork.
   void drawPins(EditorCollaboration& collaboration, const ViewportState& viewport);
   /// Draw the non-modal comment composer and feedback list.
-  void drawPanel(EditorCollaboration& collaboration, bool rendererIdle);
+  void drawPanel(EditorCollaboration& collaboration, bool rendererIdle, const Box2d& initialBounds);
   /// Show or hide the feedback panel.
   void setVisible(bool visible) { visible_ = visible; }
   /// Whether the feedback panel is visible.

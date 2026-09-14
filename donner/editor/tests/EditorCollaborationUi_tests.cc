@@ -8,7 +8,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -19,6 +21,7 @@
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "imgui_internal.h"
 #include "nlohmann/json.hpp"
@@ -28,6 +31,11 @@ class EditorCollaborationUiTestAccess {
 public:
   static void OpenContextMenu(EditorShell& shell, Vector2d point) {
     shell.openRenderPaneContextMenu(point);
+  }
+  static bool PresentedCurrentDocument(EditorShell& shell) {
+    return !shell.renderCoordinator_.asyncRenderer().isBusy() &&
+           shell.renderCoordinator_.displayedDocVersionForDiagnostics() >=
+               shell.app_.document().currentFrameVersion();
   }
   static bool PinCaptures(EditorShell& shell, Vector2d point) {
     return shell.commentsPresenter_.capturesInput(point);
@@ -136,6 +144,30 @@ protected:
     EXPECT_THAT(result["result"]["isError"], Eq(false)) << result.dump();
     return Json::parse(result["result"]["content"][0]["text"].get<std::string>());
   }
+  svg::RendererBitmap captureDocumentPixel(Vector2d point) {
+    for (int i = 0; i < 100 && !EditorCollaborationUiTestAccess::PresentedCurrentDocument(*shell);
+         ++i) {
+      window->waitEventsTimeout(0.01);
+      frame();
+    }
+    EXPECT_THAT(EditorCollaborationUiTestAccess::PresentedCurrentDocument(*shell), Eq(true));
+    window->beginFrame();
+    shell->runFrame();
+    const auto bitmap = window->endFrameAndReadPixels();
+    const auto logical = window->windowSize();
+    if (bitmap.empty() || logical.x <= 0 || logical.y <= 0) return {};
+    const auto screen = shell->viewportForReadback().documentToScreen(point);
+    const int x = static_cast<int>(std::lround(screen.x * bitmap.dimensions.x / logical.x));
+    const int y = static_cast<int>(std::lround(screen.y * bitmap.dimensions.y / logical.y));
+    if (x < 0 || y < 0 || x >= bitmap.dimensions.x || y >= bitmap.dimensions.y) return {};
+    const std::size_t offset =
+        static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4;
+    svg::RendererBitmap pixel;
+    pixel.dimensions = Vector2i(1, 1);
+    pixel.rowBytes = 4;
+    pixel.pixels.assign(bitmap.pixels.begin() + offset, bitmap.pixels.begin() + offset + 4);
+    return pixel;
+  }
   Json revision() {
     Json result = call("get_editor_state");
     return {{"session_id", result["session_id"]},
@@ -150,6 +182,12 @@ TEST_F(EditorCollaborationUiTest, McpEditsTheVisibleDocumentAndUndoRestoresIt) {
   call("apply_edits", edit);
   ASSERT_THAT(shell->documentSourceForReadback().has_value(), Eq(true));
   EXPECT_THAT(*shell->documentSourceForReadback(), HasSubstr("fill=\"blue\""));
+  svg::RendererBitmap expected;
+  expected.dimensions = Vector2i(1, 1);
+  expected.rowBytes = 4;
+  expected.pixels = {0, 0, 255, 255};
+  tests::CompareBitmapToBitmap(captureDocumentPixel(Vector2d(40, 40)), expected,
+                               "native_mcp_blue_face", tests::PixelmatchIdentityParams());
   call("select_by_selector", {{"selector", "#face"}});
   EXPECT_THAT(call("get_editor_state")["selection"][0]["id"], Eq("face"));
   call("undo", revision());

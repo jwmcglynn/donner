@@ -39,9 +39,15 @@ void EditorCommentsPresenter::drawPins(EditorCollaboration& collaboration,
   ImGui::SetCursorScreenPos(oldCursor);
 }
 
-void EditorCommentsPresenter::drawPanel(EditorCollaboration& collaboration, bool rendererIdle) {
+void EditorCommentsPresenter::drawPanel(EditorCollaboration& collaboration, bool rendererIdle,
+                                        const Box2d& initialBounds) {
   if (!visible_) return;
-  ImGui::SetNextWindowSize(ImVec2(370, 430), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos(ImVec2(static_cast<float>(initialBounds.topLeft.x),
+                                 static_cast<float>(initialBounds.topLeft.y)),
+                          ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(
+      ImVec2(static_cast<float>(initialBounds.width()), static_cast<float>(initialBounds.height())),
+      ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Comments", &visible_)) {
     ImGui::End();
     return;
