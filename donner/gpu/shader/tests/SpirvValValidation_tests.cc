@@ -43,6 +43,7 @@
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
+#include "donner/gpu/shader/tests/CompiledSlugFill.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
@@ -445,6 +446,20 @@ TEST(SpirvValValidation, StructConstruction) {
 TEST(SpirvValValidation, VectorMix) {
   ExpectWordsValidateForVulkan11(SpirvVal(), tests::VectorMixAllProjections().spirv,
                                  "VectorMix.spv");
+}
+
+TEST(SpirvValValidation, SlugFill) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugFillAllProjections().spirv,
+                                 "slug_fill.spv");
+}
+TEST(SpirvValValidation, SlugFillMutated) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugFillMutatedAllProjections().spirv,
+                                 "slug_fillMutated.spv");
+}
+
+TEST(SpirvValValidation, SlugFlatInterface) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugFlatInterfaceAllProjections().spirv,
+                                 "slug_flat.spv");
 }
 
 }  // namespace

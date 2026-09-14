@@ -580,4 +580,75 @@ py_test(
     target_compatible_with = _NATIVE,
 )
 
+donner_cc_binary(
+    name = "slug_fill_wgsl_probe",
+    testonly = 1,
+    srcs = ["SlugFillWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
+    ],
+)
+
+py_test(
+    name = "slug_fill_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug_fill",
+        "--binary=$(rootpath :slug_fill_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":slug_fill_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "slug_fill_native_probe",
+    testonly = 1,
+    srcs = ["SlugFillNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_native_artifact",
+    ],
+)
+
+py_test(
+    name = "slug_fill_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug_fill",
+        "--binary=$(rootpath :slug_fill_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":slug_fill_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "slug_fill_all_probe",
+    testonly = 1,
+    srcs = ["SlugFillAllProbe.cc"],
+    copts = ["-fconstexpr-steps=4194304"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:slug_fill_source"],
+)
+
+py_test(
+    name = "slug_fill_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug_fill",
+        "--binary=$(rootpath :slug_fill_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":slug_fill_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
 donner_package()

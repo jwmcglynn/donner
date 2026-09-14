@@ -25,10 +25,10 @@ TEST(SlugFeatures, CopiesNestedAndArrayBearingStorageValues) {
 struct Inner { row:vec4f, }
 struct Record { transform:Inner, vertices:array<vec4f,4>, }
 @group(0) @binding(0)var<storage,read> records:array<Record>;
-fn read(r:Record,i:u32)->vec4f{return r.vertices[i]+r.transform.row;}
+fn read_record(r:Record,i:u32)->vec4f{return r.vertices[i]+r.transform.row;}
 @compute @workgroup_size(1)fn main(@builtin(global_invocation_id) id:vec3u){
  let rec=records[id.x];var local=rec;local.vertices=records[id.y].vertices;
- let value=read(local,id.z);
+ let value=read_record(local,id.z);
 }
 )");
   EXPECT_EQ(parsed.diagnostic.code, ErrorCode::None) << parsed.diagnostic.span.begin;
@@ -36,7 +36,8 @@ fn read(r:Record,i:u32)->vec4f{return r.vertices[i]+r.transform.row;}
 
 TEST(SlugFeatures, BoundsLargerSourceAndFunctionArenas) {
   std::string source(40000, ' ');
-  for (unsigned i = 0; i < 40; ++i) source += "fn f" + std::to_string(i) + "()->u32{return 1u;}\n";
+  for (unsigned i = 0; i < 40; ++i)
+    source += "fn helper_" + std::to_string(i) + "()->u32{return 1u;}\n";
   EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
 }
 
@@ -99,6 +100,54 @@ TEST(SlugFeatures, ValidatesDeeplyNestedMetalBufferLayout) {
   std::array<char, 16384> bytes{};
   TextSink sink{bytes.data(), uint32_t(bytes.size())};
   EXPECT_EQ(EmitMsl(parsed.module, sink).error, TextEmitError::UniformLayoutMismatch);
+}
+
+TEST(SlugFeatures, RejectsInvalidInstancedInterfaces) {
+  for (const char* source :
+       {"@fragment fn f(@builtin(instance_index)i:u32)->@location(0)vec4f{return vec4f(0);}",
+        "@vertex fn f(@builtin(instance_index)i:i32)->@builtin(position)vec4f{return vec4f(0);}",
+        "@vertex fn f(@location(0) @interpolate(flat)x:f32)->@builtin(position)vec4f{return "
+        "vec4f(x);}",
+        "@fragment fn f()->@location(0) @interpolate(flat)f32{return 0;}",
+        "@fragment fn f(@interpolate(flat)x:u32)->@location(0)vec4f{return vec4f(0);}",
+        "@fragment fn f(@location(0)x:u32)->@location(0)vec4f{return vec4f(0);}",
+        "@fragment fn f(@location(0) @interpolate(flat) "
+        "@interpolate(flat)x:u32)->@location(0)vec4f{return vec4f(0);}"}) {
+    SCOPED_TRACE(source);
+    EXPECT_THAT(Parse(source).hasResult(), testing::IsFalse());
+  }
+}
+TEST(SlugFeatures, RejectsNonportableNestedUniformLayouts) {
+  for (const char* source :
+       {"struct I{v:mat2x2f,}struct O{i:I,}@group(0) @binding(0)var<uniform>u:O;",
+        "struct I{v:array<f32,2>,}struct O{i:I,}@group(0) @binding(0)var<uniform>u:O;",
+        "struct I{v:vec2f,}struct O{x:u32,i:I,}@group(0) @binding(0)var<uniform>u:O;",
+        "struct I{v:vec2f,}struct O{i:I,x:f32,}@group(0) @binding(0)var<uniform>u:O;"}) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::UnsupportedConstruct);
+  }
+  EXPECT_EQ(
+      Parse("struct I{v:vec4f,}struct O{x:vec4f,i:I,y:vec4f,}@group(0) @binding(0)var<uniform>u:O;")
+          .diagnostic.code,
+      ErrorCode::None);
+}
+TEST(SlugFeatures, RejectsDirectBufferRootAlsoUsedAsArrayElement) {
+  EXPECT_EQ(Parse("struct I{x:f32,}@group(0) @binding(0)var<storage,read>a:I;@group(0) "
+                  "@binding(1)var<storage,read>b:array<I>;")
+                .diagnostic.code,
+            ErrorCode::UnsupportedConstruct);
+}
+TEST(SlugFeatures, AcceptsExactTypeSizeLimitAndRejectsTheNextMember) {
+  std::string source = "struct S0{v:array<f32,8192>,}";
+  for (unsigned i = 1; i <= 5; ++i) {
+    const auto previous = "S" + std::to_string(i - 1);
+    source += "struct S" + std::to_string(i) + "{a:" + previous + ",b:" + previous + ",}";
+  }
+  const auto parsed = Parse(source);
+  ASSERT_EQ(parsed.diagnostic.code, ErrorCode::None);
+  EXPECT_EQ(parsed.module.structs[5].size, ModuleLimits::kMaxTypeBytes);
+  EXPECT_EQ(Parse(source + "struct TooBig{base:S5,tail:u32,}").diagnostic.code,
+            ErrorCode::InvalidLayout);
 }
 
 }  // namespace

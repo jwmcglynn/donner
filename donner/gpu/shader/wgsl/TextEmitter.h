@@ -33,7 +33,7 @@ struct TextEmitResult {
 };
 
 /// Maximum bytes emitted for one text projection, including count-only calls.
-inline constexpr uint32_t kMaxTextEmitBytes = 65536;
+inline constexpr uint32_t kMaxTextEmitBytes = 131072;
 
 /// A fixed, caller-owned character sink.
 ///
@@ -291,6 +291,7 @@ private:
   }
 
   constexpr uint32_t typeAlignment(const Type& value) const {
+    if (value.kind == TypeKind::Struct) return module_.typeAlignment(value);
     if (value.kind == TypeKind::Matrix) return value.rows == 2 ? 8 : 16;
     if (value.kind == TypeKind::Array) return typeAlignment(value.elementType());
     if (!value.isNumeric()) {
@@ -300,6 +301,7 @@ private:
   }
 
   constexpr uint32_t typeSize(const Type& value) const {
+    if (value.kind == TypeKind::Struct) return module_.typeSize(value);
     if (value.kind == TypeKind::Matrix) return typeAlignment(value) * value.columns;
     if (value.kind == TypeKind::Array) return module_.arrayStride(value) * value.arrayCount;
     if (!value.isNumeric()) {
@@ -381,35 +383,33 @@ private:
       error_ = TextEmitError::UniformLayoutMismatch;
   }
 
-  constexpr bool structIsBuffer(uint16_t structId) const {
-    for (uint16_t i = 0; i < module_.bindingCount; ++i) {
-      const Type& type = module_.bindings[i].type;
-      if ((type.kind == TypeKind::Struct ||
-           (type.kind == TypeKind::Array && type.elementKind == TypeKind::Struct)) &&
-          type.structId == structId)
-        return true;
+  constexpr bool containsStruct(Type type, uint16_t wanted, uint16_t depth = 0) {
+    if (type.kind != TypeKind::Array && type.kind != TypeKind::Struct) return false;
+    if (depth > ModuleLimits::kMaxStructs) {
+      error_ = TextEmitError::InvalidModule;
+      return false;
     }
+    if (type.kind == TypeKind::Array) return containsStruct(type.elementType(), wanted, depth + 1);
+    if (type.kind != TypeKind::Struct || type.structId >= module_.structCount) return false;
+    if (type.structId == wanted) return true;
+    const Struct& structure = module_.structs[type.structId];
+    for (uint16_t i = 0; i < structure.memberCount; ++i)
+      if (containsStruct(module_.structMembers[structure.firstMember + i].type, wanted, depth + 1))
+        return true;
+    return false;
+  }
+
+  constexpr bool structIsBuffer(uint16_t structId) {
+    for (uint16_t i = 0; i < module_.bindingCount; ++i)
+      if (containsStruct(module_.bindings[i].type, structId)) return true;
     return false;
   }
 
   constexpr void emitStructMember(const StructMember& member) {
     indentation();
-    if (member.type.kind == TypeKind::Array) {
-      if (member.arrayStride != module_.arrayStride(member.type)) {
-        error_ = TextEmitError::UniformLayoutMismatch;
-        return;
-      }
-      type(member.type.elementType());
-      character(' ');
-      prefixed("donner_msl_member_", member.name);
-      character('[');
-      uintText(member.type.arrayCount);
-      character(']');
-    } else {
-      type(member.type);
-      character(' ');
-      prefixed("donner_msl_member_", member.name);
-    }
+    type(member.type);
+    character(' ');
+    prefixed("donner_msl_member_", member.name);
     text(";\n");
   }
 
@@ -1305,6 +1305,10 @@ private:
     uintText(variableId);
   }
 
+  constexpr bool isVertexIndexBuiltin(BuiltinValue value) const {
+    return value == BuiltinValue::VertexIndex || value == BuiltinValue::InstanceIndex;
+  }
+
   constexpr void ioAttribute(const InterfaceVariable& variable, Stage stage, bool input) {
     if (variable.decoration.builtin == BuiltinValue::Position) {
       text(" [[position]]");
@@ -1313,7 +1317,9 @@ private:
            : stage == Stage::Fragment && !input ? " [[color("
                                                 : " [[user(locn");
       uintText(variable.decoration.location);
-      text(")]]");
+      text(")");
+      if (variable.decoration.flat) text(", flat");
+      text("]]");
     } else {
       error_ = TextEmitError::InvalidModule;
     }
@@ -1334,14 +1340,14 @@ private:
     if (!validIoRange(first, count)) return 0;
     uint16_t fields = 0;
     for (uint16_t i = first; i < first + count; ++i)
-      fields += module_.interfaceVariables[i].decoration.builtin != BuiltinValue::VertexIndex;
+      fields += !isVertexIndexBuiltin(module_.interfaceVariables[i].decoration.builtin);
     if (fields == 0) return 0;
     text("struct ");
     ioTypeName(functionId, input);
     text(" {\n");
     for (uint16_t i = first; i < first + count; ++i) {
       const InterfaceVariable& variable = module_.interfaceVariables[i];
-      if (variable.decoration.builtin == BuiltinValue::VertexIndex) continue;
+      if (isVertexIndexBuiltin(variable.decoration.builtin)) continue;
       text("  ");
       type(variable.type);
       character(' ');
@@ -1354,8 +1360,10 @@ private:
   }
 
   constexpr void emitIoInput(uint16_t variableId) {
-    if (module_.interfaceVariables[variableId].decoration.builtin == BuiltinValue::VertexIndex) {
-      text("donner_msl_vertex_index");
+    const auto builtin = module_.interfaceVariables[variableId].decoration.builtin;
+    if (isVertexIndexBuiltin(builtin)) {
+      text(builtin == BuiltinValue::VertexIndex ? "donner_msl_vertex_index"
+                                                : "donner_msl_instance_index");
     } else {
       text("donner_msl_inputs.");
       ioField(variableId);
@@ -1400,6 +1408,17 @@ private:
     text("};\n");
   }
 
+  constexpr void emitIndexParameters(const Function& function, bool& comma) {
+    for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
+      if (!isVertexIndexBuiltin(module_.interfaceVariables[i].decoration.builtin)) continue;
+      if (comma) text(", ");
+      text(module_.interfaceVariables[i].decoration.builtin == BuiltinValue::VertexIndex
+               ? "uint donner_msl_vertex_index [[vertex_id]]"
+               : "uint donner_msl_instance_index [[instance_id]]");
+      comma = true;
+    }
+  }
+
   constexpr void emitGraphicsWrapper(uint16_t functionId) {
     const Function& function = module_.functions[functionId];
     const uint16_t inputFields = emitIoStruct(functionId, true);
@@ -1426,12 +1445,7 @@ private:
       text(" donner_msl_inputs [[stage_in]]");
       comma = true;
     }
-    for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
-      if (module_.interfaceVariables[i].decoration.builtin != BuiltinValue::VertexIndex) continue;
-      if (comma) text(", ");
-      text("uint donner_msl_vertex_index [[vertex_id]]");
-      comma = true;
-    }
+    emitIndexParameters(function, comma);
     text(") {\n  ");
     if (outputFields != 0) text("const auto donner_msl_result = ");
     prefixed("donner_msl_function_", function.name);

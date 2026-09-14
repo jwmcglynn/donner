@@ -8,6 +8,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
+#include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
@@ -49,45 +50,8 @@ gpu::BindGroupLayoutEntry FragmentStorageEntry(uint32_t binding) {
 
 GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat)
     : adapterDevice_(&adapterDevice), colorFormat_(colorFormat) {
-  // ----- Bind group layout -----
-  // Twelve bindings: uniforms, H bands SSBO, H curves SSBO, pattern
-  // texture, pattern sampler, clip-mask texture, clip-mask sampler, the
-  // per-instance records SSBO (transform, color, rule, grid parameters,
-  // bounding polygon, geometry bases; 256 bytes per record), V bands
-  // SSBO, V curves SSBO, the combined dense grid storage, and the gradient
-  // paint blocks. The pattern texture/sampler are only sampled when
-  // paintMode == "pattern" and the clip-mask texture/sampler only when
-  // `hasClipMask != 0`; a 1x1 dummy texture is bound for both when the
-  // feature is inactive so the bind group layout is stable across draw
-  // calls. Every draw binds at least one record; instanced and batched
-  // draws bind a contiguous record span indexed by instance_index.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      FragmentStorageEntry(1),
-      FragmentStorageEntry(2),
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      gpu::BindGroupLayoutEntry{5, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{6, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      // Per-instance records: the vertex stage reads the transform + bounding polygon, and the
-      // fragment stage reads color / rule / grid / geometry bases through a flat instance-id
-      // varying, so overlapping batched instances still blend in painter order.
-      gpu::BindGroupLayoutEntry{7, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::ReadOnlyStorageBuffer},
-      FragmentStorageEntry(8),
-      FragmentStorageEntry(9),
-      // The four dense grid arrays (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
-      // combined u32 storage binding; instance records carry the element bases. This keeps the
-      // fragment stage at seven storage bindings, under the baseline WebGPU limit of eight per
-      // stage.
-      FragmentStorageEntry(10),
-      // Gradient paint blocks, addressed by each record's element base, so a run of differently
-      // painted gradient fills shares one draw instead of rebinding a per-draw gradient uniform.
-      FragmentStorageEntry(11),
-  };
+  const auto& shader = gpu::shader::programs::SlugFillShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                                        gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
                                    "GeodeSlugFillBGL createBindGroupLayout");
@@ -101,16 +65,18 @@ GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::Texture
   // The default entry points take the draw's paint and geometry from the uniform, which serves
   // every draw whose instances share one paint and one encoded path. `batchedPipeline` builds the
   // record-reading variant.
-  pipeline_ = buildPipeline("GeodeSlugFill", "vs_main", "fs_main");
+  pipeline_ = buildPipeline("GeodeSlugFill", shader.entryPoints[0].name.view(),
+                            shader.entryPoints[2].name.view());
 }
 
-gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label, const char* vertexEntryPoint,
-                                                 const char* fragmentEntryPoint) const {
+gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label,
+                                                 std::string_view vertexEntryPoint,
+                                                 std::string_view fragmentEntryPoint) const {
   return UnwrapOrAbort(
       adapterDevice_->createRenderPipeline(gpu::RenderPipelineDescriptor{
-          label, pipelineLayout_, gpu::VertexState{shaderModule_, vertexEntryPoint, {}},
+          label, pipelineLayout_, gpu::VertexState{shaderModule_, RcString(vertexEntryPoint), {}},
           gpu::FragmentState{shaderModule_,
-                             fragmentEntryPoint,
+                             RcString(fragmentEntryPoint),
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       label);
@@ -122,7 +88,9 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
     // module, same blending - differing only in the entry points that read
     // paint and geometry from each instance's record. Built on first use
     // because only a cross-entity batch needs it.
-    batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", "vs_main_batched", "fs_main_batched");
+    const auto& shader = gpu::shader::programs::SlugFillShader();
+    batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", shader.entryPoints[1].name.view(),
+                                     shader.entryPoints[3].name.view());
   }
   return batchedPipeline_;
 }

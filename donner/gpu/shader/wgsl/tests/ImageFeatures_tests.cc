@@ -95,8 +95,7 @@ TEST(WgslImageFeatures, StructureMembersRetainConstantExpressionClassification) 
 TEST(WgslImageFeatures, RejectsInvalidStructureConstructors) {
   for (const char* source :
        {"struct S{x:f32,y:f32,} fn f(){let s=S(1);}", "struct S{x:f32,} fn f(){let s=S(1,2);}",
-        "struct S{x:f32,} fn f(){let s=S(1u);}", "struct S{x:array<f32,2>,} fn f(){let s=S();}",
-        "struct S{x:f32,} const c=S(1);"}) {
+        "struct S{x:f32,} fn f(){let s=S(1u);}", "struct S{x:f32,} const c=S(1);"}) {
     SCOPED_TRACE(source);
     EXPECT_THAT(Parse(source).hasResult(), testing::IsFalse());
   }
@@ -124,8 +123,8 @@ TEST(WgslImageFeatures, RejectsUnsupportedOrInvalidArrayAndSwitchForms) {
   }
 }
 
-TEST(WgslImageFeatures, RejectsWholeBufferArrayCopiesButKeepsIndexedReads) {
-  const std::string_view rejected[] = {
+TEST(WgslImageFeatures, AcceptsWholeBufferArrayCopiesAndIndexedReads) {
+  const std::string_view accepted[] = {
       R"(struct B{a:array<f32,2>,} @group(0) @binding(0)var<storage,read>b:B;
           fn f()->f32{let a=b.a;return a[0];})",
       R"(struct B{a:array<f32,2>,} @group(0) @binding(0)var<storage,read>b:B;
@@ -133,9 +132,9 @@ TEST(WgslImageFeatures, RejectsWholeBufferArrayCopiesButKeepsIndexedReads) {
       R"(struct B{a:array<vec4f,2>,} @group(0) @binding(0)var<uniform>b:B;
           fn f()->vec4f{let a=b.a;return a[0];})",
   };
-  for (const auto source : rejected) {
+  for (const auto source : accepted) {
     SCOPED_TRACE(source);
-    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::UnsupportedConstruct);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
   }
   EXPECT_EQ(Parse(R"(struct B{a:array<f32,2>,} @group(0) @binding(0)var<storage,read>b:B;
           fn f(i:u32)->f32{return b.a[i];})")

@@ -22,8 +22,8 @@ struct ShaderName {
   constexpr std::string_view view() const UTILS_LIFETIME_BOUND { return {bytes.data(), size}; }
 };
 
-/// Numeric component format of a buffer member.
-enum class ShaderScalarType : uint8_t { I32, U32, F32 };
+/// Numeric component format; None denotes a structure-valued member.
+enum class ShaderScalarType : uint8_t { I32, U32, F32, None };
 
 /// A reflected buffer member, including the layout required by the shader.
 struct ShaderBufferMember {
@@ -37,6 +37,8 @@ struct ShaderBufferMember {
   uint32_t arrayStrideBytes = 0;   //!< Byte stride for a fixed array member.
   uint8_t matrixColumns = 0;       //!< Matrix columns; lanes gives rows. Zero for non-matrices.
   uint32_t matrixStrideBytes = 0;  //!< Byte stride between matrix columns.
+  uint32_t firstMember = 0;        //!< Child range for a structure or structure array element.
+  uint32_t memberCount = 0;        //!< Zero for scalar/vector/matrix members.
 };
 
 /// One resource and the layout of its parameter block, when applicable.
@@ -56,7 +58,13 @@ struct ShaderResource {
 };
 
 /// Builtin reflected by an entry-point interface.
-enum class ShaderBuiltin : uint8_t { None, GlobalInvocationId, VertexIndex, Position };
+enum class ShaderBuiltin : uint8_t {
+  None,
+  GlobalInvocationId,
+  VertexIndex,
+  Position,
+  InstanceIndex
+};
 
 /// A flattened scalar/vector entry-point input or output.
 struct ShaderInterfaceVariable {
@@ -65,6 +73,7 @@ struct ShaderInterfaceVariable {
   uint8_t lanes = 1;
   ShaderBuiltin builtin = ShaderBuiltin::None;
   uint32_t location = UINT32_MAX;
+  bool flat = false;  //!< Flat interstage interpolation.
 };
 
 /// One entry point and its source-derived interface ranges.
@@ -97,8 +106,30 @@ struct CompiledShaderView {
     return nullptr;
   }
 
+  /// Finds a member within a validated reflected range; the result borrows this artifact.
+  /// @param first First member. @param count Member count. @param name Unqualified member name.
+  constexpr const ShaderBufferMember* findMember(uint32_t first, uint32_t count,
+                                                 std::string_view name) const UTILS_LIFETIME_BOUND {
+    if (first > members.size() || count > members.size() - first) return nullptr;
+    for (uint32_t i = first; i < first + count; ++i)
+      if (members[i].name.view() == name) return &members[i];
+    return nullptr;
+  }
+
+  /// Compares one resolved member with its expected absolute layout.
+  static constexpr bool matchesLayout(const ShaderBufferMember& member, uint32_t absoluteOffset,
+                                      uint32_t offset, uint32_t size, ShaderScalarType scalar,
+                                      uint8_t lanes, uint32_t count, uint32_t stride,
+                                      uint8_t columns, uint32_t matrixStride) {
+    return absoluteOffset == offset && member.sizeBytes == size && member.scalarType == scalar &&
+           member.lanes == lanes && member.arrayCount == count &&
+           member.arrayStrideBytes == stride && member.matrixColumns == columns &&
+           member.matrixStrideBytes == matrixStride;
+  }
+
   /// Checks one C++ field against the corresponding shader member.
-  /// @param resourceName Buffer resource name. @param memberName Member name.
+  /// @param resourceName Buffer resource name. @param memberName Member name or dotted structure
+  /// path.
   /// @param offsetBytes C++ field offset. @param sizeBytes C++ field size.
   /// @param scalarType C++ numeric component kind. @param lanes C++ component count.
   /// @param arrayCount Fixed array length, or zero for a non-array member.
@@ -111,18 +142,21 @@ struct CompiledShaderView {
                                uint32_t arrayCount = 0, uint32_t arrayStrideBytes = 0,
                                uint8_t matrixColumns = 0, uint32_t matrixStrideBytes = 0) const {
     const ShaderResource* binding = resource(resourceName);
-    if (!binding || binding->firstMember > members.size() ||
-        binding->memberCount > members.size() - binding->firstMember)
-      return false;
-    for (uint32_t index = binding->firstMember; index < binding->firstMember + binding->memberCount;
-         ++index) {
-      const ShaderBufferMember& member = members[index];
-      if (member.name.view() == memberName)
-        return member.offsetBytes == offsetBytes && member.sizeBytes == sizeBytes &&
-               member.scalarType == scalarType && member.lanes == lanes &&
-               member.arrayCount == arrayCount && member.arrayStrideBytes == arrayStrideBytes &&
-               member.matrixColumns == matrixColumns &&
-               member.matrixStrideBytes == matrixStrideBytes;
+    if (!binding) return false;
+    uint32_t first = binding->firstMember, count = binding->memberCount, baseOffset = 0;
+    while (!memberName.empty()) {
+      const size_t dot = memberName.find('.');
+      const auto part = memberName.substr(0, dot);
+      const ShaderBufferMember* member = findMember(first, count, part);
+      if (!member || member->offsetBytes > UINT32_MAX - baseOffset) return false;
+      baseOffset += member->offsetBytes;
+      if (dot == std::string_view::npos)
+        return matchesLayout(*member, baseOffset, offsetBytes, sizeBytes, scalarType, lanes,
+                             arrayCount, arrayStrideBytes, matrixColumns, matrixStrideBytes);
+      if (member->arrayCount != 0) return false;
+      first = member->firstMember;
+      count = member->memberCount;
+      memberName.remove_prefix(dot + 1);
     }
     return false;
   }

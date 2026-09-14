@@ -41,6 +41,7 @@
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
+#include "donner/gpu/shader/tests/CompiledSlugFill.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
@@ -389,6 +390,20 @@ TEST(MslXcrunValidation, StructConstruction) {
 TEST(MslXcrunValidation, VectorMix) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(tests::VectorMixAllProjections().msl, "VectorMix");
+}
+
+TEST(MslXcrunValidation, SlugFill) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::SlugFillAllProjections().msl, "slug_fill");
+}
+TEST(MslXcrunValidation, SlugFillMutated) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::SlugFillMutatedAllProjections().msl, "slug_fillMutated");
+}
+
+TEST(MslXcrunValidation, SlugFlatInterface) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::SlugFlatInterfaceAllProjections().msl, "slug_flat");
 }
 
 }  // namespace

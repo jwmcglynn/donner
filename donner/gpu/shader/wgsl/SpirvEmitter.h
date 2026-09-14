@@ -195,11 +195,13 @@ private:
       declarations_.instruction(59, pointer, interfaceIds_[i], storage);
       if (variable.decoration.location != UINT32_MAX) {
         annotations_.instruction(71, interfaceIds_[i], 30, variable.decoration.location);
+        if (variable.decoration.flat) annotations_.instruction(71, interfaceIds_[i], 14);
       } else {
         uint32_t builtin = 0;
         switch (variable.decoration.builtin) {
           case BuiltinValue::GlobalInvocationId: builtin = 28; break;
           case BuiltinValue::VertexIndex: builtin = 42; break;
+          case BuiltinValue::InstanceIndex: builtin = 43; break;
           case BuiltinValue::Position: builtin = stage == Stage::Fragment ? 15 : 0; break;
           default: fail(SpirvEmitError::InvalidNode); return;
         }
@@ -233,24 +235,31 @@ private:
     writeInstruction(sink, 14, 0, 1);
   }
 
+  constexpr void writeEntryPoint(SpirvSink& sink, const Function& function, ArenaId i) {
+    Words<64> encoded;
+    encoded.string(module_.name(function.name));
+    if (!encoded.valid) {
+      fail(SpirvEmitError::Capacity);
+      return;
+    }
+    sink.word(((3u + encoded.size + function.inputCount + function.outputCount) << 16) | 15u);
+    sink.word(function.stage == Stage::Compute ? 5 : function.stage == Stage::Vertex ? 0 : 4);
+    sink.word(functionIds_[i]);
+    for (uint32_t j = 0; j < encoded.size; ++j) sink.word(encoded.data[j]);
+    for (uint16_t j = 0; j < function.inputCount; ++j)
+      sink.word(interfaceIds_[function.firstInput + j]);
+    for (uint16_t j = 0; j < function.outputCount; ++j)
+      sink.word(interfaceIds_[function.firstOutput + j]);
+  }
+
   constexpr void writeEntryPoints(SpirvSink& sink) {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       const Function& function = module_.functions[i];
       if (function.stage == Stage::None) continue;
-      Words<64> encoded;
-      encoded.string(module_.name(function.name));
-      if (!encoded.valid) {
-        fail(SpirvEmitError::Capacity);
-        return;
-      }
-      sink.word(((3u + encoded.size + function.inputCount + function.outputCount) << 16) | 15u);
-      sink.word(function.stage == Stage::Compute ? 5 : function.stage == Stage::Vertex ? 0 : 4);
-      sink.word(functionIds_[i]);
-      for (uint32_t j = 0; j < encoded.size; ++j) sink.word(encoded.data[j]);
-      for (uint16_t j = 0; j < function.inputCount; ++j)
-        sink.word(interfaceIds_[function.firstInput + j]);
-      for (uint16_t j = 0; j < function.outputCount; ++j)
-        sink.word(interfaceIds_[function.firstOutput + j]);
+      writeEntryPoint(sink, function, i);
+    }
+    for (ArenaId i = 0; i < module_.functionCount; ++i) {
+      const Function& function = module_.functions[i];
       if (function.stage == Stage::Compute)
         writeInstruction(sink, 16, functionIds_[i], 17, function.workgroupSize[0],
                          function.workgroupSize[1], function.workgroupSize[2]);
@@ -743,9 +752,9 @@ private:
   uint32_t breakTarget_ = 0;
   uint32_t continueTarget_ = 0;
   uint16_t expressionDepth_ = 0;
-  Words<1024> annotations_;
+  Words<2048> annotations_;
   Words<4096> declarations_;
-  Words<16384> functions_;
+  Words<32768> functions_;
   std::array<TypeRecord, 64> types_{};
   uint16_t typeCount_ = 0;
   std::array<PointerRecord, 96> pointers_{};

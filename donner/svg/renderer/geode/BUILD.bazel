@@ -187,6 +187,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        "//donner/gpu/shader:slug_fill_api",
         # The slabs stamp every buffer they create with
         # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
         # this is a link dependency and not just an include.
@@ -376,6 +377,8 @@ donner_cc_library(
         "//donner/gpu/shader:offset_api",
         "//donner/gpu/shader:offset_artifact",
         "//donner/gpu/shader:program_bindings",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:snapshot_unpremultiply_artifact",
@@ -445,17 +448,6 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# Embed the WGSL shader source as a C++ resource. The generated header
-# exposes `donner::embedded::kSlugFillWgsl` as a `std::span<const unsigned char>`.
-embed_resources(
-    name = "slug_fill_wgsl",
-    header_output = "embed_resources/SlugFillWgsl.h",
-    resources = {
-        "kSlugFillWgsl": "shaders/slug_fill.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 # Linear-gradient fragment shader. Shares the vertex pipeline / band layout
 # with slug_fill.wgsl but the fragment stage reads a larger uniform that
 # carries gradient parameters (transform, start/end, spread, stops).
@@ -487,12 +479,13 @@ donner_cc_library(
     deps = [
         ":filter_blend_wgsl",
         ":geode_wgpu_util",
-        ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         "//donner/base",
         "//donner/gpu",
         "//donner/gpu/shader:image_blit_api",
         "//donner/gpu/shader:image_blit_artifact",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -508,11 +501,13 @@ donner_cc_test(
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
-        ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu:slug_fill_slice",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:wgsl_emitter",
@@ -571,6 +566,8 @@ donner_cc_library(
         ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/svg/core",

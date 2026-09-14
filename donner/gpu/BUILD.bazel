@@ -389,4 +389,34 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "slug_fill_slice",
+    testonly = 1,
+    hdrs = ["tests/SlugFillSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":slug_mask_slice",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:slug_fill_api",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "flat_interface_slice",
+    testonly = 1,
+    hdrs = ["tests/FlatInterfaceSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":slug_mask_slice",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_package()

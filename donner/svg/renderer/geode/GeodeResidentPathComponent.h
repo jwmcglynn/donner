@@ -34,6 +34,7 @@
 
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
+#include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
@@ -42,66 +43,13 @@
 namespace donner::geode {
 
 /// Layout of the per-instance record at binding 7 of the Slug fill
-/// pipeline. Must match `InstanceRecord` in `shaders/slug_fill.wgsl`.
+/// pipeline. Must match `InstanceRecord` in `donner/gpu/shader/programs/SlugFillSource.h`.
 /// The vertex stage composes `uniforms.mvp * transform`; the fragment
 /// stage reads the remaining fields through a flat instance-id varying,
 /// so overlapping batched instances still blend in painter (instance)
 /// order. All geometry bases are element offsets relative to the bound
 /// buffer range's start (chunk-relative for resident geometry).
-struct alignas(16) InstanceRecord {
-  float transformRow0[4];         //   0 ..  16 - (a, c, e, 0)
-  float transformRow1[4];         //  16 ..  32 - (b, d, f, 0)
-  float color[4];                 //  32 ..  48 - premultiplied
-  uint32_t fillRule;              //  48 ..  52
-  uint32_t paintMode;             //  52 ..  56
-  float patternOpacity;           //  56 ..  60
-  uint32_t _pad0;                 //  60 ..  64
-  float gridYBase;                //  64 ..  68
-  float gridHStride;              //  68 ..  72
-  uint32_t gridHBandCount;        //  72 ..  76
-  float gridXBase;                //  76 ..  80
-  float gridVStride;              //  80 ..  84
-  uint32_t gridVBandCount;        //  84 ..  88
-  uint32_t _gridPad0;             //  88 ..  92
-  uint32_t _gridPad1;             //  92 ..  96
-  uint32_t boundingVertexCount;   //  96 .. 100
-  uint32_t _boundingPad0;         // 100 .. 104
-  uint32_t _boundingPad1;         // 104 .. 108
-  uint32_t _boundingPad2;         // 108 .. 112
-  float boundingVertices[4 * 4];  // 112 .. 176
-  uint32_t bandBase;              // 176 .. 180
-  uint32_t curveBase;             // 180 .. 184
-  uint32_t vBandBase;             // 184 .. 188
-  uint32_t vCurveBase;            // 188 .. 192
-  uint32_t hGridBase;             // 192 .. 196
-  uint32_t vGridBase;             // 196 .. 200
-  uint32_t hRefsBase;             // 200 .. 204
-  uint32_t vRefsBase;             // 204 .. 208
-  // Axis-aligned device-pixel clip rectangle as a half-open range
-  // `[minX, maxX) x [minY, maxY)` over integer pixel indices, matching what
-  // a rasterizer scissor of the same rectangle keeps. Carrying it here
-  // instead of leaving it in raster-stage pass state is what lets a
-  // rect-clipped fill stay inside a deferred batch: the batch's single draw
-  // is recorded after the clip may already have moved on, so pass state at
-  // record time is the wrong clip, while the per-instance value is the clip
-  // that was live when the instance was appended.
-  float clipRect[4];        // 208 .. 224
-  uint32_t clipRectActive;  // 224 .. 228 - 0 = unclipped, 1 = test clipRect
-  // Element index of this instance's gradient paint block inside the bound
-  // paint array. The block holds the gradient transform, the two-circle or
-  // two-point geometry, and the stop ramp; keeping it out of the record and
-  // reachable by index is what lets differently painted gradient fills share
-  // one draw with each other and with the solid fills between them. Only read
-  // when `paintMode` selects a gradient.
-  uint32_t paintBase;          // 228 .. 232
-  uint32_t gradientSpread;     // 232 .. 236 - 0 pad, 1 reflect, 2 repeat
-  uint32_t gradientStopCount;  // 236 .. 240
-  // Tail padding to 256 bytes so record-slab slot offsets satisfy the
-  // baseline min_storage_buffer_offset_alignment (256) while the WGSL
-  // array stride stays a multiple of it. Zero-initialized by the
-  // `= {}` population.
-  float _padTail[4];  // 240 .. 256
-};
+using InstanceRecord = gpu::shader::programs::SlugFillInstance;
 static_assert(sizeof(InstanceRecord) == 256, "InstanceRecord struct layout mismatch");
 
 /**

@@ -597,6 +597,7 @@ donner_cc_test(
         ":offset_test_artifact",
         ":programs",
         ":shader",
+        ":slug_fill_test_artifact",
         ":slug_mask_test_artifact",
         ":specular_lighting_test_artifact",
         ":stage_io_test_modules",
@@ -629,6 +630,7 @@ donner_cc_test(
         ":offset_test_artifact",
         ":programs",
         ":shader",
+        ":slug_fill_test_artifact",
         ":slug_mask_test_artifact",
         ":specular_lighting_test_artifact",
         ":spirv_emitter",
@@ -1233,6 +1235,70 @@ donner_cc_test(
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_fill_api",
+    hdrs = ["programs/SlugFill.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "slug_fill_source",
+    hdrs = ["programs/SlugFillSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "slug_fill_validation",
+    hdrs = ["programs/SlugFillArtifactValidation.h"],
+    deps = [":slug_fill_api"],
+)
+
+donner_cc_library(
+    name = "slug_fill_artifact",
+    srcs = ["programs/SlugFill.cc"],
+    copts = ["-fconstexpr-steps=4194304"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":slug_fill_api",
+        ":slug_fill_source",
+        ":slug_fill_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_fill_native_artifact",
+    srcs = ["programs/SlugFillNative.cc"],
+    copts = ["-fconstexpr-steps=4194304"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":slug_fill_api",
+        ":slug_fill_source",
+        ":slug_fill_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_fill_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledSlugFill.cc"],
+    hdrs = ["tests/CompiledSlugFill.h"],
+    copts = ["-fconstexpr-steps=4194304"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":slug_fill_api",
+        ":slug_fill_source",
+        ":slug_fill_validation",
     ],
 )
 

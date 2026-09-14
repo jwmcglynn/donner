@@ -121,6 +121,7 @@ constexpr uint16_t EntryCount(const Module& module) {
 
 constexpr ShaderScalarType ScalarType(Type type) {
   if (type.kind == TypeKind::F32 || type.kind == TypeKind::Matrix) return ShaderScalarType::F32;
+  if (type.kind == TypeKind::Struct) return ShaderScalarType::None;
   return type.kind == TypeKind::I32 ? ShaderScalarType::I32 : ShaderScalarType::U32;
 }
 
@@ -129,14 +130,18 @@ constexpr ShaderBufferMember ReflectMember(const Module& module, const StructMem
   const bool matrix = value.kind == TypeKind::Matrix;
   return {Name(module.name(member.name)),
           ScalarType(value),
-          matrix ? value.rows : value.lanes,
+          value.kind == TypeKind::Struct ? uint8_t(0)
+          : matrix                       ? value.rows
+                                         : value.lanes,
           member.offset,
           member.size,
           member.alignment,
           member.type.arrayCount,
           member.arrayStride,
           matrix ? value.columns : uint8_t(0),
-          matrix ? (value.rows == 2 ? 8u : 16u) : 0u};
+          matrix ? (value.rows == 2 ? 8u : 16u) : 0u,
+          value.kind == TypeKind::Struct ? module.structs[value.structId].firstMember : 0u,
+          value.kind == TypeKind::Struct ? module.structs[value.structId].memberCount : 0u};
 }
 
 constexpr BindingType ResourceType(const Binding& binding) {
@@ -205,6 +210,7 @@ constexpr ShaderBuiltin InterfaceBuiltin(BuiltinValue builtin) {
   switch (builtin) {
     case BuiltinValue::GlobalInvocationId: return ShaderBuiltin::GlobalInvocationId;
     case BuiltinValue::VertexIndex: return ShaderBuiltin::VertexIndex;
+    case BuiltinValue::InstanceIndex: return ShaderBuiltin::InstanceIndex;
     case BuiltinValue::Position: return ShaderBuiltin::Position;
     default: return ShaderBuiltin::None;
   }
@@ -212,8 +218,12 @@ constexpr ShaderBuiltin InterfaceBuiltin(BuiltinValue builtin) {
 
 constexpr ShaderInterfaceVariable ReflectInterface(const Module& module,
                                                    const InterfaceVariable& variable) {
-  return {Name(module.name(variable.name)), ScalarType(variable.type), variable.type.lanes,
-          InterfaceBuiltin(variable.decoration.builtin), variable.decoration.location};
+  return {Name(module.name(variable.name)),
+          ScalarType(variable.type),
+          variable.type.lanes,
+          InterfaceBuiltin(variable.decoration.builtin),
+          variable.decoration.location,
+          variable.decoration.flat};
 }
 
 template <typename Artifact>

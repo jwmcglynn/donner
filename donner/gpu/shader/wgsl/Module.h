@@ -96,15 +96,19 @@ enum class BuiltinValue : uint8_t {
   GlobalInvocationId,
   VertexIndex,
   Position,
+  InstanceIndex,
 };
 
 /// A scalar/vector leaf in an entry-point interface.
 struct InterfaceDecoration {
   BuiltinValue builtin = BuiltinValue::None;
   uint32_t location = UINT32_MAX;
+  bool flat = false;  //!< Explicit flat interpolation for an interstage value.
 
   /// Returns whether this value is decorated as shader IO.
-  constexpr bool present() const { return builtin != BuiltinValue::None || location != UINT32_MAX; }
+  constexpr bool present() const {
+    return builtin != BuiltinValue::None || location != UINT32_MAX || flat;
+  }
 };
 
 /// Storage layout of one structure member.
@@ -169,6 +173,7 @@ struct Symbol {
   ArenaId bindingId = kInvalidArenaId;           //!< Binding arena item for Binding symbols.
   BuiltinValue builtin = BuiltinValue::None;     //!< Entry-point parameter builtin.
   uint32_t location = UINT32_MAX;                //!< Entry-point parameter location, if present.
+  bool flat = false;                             //!< Explicit interstage flat interpolation.
   ArenaId constantExpression = kInvalidArenaId;  //!< Initializer for module constants.
 };
 
@@ -326,17 +331,18 @@ struct Function {
 
 /// Fixed capacities for one frontend module.
 struct ModuleLimits {
-  static constexpr uint32_t kMaxSourceBytes = 32768;
-  static constexpr uint16_t kMaxTokens = 8192;
-  static constexpr uint16_t kMaxIdentifierBytes = 8192;
-  static constexpr uint16_t kMaxStructs = 8;
-  static constexpr uint16_t kMaxStructMembers = 64;
+  static constexpr uint32_t kMaxSourceBytes = 65536;
+  static constexpr uint16_t kMaxTokens = 16384;
+  static constexpr uint16_t kMaxIdentifierBytes = 16384;
+  static constexpr uint16_t kMaxStructs = 16;
+  static constexpr uint16_t kMaxStructMembers = 256;
   static constexpr uint16_t kMaxArrayElements = 8192;
+  static constexpr uint32_t kMaxTypeBytes = 1048576;
   static constexpr uint16_t kMaxBindings = 16;
-  static constexpr uint16_t kMaxSymbols = 512;
-  static constexpr uint16_t kMaxExpressions = 2048;
-  static constexpr uint16_t kMaxStatements = 512;
-  static constexpr uint16_t kMaxFunctions = 32;
+  static constexpr uint16_t kMaxSymbols = 1024;
+  static constexpr uint16_t kMaxExpressions = 4096;
+  static constexpr uint16_t kMaxStatements = 1024;
+  static constexpr uint16_t kMaxFunctions = 64;
   static constexpr uint16_t kMaxNesting = 16;
   static constexpr uint16_t kMaxInterfaceVariables = 64;
 };

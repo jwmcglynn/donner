@@ -35,6 +35,7 @@
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
+#include "donner/gpu/shader/tests/CompiledSlugFill.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
@@ -46,11 +47,13 @@
 #include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FilterImageSlice.h"
 #include "donner/gpu/tests/FilterResolveSlice.h"
+#include "donner/gpu/tests/FlatInterfaceSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/ImageBlitSlice.h"
 #include "donner/gpu/tests/LightingSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
 #include "donner/gpu/tests/OffsetSlice.h"
+#include "donner/gpu/tests/SlugFillSlice.h"
 #include "donner/gpu/tests/SlugMaskSlice.h"
 #include "donner/gpu/tests/TileSlice.h"
 #include "donner/gpu/tests/TurbulenceSlice.h"
@@ -841,6 +844,107 @@ TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResultWithoutUnifiedM
   // is what a virtualized Metal device shows and what unified-memory hardware hides. Forcing the
   // model here is what puts that path under test on hardware that would never take it.
   runColorMatrixSlice(MetalDevice::MemoryModel::ForceNonUnified);
+}
+
+TEST_F(MetalColorMatrixTest, SlugFillAnalytic) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Analytic);
+}
+TEST_F(MetalColorMatrixTest, SlugFillBinary) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Binary);
+}
+TEST_F(MetalColorMatrixTest, SlugFillEvenOddBinary) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::EvenOdd);
+}
+TEST_F(MetalColorMatrixTest, SlugFillClip) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Clip);
+}
+TEST_F(MetalColorMatrixTest, SlugFillClipRect) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::ClipRect);
+}
+TEST_F(MetalColorMatrixTest, SlugFillPattern) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Pattern);
+}
+TEST_F(MetalColorMatrixTest, SlugFillBatched) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Batched);
+}
+TEST_F(MetalColorMatrixTest, SlugFillFirstInstance) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::FirstInstance);
+}
+TEST_F(MetalColorMatrixTest, SlugFillOverlap) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Overlap);
+}
+TEST_F(MetalColorMatrixTest, SlugFillDeclaredRange) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::DeclaredRange);
+}
+TEST_F(MetalColorMatrixTest, SlugFillLinearGradient) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::LinearGradient);
+}
+TEST_F(MetalColorMatrixTest, SlugFillRadialGradient) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::RadialGradient);
+}
+TEST_F(MetalColorMatrixTest, SlugFillAnalyticEvenOdd) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_fill_slice::Case::AnalyticEvenOdd);
+}
+TEST_F(MetalColorMatrixTest, SlugFillBatchedPattern) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_fill_slice::Case::BatchedPattern);
+}
+TEST_F(MetalColorMatrixTest, SlugFillBatchedClipRect) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::programs::SlugFillNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_fill_slice::Case::BatchedClipRect);
+}
+TEST_F(MetalColorMatrixTest, SlugFlatFirstVertexAndInstanceBase) {
+  gpu::tests::CheckFlatInterface(*device_, shader::tests::SlugFlatInterfaceAllProjections(),
+                                 [this](const Buffer& b) { return device_->readBackBuffer(b); });
+}
+TEST_F(MetalColorMatrixTest, SlugFillMutatedInterface) {
+  gpu::tests::CheckSlugFill(
+      *device_, shader::tests::SlugFillMutatedAllProjections(),
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
+      gpu::tests::slug_fill_slice::Case::Analytic);
 }
 
 TEST_F(MetalColorMatrixTest, SlugMaskAnalyticRectangle) {

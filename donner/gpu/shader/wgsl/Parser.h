@@ -242,6 +242,7 @@ public:
       }
     }
     if (!failed()) {
+      ValidateBufferRootTypes();
       ValidateUniformity();
       module_.valid = !failed();
     }
@@ -258,6 +259,7 @@ private:
     bool hasWorkgroupSize = false;
     BuiltinValue builtin = BuiltinValue::None;
     uint32_t location = UINT32_MAX;
+    bool flat = false;
     uint32_t group = 0;
     uint32_t binding = 0;
     uint32_t workgroupX = 1;
@@ -273,7 +275,7 @@ private:
       return hasGroup || hasBinding || compute || vertex || fragment || hasWorkgroupSize;
     }
 
-    constexpr InterfaceDecoration interface() const { return {builtin, location}; }
+    constexpr InterfaceDecoration interface() const { return {builtin, location, flat}; }
   };
 
   struct ExpressionInfo {
@@ -291,6 +293,20 @@ private:
   };
 
   static constexpr uint32_t kUnknownBound = std::numeric_limits<uint32_t>::max();
+
+  constexpr void ValidateBufferRootTypes() {
+    for (uint16_t b = 0; b < module_.bindingCount; ++b) {
+      const Binding& binding = module_.bindings[b];
+      if (binding.type.kind != TypeKind::Struct) continue;
+      for (uint16_t other = 0; other < module_.bindingCount; ++other)
+        if (module_.bindings[other].type.kind == TypeKind::Array &&
+            module_.bindings[other].type.elementType() == binding.type)
+          Fail(ErrorCode::UnsupportedConstruct, binding.nameSpan);
+      for (uint16_t i = 0; i < module_.structMemberCount; ++i)
+        if (module_.structMembers[i].type == binding.type)
+          Fail(ErrorCode::UnsupportedConstruct, binding.nameSpan);
+    }
+  }
 
   constexpr void ValidateUniformity() {
     const auto uniformity = AnalyzeUniformity(module_);
@@ -580,29 +596,47 @@ private:
     }
   }
 
-  constexpr void ParseLeadingAttribute(Attributes* attributes, SourceSpan atSpan, Token name) {
-    if (TextEquals(name.text, "compute") || TextEquals(name.text, "vertex") ||
-        TextEquals(name.text, "fragment")) {
-      if (attributes->compute || attributes->vertex || attributes->fragment)
-        Fail(ErrorCode::InvalidAttribute, atSpan);
-      attributes->compute = TextEquals(name.text, "compute");
-      attributes->vertex = TextEquals(name.text, "vertex");
-      attributes->fragment = TextEquals(name.text, "fragment");
-    } else if (TextEquals(name.text, "location")) {
-      if (attributes->location != UINT32_MAX) Fail(ErrorCode::InvalidAttribute, atSpan);
-      Expect(TokenKind::LeftParen);
-      attributes->location = ParseUnsignedNumber();
-      Expect(TokenKind::RightParen);
-      if (attributes->location >= 16) Fail(ErrorCode::InvalidAttribute, atSpan);
-    } else if (TextEquals(name.text, "workgroup_size")) {
-      ParseWorkgroupSizeAttribute(attributes, atSpan);
-    } else if (TextEquals(name.text, "group") || TextEquals(name.text, "binding")) {
-      ParseBindingAttribute(attributes, atSpan, TextEquals(name.text, "group"));
-    } else if (TextEquals(name.text, "builtin")) {
+  constexpr bool IsStageAttribute(Token name) const {
+    return TextEquals(name.text, "compute") || TextEquals(name.text, "vertex") ||
+           TextEquals(name.text, "fragment");
+  }
+  constexpr void ParseStageAttribute(Attributes* attributes, SourceSpan span, Token name) {
+    if (attributes->compute || attributes->vertex || attributes->fragment)
+      Fail(ErrorCode::InvalidAttribute, span);
+    attributes->compute = TextEquals(name.text, "compute");
+    attributes->vertex = TextEquals(name.text, "vertex");
+    attributes->fragment = TextEquals(name.text, "fragment");
+  }
+  constexpr void ParseLocationAttribute(Attributes* attributes, SourceSpan span) {
+    if (attributes->location != UINT32_MAX) Fail(ErrorCode::InvalidAttribute, span);
+    Expect(TokenKind::LeftParen);
+    attributes->location = ParseUnsignedNumber();
+    Expect(TokenKind::RightParen);
+    if (attributes->location >= 16) Fail(ErrorCode::InvalidAttribute, span);
+  }
+  constexpr void ParseInterpolationAttribute(Attributes* attributes, SourceSpan span) {
+    if (attributes->flat) Fail(ErrorCode::InvalidAttribute, span);
+    Expect(TokenKind::LeftParen);
+    const auto kind = ExpectIdentifier();
+    if (!TextEquals(kind.text, "flat")) Fail(ErrorCode::UnsupportedConstruct, span);
+    Expect(TokenKind::RightParen);
+    attributes->flat = true;
+  }
+  constexpr void ParseLeadingAttribute(Attributes* attributes, SourceSpan span, Token name) {
+    if (IsStageAttribute(name))
+      ParseStageAttribute(attributes, span, name);
+    else if (TextEquals(name.text, "location"))
+      ParseLocationAttribute(attributes, span);
+    else if (TextEquals(name.text, "interpolate"))
+      ParseInterpolationAttribute(attributes, span);
+    else if (TextEquals(name.text, "workgroup_size"))
+      ParseWorkgroupSizeAttribute(attributes, span);
+    else if (TextEquals(name.text, "group") || TextEquals(name.text, "binding"))
+      ParseBindingAttribute(attributes, span, TextEquals(name.text, "group"));
+    else if (TextEquals(name.text, "builtin"))
       ParseBuiltinAttribute(attributes);
-    } else {
+    else
       Fail(ErrorCode::UnsupportedConstruct, name.span);
-    }
   }
 
   constexpr void ParseWorkgroupSizeAttribute(Attributes* attributes, SourceSpan span) {
@@ -637,6 +671,8 @@ private:
       attributes->builtin = BuiltinValue::GlobalInvocationId;
     else if (TextEquals(value.text, "vertex_index"))
       attributes->builtin = BuiltinValue::VertexIndex;
+    else if (TextEquals(value.text, "instance_index"))
+      attributes->builtin = BuiltinValue::InstanceIndex;
     else if (TextEquals(value.text, "position"))
       attributes->builtin = BuiltinValue::Position;
     else
@@ -722,11 +758,16 @@ private:
     if (!ValidateStructMember(*structure, name, type)) return;
     uint32_t alignment = 0;
     uint32_t size = 0;
-    if (type.kind == TypeKind::Struct || !LayoutOf(type, &alignment, &size)) {
+    if (!LayoutOf(type, &alignment, &size)) {
       Fail(ErrorCode::InvalidLayout, name.span);
       return;
     }
-    *cursor = RoundUp(*cursor, alignment);
+    const uint32_t offset = RoundUp(*cursor, alignment);
+    if (size > ModuleLimits::kMaxTypeBytes || offset > ModuleLimits::kMaxTypeBytes - size) {
+      Fail(ErrorCode::InvalidLayout, name.span);
+      return;
+    }
+    *cursor = offset;
     module_.structMembers[module_.structMemberCount++] =
         StructMember{AddName(name),
                      name.span,
@@ -810,8 +851,8 @@ private:
     const bool fixed = Match(TokenKind::Comma);
     const uint32_t count = fixed ? ParseArrayCount() : 0;
     Expect(TokenKind::Greater);
-    const bool elementValid = element.isNumeric() || (element.kind == TypeKind::Struct &&
-                                                      !StructHasArray(element.structId));
+    if (fixed && element.kind == TypeKind::Struct) Fail(ErrorCode::UnsupportedConstruct, name.span);
+    const bool elementValid = element.isNumeric() || element.kind == TypeKind::Struct;
     if (!elementValid || (fixed && (count == 0 || count > ModuleLimits::kMaxArrayElements))) {
       Fail(ErrorCode::UnknownType, name.span);
       return {};
@@ -919,18 +960,37 @@ private:
     }
     const BindingKind kind = ResolveBindingKind(addressSpace, accessMode, type, name);
     if (failed()) return;
-    if (kind == BindingKind::Uniform) {
-      const Struct& structure = module_.structs[type.structId];
-      for (uint16_t i = 0; i < structure.memberCount; ++i) {
-        const Type member = module_.structMembers[structure.firstMember + i].type;
-        if (member.kind == TypeKind::Matrix && member.rows == 2)
-          Fail(ErrorCode::UnsupportedConstruct, name.span);
-        if (member.kind == TypeKind::Array && module_.arrayStride(member) % 16 != 0)
-          Fail(ErrorCode::UnsupportedConstruct, name.span);
-      }
-    }
+    if (kind == BindingKind::Uniform) ValidateUniformType(type, name.span);
     if (!BindingWithinLimits(attributes, kind, name)) return;
     InsertBinding(attributes, kind, type, name);
+  }
+
+  constexpr bool UniformMemberFits(const StructMember& member, uint32_t next) const {
+    return member.type.kind != TypeKind::Struct ||
+           (member.offset % 16 == 0 && next >= member.offset + RoundUp(member.size, 16));
+  }
+
+  constexpr void ValidateUniformType(Type type, SourceSpan span, uint16_t depth = 0) {
+    if (depth >= ModuleLimits::kMaxNesting) {
+      Fail(ErrorCode::NestingLimit, span);
+      return;
+    }
+    if (type.kind == TypeKind::Matrix && type.rows == 2)
+      Fail(ErrorCode::UnsupportedConstruct, span);
+    if (type.kind == TypeKind::Array) {
+      if (module_.arrayStride(type) % 16 != 0) Fail(ErrorCode::UnsupportedConstruct, span);
+      ValidateUniformType(type.elementType(), span, depth + 1);
+    }
+    if (type.kind != TypeKind::Struct) return;
+    const auto& structure = module_.structs[type.structId];
+    for (uint16_t i = 0; i < structure.memberCount; ++i) {
+      const auto& member = module_.structMembers[structure.firstMember + i];
+      ValidateUniformType(member.type, member.nameSpan, depth + 1);
+      const uint32_t next = i + 1 < structure.memberCount
+                                ? module_.structMembers[structure.firstMember + i + 1].offset
+                                : UINT32_MAX;
+      if (!UniformMemberFits(member, next)) Fail(ErrorCode::UnsupportedConstruct, member.nameSpan);
+    }
   }
 
   constexpr void ParseBindingAddressSpace(Token* addressSpace, Token* accessMode) {
@@ -996,16 +1056,6 @@ private:
     module_.bindings[module_.bindingCount++] = Binding{
         kind, type, AddName(name), name.span, attributes.group, attributes.binding, symbolId};
     if (symbolId != kInvalidArenaId) module_.symbols[symbolId].bindingId = bindingId;
-  }
-
-  constexpr bool StructHasArray(ArenaId structId) const {
-    if (structId >= module_.structCount) return false;
-    const Struct& structure = module_.structs[structId];
-    for (uint16_t i = 0; i < structure.memberCount; ++i) {
-      if (module_.structMembers[structure.firstMember + i].type.kind == TypeKind::Array)
-        return true;
-    }
-    return false;
   }
 
   constexpr void ParseFunction(const Attributes& attributes) {
@@ -1089,13 +1139,14 @@ private:
     if (symbol != kInvalidArenaId) {
       module_.symbols[symbol].builtin = attributes.builtin;
       module_.symbols[symbol].location = attributes.location;
+      module_.symbols[symbol].flat = attributes.flat;
     }
     ++function->parameterCount;
   }
 
   constexpr bool IsValueType(Type type) const {
     return type.isNumeric() || type.kind == TypeKind::Bool || type.kind == TypeKind::Matrix ||
-           (type.kind == TypeKind::Struct && !StructHasArray(type.structId));
+           type.kind == TypeKind::Struct;
   }
 
   constexpr void ParseFunctionReturnType(Function* function, Token name) {
@@ -1134,9 +1185,10 @@ private:
     uint32_t inputBuiltins = 0;
     for (uint16_t i = 0; i < function.parameterCount; ++i) {
       const Symbol& symbol = SymbolAt(function.firstParameter + i);
-      ValidateInterfaceType(function.stage, true, symbol.type, {symbol.builtin, symbol.location},
-                            symbol.nameSpan, symbol.name, function.firstParameter + i,
-                            &inputLocations, &inputBuiltins);
+      ValidateInterfaceType(function.stage, true, symbol.type,
+                            {symbol.builtin, symbol.location, symbol.flat}, symbol.nameSpan,
+                            symbol.name, function.firstParameter + i, &inputLocations,
+                            &inputBuiltins);
     }
     function.inputCount = module_.interfaceVariableCount - function.firstInput;
     function.firstOutput = module_.interfaceVariableCount;
@@ -1182,19 +1234,35 @@ private:
     module_.interfaceVariables[module_.interfaceVariableCount++] = variable;
   }
 
+  constexpr bool ValidLocationInterpolation(Stage stage, bool input, Type type, bool flat) const {
+    const bool interstage =
+        (stage == Stage::Vertex && !input) || (stage == Stage::Fragment && input);
+    if (!interstage) return type.kind == TypeKind::F32 && !flat;
+    return type.kind == TypeKind::F32 || flat;
+  }
+
+  constexpr void ValidateLocation(Stage stage, bool input, Type type,
+                                  InterfaceDecoration decoration, SourceSpan span,
+                                  uint32_t* locations) {
+    if (decoration.location >= 16 || decoration.builtin != BuiltinValue::None ||
+        stage == Stage::Compute || !type.isNumeric() ||
+        (*locations & (1u << decoration.location))) {
+      Fail(ErrorCode::InvalidAttribute, span);
+      return;
+    }
+    if (!ValidLocationInterpolation(stage, input, type, decoration.flat))
+      Fail(ErrorCode::InvalidAttribute, span);
+    *locations |= 1u << decoration.location;
+  }
+
   constexpr void ValidateInterfaceLeaf(Stage stage, bool input, Type type,
                                        InterfaceDecoration decoration, SourceSpan span,
                                        uint32_t* locations, uint32_t* builtins) {
     if (decoration.location != UINT32_MAX) {
-      if (decoration.location >= 16 || decoration.builtin != BuiltinValue::None ||
-          stage == Stage::Compute || type.kind != TypeKind::F32 ||
-          (*locations & (1u << decoration.location))) {
-        Fail(ErrorCode::InvalidAttribute, span);
-        return;
-      }
-      *locations |= 1u << decoration.location;
+      ValidateLocation(stage, input, type, decoration, span, locations);
       return;
     }
+    if (decoration.flat) Fail(ErrorCode::InvalidAttribute, span);
     const uint32_t bit = 1u << uint32_t(decoration.builtin);
     bool valid = false;
     switch (decoration.builtin) {
@@ -1202,6 +1270,7 @@ private:
         valid = stage == Stage::Compute && input && type == Type{TypeKind::U32, 3};
         break;
       case BuiltinValue::VertexIndex:
+      case BuiltinValue::InstanceIndex:
         valid = stage == Stage::Vertex && input && type == Type{TypeKind::U32};
         break;
       case BuiltinValue::Position:
@@ -1453,7 +1522,6 @@ private:
     Expect(TokenKind::Assign);
     const ExpressionInfo value = Materialize(ParseExpression(), ExpressionAt(target.id).type);
     Expect(TokenKind::Semicolon);
-    ValidateArrayValue(value);
     if (!target.mutableLvalue) Fail(ErrorCode::ImmutableAssignment, begin);
     if (target.id != kInvalidArenaId && value.id != kInvalidArenaId &&
         ExpressionAt(target.id).type != ExpressionAt(value.id).type)
@@ -1479,7 +1547,6 @@ private:
     initializer = Materialize(
         initializer, hasDeclared ? declared : DefaultType(ExpressionAt(initializer.id).type));
     if (!hasDeclared) declared = ExpressionAt(initializer.id).type;
-    ValidateArrayValue(initializer);
     ValidateLocalType(declared, initializer, name.span);
     if (IsLocalArray(declared) && currentFunctionId_ < module_.functionCount)
       module_.functions[currentFunctionId_].hasLocalArrays = true;
@@ -1495,13 +1562,6 @@ private:
                            kInvalidArenaId, std::numeric_limits<int32_t>::max());
     Expect(TokenKind::Assign);
     return ParseExpression();
-  }
-
-  constexpr void ValidateArrayValue(ExpressionInfo value) {
-    if (ExpressionAt(value.id).type.kind == TypeKind::Array &&
-        value.rootSymbol != kInvalidArenaId &&
-        SymbolAt(value.rootSymbol).kind == SymbolKind::Binding)
-      Fail(ErrorCode::UnsupportedConstruct, ExpressionAt(value.id).span);
   }
 
   constexpr void ValidateLocalType(Type declared, ExpressionInfo initializer, SourceSpan span) {
@@ -1782,12 +1842,32 @@ private:
       Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index).span);
   }
 
+  constexpr bool ArrayValueNeedsStorage(ExpressionInfo value) const {
+    if (value.rootSymbol == kInvalidArenaId ||
+        SymbolAt(value.rootSymbol).kind != SymbolKind::Binding)
+      return true;
+    ArenaId id = value.id;
+    for (uint16_t depth = 0; depth < 128 && id < module_.expressionCount; ++depth) {
+      const Expression& node = module_.expressions[id];
+      if (node.kind == ExpressionKind::Index) {
+        const Type base = ExpressionAt(node.operands[0]).type;
+        if (base.kind == TypeKind::Array && base.arrayCount == 0) return true;
+      }
+      if (node.operandCount == 0) return false;
+      id = node.operands[0];
+    }
+    return true;
+  }
+
   constexpr ExpressionInfo ParseArrayIndex(ExpressionInfo value) {
     ExpressionInfo index = ParseExpression();
     index = Materialize(index, DefaultType(ExpressionAt(index.id).type));
     const SourceSpan end = token_.span;
     Expect(TokenKind::RightBracket);
     const Type base = ExpressionAt(value.id).type;
+    if (base.kind == TypeKind::Array && base.arrayCount > 0 &&
+        currentFunctionId_ < module_.functionCount && ArrayValueNeedsStorage(value))
+      module_.functions[currentFunctionId_].hasLocalArrays = true;
     const Type indexType = ExpressionAt(index.id).type;
     if (!ValidIndexTypes(base, indexType)) {
       Fail(ErrorCode::TypeMismatch, end);

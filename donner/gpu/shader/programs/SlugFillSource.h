@@ -1,4 +1,10 @@
-// Slug fill pipeline: analytic dual-ray coverage at 1 sample/pixel.
+#pragma once
+/// @file
+/// Authoritative WGSL for ordinary and batched Slug fills.
+#include "donner/gpu/shader/wgsl/Compiler.h"
+namespace donner::gpu::shader::programs {
+inline constexpr wgsl::SourceText kSlugFillSource{
+    R"wgsl(// Slug fill pipeline: analytic dual-ray coverage at 1 sample/pixel.
 //
 // Algorithm:
 //   1. The path is decomposed on the CPU into horizontal bands (Y-monotonic
@@ -16,7 +22,7 @@
 //      accumulating analytic coverage per Slug's `CalcCoverage`, then folds
 //      the result into the premultiplied output color.
 //
-// Curves are axis-monotonic quadratic Béziers (3 control points each); each
+// Curves are axis-monotonic quadratic Beziers (3 control points each); each
 // curve crosses a given ray at most once. The per-root coverage is
 // `saturate(r + 0.5)` (signed by winding direction) with weight
 // `saturate(1 - 2|r|)`, where `r` is the signed root distance from the pixel
@@ -105,9 +111,8 @@ struct Band {
 @group(0) @binding(3) var patternTexture: texture_2d<f32>;
 @group(0) @binding(4) var patternSampler: sampler;
 
-// Path-clip mask texture + sampler.
+// Path-clip mask texture, read without filtering.
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
-@group(0) @binding(6) var clipMaskSampler: sampler;
 
 // Per-instance record (vertex + fragment stages). A cross-entity batch
 // binds one record per instance and reads all of it through the `_batched`
@@ -475,7 +480,7 @@ fn vs_main_batched(@builtin(vertex_index) vertex_index: u32,
 }
 
 // ============================================================================
-// Quadratic Bézier root solving
+// Quadratic Bezier root solving
 // ============================================================================
 
 struct Quadratic {
@@ -733,7 +738,7 @@ fn solve_quadratic(start: f32, control: f32, end: f32, sample: f32) -> vec2f {
 // curve in the band we solve for the t where the curve's Y equals sample.y,
 // evaluate the X distance from the pixel center, scale to pixels, and
 // accumulate `saturate(r + 0.5)` signed by the crossing direction (sign of
-// end.y - start.y - a downward crossing winds +1, upward −1, matching the integer
+// end.y - start.y - a downward crossing winds +1, upward -1, matching the integer
 // `curve_winding` convention). The weight is `saturate(1 - 2|r|)`, reduced
 // over the band via `max`.
 //
@@ -921,7 +926,7 @@ fn shade_coverage(paint: PaintParams, in: VertexOutput) -> f32 {
 
   // Fill rule. Non-zero clamps the (signed) winding coverage; even-odd folds
   // the RAW coverage via a triangle wave (the fold must see the unsaturated
-  // value - a hole has combined coverage ≈ 2, which the wave maps to 0).
+  // value - a hole has combined coverage approximately  2, which the wave maps to 0).
   if (uniforms.antialias == 0u) {
     let winding = u32(abs(hCov.winding));
     if (paint.fillRule == 0u) {
@@ -1077,4 +1082,6 @@ fn fs_main_batched(in: VertexOutput) -> FragOutput {
   }
   out.color = shade_pattern(paint, in, coverage);
   return out;
+}
+)wgsl"};
 }

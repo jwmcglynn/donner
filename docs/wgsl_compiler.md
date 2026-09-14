@@ -1,7 +1,7 @@
 # WGSL shader compilation {#WgslCompiler}
 
 Gaussian/box blur, matrix convolution, Slug mask, offset, filter resolve, specular lighting,
-turbulence and image blit are authored as inline WGSL in
+turbulence, image blit and Slug fill are authored as inline WGSL in
 `donner/gpu/shader/programs/*Source.h`. The C++20 compiler validates each source, produces immutable
 shader projections and derives its resource interface during constant evaluation. Each artifact
 implementation checks the shared host parameter layout. Application code consumes frozen data
@@ -58,7 +58,7 @@ field offsets are checked against reflection independently for each retained pro
 
 ## Supported profile and limits
 
-The compute frontend supports the migrated filter families with: flat numeric buffer structures,
+The compute frontend supports the migrated filter families with: numeric buffer structures, including bounded nesting,
 fixed numeric array members of buffer structs, root runtime storage arrays, group-zero sampled/storage textures and samplers, bounded decimal/hexadecimal
 numeric literals and abstract scalar constants, scalar/vector expressions and conversions, local bindings, conditionals,
 incrementing loops, read-only numeric helpers with up to eight parameters, and one compute entry with a global-invocation ID.
@@ -129,8 +129,8 @@ stride are explicitly outside the portable Vulkan 1.1 layout profile; storage la
 matrices retain their natural stride. Dynamic matrix column indexing, scalar-list matrix
 constructors and constant matrix arithmetic remain unsupported.
 
-Runtime storage arrays are supported at binding roots with numeric or flat structure elements.
-Fixed numeric arrays may appear in buffers; uniform arrays require a stride divisible by 16.
+Runtime storage arrays are supported at binding roots with numeric or bounded structure elements.
+Fixed numeric arrays may appear in buffers and copied structure values; uniform arrays require a stride divisible by 16. Nested uniform layouts are checked recursively, including required alignment and separation after structure members.
 Reflection carries runtime element stride and a minimum range containing one element into the
 existing device buffer-requirement contract. Nested/member runtime arrays, array aliases and writes to buffer arrays remain unsupported.
 
@@ -209,10 +209,35 @@ derivatives may follow a possible discard, including helper and loop-carried pat
 addition and subtraction support both operand orders. Switches have one integer selector per
 clause, distinct constant cases and exactly one default. Their breaks leave the switch; continues
 still target the enclosing loop. Constructor and call argument lists accept trailing commas.
-Flat structure constructors accept zero arguments or one typed value per member, up to eight
-arguments. Array-bearing structure values remain unsupported.
+Structure constructors accept zero arguments or one typed value per member, up to eight
+arguments. Structures containing fixed numeric arrays support value copies, parameters, returns and member-array assignment. Fixed arrays of structures and structures used both as direct buffer roots and as nested/runtime-array elements remain explicitly unsupported in this profile.
 
 Native image tests compare nearest/linear/pixelated sampling, alpha handling, masks and all CSS
 blend modes with existing CPU references through the strict bitmap comparator. Separate controls
 change entry names and binding numbers and exercise explicit-LOD sampling under varying control.
 Platform-only linked probes verify that unused WGSL/MSL/SPIR-V payloads remain excluded.
+
+## Slug fill
+
+`SlugFillSource.h` is authoritative for the ordinary and batched entry-point pairs. The live
+pipeline and every fill bind-group path use the frozen resource interface and entry names. Shared
+416-byte draw parameters and 256-byte instance records replace the duplicated host declarations.
+Compile-time guards cover every host field, nested transform member, both band layouts and all
+eleven resource kinds, ranges and strides. The unused clip sampler is removed.
+
+The profile supports vertex `instance_index` and flat scalar/vector integer interstage values.
+Flat interpolation uses the first vertex; optional interpolation sampling modes remain outside
+this profile. Reflection retains the builtin and flat qualifier. Native acceptance uses differing
+per-vertex values and nonzero vertex/instance bases, plus differently translated storage records.
+
+The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures,
+256 members, 1,024 symbols/statements, 4,096 expressions and 64 functions. A fixed type may occupy
+at most 1 MiB; layout growth is checked before recording member offsets. Text emission is bounded
+at 128 KiB. Slug fill uses a local 4,194,304-step Clang evaluator cap; existing smaller family caps
+remain independently checked.
+
+Native tests cover ordinary and batched fills, fractional/binary coverage, clipping, patterns,
+linear/radial gradients, painter ordering and reads limited to a declared record range. Duplicate
+contour even-odd cancellation is checked in binary mode; analytic single-contour coverage is a
+separate case. The inherited analytic coverage approximation is not a proof of duplicate-contour
+cancellation. These tests use strict pixel comparison and do not change the coverage algorithm.

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
@@ -67,87 +68,25 @@ constexpr uint64_t kStorageDummyBytes = 16u;
 static_assert(kStorageDummyBytes % sizeof(uint32_t) == 0,
               "storage dummy must be a whole number of u32 elements");
 
-/// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
-///
-/// WGSL struct layout requires the total size to be a multiple of the largest
-/// member alignment. With two mat4x4 members (16-byte alignment) the struct
-/// rounds to 176 bytes. We pad explicitly to keep this stable across
-/// compilers / WGSL backends.
-///
-/// Field order must stay in lock-step with the WGSL `Uniforms` struct.
-/// Layout of the batch-level per-draw uniform buffer. Must match
-/// `Uniforms` in `shaders/slug_fill.wgsl`. Per-instance fields (transform,
-/// color, fill rule, paint mode, grid parameters, bounding polygon, and
-/// geometry bases) live in `InstanceRecord` at binding 7.
-struct alignas(16) Uniforms {
-  float mvp[16];              //   0 ..  64
-  float patternFromPath[16];  //  64 .. 128
-  float viewport[2];          // 128 .. 136
-  float tileSize[2];          // 136 .. 144
-  uint32_t hasClipPolygon;    // 144 .. 148 - 0 = no clip, 1 = clipPolygon active
-  // Path-clip mask flag. When nonzero, the shader samples the
-  // clip mask texture at binding 5 (linear-filtered RGBA8Unorm) and folds
-  // its averaged coverage into the fragment colour. A 1x1 dummy
-  // texture is always bound so the `textureSample` is always legal.
-  uint32_t hasClipMask;  // 148 .. 152
-  uint32_t antialias;    // 152 .. 156 - 0 = binary coverage, 1 = analytic AA
-  uint32_t _pad1;        // 156 .. 160
-  // Polygon clipping: a 4-vertex convex clip polygon expressed
-  // as 4 edge half-planes, one per side, in VIEWPORT-PIXEL space. Each
-  // edge is `(a, b, c)` such that `a*x + b*y + c >= 0` marks the inside
-  // half-plane. Clip state is a batch boundary, so these stay
-  // batch-uniform rather than per-instance. Stored as `vec4f[4]`
-  // (vec4 = xyz + pad) so the WGSL side reads `array<vec4f, 4>` directly.
-  float clipPolygonPlanes[16];  // 160 .. 224 (4 edges × vec4)
+using Uniforms = gpu::shader::programs::SlugFillParams;
 
-  // Draw-level copy of the per-instance paint / geometry parameters. Every
-  // draw whose instances share one paint and one encoded path reads these
-  // instead of a record, so it binds the device's shared identity record and
-  // writes no record storage at all. `copyRecordParamsToUniform` fills them
-  // from the record the same draw would have written, so the two forms stay
-  // bit-identical by construction.
-  float color[4];                // 224 .. 240 - premultiplied
-  uint32_t fillRule;             // 240 .. 244
-  uint32_t paintMode;            // 244 .. 248
-  float patternOpacity;          // 248 .. 252
-  uint32_t _pad2;                // 252 .. 256
-  float gridYBase;               // 256 .. 260
-  float gridHStride;             // 260 .. 264
-  uint32_t gridHBandCount;       // 264 .. 268
-  float gridXBase;               // 268 .. 272
-  float gridVStride;             // 272 .. 276
-  uint32_t gridVBandCount;       // 276 .. 280
-  uint32_t boundingVertexCount;  // 280 .. 284
-  uint32_t _gridPad0;            // 284 .. 288
-  uint32_t bandBase;             // 288 .. 292
-  uint32_t curveBase;            // 292 .. 296
-  uint32_t vBandBase;            // 296 .. 300
-  uint32_t vCurveBase;           // 300 .. 304
-  uint32_t hGridBase;            // 304 .. 308
-  uint32_t vGridBase;            // 308 .. 312
-  uint32_t hRefsBase;            // 312 .. 316
-  uint32_t vRefsBase;            // 316 .. 320
-  // Two path-space vec2 vertices per vec4, up to eight vertices.
-  float boundingVertices[16];  // 320 .. 384
-  // Draw-level copy of the record's clip rectangle, same mirroring contract
-  // as the paint / geometry parameters above.
-  float clipRect[4];           // 384 .. 400
-  uint32_t clipRectActive;     // 400 .. 404
-  uint32_t paintBase;          // 404 .. 408
-  uint32_t gradientSpread;     // 408 .. 412
-  uint32_t gradientStopCount;  // 412 .. 416
-};
+uint32_t FillBinding(std::string_view name) {
+  const auto* resource = gpu::shader::programs::SlugFillShader().resource(name);
+  UTILS_RELEASE_ASSERT(resource);
+  return resource->binding;
+}
+
 static_assert(sizeof(Uniforms) == 416, "Uniforms struct layout mismatch");
 
 /// Rows the stop ramp starts at inside a gradient paint block. Must match the
-/// layout documented beside `paintData` in `shaders/slug_fill.wgsl`;
+/// layout documented beside `paintData` in `donner/gpu/shader/programs/SlugFillSource.h`;
 /// `kGradientPaintBlockRows` is the block's total row count.
 constexpr uint32_t kPaintStopColorRow = 5u;
 constexpr uint32_t kPaintStopOffsetRow = 21u;
 constexpr uint32_t kPaintBlockRows = kGradientPaintBlockRows;
 constexpr uint64_t kPaintBlockBytes = kPaintBlockRows * 16u;
 
-/// Paint modes shared with `shaders/slug_fill.wgsl`.
+/// Paint modes shared with `donner/gpu/shader/programs/SlugFillSource.h`.
 constexpr uint32_t kPaintModeLinearGradient = 2u;
 constexpr uint32_t kPaintModeRadialGradient = 3u;
 
@@ -225,7 +164,7 @@ void affineToMat4(const Transform2d& t, float* out16) {
 }
 
 /// Must match `kMaxStops` in `shaders/slug_gradient.wgsl` and in
-/// `shaders/slug_fill.wgsl`.
+/// `donner/gpu/shader/programs/SlugFillSource.h`.
 constexpr uint32_t kMaxGradientStops = 16u;
 static_assert(kPaintStopColorRow + kMaxGradientStops <= kPaintStopOffsetRow &&
                   kPaintStopOffsetRow + kMaxGradientStops / 4u <= kPaintBlockRows,
@@ -2110,16 +2049,22 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
       gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
           "GeodeResidentBindGroup",
           pipeline->bindGroupLayout(),
-          {region(0, slot.uniform), region(1, slot.bands), region(2, slot.curves),
-           gpu::BindGroupEntry{3, gpu::TextureViewBinding{*gpuContext->dummyPatternTextureView}},
-           gpu::BindGroupEntry{4, gpu::SamplerBinding{*gpuContext->dummyPatternSampler}},
-           gpu::BindGroupEntry{5, gpu::TextureViewBinding{*gpuContext->dummyClipMaskTextureView}},
-           gpu::BindGroupEntry{6, gpu::SamplerBinding{*gpuContext->dummyClipMaskSampler}},
-           gpu::BindGroupEntry{7, gpu::BufferBinding{*gpuContext->identityInstanceRecordBuffer, 0,
-                                                     sizeof(InstanceRecord)}},
-           region(8, slot.vBands), region(9, slot.vCurves),
-           gpu::BindGroupEntry{10, gpu::BufferBinding{buf, grid.offset, grid.size}},
-           region(11, slot.paint)}});
+          {region(FillBinding("uniforms"), slot.uniform), region(FillBinding("bands"), slot.bands),
+           region(FillBinding("curveData"), slot.curves),
+           gpu::BindGroupEntry{FillBinding("patternTexture"),
+                               gpu::TextureViewBinding{*gpuContext->dummyPatternTextureView}},
+           gpu::BindGroupEntry{FillBinding("patternSampler"),
+                               gpu::SamplerBinding{*gpuContext->dummyPatternSampler}},
+           gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
+                               gpu::TextureViewBinding{*gpuContext->dummyClipMaskTextureView}},
+           gpu::BindGroupEntry{FillBinding("instances"),
+                               gpu::BufferBinding{*gpuContext->identityInstanceRecordBuffer, 0,
+                                                  sizeof(InstanceRecord)}},
+           region(FillBinding("vBands"), slot.vBands),
+           region(FillBinding("vCurveData"), slot.vCurves),
+           gpu::BindGroupEntry{FillBinding("gridData"),
+                               gpu::BufferBinding{buf, grid.offset, grid.size}},
+           region(FillBinding("paintData"), slot.paint)}});
   if (created.hasError()) {
     return;
   }
@@ -2612,19 +2557,23 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
       cacheKey.uniformBufferId != 0 && cacheKey.chunkBufferId != 0 && cacheKey.recordBufferId != 0;
 
   std::vector<gpu::BindGroupEntry> entries = {
-      gpu::BindGroupEntry{0, gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
-      chunkEntry(1),
-      chunkEntry(2),
-      gpu::BindGroupEntry{3, gpu::TextureViewBinding{*impl_->gpuContext->dummyPatternTextureView}},
-      gpu::BindGroupEntry{4, gpu::SamplerBinding{*impl_->gpuContext->dummyPatternSampler}},
-      gpu::BindGroupEntry{5, gpu::TextureViewBinding{*impl_->gpuContext->dummyClipMaskTextureView}},
-      gpu::BindGroupEntry{6, gpu::SamplerBinding{*impl_->gpuContext->dummyClipMaskSampler}},
+      gpu::BindGroupEntry{FillBinding("uniforms"),
+                          gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+      chunkEntry(FillBinding("bands")),
+      chunkEntry(FillBinding("curveData")),
+      gpu::BindGroupEntry{FillBinding("patternTexture"),
+                          gpu::TextureViewBinding{*impl_->gpuContext->dummyPatternTextureView}},
+      gpu::BindGroupEntry{FillBinding("patternSampler"),
+                          gpu::SamplerBinding{*impl_->gpuContext->dummyPatternSampler}},
+      gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
+                          gpu::TextureViewBinding{*impl_->gpuContext->dummyClipMaskTextureView}},
       gpu::BindGroupEntry{
-          7, gpu::BufferBinding{binding.recordBuffer, recordSpanStart, recordSpanBytes}},
-      chunkEntry(8),
-      chunkEntry(9),
-      chunkEntry(10),
-      chunkEntry(11)};
+          FillBinding("instances"),
+          gpu::BufferBinding{binding.recordBuffer, recordSpanStart, recordSpanBytes}},
+      chunkEntry(FillBinding("vBands")),
+      chunkEntry(FillBinding("vCurveData")),
+      chunkEntry(FillBinding("gridData")),
+      chunkEntry(FillBinding("paintData"))};
 
   const gpu::BindGroup* bindGroup =
       impl_->resolveSceneBatchBindGroup(cacheKey, cacheable, std::move(entries));
@@ -2803,24 +2752,32 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
       impl_->gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
           "GeodeBindGroup",
           impl_->pipeline->bindGroupLayout(),
-          {gpu::BindGroupEntry{0,
+          {gpu::BindGroupEntry{FillBinding("uniforms"),
                                gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
            gpu::BindGroupEntry{
-               1, gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+               FillBinding("bands"),
+               gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
            gpu::BindGroupEntry{
-               2, gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
-           gpu::BindGroupEntry{3, gpu::TextureViewBinding{args.patternView}},
-           gpu::BindGroupEntry{4, gpu::SamplerBinding{args.patternSampler}},
-           gpu::BindGroupEntry{5, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
-           gpu::BindGroupEntry{6, gpu::SamplerBinding{*impl_->gpuContext->dummyClipMaskSampler}},
-           gpu::BindGroupEntry{7, gpu::BufferBinding{recordBuf, recordOffset, recordSize}},
+               FillBinding("curveData"),
+               gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
+           gpu::BindGroupEntry{FillBinding("patternTexture"),
+                               gpu::TextureViewBinding{args.patternView}},
+           gpu::BindGroupEntry{FillBinding("patternSampler"),
+                               gpu::SamplerBinding{args.patternSampler}},
+           gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
+                               gpu::TextureViewBinding{impl_->currentClipMaskView()}},
+           gpu::BindGroupEntry{FillBinding("instances"),
+                               gpu::BufferBinding{recordBuf, recordOffset, recordSize}},
            gpu::BindGroupEntry{
-               8, gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
+               FillBinding("vBands"),
+               gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
            gpu::BindGroupEntry{
-               9, gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
-           gpu::BindGroupEntry{10, gpu::BufferBinding{gridSpan.alloc.buffer, gridSpan.alloc.offset,
-                                                      gridSpan.alloc.size}},
-           gpu::BindGroupEntry{11,
+               FillBinding("vCurveData"),
+               gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
+           gpu::BindGroupEntry{FillBinding("gridData"),
+                               gpu::BufferBinding{gridSpan.alloc.buffer, gridSpan.alloc.offset,
+                                                  gridSpan.alloc.size}},
+           gpu::BindGroupEntry{FillBinding("paintData"),
                                gpu::BufferBinding{*impl_->gpuContext->dummyPaintDataBuffer, 0,
                                                   kGradientPaintBlockRows * 4u * sizeof(float)}}}});
   if (bindGroupResult.hasError()) {

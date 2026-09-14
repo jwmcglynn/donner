@@ -151,7 +151,7 @@ TEST(TextEmitter, EmitsReadOnlyStorageArraysWithClampedIndices) {
 
   ASSERT_TRUE(EmitMsl(kStorageArrayParsed.module, sink).ok());
   const std::string_view msl = sink.view();
-  EXPECT_THAT(msl, HasSubstr("float donner_msl_member_weights[4];"));
+  EXPECT_THAT(msl, HasSubstr("array<float, 4> donner_msl_member_weights;"));
   EXPECT_THAT(msl, HasSubstr("const device donner_msl_struct_storage_values&"));
   EXPECT_THAT(msl, Not(HasSubstr("[[buffer(6)]]")));
   EXPECT_THAT(msl, HasSubstr("uint(clamp(donner_msl_symbol_index_1, int(0), int(3)))"));

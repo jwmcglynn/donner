@@ -15,6 +15,7 @@ PAYLOAD_MARKERS = {
     "filter_resolve": (b"const kTransferCount:", b"donner_msl_member_userX0"),
     "offset": (b"struct OffsetParams", b"donner_msl_member_dx"),
     "specular_lighting": (b"struct LightingParams", b"donner_msl_member_specularExponent"),
+    "slug_fill": (b"struct InstanceRecord", b"donner_msl_member_clipRectActive"),
     "image_blit": (b"fn sample_pixelated(", b"donner_msl_member_pixelatedScale"),
     "turbulence": (b"struct TurbulenceParams", b"donner_msl_member_stitchTiles"),
     "slug": (b"fn effective_bounding_vertex(", b"donner_msl_member_boundingVertexCount"),
