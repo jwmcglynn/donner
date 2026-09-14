@@ -564,6 +564,12 @@ TEST(GeodePathEncoder, BoundingPolygonIsSmallAndCounterClockwise) {
 
 namespace {
 
+/// Own the lower coordinate endpoint so adjacent monotonic curves count shared vertices once.
+bool IsOwnedWindingRoot(float start, float end, double coordinate, double parameter) {
+  return parameter >= 0.0 && parameter <= 1.0 && coordinate >= std::min(start, end) &&
+         coordinate < std::max(start, end);
+}
+
 // Winding number of a horizontal +x ray from (px,py) across all Y-monotonic curves.
 int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, double py) {
   int winding = 0;
@@ -585,7 +591,7 @@ int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, 
     }
     for (int i = 0; i < n; ++i) {
       const double t = ts[i];
-      if (t < 0.0 || t > 1.0) continue;
+      if (!IsOwnedWindingRoot(c.p0y, c.p2y, py, t)) continue;
       const double omt = 1.0 - t;
       const double x = omt * omt * c.p0x + 2 * omt * t * c.p1x + t * t * c.p2x;
       if (x < px) continue;
@@ -617,7 +623,7 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
     }
     for (int i = 0; i < n; ++i) {
       const double t = ts[i];
-      if (t < 0.0 || t > 1.0) continue;
+      if (!IsOwnedWindingRoot(c.p0x, c.p2x, px, t)) continue;
       const double omt = 1.0 - t;
       const double y = omt * omt * c.p0y + 2 * omt * t * c.p1y + t * t * c.p2y;
       if (y < py) continue;
