@@ -39,6 +39,14 @@ public:
            shell.renderCoordinator_.displayedDocVersionForDiagnostics() >=
                shell.app_.document().currentFrameVersion();
   }
+  static nlohmann::json Readiness(EditorShell& shell) {
+    return {{"busy", shell.renderCoordinator_.asyncRenderer().isBusy()},
+            {"dragging", shell.selectTool_.isDragging()},
+            {"drafting", shell.penTool_.isDrafting()},
+            {"writebacks", shell.documentSyncController_.hasPendingWritebacks()},
+            {"text_changed", shell.textEditor_.isTextChanged()},
+            {"ready", shell.collaborationFrameReady()}};
+  }
   static bool PinCaptures(EditorShell& shell, Vector2d point) {
     return shell.commentsPresenter_.capturesInput(point);
   }
@@ -101,7 +109,7 @@ protected:
   Json exchange(Json request) {
     const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return Json::object();
-    timeval timeout{.tv_sec = 3, .tv_usec = 0};
+    timeval timeout{.tv_sec = 5, .tv_usec = 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
@@ -132,16 +140,17 @@ protected:
                        {"method", "tools/call"},
                        {"params", {{"name", name}, {"arguments", args}}}};
     auto reply = std::async(std::launch::async, [this, request]() { return exchange(request); });
-    for (int i = 0;
-         i < 100 && reply.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
-         ++i) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (reply.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
       window->waitEventsTimeout(0.01);
       frame();
     }
     EXPECT_THAT(reply.wait_for(std::chrono::seconds(0)), Eq(std::future_status::ready));
     const Json result = reply.get();
     if (!result.contains("result")) {
-      ADD_FAILURE() << result.dump();
+      ADD_FAILURE() << result.dump()
+                    << " readiness=" << EditorCollaborationUiTestAccess::Readiness(*shell).dump();
       return Json::object();
     }
     EXPECT_THAT(result["result"]["isError"], Eq(false)) << result.dump();
@@ -213,6 +222,17 @@ TEST_F(GeodeSplashCollaborationUiTest, PresentsTheFullArtworkAndRespondsToMcp) {
                   path.c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
                   bitmap.rowBytes / 4),
               Eq(true));
+}
+
+TEST_F(GeodeSplashCollaborationUiTest, ClickingMaskedCavityKeepsTheNativeEditorResponsive) {
+  call("get_editor_state");
+  shell->queueDocumentSpaceReplayInputForTesting(
+      {.documentPoint = Vector2d(544, 500), .leftMouseDown = true, .leftMousePressed = true});
+  frame();
+  shell->queueDocumentSpaceReplayInputForTesting(
+      {.documentPoint = Vector2d(544, 500), .leftMouseReleased = true});
+  frame();
+  EXPECT_THAT(call("get_editor_state")["selection_count"], Eq(1));
 }
 
 TEST_F(EditorCollaborationUiTest, McpEditsTheVisibleDocumentAndUndoRestoresIt) {

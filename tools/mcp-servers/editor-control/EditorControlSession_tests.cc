@@ -353,6 +353,27 @@ TEST(EditorControlSessionTest, LoadsAndRendersLayeredGeodeSplashThroughMcp) {
   EXPECT_THAT(frame.images, ::testing::Not(::testing::IsEmpty())) << frame.body.dump(2);
 }
 
+TEST(EditorControlSessionTest, ClickingMaskedGeodeCavityKeepsGpuCompositionValid) {
+  const auto splash = donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  ASSERT_THAT(splash.ok(), ::testing::Eq(true)) << splash.error;
+  EditorControlSession session;
+  const auto loaded = session.handleToolCall("load_svg", json{{"svg_source", splash.contents},
+                                                              {"canvas_width", 1536},
+                                                              {"canvas_height", 1024},
+                                                              {"device_pixel_ratio", 2},
+                                                              {"render_after_load", true}});
+  ASSERT_THAT(loaded.isError, ::testing::Eq(false)) << loaded.body.dump(2);
+  const auto selected =
+      session.handleToolCall("drag_selector", json{{"selector", "#cavity-light"},
+                                                   {"delta_x", 0.0},
+                                                   {"delta_y", 0.0},
+                                                   {"frames", 1},
+                                                   {"release", true},
+                                                   {"include_final_frame", true}});
+  EXPECT_THAT(selected.isError, ::testing::Eq(false)) << selected.body.dump(2);
+  EXPECT_THAT(selected.images, ::testing::Not(::testing::IsEmpty()));
+}
+
 TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   const json tools = EditorControlSession::toolList();
 
