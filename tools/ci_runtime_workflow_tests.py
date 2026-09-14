@@ -1,8 +1,12 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import gzip
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 import tempfile
 import textwrap
@@ -61,7 +65,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(match, "heartbeat wrapper heredoc not found")
         return textwrap.dedent(match.group("body"))
 
-    def _run_script(self, text, args, env=None, timeout=10):
+    def _run_script(self, text, args, env=None, timeout=10, cwd=None):
         with tempfile.TemporaryDirectory() as temp_dir:
             script = Path(temp_dir) / "fixture.sh"
             script.write_text(text)
@@ -73,6 +77,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 text=True,
                 env=env,
                 timeout=timeout,
+                cwd=cwd,
             )
 
     def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
@@ -410,6 +415,90 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, "ambiguous artifact outputs must fail")
         self.assertIn("PACKAGE_TARGET: ${{ needs.build.outputs.package_target }}", self.editor_wasm)
         self.assertIn('\\"targets\\":[\\"${PACKAGE_TARGET}\\"]', self.editor_wasm)
+
+    def _catalog_candidate_fixture(self, root):
+        package = root / "editor-wasm-package-geode"
+        (package / "fonts").mkdir(parents=True)
+        for name in ("donner_icon.svg", "editor-bootstrap.js", "editor.css", "editor.js",
+                     "enable-threads.js", "index.html", "catalog-fonts.js"):
+            (package / name).write_text(name)
+        (package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
+        (package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
+        fonts = []
+        families = ("Bebas Neue", "Bitter", "Inter", "JetBrains Mono", "Lato", "Lora",
+                    "Montserrat", "Open Sans", "Oswald", "Pacifico", "Playfair Display",
+                    "Roboto Mono")
+        for index, family in enumerate(families):
+            payload = bytearray([index] * 64)
+            payload[:4] = b"wOF2"
+            struct.pack_into(">I", payload, 16, 128)
+            digest = hashlib.sha256(payload).hexdigest()
+            path = "fonts/%s.woff2" % digest
+            (package / path).write_bytes(payload)
+            fonts.append({"family": family, "sha256": digest, "path": path,
+                          "encoded_bytes": len(payload), "decoded_bytes": 128})
+        (package / "catalog-fonts.json").write_text(json.dumps({
+            "fonts": fonts, "encoded_bytes": 64 * len(fonts),
+        }))
+        wasm = root / "donner/editor/wasm"
+        (wasm / "tests").mkdir(parents=True)
+        (wasm / "tests/package-lock.json").write_text("{}")
+        (wasm / "catalog_package_integrity_test.py").write_text(_workflow_text(
+            "donner/editor/wasm/catalog_package_integrity_test.py"))
+        return package
+
+    def _stage_catalog_candidate(self, root):
+        body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
+        script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
+        return self._run_script(script, [], cwd=root, env={
+            **os.environ, "RUNNER_TEMP": str(root), "GITHUB_SHA": "a" * 40,
+            "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
+        })
+
+    def test_editor_wasm_candidate_preserves_deferred_catalog_assets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._catalog_candidate_fixture(root)
+            expected = {p.relative_to(package).as_posix(): p.read_bytes()
+                        for p in package.rglob("*") if p.is_file()}
+            result = self._stage_catalog_candidate(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            candidate = root / ("donner-editor-wasm-geode-" + "a" * 40)
+            site = {p.relative_to(candidate / "site").as_posix(): p.read_bytes()
+                    for p in (candidate / "site").rglob("*") if p.is_file()}
+            self.assertEqual(site, expected)
+            deploy = {p.relative_to(candidate / "deploy").as_posix(): p.read_bytes()
+                      for p in (candidate / "deploy").rglob("*") if p.is_file()}
+            self.assertEqual(gzip.decompress(deploy.pop("editor.wasm.gz")),
+                             expected.pop("editor.wasm"))
+            self.assertEqual(deploy, expected)
+            checksums = dict(line.split("  ", 1)[::-1]
+                             for line in (candidate / "SHA256SUMS").read_text().splitlines())
+            expected_checksums = {p.relative_to(candidate).as_posix():
+                                  hashlib.sha256(p.read_bytes()).hexdigest()
+                                  for directory in (candidate / "site", candidate / "deploy")
+                                  for p in directory.rglob("*") if p.is_file()}
+            self.assertEqual(checksums, expected_checksums)
+            provenance = json.loads((candidate / "provenance.json").read_text())
+            self.assertEqual(provenance["source_revision"], "a" * 40)
+            self.assertEqual(provenance["targets"], ["//fixture:package"])
+
+    def test_editor_wasm_candidate_rejects_incomplete_or_unexpected_assets(self):
+        for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                package = self._catalog_candidate_fixture(root)
+                if failure == "corrupt-font":
+                    next((package / "fonts").glob("*.woff2")).write_bytes(b"corrupt")
+                elif failure == "extra-font":
+                    (package / "fonts/extra.woff2").write_bytes(b"unexpected")
+                elif failure == "extra-root-file":
+                    (package / "unexpected.txt").write_text("unexpected")
+                else:
+                    (package / "catalog-fonts.js").unlink()
+                result = self._stage_catalog_candidate(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((root / "output").exists())
 
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
