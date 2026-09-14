@@ -327,7 +327,7 @@ TEST(NestedSvgFontResourcesTest, MissingOffscreenRendererPreservesUnpreparedChil
   EXPECT_THAT(fonts.dependencies, IsEmpty());
 }
 
-TEST(NestedSvgFontResourcesTest, CulledChildExclusionAppliesOnlyToCompletedRenderedScope) {
+TEST(NestedSvgFontResourcesTest, RecordedChildExclusionAppliesOnlyToCompletedRenderedScope) {
   std::string source = ImageSource();
   source.replace(source.find("id='first'"), std::string("id='first'").size(),
                  "id='first' x='1000'");
@@ -335,9 +335,18 @@ TEST(NestedSvgFontResourcesTest, CulledChildExclusionAppliesOnlyToCompletedRende
   ASSERT_TRUE(parsed.has_value());
   testing::NiceMock<tests::MockRendererInterface> backend;
   RendererDriver driver(backend);
-  driver.draw(*parsed);
-  EXPECT_EQ(parsed->renderedFontResources().status, FontResourcePreflight::Status::Ready);
   const auto host = *parsed->querySelector("#first");
+  ASSERT_EQ(parsed->preflightFontResourcesForElement(host).status,
+            FontResourcePreflight::Status::NeedsRender);
+  ASSERT_THAT(ChildHandle(*parsed, "#first"), Not(testing::IsNull()));
+  auto& registry = parsed->registry();
+  const Entity root = registry.ctx().get<components::SVGDocumentContext>().rootEntity;
+  // Unit-test an explicit exclusion receipt; the renderer does not currently cull SVG images.
+  components::ScopedFontResourceRender frame(registry, root);
+  components::ScopedFontResourceRender::recordDraw(registry, host.unsafeEntityHandle().entity(),
+                                                   true);
+  frame.finish();
+  EXPECT_EQ(parsed->renderedFontResources().status, FontResourcePreflight::Status::Ready);
   EXPECT_EQ(parsed->preflightFontResourcesForElement(host).status,
             FontResourcePreflight::Status::NeedsRender);
   // A cancelled later draw cannot publish or inherit the previous viewport's exclusions.
@@ -413,10 +422,7 @@ TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregate
 }
 
 TEST(NestedSvgFontResourcesTest, TwoStandaloneRangesCannotQualifyAWholeDocument) {
-  std::string source = ImageSource();
-  source.replace(source.find("id='first'"), std::string("id='first'").size(),
-                 "id='first' x='1000'");
-  auto parsed = ParseDocument(source);
+  auto parsed = ParseDocument(ImageSource());
   ASSERT_TRUE(parsed.has_value());
   testing::NiceMock<tests::MockRendererInterface> backend;
   RendererDriver driver(backend);
@@ -425,7 +431,9 @@ TEST(NestedSvgFontResourcesTest, TwoStandaloneRangesCannotQualifyAWholeDocument)
   const Entity image = parsed->querySelector("#first")->unsafeEntityHandle().entity();
   const Entity unrelated = parsed->querySelector("#unrelated")->unsafeEntityHandle().entity();
   auto& registry = parsed->registry();
-  ASSERT_TRUE(registry.ctx().get<components::RenderedFontResourceScope>().excluded.contains(image));
+  ASSERT_THAT(registry.get<components::FontPaintDependenciesComponent>(image).children, SizeIs(1));
+  ASSERT_EQ(parsed->preflightFontResourcesForElement(*parsed->querySelector("#first")).status,
+            FontResourcePreflight::Status::Ready);
   const RenderViewport viewport{.size = Vector2d(360, 100)};
   driver.drawEntityRange(registry, unrelated, unrelated, viewport, Transform2d());
   EXPECT_EQ(parsed->renderedFontResources().status, FontResourcePreflight::Status::NeedsRender);
