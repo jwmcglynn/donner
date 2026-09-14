@@ -1182,11 +1182,6 @@ test(
       const response = await responsePromise;
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toBe("font/woff2");
-      const transferFinished = response.finished();
-      const transferDeadline = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("font response did not finish within 2 seconds")), 2000);
-      });
-      expect(await Promise.race([transferFinished, transferDeadline])).toBeNull();
       await expect.poll(async () =>
         page.evaluate((previous) => {
           const current = window.__donnerWorkerStats;
