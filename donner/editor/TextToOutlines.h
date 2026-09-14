@@ -25,7 +25,8 @@
 ///   individual glyph `<path>`s so multi-color runs are not collapsed.
 ///
 /// The conversion is DOM-first: it builds unattached DOM elements and never
-/// mutates the document. The caller applies it as ordinary structural DOM
+/// changes the authored tree or source. Detached elements share document storage.
+/// The caller applies them as ordinary structural DOM
 /// edits - insert the group before the `<text>` (preserving paint order),
 /// insert each path into the group, delete the `<text>` - through the
 /// editor's mutation seam (`EditorCommand::InsertElementCommand` /
@@ -37,6 +38,7 @@
 /// created in the document tree) and the caller must not mutate the document.
 
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -68,6 +70,21 @@ struct ConvertTextToOutlinesResult {
   /// `ok`; the caller selects this after applying the edits.
   std::string outlineGroupId;
 };
+
+/// All-or-error result for a set of text-to-outline conversions.
+struct ConvertTextsToOutlinesResult {
+  bool ok = false;    //!< Whether every selected element was converted.
+  std::string error;  //!< Failure reason; populated when ok is false.
+  /// Detached conversions in input order. Empty on any failure.
+  std::vector<ConvertTextToOutlinesResult> conversions;
+};
+
+/// Preflight every target before constructing any detached replacements, under one write guard.
+/// The authored tree and source remain unchanged on both success and failure.
+/// @param document Document containing all text elements.
+/// @param textElements Text targets, in the desired conversion order.
+[[nodiscard]] ConvertTextsToOutlinesResult convertTextsToOutlines(
+    svg::SVGDocument& document, std::span<const svg::SVGElement> textElements);
 
 /// Prepare a text-to-outline conversion of \p textElement within \p document.
 ///

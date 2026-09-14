@@ -3122,8 +3122,14 @@ void EditorShell::convertSelectedTextToOutlines() {
   if (!requireCatalogFontsForSelection()) return;
   const std::string sourceBefore(document.source());
 
-  // Build every conversion first (detached DOM elements, no mutation) so any
-  // failure abandons the command with the document untouched.
+  const auto selectedElements = app_.selectedElements();
+  auto batch = convertTextsToOutlines(document, selectedElements);
+  if (!batch.ok) {
+    lastConvertTextError_ = std::move(batch.error);
+    return;
+  }
+
+  // Build every conversion before applying authored-tree mutations.
   struct PlannedConversion {
     svg::SVGElement text;
     svg::SVGElement parent;
@@ -3131,17 +3137,14 @@ void EditorShell::convertSelectedTextToOutlines() {
     std::vector<svg::SVGElement> paths;
   };
   std::vector<PlannedConversion> planned;
-  for (const svg::SVGElement& element : app_.selectedElements()) {
+  size_t conversionIndex = 0;
+  for (const svg::SVGElement& element : selectedElements) {
     const std::optional<svg::SVGElement> parent = element.parentElement();
     if (!parent.has_value()) {
       lastConvertTextError_ = "Convert to outlines failed: <text> element has no parent.";
       return;
     }
-    ConvertTextToOutlinesResult result = convertTextToOutlines(document, element);
-    if (!result.ok) {
-      lastConvertTextError_ = result.error;
-      return;
-    }
+    ConvertTextToOutlinesResult& result = batch.conversions[conversionIndex++];
     planned.push_back(PlannedConversion{
         .text = element,
         .parent = *parent,

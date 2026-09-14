@@ -295,5 +295,65 @@ TEST(CatalogFontResourcesTest, DependencyOverflowCannotPassOutputPreflight) {
   EXPECT_EQ(convertTextToOutlines(document, target).ok, false);
 }
 
+TEST(CatalogFontResourcesTest, PendingSecondOutlineTargetPreventsAllMaterialization) {
+  constexpr std::string_view source = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="90">
+  <text id="first" x="10" y="30" font-family="sans-serif">Ready</text>
+  <text id="second" x="10" y="65" font-family="Inter">Pending</text>
+</svg>)svg";
+  auto store = std::make_shared<svg::CatalogEncodedFontStore>();
+  svg::FontCatalog catalog(store);
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(source), true);
+  auto& document = app.document().document();
+  AttachProvider(document, catalog);
+  svg::Renderer renderer;
+  renderer.draw(document);
+  const std::vector<svg::SVGElement> selected = {*document.querySelector("#first"),
+                                                 *document.querySelector("#second")};
+  app.setSelection(selected);
+  ASSERT_EQ(document.preflightFontResourcesForElement(selected[0]).status,
+            svg::FontResourcePreflight::Status::Ready);
+  ASSERT_EQ(document.preflightFontResourcesForElement(selected[1]).status,
+            svg::FontResourcePreflight::Status::PendingFonts);
+  const std::string sourceBefore(document.source());
+  const auto elementCount = document.elementCount();
+  const auto batch = convertTextsToOutlines(document, selected);
+  EXPECT_EQ(batch.ok, false);
+  EXPECT_THAT(batch.error, testing::HasSubstr("font is not ready"));
+  EXPECT_THAT(batch.conversions, IsEmpty());
+  EXPECT_EQ(document.elementCount(), elementCount);
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(selected[0], selected[1]));
+  EXPECT_EQ(app.canUndo(), false);
+}
+
+TEST(CatalogFontResourcesTest, EmptySecondOutlineTargetLeavesAuthoredStateUnchanged) {
+  constexpr std::string_view source = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="90">
+  <text id="first" x="10" y="30">Ready</text>
+  <text id="second" x="10" y="65"></text>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(source), true);
+  auto& document = app.document().document();
+  svg::Renderer renderer;
+  renderer.draw(document);
+  const std::vector<svg::SVGElement> selected = {*document.querySelector("#first"),
+                                                 *document.querySelector("#second")};
+  app.setSelection(selected);
+  const std::string sourceBefore(document.source());
+  const auto batch = convertTextsToOutlines(document, selected);
+  EXPECT_EQ(batch.ok, false);
+  EXPECT_THAT(batch.error, testing::HasSubstr("glyph outlines"));
+  EXPECT_THAT(batch.conversions, IsEmpty());
+  EXPECT_EQ(document.querySelector("#first").has_value(), true);
+  EXPECT_EQ(document.querySelector("#second").has_value(), true);
+  EXPECT_EQ(document.querySelector("#first_outlines").has_value(), false);
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(selected[0], selected[1]));
+  EXPECT_EQ(app.canUndo(), false);
+}
+
 }  // namespace
 }  // namespace donner::editor
