@@ -4099,6 +4099,38 @@ TEST(EditorShellTest, ConvertSelectedTextToOutlinesReplacesTextWithPathGroup) {
   EXPECT_TRUE(EditorShellTestAccess::LastConvertTextError(shell).empty());
 }
 
+TEST(EditorShellTest, ConvertMultipleTextElementsToOutlinesUsesOneUndoEntry) {
+  constexpr std::string_view source = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="90">
+  <text id="first" x="10" y="30">First</text>
+  <text id="second" x="10" y="65">Second</text>
+</svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_EQ(window.valid(), true);
+  EditorShell shell(window, OptionsWithSource(source, "multiple-text.svg"));
+  ASSERT_EQ(shell.valid(), true);
+  auto& app = EditorShellTestAccess::App(shell);
+  auto& document = app.document().document();
+  svg::Renderer renderer;
+  renderer.draw(document);
+  app.setSelection({*document.querySelector("#first"), *document.querySelector("#second")});
+  const std::string sourceBefore(document.source());
+
+  EditorShellTestAccess::ConvertSelectedTextToOutlines(shell);
+  ASSERT_THAT(EditorShellTestAccess::LastConvertTextError(shell), testing::IsEmpty());
+  ASSERT_EQ(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell), true);
+  EXPECT_EQ(document.querySelector("text").has_value(), false);
+  EXPECT_EQ(document.querySelector("#first_outlines").has_value(), true);
+  EXPECT_EQ(document.querySelector("#second_outlines").has_value(), true);
+  EXPECT_THAT(app.selectedElements(), testing::SizeIs(2));
+  ASSERT_EQ(app.canUndo(), true);
+
+  app.undo();
+  ASSERT_EQ(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell), true);
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+  EXPECT_EQ(app.canUndo(), false);
+}
+
 TEST(EditorShellTest, RenderPaneDeferredEmptyClickStartsMarqueeAfterHold) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {

@@ -296,6 +296,7 @@ py_test(
 py_test(
     name = "catalog_package_validation_tests",
     srcs = ["catalog_package_integrity_test.py"],
+    main = "catalog_package_integrity_test.py",
 )
 
 serve_http(
@@ -433,4 +434,5 @@ py_test(
         "package_web_files.py",
         "package_web_files_test.py",
     ],
+    imports = ["."],
 )
