@@ -940,17 +940,13 @@
           <polygon id="cavity-facet-204" points="546 544 557 522 560 538" fill="#130046" stroke="#130046" />
           <polygon id="cavity-facet-205" points="502 570 527 560 514 572" fill="#2e067e" stroke="#2e067e" />
           <polygon id="cavity-facet-206" points="546 544 541 555 527 560" fill="#250474" stroke="#250474" />
-          <polygon id="cavity-facet-207" points="514 572 532 586 533 590" fill="#bf9cf7" stroke="#bf9cf7" />
           <polygon id="cavity-facet-208" points="514 572 503 575 502 570" fill="#2d087e" stroke="#2d087e" />
-          <polygon id="cavity-facet-209" points="519 571 514 572 527 560" fill="#320784" stroke="#320784" />
-          <polygon id="cavity-facet-210" points="532 586 514 572 519 571" fill="#c09cf8" stroke="#c09cf8" />
-          <polygon id="cavity-facet-211" points="527 560 533 578 519 571" fill="#28066e" stroke="#28066e" />
+          <polygon id="cavity-facet-211" points="527 560 533 578 514 572" fill="#28066e" stroke="#28066e" />
           <polygon id="cavity-facet-212" points="527 560 541 555 533 560" fill="#220268" stroke="#220268" />
           <polygon id="cavity-facet-213" points="545 551 541 555 546 544" fill="#260476" stroke="#260476" />
           <polygon id="cavity-facet-214" points="533 560 541 555 533 578" fill="#3c089d" stroke="#3c089d" />
-          <polygon id="cavity-facet-215" points="533 590 532 586 544 597" fill="#1f0264" stroke="#1f0264" />
-          <polygon id="cavity-facet-216" points="532 586 519 571 533 578" fill="#51289a" stroke="#51289a" />
-          <polygon id="cavity-facet-217" points="533 578 541 555 532 586" fill="#34098e" stroke="#34098e" />
+          <polygon id="cavity-facet-216" points="533 590 514 572 533 578" fill="#28066e" stroke="#28066e" />
+          <polygon id="cavity-facet-217" points="533 578 541 555 533 590" fill="#34098e" stroke="#34098e" />
           <polygon id="cavity-facet-218" points="533 578 527 560 533 560" fill="#1c025c" stroke="#1c025c" />
           <polygon id="cavity-facet-219" points="501 620 510 621 504.82 626.98" fill="#26046d" stroke="#26046d" />
           <polygon id="cavity-facet-220" points="510 621 501 620 491 615" fill="#1e025e" stroke="#1e025e" />
@@ -985,7 +981,7 @@
           <polygon id="cavity-facet-249" points="572 537 580 548 561 551" fill="#160151" stroke="#160151" />
           <polygon id="cavity-facet-250" points="584 585 575 573 588.69 583.17" fill="#25056b" stroke="#25056b" />
           <polygon id="cavity-facet-251" points="553 598 558 596 564.25 610.76" fill="#5418bb" stroke="#5418bb" />
-          <polygon id="cavity-facet-252" points="544 597 532 586 553 598" fill="#1e015f" stroke="#1e015f" />
+          <polygon id="cavity-facet-252" points="544 597 533 590 553 598" fill="#1e015f" stroke="#1e015f" />
           <polygon id="cavity-facet-253" points="564.25 610.76 558 596 568.47 605.27" fill="#3e0c9e" stroke="#3e0c9e" />
           <polygon id="cavity-facet-254" points="553 598 564.25 610.76 559.64 614.34" fill="#450ea8" stroke="#450ea8" />
           <polygon id="cavity-facet-255" points="553 598 554.04 616.45 546.87 617.45" fill="#3c0b98" stroke="#3c0b98" />
