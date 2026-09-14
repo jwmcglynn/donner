@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <limits>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -627,11 +628,76 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
   return winding;
 }
 
+/// Orient an independent polygon fixture for either ray and source direction.
+std::vector<EncodedPath::Curve> OrientWindingCurves(std::vector<EncodedPath::Curve> curves,
+                                                    bool transpose, bool reverse) {
+  for (auto& curve : curves) {
+    if (transpose) {
+      std::swap(curve.p0x, curve.p0y);
+      std::swap(curve.p1x, curve.p1y);
+      std::swap(curve.p2x, curve.p2y);
+    }
+    if (reverse) {
+      std::swap(curve.p0x, curve.p2x);
+      std::swap(curve.p0y, curve.p2y);
+    }
+  }
+  return curves;
+}
+
+/// Format the actual six-float records when a winding assertion fails.
+std::string DescribeWindingCurves(const std::vector<EncodedPath::Curve>& curves) {
+  std::vector<std::array<float, 6>> fields;
+  for (const auto& curve : curves) {
+    fields.push_back({curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y});
+  }
+  return testing::PrintToString(fields);
+}
+
 }  // namespace
 
 // The vertical (X-monotonic) band set must be populated and produce winding
 // numbers consistent with the horizontal set - winding is ray-direction-independent,
 // so a point is inside per the horizontal ray iff it is inside per the vertical ray.
+TEST(GeodePathEncoder, WindingHelpersCountSharedVerticesOnce) {
+  const std::vector<EncodedPath::Curve> rectangle = {{-2, -2, 0, -2, 2, -2},
+                                                     {2, -2, 2, -1, 2, 0},
+                                                     {2, 0, 2, 1, 2, 2},
+                                                     {2, 2, 0, 2, -2, 2},
+                                                     {-2, 2, -2, 0, -2, -2}};
+  for (bool transpose : {false, true}) {
+    for (bool reverse : {false, true}) {
+      SCOPED_TRACE(transpose);
+      SCOPED_TRACE(reverse);
+      const auto curves = OrientWindingCurves(rectangle, transpose, reverse);
+      const int outside =
+          transpose ? VerticalWinding(curves, 0, -3) : HorizontalWinding(curves, -3, 0);
+      const int inside =
+          transpose ? VerticalWinding(curves, 0, 0) : HorizontalWinding(curves, 0, 0);
+      EXPECT_EQ(outside, 0);
+      EXPECT_EQ(std::abs(inside), 1);
+    }
+  }
+}
+
+TEST(GeodePathEncoder, WindingHelpersCancelAtCoordinateExtrema) {
+  const std::vector<EncodedPath::Curve> diamond = {
+      {0, -2, 1, -1, 2, 0}, {2, 0, 1, 1, 0, 2}, {0, 2, -1, 1, -2, 0}, {-2, 0, -1, -1, 0, -2}};
+  for (bool transpose : {false, true}) {
+    for (bool reverse : {false, true}) {
+      SCOPED_TRACE(transpose);
+      SCOPED_TRACE(reverse);
+      const auto curves = OrientWindingCurves(diamond, transpose, reverse);
+      for (double extremum : {-2.0, 2.0}) {
+        SCOPED_TRACE(extremum);
+        const int winding = transpose ? VerticalWinding(curves, extremum, -3)
+                                      : HorizontalWinding(curves, -3, extremum);
+        EXPECT_EQ(winding, 0);
+      }
+    }
+  }
+}
+
 TEST(GeodePathEncoder, CapSeamsCancelButGenuineCapBoundariesRemain) {
   const Path line = PathBuilder().moveTo({0, 0}).lineTo({20, 0}).build();
   for (LineCap cap : {LineCap::Butt, LineCap::Square, LineCap::Round}) {
@@ -647,7 +713,9 @@ TEST(GeodePathEncoder, CapSeamsCancelButGenuineCapBoundariesRemain) {
     EXPECT_THAT(hasVerticalEdge(0), testing::Eq(cap == LineCap::Butt));
     EXPECT_THAT(hasVerticalEdge(20), testing::Eq(cap == LineCap::Butt));
     EXPECT_THAT(HorizontalWinding(encoded.curves, -2, 0) != 0, testing::Eq(cap != LineCap::Butt));
-    EXPECT_THAT(HorizontalWinding(encoded.curves, -4, 0), testing::Eq(0));
+    EXPECT_THAT(HorizontalWinding(encoded.curves, -4, 0), testing::Eq(0))
+        << "Horizontal curves (p0x, p0y, p1x, p1y, p2x, p2y): "
+        << DescribeWindingCurves(encoded.curves);
     EXPECT_THAT(VerticalWinding(encoded.vCurves, 10, 0) != 0, testing::IsTrue());
   }
 }
