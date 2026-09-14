@@ -28,7 +28,7 @@ TEST(FilterBlendParity, HueAndSaturationPreserveMiddleChannel) {
   };
   constexpr std::array cases{Case{"hue", {168, 104, 40, 255}},
                              Case{"saturation", {64, 128, 192, 255}}};
-  static const auto device = geode::GeodeDevice::CreateHeadless();
+  static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.mode);
