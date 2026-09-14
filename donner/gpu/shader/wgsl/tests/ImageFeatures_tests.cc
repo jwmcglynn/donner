@@ -8,6 +8,20 @@
 namespace donner::gpu::shader::wgsl {
 namespace {
 
+TEST(WgslImageFeatures, ConstructsFlatStructuresAndZeroValues) {
+  const auto parsed = Parse(R"(
+struct Color { rg:vec2f, b:f32, a:f32, }
+struct Scalar { value:f32, }
+fn f(v:vec4f)->vec4f {
+  let c=Color(v.xy,v.z,v.w,);
+  let zero=Color();
+  let scalar=Scalar(c.a);
+  return vec4f(c.rg,c.b,scalar.value)+vec4f(zero.b);
+}
+)");
+  EXPECT_EQ(parsed.diagnostic.code, ErrorCode::None) << parsed.diagnostic.span.begin;
+}
+
 TEST(WgslImageFeatures, LocalArraysCopyAndAllowDynamicTemporaryIndexing) {
   const auto parsed = Parse(R"(
 fn f(i:u32)->f32 {
