@@ -11,6 +11,31 @@
 namespace donner::gpu::shader::wgsl {
 namespace {
 
+TEST(Language, AcceptsFloatingFloorAndSignWithScalarAndVectorShapes) {
+  for (const char* source : {
+           "fn f(x:f32)->f32 { return floor(x); }",
+           "fn f(x:f32)->f32 { return sign(x); }",
+           "fn f(x:vec2f)->vec2f { return floor(x); }",
+           "fn f(x:vec4f)->vec4f { return sign(x); }",
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
+  }
+}
+
+TEST(Language, RejectsFloorAndSignOutsideTheFloatingRuntimeProfile) {
+  for (const char* source : {
+           "fn f(x:f32)->f32 { return floor(); }",
+           "fn f(x:f32)->f32 { return sign(x,x); }",
+           "fn f(x:u32)->u32 { return sign(x); }",
+           "fn f(x:i32)->i32 { return floor(x); }",
+           "fn f(x:bool)->bool { return sign(x); }",
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::InvalidCall);
+  }
+}
+
 TEST(Language, MaterializesAbstractConstantsAndPreservesExplicitTypes) {
   constexpr auto result = Parse(R"(
 const noBand: u32 = 0xFFFFFFFFu;
