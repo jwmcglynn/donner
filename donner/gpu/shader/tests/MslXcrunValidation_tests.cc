@@ -38,6 +38,7 @@
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
@@ -183,7 +184,7 @@ TEST(MslXcrunValidation, EmittedCheckerboardCompilesWithMetalCompiler) {
 
 TEST(MslXcrunValidation, FinalFilterResolveCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildFilterResolveModule(), "filter_resolve");
+  ExpectCompilesWithMetalCompiler(tests::FilterResolveAllProjections().msl, "filter_resolve");
 }
 TEST(MslXcrunValidation, EmittedCompositeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());

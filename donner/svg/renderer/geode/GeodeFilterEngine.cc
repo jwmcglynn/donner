@@ -29,7 +29,6 @@
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/generated/FilterColorMatrixShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
-#include "donner/gpu/shader/generated/FilterResolveShader.h"
 #include "donner/gpu/shader/generated/FloodShader.h"
 #include "donner/gpu/shader/generated/MergeShader.h"
 #include "donner/gpu/shader/generated/MorphologyShader.h"
@@ -45,6 +44,7 @@
 #include "donner/gpu/shader/programs/DropShadowBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FilterImageBindings.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/LightingBindings.h"
@@ -937,20 +937,7 @@ struct TileParams {
 
 /// Uniform buffer layout mirroring the shader program's `SubregionClipParams` struct: the inverse
 /// transform that maps a pixel center back to user space, then the user-space rectangle to keep.
-struct SubregionClipParams {
-  float invA;     //!< Pixel-x coefficient of the user-space x.
-  float invB;     //!< Pixel-x coefficient of the user-space y.
-  float invC;     //!< Pixel-y coefficient of the user-space x.
-  float invD;     //!< Pixel-y coefficient of the user-space y.
-  float invE;     //!< Constant term of the user-space x.
-  float invF;     //!< Constant term of the user-space y.
-  float userX0;   //!< Low x edge, inclusive.
-  float userY0;   //!< Low y edge, inclusive.
-  float userX1;   //!< High x edge, exclusive.
-  float userY1;   //!< High y edge, exclusive.
-  uint32_t pad0;  //!< Trailing word the program declares; the two sizes must agree.
-  uint32_t pad1;  //!< Trailing word the program declares; the two sizes must agree.
-};
+using SubregionClipParams = gpu::shader::programs::FilterResolveParams;
 
 /// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
 /// Uniform buffer layout mirroring the shader program's `ColorSpaceConvertParams` struct.
@@ -1192,6 +1179,10 @@ RuntimeComputeProgram CreateReflectedFilterProgram(gpu::Device& runtime,
       runtime, gpu::shader::MakeShaderDescriptor(shader, runtime.shaderSourceKind(), label),
       gpu::shader::MakeBindingLayout(shader));
   result.inputOutputParameterBindings = {input->binding, output->binding, params->binding};
+  if (const auto* table = shader.resource("transferTable")) {
+    if (table->type != gpu::BindingType::ReadOnlyStorageBuffer) return {};
+    result.transferTableBinding = table->binding;
+  }
   result.useReflectedInputOutputMetadata = true;
   return result;
 }
@@ -1245,6 +1236,10 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
+  if (program.useReflectedInputOutputMetadata &&
+      (transferTable != nullptr) != program.transferTableBinding.has_value())
+    return false;
+
   const gpu::Texture* source = arena.importRuntimeTexture(input);
   if (source == nullptr) {
     return false;
@@ -1266,8 +1261,9 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   entries[2] = {program.useReflectedInputOutputMetadata ? bindings[2] : 2,
                 gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}};
   if (transferTable != nullptr) {
-    entries[3] = {3, gpu::BufferBinding{*transferTable, 0,
-                                        sizeof(gpu::shader::programs::ColorTransferSamples())}};
+    entries[3] = {program.useReflectedInputOutputMetadata ? *program.transferTableBinding : 3,
+                  gpu::BufferBinding{*transferTable, 0,
+                                     sizeof(gpu::shader::programs::ColorTransferSamples())}};
   }
   const gpu::BindGroup* bindGroup =
       arena.createRuntimeBindGroup(program.bindGroupLayout, std::move(entries), RcString(label));
@@ -1753,14 +1749,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
          StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture)),
          UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))});
-    filterResolveProgram_ = CreateRuntimeComputeProgram(
-        device_.adapterDevice(),
-        gpu::generated::filter_resolve::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
-        {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
-         StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture),
-                            gpu::TextureFormat::RGBA8Unorm),
-         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params)),
-         {3, gpu::ShaderStage::Compute, gpu::BindingType::ReadOnlyStorageBuffer}});
+    filterResolveProgram_ = CreateReflectedFilterProgram(
+        device_.adapterDevice(), gpu::shader::programs::FilterResolveShader(), "FilterResolve");
   }
 
   // --- sRGB to linear color space conversion pipeline, through the GPU runtime ---
@@ -1776,6 +1766,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
          {static_cast<uint32_t>(ColorSpaceConvertBinding::TransferTable), gpu::ShaderStage::Compute,
           gpu::BindingType::ReadOnlyStorageBuffer}});
     const auto& samples = gpu::shader::programs::ColorTransferSamples();
+    static_assert(sizeof(samples) ==
+                  gpu::shader::programs::kFilterResolveTransferCount * sizeof(float));
     auto table = device_.adapterDevice().createBuffer(
         {"FilterColorTransferTable", sizeof(samples),
          gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});

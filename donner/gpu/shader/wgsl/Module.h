@@ -35,6 +35,7 @@ struct NameRef {
 /// Storage format accepted by the frontend profile.
 enum class StorageTextureFormat : uint8_t {
   Rgba32Float,  //!< `rgba32float`.
+  Rgba8Unorm,   //!< `rgba8unorm`.
 };
 
 /// Kind of a resolved WGSL value type.
@@ -68,6 +69,12 @@ struct Type {
 
   /// Returns the scalar/vector/structure element type of an array.
   constexpr Type elementType() const { return Type{elementKind, elementLanes, structId}; }
+
+  /// Returns whether a storage texture's format belongs to this compiler profile.
+  constexpr bool hasSupportedStorageFormat() const {
+    return storageFormat == StorageTextureFormat::Rgba32Float ||
+           storageFormat == StorageTextureFormat::Rgba8Unorm;
+  }
 
   /// Returns true for identical resolved types.
   constexpr bool operator==(const Type& other) const = default;
@@ -312,7 +319,7 @@ struct ModuleLimits {
   static constexpr uint16_t kMaxIdentifierBytes = 8192;
   static constexpr uint16_t kMaxStructs = 8;
   static constexpr uint16_t kMaxStructMembers = 64;
-  static constexpr uint16_t kMaxArrayElements = 256;
+  static constexpr uint16_t kMaxArrayElements = 8192;
   static constexpr uint16_t kMaxBindings = 16;
   static constexpr uint16_t kMaxSymbols = 512;
   static constexpr uint16_t kMaxExpressions = 2048;

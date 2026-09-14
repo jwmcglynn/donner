@@ -363,6 +363,7 @@ donner_cc_library(
         "//donner/gpu/shader:drop_shadow_artifact",
         "//donner/gpu/shader:filter_color_matrix_artifact",
         "//donner/gpu/shader:filter_image_artifact",
+        "//donner/gpu/shader:filter_resolve_api",
         "//donner/gpu/shader:filter_resolve_artifact",
         "//donner/gpu/shader:flood_artifact",
         "//donner/gpu/shader:gaussian_blur_api",

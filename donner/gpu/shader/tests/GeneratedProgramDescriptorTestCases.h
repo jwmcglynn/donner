@@ -13,7 +13,6 @@
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/generated/FilterColorMatrixShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
-#include "donner/gpu/shader/generated/FilterResolveShader.h"
 #include "donner/gpu/shader/generated/FloodShader.h"
 #include "donner/gpu/shader/generated/MergeShader.h"
 #include "donner/gpu/shader/generated/MorphologyShader.h"
@@ -30,6 +29,7 @@
 #include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Lighting.h"
@@ -75,8 +75,11 @@ inline const Program kPrograms[] = {
     {"composite", programs::BuildCompositeModule, generated::composite::BuildDescriptor, false},
     {"morphology", programs::BuildMorphologyModule, generated::morphology::BuildDescriptor, false},
     {"tile", programs::BuildTileModule, generated::tile::BuildDescriptor, false},
-    {"filter_resolve", programs::BuildFilterResolveModule,
-     generated::filter_resolve::BuildDescriptor, false},
+    {"filter_resolve", nullptr,
+     [](ShaderSourceKind kind) {
+       return MakeShaderDescriptor(programs::FilterResolveShader(), kind, "FilterResolve");
+     },
+     false, programs::FilterResolveShader},
     {"component_transfer", programs::BuildComponentTransferModule,
      generated::component_transfer::BuildDescriptor, true},
     {"displacement_map", programs::BuildDisplacementMapModule,

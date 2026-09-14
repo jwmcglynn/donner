@@ -30,6 +30,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -992,23 +993,14 @@ std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
   wgpu::Buffer readback = device.createBuffer(readbackDesc);
 
   wgpu::CommandEncoder encoder = device.createCommandEncoder();
-  const auto resolveModule = programs::BuildFilterResolveModule();
-  if (resolveModule.hasError()) {
-    ADD_FAILURE() << resolveModule.error();
-    return {};
-  }
-  const auto resolveWgsl = EmitWgsl(resolveModule.result());
-  if (resolveWgsl.hasError()) {
-    ADD_FAILURE() << resolveWgsl.error();
-    return {};
-  }
+  const std::string resolveWgsl(programs::FilterResolveShader().wgsl);
   const float clip[12] = {
       1, 0, 0, 1, 0, 0, 0, 0, static_cast<float>(width), static_cast<float>(height), 0, 0};
   const std::span<const uint8_t> clipBytes(reinterpret_cast<const uint8_t*>(clip), sizeof(clip));
   if (!RecordInputOutputUniformProgram(device, queue, encoder, wgsl, source, intermediate, uniforms,
                                        workgroupSize, transferSamples) ||
       !RecordInputOutputUniformProgram(
-          device, queue, encoder, resolveWgsl.result(), intermediate, destination, clipBytes,
+          device, queue, encoder, resolveWgsl, intermediate, destination, clipBytes,
           programs::kSubregionClipWorkgroupSize, programs::ColorTransferSamples())) {
     return {};
   }
@@ -1574,10 +1566,12 @@ void ExpectColorTransferBoundaries(bool resolve) {
   }
   auto geode = donner::geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(geode, testing::NotNull());
-  const auto module =
-      resolve ? programs::BuildFilterResolveModule() : programs::BuildColorSpaceConvertModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
+  const auto wgsl = [&]() -> ShaderResult<std::string> {
+    if (resolve) return std::string(programs::FilterResolveShader().wgsl);
+    const auto module = programs::BuildColorSpaceConvertModule();
+    if (module.hasError()) return module.error();
+    return EmitWgsl(module.result());
+  }();
   ASSERT_THAT(wgsl, HasShaderResult());
   const auto& device = geode->device();
   const auto& queue = geode->queue();

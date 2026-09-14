@@ -70,6 +70,7 @@ struct RuntimeComputeProgram {
   gpu::WorkgroupSize workgroupSize;      //!< Dispatch dimensions declared by the entry point.
   std::array<uint32_t, 3> inputOutputParameterBindings = {0, 1, 2};
   //!< Input texture, output texture, and uniform resource bindings.
+  std::optional<uint32_t> transferTableBinding;  //!< Optional reflected lookup-table binding.
   bool useReflectedInputOutputMetadata = false;  //!< Selects the reflected dispatch contract.
 };
 

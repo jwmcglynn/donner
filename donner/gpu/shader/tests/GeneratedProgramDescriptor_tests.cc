@@ -30,14 +30,22 @@ TEST_P(GeneratedProgramDescriptorTests, PreservesSourceAndCompleteInterface) {
     const auto descriptor = GetParam().buildDescriptor(ShaderSourceKind::Wgsl);
     EXPECT_THAT(descriptor.sourceText, testing::Eq(shader.wgsl));
     ASSERT_THAT(descriptor.bufferBindings, testing::Optional(testing::_));
-    ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(1));
-    const auto& binding = descriptor.bufferBindings->front();
-    EXPECT_THAT(binding.entryPoint, testing::Eq(shader.entryPoints.front().name.view()));
-    EXPECT_THAT(binding.stage, testing::Eq(ShaderStage::Compute));
-    EXPECT_THAT(binding.group, testing::Eq(0));
-    EXPECT_THAT(binding.binding, testing::Eq(shader.resource("params")->binding));
-    EXPECT_THAT(binding.type, testing::Eq(shader.resource("params")->type));
-    EXPECT_THAT(binding.minSizeBytes, testing::Eq(shader.resource("params")->minSizeBytes));
+    std::vector<const ShaderResource*> buffers;
+    for (const auto& resource : shader.resources) {
+      if (resource.type == BindingType::UniformBuffer ||
+          resource.type == BindingType::ReadOnlyStorageBuffer)
+        buffers.push_back(&resource);
+    }
+    ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(buffers.size()));
+    for (size_t i = 0; i < buffers.size(); ++i) {
+      const auto& binding = descriptor.bufferBindings->at(i);
+      EXPECT_EQ(binding.entryPoint, shader.entryPoints.front().name.view());
+      EXPECT_EQ(binding.stage, ShaderStage::Compute);
+      EXPECT_EQ(binding.group, buffers[i]->group);
+      EXPECT_EQ(binding.binding, buffers[i]->binding);
+      EXPECT_EQ(binding.type, buffers[i]->type);
+      EXPECT_EQ(binding.minSizeBytes, buffers[i]->minSizeBytes);
+    }
     ASSERT_THAT(descriptor.computeEntryPoints, testing::SizeIs(1));
     EXPECT_THAT(descriptor.computeEntryPoints.front().name,
                 testing::Eq(shader.entryPoints.front().name.view()));

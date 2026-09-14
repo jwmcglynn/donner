@@ -436,6 +436,10 @@ donner_cc_test(
         ":displacement_map_artifact",
         ":drop_shadow_artifact",
         ":filter_image_artifact",
+        ":filter_resolve_api",
+        ":filter_resolve_artifact",
+        ":filter_resolve_source",
+        ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
@@ -513,6 +517,7 @@ donner_cc_test(
     deps = [
         ":convolve_matrix_test_artifact",
         ":external_tool_gate",
+        ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
         ":msl_emitter",
@@ -542,6 +547,7 @@ donner_cc_test(
     data = ["@spirv_tools//:spirv-val"],
     deps = [
         ":convolve_matrix_test_artifact",
+        ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
         ":offset_test_artifact",
@@ -572,6 +578,9 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":filter_resolve_api",
+        ":filter_resolve_artifact",
+        ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
@@ -909,19 +918,63 @@ donner_cc_library(
     deps = ["//donner/gpu:descriptors"],
 )
 
-genrule(
-    name = "filter_resolve_generated",
-    outs = ["generated/FilterResolveShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_resolve " +
-          "$(location generated/FilterResolveShader.h) --wgsl-descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+donner_cc_library(
+    name = "filter_resolve_api",
+    hdrs = ["programs/FilterResolve.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "filter_resolve_source",
+    hdrs = ["programs/FilterResolveSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "filter_resolve_validation",
+    hdrs = ["programs/FilterResolveArtifactValidation.h"],
+    deps = [":filter_resolve_api"],
 )
 
 donner_cc_library(
     name = "filter_resolve_artifact",
-    hdrs = ["generated/FilterResolveShader.h"],
+    srcs = ["programs/FilterResolve.cc"],
     visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
+    deps = [
+        ":filter_resolve_api",
+        ":filter_resolve_source",
+        ":filter_resolve_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_resolve_native_artifact",
+    srcs = ["programs/FilterResolveNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_resolve_api",
+        ":filter_resolve_source",
+        ":filter_resolve_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_resolve_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledFilterResolve.cc"],
+    hdrs = ["tests/CompiledFilterResolve.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":filter_resolve_source",
+    ],
 )
 
 donner_cc_library(
@@ -939,6 +992,7 @@ donner_cc_library(
         ":drop_shadow_artifact",
         ":filter_color_matrix_artifact",
         ":filter_image_artifact",
+        ":filter_resolve_api",
         ":filter_resolve_artifact",
         ":flood_artifact",
         ":gaussian_blur_api",

@@ -241,7 +241,10 @@ private:
       case TypeKind::Array: error_ = TextEmitError::UnsupportedType; return;
       case TypeKind::Sampler: text("sampler"); return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
-      case TypeKind::StorageTexture2d: text("texture2d<float, access::write>"); return;
+      case TypeKind::StorageTexture2d:
+        if (!value.hasSupportedStorageFormat()) error_ = TextEmitError::UnsupportedType;
+        text("texture2d<float, access::write>");
+        return;
       default: emitScalarType(value); return;
     }
   }

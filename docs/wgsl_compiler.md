@@ -1,6 +1,6 @@
 # WGSL shader compilation {#WgslCompiler}
 
-Gaussian/box blur, matrix convolution, Slug mask and offset are authored as inline WGSL in
+Gaussian/box blur, matrix convolution, Slug mask, offset and filter resolve are authored as inline WGSL in
 `donner/gpu/shader/programs/*Source.h`. The C++20 compiler validates each source, produces immutable
 shader projections and derives its resource interface during constant evaluation. Each artifact
 implementation checks the shared host parameter layout. Application code consumes frozen data
@@ -42,7 +42,7 @@ Native GPU tools still perform their normal final compilation.
 
 `MakeShaderDescriptor` selects precompiled bytes for the device and supplies compute-entry and
 buffer-range metadata. `MakeBindingLayout` derives layout entries and stage visibility from the same resource
-records. Gaussian, convolution and offset dispatch resolve their input, output and parameter bindings by
+records. Gaussian, convolution, offset and filter-resolve dispatch resolve their input, output and parameter bindings by
 their authored names; changing a binding number changes the layout and resource entries together.
 
 `GaussianBlurParams` is the host parameter type. Its implementation checks the resource's total
@@ -67,7 +67,7 @@ textures; texture writes occur in the compute entry. Mutable local declarations 
 calls are outside this profile and fail explicitly. Offset retains its half-away-from-zero
 rounding helper; replacing it with WGSL `round` changes exact half-pixel shifts.
 
-Unsupported language constructs fail explicitly. Fixed arrays have 1 through 256 elements; local, parameter, return and nested arrays are outside
+Unsupported language constructs fail explicitly. Fixed arrays have 1 through 8,192 elements, with integer constant-expression extents; local, parameter, return and nested arrays are outside
 this profile. Constant out-of-range indices
 fail compilation. Native dynamic indices are clamped before memory access; authored convolution
 also clamps its coefficient index explicitly for consistent WebGPU execution. Buffer layouts that
@@ -76,7 +76,10 @@ member offsets.
 
 `ModuleLimits` bounds source bytes, tokens, identifier storage, structures, bindings, symbols,
 expressions, statements, functions and nesting. Projection sinks have independent output bounds.
-An error invalidates the complete result; a truncated output is never a usable shader.
+An error invalidates the complete result; a truncated output is never a usable shader. Array
+extents accept literals, named constants and arithmetic; runtime values and out-of-range extents
+are rejected before layout. Larger buffer arrays are represented by their type/stride, without
+allocating one compiler expression per element.
 
 The parser's loop restriction is a syntax/profile constraint, not a proof that arbitrary runtime
 parameters terminate. Gaussian's filter-admission path supplies its documented finite sigma and
@@ -85,6 +88,12 @@ box-extent bounds. Shader compilation does not make arbitrary GPU execution safe
 MSL/SPIR-V lowering preserves short-circuit operators, protects texture accesses, and handles
 defined integer division/remainder and numeric conversion edges. No general optimizer runs in the
 frontend. Backend compilers retain responsibility for final target code generation.
+
+Filter resolve writes `rgba8unorm` storage images; the earlier filters use `rgba32float`.
+The format is reflected into the bind layout and encoded in SPIR-V image types. Metal uses typed
+float writes to the selected texture format. The resolve shader shares a 48-byte parameter block
+and an 8,192-entry read-only transfer table with its host. Its table binding is reflected along with
+its input, output, parameters and workgroup shape.
 
 ## Graphics entry interfaces
 

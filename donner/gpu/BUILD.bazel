@@ -127,6 +127,20 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "filter_resolve_slice",
+    testonly = 1,
+    hdrs = ["tests/FilterResolveSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:filter_resolve_api",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 # The sub-rectangle texture-copy scene shared by the backend copy slices: the
 # same source pattern, destination fill, copy rectangle, origins, and expected
 # image.

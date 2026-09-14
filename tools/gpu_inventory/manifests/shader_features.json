@@ -54,6 +54,68 @@
         "ConvolveMatrixParams"
       ]
     },
+    "donner/gpu/shader/programs/FilterResolveSource.h#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "SubregionClipParams"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 3,
+          "group": 0,
+          "name": "transferTable",
+          "type": "ColorTransferTable"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "array",
+        "const",
+        "floor",
+        "if",
+        "let",
+        "min",
+        "return",
+        "saturate",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "ColorTransferTable",
+        "SubregionClipParams"
+      ]
+    },
     "donner/gpu/shader/programs/GaussianBlurSource.h#kGaussianBlurSource": {
       "bindings": [
         {
@@ -420,6 +482,63 @@
       "structs": [
         "Input"
       ]
+    },
+    "donner/gpu/shader/wgsl/tests/Language_tests.cc#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "output",
+          "type": "texture_storage_2d<rgba8unorm,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "if",
+        "let",
+        "textureDimensions",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
+    },
+    "donner/gpu/shader/wgsl/tests/Language_tests.cc#inline1": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "output",
+          "type": "texture_storage_2d<rgba8unorm,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "textureStore",
+        "var"
+      ],
+      "structs": []
     },
     "donner/gpu/shader/wgsl/tests/MatrixSource.h#inline0": {
       "bindings": [

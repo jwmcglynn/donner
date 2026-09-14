@@ -286,9 +286,15 @@ private:
   }
 
   constexpr void declareImageType(Type type, uint32_t value) {
+    if (type.kind == TypeKind::StorageTexture2d && !type.hasSupportedStorageFormat()) {
+      fail(SpirvEmitError::UnsupportedType);
+      return;
+    }
     declarations_.instruction(25, value, typeId(Type{TypeKind::F32}), 1, 0, 0, 0,
                               type.kind == TypeKind::SampledTexture2d ? 1 : 2,
-                              type.kind == TypeKind::SampledTexture2d ? 0 : 1);
+                              type.kind == TypeKind::SampledTexture2d                  ? 0
+                              : type.storageFormat == StorageTextureFormat::Rgba8Unorm ? 4
+                                                                                       : 1);
   }
 
   constexpr void declareArrayType(Type type, uint32_t value) {

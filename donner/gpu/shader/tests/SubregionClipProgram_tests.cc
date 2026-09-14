@@ -5,13 +5,16 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -51,16 +54,33 @@ TEST(SubregionClipProgramTests, ModuleBuildsCleanly) {
 }
 
 TEST(SubregionClipProgramTests, FinalResolveBuildsAndRoundsClampedChannelsHalfUp) {
-  const auto module = programs::BuildFilterResolveModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
+  const ShaderResult<std::string> wgsl{std::string(programs::FilterResolveShader().wgsl)};
   EXPECT_THAT(wgsl.result(), HasSubstr("texture_storage_2d<rgba8unorm, write>"));
   EXPECT_THAT(wgsl.result(), HasSubstr("floor("));
   EXPECT_THAT(wgsl.result(), HasSubstr("vec4<f32>(0.5f)"));
   EXPECT_THAT(wgsl.result(), HasSubstr("if (outside)"));
   EXPECT_THAT(wgsl.result(), HasSubstr("linear_channel_to_srgb"));
   EXPECT_THAT(wgsl.result(), HasSubstr("transferTable"));
+}
+
+TEST(SubregionClipProgramTests, ResolveReflectsFormatLargeTableAndChangedBindings) {
+  const auto& shader = tests::FilterResolveMutatedAllProjections();
+  const auto* output = shader.resource("outputTexture");
+  const auto* table = shader.resource("transferTable");
+  const auto* params = shader.resource("params");
+  ASSERT_NE(output, nullptr);
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(params, nullptr);
+  EXPECT_EQ(output->storageFormat, TextureFormat::RGBA8Unorm);
+  EXPECT_EQ(table->binding, 6u);
+  EXPECT_EQ(params->binding, 7u);
+  EXPECT_EQ(table->minSizeBytes, 8192u * sizeof(float));
+  EXPECT_TRUE(shader.matchesMember("transferTable", "samples", 0, 8192u * sizeof(float),
+                                   ShaderScalarType::F32, 1, 8192, sizeof(float)));
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  const auto layout = MakeBindingLayout(shader);
+  ASSERT_THAT(layout, testing::SizeIs(4));
+  EXPECT_EQ(layout[1].storageTextureFormat, TextureFormat::RGBA8Unorm);
 }
 
 TEST(SubregionClipProgramTests, EmitsDeterministically) {

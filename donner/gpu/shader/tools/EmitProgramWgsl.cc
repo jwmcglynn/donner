@@ -74,7 +74,6 @@ constexpr ProgramEntry kPrograms[] = {
     {"turbulence", 1, &programs::BuildTurbulenceModule},
     {"snapshot_unpremultiply", 1, &programs::BuildSnapshotUnpremultiplyModule},
     {"subregion_clip", 1, &programs::BuildSubregionClipModule},
-    {"filter_resolve", 1, &programs::BuildFilterResolveModule},
 };
 
 /// Writes \p contents to \p path, returning false with a diagnostic on failure.

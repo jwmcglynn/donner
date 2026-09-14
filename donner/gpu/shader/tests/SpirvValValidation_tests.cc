@@ -40,6 +40,7 @@
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
@@ -213,8 +214,8 @@ TEST(SpirvValValidation, EmittedCheckerboardPassesVulkan11Validation) {
 }
 
 TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
-  ExpectValidatesForVulkan11(SpirvVal(), programs::BuildFilterResolveModule(),
-                             "filter_resolve.spv");
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::FilterResolveAllProjections().spirv,
+                                 "filter_resolve.spv");
 }
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
   ExpectValidatesForVulkan11(SpirvVal(), programs::BuildCompositeModule(), "composite.spv");

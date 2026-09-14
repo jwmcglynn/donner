@@ -770,11 +770,24 @@ private:
     return {};
   }
 
+  constexpr uint32_t ParseArrayCount() {
+    // Arithmetic precedence leaves the enclosing type's closing angle bracket unconsumed.
+    ExpressionInfo count = ParseExpression(BinaryPrecedence(TokenKind::Plus));
+    count = Materialize(count, Type{TypeKind::U32});
+    uint32_t value = 0;
+    if (ConstU32Value(count.id, &value)) return value;
+    int32_t signedValue = 0;
+    if (ConstI32Value(count.id, &signedValue) && signedValue >= 0)
+      return static_cast<uint32_t>(signedValue);
+    Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(count.id).span);
+    return 0;
+  }
+
   constexpr Type ParseArrayType(Token name) {
     Expect(TokenKind::Less);
     const Type element = ParseType();
     const bool fixed = Match(TokenKind::Comma);
-    const uint32_t count = fixed ? ParseUnsignedNumber() : 0;
+    const uint32_t count = fixed ? ParseArrayCount() : 0;
     Expect(TokenKind::Greater);
     const bool elementValid = element.isNumeric() || (element.kind == TypeKind::Struct &&
                                                       !StructHasArray(element.structId));
@@ -805,9 +818,13 @@ private:
     Expect(TokenKind::Comma);
     const Token access = ExpectIdentifier();
     Expect(TokenKind::Greater);
-    if (format.text != "rgba32float" || access.text != "write")
+    Type type{TypeKind::StorageTexture2d};
+    if (format.text == "rgba8unorm")
+      type.storageFormat = StorageTextureFormat::Rgba8Unorm;
+    else if (format.text != "rgba32float")
       Fail(ErrorCode::UnknownType, format.span);
-    return Type{TypeKind::StorageTexture2d};
+    if (access.text != "write") Fail(ErrorCode::UnknownType, access.span);
+    return type;
   }
 
   constexpr bool IsVectorTypeName(Token name) const {
@@ -1480,7 +1497,7 @@ private:
         module_.functions[currentFunctionId_].stage != Stage::Compute) {
       Fail(ErrorCode::UnsupportedConstruct, begin);
     }
-    if (ExpressionAt(texture.id).type != Type{TypeKind::StorageTexture2d} ||
+    if (ExpressionAt(texture.id).type.kind != TypeKind::StorageTexture2d ||
         ExpressionAt(coordinate.id).type != Type{TypeKind::I32, 2} ||
         ExpressionAt(value.id).type != Type{TypeKind::F32, 4}) {
       Fail(ErrorCode::InvalidCall, begin);
@@ -2080,8 +2097,8 @@ private:
   constexpr bool ValidateTextureDimensionsBuiltin(const std::array<ExpressionInfo, 4>& arguments,
                                                   uint8_t count, Type* result) const {
     const Type texture = BuiltinArgumentType(arguments, 0);
-    if (count != 1 || (texture != Type{TypeKind::SampledTexture2d} &&
-                       texture != Type{TypeKind::StorageTexture2d}))
+    if (count != 1 ||
+        (texture.kind != TypeKind::SampledTexture2d && texture.kind != TypeKind::StorageTexture2d))
       return false;
     *result = Type{TypeKind::U32, 2};
     return true;

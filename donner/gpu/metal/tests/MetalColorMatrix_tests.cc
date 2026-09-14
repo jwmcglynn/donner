@@ -31,6 +31,7 @@
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
@@ -41,6 +42,7 @@
 #include "donner/gpu/tests/DisplacementMapSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
 #include "donner/gpu/tests/FilterImageSlice.h"
+#include "donner/gpu/tests/FilterResolveSlice.h"
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/LightingSlice.h"
 #include "donner/gpu/tests/MorphologySlice.h"
@@ -429,6 +431,21 @@ TEST_F(MetalColorMatrixTest, LightingArtifactsPreserveAllLightSourcesAndFloatSto
           lightType);
     }
   }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, FilterResolveClipsTransfersAndQuantizes) {
+  for (bool convert : {false, true}) {
+    gpu::tests::CheckFilterResolveStorage(
+        *device_, shader::programs::FilterResolveNativeShader(),
+        [this](const Buffer& b) { return device_->readBackBuffer(b); }, convert);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterResolveUsesReflectedTableBindingAndWorkgroups) {
+  gpu::tests::CheckFilterResolveStorage(
+      *device_, shader::tests::FilterResolveMutatedAllProjections(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, true);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

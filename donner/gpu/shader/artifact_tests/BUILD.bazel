@@ -229,6 +229,76 @@ py_test(
 )
 
 donner_cc_binary(
+    name = "filter_resolve_wgsl_probe",
+    testonly = 1,
+    srcs = ["FilterResolveWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_resolve_api",
+        "//donner/gpu/shader:filter_resolve_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_resolve_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_resolve",
+        "--binary=$(rootpath :filter_resolve_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":filter_resolve_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_resolve_native_probe",
+    testonly = 1,
+    srcs = ["FilterResolveNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_resolve_api",
+        "//donner/gpu/shader:filter_resolve_native_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_resolve_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_resolve",
+        "--binary=$(rootpath :filter_resolve_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":filter_resolve_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_resolve_all_probe",
+    testonly = 1,
+    srcs = ["FilterResolveAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:filter_resolve_source"],
+)
+
+py_test(
+    name = "filter_resolve_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_resolve",
+        "--binary=$(rootpath :filter_resolve_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":filter_resolve_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
     name = "slug_wgsl_probe",
     testonly = 1,
     srcs = ["SlugMaskWgslProbe.cc"],

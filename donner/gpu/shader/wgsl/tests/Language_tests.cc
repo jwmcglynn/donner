@@ -75,6 +75,21 @@ TEST(Language, AcceptsRgba8StorageDimensionsAndWrites) {
   EXPECT_TRUE(parsed.hasResult()) << unsigned(parsed.diagnostic.code);
 }
 
+TEST(Language, NativeEmittersRejectUnknownStorageFormats) {
+  auto parsed = Parse(R"wgsl(
+@group(0) @binding(0) var output:texture_storage_2d<rgba8unorm,write>;
+@compute @workgroup_size(1) fn cs_main(@builtin(global_invocation_id) gid:vec3u) {
+  textureStore(output,vec2i(gid.xy),vec4f(0.5));
+}
+)wgsl");
+  ASSERT_TRUE(parsed.hasResult());
+  parsed.module.bindings[0].type.storageFormat = static_cast<StorageTextureFormat>(255);
+  TextSink text{};
+  EXPECT_EQ(EmitMsl(parsed.module, text).error, TextEmitError::UnsupportedType);
+  SpirvSink words{};
+  EXPECT_EQ(EmitSpirv(parsed.module, words).error, SpirvEmitError::UnsupportedType);
+}
+
 TEST(Language, MaterializesAbstractConstantsAndPreservesExplicitTypes) {
   constexpr auto result = Parse(R"(
 const noBand: u32 = 0xFFFFFFFFu;

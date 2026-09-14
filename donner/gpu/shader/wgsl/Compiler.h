@@ -177,6 +177,10 @@ constexpr ShaderResource ReflectResource(const Module& module, const Binding& bi
   resource.group = binding.group;
   resource.binding = binding.binding;
   resource.type = ResourceType(binding.kind);
+  if (binding.kind == BindingKind::StorageTexture)
+    resource.storageFormat = binding.type.storageFormat == StorageTextureFormat::Rgba8Unorm
+                                 ? TextureFormat::RGBA8Unorm
+                                 : TextureFormat::RGBA32Float;
   if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage)
     ReflectBufferLayout(module, binding.type, resource);
   return resource;
