@@ -71,8 +71,9 @@ calls are outside this profile and fail explicitly. Offset retains its half-away
 rounding helper; replacing it with WGSL `round` changes exact half-pixel shifts.
 
 Unsupported language constructs fail explicitly. Fixed arrays have 1 through 8,192 elements, with integer constant-expression extents; fixed numeric local arrays support zero construction, up to eight explicit constructor arguments,
-whole local copies and indexed writes. Array parameters, array returns, nested arrays and whole
-buffer-array copies remain outside this profile. Constant out-of-range indices
+whole local copies and indexed writes. Fixed numeric arrays can also be copied from buffers into
+local values. Direct array parameters, array returns, nested arrays and fixed arrays of structures
+remain outside this profile. Constant out-of-range indices
 fail compilation. Native dynamic indices are clamped before memory access; authored convolution
 also clamps its coefficient index explicitly for consistent WebGPU execution. Buffer layouts that
 MSL cannot represent, including unsupported vec3 packing, fail projection instead of changing
@@ -108,11 +109,13 @@ the actual entry name and stage. The blur and convolution consumers explicitly r
 entry before reading dispatch metadata.
 
 Vertex and fragment entries accept direct scalar/vector interfaces or flat numeric IO structures.
-The supported builtins are vertex index, vertex-output/fragment-input position and compute global
-invocation ID. User locations currently support f32 scalars/vectors with default interpolation;
-integer interpolation and structured compute inputs remain explicitly unsupported. Duplicate
+The supported builtins are vertex index, instance index, vertex-output/fragment-input position and
+compute global invocation ID. User locations support f32 scalars/vectors with default interpolation
+and scalar/vector integer interstage values with explicit flat interpolation. Structured compute
+inputs and optional interpolation sampling modes remain outside this profile. Duplicate
 locations/builtins, missing decorations, invalid stage/type combinations and vertex entries without
-position are rejected. Flat structure values may be passed to and returned from helpers.
+position are rejected. Bounded nested structure values, including fixed numeric array members, may
+be passed to and returned from helpers.
 
 MSL projects entry interfaces through stage-specific wrappers over ordinary value structures.
 SPIR-V declares stage IO variables and reconstructs parameters and return values from the same
@@ -190,7 +193,7 @@ edges, binary coverage, nested clip values, both winding rules, and deliberately
 buffer ranges than the underlying allocations. They use the existing strict bitmap comparator.
 These cases are the execution gate for the mask, not a claim that every supported platform has
 already passed. The adapter pipeline reads entry names and binding slots from the frozen interface.
-The Slug and image-blit targets' positive Clang evaluator budgets is emitted in CMake only for Clang/AppleClang;
+The Slug and image-blit targets' positive Clang evaluator budgets are emitted in CMake only for Clang/AppleClang;
 other compilers retain their own evaluator defaults.
 
 ## Image sampling and local control flow
