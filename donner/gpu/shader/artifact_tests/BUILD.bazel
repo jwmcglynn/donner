@@ -158,4 +158,75 @@ py_test(
     target_compatible_with = _NATIVE,
 )
 
+donner_cc_binary(
+    name = "slug_wgsl_probe",
+    testonly = 1,
+    srcs = ["SlugMaskWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
+    ],
+)
+
+py_test(
+    name = "slug_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug",
+        "--binary=$(rootpath :slug_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":slug_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "slug_native_probe",
+    testonly = 1,
+    srcs = ["SlugMaskNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_native_artifact",
+    ],
+)
+
+py_test(
+    name = "slug_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug",
+        "--binary=$(rootpath :slug_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":slug_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "slug_all_probe",
+    testonly = 1,
+    srcs = ["SlugMaskAllProbe.cc"],
+    copts = ["-fconstexpr-steps=2097152"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:slug_mask_source"],
+)
+
+py_test(
+    name = "slug_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug",
+        "--binary=$(rootpath :slug_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":slug_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
 donner_package()

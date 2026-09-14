@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks selected and excluded Gaussian shader payloads in a linked executable."""
+"""Checks selected and excluded shader payloads in a linked executable."""
 
 import argparse
 import pathlib
@@ -12,6 +12,7 @@ SPIRV_HEADER = b"\x03\x02\x23\x07\x00\x03\x01\x00\x00\x00\x00\x00"
 PAYLOAD_MARKERS = {
     "gaussian": (b"struct BlurParams", b"donner_msl_member_stdDeviation"),
     "convolve": (b"struct ConvolveMatrixParams", b"donner_msl_member_coefficients"),
+    "slug": (b"fn effective_bounding_vertex(", b"donner_msl_member_boundingVertexCount"),
 }
 
 
