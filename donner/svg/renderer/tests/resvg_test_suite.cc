@@ -764,11 +764,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"on-tspan.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-paint-order-on-tspan.png")
-                     .withReason("Preserve cross-span kerning across a paint-only tspan boundary")
-                     .withGeodeGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/geode/"
-                         "painting_paint-order_on-tspan.png",
-                         "Exact Geode analytic text-edge oracle for the same shaped glyph run")},
+                     .withReason("Preserve cross-span kerning across a paint-only tspan boundary")},
                 {"on-text.svg",
                  Params{}.withGeodeGoldenOverride(
                      "donner/svg/renderer/testdata/golden/geode/"

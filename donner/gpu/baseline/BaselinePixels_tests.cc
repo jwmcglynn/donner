@@ -211,6 +211,16 @@ TEST_P(FrozenPixelBaselineTest, MatchesFrozenCapture) {
       ToBitmap(std::move(pixels)),
       std::string(kBaselinesRunfileDir) + "/" + slug_ + "/" + sceneName + ".png",
       "frozen_baseline_" + slug_ + "_" + sceneName, editor::tests::PixelmatchIdentityParams());
+
+  if (HasFailure()) {
+    // Preserve one complete adapter capture so CI failures include fresh provenance and PNGs.
+    static const std::string captureError = [&] {
+      std::filesystem::path written;
+      return WriteFrozenBaselineSet(*capturer_, UndeclaredOutputDir() / "current_capture",
+                                    "unknown", "unknown", &written);
+    }();
+    EXPECT_THAT(captureError, testing::IsEmpty());
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(Corpus, FrozenPixelBaselineTest,

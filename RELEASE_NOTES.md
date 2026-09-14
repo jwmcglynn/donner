@@ -63,6 +63,13 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
 - **Layers thumbnails render through Donner** — layer previews are rasterized by the Donner renderer
   and blitted as textures, replacing the prior hand-drawn ImGui silhouette so previews match real
   render output.
+- **Stroke outlines are NonZero unions** — `Path::strokeToFill` now returns a union of overlapping,
+  positive-winding pieces that must be filled with `FillRule::NonZero`, which closes the coverage
+  gaps where a stroke overlapped itself (thin crossbars, narrow closed paths, fractional-offset
+  dashes). It fails closed to an empty path when the outline cannot be represented, either because
+  the aggregate point budget is exhausted or because a piece's corner products overflow a double;
+  `PathBuilder::rejectRemainingCommands` is the new public hook producers use to request that
+  result.
 
 ### Removed
 

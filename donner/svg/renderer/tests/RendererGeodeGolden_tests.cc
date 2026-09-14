@@ -232,15 +232,8 @@ TEST_F(RendererGeodeGoldenTests, Polygon) {
 
 /// Quadratic Bézier annotation figure - fills and strokes on quad-curve paths.
 TEST_F(RendererGeodeGoldenTests, QuadBezier) {
-  // Per-backend golden: Geode's analytic dual-ray Slug coverage (0041) renders
-  // the curved stroke's edges with a ~1px-finer band than tiny-skia's
-  // finite-sample scan-converter along the full length of the Bézier, so the
-  // shared `golden/quadbezier1.png` stays the tiny-skia reference for the CPU
-  // suite and Geode pins its own golden here. The long control-hull lines make
-  // the cross-driver edge fringe span ~380 sub-pixel pixels on llvmpipe (all
-  // <=25/255), so use the suite's standard threshold rather than strict-0.
   compareWithGeodeGolden("donner/svg/renderer/testdata/quadbezier1.svg",
-                         "donner/svg/renderer/testdata/golden/geode/quadbezier1.png",
+                         "donner/svg/renderer/testdata/golden/quadbezier1.png",
                          crossDriverGeodeParams());
 }
 
