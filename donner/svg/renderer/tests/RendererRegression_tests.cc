@@ -151,6 +151,30 @@ TEST_F(RendererRegressionTests, FontSizeAdjustDecorationMatchesExplicitDeclaring
   }
 }
 
+TEST_F(RendererRegressionTests, ZeroAdjustedDecorationDoesNotUseDescendantSize) {
+  SVGDocument decorated = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans">
+      <text x="30" y="100" font-size="64" font-size-adjust="0" text-decoration="underline">
+        <tspan font-size="20" font-size-adjust="none">Text</tspan>
+      </text>
+    </svg>
+  )",
+                                             {}, Vector2i(500, 500));
+  SVGDocument plain = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans">
+      <text x="30" y="100" font-size="20">Text</text>
+    </svg>
+  )",
+                                         {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(decorated, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(decorated, ActiveRendererBackend());
+  const auto expected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ExpectVisibleBitmap(actual, "zero_decoration_visible_text");
+  ExpectBitmapsIdentical(actual, expected, "zero_declaring_size_has_no_decoration");
+}
+
 TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"(
     <svg viewBox="0 0 200 200">

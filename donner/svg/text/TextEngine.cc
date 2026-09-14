@@ -1592,6 +1592,25 @@ void UpdateUnshapedSpanPredecessor(std::string_view text, const TextRun& run, bo
 
 }  // namespace
 
+ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2d& viewBox,
+                                             const FontMetrics& fontMetrics) const {
+  UTILS_RELEASE_ASSERT(styleOwner.registry() == &registry_);
+  const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleOwner.entity());
+  if (!style || !style->properties) return {};
+  const auto& properties = *style->properties;
+  components::ComputedTextComponent::TextSpan span;
+  span.fontFamilies = properties.fontFamily.get().value();
+  span.fontWeight = properties.fontWeight.get().value();
+  span.fontStyle = properties.fontStyle.get().value();
+  span.fontStretch = static_cast<FontStretch>(properties.fontStretch.get().value());
+  FontHandle font =
+      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.fallbackFont());
+  font = selectBackendSafeFont(*backend_, fontManager_, font);
+  const float size = CheckedFontSizePx(
+      properties.fontSize.get().value().toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
+  return {font, AdjustFontSize(*backend_, font, size, properties.fontSizeAdjust.get().value())};
+}
+
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
   // ── Resolve base font ─────────────────────────────────────────────────────────

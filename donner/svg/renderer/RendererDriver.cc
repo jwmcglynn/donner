@@ -417,7 +417,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       span.resolvedDecorationStroke = PaintServer::None();
       span.decorationFillOpacity = 1.0;
       span.decorationStrokeOpacity = 1.0;
-      span.decorationFontSizePx = 0.0f;
+      span.decorationFont.reset();
       span.decorationStrokeWidth = 0.0;
       span.decorationDeclarationCount = 0;
 
@@ -468,8 +468,10 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
           span.decorationStrokeOpacity = decoProps.strokeOpacity.get().value();
           span.decorationStrokeWidth =
               decoProps.strokeWidth.get().value().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
-          span.decorationFontSizePx = static_cast<float>(
-              decoProps.fontSize.get().value().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed));
+          if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+            span.decorationFont = textEngine->resolveUsedFont(
+                EntityHandle(registry, decorationPaintEntity), viewBox, baseFm);
+          }
         }
       }
     }

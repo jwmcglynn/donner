@@ -20,6 +20,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/Visibility.h"
+#include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {
 
@@ -189,8 +190,8 @@ struct ComputedTextComponent {
     /// CSS `stroke-opacity` resolved from the text element that provides decoration paint.
     double decorationStrokeOpacity = 1.0;
 
-    /// Font size (in pixels) from the declaring element, for computing decoration metrics.
-    float decorationFontSizePx = 0.0f;
+    /// Declaring element's resolved face and adjusted used size for decoration metrics.
+    std::optional<ResolvedTextFont> decorationFont;
 
     /// Stroke width from the declaring element, for stroking decoration lines.
     double decorationStrokeWidth = 0.0;

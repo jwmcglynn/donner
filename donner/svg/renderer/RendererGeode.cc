@@ -6975,24 +6975,26 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
 
-      const float decoFontSizePx =
-          span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
-      const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
-      const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
+      const ResolvedTextFont decorationFont =
+          span.decorationFont.value_or(ResolvedTextFont{run.font, spanFontSizePx});
+      const float decoScale =
+          textEngine.scaleForPixelHeight(decorationFont.font, decorationFont.usedSizePx);
+      const float decoEmScale =
+          textEngine.scaleForEmToPixels(decorationFont.font, decorationFont.usedSizePx);
 
-      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(decorationFont.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      if (auto ul = textEngine.underlineMetrics(run.font)) {
+      if (auto ul = textEngine.underlineMetrics(decorationFont.font)) {
         fontUnderlinePos = ul->position;
         fontUnderlineThick = ul->thickness;
       }
       double fontStrikePos = 0.0;
       double fontStrikeThick = 0.0;
-      if (auto strike = textEngine.strikeoutMetrics(run.font)) {
+      if (auto strike = textEngine.strikeoutMetrics(decorationFont.font)) {
         fontStrikePos = strike->position;
         fontStrikeThick = strike->thickness;
       }

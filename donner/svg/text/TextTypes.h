@@ -7,6 +7,12 @@
 
 namespace donner::svg {
 
+/// Resolved face and used font size for layout or declaring-element decoration metrics.
+struct ResolvedTextFont {
+  FontHandle font;
+  float usedSizePx = 0.0f;
+};
+
 /**
  * A single positioned glyph in a laid-out text run.
  *
