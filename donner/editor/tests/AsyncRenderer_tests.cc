@@ -2465,6 +2465,11 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   EXPECT_EQ(result->compositedPreview->tiles[2].kind,
             RenderResult::CompositedTile::Kind::Immediate);
   EXPECT_TRUE(std::ranges::any_of(result->compositedPreview->tiles, HasPresentationPayload));
+  if (renderer.requiresTextureSnapshotPresentation()) {
+    EXPECT_THAT(renderer.borrowTextureSnapshot(), ::testing::IsNull())
+        << "The editor presents the GPU tiles directly; an unused flattened target can exhaust "
+           "the surface budget after selecting a masked shape";
+  }
 }
 
 TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesCompositorSegment) {
