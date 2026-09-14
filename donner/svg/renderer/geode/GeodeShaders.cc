@@ -3,10 +3,10 @@
 #include <string_view>
 
 #include "donner/base/RcString.h"
+#include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
-#include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
 
@@ -71,8 +71,8 @@ gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
 }
 
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
-  return createGpuShaderFromWgsl(device, "ImageBlit", donner::embedded::kImageBlitWgsl.data(),
-                                 donner::embedded::kImageBlitWgsl.size());
+  return device.createShaderModule(gpu::shader::MakeShaderDescriptor(
+      gpu::shader::programs::ImageBlitShader(), gpu::ShaderSourceKind::Wgsl, "ImageBlit"));
 }
 
 wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {

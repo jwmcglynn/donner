@@ -139,12 +139,14 @@ constexpr ShaderBufferMember ReflectMember(const Module& module, const StructMem
           matrix ? (value.rows == 2 ? 8u : 16u) : 0u};
 }
 
-constexpr BindingType ResourceType(BindingKind kind) {
-  switch (kind) {
+constexpr BindingType ResourceType(const Binding& binding) {
+  switch (binding.kind) {
     case BindingKind::Sampler: return BindingType::FilteringSampler;
     case BindingKind::Uniform: return BindingType::UniformBuffer;
     case BindingKind::ReadOnlyStorage: return BindingType::ReadOnlyStorageBuffer;
-    case BindingKind::SampledTexture: return BindingType::SampledTexture2dUnfilterableFloat;
+    case BindingKind::SampledTexture:
+      return binding.sampled ? BindingType::SampledTexture2dFloat
+                             : BindingType::SampledTexture2dUnfilterableFloat;
     default: return BindingType::WriteOnlyStorageTexture2d;
   }
 }
@@ -176,7 +178,7 @@ constexpr ShaderResource ReflectResource(const Module& module, const Binding& bi
   resource.name = Name(module.name(binding.name));
   resource.group = binding.group;
   resource.binding = binding.binding;
-  resource.type = ResourceType(binding.kind);
+  resource.type = ResourceType(binding);
   if (binding.kind == BindingKind::StorageTexture)
     resource.storageFormat = binding.type.storageFormat == StorageTextureFormat::Rgba8Unorm
                                  ? TextureFormat::RGBA8Unorm

@@ -208,6 +208,76 @@ donner_cc_library(
 # computation per the WGSL specification's memory layout rules, deterministic
 # text serialization, and three emitters that consume the same binding and
 # layout metadata.
+donner_cc_library(
+    name = "image_blit_api",
+    hdrs = ["programs/ImageBlit.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "image_blit_source",
+    hdrs = ["programs/ImageBlitSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "image_blit_validation",
+    hdrs = ["programs/ImageBlitArtifactValidation.h"],
+    deps = [":image_blit_api"],
+)
+
+donner_cc_library(
+    name = "image_blit_artifact",
+    srcs = ["programs/ImageBlit.cc"],
+    copts = ["-fconstexpr-steps=2097152"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":image_blit_api",
+        ":image_blit_source",
+        ":image_blit_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "image_blit_native_artifact",
+    srcs = ["programs/ImageBlitNative.cc"],
+    copts = ["-fconstexpr-steps=2097152"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":image_blit_api",
+        ":image_blit_source",
+        ":image_blit_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "image_blit_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledImageBlit.cc"],
+    hdrs = ["tests/CompiledImageBlit.h"],
+    copts = ["-fconstexpr-steps=2097152"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":image_blit_api",
+        ":image_blit_source",
+        ":image_blit_validation",
+    ],
+)
+
+# The typed shader IR and each emitter have independent compilation dependencies.
+#
+# A typed immutable IR with a validating builder, host-shareable layout
+# computation per the WGSL specification's memory layout rules, deterministic
+# text serialization, and three emitters that consume the same binding and
+# layout metadata.
 
 donner_cc_library(
     name = "shader",
@@ -442,6 +512,7 @@ donner_cc_test(
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
         ":gaussian_blur_test_artifact",
+        ":image_blit_test_artifact",
         ":lighting_artifacts",
         ":module_interface",
         ":msl_emitter",
@@ -525,6 +596,7 @@ donner_cc_test(
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
+        ":image_blit_test_artifact",
         ":msl_emitter",
         ":offset_test_artifact",
         ":programs",
@@ -557,6 +629,7 @@ donner_cc_test(
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
+        ":image_blit_test_artifact",
         ":offset_test_artifact",
         ":programs",
         ":shader",
@@ -593,6 +666,7 @@ donner_cc_test(
         ":float_storage_test_module",
         ":gaussian_blur_api",
         ":gaussian_blur_artifact",
+        ":image_blit_test_artifact",
         ":offset_api",
         ":offset_artifact",
         ":programs",

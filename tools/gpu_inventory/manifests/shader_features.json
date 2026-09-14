@@ -173,6 +173,87 @@
         "BlurParams"
       ]
     },
+    "donner/gpu/shader/programs/ImageBlitSource.h#inline0": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "uniforms",
+          "type": "Uniforms"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "imageSampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 2,
+          "group": 0,
+          "name": "imageTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 3,
+          "group": 0,
+          "name": "maskTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 4,
+          "group": 0,
+          "name": "dstSnapshotTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 5,
+          "group": 0,
+          "name": "clipMaskTexture",
+          "type": "texture_2d<f32>"
+        }
+      ],
+      "builtins": [
+        "position",
+        "vertex_index"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "abs",
+        "array",
+        "clamp",
+        "floor",
+        "fract",
+        "if",
+        "let",
+        "mat4x4f",
+        "max",
+        "min",
+        "mix",
+        "return",
+        "round",
+        "select",
+        "sqrt",
+        "switch",
+        "textureDimensions",
+        "textureLoad",
+        "textureSample",
+        "var"
+      ],
+      "structs": [
+        "Uniforms",
+        "VertexOutput"
+      ]
+    },
     "donner/gpu/shader/programs/OffsetSource.h#inline0": {
       "bindings": [
         {
@@ -460,6 +541,127 @@
         "TurbulenceParams",
         "TurbulenceTables"
       ]
+    },
+    "donner/gpu/shader/tests/CompiledImageBlit.cc#inline0": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "array",
+        "break",
+        "let",
+        "return",
+        "switch",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
+    },
+    "donner/gpu/shader/tests/CompiledImageBlit.cc#inline1": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "break",
+        "continue",
+        "for",
+        "let",
+        "return",
+        "switch",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
+    },
+    "donner/gpu/shader/tests/CompiledImageBlit.cc#inline2": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "let",
+        "mix",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
     },
     "donner/gpu/shader/tests/CompiledOffset.cc#inline0": {
       "bindings": [
@@ -1191,93 +1393,6 @@
       ],
       "structs": [
         "BlendParams"
-      ]
-    },
-    "donner/svg/renderer/geode/shaders/image_blit.wgsl": {
-      "bindings": [
-        {
-          "addressSpace": "uniform",
-          "binding": 0,
-          "group": 0,
-          "name": "uniforms",
-          "type": "Uniforms"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "imageSampler",
-          "type": "sampler"
-        },
-        {
-          "binding": 2,
-          "group": 0,
-          "name": "imageTexture",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 3,
-          "group": 0,
-          "name": "maskTexture",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 4,
-          "group": 0,
-          "name": "dstSnapshotTexture",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 5,
-          "group": 0,
-          "name": "clipMaskTexture",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 6,
-          "group": 0,
-          "name": "clipMaskSampler",
-          "type": "sampler"
-        }
-      ],
-      "builtins": [
-        "position",
-        "vertex_index"
-      ],
-      "entryPoints": [
-        {
-          "name": "fs_main",
-          "stage": "fragment"
-        },
-        {
-          "name": "vs_main",
-          "stage": "vertex"
-        }
-      ],
-      "features": [
-        "abs",
-        "array",
-        "clamp",
-        "floor",
-        "fract",
-        "if",
-        "let",
-        "mat4x4f",
-        "max",
-        "min",
-        "mix",
-        "return",
-        "round",
-        "select",
-        "sqrt",
-        "switch",
-        "textureDimensions",
-        "textureLoad",
-        "textureSample",
-        "var"
-      ],
-      "structs": [
-        "Uniforms",
-        "VertexOutput"
       ]
     },
     "donner/svg/renderer/geode/shaders/slug_fill.wgsl": {

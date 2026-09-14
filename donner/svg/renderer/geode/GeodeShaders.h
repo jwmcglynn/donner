@@ -67,15 +67,8 @@ gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device);
 /**
  * Compile the image-blit shader for the given device.
  *
- * The WGSL source is embedded at build time from
- * `shaders/image_blit.wgsl` via the `embed_resources()` Bazel rule. The
- * shader expects:
- *
- * - `@group(0) @binding(0) var<uniform> uniforms: Uniforms;`
- * - `@group(0) @binding(1) var imageSampler: sampler;`
- * - `@group(0) @binding(2) var imageTexture: texture_2d<f32>;`
- *
- * and no vertex buffer - corners are generated from `@builtin(vertex_index)`.
+ * Uses the frozen WGSL artifact and its reflected resource, buffer and graphics interfaces.
+ * The shader generates its quad from the vertex index and needs no vertex buffers.
  *
  * @param device Donner GPU device (in this transition phase, the wgpu adapter).
  * @return The shader module handle, or the creation error.
@@ -89,7 +82,7 @@ gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device);
  * `shaders/filter_blend.wgsl` via the `embed_resources()` Bazel rule.
  * The shader applies one of 16 W3C Compositing 1 blend modes to two
  * premultiplied-alpha input textures, using the same blend formulas as
- * `image_blit.wgsl`.
+ * the image-blit shader.
  *
  * Bind group layout:
  * - `@group(0) @binding(0) var in1_tex: texture_2d<f32>;`

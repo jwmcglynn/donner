@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
@@ -28,26 +29,8 @@ T UnwrapOrAbort(gpu::Result<T>&& result, const char* what) {
 GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
                                        gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
-  // ----- Bind group layout -----
-  // Seven bindings: uniform buffer, sampler, sampled content texture,
-  // sampled luminance-mask texture (`<mask>`), sampled parent-snapshot
-  // texture (blend modes), sampled path-clip mask texture, clip-mask
-  // sampler. Optional textures always
-  // bind some valid view so the layout stays stable across every draw.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      gpu::BindGroupLayoutEntry{1, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      gpu::BindGroupLayoutEntry{2, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{5, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{6, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-  };
+  const auto& shader = gpu::shader::programs::ImageBlitShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ =
       UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                         gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
@@ -73,9 +56,11 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
   // No vertex buffers - the shader generates corners from vertex_index.
   pipeline_ = UnwrapOrAbort(
       adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "GeodeImageBlit", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
-          gpu::FragmentState{
-              shaderModule_, "fs_main", {gpu::ColorTargetState{colorFormat_, blend}}},
+          "GeodeImageBlit", pipelineLayout_,
+          gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
+          gpu::FragmentState{shaderModule_,
+                             RcString(shader.entryPoints[1].name.view()),
+                             {gpu::ColorTargetState{colorFormat_, blend}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeImageBlit createRenderPipeline");
 
@@ -94,12 +79,6 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
                         "GeodeImageBlitNearest", gpu::FilterMode::Nearest, gpu::FilterMode::Nearest,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitNearest createSampler");
-
-  clipMaskSampler_ =
-      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
-                        "GeodeImageBlitClipMask", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
-                        gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
-                    "GeodeImageBlitClipMask createSampler");
 }
 
 }  // namespace donner::geode

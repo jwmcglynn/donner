@@ -10,6 +10,7 @@
 
 #include "donner/gpu/shader/wgsl/Module.h"
 #include "donner/gpu/shader/wgsl/Number.h"
+#include "donner/gpu/shader/wgsl/Uniformity.h"
 
 namespace donner::gpu::shader::wgsl {
 
@@ -48,6 +49,10 @@ enum class ErrorCode : uint8_t {
   InvalidLoop,
   MissingReturn,
   UnreachableStatement,
+  InvalidSwitch,
+  NonUniformControl,
+  UniformityLimit,
+  InvalidStage,
 };
 
 /// A fail-closed parser diagnostic.
@@ -237,7 +242,8 @@ public:
       }
     }
     if (!failed()) {
-      module_.valid = true;
+      ValidateUniformity();
+      module_.valid = !failed();
     }
     return ParseResult{module_, diagnostic_};
   }
@@ -285,6 +291,21 @@ private:
   };
 
   static constexpr uint32_t kUnknownBound = std::numeric_limits<uint32_t>::max();
+
+  constexpr void ValidateUniformity() {
+    const auto uniformity = AnalyzeUniformity(module_);
+    switch (uniformity.error) {
+      case UniformityError::None: break;
+      case UniformityError::NonUniformControl:
+        Fail(ErrorCode::NonUniformControl, uniformity.span);
+        break;
+      case UniformityError::InvalidStage: Fail(ErrorCode::InvalidStage, uniformity.span); break;
+      case UniformityError::AfterDiscard:
+        Fail(ErrorCode::UnsupportedConstruct, uniformity.span);
+        break;
+      default: Fail(ErrorCode::UniformityLimit, uniformity.span); break;
+    }
+  }
 
   constexpr void InitializeSourceCopy() {
     if (sourceSize_ > ModuleLimits::kMaxSourceBytes) {
@@ -1007,6 +1028,7 @@ private:
     const BlockInfo body = ParseFunctionBody(function.returnType, functionId);
     function.firstStatement = body.first;
     function.resourceMask = module_.functions[functionId].resourceMask;
+    function.hasLocalArrays = module_.functions[functionId].hasLocalArrays;
     ValidateCompletedFunction(function, name, body.alwaysTerminates);
     module_.functions[functionId] = function;
     PopScope();
@@ -1093,14 +1115,11 @@ private:
   }
 
   constexpr BlockInfo ParseFunctionBody(Type returnType, ArenaId functionId) {
-    const bool previousControl = entryControlSeen_;
-    entryControlSeen_ = false;
     const Type previousReturnType = currentFunctionReturnType_;
     const ArenaId previousFunctionId = currentFunctionId_;
     currentFunctionReturnType_ = returnType;
     currentFunctionId_ = functionId;
     const BlockInfo body = ParseBlock();
-    entryControlSeen_ = previousControl;
     currentFunctionReturnType_ = previousReturnType;
     currentFunctionId_ = previousFunctionId;
     return body;
@@ -1281,12 +1300,108 @@ private:
     }
     if (MatchIdentifier("if")) return ParseIf(alwaysTerminates);
     if (MatchIdentifier("for")) return ParseFor();
+    if (MatchIdentifier("switch")) return ParseSwitch(alwaysTerminates);
     if (MatchIdentifier("return")) return ParseReturnStatement(alwaysTerminates);
     if (MatchIdentifier("break") || MatchIdentifier("continue") || MatchIdentifier("discard")) {
       return ParseControlStatement(alwaysTerminates);
     }
     if (MatchIdentifier("textureStore")) return ParseTextureStore();
     return ParseAssignmentStatement();
+  }
+
+  constexpr ArenaId ParseSwitchLabel(Type selector, bool* isDefault) {
+    if (MatchIdentifier("case"))
+      Next();
+    else if (!MatchIdentifier("default")) {
+      Fail(ErrorCode::UnexpectedToken, token_.span);
+      return kInvalidArenaId;
+    }
+    *isDefault = MatchIdentifier("default");
+    if (*isDefault) {
+      Next();
+      return kInvalidArenaId;
+    }
+    const auto value = Materialize(ParseExpression(), selector);
+    Expression& label = ExpressionAt(value.id);
+    if (label.type != selector) Fail(ErrorCode::TypeMismatch, label.span);
+    uint32_t bits = 0;
+    int32_t signedValue = 0;
+    if (selector.kind == TypeKind::I32 && ConstI32Value(value.id, &signedValue))
+      bits = std::bit_cast<uint32_t>(signedValue);
+    else if (selector.kind != TypeKind::U32 || !ConstU32Value(value.id, &bits))
+      Fail(ErrorCode::InvalidConstantExpression, label.span);
+    label = Expression{ExpressionKind::Literal, selector, label.span, {}, 0, bits};
+    return value.id;
+  }
+
+  constexpr bool DuplicateSwitchLabel(ArenaId first, ArenaId label) const {
+    for (ArenaId clause = first; clause != kInvalidArenaId;
+         clause = module_.statements[clause].next) {
+      const ArenaId other = module_.statements[clause].expression;
+      if (other != kInvalidArenaId &&
+          module_.expressions[other].payload == module_.expressions[label].payload)
+        return true;
+    }
+    return false;
+  }
+
+  constexpr bool ParseSwitchClause(Type type, BlockInfo* clauses, bool* hasDefault) {
+    const SourceSpan clauseSpan = token_.span;
+    const bool caseClause = MatchIdentifier("case");
+    bool isDefault = false;
+    const ArenaId label = ParseSwitchLabel(type, &isDefault);
+    if (isDefault) {
+      if (*hasDefault) Fail(ErrorCode::InvalidSwitch, clauseSpan);
+      *hasDefault = true;
+    } else if (!failed() && DuplicateSwitchLabel(clauses->first, label))
+      Fail(ErrorCode::InvalidSwitch, clauseSpan);
+    if (Match(TokenKind::Comma)) {
+      if (!caseClause)
+        Fail(ErrorCode::InvalidSwitch, clauseSpan);
+      else if (token_.kind != TokenKind::LeftBrace && token_.kind != TokenKind::Colon)
+        Fail(ErrorCode::UnsupportedConstruct, token_.span);
+    }
+    Match(TokenKind::Colon);
+    const BlockInfo body = ParseBlock();
+    Statement clause{StatementKind::Case, clauseSpan};
+    clause.expression = label;
+    clause.firstBody = body.first;
+    clause.alwaysTerminates = body.alwaysTerminates;
+    AppendToBlock(clauses, AddStatement(clause));
+    return body.alwaysTerminates;
+  }
+
+  constexpr ArenaId ParseSwitch(bool* alwaysTerminates) {
+    const SourceSpan begin = token_.span;
+    Next();
+    const auto raw = ParseExpression();
+    const auto selector = Materialize(raw, DefaultType(ExpressionAt(raw.id).type));
+    const Type type = ExpressionAt(selector.id).type;
+    if (type.lanes != 1 || (type.kind != TypeKind::I32 && type.kind != TypeKind::U32))
+      Fail(ErrorCode::InvalidSwitch, begin);
+    if (switchDepth_ == ModuleLimits::kMaxNesting) {
+      Fail(ErrorCode::NestingLimit, begin);
+      return kInvalidArenaId;
+    }
+    const uint16_t depth = switchDepth_++;
+    switchLoopDepth_[depth] = loopDepth_;
+    switchBreakSeen_[depth] = false;
+    Expect(TokenKind::LeftBrace);
+    BlockInfo clauses;
+    bool hasDefault = false;
+    bool allTerminate = true;
+    while (!failed() && token_.kind != TokenKind::RightBrace) {
+      allTerminate &= ParseSwitchClause(type, &clauses, &hasDefault);
+    }
+    const auto end = Expect(TokenKind::RightBrace).span;
+    if (clauses.first == kInvalidArenaId || !hasDefault) Fail(ErrorCode::InvalidSwitch, begin);
+    *alwaysTerminates = hasDefault && allTerminate && !switchBreakSeen_[depth];
+    --switchDepth_;
+    Statement statement{StatementKind::Switch, {begin.begin, end.end}};
+    statement.expression = selector.id;
+    statement.firstBody = clauses.first;
+    statement.alwaysTerminates = *alwaysTerminates;
+    return AddStatement(statement);
   }
 
   constexpr ArenaId ParseReturnStatement(bool* alwaysTerminates) {
@@ -1311,8 +1426,14 @@ private:
                                                                       : StatementKind::Discard;
     if (kind == StatementKind::Discard)
       ValidateDiscard(keyword);
-    else if (loopDepth_ == 0)
-      Fail(ErrorCode::InvalidLoop, keyword.span);
+    else {
+      const bool exitsSwitch = kind == StatementKind::Break && switchDepth_ > 0 &&
+                               loopDepth_ == switchLoopDepth_[switchDepth_ - 1];
+      if (exitsSwitch)
+        switchBreakSeen_[switchDepth_ - 1] = true;
+      else if (loopDepth_ == 0)
+        Fail(ErrorCode::InvalidLoop, keyword.span);
+    }
     Next();
     Expect(TokenKind::Semicolon);
     *alwaysTerminates = kind != StatementKind::Discard;
@@ -1320,9 +1441,9 @@ private:
   }
 
   constexpr void ValidateDiscard(Token keyword) {
-    entryControlSeen_ = true;
     if (currentFunctionId_ == kInvalidArenaId ||
-        module_.functions[currentFunctionId_].stage != Stage::Fragment)
+        (module_.functions[currentFunctionId_].stage != Stage::Fragment &&
+         module_.functions[currentFunctionId_].stage != Stage::None))
       Fail(ErrorCode::UnsupportedConstruct, keyword.span);
   }
 
@@ -1332,6 +1453,7 @@ private:
     Expect(TokenKind::Assign);
     const ExpressionInfo value = Materialize(ParseExpression(), ExpressionAt(target.id).type);
     Expect(TokenKind::Semicolon);
+    ValidateArrayValue(value);
     if (!target.mutableLvalue) Fail(ErrorCode::ImmutableAssignment, begin);
     if (target.id != kInvalidArenaId && value.id != kInvalidArenaId &&
         ExpressionAt(target.id).type != ExpressionAt(value.id).type)
@@ -1349,14 +1471,18 @@ private:
     if (Match(TokenKind::Colon)) {
       declared = ParseType();
       hasDeclared = true;
-      if (declared.kind == TypeKind::Array) Fail(ErrorCode::UnsupportedConstruct, name.span);
+      if (declared.kind == TypeKind::Array && !IsLocalArray(declared))
+        Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
     ExpressionInfo initializer = ParseInitializer(mutableValue, hasDeclared, declared, name);
     if (semicolon) Expect(TokenKind::Semicolon);
     initializer = Materialize(
         initializer, hasDeclared ? declared : DefaultType(ExpressionAt(initializer.id).type));
     if (!hasDeclared) declared = ExpressionAt(initializer.id).type;
+    ValidateArrayValue(initializer);
     ValidateLocalType(declared, initializer, name.span);
+    if (IsLocalArray(declared) && currentFunctionId_ < module_.functionCount)
+      module_.functions[currentFunctionId_].hasLocalArrays = true;
     const ArenaId symbol = AddLocalSymbol(mutableValue, declared, name, initializer);
     return AddStatement(
         Statement{StatementKind::Declaration, begin, kInvalidArenaId, symbol, initializer.id});
@@ -1371,8 +1497,16 @@ private:
     return ParseExpression();
   }
 
+  constexpr void ValidateArrayValue(ExpressionInfo value) {
+    if (ExpressionAt(value.id).type.kind == TypeKind::Array &&
+        value.rootSymbol != kInvalidArenaId &&
+        SymbolAt(value.rootSymbol).kind == SymbolKind::Binding)
+      Fail(ErrorCode::UnsupportedConstruct, ExpressionAt(value.id).span);
+  }
+
   constexpr void ValidateLocalType(Type declared, ExpressionInfo initializer, SourceSpan span) {
-    if (!IsValueType(declared)) Fail(ErrorCode::UnsupportedConstruct, span);
+    if (!IsValueType(declared) && !IsLocalArray(declared))
+      Fail(ErrorCode::UnsupportedConstruct, span);
     if (initializer.id != kInvalidArenaId && declared != ExpressionAt(initializer.id).type)
       Fail(ErrorCode::TypeMismatch, span);
   }
@@ -1399,7 +1533,6 @@ private:
   }
 
   constexpr ArenaId ParseIfImpl(bool* alwaysTerminates) {
-    entryControlSeen_ = true;
     const SourceSpan begin = token_.span;
     Next();
     Expect(TokenKind::LeftParen);
@@ -1428,7 +1561,6 @@ private:
   }
 
   constexpr ArenaId ParseFor() {
-    entryControlSeen_ = true;
     const SourceSpan begin = token_.span;
     Next();
     Expect(TokenKind::LeftParen);
@@ -1539,10 +1671,7 @@ private:
   }
 
   constexpr ExpressionInfo ParseBinaryOperand(TokenKind op, uint8_t precedence) {
-    const bool previousControl = entryControlSeen_;
-    if (op == TokenKind::And || op == TokenKind::Or) entryControlSeen_ = true;
     const ExpressionInfo result = ParseExpression(precedence);
-    entryControlSeen_ = previousControl;
     return result;
   }
 
@@ -1678,7 +1807,8 @@ private:
             base.kind == TypeKind::Matrix
                 ? (constant.hasSigned ? uint32_t(constant.signedValue) : constant.unsignedValue)
                 : 0},
-        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+        value.mutableLvalue && IsLocalArray(base), value.rootSymbol,
+        std::numeric_limits<int32_t>::max());
   }
 
   constexpr ExpressionInfo ParseMemberAccess(ExpressionInfo value) {
@@ -1756,6 +1886,11 @@ private:
   constexpr ExpressionInfo ParseNamedPrimary(Token name) {
     if (TextEquals(name.text, "true") || TextEquals(name.text, "false"))
       return ParseBoolLiteral(name);
+    if (TextEquals(name.text, "array")) {
+      const Type type = ParseArrayType(name);
+      Expect(TokenKind::LeftParen);
+      return ParseArrayConstruction(name, type);
+    }
     if (IsVectorTypeName(name)) {
       const Type type = ParseVectorType(name);
       Expect(TokenKind::LeftParen);
@@ -1822,6 +1957,40 @@ private:
         resolved.mutableValue, symbol, symbolUpperBounds_[symbol]);
   }
 
+  constexpr bool IsLocalArray(Type type) const {
+    return type.kind == TypeKind::Array && type.arrayCount > 0 && type.elementType().isNumeric();
+  }
+
+  constexpr ExpressionInfo ParseArrayConstruction(Token name, Type type) {
+    if (currentFunctionId_ >= module_.functionCount)
+      Fail(ErrorCode::UnsupportedConstruct, name.span);
+    else
+      module_.functions[currentFunctionId_].hasLocalArrays = true;
+    std::array<ArenaId, Expression::kMaxOperands> operands{};
+    uint8_t count = 0;
+    if (!IsLocalArray(type)) Fail(ErrorCode::UnsupportedConstruct, name.span);
+    if (token_.kind != TokenKind::RightParen) {
+      do {
+        if (count == operands.size()) {
+          Fail(ErrorCode::InvalidCall, token_.span);
+          break;
+        }
+        const auto value = Materialize(ParseExpression(), type.elementType());
+        if (ExpressionAt(value.id).type != type.elementType())
+          Fail(ErrorCode::TypeMismatch, ExpressionAt(value.id).span);
+        operands[count++] = value.id;
+      } while (Match(TokenKind::Comma) && token_.kind != TokenKind::RightParen);
+    }
+    const auto end = Expect(TokenKind::RightParen).span;
+    if (count == 0)
+      return AddExpression(Expression{ExpressionKind::Zero, type, {name.span.begin, end.end}},
+                           false, kInvalidArenaId, INT32_MAX);
+    if (count != type.arrayCount) Fail(ErrorCode::InvalidCall, name.span);
+    return AddExpression(
+        Expression{ExpressionKind::Construct, type, {name.span.begin, end.end}, operands, count},
+        false, kInvalidArenaId, INT32_MAX);
+  }
+
   constexpr ExpressionInfo ParseMatrixConstruction(Token name, Type type) {
     std::array<ArenaId, Expression::kMaxOperands> operands{kInvalidArenaId, kInvalidArenaId,
                                                            kInvalidArenaId, kInvalidArenaId};
@@ -1833,7 +2002,7 @@ private:
           break;
         }
         operands[count++] = ParseExpression().id;
-      } while (Match(TokenKind::Comma));
+      } while (Match(TokenKind::Comma) && token_.kind != TokenKind::RightParen);
     }
     const SourceSpan end = Expect(TokenKind::RightParen).span;
     if (count == 0)
@@ -1851,8 +2020,8 @@ private:
         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
-  constexpr ExpressionInfo ParseConstruction(Token constructor, Type type) {
-    std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
+  constexpr uint8_t ParseArguments(
+      std::array<ExpressionInfo, Expression::kMaxOperands>& arguments) {
     uint8_t count = 0;
     if (token_.kind != TokenKind::RightParen) {
       do {
@@ -1861,18 +2030,32 @@ private:
           break;
         }
         arguments[count++] = ParseExpression();
-      } while (Match(TokenKind::Comma));
+      } while (Match(TokenKind::Comma) && token_.kind != TokenKind::RightParen);
     }
-    const SourceSpan end = token_.span;
-    Expect(TokenKind::RightParen);
+    return count;
+  }
+
+  constexpr uint8_t MaterializeVectorComponents(
+      std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, Type type, uint8_t count,
+      bool& valid) {
     uint8_t components = 0;
-    bool valid = type.lanes >= 2 && type.isNumeric();
+    valid = type.lanes >= 2 && type.isNumeric();
     for (uint8_t i = 0; i < count; ++i) {
       arguments[i] = Materialize(arguments[i], Type{type.kind});
       const Type argumentType = ExpressionAt(arguments[i].id).type;
       valid = valid && argumentType.kind == type.kind;
       components += argumentType.lanes;
     }
+    return components;
+  }
+
+  constexpr ExpressionInfo ParseConstruction(Token constructor, Type type) {
+    std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
+    const uint8_t count = ParseArguments(arguments);
+    const SourceSpan end = token_.span;
+    Expect(TokenKind::RightParen);
+    bool valid = false;
+    const uint8_t components = MaterializeVectorComponents(arguments, type, count, valid);
     const Type firstArgumentType = count == 0 ? Type{} : ExpressionAt(arguments[0].id).type;
     const bool scalarOrComponentConstruction =
         valid && (components == type.lanes || (count == 1 && firstArgumentType.lanes == 1));
@@ -1890,42 +2073,53 @@ private:
 
   constexpr ExpressionInfo ParseCall(Token name) {
     std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
-    uint8_t count = 0;
-    if (token_.kind != TokenKind::RightParen) {
-      do {
-        if (count == arguments.size()) {
-          Fail(ErrorCode::InvalidCall, token_.span);
-          break;
-        }
-        arguments[count++] = ParseExpression();
-      } while (Match(TokenKind::Comma));
-    }
+    const uint8_t count = ParseArguments(arguments);
     const SourceSpan end = token_.span;
     Expect(TokenKind::RightParen);
     std::array<ArenaId, Expression::kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId,
                                                               kInvalidArenaId, kInvalidArenaId};
     for (uint8_t i = 0; i < count; ++i) operands[i] = arguments[i].id;
     Builtin builtin;
-    if (BuiltinNamed(name, &builtin)) {
-      if (builtin == Builtin::Fwidth &&
-          (currentFunctionId_ >= module_.functionCount ||
-           module_.functions[currentFunctionId_].stage != Stage::Fragment || entryControlSeen_))
-        Fail(ErrorCode::UnsupportedConstruct, name.span);
-      MaterializeBuiltinArguments(arguments, count);
-      Type result;
-      if (!ValidateBuiltin(builtin, arguments, count, &result))
-        Fail(ErrorCode::InvalidCall, name.span);
-      if (AllConstantSyntax(arguments, count)) {
-        Fail(ErrorCode::InvalidConstantExpression, name.span);
-      }
-      if (builtin == Builtin::Clamp && !HasValidStaticClampBounds(arguments, count)) {
-        Fail(ErrorCode::InvalidConstantExpression, name.span);
-      }
-      return AddExpression(
-          Expression{ExpressionKind::BuiltinCall, result, SourceSpan{name.span.begin, end.end},
-                     operands, count, static_cast<uint32_t>(builtin)},
-          false, kInvalidArenaId, BuiltinUpperBound(builtin, arguments, count));
+    if (BuiltinNamed(name, &builtin))
+      return ParseBuiltinCall(name, end, builtin, arguments, operands, count);
+    return ParseFunctionCall(name, end, arguments, operands, count);
+  }
+
+  constexpr void MarkSampledTexture(Builtin builtin, ExpressionInfo argument, SourceSpan span) {
+    if (builtin == Builtin::TextureSample || builtin == Builtin::TextureSampleLevel) {
+      const auto& texture = ExpressionAt(argument.id);
+      if (texture.kind != ExpressionKind::Symbol || texture.payload >= module_.symbolCount ||
+          module_.symbols[texture.payload].bindingId >= module_.bindingCount)
+        Fail(ErrorCode::InvalidCall, span);
+      else
+        module_.bindings[module_.symbols[texture.payload].bindingId].sampled = true;
     }
+  }
+
+  constexpr ExpressionInfo ParseBuiltinCall(
+      Token name, SourceSpan end, Builtin builtin,
+      std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      const std::array<ArenaId, Expression::kMaxOperands>& operands, uint8_t count) {
+    MaterializeBuiltinArguments(arguments, count);
+    Type result;
+    if (!ValidateBuiltin(builtin, arguments, count, &result))
+      Fail(ErrorCode::InvalidCall, name.span);
+    MarkSampledTexture(builtin, arguments[0], name.span);
+    if (AllConstantSyntax(arguments, count)) {
+      Fail(ErrorCode::InvalidConstantExpression, name.span);
+    }
+    if (builtin == Builtin::Clamp && !HasValidStaticClampBounds(arguments, count)) {
+      Fail(ErrorCode::InvalidConstantExpression, name.span);
+    }
+    return AddExpression(
+        Expression{ExpressionKind::BuiltinCall, result, SourceSpan{name.span.begin, end.end},
+                   operands, count, static_cast<uint32_t>(builtin)},
+        false, kInvalidArenaId, BuiltinUpperBound(builtin, arguments, count));
+  }
+
+  constexpr ExpressionInfo ParseFunctionCall(
+      Token name, SourceSpan end, std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      const std::array<ArenaId, Expression::kMaxOperands>& operands, uint8_t count) {
     for (uint16_t i = 0; i < module_.functionCount; ++i) {
       if (i >= currentFunctionId_) break;
       const Function& function = module_.functions[i];
@@ -1958,6 +2152,9 @@ private:
       {"sin", Builtin::Sin},
       {"cos", Builtin::Cos},
       {"pow", Builtin::Pow},
+      {"mix", Builtin::Mix},
+      {"textureSample", Builtin::TextureSample},
+      {"textureSampleLevel", Builtin::TextureSampleLevel},
       {"floor", Builtin::Floor},
       {"sign", Builtin::Sign},
       {"any", Builtin::Any},
@@ -2024,6 +2221,19 @@ private:
     return true;
   }
 
+  constexpr bool ValidateMixBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
+    if (count != 3) return false;
+    const Type value = BuiltinArgumentType(arguments, 0);
+    const Type weight = BuiltinArgumentType(arguments, 2);
+    if (value.kind != TypeKind::F32 || value != BuiltinArgumentType(arguments, 1) ||
+        (weight != value && weight != Type{TypeKind::F32}))
+      return false;
+    *result = value;
+    return true;
+  }
+
   constexpr bool ValidateValueBuiltin(
       Builtin builtin, const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
       uint8_t count, Type* result) const {
@@ -2033,6 +2243,7 @@ private:
       case Builtin::Clamp: return ValidateClampBuiltin(arguments, count, result);
       case Builtin::Select: return ValidateSelectBuiltin(arguments, count, result);
       case Builtin::Pow: return ValidatePowBuiltin(arguments, count, result);
+      case Builtin::Mix: return ValidateMixBuiltin(arguments, count, result);
       case Builtin::Max:
       case Builtin::Min: return ValidateMinBuiltin(arguments, count, result);
       default: return false;
@@ -2047,6 +2258,9 @@ private:
       return ValidateVectorMathBuiltin(builtin, arguments, count, result);
     switch (builtin) {
       case Builtin::TextureLoad: return ValidateTextureLoadBuiltin(arguments, count, result);
+      case Builtin::TextureSample:
+      case Builtin::TextureSampleLevel:
+        return ValidateSamplingBuiltin(builtin, arguments, count, result);
       case Builtin::TextureDimensions:
         return ValidateTextureDimensionsBuiltin(arguments, count, result);
       default: return ValidateValueBuiltin(builtin, arguments, count, result);
@@ -2106,6 +2320,20 @@ private:
     const Type value = BuiltinArgumentType(arguments, 0);
     if (count != 1 || value.kind != TypeKind::F32) return false;
     *result = value;
+    return true;
+  }
+
+  constexpr bool ValidateSamplingBuiltin(
+      Builtin builtin, const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      uint8_t count, Type* result) const {
+    const bool level = builtin == Builtin::TextureSampleLevel;
+    if (count != (level ? 4 : 3) ||
+        BuiltinArgumentType(arguments, 0) != Type{TypeKind::SampledTexture2d} ||
+        BuiltinArgumentType(arguments, 1) != Type{TypeKind::Sampler} ||
+        BuiltinArgumentType(arguments, 2) != Type{TypeKind::F32, 2} ||
+        (level && BuiltinArgumentType(arguments, 3) != Type{TypeKind::F32}))
+      return false;
+    *result = Type{TypeKind::F32, 4};
     return true;
   }
 
@@ -2589,14 +2817,14 @@ private:
       valid = valid && left == right && left.lanes == 1 &&
               (left.kind == TypeKind::Bool || left.isNumeric());
       result = Type{TypeKind::Bool};
-    } else if (binary == BinaryOp::Mul || binary == BinaryOp::Div) {
+    } else if (binary == BinaryOp::Mul || binary == BinaryOp::Div || binary == BinaryOp::Add ||
+               binary == BinaryOp::Sub) {
       valid = valid && left.isNumeric() && right.isNumeric() && left.kind == right.kind;
       if (left.lanes == right.lanes)
         result = left;
       else if (left.lanes > 1 && right.lanes == 1)
         result = left;
-      else if (right.lanes > 1 && left.lanes == 1 &&
-               (binary == BinaryOp::Mul || binary == BinaryOp::Div))
+      else if (right.lanes > 1 && left.lanes == 1)
         result = right;
       else
         valid = false;
@@ -2849,8 +3077,10 @@ private:
   uint16_t unaryDepth_ = 0;
   Type currentFunctionReturnType_;
   ArenaId currentFunctionId_ = kInvalidArenaId;
-  bool entryControlSeen_ = false;
   uint16_t loopDepth_ = 0;
+  uint16_t switchDepth_ = 0;
+  std::array<uint16_t, ModuleLimits::kMaxNesting> switchLoopDepth_{};
+  std::array<bool, ModuleLimits::kMaxNesting> switchBreakSeen_{};
   uint16_t conditionalDepth_ = 0;
 };
 

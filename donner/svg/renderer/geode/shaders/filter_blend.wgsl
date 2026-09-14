@@ -30,7 +30,7 @@ struct BlendParams {
 @group(0) @binding(3) var<uniform> params: BlendParams;
 
 // ============================================================================
-// W3C Compositing 1 blend-mode formulas (mirrored from image_blit.wgsl)
+// W3C Compositing 1 blend-mode formulas (shared with the image-blit shader)
 // ============================================================================
 
 fn blend_multiply(cb: vec3f, cs: vec3f) -> vec3f {

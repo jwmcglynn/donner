@@ -1,4 +1,10 @@
-// Geode image blit pipeline: renders a textured quad.
+#pragma once
+/// @file
+/// Authoritative WGSL for textured quads, masks and CSS blend modes.
+#include "donner/gpu/shader/wgsl/Compiler.h"
+namespace donner::gpu::shader::programs {
+inline constexpr wgsl::SourceText kImageBlitSource{
+    R"wgsl(// Geode image blit pipeline: renders a textured quad.
 //
 // Shared by:
 //   - `drawImage`: SVG <image> elements (via GeoEncoder::drawImage).
@@ -51,7 +57,7 @@ struct Uniforms {
   // attributes.
   applyMaskBounds: u32,
   // Mask bounds rectangle (x0, y0, x1, y1) in target-pixel space -
-  // only read when `applyMaskBounds != 0`. Sits at offset 112 so it
+  // only read when `applyMaskBounds != 0`. Sits at offset 128 so it
   // remains 16-byte (`vec4f`) aligned without explicit padding.
   maskBounds: vec4f,
   // SVG `mix-blend-mode` selector. `0` = plain source-over
@@ -62,7 +68,7 @@ struct Uniforms {
   // formula before writing. `maskMode` and `blendMode` are mutually
   // exclusive; the host sets at most one per draw.
   blendMode: u32,
-  // Nonzero when a path-clip mask is bound at binding 5/6 and
+  // Nonzero when a path-clip mask is bound at binding 5 and
   // should gate the SOURCE content before mask/blend compositing.
   hasClipMask: u32,
   // 0 = linear, 1 = nearest, 2 = CSS pixelated two-stage sampling.
@@ -90,7 +96,6 @@ struct Uniforms {
 // `hasClipMask == 0`. Sampled in target-pixel space rather than source
 // UV space so it applies equally to whole-target blits and partial image draws.
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
-@group(0) @binding(6) var clipMaskSampler: sampler;
 
 fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
   let dims = vec2i(textureDimensions(clipMaskTexture));
@@ -182,9 +187,9 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
 // All blend functions `B(Cb, Cs)` operate on STRAIGHT-alpha RGB values.
 // The final W3C composite is applied by `composite_with_blend` below:
 //
-//   Cs' = (1 - αb) * Cs + αb * B(Cb, Cs)           // blended source
-//   Co  = αs * Cs' + (1 - αs) * αb * Cb            // premultiplied output
-//   αo  = αs + αb - αs * αb                        // Porter-Duff "over"
+//   Cs' = (1 - alphab) * Cs + alphab * B(Cb, Cs)           // blended source
+//   Co  = alphas * Cs' + (1 - alphas) * alphab * Cb            // premultiplied output
+//   alphao  = alphas + alphab - alphas * alphab                        // Porter-Duff "over"
 //
 // which reduces to ordinary source-over when `B(Cb, Cs) == Cs` (the
 // Normal case). The host demultiplies both inputs inside
@@ -204,7 +209,7 @@ fn blend_screen(cb: vec3f, cs: vec3f) -> vec3f {
 }
 
 fn blend_hard_light(cb: vec3f, cs: vec3f) -> vec3f {
-  // Overlay(cs, cb) = HardLight(cb, cs). Per W3C §9.1.7 the spec
+  // Overlay(cs, cb) = HardLight(cb, cs). Per W3C section9.1.7 the spec
   // definition is: if cs <= 0.5 then 2*cb*cs else Screen(cb, 2*cs - 1).
   let lo = 2.0 * cb * cs;
   let hi = vec3f(1.0) - 2.0 * (vec3f(1.0) - cb) * (vec3f(1.0) - cs);
@@ -261,7 +266,7 @@ fn blend_color_burn(cb: vec3f, cs: vec3f) -> vec3f {
 }
 
 fn blend_soft_light_channel(cb: f32, cs: f32) -> f32 {
-  // W3C Compositing 1 §9.1.9 soft-light.
+  // W3C Compositing 1 section9.1.9 soft-light.
   //
   //   if (cs <= 0.5):
   //     B = cb - (1 - 2*cs) * cb * (1 - cb)
@@ -301,7 +306,7 @@ fn blend_exclusion(cb: vec3f, cs: vec3f) -> vec3f {
 
 // --- Non-separable modes (HSL) --------------------------------------------
 //
-// Lum, Sat, SetLum, SetSat, ClipColor follow W3C Compositing 1 §9.2.
+// Lum, Sat, SetLum, SetSat, ClipColor follow W3C Compositing 1 section9.2.
 // The coefficients are the SVG / W3C spec values - NOT BT.709 - and are
 // applied to STRAIGHT RGB.
 
@@ -334,7 +339,7 @@ fn sat_of(c: vec3f) -> f32 {
 
 fn set_sat(c_in: vec3f, s: f32) -> vec3f {
   // Sort channels and rewrite mid/max relative to the new saturation.
-  // This is the `SetSat` algorithm from §9.2 expressed without
+  // This is the `SetSat` algorithm from section9.2 expressed without
   // pointer-chasing: identify min/mid/max indices by successive
   // min/max operations, then build the output componentwise.
   let r = c_in.x;
@@ -420,13 +425,13 @@ fn composite_with_blend(mode: u32, src_pm: vec4f, dst_pm: vec4f) -> vec4f {
 
   let blended = apply_blend_fn(mode, cb, cs);
 
-  // Blended source colour per Compositing 1 §5.8.
+  // Blended source colour per Compositing 1 section5.8.
   let cs_prime = (1.0 - ab) * cs + ab * blended;
 
   // Porter-Duff `over` with the blended source, emitting a
   // premultiplied result:
-  //   co = αs * Cs' + (1 - αs) * αb * Cb
-  //   αo = αs + αb - αs * αb
+  //   co = alphas * Cs' + (1 - alphas) * alphab * Cb
+  //   alphao = alphas + alphab - alphas * alphab
   let co = as_ * cs_prime + (1.0 - as_) * ab * cb;
   let ao = as_ + ab - as_ * ab;
   return vec4f(co, ao);
@@ -508,3 +513,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
   return color;
 }
+)wgsl"};
+}  // namespace donner::gpu::shader::programs

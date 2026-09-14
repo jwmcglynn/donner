@@ -19,6 +19,7 @@ donner_cc_library(
     hdrs = [
         "Module.h",
         "Parser.h",
+        "Uniformity.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -91,6 +92,7 @@ donner_cc_test(
         "tests/Language_tests.cc",
         "tests/Parser_tests.cc",
         "tests/TextEmitter_tests.cc",
+        "tests/Uniformity_tests.cc",
     ],
     deps = [
         ":compiler",

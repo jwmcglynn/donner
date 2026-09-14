@@ -368,6 +368,8 @@ donner_cc_library(
         "//donner/gpu/shader:flood_artifact",
         "//donner/gpu/shader:gaussian_blur_api",
         "//donner/gpu/shader:gaussian_blur_artifact",
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:image_blit_artifact",
         "//donner/gpu/shader:lighting_artifacts",
         "//donner/gpu/shader:merge_artifact",
         "//donner/gpu/shader:morphology_artifact",
@@ -468,14 +470,6 @@ embed_resources(
 
 # Embed the image-blit WGSL shader source. Used by the image-blit pipeline
 # (drawImage today, pattern tile sampling in Phase 2H).
-embed_resources(
-    name = "image_blit_wgsl",
-    header_output = "embed_resources/ImageBlitWgsl.h",
-    resources = {
-        "kImageBlitWgsl": "shaders/image_blit.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
 
 # feBlend W3C Compositing 1 blend-mode compute shader.
 embed_resources(
@@ -496,11 +490,12 @@ donner_cc_library(
     deps = [
         ":filter_blend_wgsl",
         ":geode_wgpu_util",
-        ":image_blit_wgsl",
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         "//donner/base",
         "//donner/gpu",
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:image_blit_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//third_party/webgpu-cpp:webgpu_cpp",

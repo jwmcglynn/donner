@@ -186,7 +186,8 @@ TEST(Language, RejectsMalformedConstantDeclarationsWithoutInvalidArenaAccess) {
         Case{"fn f(x: i32) { for(var i=0; i<x; i=i+(-1)) {} }", ErrorCode::InvalidLoop},
         Case{"fn f() { break; }", ErrorCode::InvalidLoop},
         Case{"fn f() { continue; }", ErrorCode::InvalidLoop},
-        Case{"fn f() { discard; }", ErrorCode::UnsupportedConstruct},
+        Case{"@vertex fn f()->@builtin(position)vec4f { discard; return vec4f(0); }",
+             ErrorCode::UnsupportedConstruct},
         Case{"@group(0) @binding(16) var s: sampler;", ErrorCode::InvalidBinding}}) {
     SCOPED_TRACE(item.source);
     EXPECT_EQ(Parse(item.source).diagnostic.code, item.error);
@@ -209,18 +210,20 @@ TEST(Language, EnforcesWgslOperatorGrouping) {
   }
 }
 
-TEST(Language, RequiresDerivativesInStraightLineFragmentEntryCode) {
+TEST(Language, RequiresDerivativesInUniformFragmentControl) {
   for (const char* body :
        {"let b = (p.x > 0.0) && (fwidth(p.x) > 0.0);",
-        "let b = (p.x > 0.0) || (fwidth(p.x) > 0.0);", "if (p.x > 0.0) { let w=fwidth(p.x); }",
-        "if (p.x > 0.0) { discard; } let w=fwidth(p.x);"}) {
+        "let b = (p.x > 0.0) || (fwidth(p.x) > 0.0);", "if (p.x > 0.0) { let w=fwidth(p.x); }"}) {
     const std::string source =
         std::string("@fragment fn f(@builtin(position) p:vec4f)->@location(0) vec4f {") + body +
         "return vec4f(0.0); }";
     SCOPED_TRACE(source);
-    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::UnsupportedConstruct);
+    EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::NonUniformControl);
   }
-  EXPECT_EQ(Parse("fn f(x:f32)->f32 { return fwidth(x); }").diagnostic.code,
+  EXPECT_EQ(Parse("fn f(x:f32)->f32 { return fwidth(x); }").diagnostic.code, ErrorCode::None);
+  EXPECT_EQ(Parse("@fragment fn f(@builtin(position) p:vec4f)->@location(0) f32 {"
+                  "if(p.x>0.0){discard;} return fwidth(p.x);}")
+                .diagnostic.code,
             ErrorCode::UnsupportedConstruct);
 }
 

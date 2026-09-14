@@ -41,6 +41,7 @@
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
@@ -414,6 +415,31 @@ TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
 
   EXPECT_NE(status, 0) << "spirv-val accepted a truncated module:\n" << output;
   EXPECT_THAT(output, HasSubstr("error")) << output;
+}
+
+TEST(SpirvValValidation, ImageBlit) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ImageBlitAllProjections().spirv,
+                                 "ImageBlit.spv");
+}
+TEST(SpirvValValidation, ImageBlitMutated) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ImageBlitMutatedAllProjections().spirv,
+                                 "ImageBlitMutated.spv");
+}
+TEST(SpirvValValidation, ImageBlitExplicitLevel) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ImageBlitExplicitLevelAllProjections().spirv,
+                                 "ImageBlitExplicitLevel.spv");
+}
+TEST(SpirvValValidation, ArraySwitch) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ArraySwitchAllProjections().spirv,
+                                 "ArraySwitch.spv");
+}
+TEST(SpirvValValidation, LoopSwitch) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::LoopSwitchAllProjections().spirv,
+                                 "LoopSwitch.spv");
+}
+TEST(SpirvValValidation, VectorMix) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::VectorMixAllProjections().spirv,
+                                 "VectorMix.spv");
 }
 
 }  // namespace

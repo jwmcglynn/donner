@@ -147,6 +147,7 @@ struct Binding {
   uint32_t group = 0;                       //!< `@group` value.
   uint32_t binding = 0;                     //!< `@binding` value.
   ArenaId symbolId = kInvalidArenaId;       //!< Corresponding Symbol arena item.
+  bool sampled = false;  //!< Filtering operations require a sample-capable texture.
 };
 
 /// Scope category of one resolved name.
@@ -208,20 +209,23 @@ enum class Builtin : uint8_t {
   Saturate,
   Fract,
   Fwidth,
-  Any,                //!< `any`.
-  Clamp,              //!< `clamp`.
-  Select,             //!< `select`.
-  Min,                //!< `min`.
-  Ceil,               //!< `ceil`.
-  Exp,                //!< `exp`.
-  TextureLoad,        //!< `textureLoad`.
-  TextureDimensions,  //!< `textureDimensions`.
-  TextureStore,       //!< `textureStore`.
-  Floor,              //!< Floating-point `floor`.
-  Sign,               //!< Floating-point `sign`.
-  Sin,                //!< Floating-point sine.
-  Cos,                //!< Floating-point cosine.
-  Pow,                //!< Floating-point power.
+  Any,                 //!< `any`.
+  Clamp,               //!< `clamp`.
+  Select,              //!< `select`.
+  Min,                 //!< `min`.
+  Ceil,                //!< `ceil`.
+  Exp,                 //!< `exp`.
+  TextureLoad,         //!< `textureLoad`.
+  TextureDimensions,   //!< `textureDimensions`.
+  TextureStore,        //!< `textureStore`.
+  Floor,               //!< Floating-point `floor`.
+  Sign,                //!< Floating-point `sign`.
+  Sin,                 //!< Floating-point sine.
+  Cos,                 //!< Floating-point cosine.
+  Pow,                 //!< Floating-point power.
+  Mix,                 //!< Floating-point linear interpolation.
+  TextureSample,       //!< Implicit-level filtering in uniform fragment control.
+  TextureSampleLevel,  //!< Explicit-level filtering.
 };
 
 /// Kind of a typed expression node.
@@ -264,6 +268,8 @@ enum class StatementKind : uint8_t {
   Break,         //!< Exit the innermost loop.
   Continue,      //!< Run the innermost loop continuation.
   Discard,       //!< Discard the current fragment invocation.
+  Switch,        //!< An integer selection with case clauses.
+  Case,          //!< One constant case or default clause.
 };
 
 /// One typed statement node. The next link preserves lexical statement order.
@@ -279,6 +285,7 @@ struct Statement {
   ArenaId firstElseBody = kInvalidArenaId;          //!< Else body statement.
   ArenaId init = kInvalidArenaId;                   //!< For-loop initializer statement.
   ArenaId continuing = kInvalidArenaId;             //!< For-loop continuing statement.
+  bool alwaysTerminates = false;                    //!< No path reaches the following statement.
 };
 
 /// Pipeline stage associated with a function.
@@ -309,7 +316,8 @@ struct Function {
   Stage stage = Stage::None;                          //!< Helper or compute entry point.
   std::array<uint32_t, 3> workgroupSize = {1, 1, 1};  //!< Compute workgroup dimensions.
   InterfaceDecoration returnInterface;                //!< Direct return-value decoration.
-  uint32_t resourceMask = 0;  //!< Resources statically accessed, including called helpers.
+  uint32_t resourceMask = 0;    //!< Resources statically accessed, including called helpers.
+  bool hasLocalArrays = false;  //!< Requires function-local array storage or temporaries.
   uint16_t firstInput = 0;
   uint16_t inputCount = 0;
   uint16_t firstOutput = 0;

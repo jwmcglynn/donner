@@ -39,6 +39,7 @@
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
+#include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
@@ -356,6 +357,32 @@ TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
 
   EXPECT_NE(status, 0) << "the Metal compiler accepted deliberately invalid MSL:\n" << output;
   EXPECT_THAT(output, HasSubstr("error:")) << output;
+}
+
+TEST(MslXcrunValidation, ImageBlit) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::ImageBlitAllProjections().msl, "ImageBlit");
+}
+TEST(MslXcrunValidation, ImageBlitMutated) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::ImageBlitMutatedAllProjections().msl, "ImageBlitMutated");
+}
+TEST(MslXcrunValidation, ImageBlitExplicitLevel) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::ImageBlitExplicitLevelAllProjections().msl,
+                                  "ImageBlitExplicitLevel");
+}
+TEST(MslXcrunValidation, ArraySwitch) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::ArraySwitchAllProjections().msl, "ArraySwitch");
+}
+TEST(MslXcrunValidation, LoopSwitch) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::LoopSwitchAllProjections().msl, "LoopSwitch");
+}
+TEST(MslXcrunValidation, VectorMix) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::VectorMixAllProjections().msl, "VectorMix");
 }
 
 }  // namespace

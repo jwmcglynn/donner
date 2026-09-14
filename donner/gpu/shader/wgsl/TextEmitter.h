@@ -238,7 +238,7 @@ private:
       case TypeKind::Void: text("void"); return;
       case TypeKind::Struct: emitStructType(value); return;
       case TypeKind::Matrix: emitMatrixType(value); return;
-      case TypeKind::Array: error_ = TextEmitError::UnsupportedType; return;
+      case TypeKind::Array: emitArrayType(value); return;
       case TypeKind::Sampler: text("sampler"); return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d:
@@ -247,6 +247,19 @@ private:
         return;
       default: emitScalarType(value); return;
     }
+  }
+
+  constexpr void emitArrayType(const Type& value) {
+    if (value.arrayCount == 0 || !value.elementType().isNumeric()) {
+      error_ = TextEmitError::UnsupportedType;
+      return;
+    }
+    text("array<");
+    type(value.elementType());
+    text(", ");
+    uintText(value.arrayCount);
+    character('>');
+    return;
   }
 
   constexpr void emitScalarType(const Type& value) {
@@ -496,16 +509,22 @@ private:
         }
         break;
       case BindingKind::SampledTexture:
-      case BindingKind::StorageTexture:
-        type(binding.type);
-        character(' ');
-        bindingName(index);
-        if (attributes) {
-          text(" [[texture(");
-          uintText(MslTextureIndex(binding.binding));
-          text(")]]");
-        }
-        break;
+      case BindingKind::StorageTexture: emitTextureParameter(index, attributes); break;
+    }
+  }
+
+  constexpr void emitTextureParameter(uint16_t index, bool attributes) {
+    const Binding& binding = module_.bindings[index];
+    if (binding.kind == BindingKind::SampledTexture && binding.sampled)
+      text("texture2d<float, access::sample>");
+    else
+      type(binding.type);
+    character(' ');
+    bindingName(index);
+    if (attributes) {
+      text(" [[texture(");
+      uintText(MslTextureIndex(binding.binding));
+      text(")]]");
     }
   }
 
@@ -524,9 +543,16 @@ private:
   }
 
   constexpr void emitTextureHelpers() {
-    text(
-        "float4 donner_msl_texture_load(texture2d<float, access::read> texture, int2 coord, int "
-        "level) {\n");
+    bool sampled = false;
+    for (uint16_t i = 0; i < module_.bindingCount; ++i) sampled |= module_.bindings[i].sampled;
+    if (sampled)
+      text(
+          "template<access A>\nfloat4 donner_msl_texture_load(texture2d<float, A> texture, int2 "
+          "coord, int level) {\n");
+    else
+      text(
+          "float4 donner_msl_texture_load(texture2d<float, access::read> texture, int2 coord, int "
+          "level) {\n");
     text("  if (level < 0 || uint(level) >= texture.get_num_mip_levels()) return float4(0.0f);\n");
     text("  uint mip = uint(level);\n");
     text("  uint2 size(texture.get_width(mip), texture.get_height(mip));\n");
@@ -702,19 +728,19 @@ private:
   }
 
   constexpr void emitConstruct(const Expression& node) {
-    if (node.operandCount == 1 &&
+    if (node.type.kind != TypeKind::Array && node.operandCount == 1 &&
         module_.expressions[node.operands[0]].type.lanes == node.type.lanes &&
         module_.expressions[node.operands[0]].type.kind != node.type.kind) {
       emitConversion(node);
       return;
     }
     type(node.type);
-    character('(');
+    character(node.type.kind == TypeKind::Array ? '{' : '(');
     for (uint8_t index = 0; index < node.operandCount; ++index) {
       if (index != 0) text(", ");
       emitChild(node, index);
     }
-    character(')');
+    character(node.type.kind == TypeKind::Array ? '}' : ')');
     return;
   }
 
@@ -1007,6 +1033,7 @@ private:
         {Builtin::Sin, "sin"},
         {Builtin::Cos, "cos"},
         {Builtin::Pow, "pow"},
+        {Builtin::Mix, "mix"},
         {Builtin::Floor, "floor"},
         {Builtin::Sign, "sign"},
         {Builtin::All, "all"},
@@ -1034,6 +1061,21 @@ private:
   }
 
   constexpr void emitBuiltin(const Expression& node) {
+    if (node.payload == uint32_t(Builtin::TextureSample) ||
+        node.payload == uint32_t(Builtin::TextureSampleLevel)) {
+      emitChild(node, 0);
+      text(".sample(");
+      emitChild(node, 1);
+      text(", ");
+      emitChild(node, 2);
+      if (node.payload == uint32_t(Builtin::TextureSampleLevel)) {
+        text(", level(");
+        emitChild(node, 3);
+        character(')');
+      }
+      character(')');
+      return;
+    }
     const Builtin builtin = static_cast<Builtin>(node.payload);
     switch (builtin) {
       case Builtin::Select:
@@ -1105,6 +1147,16 @@ private:
       case StatementKind::Assign: emitAssignment(node, inlineStatement); break;
       case StatementKind::If: emitIf(node); break;
       case StatementKind::For: emitFor(node); break;
+      case StatementKind::Switch: emitSwitch(node); break;
+      case StatementKind::Return: emitReturn(node, inlineStatement); break;
+      case StatementKind::TextureStore: emitTextureStore(node, inlineStatement); break;
+      default: emitControlStatement(node); break;
+    }
+  }
+
+  constexpr void emitControlStatement(const Statement& node) {
+    switch (node.kind) {
+      default: error_ = TextEmitError::InvalidModule; break;
       case StatementKind::Break: text("break;"); break;
       case StatementKind::Continue: text("continue;"); break;
       case StatementKind::Discard:
@@ -1112,8 +1164,6 @@ private:
         if (currentReturnType_.kind != TypeKind::Void) text(" {}");
         character(';');
         break;
-      case StatementKind::Return: emitReturn(node, inlineStatement); break;
-      case StatementKind::TextureStore: emitTextureStore(node, inlineStatement); break;
     }
   }
 
@@ -1156,6 +1206,43 @@ private:
       indentation();
       character('}');
     }
+  }
+
+  constexpr void emitSwitch(const Statement& node) {
+    text("switch (");
+    expression(node.expression);
+    text(") {\n");
+    ++indent_;
+    uint16_t count = 0;
+    for (ArenaId id = node.firstBody; id != kInvalidArenaId && error_ == TextEmitError::None;
+         id = module_.statements[id].next) {
+      if (++count > ModuleLimits::kMaxStatements || !validId(id, module_.statementCount) ||
+          module_.statements[id].kind != StatementKind::Case) {
+        error_ = TextEmitError::InvalidModule;
+        break;
+      }
+      const Statement& clause = module_.statements[id];
+      indentation();
+      if (clause.expression == kInvalidArenaId)
+        text("default");
+      else {
+        text("case ");
+        expression(clause.expression);
+      }
+      text(": {\n");
+      ++indent_;
+      block(clause.firstBody);
+      if (!clause.alwaysTerminates) {
+        indentation();
+        text("break;\n");
+      }
+      --indent_;
+      indentation();
+      text("}\n");
+    }
+    --indent_;
+    indentation();
+    character('}');
   }
 
   constexpr void emitFor(const Statement& node) {
