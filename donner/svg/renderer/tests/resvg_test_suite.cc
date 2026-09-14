@@ -1214,9 +1214,10 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/font",
                 {
+                    {"font-shorthand.svg",
+                     Params::Skip(
+                         "Vertical gray crosshair stroke comparison remains unresolved (#1173)")},
                     {"simple-case.svg", Params::Skip("Canvas size mismatch (400 vs 500)")},
-
-                    {"font-shorthand.svg", Params::Skip("Not impl: font shorthand property")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1253,12 +1254,9 @@ INSTANTIATE_TEST_SUITE_P(
     TextFontKerning, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "text/font-kerning",
-                {
-                    {"arabic-script.svg",
-                     Params::Skip("Not impl: font-kerning property (HarfBuzz feature toggle)")},
-                    {"none.svg",
-                     Params::Skip("Not impl: font-kerning property (HarfBuzz feature toggle)")},
-                })),
+                {{"arabic-script.svg",
+                  Params().onlyTextFull().withReason("Arabic contextual joining requires HarfBuzz; "
+                                                     "disabling kerning must preserve joining")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1282,12 +1280,13 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontSizeAdjust, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("text/font-size-adjust",
-                                        {
-                                            {"simple-case.svg",
-                                             Params::Skip("Not impl: font-size-adjust property")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/font-size-adjust",
+            {{"simple-case.svg",
+              Params::Skip(
+                  "Legacy font-size-adjust reference placement remains unqualified (#1173)")}})),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextFontStretch, ImageComparisonTestFixture,

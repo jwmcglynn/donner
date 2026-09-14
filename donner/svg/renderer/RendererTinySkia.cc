@@ -2842,9 +2842,6 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   }
 
   float scale = 0.0f;
-  const float fontSizePx = static_cast<float>(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
   // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
@@ -2852,8 +2849,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // drift on the bbox. Per the SVG spec it uses
   // em-box cells from font v-metrics (ascent above baseline, |descent| below),
   // not the raw font size.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
-                                             params.fontMetrics, fontSizePx);
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
@@ -2884,11 +2880,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     const auto& run = runs[runIndex];
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    float spanFontSizePx = fontSizePx;
-    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
-      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
-          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float spanFontSizePx = run.usedFontSizePx;
 
     if (run.font != FontHandle()) {
       scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
@@ -3111,25 +3103,26 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     if (spanDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
       const auto& span = text.spans[runIndex];
 
-      // Use the declaring element's font-size for metrics (Category C fix).
-      const float decoFontSizePx =
-          span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
-      const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
-      const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
+      const ResolvedTextFont decorationFont =
+          span.decorationFont.value_or(ResolvedTextFont{run.font, spanFontSizePx});
+      const float decoScale =
+          textEngine.scaleForPixelHeight(decorationFont.font, decorationFont.usedSizePx);
+      const float decoEmScale =
+          textEngine.scaleForEmToPixels(decorationFont.font, decorationFont.usedSizePx);
 
-      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(decorationFont.font);
       const int ascent = vmetrics.ascent;
       const int descent = vmetrics.descent;
 
       double fontUnderlinePos = 0.0;
       double fontUnderlineThick = 0.0;
-      if (auto ul = textEngine.underlineMetrics(run.font)) {
+      if (auto ul = textEngine.underlineMetrics(decorationFont.font)) {
         fontUnderlinePos = ul->position;
         fontUnderlineThick = ul->thickness;
       }
       double fontStrikePos = 0.0;
       double fontStrikeThick = 0.0;
-      if (auto strike = textEngine.strikeoutMetrics(run.font)) {
+      if (auto strike = textEngine.strikeoutMetrics(decorationFont.font)) {
         fontStrikePos = strike->position;
         fontStrikeThick = strike->thickness;
       }

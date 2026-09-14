@@ -35,6 +35,21 @@ namespace donner::svg {
 
 namespace {
 
+/// Converts a computed font size only when the result is representable by the shaping API.
+float CheckedFontSizePx(double sizePx) {
+  if (!std::isfinite(sizePx) || sizePx <= 0.0 ||
+      sizePx > static_cast<double>(std::numeric_limits<float>::max())) {
+    return 0.0f;
+  }
+  const float result = static_cast<float>(sizePx);
+  return std::isfinite(result) ? result : 0.0f;
+}
+
+/// Zero or unrepresentable used sizes consume positioning without producing glyphs.
+bool HasRenderableSpanText(std::string_view text, float usedSizePx) {
+  return !text.empty() && usedSizePx > 0.0f && std::isfinite(usedSizePx);
+}
+
 /// Decode a single UTF-8 codepoint, advancing \p i past the consumed bytes.
 uint32_t decodeUtf8(const std::string_view str, size_t& i) {
   const auto [cp, length] = Utf8::NextCodepoint(str.substr(i));
@@ -224,6 +239,8 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
 
   params.textAnchor = properties.textAnchor.get().value();
   params.writingMode = properties.writingMode.get().value();
+  params.fontKerning = properties.fontKerning.get().value();
+  params.fontSizeAdjust = properties.fontSizeAdjust.get().value();
   params.letterSpacingPx = properties.letterSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
   params.wordSpacingPx = properties.wordSpacing.get().value().toPixels(
@@ -298,7 +315,10 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontStyle = style->properties->fontStyle.get().value();
     span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
     span.fontVariant = style->properties->fontVariant.get().value();
+    span.fontKerning = style->properties->fontKerning.get().value();
+    span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
+    span.fontFamilies = style->properties->fontFamily.get().value();
     span.visibility = style->properties->visibility.get().value();
     span.opacity = style->properties->opacity.get().value();
     span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
@@ -1099,9 +1119,9 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
 
   FontMetrics spanFontMetrics = params.fontMetrics;
   const float spanFontSizePx =
-      span.fontSize.value != 0.0 ? static_cast<float>(span.fontSize.toPixels(
+      span.fontSize.value != 0.0 ? CheckedFontSizePx(span.fontSize.toPixels(
                                        params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
-                                 : static_cast<float>(params.fontSize.toPixels(
+                                 : CheckedFontSizePx(params.fontSize.toPixels(
                                        params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
   spanFontMetrics.fontSize = spanFontSizePx;
 
@@ -1129,11 +1149,11 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
     for (const auto& ancestor : span.ancestorBaselineShifts) {
       if (subSuper.has_value() && ancestor.keyword == BSK::Sub) {
         const float ancestorScale =
-            backend.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+            backend.scaleForEmToPixels(spanFont, CheckedFontSizePx(ancestor.fontSizePx));
         spanBaselineShiftPx += -static_cast<double>(subSuper->subscriptYOffset) * ancestorScale;
       } else if (subSuper.has_value() && ancestor.keyword == BSK::Super) {
         const float ancestorScale =
-            backend.scaleForEmToPixels(spanFont, static_cast<float>(ancestor.fontSizePx));
+            backend.scaleForEmToPixels(spanFont, CheckedFontSizePx(ancestor.fontSizePx));
         spanBaselineShiftPx += static_cast<double>(subSuper->superscriptYOffset) * ancestorScale;
       } else {
         FontMetrics ancestorFm = params.fontMetrics;
@@ -1467,6 +1487,130 @@ void TextEngine::addFontFaces(std::span<const css::FontFace> faces) {
   registeredFontFaceCount_ = faces.size();
 }
 
+namespace {
+
+/// Resolves a span's inherited font family and face attributes.
+FontHandle ResolveSpanFace(FontManager& fontManager,
+                           const components::ComputedTextComponent::TextSpan& span,
+                           const SmallVector<RcString, 1>& families, FontHandle fallback) {
+  const SmallVector<RcString, 1>& spanFamilies =
+      span.fontFamilies.empty() ? families : span.fontFamilies;
+  FontHandle spanFont;
+  for (const auto& family : spanFamilies) {
+    spanFont = fontManager.findFont(family);
+    if (spanFont) {
+      break;
+    }
+  }
+  if (!spanFont) {
+    spanFont = fallback;
+  }
+  if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
+      span.fontStretch != FontStretch::Normal) {
+    for (const auto& family : spanFamilies) {
+      FontHandle candidate =
+          fontManager.findFont(family, span.fontWeight, static_cast<int>(span.fontStyle),
+                               static_cast<int>(span.fontStretch));
+      if (candidate) {
+        spanFont = candidate;
+        break;
+      }
+    }
+  }
+
+  return spanFont;
+}
+
+/// Applies the requested x-height ratio after the final face has been selected.
+float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
+                     const std::optional<double>& fontSizeAdjust) {
+  sizePx = CheckedFontSizePx(sizePx);
+  if (sizePx == 0.0f || !fontSizeAdjust) return sizePx;
+  if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust <= 0.0) return 0.0f;
+  const FontVMetrics metrics = backend.fontVMetrics(font);
+  if (metrics.xHeight <= 0 || metrics.unitsPerEm <= 0) return sizePx;
+  const double aspect = static_cast<double>(metrics.xHeight) / metrics.unitsPerEm;
+  return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
+}
+
+/// Preserve same-family boundary shaping across size/face changes, using the preceding face's kern.
+bool CompatibleKerningRuns(const FontManager& fontManager, const TextRun& current,
+                           FontVariant currentVariant, FontHandle previousFont,
+                           float previousSizePx, FontVariant previousVariant, bool currentKerning,
+                           bool previousKerning) {
+  return currentKerning && previousKerning && currentVariant == previousVariant &&
+         current.usedFontSizePx > 0.0f && previousSizePx > 0.0f &&
+         fontManager.fontsShareFamily(current.font, previousFont);
+}
+
+/// Keep source clusters in the positioning pipeline without invoking a font backend at size zero.
+TextBackend::ShapedRun ShapeAddressableZeroSizeText(std::string_view text, size_t start,
+                                                    size_t length) {
+  TextBackend::ShapedRun result;
+  const size_t end = start + length;
+  for (size_t offset = start; offset < end;) {
+    TextBackend::ShapedGlyph glyph;
+    glyph.cluster = static_cast<uint32_t>(offset);
+    result.glyphs.push_back(glyph);
+    decodeUtf8(text, offset);
+  }
+  return result;
+}
+
+/// Select zero-advance character records or the normal kerning-aware shaping path.
+TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun& run,
+                                      std::string_view text, const ChunkRange& chunk, bool vertical,
+                                      FontVariant variant, bool kerning) {
+  if (run.usedFontSizePx == 0.0f) {
+    return ShapeAddressableZeroSizeText(text, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
+  }
+  return kerning
+             ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                chunk.byteEnd - chunk.byteStart, vertical, variant, false)
+             : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                         chunk.byteEnd - chunk.byteStart, vertical, variant, false);
+}
+
+/// Valid zero adjustment retains characters; other unusable sizes do not reach layout.
+bool HasAddressableSpanText(std::string_view text, float size,
+                            const std::optional<double>& adjustment) {
+  return !text.empty() && (HasRenderableSpanText(text, size) || adjustment == 0.0);
+}
+
+/// Nonempty unshaped text interrupts kerning; an empty span keeps the previous pair.
+void UpdateUnshapedSpanPredecessor(std::string_view text, const TextRun& run, bool kerningEnabled,
+                                   uint32_t& previousCodepoint, FontHandle& previousFont,
+                                   float& previousSizePx, bool& previousKerning) {
+  if (text.empty()) {
+    return;
+  }
+  previousCodepoint = 0;
+  previousFont = run.font;
+  previousSizePx = run.usedFontSizePx;
+  previousKerning = kerningEnabled;
+}
+
+}  // namespace
+
+ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2d& viewBox,
+                                             const FontMetrics& fontMetrics) const {
+  UTILS_RELEASE_ASSERT(styleOwner.registry() == &registry_);
+  const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleOwner.entity());
+  if (!style || !style->properties) return {};
+  const auto& properties = *style->properties;
+  components::ComputedTextComponent::TextSpan span;
+  span.fontFamilies = properties.fontFamily.get().value();
+  span.fontWeight = properties.fontWeight.get().value();
+  span.fontStyle = properties.fontStyle.get().value();
+  span.fontStretch = static_cast<FontStretch>(properties.fontStretch.get().value());
+  FontHandle font =
+      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.fallbackFont());
+  font = selectBackendSafeFont(*backend_, fontManager_, font);
+  const float size = CheckedFontSizePx(
+      properties.fontSize.get().value().toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
+  return {font, AdjustFontSize(*backend_, font, size, properties.fontSizeAdjust.get().value())};
+}
+
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
   // ── Resolve base font ─────────────────────────────────────────────────────────
@@ -1481,7 +1625,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     font = fontManager_.fallbackFont();
   }
 
-  const float fontSizePx = static_cast<float>(
+  const float fontSizePx = CheckedFontSizePx(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
   // ── Layout state ──────────────────────────────────────────────────────────────
@@ -1493,6 +1637,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   uint32_t prevSpanLastCodepoint = 0;  // Last codepoint of previous span, for cross-span kerning.
   FontHandle prevSpanFont;
   float prevSpanFontSizePx = 0.0f;
+  bool prevSpanFontKerning = true;
+  FontVariant prevSpanFontVariant = FontVariant::Normal;
   Entity prevTextPathSource = entt::null;
   std::optional<size_t> firstPathRun;
   TextPathStagingState pathStaging;
@@ -1536,32 +1682,23 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // ── Per-span font resolution ────────────────────────────────────────────────
-    FontHandle spanFont = font;
-    if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
-        span.fontStretch != FontStretch::Normal) {
-      for (const auto& family : params.fontFamilies) {
-        FontHandle candidate =
-            fontManager_.findFont(family, span.fontWeight, static_cast<int>(span.fontStyle),
-                                  static_cast<int>(span.fontStretch));
-        if (candidate) {
-          spanFont = candidate;
-          break;
-        }
-      }
-    }
+    FontHandle spanFont = ResolveSpanFace(fontManager_, span, params.fontFamilies, font);
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    const float spanFontSizePx =
-        span.fontSize.value != 0.0
-            ? static_cast<float>(span.fontSize.toPixels(params.viewBox, params.fontMetrics,
-                                                        Lengthd::Extent::Mixed))
-            : fontSizePx;
+    float spanFontSizePx = span.fontSize.value != 0.0
+                               ? CheckedFontSizePx(span.fontSize.toPixels(
+                                     params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
+                               : fontSizePx;
 
     const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
     spanFont = selectBackendSafeFont(*backend_, fontManager_, spanFont);
     spanFont = findCoverageFallbackFont(*backend_, fontManager_, spanFont, spanFontSizePx,
                                         spanTestCodepoint);
+    const std::optional<double> fontSizeAdjust =
+        span.fontSizeAdjust.value_or(params.fontSizeAdjust);
+    spanFontSizePx = AdjustFontSize(*backend_, spanFont, spanFontSizePx, fontSizeAdjust);
     run.font = spanFont;
+    run.usedFontSizePx = spanFontSizePx;
 
     // Note: bitmap-only fonts (e.g., color emoji) are valid for the full backend.
     // The simple backend can't handle them but produces empty shapeRun results,
@@ -1630,12 +1767,15 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       chunkBoundaries.push_back({runs.size(), 0, span.textAnchor});
     }
 
-    // For empty spans, span-start already applied positioning - just propagate.
-    if (spanText.empty()) {
+    const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
+    // Propagate the span-start position even when the span produces no glyphs.
+    if (!HasAddressableSpanText(spanText, spanFontSizePx, fontSizeAdjust)) {
       currentPenX = penX;
       currentPenY = penY;
       prevDefaultY = defaultY;
       haveCurrentPosition = true;
+      UpdateUnshapedSpanPredecessor(spanText, run, spanFontKerning, prevSpanLastCodepoint,
+                                    prevSpanFont, prevSpanFontSizePx, prevSpanFontKerning);
       runExtents.push_back({penX, penY, penX, penY});
       runs.push_back(std::move(run));
       continue;
@@ -1660,12 +1800,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     uint32_t prevChunkLastCodepoint = prevSpanLastCodepoint;
     FontHandle prevChunkFont = prevSpanFont;
     float prevChunkFontSizePx = prevSpanFontSizePx;
+    bool prevChunkFontKerning = prevSpanFontKerning;
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
-      const auto shaped =
-          backend_->shapeRun(spanFont, spanFontSizePx, spanText, chunk.byteStart,
-                             chunk.byteEnd - chunk.byteStart, vertical, span.fontVariant, false);
+      const auto shaped = ShapeSpanChunk(*backend_, run, spanText, chunk, vertical,
+                                         span.fontVariant, spanFontKerning);
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
       // When a multi-glyph RTL chunk starts because of an absolute y position on the
@@ -1694,8 +1834,10 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
         crossKern =
-            backend_->crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont, spanFontSizePx,
-                                    prevChunkLastCodepoint, firstCp, vertical);
+            spanFontKerning && prevChunkFontKerning
+                ? backend_->crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont,
+                                          spanFontSizePx, prevChunkLastCodepoint, firstCp, vertical)
+                : 0.0;
         appliedCrossKern = true;
       } else if (ci == 0 && !span.startsNewChunk && prevSpanLastCodepoint != 0 &&
                  !shaped.glyphs.empty()) {
@@ -1703,8 +1845,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
         crossKern =
-            backend_->crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont, spanFontSizePx,
-                                    prevSpanLastCodepoint, firstCp, vertical);
+            CompatibleKerningRuns(fontManager_, run, span.fontVariant, prevSpanFont,
+                                  prevSpanFontSizePx, prevSpanFontVariant, spanFontKerning,
+                                  prevSpanFontKerning)
+                ? backend_->crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont,
+                                          spanFontSizePx, prevSpanLastCodepoint, firstCp, vertical)
+                : 0.0;
         appliedCrossKern = true;
       }
 
@@ -1953,6 +2099,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         prevChunkLastCodepoint = decodeUtf8(spanText, lastCluster);
         prevChunkFont = spanFont;
         prevChunkFontSizePx = spanFontSizePx;
+        prevChunkFontKerning = spanFontKerning;
       }
     }
 
@@ -1978,6 +2125,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     prevSpanLastCodepoint = lastCodepoint;
     prevSpanFont = spanFont;
     prevSpanFontSizePx = spanFontSizePx;
+    prevSpanFontKerning = spanFontKerning;
+    prevSpanFontVariant = span.fontVariant;
 
     // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
     // are not rendered. Clear the glyph list so the renderer skips this run.
@@ -2129,9 +2278,6 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
 
-  const float fontSizePx = static_cast<float>(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
     const auto& run = runs[runIndex];
@@ -2142,11 +2288,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       continue;
     }
 
-    float runFontSizePx = fontSizePx;
-    if (span.fontSize.value != 0.0) {
-      runFontSizePx = static_cast<float>(
-          span.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float runFontSizePx = run.usedFontSizePx;
 
     const float runScale = run.font ? scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
     double emTop = static_cast<double>(runFontSizePx);
@@ -2212,6 +2354,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       charGeom.endPosition =
           Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance);
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
+
+      if (runFontSizePx == 0.0f) continue;
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
       Path glyphPath = glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);

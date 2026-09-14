@@ -38,6 +38,9 @@ public:
   ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
                      bool forceLogicalOrder) const override;
+  ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
+                              size_t byteOffset, size_t byteLength, bool isVertical,
+                              FontVariant fontVariant, bool forceLogicalOrder) const override;
   double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont, float curSizePx,
                        uint32_t prevCodepoint, uint32_t curCodepoint,
                        bool isVertical) const override;
@@ -49,6 +52,10 @@ public:
   [[nodiscard]] bool embeddedBitmapLoadingDisabledForTesting(FontHandle font) const;
 
 private:
+  ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
+                         size_t byteOffset, size_t byteLength, bool isVertical,
+                         FontVariant fontVariant, bool enableKerning, bool forceLogicalOrder) const;
+
   FontManager& fontManager_;
   Registry& registry_;
 

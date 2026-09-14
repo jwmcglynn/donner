@@ -140,14 +140,8 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
  *
  * @param textEngine Engine providing per-run scale + font v-metrics.
  * @param runs Positioned layout runs.
- * @param spans Per-span styles (for per-span font-size overrides).
- * @param viewBox Viewport box for length resolution.
- * @param fontMetrics Font metrics for length resolution.
- * @param fontSizePx Element-level resolved font size in pixels.
  * @return The text bounding box in the element's local space.
  */
-Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
-                        std::span<const components::ComputedTextComponent::TextSpan> spans,
-                        const Box2d& viewBox, const FontMetrics& fontMetrics, float fontSizePx);
+Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs);
 
 }  // namespace donner::svg

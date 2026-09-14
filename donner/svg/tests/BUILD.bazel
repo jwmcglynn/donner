@@ -1,10 +1,10 @@
+load("//build_defs:package.bzl", "donner_package")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
     "donner_cc_test",
     "donner_transitioned_cc_test",
 )
-load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_test(
     name = "svg_document_concurrency_tests",
@@ -84,6 +84,7 @@ donner_cc_test(
         "SVGUnknownElement_tests.cc",
         "SVGUseElement_tests.cc",
     ],
+    data = ["//third_party/resvg-test-suite:fonts"],
     opens_gpu_device = True,
     shard_count = 10,
     # Variant lanes (doc 0031 M2.3): emits `svg_tests_tiny`,
@@ -97,9 +98,11 @@ donner_cc_test(
     deps = [
         ":parser_test_utils",
         "//donner/base:base_test_utils",
+        "//donner/css:core",
         "//donner/svg",
         "//donner/svg/core/tests:core_test_utils",
         "//donner/svg/renderer/tests:renderer_test_utils",
+        "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
 )

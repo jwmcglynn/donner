@@ -8,6 +8,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/WritingMode.h"
@@ -28,6 +29,8 @@ struct TextLayoutParams {
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
   WritingMode writingMode = WritingMode::HorizontalTb;
+  FontKerning fontKerning = FontKerning::Auto;
+  std::optional<double> fontSizeAdjust;
   double letterSpacingPx = 0.0;
   double wordSpacingPx = 0.0;
   std::optional<Lengthd> textLength;

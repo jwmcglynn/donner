@@ -62,6 +62,10 @@ public:
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,
                               const TextLayoutParams& params);
 
+  /// Resolve a style owner's face and adjusted used size for declaring-element font metrics.
+  ResolvedTextFont resolveUsedFont(EntityHandle styleOwner, const Box2d& viewBox,
+                                   const FontMetrics& fontMetrics) const;
+
   /// Return vertical font metrics for \p font.
   FontVMetrics fontVMetrics(FontHandle font) const;
   /// Return the scale factor mapping design units to \p pixelHeight pixels for \p font.

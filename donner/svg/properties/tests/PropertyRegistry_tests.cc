@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -665,6 +666,188 @@ TEST(PropertyRegistry, FontStyle) {
     EXPECT_THAT(registry.parsePresentationAttribute("font-style", "italic"), ParseResultIs(true));
     EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
   }
+}
+
+TEST(PropertyRegistry, FontShorthandResetsOmittedLonghands) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-style: italic; font-weight: bold; font-stretch: condensed; font-variant: small-caps; "
+      "font-size: 18px; font-family: inherited; font-kerning: none");
+
+  registry.parseStyle("font: 50px 'Noto Sans'");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Normal));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(400));
+  EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Normal)));
+  EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::Normal));
+  EXPECT_THAT(registry.fontKerning.get(), Optional(FontKerning::Auto));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(50, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+}
+
+TEST(PropertyRegistry, FontKerningAndSizeAdjustInherit) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-kerning: none; font-size-adjust: 0.3");
+
+  const PropertyRegistry inherited = PropertyRegistry().inheritFrom(parent);
+  EXPECT_THAT(inherited.fontKerning.get(), Optional(FontKerning::None));
+  ASSERT_TRUE(inherited.fontSizeAdjust.get().has_value());
+  ASSERT_TRUE(inherited.fontSizeAdjust.get()->has_value());
+  EXPECT_DOUBLE_EQ(**inherited.fontSizeAdjust.get(), 0.3);
+
+  PropertyRegistry reset;
+  reset.parseStyle("font-kerning: normal; font-size-adjust: none");
+  EXPECT_THAT(reset.fontKerning.get(), Optional(FontKerning::Normal));
+  ASSERT_TRUE(reset.fontSizeAdjust.get().has_value());
+  EXPECT_FALSE(reset.fontSizeAdjust.get()->has_value());
+}
+
+TEST(PropertyRegistry, FontShorthandRejectsConflictsWithoutPartialMutation) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-style: italic; font-weight: bold; font-size: 18px; font-family: preserved");
+
+  registry.parseStyle("font: italic oblique 50px 'Noto Sans'");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(18, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
+
+  registry.parseStyle("font: 50px 'Noto Sans',");
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
+}
+
+TEST(PropertyRegistry, FontShorthandPresentationAttributeAcceptsUserUnitSize) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parsePresentationAttribute("font", "50 Noto Sans"), ParseResultIs(true));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(50, Lengthd::Unit::None)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+}
+
+TEST(PropertyRegistry, FontShorthandAcceptsSizeKeywordsStretchAndLineHeight) {
+  PropertyRegistry registry;
+  registry.parseStyle("font: italic small-caps bold expanded large/1.2 Noto Sans");
+
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+  EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+  EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Expanded)));
+  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(12.0 * 6.0 / 5.0, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+}
+
+TEST(PropertyRegistry, NegativeSpacingAndBaselineShiftRemainValid) {
+  PropertyRegistry registry;
+  registry.parseStyle("letter-spacing:-2px; word-spacing:-3px; baseline-shift:-4px");
+  EXPECT_THAT(registry.letterSpacing.get(), Optional(Lengthd(-2, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.wordSpacing.get(), Optional(Lengthd(-3, Lengthd::Unit::Px)));
+  EXPECT_THAT(registry.baselineShift.get(), Optional(Lengthd(-4, Lengthd::Unit::Px)));
+}
+
+TEST(PropertyRegistry, NumericFontWeightCanPrecedeEveryOptionalPrefix) {
+  for (std::string_view prefix :
+       {"700 italic small-caps condensed", "700 condensed small-caps italic",
+        "small-caps 700 italic condensed", "condensed italic 700 small-caps"}) {
+    SCOPED_TRACE(prefix);
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("font:") + std::string(prefix) + " 24px serif");
+    EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+    EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(24, Lengthd::Unit::Px)));
+    EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("serif"))));
+  }
+}
+
+TEST(PropertyRegistry, FontShorthandGrammarIsTransactional) {
+  for (std::string_view value : {"normal normal normal normal normal 12px serif",
+                                 "bold 600 12px serif",
+                                 "condensed expanded 12px serif",
+                                 "small-caps small-caps 12px serif",
+                                 "italic oblique 12px serif",
+                                 "12px",
+                                 "12px , serif",
+                                 "12px serif,",
+                                 "12px serif,,sans-serif",
+
+                                 "12px/ serif",
+                                 "12px/-1 serif",
+                                 "12px/-2px serif",
+                                 "-1px serif",
+                                 "12px inherit",
+                                 "12px initial",
+                                 "12px unset",
+                                 "12px serif initial",
+                                 "12px/normal/normal serif",
+                                 "12px 'A' 'B'",
+                                 "italic12px serif"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle(
+        "font: italic small-caps bold condensed 18px preserved; "
+        "font-kerning: none; font-size-adjust: 0.4");
+    registry.parseStyle(std::string("font: ") + std::string(value));
+    EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+    EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::SmallCaps));
+    EXPECT_THAT(registry.fontWeight.get(), Optional(700));
+    EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+    EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(18, Lengthd::Unit::Px)));
+    EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
+    EXPECT_THAT(registry.fontSizeAdjust.get(), Optional(Optional(0.4)));
+  }
+}
+
+TEST(PropertyRegistry, FontShorthandReusesLonghandValues) {
+  PropertyRegistry registry;
+  registry.parseStyle("font: 600 large/normal 'Noto Sans' , serif");
+  EXPECT_THAT(registry.fontWeight.get(), Optional(600));
+  EXPECT_THAT(registry.fontFamily.get(),
+              Optional(testing::ElementsAre(RcString("Noto Sans"), RcString("serif"))));
+  registry.parseStyle("font: normal normal normal normal 12px '', serif");
+  EXPECT_THAT(registry.fontFamily.get(),
+              Optional(testing::ElementsAre(RcString(""), RcString("serif"))));
+  registry.parseStyle("font: bolder 12px serif");
+  EXPECT_THAT(registry.fontWeight.get(), Optional(PropertyRegistry::kFontWeightBolder));
+}
+
+TEST(PropertyRegistry, FontKerningPreservesComputedKeyword) {
+  for (std::string_view value : {"auto", "normal", "none"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("font-kerning: ") + std::string(value));
+    std::ostringstream output;
+    output << *registry.fontKerning.get();
+    EXPECT_EQ(output.str(), value);
+  }
+}
+
+TEST(PropertyRegistry, FontShorthandCssWideKeywordsIncludeResetOnlyLonghands) {
+  PropertyRegistry parent;
+  parent.parseStyle(
+      "font: italic small-caps bold condensed 18px parent; "
+      "font-kerning: none; font-size-adjust: 0.4");
+  for (std::string_view value : {"inherit", "unset", "initial"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("font: ") + std::string(value));
+    const PropertyRegistry inherited = registry.inheritFrom(parent);
+    const bool initial = value == "initial";
+    EXPECT_THAT(inherited.fontStyle.get(),
+                Optional(initial ? FontStyle::Normal : FontStyle::Italic));
+    EXPECT_THAT(inherited.fontVariant.get(),
+                Optional(initial ? FontVariant::Normal : FontVariant::SmallCaps));
+    EXPECT_THAT(inherited.fontWeight.get(), Optional(initial ? 400 : 700));
+    EXPECT_THAT(inherited.fontSizeAdjust.get(),
+                Optional(initial ? std::optional<double>() : std::optional<double>(0.4)));
+  }
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-size-adjust: 0.7 !important; font-weight: 900 !important; "
+      "font: 12px serif");
+  EXPECT_THAT(registry.fontSizeAdjust.get(), Optional(Optional(0.7)));
+  EXPECT_THAT(registry.fontWeight.get(), Optional(900));
 }
 
 TEST(PropertyRegistry, FontStretch) {

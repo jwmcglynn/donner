@@ -13,6 +13,7 @@
 #include "donner/base/fonts/SfntUtils.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
+#include "donner/svg/resources/FontMetadata.h"
 #include "embed_resources/PublicSansFont.h"
 
 using testing::Eq;
@@ -151,10 +152,109 @@ private:
 size_t RetainedCharge(std::span<const uint8_t> data) {
   auto sfnt = fonts::SfntFont::Validate(data);
   EXPECT_TRUE(sfnt.has_value());
-  return data.size() + (sfnt ? sfnt->retainedBytes() : 0);
+  const auto metadata = ParseFontMetadata(data);
+  const size_t familyBytes = metadata ? metadata->familyName.capacity() + 1 : 0;
+  return data.size() + (sfnt ? sfnt->retainedBytes() : 0) + familyBytes;
+}
+
+size_t SetFamilyInitial(std::vector<uint8_t>& data, size_t record, size_t strings,
+                        uint16_t initial) {
+  if (record + 12 > data.size()) return 0;
+  const uint16_t nameId = fonts::ReadBe16(data.data() + record + 6);
+  if (fonts::ReadBe16(data.data() + record) != 3 || (nameId != 1 && nameId != 16)) return 0;
+  const size_t start = strings + fonts::ReadBe16(data.data() + record + 10);
+  if (fonts::ReadBe16(data.data() + record + 8) < 2 || start + 2 > data.size()) return 0;
+  data[start] = static_cast<uint8_t>(initial >> 8);
+  data[start + 1] = static_cast<uint8_t>(initial);
+  return 1;
+}
+
+std::vector<uint8_t> WithFamilyInitial(std::span<const uint8_t> source, uint16_t initial) {
+  std::vector<uint8_t> data(source.begin(), source.end());
+  const auto sfnt = fonts::SfntFont::Validate(data);
+  EXPECT_THAT(sfnt.has_value(), testing::IsTrue());
+  if (!sfnt) return {};
+  const auto table = sfnt->findTable(data, "name");
+  EXPECT_THAT(table.has_value(), testing::IsTrue());
+  if (!table || table->size() < 6) return {};
+  const size_t offset = table->data() - data.data();
+  const size_t strings = offset + fonts::ReadBe16(table->data() + 4);
+  size_t changed = 0;
+  for (size_t i = 0; i < fonts::ReadBe16(table->data() + 2); ++i) {
+    changed += SetFamilyInitial(data, offset + 6 + i * 12, strings, initial);
+  }
+  EXPECT_GT(changed, 0u);
+  return data;
 }
 
 }  // namespace
+
+TEST(FontManagerTest, ActualFamilyIdentitySurvivesManagerLifetimeAndTracksReplacement) {
+  Registry registry;
+  FontHandle first;
+  FontHandle second;
+  {
+    FontManager manager(registry);
+    first = manager.loadFontData(embedded::kPublicSansMediumOtf);
+    second = manager.loadFontData(WithFamilyInitial(embedded::kPublicSansMediumOtf, 'p'));
+    ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+    ASSERT_THAT(static_cast<bool>(second), testing::IsTrue());
+    ASSERT_NE(first, second);
+    EXPECT_THAT(manager.fontsShareFamily(first, second), testing::IsTrue());
+  }
+  FontManager manager(registry);
+  EXPECT_THAT(manager.fontsShareFamily(first, second), testing::IsTrue());
+  EXPECT_THAT(FontManagerTestAccess::ReplaceFontData(
+                  manager, second, WithFamilyInitial(embedded::kPublicSansMediumOtf, 'Z')),
+              testing::IsTrue());
+  EXPECT_THAT(manager.fontsShareFamily(first, second), testing::IsFalse());
+  EXPECT_THAT(manager.fontsShareFamily(first, first), testing::IsTrue());
+  EXPECT_THAT(manager.fontsShareFamily(first, FontHandle{}), testing::IsFalse());
+}
+
+TEST(FontManagerTest, UnknownOrLossyFamilyNamesDoNotMatchDifferentHandles) {
+  Registry registry;
+  FontManager manager(registry);
+  const auto firstBytes = WithFamilyInitial(embedded::kPublicSansMediumOtf, 0x100);
+  const auto secondBytes = WithFamilyInitial(embedded::kPublicSansMediumOtf, 0x101);
+  const auto firstMetadata = ParseFontMetadata(firstBytes);
+  const auto secondMetadata = ParseFontMetadata(secondBytes);
+  ASSERT_THAT(firstMetadata.has_value(), testing::IsTrue());
+  ASSERT_THAT(secondMetadata.has_value(), testing::IsTrue());
+  ASSERT_EQ(firstMetadata->familyName, secondMetadata->familyName);
+  const FontHandle first = manager.loadFontData(firstBytes);
+  const FontHandle second = manager.loadFontData(secondBytes);
+  ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(second), testing::IsTrue());
+  EXPECT_THAT(manager.fontsShareFamily(first, second), testing::IsFalse());
+  EXPECT_THAT(manager.fontsShareFamily(first, first), testing::IsTrue());
+
+  std::vector<uint8_t> unnamed(embedded::kPublicSansMediumOtf.begin(),
+                               embedded::kPublicSansMediumOtf.end());
+  const auto table = fonts::FindSfntTable(unnamed, "name");
+  ASSERT_THAT(table.has_value(), testing::IsTrue());
+  ASSERT_GE(table->size(), 6u);
+  const size_t offset = table->data() - unnamed.data();
+  unnamed[offset + 2] = 0;
+  unnamed[offset + 3] = 0;
+  const FontHandle noName = manager.loadFontData(unnamed);
+  const FontHandle anotherNoName = manager.loadFontData(unnamed);
+  ASSERT_THAT(static_cast<bool>(noName), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(anotherNoName), testing::IsTrue());
+  EXPECT_THAT(manager.fontsShareFamily(noName, anotherNoName), testing::IsFalse());
+  EXPECT_THAT(manager.fontsShareFamily(noName, noName), testing::IsTrue());
+}
+
+TEST(FontManagerTest, ActualFamilyStorageCountsTowardTheAggregateBudget) {
+  Registry registry;
+  const auto sfnt = fonts::SfntFont::Validate(embedded::kPublicSansMediumOtf);
+  ASSERT_THAT(sfnt.has_value(), testing::IsTrue());
+  FontManager manager(registry, embedded::kPublicSansMediumOtf.size() + sfnt->retainedBytes());
+  EXPECT_THAT(static_cast<bool>(manager.loadFontData(embedded::kPublicSansMediumOtf)),
+              testing::IsFalse());
+  EXPECT_EQ(manager.loadedFontBytes(), 0u);
+  EXPECT_EQ(manager.numLoadedFonts(), 0u);
+}
 
 TEST(FontManagerTest, FallbackFontLoads) {
   Registry registry;

@@ -117,9 +117,7 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   return TransformPath(glyphPath, glyphFromLocal);
 }
 
-Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
-                        std::span<const components::ComputedTextComponent::TextSpan> spans,
-                        const Box2d& viewBox, const FontMetrics& fontMetrics, float fontSizePx) {
+Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs) {
   double minX = std::numeric_limits<double>::max();
   double minY = std::numeric_limits<double>::max();
   double maxX = std::numeric_limits<double>::lowest();
@@ -128,12 +126,7 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
   for (size_t runIdx = 0; runIdx < runs.size(); ++runIdx) {
     const auto& run = runs[runIdx];
 
-    // Per-run font size (spans may override the text element's font size).
-    float runFontSizePx = fontSizePx;
-    if (runIdx < spans.size() && spans[runIdx].fontSize.value != 0.0) {
-      runFontSizePx = static_cast<float>(
-          spans[runIdx].fontSize.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
-    }
+    const float runFontSizePx = run.usedFontSizePx;
 
     // Em-box vertical extent from font v-metrics (ascent above baseline,
     // |descent| below), not the raw font size.
