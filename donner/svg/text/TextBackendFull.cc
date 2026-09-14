@@ -1039,7 +1039,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
 double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
                                       float curSizePx, uint32_t prevCodepoint,
                                       uint32_t curCodepoint, bool isVertical) const {
-  if (prevFont != curFont || prevSizePx != curSizePx) return 0.0;
+  if (!fontManager_.fontsShareFamily(prevFont, curFont) || !std::isfinite(curSizePx) ||
+      curSizePx <= 0.0f) {
+    return 0.0;
+  }
   hb_font_t* hbFont = getOrCreateHbFont(prevFont);
   if (!hbFont) {
     return 0.0;

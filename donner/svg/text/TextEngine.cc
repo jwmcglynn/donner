@@ -1533,12 +1533,14 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
   return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
 }
 
-/// Cross-span pairs must use the same resolved font, used size, and glyph variant.
-bool CompatibleKerningRuns(const TextRun& current, FontVariant currentVariant,
-                           FontHandle previousFont, float previousSizePx,
-                           FontVariant previousVariant, bool currentKerning, bool previousKerning) {
-  return currentKerning && previousKerning && current.font == previousFont &&
-         current.usedFontSizePx == previousSizePx && currentVariant == previousVariant;
+/// Preserve same-family boundary shaping across size/face changes, using the preceding face's kern.
+bool CompatibleKerningRuns(const FontManager& fontManager, const TextRun& current,
+                           FontVariant currentVariant, FontHandle previousFont,
+                           float previousSizePx, FontVariant previousVariant, bool currentKerning,
+                           bool previousKerning) {
+  return currentKerning && previousKerning && currentVariant == previousVariant &&
+         current.usedFontSizePx > 0.0f && previousSizePx > 0.0f &&
+         fontManager.fontsShareFamily(current.font, previousFont);
 }
 
 /// Keep source clusters in the positioning pipeline without invoking a font backend at size zero.
@@ -1843,8 +1845,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
         crossKern =
-            CompatibleKerningRuns(run, span.fontVariant, prevSpanFont, prevSpanFontSizePx,
-                                  prevSpanFontVariant, spanFontKerning, prevSpanFontKerning)
+            CompatibleKerningRuns(fontManager_, run, span.fontVariant, prevSpanFont,
+                                  prevSpanFontSizePx, prevSpanFontVariant, spanFontKerning,
+                                  prevSpanFontKerning)
                 ? backend_->crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont,
                                           spanFontSizePx, prevSpanLastCodepoint, firstCp, vertical)
                 : 0.0;

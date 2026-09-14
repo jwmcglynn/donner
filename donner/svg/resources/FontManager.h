@@ -270,7 +270,18 @@ public:
   /// Return true when @p handle has a cached validated sfnt directory.
   bool isValidatedFont(FontHandle handle) const;
 
-  /// Exact font-data and cached-index bytes currently charged to this registry's budget.
+  /**
+   * Compare the actual family names cached from two loaded fonts, independently of CSS aliases.
+   * Equal valid handles match even without a name; different handles with missing or lossy names
+   * do not. This performs no decoding or allocation.
+   *
+   * @param first First loaded font.
+   * @param second Second loaded font.
+   * @return Whether the handles identify the same face or a known common family.
+   */
+  bool fontsShareFamily(FontHandle first, FontHandle second) const;
+
+  /// Font-data, cached-index, and family-name storage bytes charged to this registry's budget.
   size_t loadedFontBytes() const;
 
   /// Number of loaded font components currently charged to this registry's budget.

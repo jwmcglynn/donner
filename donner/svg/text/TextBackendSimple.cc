@@ -379,8 +379,8 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
 double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
                                         float curSizePx, uint32_t prevCodepoint,
                                         uint32_t curCodepoint, bool isVertical) const {
-  if (prevFont != curFont || prevSizePx != curSizePx || !std::isfinite(prevSizePx) ||
-      prevSizePx <= 0.0f) {
+  if (!fontManager_.fontsShareFamily(prevFont, curFont) || !std::isfinite(prevSizePx) ||
+      !std::isfinite(curSizePx) || prevSizePx <= 0.0f || curSizePx <= 0.0f) {
     return 0.0;
   }
   const stbtt_fontinfo* info = getFontInfo(prevFont);
