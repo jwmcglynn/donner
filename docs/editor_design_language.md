@@ -262,7 +262,7 @@ Full-shell visual verification uses the Geode replay harness with a worker-settl
 
 ```sh
 bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
-  --rnr zoom-out-drag-jump.rnr \
+  --rnr donner/editor/tests/zoom-out-drag-jump.rnr \
   --capture-frame 10 --max-frame 10 --crop full \
   --worker-scheduling drain-each-frame
 ```

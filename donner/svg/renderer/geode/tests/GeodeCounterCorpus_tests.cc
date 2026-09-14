@@ -600,10 +600,10 @@ struct CorpusRoot {
   size_t minimumScenes;
 };
 
-/// The repository root itself carries the logo SVGs, which ship in the same
-/// `testdata` filegroup as the renderer corpus.
+/// The repository root itself carries the checked-in logo SVGs, which ship in
+/// the same `testdata` filegroup as the renderer corpus.
 constexpr CorpusRoot kCorpusRoots[] = {
-    {".", 3},
+    {".", 2},
     {"donner/svg/renderer/testdata", 70},
     {"donner/svg/renderer/benchmarks/testdata", 1},
 };

@@ -126,7 +126,7 @@ py_test(
     data = [
         ":editor_control_mcp_server",
         "//:donner_splash.svg",
-        "//:zoom-out-drag-jump.rnr",
+        "//donner/editor/tests:zoom_out_drag_jump_rnr",
     ],
     # This test intentionally exercises the raw bazel-bin MCP launch path, which
     # runs a nested `bazel run` GL replay helper. Keep it opt-in so `bazel test
