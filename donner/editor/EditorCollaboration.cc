@@ -90,6 +90,7 @@ std::string ElementIdSelector(std::string_view id) {
   return selector + "\"]";
 }
 bool SafeAttribute(std::string_view name, std::string_view value, bool inserting = false) {
+  if (value.find('\\') != std::string_view::npos) return false;
   if (name.empty() || name.size() > 128 || value.size() > 65536 ||
       value.find('\0') != std::string_view::npos || (!inserting && name == "id"))
     return false;
