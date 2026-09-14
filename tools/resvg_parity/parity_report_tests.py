@@ -305,8 +305,15 @@ class RealTreeParityReportTests(unittest.TestCase):
         self.assertEqual(summary["pixel_budget_sources"], 103)
         self.assertEqual(summary["effective_pixel_budget_cases"], 125)
         self.assertEqual(summary["shared_golden_cases"], 36)
-        self.assertEqual(summary["geode_golden_cases"], 5)
+        self.assertEqual(summary["geode_golden_cases"], 4)
         self.assertEqual(summary["backend_disabled_cases"], 0)
+
+        on_tspan = next(
+            case for case in report["cases"]
+            if case["path"] == "painting/paint-order/on-tspan.svg"
+        )
+        self.assertIn("shared_golden", on_tspan["exception_types"])
+        self.assertNotIn("geode_golden", on_tspan["exception_types"])
 
 
 if __name__ == "__main__":
