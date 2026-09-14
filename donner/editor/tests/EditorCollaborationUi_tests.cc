@@ -226,7 +226,7 @@ class PolygonClipCollaborationUiTest : public EditorCollaborationUiTest {
 protected:
   std::string initialSource() override {
     return R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="160">
-      <rect width="200" height="160" fill="white"/>
+      <defs id="definitions"/><rect width="200" height="160" fill="white"/>
       <rect id="face" x="10" y="10" width="150" height="120" fill="red"/>
     </svg>)";
   }
@@ -238,7 +238,7 @@ TEST_F(PolygonClipCollaborationUiTest, GenericPointsEditsRenderLivePolygonClips)
   ASSERT_THAT(red.empty(), Eq(false));
   ASSERT_THAT(white.empty(), Eq(false));
   auto args = revision();
-  args.update({{"parent", "svg"}, {"tag", "clipPath"}, {"attributes", {{"id", "clip"}}}});
+  args.update({{"parent", "#definitions"}, {"tag", "clipPath"}, {"attributes", {{"id", "clip"}}}});
   call("insert_element", args);
   args = revision();
   args.update({{"parent", "#clip"},
