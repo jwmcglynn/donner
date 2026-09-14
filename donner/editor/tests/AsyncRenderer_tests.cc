@@ -5447,6 +5447,72 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPromotedTilePresentati
          "be drawn even while selection chrome remains visible.";
 }
 
+TEST(RenderCoordinatorTest, SurfaceBudgetRecoveryReducesOnlyPreviewResolution) {
+  EditorApp app;
+  ASSERT_THAT(
+      app.loadFromString(
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="red"/></svg>)"),
+      ::testing::Eq(true));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(100, 100);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, 100, 100);
+  viewport.resetTo100Percent();
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation())
+    GTEST_SKIP() << "GPU budget test";
+  coordinator.renderer().setSurfaceBudgetForTesting(8, 20000);
+  SelectTool select;
+  GlTextureCache textures;
+  const auto settle = [&]() {
+    return PollUntil([&]() { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&]() { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(2));
+  };
+  ASSERT_THAT(coordinator.maybeRequestRender(app, select, viewport, &textures),
+              ::testing::Eq(true));
+  ASSERT_THAT(settle(), ::testing::Eq(true));
+  EXPECT_THAT(coordinator.previewRasterScale(), ::testing::Eq(0.5));
+  ASSERT_THAT(coordinator.maybeRequestRender(app, select, viewport, &textures),
+              ::testing::Eq(true));
+  ASSERT_THAT(settle(), ::testing::Eq(true));
+  EXPECT_THAT(coordinator.compositedPresentation().hasCachedTextures(), ::testing::Eq(true));
+  EXPECT_THAT(app.document().document().canvasSize(), ::testing::Eq(Vector2i(100, 100)));
+  EXPECT_THAT(coordinator.previewRenderingBlocked(), ::testing::Eq(false));
+  viewport.zoomAround(0.5, viewport.paneCenter());
+  (void)coordinator.maybeRequestRender(app, select, viewport, &textures);
+  EXPECT_THAT(coordinator.previewRasterScale(), ::testing::Eq(1.0));
+}
+
+TEST(RenderCoordinatorTest, SurfaceBudgetRecoveryStopsAtItsMinimumResolution) {
+  EditorApp app;
+  ASSERT_THAT(
+      app.loadFromString(
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32"/></svg>)"),
+      ::testing::Eq(true));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(32, 32);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, 32, 32);
+  viewport.resetTo100Percent();
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation())
+    GTEST_SKIP() << "GPU budget test";
+  coordinator.renderer().setSurfaceBudgetForTesting(1, 0);
+  SelectTool select;
+  GlTextureCache textures;
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    ASSERT_THAT(coordinator.maybeRequestRender(app, select, viewport, &textures),
+                ::testing::Eq(true));
+    ASSERT_THAT(PollUntil([&]() { coordinator.pollRenderResult(app, viewport, textures); },
+                          [&]() { return !coordinator.asyncRenderer().isBusy(); },
+                          std::chrono::steady_clock::now() + std::chrono::seconds(1)),
+                ::testing::Eq(true));
+  }
+  EXPECT_THAT(coordinator.previewRasterScale(), ::testing::Eq(0.125));
+  EXPECT_THAT(coordinator.previewRenderingBlocked(), ::testing::Eq(true));
+  EXPECT_THAT(coordinator.maybeRequestRender(app, select, viewport, &textures),
+              ::testing::Eq(false));
+}
+
 TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(

@@ -82,11 +82,28 @@ void PublishWorkerTimingStats(
         const b = $0 >> 3;
         const heap = HEAPF64;
         const names = ([
-          'workerMs', 'queueWaitMs', 'dequeueToStartMs', 'setupMs', 'renderFrameMs',
-          'buildPreviewMs', 'finalSnapshotMs', 'diagnosticsMs', 'pollDelayMs', 'wakeToPollMs',
-          'firstFrameDrawMs', 'firstFramePlanningMs', 'firstFrameWarmupMs', 'immediateRasterizeMs',
-          'cachedRasterizeMs', 'immediateTileCount', 'cachedTileCount', 'offscreenCreateCount',
-          'offscreenRecycleCount', 'offscreenCreateTotal', 'offscreenRecycleTotal', 'readbackCount',
+          'workerMs',
+          'queueWaitMs',
+          'dequeueToStartMs',
+          'setupMs',
+          'renderFrameMs',
+          'buildPreviewMs',
+          'finalSnapshotMs',
+          'diagnosticsMs',
+          'pollDelayMs',
+          'wakeToPollMs',
+          'firstFrameDrawMs',
+          'firstFramePlanningMs',
+          'firstFrameWarmupMs',
+          'immediateRasterizeMs',
+          'cachedRasterizeMs',
+          'immediateTileCount',
+          'cachedTileCount',
+          'offscreenCreateCount',
+          'offscreenRecycleCount',
+          'offscreenCreateTotal',
+          'offscreenRecycleTotal',
+          'readbackCount',
           'readbackPollIterations'
         ]);
         const previous = window['__donnerWorkerStats'];
@@ -274,6 +291,17 @@ bool DocumentRectContains(const Box2d& outer, const Box2d& inner) {
          outer.topLeft.y <= inner.topLeft.y + kTolerance &&
          outer.bottomRight.x + kTolerance >= inner.bottomRight.x &&
          outer.bottomRight.y + kTolerance >= inner.bottomRight.y;
+}
+
+EditorRasterViewport PreviewAtResolution(EditorRasterViewport viewport, double scale) {
+  if (scale >= 1.0 || viewport.outputSizePx.x <= 0 || viewport.outputSizePx.y <= 0) return viewport;
+  const Vector2i original = viewport.outputSizePx;
+  viewport.outputSizePx = Vector2i(std::max(1, static_cast<int>(std::ceil(original.x * scale))),
+                                   std::max(1, static_cast<int>(std::ceil(original.y * scale))));
+  // Keep one exact scale across normal and overscan viewports. Rounded target dimensions may
+  // add a transparent edge pixel; deriving separate x/y scales would break camera compatibility.
+  viewport.outputFromDocument = viewport.outputFromDocument * Transform2d::Scale(scale);
+  return viewport;
 }
 
 bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendered,
@@ -515,6 +543,11 @@ RenderCoordinator::RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevic
 
 void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration) {
   (void)documentGeneration;
+  previewRasterScale_ = 1.0;
+  lastBudgetZoom_ = 0.0;
+  blockedPreview_.reset();
+  (void)renderWorker_.asyncRenderer.consumeSurfaceBudgetRejection();
+
   compositedPresentation_ = CompositedPresentation{};
   selectionBoundsCache_ = SelectionBoundsCache{};
   displayedDocVersion_ = 0;
@@ -857,6 +890,18 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   ZoneScopedN("RenderCoordinator::pollRenderResult");
   const ScopedHeapDelta pollHeapDelta(MemoryStage::AppPollResult);
   auto resultOpt = renderWorker_.asyncRenderer.pollResult();
+  if (renderWorker_.asyncRenderer.consumeSurfaceBudgetRejection() && app.hasDocument()) {
+    lastBudgetZoom_ = viewport.zoom;
+    if (previewRasterScale_ > 0.125) {
+      previewRasterScale_ *= 0.5;
+      pendingPresentationRefresh_ = true;
+    } else {
+      blockedPreview_ = viewport.rasterViewport();
+      blockedPreviewVersion_ = app.document().currentFrameVersion();
+      pendingPresentationRefresh_ = false;
+    }
+  }
+
 #ifdef __EMSCRIPTEN__
   // Report a GPU-wait failure whether or not a frame landed. The completed
   // frame below carries the same fields, so consume the generation either way
@@ -892,7 +937,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
-  const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+  const EditorRasterViewport rasterViewport =
+      PreviewAtResolution(viewport.rasterViewport(), previewRasterScale_);
   const bool overviewInfillResult =
       result.overviewInfillOnly && result.compositedPreview.has_value() &&
       result.compositedPreview->valid() && !result.rasterViewport.viewportBounded;
@@ -974,7 +1020,21 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
 
-  const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+  const EditorRasterViewport fullResolutionViewport = viewport.rasterViewport();
+  if (previewRasterScale_ < 1.0 && viewport.zoom < lastBudgetZoom_) {
+    previewRasterScale_ = 1.0;
+    blockedPreview_.reset();
+    pendingPresentationRefresh_ = true;
+  }
+  if (blockedPreview_.has_value()) {
+    if (blockedPreviewVersion_ == app.document().currentFrameVersion() &&
+        SameRasterViewport(*blockedPreview_, fullResolutionViewport))
+      return false;
+    blockedPreview_.reset();
+    pendingPresentationRefresh_ = true;
+  }
+  const EditorRasterViewport rasterViewport =
+      PreviewAtResolution(fullResolutionViewport, previewRasterScale_);
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
   const auto dragPreview = selectTool.activeDragPreview();
@@ -1039,9 +1099,11 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason);
   const EditorRasterViewport requestRasterViewport =
       requestOverviewInfill
-          ? viewport.overviewInfillRasterViewport()
-          : (useSelectedPrewarmRasterViewport ? viewport.selectedPrewarmRasterViewport()
-                                              : rasterViewport);
+          ? PreviewAtResolution(viewport.overviewInfillRasterViewport(), previewRasterScale_)
+          : (useSelectedPrewarmRasterViewport
+                 ? PreviewAtResolution(viewport.selectedPrewarmRasterViewport(),
+                                       previewRasterScale_)
+                 : rasterViewport);
   const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
   if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&

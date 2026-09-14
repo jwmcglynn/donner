@@ -484,6 +484,9 @@ public:
   /// True when the first correct frame has been drawn but its retained caches still need warming.
   [[nodiscard]] bool hasPendingFirstFrameWarmup() const { return firstFrameWarmupPending_; }
 
+  /// True when the most recent frame was refused by the renderer surface budget.
+  [[nodiscard]] bool resourceLimitRejected() const { return resourceLimitRejected_; }
+
   /// Warm retained layer and segment caches for the already-presented first frame.
   ///
   /// This never writes the main render target. It is intended for a later low-priority worker turn
@@ -1396,6 +1399,8 @@ private:
 
   /// Snapshot consumers need flat output by default; tile-only consumers opt out explicitly.
   bool mainCompositionRequired_ = true;
+  bool resourceLimitRejected_ = false;
+  bool acceptSurfaceBudget(const RendererInterface& renderer);
 
   FastPathCounters fastPathCounters_;
 

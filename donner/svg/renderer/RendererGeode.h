@@ -492,7 +492,7 @@ public:
                                    std::uint64_t maximumResidentBytes);
 
   /// Shrink the aggregate frame-surface budget for boundary tests.
-  void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes);
+  void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes) override;
 
   /// Shrink the aggregate text-materialization budget for boundary tests.
   void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits,

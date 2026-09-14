@@ -1178,6 +1178,9 @@ public:
   /// Return resource-admission diagnostics for the current frame.
   [[nodiscard]] virtual RendererResourceStats resourceStats() const { return {}; }
 
+  /// Lower the surface budget for deterministic allocation-refusal tests. No-op on other backends.
+  virtual void setSurfaceBudgetForTesting(std::size_t, std::uint64_t) {}
+
   /// Shared driver-side filter preparation budget for this renderer family, when supported.
   [[nodiscard]] virtual RendererFilterPreparationBudget* filterPreparationBudget() {
     return nullptr;

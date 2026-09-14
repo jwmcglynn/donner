@@ -675,6 +675,10 @@ RendererResourceStats Renderer::resourceStats() const {
   return impl_->resourceStats();
 }
 
+void Renderer::setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes) {
+  impl_->setSurfaceBudgetForTesting(maximumSurfaces, maximumBytes);
+}
+
 std::uint64_t Renderer::filterBudgetChunksForTesting() const {
   return impl_->filterBudgetChunksForTesting();
 }

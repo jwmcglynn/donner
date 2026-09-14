@@ -124,6 +124,8 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     }
   }
 
+  if (!acceptSurfaceBudget(*offscreen)) return;
+
   // Stamp the bitmap with the entity's current absolute transform so the
   // fast path in `renderFrame` can later tell whether a DOM transform
   // mutation is a pure translation (reuse bitmap via `canvasFromBitmap_`
@@ -432,6 +434,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
                 [this]() { return isCancelled(); })) {
           return;
         }
+        if (!acceptSurfaceBudget(*offscreen)) return;
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -454,6 +457,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
                                                  [this]() { return isCancelled(); })) {
           return;
         }
+        if (!acceptSurfaceBudget(*offscreen)) return;
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -879,6 +883,11 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   }
 
   renderer().beginFrame(viewport);
+  if (!acceptSurfaceBudget(renderer())) {
+    renderer().endFrame();
+    mainRendererHasCachedFrame_ = false;
+    return;
+  }
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
     if (segmentIndex >= staticSpanPlans_.size()) {
@@ -904,6 +913,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   const auto drawPayload = [this](const RendererBitmap* bitmap,
                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
                                   const Transform2d& canvasFromPayload) {
+    if (!acceptSurfaceBudget(renderer())) return;
     const Vector2i payloadDims =
         bitmap != nullptr && HasPublicTileBitmap(*bitmap)
             ? bitmap->dimensions
@@ -1032,7 +1042,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   // Record that the main renderer's framebuffer now holds a full
   // compose - future drag frames can safely skip `composeLayers` and
   // `takeSnapshot` will still return a valid full-canvas snapshot.
-  mainRendererHasCachedFrame_ = true;
+  mainRendererHasCachedFrame_ = acceptSurfaceBudget(renderer());
 }
 
 }  // namespace donner::svg::compositor

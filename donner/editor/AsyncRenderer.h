@@ -481,6 +481,11 @@ public:
   /// true.
   [[nodiscard]] bool isBusy() const;
 
+  /// Consume a surface-budget refusal after the worker has released the document.
+  [[nodiscard]] bool consumeSurfaceBudgetRejection() {
+    return surfaceBudgetRejected_.exchange(false, std::memory_order_acq_rel);
+  }
+
   /// Returns true only while the worker may still be computing or cancelling a render.
   /// Unlike `isBusy()`, a staged result waiting in `DoneState` is not in flight.
   [[nodiscard]] bool hasRenderInFlightForTesting() const;
@@ -828,6 +833,7 @@ private:
                                                       int constructionStart) const;
   void finishSampleThumbnailRendererCreation();
 
+  std::atomic_bool surfaceBudgetRejected_{false};
   std::thread thread_;
   mutable std::mutex mutex_;
   std::condition_variable cv_;

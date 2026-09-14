@@ -1078,6 +1078,7 @@ void CompositorController::warmFirstFrameCaches(const RenderViewport& viewport,
         }
         if (!layer.hasRenderablePayload()) {
           rasterizeLayer(layer, viewport, surfaceFromCanvas);
+          if (resourceLimitRejected_) return;
           if (layer.isImmediate()) {
             lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
             ++lastRenderFrameStats_.immediateTileCount;
@@ -1105,6 +1106,7 @@ void CompositorController::warmFirstFrameCaches(const RenderViewport& viewport,
     {
       ZoneScopedN("Compositor::rasterizeDirtyStaticSegments (first)");
       rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
+      if (resourceLimitRejected_) return;
     }
   } else {
     offscreenSupportKnown_ = true;
@@ -1130,6 +1132,8 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
     return false;
   }
 
+  resourceLimitRejected_ = false;
+  const ScopedFrameResourceBudget frameResourceBudget(renderer());
   lastRenderFrameStats_.firstFrameWarmupMs = 0.0;
   lastRenderFrameStats_.immediateRasterizeMs = 0.0;
   lastRenderFrameStats_.cachedRasterizeMs = 0.0;
@@ -1138,15 +1142,21 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   const auto warmupStart = std::chrono::steady_clock::now();
   cancelToken_.emplace(token);
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
-  const bool completed = !token.isCancelled();
+  const bool completed = !token.isCancelled() && acceptSurfaceBudget(renderer());
   cancelToken_.reset();
   lastRenderFrameStats_.firstFrameWarmupMs =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmupStart)
           .count();
-  if (completed) {
+  if (completed || resourceLimitRejected_) {
     firstFrameWarmupPending_ = false;
   }
   return completed;
+}
+
+bool CompositorController::acceptSurfaceBudget(const RendererInterface& candidate) {
+  resourceLimitRejected_ =
+      resourceLimitRejected_ || candidate.resourceStats().surfaceBudgetRejected;
+  return !resourceLimitRejected_;
 }
 
 bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token) {
@@ -1160,22 +1170,26 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
   cancelToken_.emplace(token);
   renderFrameImpl(viewport, surfaceFromCanvas);
   const bool cancelled = token.isCancelled();
+  (void)acceptSurfaceBudget(renderer());
   cancelToken_.reset();
-  return !cancelled;
+  return !cancelled && !resourceLimitRejected_;
 }
 
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   renderFrameImpl(viewport, Transform2d());
+  (void)acceptSurfaceBudget(renderer());
 }
 
 void CompositorController::renderFrame(const RenderViewport& viewport,
                                        const Transform2d& surfaceFromCanvas) {
   renderFrameImpl(viewport, surfaceFromCanvas);
+  (void)acceptSurfaceBudget(renderer());
 }
 
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
+  resourceLimitRejected_ = false;
   const ScopedFrameResourceBudget frameResourceBudget(renderer());
   // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
   // will populate whatever retained payloads are still missing, with the current viewport and DOM.
@@ -1881,6 +1895,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           return;
         }
         rasterizeLayer(layer, viewport, surfaceFromCanvas);
+        if (resourceLimitRejected_) return;
         if (layer.isImmediate()) {
           lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
           ++lastRenderFrameStats_.immediateTileCount;
@@ -1944,6 +1959,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   {
     ZoneScopedN("Compositor::rasterizeDirtyStaticSegments");
     rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
+    if (resourceLimitRejected_) return;
   }
 
   // In the single-drag-target split path, publish the editor-facing

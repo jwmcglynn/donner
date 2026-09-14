@@ -148,6 +148,11 @@ public:
   [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
   [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return renderWorker_.asyncRenderer; }
   [[nodiscard]] svg::Renderer& renderer() { return renderWorker_.renderer; }
+  /// Pixel-resolution fraction used for previews after a renderer budget refusal.
+  [[nodiscard]] double previewRasterScale() const { return previewRasterScale_; }
+  /// True when even the minimum preview resolution was refused.
+  [[nodiscard]] bool previewRenderingBlocked() const { return blockedPreview_.has_value(); }
+
   [[nodiscard]] const SelectionBoundsCache& selectionBoundsCache() const {
     return selectionBoundsCache_;
   }
@@ -469,6 +474,11 @@ private:
   bool pendingDocumentMutationOverviewRefresh_ = false;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
+  double previewRasterScale_ = 1.0;
+  double lastBudgetZoom_ = 0.0;
+  std::optional<EditorRasterViewport> blockedPreview_;
+  std::uint64_t blockedPreviewVersion_ = 0;
+
   FrameCostBreakdown lastFrameCostBreakdown_;
   /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
   std::uint64_t documentCanvasCommitTotal_ = 0;

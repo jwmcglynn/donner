@@ -338,6 +338,8 @@ public:
 
   /// Forwards bounded-resource diagnostics to the active backend.
   [[nodiscard]] RendererResourceStats resourceStats() const override;
+  /// Forward the lowering-only renderer surface-budget test control.
+  void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes) override;
 
   [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
 

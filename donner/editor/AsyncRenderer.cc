@@ -1535,6 +1535,7 @@ void AsyncRenderer::workerLoop() {
       }
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
+    if (requestRenderer.resourceStats().surfaceBudgetRejected) renderCompleted = false;
     if (renderCompleted && compositor_ != nullptr && !desiredEntities.empty()) {
       desiredPromotionCoverageCompleteAfterRender =
           compositor_->interactionLayersCover(compositorEntities_, desiredEntities);
@@ -1559,6 +1560,10 @@ void AsyncRenderer::workerLoop() {
     // pass. Do not publish a partial result; either loop into the superseding
     // request or park after a cancel-without-replacement.
     if (!renderCompleted) {
+      const bool resourceRejected =
+          !cancelRender_.isCancelled() &&
+          ((compositor_ != nullptr && compositor_->resourceLimitRejected()) ||
+           requestRenderer.resourceStats().surfaceBudgetRejected);
       // Release document access before taking `mutex_` to avoid a lock-order inversion.
       releaseDocumentAccess();
       // An abandoned iteration still observed whatever the backend device did.
@@ -1567,11 +1572,20 @@ void AsyncRenderer::workerLoop() {
       // place that failure can be recorded: the completed-frame stats below
       // are never reached.
       noteGpuWaitOutcome(requestRenderer.consumeReadbackStats());
-      cancelledRenderCount_.fetch_add(1, std::memory_order_release);
+      if (!resourceRejected) cancelledRenderCount_.fetch_add(1, std::memory_order_release);
       std::function<void()> wake;
       bool notifyStateChange = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (resourceRejected) {
+          const auto* rendering = std::get_if<RenderingState>(&workerState_);
+          if (rendering != nullptr && !rendering->pendingRequest.has_value()) {
+            surfaceBudgetRejected_.store(true, std::memory_order_release);
+            workerState_ = IdleState{};
+            wake = wakeCallback_;
+            notifyStateChange = true;
+          }
+        }
         if (std::holds_alternative<CancellingState>(workerState_)) {
           workerState_ = IdleState{};
           wake = wakeCallback_;
@@ -1723,6 +1737,7 @@ void AsyncRenderer::workerLoop() {
       if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
         if (rendering->pendingRequest.has_value()) {
         } else {
+          surfaceBudgetRejected_.store(false, std::memory_order_release);
           DoneState done;
           done.result.bitmap = std::move(bitmap);
           done.result.compositedPreview = std::move(compositedPreview);

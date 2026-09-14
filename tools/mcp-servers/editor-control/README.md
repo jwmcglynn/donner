@@ -43,6 +43,11 @@ other edits happen. Comments are editor UI and are stored in a private `.comment
 beside the socket; they are not part of the exported SVG. Use a persistent private socket directory
 and save the SVG to a file before adding feedback that should survive restarting the editor.
 
+If a preview exceeds the GPU surface budget, the editor retries at a lower preview resolution
+and shows a status beside the zoom control. SVG geometry and saved files remain unchanged.
+Zooming out retries full preview resolution; retries stop if the minimum resolution still exceeds
+the limit, keeping the editor responsive.
+
 ### Native tools
 
 | Tool | Purpose |

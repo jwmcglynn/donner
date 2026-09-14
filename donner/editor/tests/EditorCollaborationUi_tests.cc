@@ -35,7 +35,8 @@ public:
     shell.openRenderPaneContextMenu(point);
   }
   static bool PresentedCurrentDocument(EditorShell& shell) {
-    return !shell.renderCoordinator_.asyncRenderer().isBusy() &&
+    // Background refinement may still be running after the current document is presented.
+    return shell.renderCoordinator_.compositedPresentation().hasCachedTextures() &&
            shell.renderCoordinator_.displayedDocVersionForDiagnostics() >=
                shell.app_.document().currentFrameVersion();
   }
@@ -45,7 +46,22 @@ public:
             {"drafting", shell.penTool_.isDrafting()},
             {"writebacks", shell.documentSyncController_.hasPendingWritebacks()},
             {"text_changed", shell.textEditor_.isTextChanged()},
-            {"ready", shell.collaborationFrameReady()}};
+            {"ready", shell.collaborationFrameReady()},
+            {"preview_scale", shell.renderCoordinator_.previewRasterScale()},
+            {"preview_blocked", shell.renderCoordinator_.previewRenderingBlocked()},
+            {"cached", shell.renderCoordinator_.compositedPresentation().hasCachedTextures()},
+            {"displayed", shell.renderCoordinator_.displayedDocVersionForDiagnostics()},
+            {"current", shell.app_.document().currentFrameVersion()}};
+  }
+  static void LimitSurfaceBytes(EditorShell& shell, std::uint64_t bytes) {
+    ASSERT_THAT(shell.renderCoordinator_.asyncRenderer().isBusy(), ::testing::Eq(false));
+    shell.renderCoordinator_.renderer().setSurfaceBudgetForTesting(256, bytes);
+  }
+  static double PreviewScale(EditorShell& shell) {
+    return shell.renderCoordinator_.previewRasterScale();
+  }
+  static bool PreviewBlocked(EditorShell& shell) {
+    return shell.renderCoordinator_.previewRenderingBlocked();
   }
   static bool PinCaptures(EditorShell& shell, Vector2d point) {
     return shell.commentsPresenter_.capturesInput(point);
@@ -157,12 +173,14 @@ protected:
     return Json::parse(result["result"]["content"][0]["text"].get<std::string>());
   }
   svg::RendererBitmap captureDocumentPixel(Vector2d point) {
-    for (int i = 0; i < 100 && !EditorCollaborationUiTestAccess::PresentedCurrentDocument(*shell);
-         ++i) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!EditorCollaborationUiTestAccess::PresentedCurrentDocument(*shell) &&
+           std::chrono::steady_clock::now() < deadline) {
       window->waitEventsTimeout(0.01);
       frame();
     }
-    EXPECT_THAT(EditorCollaborationUiTestAccess::PresentedCurrentDocument(*shell), Eq(true));
+    EXPECT_THAT(EditorCollaborationUiTestAccess::PresentedCurrentDocument(*shell), Eq(true))
+        << EditorCollaborationUiTestAccess::Readiness(*shell).dump();
     window->beginFrame();
     shell->runFrame();
     const auto bitmap = window->endFrameAndReadPixels();
@@ -208,9 +226,8 @@ class GeodeSplashCollaborationUiTest : public EditorCollaborationUiTest {
 protected:
   gui::EditorWindowOptions windowOptions() override {
     auto options = EditorCollaborationUiTest::windowOptions();
-    options.initialWidth = 3200;
-    options.initialHeight = 1800;
-    options.offscreenContentScale = 2.0;
+    options.initialWidth = 2400;
+    options.initialHeight = 1600;
     return options;
   }
   std::string initialSource() override {
@@ -219,6 +236,51 @@ protected:
     return splash.contents;
   }
 };
+
+class BudgetedGeodeCollaborationUiTest : public GeodeSplashCollaborationUiTest {
+protected:
+  void SetUp() override {
+    GeodeSplashCollaborationUiTest::SetUp();
+    ASSERT_THAT(shell != nullptr, Eq(true));
+    EditorCollaborationUiTestAccess::LimitSurfaceBytes(*shell, 8u * 1024u * 1024u);
+  }
+};
+
+TEST_F(BudgetedGeodeCollaborationUiTest, BudgetRecoveryPreservesArtworkAndRepeatedComments) {
+  const std::string before = call("get_svg_source")["source"].get<std::string>();
+  {
+    SCOPED_TRACE("initial budget recovery");
+    (void)captureDocumentPixel(Vector2d(544, 500));
+  }
+  EXPECT_THAT(EditorCollaborationUiTestAccess::PreviewScale(*shell), ::testing::Lt(1.0));
+  shell->queueDocumentSpaceReplayInputForTesting(
+      {.documentPoint = Vector2d(544, 500), .leftMouseDown = true, .leftMousePressed = true});
+  frame();
+  shell->queueDocumentSpaceReplayInputForTesting(
+      {.documentPoint = Vector2d(544, 500), .leftMouseReleased = true});
+  frame();
+  call("get_editor_state");
+  {
+    SCOPED_TRACE("after shape click");
+    (void)captureDocumentPixel(Vector2d(544, 500));
+  }
+  EXPECT_THAT(EditorCollaborationUiTestAccess::PreviewBlocked(*shell), Eq(false));
+  addComment(Vector2d(544, 500), "Refine this crystal");
+  addComment(Vector2d(500, 400), "Refine this edge");
+  EXPECT_THAT(call("get_comments")["comments"].size(), Eq(2u));
+  EXPECT_THAT(call("get_svg_source")["source"].get<std::string>(), Eq(before));
+  window->beginFrame();
+  shell->runFrame();
+  const auto bitmap = window->endFrameAndReadPixels();
+  ASSERT_THAT(bitmap.empty(), Eq(false));
+  const char* output = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  ASSERT_THAT(output != nullptr, Eq(true));
+  const std::string path = (std::filesystem::path(output) / "native-budget-recovery.png").string();
+  EXPECT_THAT(svg::RendererImageIO::writeRgbaPixelsToPngFile(
+                  path.c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                  bitmap.rowBytes / 4),
+              Eq(true));
+}
 
 TEST_F(GeodeSplashCollaborationUiTest, PresentsTheFullArtworkAndRespondsToMcp) {
   std::cerr << "Startup window=" << window->windowSize().x << "x" << window->windowSize().y

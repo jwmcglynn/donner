@@ -4916,6 +4916,11 @@ void EditorShell::renderCanvasZoomControl() {
                     theme.radiusControl, 0, 1.0f);
   char label[16];
   std::snprintf(label, sizeof(label), "%.0f%%", interactionController_.viewport().zoom * 100.0);
+  if (renderCoordinator_.previewRasterScale() < 1.0) {
+    drawList->AddText(ImVec2(max.x + 8.0f, min.y + 4.0f), theme.textPrimary,
+                      renderCoordinator_.previewRenderingBlocked() ? "Preview paused - zoom out"
+                                                                   : "Reduced preview resolution");
+  }
   const ImVec2 textSize = ImGui::CalcTextSize(label);
   drawList->AddText(ImVec2(min.x + (max.x - min.x - textSize.x) * 0.5f,
                            min.y + (max.y - min.y - textSize.y) * 0.5f),
@@ -7147,6 +7152,8 @@ void EditorShell::runFrame() {
 
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
                                       &interactionController_.frameHistory());
+  if (renderCoordinator_.presentationRefreshPending()) requestRenderAtEndOfFrame_ = true;
+
   applyPendingHistoryActions();
   // Polling releases the completed-render document gate. Dispatch before selection/overlay work
   // can schedule another render, so a steady stream of preview frames cannot starve MCP.
