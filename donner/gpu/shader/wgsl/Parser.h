@@ -203,8 +203,10 @@ inline constexpr std::string_view kReservedDeclarationNames[] = {
 /// Private parser state. All storage is fixed-size and constexpr-compatible.
 class Parser {
 public:
-  /// Creates a parser for p source.
-  constexpr explicit Parser(std::string_view source) : source_(source) {
+  /// Borrows input for the parser lifetime; parsed modules retain their own text.
+  /// @param source WGSL input text.
+  constexpr explicit Parser(std::string_view source)
+      : source_(source), sourceData_(source.data()), sourceSize_(source.size()) {
     scopeStarts_[0] = 0;
     scopeDepth_ = 1;
     InitializeSourceCopy();
@@ -285,18 +287,19 @@ private:
   static constexpr uint32_t kUnknownBound = std::numeric_limits<uint32_t>::max();
 
   constexpr void InitializeSourceCopy() {
-    if (source_.size() > ModuleLimits::kMaxSourceBytes) {
-      Fail(ErrorCode::SourceTooLarge, SourceSpan{0, static_cast<uint32_t>(source_.size())});
+    if (sourceSize_ > ModuleLimits::kMaxSourceBytes) {
+      Fail(ErrorCode::SourceTooLarge, SourceSpan{0, static_cast<uint32_t>(sourceSize_)});
       return;
     }
-    module_.sourceByteCount = static_cast<uint32_t>(source_.size());
+    module_.sourceByteCount = static_cast<uint32_t>(sourceSize_);
+    char* destination = module_.sourceBytes.data();
     for (uint32_t i = 0; i < module_.sourceByteCount; ++i) {
-      const unsigned char ch = static_cast<unsigned char>(source_[i]);
+      const unsigned char ch = static_cast<unsigned char>(sourceData_[i]);
       if (ch > 0x7f) {
         Fail(ErrorCode::NonAsciiSource, SourceSpan{i, i + 1});
         return;
       }
-      module_.sourceBytes[i] = static_cast<char>(ch);
+      destination[i] = static_cast<char>(ch);
     }
   }
 
@@ -339,15 +342,15 @@ private:
   }
 
   constexpr void SkipTrivia() {
-    while (cursor_ < source_.size()) {
-      const char ch = source_[cursor_];
+    while (cursor_ < sourceSize_) {
+      const char ch = sourceData_[cursor_];
       if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
         ++cursor_;
         continue;
       }
-      if (ch == '/' && cursor_ + 1 < source_.size() && source_[cursor_ + 1] == '/') {
+      if (ch == '/' && cursor_ + 1 < sourceSize_ && sourceData_[cursor_ + 1] == '/') {
         cursor_ += 2;
-        while (cursor_ < source_.size() && source_[cursor_] != '\n') {
+        while (cursor_ < sourceSize_ && sourceData_[cursor_] != '\n') {
           ++cursor_;
         }
         continue;
@@ -368,14 +371,14 @@ private:
       return;
     }
     const uint32_t begin = static_cast<uint32_t>(cursor_);
-    if (cursor_ == source_.size()) {
+    if (cursor_ == sourceSize_) {
       token_ = Token{TokenKind::End, SourceSpan{begin, begin}, {}};
       return;
     }
-    const char ch = source_[cursor_++];
+    const char ch = sourceData_[cursor_++];
     if (IsIdentifierStart(ch)) return ScanIdentifier(begin);
-    if ((ch >= '0' && ch <= '9') || (ch == '.' && cursor_ < source_.size() &&
-                                     source_[cursor_] >= '0' && source_[cursor_] <= '9'))
+    if ((ch >= '0' && ch <= '9') || (ch == '.' && cursor_ < sourceSize_ &&
+                                     sourceData_[cursor_] >= '0' && sourceData_[cursor_] <= '9'))
       return ScanNumber(begin);
     const TokenKind kind = Punctuation(ch);
     if (kind == TokenKind::End) {
@@ -386,20 +389,20 @@ private:
   }
 
   constexpr void ScanIdentifier(uint32_t begin) {
-    while (cursor_ < source_.size() && IsIdentifierContinue(source_[cursor_])) ++cursor_;
+    while (cursor_ < sourceSize_ && IsIdentifierContinue(sourceData_[cursor_])) ++cursor_;
     token_ = MakeToken(TokenKind::Identifier, begin);
   }
 
   constexpr void ScanNumber(uint32_t begin) {
-    const bool hex = begin + 1 < source_.size() && source_[begin] == '0' &&
-                     (source_[begin + 1] == 'x' || source_[begin + 1] == 'X');
-    while (cursor_ < source_.size()) {
-      const char ch = source_[cursor_];
+    const bool hex = begin + 1 < sourceSize_ && sourceData_[begin] == '0' &&
+                     (sourceData_[begin + 1] == 'x' || sourceData_[begin + 1] == 'X');
+    while (cursor_ < sourceSize_) {
+      const char ch = sourceData_[cursor_];
       if (IsIdentifierContinue(ch) || ch == '.') {
         ++cursor_;
         continue;
       }
-      const char previous = source_[cursor_ - 1];
+      const char previous = sourceData_[cursor_ - 1];
       if ((ch == '+' || ch == '-') &&
           (hex ? previous == 'p' || previous == 'P' : previous == 'e' || previous == 'E')) {
         ++cursor_;
@@ -440,7 +443,7 @@ private:
   }
 
   constexpr bool Peek(char expected) {
-    if (cursor_ < source_.size() && source_[cursor_] == expected) {
+    if (cursor_ < sourceSize_ && sourceData_[cursor_] == expected) {
       ++cursor_;
       return true;
     }
@@ -2780,7 +2783,10 @@ private:
     return id;
   }
 
-  std::string_view source_;
+  const std::string_view source_;
+  // Keep repeated lexer accesses independent of standard-library constexpr checks.
+  const char* const sourceData_;
+  const size_t sourceSize_;
   Module module_;
   Diagnostic diagnostic_;
   Expression invalidExpression_;
