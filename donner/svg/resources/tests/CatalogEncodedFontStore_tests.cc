@@ -224,6 +224,47 @@ TEST(CatalogEncodedFontStoreTest, ConsumerBudgetPressureDefersWithoutPoisoningTh
   EXPECT_EQ(manager.isValidatedFont(manager.findFont("Inter")), true);
 }
 
+TEST(CatalogEncodedFontStoreTest, FamilyMetadataPressureDefersAndRecoversAfterRelease) {
+  Registry measurementRegistry;
+  FontManager measurement(measurementRegistry);
+  const auto measured = measurement.loadFontData(InterBytes(), FontDataTrust::Trusted);
+  ASSERT_EQ(measurement.isValidatedFont(measured), true);
+  const auto data = measurement.fontData(measured);
+  const auto sfnt = fonts::SfntFont::Validate(data);
+  ASSERT_EQ(sfnt.has_value(), true);
+  const size_t fullCharge = measurement.loadedFontBytes();
+  const size_t dataAndIndexCharge = data.size() + sfnt->retainedBytes();
+  ASSERT_GT(fullCharge, dataAndIndexCharge);
+  ASSERT_GE(fullCharge - 1, dataAndIndexCharge);
+
+  EmbeddedFontProvider provider;
+  Registry registry;
+  FontManager manager(registry, 2 * fullCharge - 1);
+  const auto occupied = manager.loadFontData(InterBytes(), FontDataTrust::Trusted);
+  ASSERT_EQ(manager.isValidatedFont(occupied), true);
+  ASSERT_EQ(manager.loadedFontBytes(), fullCharge);
+  manager.setFontProvider(&provider);
+  const auto fallback = manager.findFont("Inter");
+  EXPECT_EQ(fallback, manager.fallbackFont());
+  EXPECT_THAT(manager.faceDependencies(),
+              ElementsAre(testing::AllOf(
+                  Field(&FontFaceDependency::state, FontFaceLoadState::WaitingForAdmission),
+                  Field(&FontFaceDependency::waitReason, FontFaceWaitReason::RetainedBudget))));
+  EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 2u);
+  EXPECT_EQ(manager.findFont("Inter"), fallback);
+  EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 2u);
+
+  registry.destroy(occupied.entity());
+  EXPECT_EQ(manager.needsResourceRefresh(), true);
+  EXPECT_EQ(manager.refreshPendingFonts(), true);
+  const auto loaded = manager.findFont("Inter");
+  EXPECT_NE(loaded, fallback);
+  EXPECT_EQ(manager.isValidatedFont(loaded), true);
+  EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 3u);
+  EXPECT_THAT(manager.faceDependencies(),
+              ElementsAre(Field(&FontFaceDependency::state, FontFaceLoadState::Loaded)));
+}
+
 TEST(CatalogEncodedFontStoreTest, ReadyAssetDeferredDecodeWakesWithoutAnotherFetch) {
   auto store = std::make_shared<CatalogEncodedFontStore>();
   EmbeddedFontProvider provider(store);
