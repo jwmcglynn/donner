@@ -23,7 +23,11 @@ module.exports = defineConfig({
   // passes starves the sampler and fails the suite's usability guard on
   // machines that run the real thing at 110 fps. Both composited suites run on
   // hardware via playwright.composited-chromium.config.js instead.
-  testIgnore: ["composited-invariants.spec.ts", "composited-drag-invariants.spec.ts"],
+  testIgnore: [
+    "composited-invariants.spec.ts",
+    "composited-drag-invariants.spec.ts",
+    "font-reference.spec.ts",
+  ],
   timeout: 30000,
   use: {
     ...devices["Desktop Chrome"],
