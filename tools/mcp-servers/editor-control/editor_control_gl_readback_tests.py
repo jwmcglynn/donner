@@ -147,7 +147,7 @@ class McpClient:
 class EditorControlGlReadbackTests(unittest.TestCase):
   def test_replay_rnr_gl_readback_returns_imgui_framebuffer_png(self) -> None:
     server = runfile("tools/mcp-servers/editor-control/editor_control_mcp_server")
-    rnr = runfile("zoom-out-drag-jump.rnr")
+    rnr = runfile("donner/editor/tests/zoom-out-drag-jump.rnr")
     svg = runfile("donner_splash.svg")
 
     client = McpClient(server)

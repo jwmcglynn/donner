@@ -968,6 +968,12 @@ filegroup(
     visibility = ["//tools/mcp-servers/editor-control:__pkg__"],
 )
 
+filegroup(
+    name = "zoom_out_drag_jump_rnr",
+    srcs = ["zoom-out-drag-jump.rnr"],
+    visibility = ["//tools/mcp-servers/editor-control:__pkg__"],
+)
+
 donner_cc_binary(
     name = "editor_rnr_gl_replay",
     srcs = ["EditorRnrGlReplay.cc"],
@@ -977,8 +983,8 @@ donner_cc_binary(
         "geode_drag_zoom_o_pop.rnr",
         "pen-fill.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
+        ":zoom_out_drag_jump_rnr",
         "//:donner_splash.svg",
-        "//:zoom-out-drag-jump.rnr",
     ],
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -1005,11 +1011,11 @@ donner_cc_test(
     # decouples them from real frame pacing and host load, so they run reliably
     # on shared/loaded executors without a forced-local execution strategy.
     # Only the recordings this suite actually opens. `drag_start_hang_repro.rnr`
-    # (695 frames), `pen-fill.rnr` (254) and `//:zoom-out-drag-jump.rnr` (253)
+    # (695 frames), `pen-fill.rnr` (254) and `:zoom_out_drag_jump_rnr` (253)
     # were listed here but referenced by no test in GlRnrReplay_tests.cc, so
     # each of the six shards staged ~328 KB of runfiles it never read - and on a
     # remote executor that is input-tree work repeated per shard, per run.
-    # `//:zoom-out-drag-jump.rnr` is still consumed by
+    # `:zoom_out_drag_jump_rnr` is still consumed by
     # //tools/mcp-servers/editor-control, which declares it itself, and the
     # `editor_rnr_gl_replay` developer binary above still stages all of them.
     data = [

@@ -140,9 +140,9 @@ its bounded frame-to-frame progress. `//donner/editor/tests:editor_shell_tests` 
 pane and replay integration.
 
 The full editor frame is verified through
-`//donner/editor/tests:editor_rnr_gl_replay` with `zoom-out-drag-jump.rnr`, full-frame capture, and
-`drain-each-frame` worker scheduling. The review checks canvas framing, chrome fit, text contrast,
-panel balance, source readability, and absence of overlapping controls.
+`//donner/editor/tests:editor_rnr_gl_replay` with `donner/editor/tests/zoom-out-drag-jump.rnr`,
+full-frame capture, and `drain-each-frame` worker scheduling. The review checks canvas framing,
+chrome fit, text contrast, panel balance, source readability, and absence of overlapping controls.
 
 The Transform regression uses concurrent-DOM mode and a bounded timeout so lock re-entry fails as a
 test instead of hanging the suite. The Inspector fuzzer combines arbitrary pointer frames with
