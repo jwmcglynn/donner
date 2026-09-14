@@ -219,51 +219,96 @@ struct FloatResult {
   Error error = Error::None;
 };
 
-/// Converts an exact rational times a power of two to finite binary32 or binary64.
-constexpr FloatResult Round(const UInt& n, const UInt& d, int32_t power, uint32_t precision,
-                            bool negative = false) {
-  if (precision != 24 && precision != 53) return {0, false, Error::Capacity};
+struct RoundFormat {
+  int32_t bias;
+  int32_t minimum;
+  int32_t smallest;
+  uint64_t hidden;
+  uint64_t sign;
+  uint32_t precision;
+};
+
+constexpr Error ValidateRational(const UInt& n, const UInt& d, uint32_t precision) {
+  if (precision != 24 && precision != 53) return Error::Capacity;
+  if (!n.valid || !d.valid) return Error::Capacity;
+  if (!d.used) return Error::DivisionByZero;
+  return Error::None;
+}
+
+constexpr RoundFormat GetRoundFormat(uint32_t precision, bool negative) {
   const int32_t bias = precision == 24 ? 127 : 1023;
   const uint32_t totalBits = precision == 24 ? 32 : 64;
-  const uint64_t sign = negative ? uint64_t(1) << (totalBits - 1) : 0;
-  if (!n.valid || !d.valid) return {0, false, Error::Capacity};
-  if (!d.used) return {0, false, Error::DivisionByZero};
-  if (!n.used) return {sign, true, Error::None};
-  int32_t exponent = int32_t(n.bits()) - int32_t(d.bits());
-  UInt comparison = exponent >= 0 ? d : n;
+  return {bias,
+          1 - bias,
+          1 - bias - int32_t(precision - 1),
+          uint64_t(1) << (precision - 1),
+          negative ? uint64_t(1) << (totalBits - 1) : 0,
+          precision};
+}
+
+constexpr int32_t RationalExponent(const UInt& numerator, const UInt& denominator, int32_t power) {
+  int32_t exponent = int32_t(numerator.bits()) - int32_t(denominator.bits());
+  UInt comparison = exponent >= 0 ? denominator : numerator;
   comparison.shiftLeft(uint32_t(exponent >= 0 ? exponent : -exponent));
-  if ((exponent >= 0 && n.compare(comparison) < 0) || (exponent < 0 && comparison.compare(d) < 0))
+  if ((exponent >= 0 && numerator.compare(comparison) < 0) ||
+      (exponent < 0 && comparison.compare(denominator) < 0))
     --exponent;
-  exponent += power;
-  if (exponent > bias) return {0, false, Error::Range};
-  const int32_t minimum = 1 - bias;
-  const int32_t smallest = minimum - int32_t(precision - 1);
-  if (exponent < smallest - 1) return {sign, false, Error::None};
-  const int32_t quantum = exponent < minimum ? smallest : exponent - int32_t(precision - 1);
-  const int32_t shift = power - quantum;
+  return exponent + power;
+}
+
+constexpr Quotient ScaleAndDivide(const UInt& n, const UInt& d, int32_t power, int32_t quantum) {
   UInt numerator = n, denominator = d;
+  const int32_t shift = power - quantum;
   if (shift >= 0)
     numerator.shiftLeft(uint32_t(shift));
   else
     denominator.shiftLeft(uint32_t(-shift));
-  const Quotient quotient = Divide(numerator, denominator);
-  if (quotient.error != Error::None) return {0, false, quotient.error};
-  const uint64_t hidden = uint64_t(1) << (precision - 1);
-  const uint64_t maximum = (hidden << 1) - 1;
-  if (exponent == bias &&
-      (quotient.floor > maximum || (quotient.floor == maximum && !quotient.exact)))
-    return {0, false, Error::Range};
+  return Divide(numerator, denominator);
+}
+
+constexpr bool ExceedsFiniteRange(const Quotient& quotient, int32_t exponent, RoundFormat format) {
+  const uint64_t maximum = (format.hidden << 1) - 1;
+  return exponent == format.bias &&
+         (quotient.floor > maximum || (quotient.floor == maximum && !quotient.exact));
+}
+
+constexpr FloatResult EncodeRounded(Quotient quotient, int32_t exponent, RoundFormat format) {
+  if (ExceedsFiniteRange(quotient, exponent, format)) return {0, false, Error::Range};
   uint64_t significand = quotient.rounded;
-  if (exponent < minimum) {
-    if (significand < hidden) return {sign | significand, quotient.exact, Error::None};
-    exponent = minimum;
-  } else if (significand >= hidden << 1) {
+  if (exponent < format.minimum) {
+    if (significand < format.hidden)
+      return {format.sign | significand, quotient.exact, Error::None};
+    exponent = format.minimum;
+  } else if (significand >= format.hidden << 1) {
     significand >>= 1;
     ++exponent;
   }
-  if (exponent > bias) return {0, false, Error::Range};
-  return {sign | (uint64_t(exponent + bias) << (precision - 1)) | (significand - hidden),
+  if (exponent > format.bias) return {0, false, Error::Range};
+  return {format.sign | (uint64_t(exponent + format.bias) << (format.precision - 1)) |
+              (significand - format.hidden),
           quotient.exact, Error::None};
+}
+
+constexpr FloatResult RoundNonzero(const UInt& n, const UInt& d, int32_t power,
+                                   RoundFormat format) {
+  const int32_t exponent = RationalExponent(n, d, power);
+  if (exponent > format.bias) return {0, false, Error::Range};
+  if (exponent < format.smallest - 1) return {format.sign, false, Error::None};
+  const int32_t quantum =
+      exponent < format.minimum ? format.smallest : exponent - int32_t(format.precision - 1);
+  const Quotient quotient = ScaleAndDivide(n, d, power, quantum);
+  if (quotient.error != Error::None) return {0, false, quotient.error};
+  return EncodeRounded(quotient, exponent, format);
+}
+
+/// Converts an exact rational times a power of two to finite binary32 or binary64.
+constexpr FloatResult Round(const UInt& n, const UInt& d, int32_t power, uint32_t precision,
+                            bool negative = false) {
+  const Error error = ValidateRational(n, d, precision);
+  if (error != Error::None) return {0, false, error};
+  const RoundFormat format = GetRoundFormat(precision, negative);
+  if (!n.used) return {format.sign, true, Error::None};
+  return RoundNonzero(n, d, power, format);
 }
 
 /// Decoded finite IEEE significand, binary scale and sign.
@@ -345,6 +390,171 @@ struct Value {
   Error error = Error::None;
 };
 
+struct LiteralHeader {
+  std::string_view digits;
+  bool hex = false;
+  bool point = false;
+  bool exponent = false;
+  char suffix = 0;
+};
+
+constexpr bool ExponentMarker(char ch, bool hex) {
+  return hex ? ch == 'p' || ch == 'P' : ch == 'e' || ch == 'E';
+}
+
+constexpr char LiteralSuffix(char ch, bool hex, bool exponent) {
+  if (ch == 'i' || ch == 'u') return ch;
+  if ((!hex || exponent) && (ch == 'f' || ch == 'h')) return ch;
+  return 0;
+}
+
+constexpr bool HexPrefix(std::string_view text) {
+  return text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
+}
+
+constexpr LiteralHeader Classify(std::string_view text) {
+  LiteralHeader header;
+  header.hex = HexPrefix(text);
+  if (header.hex) text.remove_prefix(2);
+  for (char ch : text) {
+    header.point |= ch == '.';
+    header.exponent |= ExponentMarker(ch, header.hex);
+  }
+  if (!text.empty()) {
+    header.suffix = LiteralSuffix(text.back(), header.hex, header.exponent);
+    if (header.suffix) text.remove_suffix(1);
+  }
+  header.digits = text;
+  return header;
+}
+
+struct SignificandScan {
+  UInt value;
+  uint32_t cursor = 0, digits = 0, significant = 0, dropped = 0, fractional = 0;
+  Error error = Error::None;
+};
+
+constexpr void KeepDigit(SignificandScan& scan, uint32_t digit, bool hex) {
+  if (digit == 0 && scan.significant == 0) return;
+  ++scan.significant;
+  const uint32_t retained = hex ? 16 : 20;
+  if (scan.significant <= retained) {
+    scan.value.multiplySmall(hex ? 16 : 10);
+    scan.value.addSmall(digit);
+  } else
+    ++scan.dropped;
+}
+
+constexpr SignificandScan ScanSignificand(std::string_view text, bool hex) {
+  SignificandScan scan;
+  bool point = false;
+  while (scan.cursor < text.size()) {
+    const char ch = text[scan.cursor];
+    if (ch == '.') {
+      if (point) {
+        scan.error = Error::Syntax;
+        return scan;
+      }
+      point = true;
+      ++scan.cursor;
+      continue;
+    }
+    const int digit = Digit(ch, hex);
+    if (digit < 0) break;
+    ++scan.cursor;
+    ++scan.digits;
+    if (point) ++scan.fractional;
+    KeepDigit(scan, uint32_t(digit), hex);
+  }
+  if (!scan.digits) scan.error = Error::Syntax;
+  return scan;
+}
+
+struct ParsedPower {
+  int32_t value = 0;
+  Error error = Error::None;
+};
+
+constexpr bool ConsumeSign(std::string_view text, uint32_t& cursor) {
+  if (cursor < text.size() && (text[cursor] == '+' || text[cursor] == '-'))
+    return text[cursor++] == '-';
+  return false;
+}
+
+constexpr ParsedPower PowerDigits(std::string_view text, uint32_t cursor) {
+  if (cursor == text.size()) return {0, Error::Syntax};
+  int32_t value = 0;
+  while (cursor < text.size()) {
+    const int digit = Digit(text[cursor++], false);
+    if (digit < 0) return {0, Error::Syntax};
+    if (value > 1000) return {0, Error::Capacity};
+    value = value * 10 + digit;
+  }
+  return {value, Error::None};
+}
+
+constexpr ParsedPower ParseExplicitPower(std::string_view text, uint32_t cursor, bool hex) {
+  if (cursor == text.size()) return {};
+  if (!ExponentMarker(text[cursor++], hex)) return {0, Error::Syntax};
+  const bool negative = ConsumeSign(text, cursor);
+  ParsedPower result = PowerDigits(text, cursor);
+  if (negative) result.value = -result.value;
+  return result;
+}
+
+constexpr bool InvalidFloatPrefix(const LiteralHeader& header) {
+  return !header.hex && !header.point && !header.exponent && header.digits.size() > 1 &&
+         header.digits[0] == '0';
+}
+
+constexpr bool InvalidFloatHeader(const LiteralHeader& header) {
+  if (header.suffix == 'h' || header.suffix == 'i' || header.suffix == 'u' || header.digits.empty())
+    return true;
+  return InvalidFloatPrefix(header);
+}
+
+constexpr void ScaleDecimal(UInt& significand, UInt& denominator, int32_t power) {
+  if (power >= 0)
+    for (int32_t i = 0; i < power; ++i) significand.multiplySmall(10);
+  else
+    for (int32_t i = 0; i < -power; ++i) denominator.multiplySmall(10);
+}
+
+constexpr Value ConvertDecimal(SignificandScan scan, int32_t power, uint32_t precision, Kind kind) {
+  const int32_t exponent = int32_t(scan.significant - scan.dropped) + power - 1;
+  if (exponent > (precision == 24 ? 38 : 308)) return {kind, 0, Error::Range};
+  if (exponent < (precision == 24 ? -46 : -324)) return {kind, 0, Error::None};
+  UInt denominator(1);
+  ScaleDecimal(scan.value, denominator, power);
+  const FloatResult result = Round(scan.value, denominator, 0, precision);
+  return {kind, result.bits, result.error};
+}
+
+constexpr Value ConvertLiteral(const LiteralHeader& header, const SignificandScan& scan,
+                               int32_t power) {
+  const uint32_t precision = header.suffix == 'f' ? 24 : 53;
+  const Kind kind = header.suffix == 'f' ? Kind::F32 : Kind::AbstractFloat;
+  power += (int32_t(scan.dropped) - int32_t(scan.fractional)) * (header.hex ? 4 : 1);
+  if (!scan.value.used) return {kind, 0, Error::None};
+  if (!header.hex) return ConvertDecimal(scan, power, precision, kind);
+  const FloatResult result = Round(scan.value, UInt(1), power, precision);
+  if (header.suffix == 'f' && !result.exact) return {kind, 0, Error::Range};
+  return {kind, result.bits, result.error};
+}
+
+constexpr Value ParseFloating(const LiteralHeader& header) {
+  if (InvalidFloatHeader(header)) return {Kind::AbstractFloat, 0, Error::Syntax};
+  const SignificandScan scan = ScanSignificand(header.digits, header.hex);
+  if (scan.error != Error::None) return {Kind::AbstractFloat, 0, scan.error};
+  const ParsedPower power = ParseExplicitPower(header.digits, scan.cursor, header.hex);
+  if (power.error != Error::None) return {Kind::AbstractFloat, 0, power.error};
+  return ConvertLiteral(header, scan, power.value);
+}
+
+constexpr bool IsFloating(const LiteralHeader& header) {
+  return header.point || header.exponent || header.suffix == 'f' || header.suffix == 'h';
+}
+
 constexpr Value Integer(std::string_view text, bool hex, char suffix) {
   uint64_t result = 0;
   if (text.empty() || (!hex && text.size() > 1 && text[0] == '0'))
@@ -370,90 +580,9 @@ constexpr Value Integer(std::string_view text, bool hex, char suffix) {
 constexpr Value Parse(std::string_view text) {
   if (text.empty()) return {Kind::AbstractInt, 0, Error::Syntax};
   if (text.size() > 256) return {Kind::AbstractInt, 0, Error::Capacity};
-  const bool hex = text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
-  if (hex) text.remove_prefix(2);
-  bool point = false, exponent = false;
-  for (char ch : text) {
-    point |= ch == '.';
-    exponent |= hex ? ch == 'p' || ch == 'P' : ch == 'e' || ch == 'E';
-  }
-  char suffix = 0;
-  if (!text.empty()) {
-    const char last = text.back();
-    if (last == 'i' || last == 'u' || ((!hex || exponent) && (last == 'f' || last == 'h'))) {
-      suffix = last;
-      text.remove_suffix(1);
-    }
-  }
-  const bool floating = point || exponent || suffix == 'f' || suffix == 'h';
-  if (!floating) return Integer(text, hex, suffix);
-  if (suffix == 'h' || suffix == 'i' || suffix == 'u' || text.empty())
-    return {Kind::AbstractFloat, 0, Error::Syntax};
-  if (!hex && !point && !exponent && text.size() > 1 && text[0] == '0')
-    return {Kind::AbstractFloat, 0, Error::Syntax};
-  UInt significand;
-  uint32_t cursor = 0, digits = 0, significant = 0, dropped = 0, fractional = 0;
-  bool afterPoint = false;
-  const uint32_t retained = hex ? 16 : 20;
-  while (cursor < text.size()) {
-    const char ch = text[cursor];
-    if (ch == '.') {
-      if (afterPoint) return {Kind::AbstractFloat, 0, Error::Syntax};
-      afterPoint = true;
-      ++cursor;
-      continue;
-    }
-    const int digit = Digit(ch, hex);
-    if (digit < 0) break;
-    ++cursor;
-    ++digits;
-    if (afterPoint) ++fractional;
-    if (digit != 0 || significant != 0) {
-      ++significant;
-      if (significant <= retained) {
-        significand.multiplySmall(hex ? 16 : 10);
-        significand.addSmall(uint32_t(digit));
-      } else
-        ++dropped;
-    }
-  }
-  if (!digits) return {Kind::AbstractFloat, 0, Error::Syntax};
-  int32_t explicitPower = 0;
-  if (cursor < text.size()) {
-    const char marker = text[cursor++];
-    if (!(hex ? marker == 'p' || marker == 'P' : marker == 'e' || marker == 'E'))
-      return {Kind::AbstractFloat, 0, Error::Syntax};
-    bool negative = false;
-    if (cursor < text.size() && (text[cursor] == '+' || text[cursor] == '-'))
-      negative = text[cursor++] == '-';
-    const uint32_t first = cursor;
-    while (cursor < text.size()) {
-      const int digit = Digit(text[cursor++], false);
-      if (digit < 0) return {Kind::AbstractFloat, 0, Error::Syntax};
-      if (explicitPower > 1000) return {Kind::AbstractFloat, 0, Error::Capacity};
-      explicitPower = explicitPower * 10 + digit;
-    }
-    if (cursor == first) return {Kind::AbstractFloat, 0, Error::Syntax};
-    if (negative) explicitPower = -explicitPower;
-  }
-  const uint32_t precision = suffix == 'f' ? 24 : 53;
-  const Kind kind = suffix == 'f' ? Kind::F32 : Kind::AbstractFloat;
-  int32_t power = explicitPower + (int32_t(dropped) - int32_t(fractional)) * (hex ? 4 : 1);
-  if (!significand.used) return {kind, 0, Error::None};
-  UInt denominator(1);
-  int32_t binaryPower = hex ? power : 0;
-  if (!hex) {
-    const int32_t decimalExponent = int32_t(significant - dropped) + power - 1;
-    if (decimalExponent > (precision == 24 ? 38 : 308)) return {kind, 0, Error::Range};
-    if (decimalExponent < (precision == 24 ? -46 : -324)) return {kind, 0, Error::None};
-    if (power >= 0)
-      for (int32_t i = 0; i < power; ++i) significand.multiplySmall(10);
-    else
-      for (int32_t i = 0; i < -power; ++i) denominator.multiplySmall(10);
-  }
-  const FloatResult result = Round(significand, denominator, binaryPower, precision);
-  if (hex && suffix == 'f' && !result.exact) return {kind, 0, Error::Range};
-  return {kind, result.bits, result.error};
+  const LiteralHeader header = Classify(text);
+  if (!IsFloating(header)) return Integer(header.digits, header.hex, header.suffix);
+  return ParseFloating(header);
 }
 
 }  // namespace donner::gpu::shader::wgsl::number

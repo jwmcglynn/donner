@@ -119,6 +119,112 @@ constexpr uint16_t EntryCount(const Module& module) {
   return count;
 }
 
+constexpr ShaderScalarType ScalarType(Type type) {
+  if (type.kind == TypeKind::F32 || type.kind == TypeKind::Matrix) return ShaderScalarType::F32;
+  return type.kind == TypeKind::I32 ? ShaderScalarType::I32 : ShaderScalarType::U32;
+}
+
+constexpr ShaderBufferMember ReflectMember(const Module& module, const StructMember& member) {
+  const Type value = member.type.kind == TypeKind::Array ? member.type.elementType() : member.type;
+  const bool matrix = value.kind == TypeKind::Matrix;
+  return {Name(module.name(member.name)),
+          ScalarType(value),
+          matrix ? value.rows : value.lanes,
+          member.offset,
+          member.size,
+          member.alignment,
+          member.type.arrayCount,
+          member.arrayStride,
+          matrix ? value.columns : uint8_t(0),
+          matrix ? (value.rows == 2 ? 8u : 16u) : 0u};
+}
+
+constexpr BindingType ResourceType(BindingKind kind) {
+  switch (kind) {
+    case BindingKind::Sampler: return BindingType::FilteringSampler;
+    case BindingKind::Uniform: return BindingType::UniformBuffer;
+    case BindingKind::ReadOnlyStorage: return BindingType::ReadOnlyStorageBuffer;
+    case BindingKind::SampledTexture: return BindingType::SampledTexture2dUnfilterableFloat;
+    default: return BindingType::WriteOnlyStorageTexture2d;
+  }
+}
+
+constexpr void ReflectBufferLayout(const Module& module, Type type, ShaderResource& resource) {
+  Type layoutType = type;
+  if (type.kind == TypeKind::Array) {
+    resource.runtimeArrayStrideBytes = module.arrayStride(type);
+    resource.minSizeBytes = resource.runtimeArrayStrideBytes;
+    resource.alignmentBytes = module.typeAlignment(type);
+    layoutType = type.elementType();
+    if (layoutType.isNumeric()) {
+      resource.runtimeArrayScalarType = ScalarType(layoutType);
+      resource.runtimeArrayLanes = layoutType.lanes;
+    }
+  } else {
+    resource.minSizeBytes = module.typeSize(type);
+    resource.alignmentBytes = module.typeAlignment(type);
+  }
+  if (layoutType.kind == TypeKind::Struct) {
+    const Struct& structure = module.structs[layoutType.structId];
+    resource.firstMember = structure.firstMember;
+    resource.memberCount = structure.memberCount;
+  }
+}
+
+constexpr ShaderResource ReflectResource(const Module& module, const Binding& binding) {
+  ShaderResource resource;
+  resource.name = Name(module.name(binding.name));
+  resource.group = binding.group;
+  resource.binding = binding.binding;
+  resource.type = ResourceType(binding.kind);
+  if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage)
+    ReflectBufferLayout(module, binding.type, resource);
+  return resource;
+}
+
+constexpr ShaderEntryPoint ReflectEntry(const Module& module, const Function& function) {
+  return {Name(module.name(function.name)),
+          function.stage == Stage::Compute  ? ShaderStage::Compute
+          : function.stage == Stage::Vertex ? ShaderStage::Vertex
+                                            : ShaderStage::Fragment,
+          function.workgroupSize,
+          function.firstInput,
+          function.inputCount,
+          function.firstOutput,
+          function.outputCount,
+          function.resourceMask};
+}
+
+constexpr ShaderBuiltin InterfaceBuiltin(BuiltinValue builtin) {
+  switch (builtin) {
+    case BuiltinValue::GlobalInvocationId: return ShaderBuiltin::GlobalInvocationId;
+    case BuiltinValue::VertexIndex: return ShaderBuiltin::VertexIndex;
+    case BuiltinValue::Position: return ShaderBuiltin::Position;
+    default: return ShaderBuiltin::None;
+  }
+}
+
+constexpr ShaderInterfaceVariable ReflectInterface(const Module& module,
+                                                   const InterfaceVariable& variable) {
+  return {Name(module.name(variable.name)), ScalarType(variable.type), variable.type.lanes,
+          InterfaceBuiltin(variable.decoration.builtin), variable.decoration.location};
+}
+
+template <typename Artifact>
+constexpr void FreezeInterface(const Module& module, Artifact& result) {
+  for (uint16_t i = 0; i < module.structMemberCount; ++i)
+    result.members[i] = ReflectMember(module, module.structMembers[i]);
+  for (uint16_t i = 0; i < module.bindingCount; ++i)
+    result.resources[i] = ReflectResource(module, module.bindings[i]);
+  size_t entry = 0;
+  for (uint16_t i = 0; i < module.functionCount; ++i) {
+    const Function& function = module.functions[i];
+    if (function.stage != Stage::None) result.entryPoints[entry++] = ReflectEntry(module, function);
+  }
+  for (uint16_t i = 0; i < module.interfaceVariableCount; ++i)
+    result.interfaceVariables[i] = ReflectInterface(module, module.interfaceVariables[i]);
+}
+
 }  // namespace compiler_detail
 
 /// Compiles authored source immediately, failing C++ compilation on validation/emission failure.
@@ -149,94 +255,7 @@ consteval auto Compile() {
   for (size_t i = 0; i < wgslBytes; ++i) result.wgsl[i] = Source.bytes[i];
   for (size_t i = 0; i < emitted.mslSize; ++i) result.msl[i] = emitted.msl[i];
   for (size_t i = 0; i < emitted.spirvSize; ++i) result.spirv[i] = emitted.spirv[i];
-  for (size_t i = 0; i < parsed.module.structMemberCount; ++i) {
-    const StructMember& member = parsed.module.structMembers[i];
-    const Type valueType =
-        member.type.kind == TypeKind::Array ? member.type.elementType() : member.type;
-    result.members[i] = {
-        compiler_detail::Name(parsed.module.name(member.name)),
-        valueType.kind == TypeKind::F32 || valueType.kind == TypeKind::Matrix
-            ? ShaderScalarType::F32
-        : valueType.kind == TypeKind::I32 ? ShaderScalarType::I32
-                                          : ShaderScalarType::U32,
-        valueType.kind == TypeKind::Matrix ? valueType.rows : valueType.lanes,
-        member.offset,
-        member.size,
-        member.alignment,
-        member.type.arrayCount,
-        member.arrayStride,
-        valueType.kind == TypeKind::Matrix ? valueType.columns : uint8_t(0),
-        valueType.kind == TypeKind::Matrix ? (valueType.rows == 2 ? 8u : 16u) : 0u};
-  }
-  for (size_t i = 0; i < parsed.module.bindingCount; ++i) {
-    const Binding& binding = parsed.module.bindings[i];
-    ShaderResource& resource = result.resources[i];
-    resource.name = compiler_detail::Name(parsed.module.name(binding.name));
-    resource.group = binding.group;
-    resource.binding = binding.binding;
-    resource.type = binding.kind == BindingKind::Sampler   ? BindingType::FilteringSampler
-                    : binding.kind == BindingKind::Uniform ? BindingType::UniformBuffer
-                    : binding.kind == BindingKind::ReadOnlyStorage
-                        ? BindingType::ReadOnlyStorageBuffer
-                    : binding.kind == BindingKind::SampledTexture
-                        ? BindingType::SampledTexture2dUnfilterableFloat
-                        : BindingType::WriteOnlyStorageTexture2d;
-    if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage) {
-      Type layoutType = binding.type;
-      if (binding.type.kind == TypeKind::Array) {
-        resource.runtimeArrayStrideBytes = parsed.module.arrayStride(binding.type);
-        resource.minSizeBytes = resource.runtimeArrayStrideBytes;
-        resource.alignmentBytes = parsed.module.typeAlignment(binding.type);
-        layoutType = binding.type.elementType();
-        if (layoutType.isNumeric()) {
-          resource.runtimeArrayScalarType = layoutType.kind == TypeKind::F32 ? ShaderScalarType::F32
-                                            : layoutType.kind == TypeKind::I32
-                                                ? ShaderScalarType::I32
-                                                : ShaderScalarType::U32;
-          resource.runtimeArrayLanes = layoutType.lanes;
-        }
-      } else {
-        resource.minSizeBytes = parsed.module.typeSize(binding.type);
-        resource.alignmentBytes = parsed.module.typeAlignment(binding.type);
-      }
-      if (layoutType.kind == TypeKind::Struct) {
-        const Struct& structure = parsed.module.structs[layoutType.structId];
-        resource.firstMember = structure.firstMember;
-        resource.memberCount = structure.memberCount;
-      }
-    }
-  }
-
-  size_t entryIndex = 0;
-  for (uint16_t i = 0; i < parsed.module.functionCount; ++i) {
-    const Function& function = parsed.module.functions[i];
-    if (function.stage == Stage::None) continue;
-    result.entryPoints[entryIndex++] = {compiler_detail::Name(parsed.module.name(function.name)),
-                                        function.stage == Stage::Compute  ? ShaderStage::Compute
-                                        : function.stage == Stage::Vertex ? ShaderStage::Vertex
-                                                                          : ShaderStage::Fragment,
-                                        function.workgroupSize,
-                                        function.firstInput,
-                                        function.inputCount,
-                                        function.firstOutput,
-                                        function.outputCount,
-                                        function.resourceMask};
-  }
-  for (uint16_t i = 0; i < parsed.module.interfaceVariableCount; ++i) {
-    const InterfaceVariable& variable = parsed.module.interfaceVariables[i];
-    result.interfaceVariables[i] = {
-        compiler_detail::Name(parsed.module.name(variable.name)),
-        variable.type.kind == TypeKind::F32   ? ShaderScalarType::F32
-        : variable.type.kind == TypeKind::I32 ? ShaderScalarType::I32
-                                              : ShaderScalarType::U32,
-        variable.type.lanes,
-        variable.decoration.builtin == BuiltinValue::GlobalInvocationId
-            ? ShaderBuiltin::GlobalInvocationId
-        : variable.decoration.builtin == BuiltinValue::VertexIndex ? ShaderBuiltin::VertexIndex
-        : variable.decoration.builtin == BuiltinValue::Position    ? ShaderBuiltin::Position
-                                                                   : ShaderBuiltin::None,
-        variable.decoration.location};
-  }
+  compiler_detail::FreezeInterface(parsed.module, result);
   return result;
 }
 

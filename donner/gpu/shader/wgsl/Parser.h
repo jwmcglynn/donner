@@ -674,44 +674,7 @@ private:
     uint32_t cursor = 0;
     uint32_t maxAlignment = 1;
     while (!failed() && token_.kind != TokenKind::RightBrace) {
-      Attributes memberAttributes;
-      ParseLeadingAttributes(&memberAttributes);
-      const Token memberName = ExpectIdentifier();
-      if (memberAttributes.nonInterface()) Fail(ErrorCode::InvalidAttribute, memberName.span);
-      if (!IsValidDeclarationName(memberName)) Fail(ErrorCode::InvalidIdentifier, memberName.span);
-      Expect(TokenKind::Colon);
-      const Type memberType = ParseType();
-      Expect(TokenKind::Comma);
-      if (module_.structMemberCount == ModuleLimits::kMaxStructMembers) {
-        Fail(ErrorCode::StructMemberLimit, memberName.span);
-        break;
-      }
-      for (uint16_t i = 0; i < structure.memberCount; ++i) {
-        if (SameName(module_.structMembers[structure.firstMember + i].name, memberName)) {
-          Fail(ErrorCode::DuplicateName, memberName.span);
-        }
-      }
-      if (memberType.kind == TypeKind::Array && memberType.elementKind == TypeKind::Struct)
-        Fail(ErrorCode::UnsupportedConstruct, memberName.span);
-      uint32_t alignment = 0;
-      uint32_t size = 0;
-      if (memberType.kind == TypeKind::Struct || !LayoutOf(memberType, &alignment, &size)) {
-        Fail(ErrorCode::InvalidLayout, memberName.span);
-        return;
-      }
-      cursor = RoundUp(cursor, alignment);
-      module_.structMembers[module_.structMemberCount++] =
-          StructMember{AddName(memberName),
-                       memberName.span,
-                       memberType,
-                       cursor,
-                       alignment,
-                       size,
-                       memberType.kind == TypeKind::Array ? module_.arrayStride(memberType) : 0,
-                       memberAttributes.interface()};
-      cursor += size;
-      if (alignment > maxAlignment) maxAlignment = alignment;
-      ++structure.memberCount;
+      ParseStructMember(&structure, &cursor, &maxAlignment);
     }
     Expect(TokenKind::RightBrace);
     if (structure.memberCount == 0) {
@@ -721,6 +684,55 @@ private:
     structure.alignment = maxAlignment;
     structure.size = RoundUp(cursor, maxAlignment);
     module_.structs[structId] = structure;
+  }
+
+  constexpr void ParseStructMember(Struct* structure, uint32_t* cursor, uint32_t* maxAlignment) {
+    Attributes attributes;
+    ParseLeadingAttributes(&attributes);
+    const Token name = ExpectIdentifier();
+    if (attributes.nonInterface()) Fail(ErrorCode::InvalidAttribute, name.span);
+    if (!IsValidDeclarationName(name)) Fail(ErrorCode::InvalidIdentifier, name.span);
+    Expect(TokenKind::Colon);
+    const Type type = ParseType();
+    Expect(TokenKind::Comma);
+    if (!ValidateStructMember(*structure, name, type)) return;
+    uint32_t alignment = 0;
+    uint32_t size = 0;
+    if (type.kind == TypeKind::Struct || !LayoutOf(type, &alignment, &size)) {
+      Fail(ErrorCode::InvalidLayout, name.span);
+      return;
+    }
+    *cursor = RoundUp(*cursor, alignment);
+    module_.structMembers[module_.structMemberCount++] =
+        StructMember{AddName(name),
+                     name.span,
+                     type,
+                     *cursor,
+                     alignment,
+                     size,
+                     type.kind == TypeKind::Array ? module_.arrayStride(type) : 0,
+                     attributes.interface()};
+    *cursor += size;
+    if (alignment > *maxAlignment) *maxAlignment = alignment;
+    ++structure->memberCount;
+  }
+
+  constexpr bool ValidateStructMember(const Struct& structure, Token name, Type type) {
+    if (module_.structMemberCount == ModuleLimits::kMaxStructMembers) {
+      Fail(ErrorCode::StructMemberLimit, name.span);
+      return false;
+    }
+    for (uint16_t i = 0; i < structure.memberCount; ++i) {
+      if (SameName(module_.structMembers[structure.firstMember + i].name, name)) {
+        Fail(ErrorCode::DuplicateName, name.span);
+        return false;
+      }
+    }
+    if (type.kind == TypeKind::Array && type.elementKind == TypeKind::Struct) {
+      Fail(ErrorCode::UnsupportedConstruct, name.span);
+      return false;
+    }
+    return true;
   }
 
   constexpr uint32_t RoundUp(uint32_t value, uint32_t alignment) const {
@@ -1245,41 +1257,52 @@ private:
     }
     if (MatchIdentifier("if")) return ParseIf(alwaysTerminates);
     if (MatchIdentifier("for")) return ParseFor();
-    if (MatchIdentifier("return")) {
-      const SourceSpan begin = token_.span;
-      Next();
-      ArenaId value = kInvalidArenaId;
-      if (token_.kind != TokenKind::Semicolon)
-        value = Materialize(ParseExpression(), currentFunctionReturnType_).id;
-      Expect(TokenKind::Semicolon);
-      const Type expected = currentFunctionReturnType_;
-      if ((expected.kind == TypeKind::Void) != (value == kInvalidArenaId) ||
-          (value != kInvalidArenaId && ExpressionAt(value).type != expected)) {
-        Fail(ErrorCode::InvalidReturn, begin);
-      }
-      *alwaysTerminates = true;
-      return AddStatement(
-          Statement{StatementKind::Return, begin, kInvalidArenaId, kInvalidArenaId, value});
-    }
+    if (MatchIdentifier("return")) return ParseReturnStatement(alwaysTerminates);
     if (MatchIdentifier("break") || MatchIdentifier("continue") || MatchIdentifier("discard")) {
-      const Token keyword = token_;
-      const StatementKind kind = TextEquals(keyword.text, "break")      ? StatementKind::Break
-                                 : TextEquals(keyword.text, "continue") ? StatementKind::Continue
-                                                                        : StatementKind::Discard;
-      if (kind == StatementKind::Discard) {
-        entryControlSeen_ = true;
-        if (currentFunctionId_ == kInvalidArenaId ||
-            module_.functions[currentFunctionId_].stage != Stage::Fragment)
-          Fail(ErrorCode::UnsupportedConstruct, keyword.span);
-      } else if (loopDepth_ == 0) {
-        Fail(ErrorCode::InvalidLoop, keyword.span);
-      }
-      Next();
-      Expect(TokenKind::Semicolon);
-      *alwaysTerminates = kind != StatementKind::Discard;
-      return AddStatement(Statement{kind, keyword.span});
+      return ParseControlStatement(alwaysTerminates);
     }
     if (MatchIdentifier("textureStore")) return ParseTextureStore();
+    return ParseAssignmentStatement();
+  }
+
+  constexpr ArenaId ParseReturnStatement(bool* alwaysTerminates) {
+    const SourceSpan begin = token_.span;
+    Next();
+    ArenaId value = kInvalidArenaId;
+    if (token_.kind != TokenKind::Semicolon)
+      value = Materialize(ParseExpression(), currentFunctionReturnType_).id;
+    Expect(TokenKind::Semicolon);
+    if ((currentFunctionReturnType_.kind == TypeKind::Void) != (value == kInvalidArenaId) ||
+        (value != kInvalidArenaId && ExpressionAt(value).type != currentFunctionReturnType_))
+      Fail(ErrorCode::InvalidReturn, begin);
+    *alwaysTerminates = true;
+    return AddStatement(
+        Statement{StatementKind::Return, begin, kInvalidArenaId, kInvalidArenaId, value});
+  }
+
+  constexpr ArenaId ParseControlStatement(bool* alwaysTerminates) {
+    const Token keyword = token_;
+    const StatementKind kind = TextEquals(keyword.text, "break")      ? StatementKind::Break
+                               : TextEquals(keyword.text, "continue") ? StatementKind::Continue
+                                                                      : StatementKind::Discard;
+    if (kind == StatementKind::Discard)
+      ValidateDiscard(keyword);
+    else if (loopDepth_ == 0)
+      Fail(ErrorCode::InvalidLoop, keyword.span);
+    Next();
+    Expect(TokenKind::Semicolon);
+    *alwaysTerminates = kind != StatementKind::Discard;
+    return AddStatement(Statement{kind, keyword.span});
+  }
+
+  constexpr void ValidateDiscard(Token keyword) {
+    entryControlSeen_ = true;
+    if (currentFunctionId_ == kInvalidArenaId ||
+        module_.functions[currentFunctionId_].stage != Stage::Fragment)
+      Fail(ErrorCode::UnsupportedConstruct, keyword.span);
+  }
+
+  constexpr ArenaId ParseAssignmentStatement() {
     const ExpressionInfo target = ParseExpression();
     const SourceSpan begin = ExpressionAt(target.id).span;
     Expect(TokenKind::Assign);
@@ -1287,9 +1310,8 @@ private:
     Expect(TokenKind::Semicolon);
     if (!target.mutableLvalue) Fail(ErrorCode::ImmutableAssignment, begin);
     if (target.id != kInvalidArenaId && value.id != kInvalidArenaId &&
-        ExpressionAt(target.id).type != ExpressionAt(value.id).type) {
+        ExpressionAt(target.id).type != ExpressionAt(value.id).type)
       Fail(ErrorCode::TypeMismatch, begin);
-    }
     return AddStatement(Statement{StatementKind::Assign, begin, kInvalidArenaId, kInvalidArenaId,
                                   target.id, value.id});
   }
@@ -1305,32 +1327,40 @@ private:
       hasDeclared = true;
       if (declared.kind == TypeKind::Array) Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
-    ExpressionInfo initializer;
-    if (mutableValue && hasDeclared && token_.kind == TokenKind::Semicolon) {
-      initializer = AddExpression(Expression{ExpressionKind::Zero, declared, name.span}, false,
-                                  kInvalidArenaId, std::numeric_limits<int32_t>::max());
-    } else {
-      Expect(TokenKind::Assign);
-      initializer = ParseExpression();
-    }
+    ExpressionInfo initializer = ParseInitializer(mutableValue, hasDeclared, declared, name);
     if (semicolon) Expect(TokenKind::Semicolon);
     initializer = Materialize(
         initializer, hasDeclared ? declared : DefaultType(ExpressionAt(initializer.id).type));
     if (!hasDeclared) declared = ExpressionAt(initializer.id).type;
-    if (!IsValueType(declared)) {
-      Fail(ErrorCode::UnsupportedConstruct, name.span);
-    }
-    if (initializer.id != kInvalidArenaId && declared != ExpressionAt(initializer.id).type) {
-      Fail(ErrorCode::TypeMismatch, name.span);
-    }
-    const ArenaId symbol =
-        AddSymbol(mutableValue ? SymbolKind::Var : SymbolKind::Let, declared, name, mutableValue);
-    if (symbol != kInvalidArenaId && declared.kind == TypeKind::I32 &&
-        initializer.i32UpperBound != std::numeric_limits<int32_t>::max()) {
-      symbolUpperBounds_[symbol] = initializer.i32UpperBound;
-    }
+    ValidateLocalType(declared, initializer, name.span);
+    const ArenaId symbol = AddLocalSymbol(mutableValue, declared, name, initializer);
     return AddStatement(
         Statement{StatementKind::Declaration, begin, kInvalidArenaId, symbol, initializer.id});
+  }
+
+  constexpr ExpressionInfo ParseInitializer(bool mutableValue, bool hasDeclared, Type declared,
+                                            Token name) {
+    if (mutableValue && hasDeclared && token_.kind == TokenKind::Semicolon)
+      return AddExpression(Expression{ExpressionKind::Zero, declared, name.span}, false,
+                           kInvalidArenaId, std::numeric_limits<int32_t>::max());
+    Expect(TokenKind::Assign);
+    return ParseExpression();
+  }
+
+  constexpr void ValidateLocalType(Type declared, ExpressionInfo initializer, SourceSpan span) {
+    if (!IsValueType(declared)) Fail(ErrorCode::UnsupportedConstruct, span);
+    if (initializer.id != kInvalidArenaId && declared != ExpressionAt(initializer.id).type)
+      Fail(ErrorCode::TypeMismatch, span);
+  }
+
+  constexpr ArenaId AddLocalSymbol(bool mutableValue, Type type, Token name,
+                                   ExpressionInfo initializer) {
+    const ArenaId symbol =
+        AddSymbol(mutableValue ? SymbolKind::Var : SymbolKind::Let, type, name, mutableValue);
+    if (symbol != kInvalidArenaId && type.kind == TypeKind::I32 &&
+        initializer.i32UpperBound != std::numeric_limits<int32_t>::max())
+      symbolUpperBounds_[symbol] = initializer.i32UpperBound;
+    return symbol;
   }
 
   constexpr ArenaId ParseIf(bool* alwaysTerminates) {
@@ -1469,18 +1499,27 @@ private:
 
   constexpr ExpressionInfo ParseExpressionImpl(uint8_t precedence) {
     ExpressionInfo lhs = ParseUnary();
-    while (!failed() && BinaryPrecedence(token_.kind) >= precedence &&
-           BinaryPrecedence(token_.kind) != 0) {
+    while (HasBinaryOperator(precedence)) {
       const Token op = token_;
       const uint8_t nextPrecedence = BinaryPrecedence(op.kind) + 1;
       Next();
-      const bool previousControl = entryControlSeen_;
-      if (op.kind == TokenKind::And || op.kind == TokenKind::Or) entryControlSeen_ = true;
-      const ExpressionInfo rhs = ParseExpression(nextPrecedence);
-      entryControlSeen_ = previousControl;
+      const ExpressionInfo rhs = ParseBinaryOperand(op.kind, nextPrecedence);
       lhs = MakeBinary(op, lhs, rhs);
     }
     return lhs;
+  }
+
+  constexpr bool HasBinaryOperator(uint8_t precedence) const {
+    return !failed() && BinaryPrecedence(token_.kind) >= precedence &&
+           BinaryPrecedence(token_.kind) != 0;
+  }
+
+  constexpr ExpressionInfo ParseBinaryOperand(TokenKind op, uint8_t precedence) {
+    const bool previousControl = entryControlSeen_;
+    if (op == TokenKind::And || op == TokenKind::Or) entryControlSeen_ = true;
+    const ExpressionInfo result = ParseExpression(precedence);
+    entryControlSeen_ = previousControl;
+    return result;
   }
 
   constexpr uint8_t BinaryPrecedence(TokenKind kind) const {
@@ -1516,17 +1555,8 @@ private:
       --unaryDepth_;
       Type type = ExpressionAt(operand.id).type;
       if (type.isAbstract()) return NegateAbstract(op, operand);
-      if ((op.kind == TokenKind::Minus && (!type.isNumeric() || type.kind == TypeKind::U32)) ||
-          (op.kind == TokenKind::Not && type != Type{TypeKind::Bool})) {
-        Fail(ErrorCode::TypeMismatch, op.span);
-      }
-      int32_t constantI32 = 0;
-      if (op.kind == TokenKind::Minus && type == Type{TypeKind::I32} &&
-          IsConstantSyntax(operand.id) &&
-          (!ConstI32Value(operand.id, &constantI32) ||
-           constantI32 == std::numeric_limits<int32_t>::min())) {
-        Fail(ErrorCode::InvalidConstantExpression, op.span);
-      }
+      if (!ValidUnaryType(op.kind, type)) Fail(ErrorCode::TypeMismatch, op.span);
+      ValidateUnaryConstant(op, type, operand.id);
       return AddExpression(
           Expression{
               ExpressionKind::Unary,
@@ -1538,6 +1568,19 @@ private:
           false, kInvalidArenaId, operand.i32UpperBound);
     }
     return ParsePostfix();
+  }
+
+  constexpr bool ValidUnaryType(TokenKind op, Type type) const {
+    if (op == TokenKind::Minus) return type.isNumeric() && type.kind != TypeKind::U32;
+    return type == Type{TypeKind::Bool};
+  }
+
+  constexpr void ValidateUnaryConstant(Token op, Type type, ArenaId operand) {
+    if (op.kind != TokenKind::Minus || type != Type{TypeKind::I32} || !IsConstantSyntax(operand))
+      return;
+    int32_t value = 0;
+    if (!ConstI32Value(operand, &value) || value == std::numeric_limits<int32_t>::min())
+      Fail(ErrorCode::InvalidConstantExpression, op.span);
   }
 
   constexpr ExpressionInfo ParsePostfix() {
@@ -1553,6 +1596,33 @@ private:
     return value;
   }
 
+  struct IndexConstant {
+    int32_t signedValue = 0;
+    uint32_t unsignedValue = 0;
+    bool hasSigned = false;
+    bool hasUnsigned = false;
+  };
+
+  constexpr bool ValidIndexTypes(Type base, Type index) const {
+    return (base.kind == TypeKind::Array || base.kind == TypeKind::Matrix) && index.lanes == 1 &&
+           (index.kind == TypeKind::I32 || index.kind == TypeKind::U32);
+  }
+
+  constexpr bool IndexOutsideRange(const IndexConstant& value, uint32_t count) const {
+    if (value.hasSigned)
+      return value.signedValue < 0 || (count != 0 && uint32_t(value.signedValue) >= count);
+    return value.hasUnsigned && count != 0 && value.unsignedValue >= count;
+  }
+
+  constexpr void ValidateIndexConstant(Type base, ArenaId index, const IndexConstant& value) {
+    const bool known = value.hasSigned || value.hasUnsigned;
+    const uint32_t count = base.kind == TypeKind::Matrix ? base.columns : base.arrayCount;
+    if (base.kind == TypeKind::Matrix && !known)
+      Fail(ErrorCode::UnsupportedConstruct, ExpressionAt(index).span);
+    if ((IsConstantSyntax(index) && !known) || IndexOutsideRange(value, count))
+      Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index).span);
+  }
+
   constexpr ExpressionInfo ParseArrayIndex(ExpressionInfo value) {
     ExpressionInfo index = ParseExpression();
     index = Materialize(index, DefaultType(ExpressionAt(index.id).type));
@@ -1560,24 +1630,14 @@ private:
     Expect(TokenKind::RightBracket);
     const Type base = ExpressionAt(value.id).type;
     const Type indexType = ExpressionAt(index.id).type;
-    if ((base.kind != TypeKind::Array && base.kind != TypeKind::Matrix) || indexType.lanes != 1 ||
-        (indexType.kind != TypeKind::I32 && indexType.kind != TypeKind::U32)) {
+    if (!ValidIndexTypes(base, indexType)) {
       Fail(ErrorCode::TypeMismatch, end);
       return ErrorExpression(end);
     }
-    int32_t signedIndex = 0;
-    uint32_t unsignedIndex = 0;
-    const bool hasSignedIndex = ConstI32Value(index.id, &signedIndex);
-    const bool hasUnsignedIndex = ConstU32Value(index.id, &unsignedIndex);
-    const uint32_t count = base.kind == TypeKind::Matrix ? base.columns : base.arrayCount;
-    if (base.kind == TypeKind::Matrix && !hasSignedIndex && !hasUnsignedIndex)
-      Fail(ErrorCode::UnsupportedConstruct, ExpressionAt(index.id).span);
-    if ((IsConstantSyntax(index.id) && !hasSignedIndex && !hasUnsignedIndex) ||
-        (hasSignedIndex &&
-         (signedIndex < 0 || (count != 0 && static_cast<uint32_t>(signedIndex) >= count))) ||
-        (hasUnsignedIndex && count != 0 && unsignedIndex >= count)) {
-      Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(index.id).span);
-    }
+    IndexConstant constant;
+    constant.hasSigned = ConstI32Value(index.id, &constant.signedValue);
+    constant.hasUnsigned = ConstU32Value(index.id, &constant.unsignedValue);
+    ValidateIndexConstant(base, index.id, constant);
     return AddExpression(
         Expression{
             ExpressionKind::Index,
@@ -1585,8 +1645,9 @@ private:
             SourceSpan{ExpressionAt(value.id).span.begin, end.end},
             {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
             2,
-            base.kind == TypeKind::Matrix ? (hasSignedIndex ? uint32_t(signedIndex) : unsignedIndex)
-                                          : 0},
+            base.kind == TypeKind::Matrix
+                ? (constant.hasSigned ? uint32_t(constant.signedValue) : constant.unsignedValue)
+                : 0},
         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
@@ -1892,15 +1953,8 @@ private:
     return false;
   }
 
-  constexpr bool ValidateBuiltin(Builtin builtin, const std::array<ExpressionInfo, 4>& arguments,
-                                 uint8_t count, Type* result) const {
+  constexpr bool IsUnaryFloatBuiltin(Builtin builtin) const {
     switch (builtin) {
-      case Builtin::All:
-      case Builtin::Any: return ValidateAnyBuiltin(arguments, count, result);
-      case Builtin::Clamp: return ValidateClampBuiltin(arguments, count, result);
-      case Builtin::Select: return ValidateSelectBuiltin(arguments, count, result);
-      case Builtin::Max:
-      case Builtin::Min: return ValidateMinBuiltin(arguments, count, result);
       case Builtin::Abs:
       case Builtin::Round:
       case Builtin::Sqrt:
@@ -1908,24 +1962,51 @@ private:
       case Builtin::Fract:
       case Builtin::Fwidth:
       case Builtin::Ceil:
-      case Builtin::Exp: return ValidateFloatBuiltin(arguments, count, result);
-      case Builtin::Dot:
-      case Builtin::Length:
-      case Builtin::Normalize: {
-        const Type type = BuiltinArgumentType(arguments, 0);
-        if (type.kind != TypeKind::F32 || type.lanes < 2 ||
-            count != (builtin == Builtin::Dot ? 2 : 1))
-          return false;
-        if (builtin == Builtin::Dot && type != BuiltinArgumentType(arguments, 1)) return false;
-        *result = builtin == Builtin::Normalize ? type : Type{TypeKind::F32};
-        return true;
-      }
+      case Builtin::Exp: return true;
+      default: return false;
+    }
+  }
+
+  constexpr bool IsVectorMathBuiltin(Builtin builtin) const {
+    return builtin == Builtin::Dot || builtin == Builtin::Length || builtin == Builtin::Normalize;
+  }
+
+  constexpr bool ValidateVectorMathBuiltin(Builtin builtin,
+                                           const std::array<ExpressionInfo, 4>& arguments,
+                                           uint8_t count, Type* result) const {
+    const Type type = BuiltinArgumentType(arguments, 0);
+    if (type.kind != TypeKind::F32 || type.lanes < 2 || count != (builtin == Builtin::Dot ? 2 : 1))
+      return false;
+    if (builtin == Builtin::Dot && type != BuiltinArgumentType(arguments, 1)) return false;
+    *result = builtin == Builtin::Normalize ? type : Type{TypeKind::F32};
+    return true;
+  }
+
+  constexpr bool ValidateValueBuiltin(Builtin builtin,
+                                      const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
+                                      Type* result) const {
+    switch (builtin) {
+      case Builtin::All:
+      case Builtin::Any: return ValidateAnyBuiltin(arguments, count, result);
+      case Builtin::Clamp: return ValidateClampBuiltin(arguments, count, result);
+      case Builtin::Select: return ValidateSelectBuiltin(arguments, count, result);
+      case Builtin::Max:
+      case Builtin::Min: return ValidateMinBuiltin(arguments, count, result);
+      default: return false;
+    }
+  }
+
+  constexpr bool ValidateBuiltin(Builtin builtin, const std::array<ExpressionInfo, 4>& arguments,
+                                 uint8_t count, Type* result) const {
+    if (IsUnaryFloatBuiltin(builtin)) return ValidateFloatBuiltin(arguments, count, result);
+    if (IsVectorMathBuiltin(builtin))
+      return ValidateVectorMathBuiltin(builtin, arguments, count, result);
+    switch (builtin) {
       case Builtin::TextureLoad: return ValidateTextureLoadBuiltin(arguments, count, result);
       case Builtin::TextureDimensions:
         return ValidateTextureDimensionsBuiltin(arguments, count, result);
-      case Builtin::TextureStore: return false;
+      default: return ValidateValueBuiltin(builtin, arguments, count, result);
     }
-    return false;
   }
 
   constexpr Type BuiltinArgumentType(const std::array<ExpressionInfo, 4>& arguments,

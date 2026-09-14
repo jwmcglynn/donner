@@ -228,37 +228,50 @@ private:
       error_ = TextEmitError::UnsupportedType;
       return;
     }
-    std::string_view scalar;
+    emitTypeKind(value);
+  }
+
+  constexpr void emitTypeKind(const Type& value) {
     switch (value.kind) {
       case TypeKind::AbstractInt:
       case TypeKind::AbstractFloat: error_ = TextEmitError::UnsupportedType; return;
       case TypeKind::Void: text("void"); return;
-      case TypeKind::Bool: scalar = "bool"; break;
-      case TypeKind::I32: scalar = "int"; break;
-      case TypeKind::U32: scalar = "uint"; break;
-      case TypeKind::F32: scalar = "float"; break;
-      case TypeKind::Struct:
-        if (!validId(value.structId, module_.structCount)) {
-          error_ = TextEmitError::InvalidArenaReference;
-          return;
-        }
-        prefixed("donner_msl_struct_", module_.structs[value.structId].name);
-        return;
-      case TypeKind::Matrix:
-        text("float");
-        uintText(value.columns);
-        character('x');
-        uintText(value.rows);
-        return;
+      case TypeKind::Struct: emitStructType(value); return;
+      case TypeKind::Matrix: emitMatrixType(value); return;
       case TypeKind::Array: error_ = TextEmitError::UnsupportedType; return;
       case TypeKind::Sampler: text("sampler"); return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d: text("texture2d<float, access::write>"); return;
+      default: emitScalarType(value); return;
     }
-    text(scalar);
+  }
+
+  constexpr void emitScalarType(const Type& value) {
+    constexpr std::string_view kNames[] = {"bool", "int", "uint", "float"};
+    const uint8_t index = static_cast<uint8_t>(value.kind) - static_cast<uint8_t>(TypeKind::Bool);
+    if (index >= sizeof(kNames) / sizeof(kNames[0])) {
+      error_ = TextEmitError::UnsupportedType;
+      return;
+    }
+    text(kNames[index]);
     if (value.lanes != 1) {
       uintText(value.lanes);
     }
+  }
+
+  constexpr void emitStructType(const Type& value) {
+    if (!validId(value.structId, module_.structCount)) {
+      error_ = TextEmitError::InvalidArenaReference;
+      return;
+    }
+    prefixed("donner_msl_struct_", module_.structs[value.structId].name);
+  }
+
+  constexpr void emitMatrixType(const Type& value) {
+    text("float");
+    uintText(value.columns);
+    character('x');
+    uintText(value.rows);
   }
 
   constexpr uint32_t typeAlignment(const Type& value) const {
@@ -285,12 +298,7 @@ private:
       return;
     }
     const Struct& structure = module_.structs[structId];
-    bool buffer = false;
-    for (uint16_t i = 0; i < module_.bindingCount; ++i)
-      buffer |= (module_.bindings[i].type.kind == TypeKind::Struct ||
-                 (module_.bindings[i].type.kind == TypeKind::Array &&
-                  module_.bindings[i].type.elementKind == TypeKind::Struct)) &&
-                module_.bindings[i].type.structId == structId;
+    const bool buffer = structIsBuffer(structId);
     if (!validId(structure.firstMember, module_.structMemberCount) ||
         structure.memberCount > module_.structMemberCount - structure.firstMember) {
       error_ = TextEmitError::InvalidArenaReference;
@@ -300,37 +308,72 @@ private:
     prefixed("donner_msl_struct_", structure.name);
     text(" {\n");
     ++indent_;
+    StructLayoutState layout;
+    emitStructMembers(structure, buffer, &layout);
+    if (error_ != TextEmitError::None) return;
+    validateStructLayout(structure, buffer, layout);
+    if (error_ != TextEmitError::None) return;
+    --indent_;
+    text("};\n");
+  }
+
+  struct StructLayoutState {
     uint32_t offset = 0;
     uint32_t maximumAlignment = 1;
+  };
+
+  constexpr void emitStructMembers(const Struct& structure, bool buffer,
+                                   StructLayoutState* layout) {
     for (uint16_t index = 0; index < structure.memberCount; ++index) {
-      const StructMember& member = module_.structMembers[structure.firstMember + index];
-      const uint32_t alignment = typeAlignment(member.type);
-      const uint32_t size = typeSize(member.type);
-      if (alignment == 0 || size == 0 ||
-          (buffer && (member.alignment != alignment || member.size != size))) {
-        error_ = TextEmitError::UniformLayoutMismatch;
-        return;
-      }
-      offset = ((offset + alignment - 1) / alignment) * alignment;
-      if (buffer && member.offset != offset) {
-        error_ = TextEmitError::UniformLayoutMismatch;
-        return;
-      }
-      offset += size;
-      if (alignment > maximumAlignment) {
-        maximumAlignment = alignment;
-      }
-      emitStructMember(member);
+      emitStructMemberWithLayout(module_.structMembers[structure.firstMember + index], buffer,
+                                 layout);
       if (error_ != TextEmitError::None) return;
     }
-    const uint32_t naturalSize =
-        ((offset + maximumAlignment - 1) / maximumAlignment) * maximumAlignment;
-    if (buffer && (structure.alignment != maximumAlignment || structure.size != naturalSize)) {
+  }
+
+  constexpr void emitStructMemberWithLayout(const StructMember& member, bool buffer,
+                                            StructLayoutState* layout) {
+    const uint32_t alignment = typeAlignment(member.type);
+    const uint32_t size = typeSize(member.type);
+    if (!validMemberLayout(member, buffer, alignment, size)) return;
+    layout->offset = ((layout->offset + alignment - 1) / alignment) * alignment;
+    if (buffer && member.offset != layout->offset) {
       error_ = TextEmitError::UniformLayoutMismatch;
       return;
     }
-    --indent_;
-    text("};\n");
+    layout->offset += size;
+    if (alignment > layout->maximumAlignment) layout->maximumAlignment = alignment;
+    emitStructMember(member);
+  }
+
+  constexpr bool validMemberLayout(const StructMember& member, bool buffer, uint32_t alignment,
+                                   uint32_t size) {
+    if (alignment == 0 || size == 0 ||
+        (buffer && (member.alignment != alignment || member.size != size))) {
+      error_ = TextEmitError::UniformLayoutMismatch;
+      return false;
+    }
+    return true;
+  }
+
+  constexpr void validateStructLayout(const Struct& structure, bool buffer,
+                                      const StructLayoutState& layout) {
+    const uint32_t naturalSize =
+        ((layout.offset + layout.maximumAlignment - 1) / layout.maximumAlignment) *
+        layout.maximumAlignment;
+    if (buffer && (structure.alignment != layout.maximumAlignment || structure.size != naturalSize))
+      error_ = TextEmitError::UniformLayoutMismatch;
+  }
+
+  constexpr bool structIsBuffer(uint16_t structId) const {
+    for (uint16_t i = 0; i < module_.bindingCount; ++i) {
+      const Type& type = module_.bindings[i].type;
+      if ((type.kind == TypeKind::Struct ||
+           (type.kind == TypeKind::Array && type.elementKind == TypeKind::Struct)) &&
+          type.structId == structId)
+        return true;
+    }
+    return false;
   }
 
   constexpr void emitStructMember(const StructMember& member) {
@@ -559,7 +602,18 @@ private:
       error_ = TextEmitError::InvalidArenaReference;
       return;
     }
-    const Expression& node = module_.expressions[id];
+    emitExpressionNode(module_.expressions[id]);
+  }
+
+  constexpr void emitExpressionNode(const Expression& node) {
+    if (node.kind <= ExpressionKind::Construct) {
+      emitValueExpression(node);
+      return;
+    }
+    emitCallExpression(node);
+  }
+
+  constexpr void emitValueExpression(const Expression& node) {
     switch (node.kind) {
       case ExpressionKind::Zero:
         type(node.type);
@@ -572,10 +626,17 @@ private:
       case ExpressionKind::Member: emitMember(node); return;
       case ExpressionKind::Swizzle: emitSwizzle(node); return;
       case ExpressionKind::Construct: emitConstruct(node); return;
+      default: error_ = TextEmitError::InvalidModule; return;
+    }
+  }
+
+  constexpr void emitCallExpression(const Expression& node) {
+    switch (node.kind) {
       case ExpressionKind::Convert: emitConversion(node); return;
       case ExpressionKind::BuiltinCall: emitBuiltin(node); return;
       case ExpressionKind::FunctionCall: emitFunctionCall(node); return;
       case ExpressionKind::Index: emitIndex(node); return;
+      default: error_ = TextEmitError::InvalidModule; return;
     }
   }
 
@@ -719,50 +780,73 @@ private:
   }
 
   constexpr void emitIndex(const Expression& node) {
-    if (node.operandCount != 2 || !validId(node.operands[0], module_.expressionCount) ||
-        !validId(node.operands[1], module_.expressionCount)) {
+    if (!validIndexOperands(node)) {
       error_ = TextEmitError::InvalidArenaReference;
       return;
     }
     const Type& array = module_.expressions[node.operands[0]].type;
     const Type& index = module_.expressions[node.operands[1]].type;
     if (array.kind == TypeKind::Matrix) {
-      if (node.payload >= array.columns) {
-        error_ = TextEmitError::InvalidModule;
-        return;
-      }
-      expression(node.operands[0]);
-      character('[');
-      uintText(node.payload);
-      character(']');
+      emitMatrixIndex(node, array);
       return;
     }
     if (array.kind == TypeKind::Array && array.arrayCount == 0) {
       emitRuntimeArrayIndex(node, array);
       return;
     }
-    if (array.kind != TypeKind::Array || !array.elementType().isNumeric() ||
-        array.arrayCount == 0 || (index.kind != TypeKind::I32 && index.kind != TypeKind::U32) ||
-        index.lanes != 1) {
+    if (!validFixedArrayIndex(array, index)) {
       error_ = TextEmitError::UnsupportedType;
       return;
     }
+    emitFixedArrayIndex(node, array, index);
+  }
+
+  constexpr bool validIndexOperands(const Expression& node) const {
+    return node.operandCount == 2 && validId(node.operands[0], module_.expressionCount) &&
+           validId(node.operands[1], module_.expressionCount);
+  }
+
+  constexpr void emitMatrixIndex(const Expression& node, const Type& matrix) {
+    if (node.payload >= matrix.columns) {
+      error_ = TextEmitError::InvalidModule;
+      return;
+    }
+    expression(node.operands[0]);
+    character('[');
+    uintText(node.payload);
+    character(']');
+  }
+
+  constexpr bool validFixedArrayIndex(const Type& array, const Type& index) const {
+    return array.kind == TypeKind::Array && array.elementType().isNumeric() &&
+           array.arrayCount != 0 && (index.kind == TypeKind::I32 || index.kind == TypeKind::U32) &&
+           index.lanes == 1;
+  }
+
+  constexpr void emitFixedArrayIndex(const Expression& node, const Type& array, const Type& index) {
     expression(node.operands[0]);
     text("[");
-    if (index.kind == TypeKind::I32) {
-      text("uint(clamp(");
-      expression(node.operands[1]);
-      text(", int(0), int(");
-      uintText(array.arrayCount - 1);
-      text(")))");
-    } else {
-      text("min(");
-      expression(node.operands[1]);
-      text(", ");
-      uintText(array.arrayCount - 1);
-      text("u)");
-    }
+    if (index.kind == TypeKind::I32)
+      emitSignedArrayIndex(node, array.arrayCount);
+    else
+      emitUnsignedArrayIndex(node, array.arrayCount);
     text("]");
+  }
+
+  constexpr void emitSignedArrayIndex(const Expression& node, uint16_t count) {
+    text("uint(clamp(");
+    expression(node.operands[1]);
+    text(", int(0), int(");
+    uintText(count - 1);
+    text(")))");
+  }
+
+  constexpr void emitUnsignedArrayIndex(const Expression& node, uint16_t count) {
+    text("min(");
+    expression(node.operands[1]);
+    text(", ");
+    uintText(count - 1);
+    text("u)");
   }
 
   constexpr void vectorConstant(const Type& valueType, std::string_view scalar) {
@@ -910,74 +994,40 @@ private:
     }
   }
 
+  /// Returns a Metal function name backed by static string literals.
+  static constexpr std::string_view BuiltinName(Builtin builtin) {
+    struct NamedBuiltin {
+      Builtin builtin;
+      std::string_view name;
+    };
+    constexpr NamedBuiltin kNames[] = {
+        {Builtin::All, "all"},
+        {Builtin::Abs, "abs"},
+        {Builtin::Max, "max"},
+        {Builtin::Round, "rint"},
+        {Builtin::Sqrt, "sqrt"},
+        {Builtin::Dot, "dot"},
+        {Builtin::Length, "length"},
+        {Builtin::Normalize, "normalize"},
+        {Builtin::Saturate, "saturate"},
+        {Builtin::Fract, "fract"},
+        {Builtin::Fwidth, "fwidth"},
+        {Builtin::Any, "any"},
+        {Builtin::Clamp, "clamp"},
+        {Builtin::Min, "min"},
+        {Builtin::Ceil, "ceil"},
+        {Builtin::Exp, "exp"},
+        {Builtin::TextureLoad, "donner_msl_texture_load"},
+    };
+    for (const NamedBuiltin& entry : kNames) {
+      if (entry.builtin == builtin) return entry.name;
+    }
+    return {};
+  }
+
   constexpr void emitBuiltin(const Expression& node) {
     const Builtin builtin = static_cast<Builtin>(node.payload);
     switch (builtin) {
-      case Builtin::All:
-        text("all(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Abs:
-        text("abs(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Max:
-        text("max(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Round:
-        text("rint(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Sqrt:
-        text("sqrt(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Dot:
-        text("dot(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Length:
-        text("length(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Normalize:
-        text("normalize(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Saturate:
-        text("saturate(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Fract:
-        text("fract(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Fwidth:
-        text("fwidth(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Any:
-        text("any(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Clamp:
-        text("clamp(");
-        expressionList(node);
-        character(')');
-        return;
       case Builtin::Select:
         text("select(");
         expression(node.operands[0]);
@@ -985,26 +1035,6 @@ private:
         expression(node.operands[1]);
         text(", ");
         expression(node.operands[2]);
-        character(')');
-        return;
-      case Builtin::Min:
-        text("min(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Ceil:
-        text("ceil(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::Exp:
-        text("exp(");
-        expressionList(node);
-        character(')');
-        return;
-      case Builtin::TextureLoad:
-        text("donner_msl_texture_load(");
-        expressionList(node);
         character(')');
         return;
       case Builtin::TextureDimensions:
@@ -1015,7 +1045,18 @@ private:
         text(".get_height())");
         return;
       case Builtin::TextureStore: error_ = TextEmitError::InvalidModule; return;
+      default:
+        const std::string_view name = BuiltinName(builtin);
+        if (!name.empty()) emitNamedBuiltin(name, node);
+        return;
     }
+  }
+
+  constexpr void emitNamedBuiltin(std::string_view name, const Expression& node) {
+    text(name);
+    character('(');
+    expressionList(node);
+    character(')');
   }
 
   constexpr void emitFunctionCall(const Expression& node) {
@@ -1046,6 +1087,11 @@ private:
     }
     const Statement& node = module_.statements[id];
     if (!inlineStatement) indentation();
+    emitStatementNode(node, inlineStatement);
+    if (!inlineStatement) newline();
+  }
+
+  constexpr void emitStatementNode(const Statement& node, bool inlineStatement) {
     switch (node.kind) {
       case StatementKind::Declaration: emitDeclaration(node, inlineStatement); break;
       case StatementKind::Assign: emitAssignment(node, inlineStatement); break;
@@ -1061,7 +1107,6 @@ private:
       case StatementKind::Return: emitReturn(node, inlineStatement); break;
       case StatementKind::TextureStore: emitTextureStore(node, inlineStatement); break;
     }
-    if (!inlineStatement) newline();
   }
 
   constexpr void emitDeclaration(const Statement& node, bool inlineStatement) {

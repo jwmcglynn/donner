@@ -334,6 +334,20 @@ private:
     }
   }
 
+  constexpr void declareAggregateType(Type type, uint32_t value) {
+    switch (type.kind) {
+      case TypeKind::Sampler: declarations_.instruction(26, value); break;
+      case TypeKind::SampledTexture2d:
+      case TypeKind::StorageTexture2d: declareImageType(type, value); break;
+      case TypeKind::Struct: declareStructType(type, value); break;
+      case TypeKind::Array: declareArrayType(type, value); break;
+      case TypeKind::Matrix:
+        declarations_.instruction(24, value, typeId(Type{TypeKind::F32, type.rows}), type.columns);
+        break;
+      default: break;
+    }
+  }
+
   constexpr void declareType(Type type, uint32_t value) {
     if (type.lanes > 1) {
       declareVectorType(type, value);
@@ -347,14 +361,7 @@ private:
       case TypeKind::I32: declarations_.instruction(21, value, 32, 1); break;
       case TypeKind::U32: declarations_.instruction(21, value, 32, 0); break;
       case TypeKind::F32: declarations_.instruction(22, value, 32); break;
-      case TypeKind::Sampler: declarations_.instruction(26, value); break;
-      case TypeKind::SampledTexture2d:
-      case TypeKind::StorageTexture2d: declareImageType(type, value); break;
-      case TypeKind::Struct: declareStructType(type, value); break;
-      case TypeKind::Array: declareArrayType(type, value); break;
-      case TypeKind::Matrix:
-        declarations_.instruction(24, value, typeId(Type{TypeKind::F32, type.rows}), type.columns);
-        break;
+      default: declareAggregateType(type, value); break;
     }
   }
 
