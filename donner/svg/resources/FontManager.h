@@ -389,8 +389,10 @@ private:
    */
   std::shared_ptr<FontBudgetState> budgetStateForWrite();
   bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes,
-                          const std::shared_ptr<FontBudgetState>& budgetState) const;
-  bool storeLoadedFont(Entity entity, LoadedFontComponent font);
+                          const std::shared_ptr<FontBudgetState>& budgetState,
+                          bool* retainedBudgetExceeded = nullptr) const;
+  bool storeLoadedFont(Entity entity, LoadedFontComponent font,
+                       bool* retainedBudgetExceeded = nullptr);
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data,
                                     FontDataTrust trust);

@@ -265,6 +265,27 @@ TEST(CatalogEncodedFontStoreTest, FamilyMetadataPressureDefersAndRecoversAfterRe
               ElementsAre(Field(&FontFaceDependency::state, FontFaceLoadState::Loaded)));
 }
 
+TEST(CatalogEncodedFontStoreTest, FamilyMetadataBeyondWholeBudgetRemainsTerminal) {
+  Registry measurementRegistry;
+  FontManager measurement(measurementRegistry);
+  ASSERT_EQ(measurement.isValidatedFont(measurement.loadFontData(InterBytes())), true);
+  const size_t fullCharge = measurement.loadedFontBytes();
+  ASSERT_GT(fullCharge, InterAsset().decodedBytes);
+
+  EmbeddedFontProvider provider;
+  Registry registry;
+  FontManager manager(registry, fullCharge - 1);
+  manager.setFontProvider(&provider);
+  const auto fallback = manager.findFont("Inter");
+  EXPECT_EQ(fallback, manager.fallbackFont());
+  EXPECT_THAT(manager.faceDependencies(),
+              ElementsAre(Field(&FontFaceDependency::state, FontFaceLoadState::Failed)));
+  EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 1u);
+  EXPECT_EQ(manager.refreshPendingFonts(), false);
+  EXPECT_EQ(manager.findFont("Inter"), fallback);
+  EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 1u);
+}
+
 TEST(CatalogEncodedFontStoreTest, ReadyAssetDeferredDecodeWakesWithoutAnotherFetch) {
   auto store = std::make_shared<CatalogEncodedFontStore>();
   EmbeddedFontProvider provider(store);
