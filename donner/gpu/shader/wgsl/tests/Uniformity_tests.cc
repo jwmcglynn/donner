@@ -9,7 +9,6 @@ struct UniformityCase {
   ErrorCode expected;
 };
 const UniformityCase kCases[] = {
-
     {"unconditional",
      R"(@group(0) @binding(0) var t:texture_2d<f32>; @group(0) @binding(1) var s:sampler;
 

@@ -149,6 +149,42 @@ inline std::vector<uint8_t> NonseparableExpected(const Scenario& scenario,
   return {target.data().begin(), target.data().end()};
 }
 
+inline bool OutsideRectangle(float x, float y, const std::array<float, 4>& rect) {
+  return x < rect[0] || x >= rect[2] || y < rect[1] || y >= rect[3];
+}
+
+inline float CoverageScale(const shader::programs::ImageBlitParams& params, uint32_t x,
+                           uint32_t y) {
+  float scale = params.opacity;
+  if (params.hasClipMask) scale *= ClipValue(x, y) / 255.0f;
+  if (params.maskMode == 1)
+    scale *= (0.2126f * kMask[0] + 0.7152f * kMask[1] + 0.0722f * kMask[2]) / 255.0f;
+  if (params.maskMode == 2) scale *= kMask[3] / 255.0f;
+  return scale;
+}
+
+inline FloatPixel ForegroundPixel(const Scenario& scenario,
+                                  const shader::programs::ImageBlitParams& params, uint32_t x,
+                                  uint32_t y) {
+  const float px = x + 0.5f, py = y + 0.5f;
+  if (OutsideRectangle(
+          px, py, {params.destRect[0], params.destRect[1], params.destRect[2], params.destRect[3]}))
+    return {};
+  if (params.applyMaskBounds && OutsideRectangle(px, py, {2, 1, 6, 3})) return {};
+  const float u = params.srcRect[0] + (px - params.destRect[0]) /
+                                          (params.destRect[2] - params.destRect[0]) *
+                                          (params.srcRect[2] - params.srcRect[0]);
+  const float v = params.srcRect[1] + (py - params.destRect[1]) /
+                                          (params.destRect[3] - params.destRect[1]) *
+                                          (params.srcRect[3] - params.srcRect[1]);
+  FloatPixel value = Sample(scenario, u, v);
+  if (!params.sourceIsPremult)
+    for (size_t c = 0; c < 3; ++c) value[c] *= value[3];
+  const float scale = CoverageScale(params, x, y);
+  for (float& component : value) component *= scale;
+  return value;
+}
+
 inline std::vector<uint8_t> Expected(const Scenario& scenario) {
   using tiny_skia::filter::BlendMode;
   using tiny_skia::filter::FloatPixmap;
@@ -161,26 +197,8 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
       const size_t offset = (y * scenario.width() + x) * 4;
       if (scenario.kind == Case::Blend)
         for (size_t c = 0; c < 4; ++c) background.data()[offset + c] = kBackdrop[c] / 255.0f;
-      const float px = x + 0.5f, py = y + 0.5f;
-      if (px < params.destRect[0] || px >= params.destRect[2] || py < params.destRect[1] ||
-          py >= params.destRect[3])
-        continue;
-      if (params.applyMaskBounds && (px < 2 || px >= 6 || py < 1 || py >= 3)) continue;
-      const float u = params.srcRect[0] + (px - params.destRect[0]) /
-                                              (params.destRect[2] - params.destRect[0]) *
-                                              (params.srcRect[2] - params.srcRect[0]);
-      const float v = params.srcRect[1] + (py - params.destRect[1]) /
-                                              (params.destRect[3] - params.destRect[1]) *
-                                              (params.srcRect[3] - params.srcRect[1]);
-      FloatPixel value = Sample(scenario, u, v);
-      if (!params.sourceIsPremult)
-        for (size_t c = 0; c < 3; ++c) value[c] *= value[3];
-      float scale = params.opacity;
-      if (params.hasClipMask) scale *= ClipValue(x, y) / 255.0f;
-      if (params.maskMode == 1)
-        scale *= (0.2126f * kMask[0] + 0.7152f * kMask[1] + 0.0722f * kMask[2]) / 255.0f;
-      if (params.maskMode == 2) scale *= kMask[3] / 255.0f;
-      for (size_t c = 0; c < 4; ++c) foreground.data()[offset + c] = value[c] * scale;
+      const FloatPixel value = ForegroundPixel(scenario, params, x, y);
+      std::copy(value.begin(), value.end(), foreground.data().begin() + offset);
     }
   }
   constexpr std::array modes{
