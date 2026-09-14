@@ -5,7 +5,7 @@ mutation revision, mutation log, detached-node lifetime state, and the
 reader/writer access coordinator.
 
 `SVGDocument` defaults to `ThreadingMode::SingleThreaded`. That keeps the
-existing low-overhead path for users that touch a document from one thread. In
+existing low-overhead path for callers that touch a document from one thread. In
 this mode, access guards assert that the calling thread is the original owner
 thread but do not acquire locks.
 
@@ -29,7 +29,7 @@ element.withWriteAccess([](DocumentWriteAccess& access, EntityHandle handle) {
 
 Raw ECS access is intentionally noisy in concurrent mode. Use
 `unsafeRegistry()` or `unsafeEntityHandle()` only when the caller has a stronger
-external guarantee and wants to bypass the guard assertion.
+external guarantee and needs to bypass the guard assertion.
 
 ## Mutation Revisions
 
@@ -52,7 +52,7 @@ mutations made after snapshot capture take effect on a later frame.
 
 ## Validation
 
-Useful focused checks:
+Focused checks:
 
 ```sh
 bazel test --config=tsan //donner/svg/tests:svg_document_concurrency_tests

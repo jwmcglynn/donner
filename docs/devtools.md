@@ -4,13 +4,13 @@
 
 ## Generating Documentation
 
-Doxygen may be generated with:
+Generate the documentation with:
 
 ```sh
 tools/doxygen.sh
 ```
 
-It requires the `doxygen` package to be installed. The generated documentation will be in `generated-doxygen/html/index.html`.
+The script requires the `doxygen` package. Output is written to `generated-doxygen/html/index.html`.
 
 Tools required to generate the documentation are:
 
@@ -25,7 +25,7 @@ To generate code coverage locally:
 tools/coverage.sh
 ```
 
-Thn open `coverage-report/index.html` in a browser.
+Then open `coverage-report/index.html` in a browser.
 
 ## Binary Size
 
@@ -39,7 +39,7 @@ Then open `build-binary-size/binary_size_report.html` in a browser.
 
 ## Clang Tidy
 
-clang-tidy may be invoked by building with `--config=clang-tidy`:
+Run clang-tidy by building with `--config=clang-tidy`:
 
 ```sh
 bazel build --config clang-tidy //...

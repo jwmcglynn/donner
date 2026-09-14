@@ -10,16 +10,17 @@ features on top of that source buffer. They do not create a second source store,
 rewrite XML, or change save output.
 
 Source focus mode is enabled by default. Users can toggle it from the View menu,
-the source editor context menu, or `Cmd+Enter` on macOS and `Ctrl+Enter` on other
-platforms. When enabled, the source pane folds unrelated lines, keeps selected
-elements and their referenced resources visible, dims structural ancestor
-context, and draws reference arrows between source refs and target elements.
+from the source editor context menu, or with `Cmd+Enter` on macOS and
+`Ctrl+Enter` on other platforms. When enabled, the source pane folds unrelated
+lines, keeps selected elements and their referenced resources visible, dims
+structural ancestor context, and draws reference arrows between source refs and
+target elements.
 
 Moving the source cursor updates the canvas/tree selection when the cursor lands
-inside an SVG element. Hovering source text is non-mutating: it highlights the
-corresponding shape in the render pane and adds a subtle source highlight without
-changing selection. Elements already in the active selection do not get duplicate
-source-hover highlights.
+inside an SVG element. Hovering source text does not change the document: it
+highlights the corresponding shape in the render pane and adds a source
+highlight without changing selection. Elements already in the active selection
+do not get duplicate source-hover highlights.
 
 ## Architecture Snapshot
 
@@ -45,7 +46,7 @@ source-hover highlights.
 Reference traversal follows same-document resource refs from selected rendered
 content, including paint refs, filter/mask/clip refs, href chains, inline style
 refs, and CSS declaration refs. When a selected group contains children, child
-refs contribute arrows and resource visibility too.
+refs also contribute arrows and resource visibility.
 
 CSS provenance stays in Donner's CSS and style layers:
 

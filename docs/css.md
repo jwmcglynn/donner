@@ -2,9 +2,9 @@
 
 \tableofcontents
 
-Donner implements CSS3 through a hand-rolled CSS library, \ref donner::css. Donner's CSS library is designed to have minimal dependencies and to be easy to integrate into other projects by using an adapter that satisfies the \ref donner::ElementLike concept.
+Donner implements CSS3 in its own CSS library, \ref donner::css. The library has minimal dependencies and can be integrated into other projects with an adapter that satisfies the \ref donner::ElementLike concept.
 
-\ref donner::css::CSS provides a high-level API surface for parsing CSS constructs, which is implemented on top of lower-level parser APIs which provide finer-grained control over the parsing process and better error handling.
+\ref donner::css::CSS provides a high-level API for parsing CSS constructs. It is implemented on top of lower-level parser APIs that give finer-grained control over parsing and more detailed error handling.
 
 ## Anatomy of CSS Strings
 
@@ -76,7 +76,7 @@ flowchart TD
 
 <img src="selector_anatomy.svg" title="CSS selector anatomy diagram" width="900" />
 
-Selectors provide many ways to match elements in the DOM. Selectors can be chained together to create complex matching rules.
+Selectors provide many ways to match elements in the DOM.
 
 | Selector                                                        | Example        | Description                                                                  |
 | --------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------- |
@@ -87,7 +87,7 @@ Selectors provide many ways to match elements in the DOM. Selectors can be chain
 | \ref donner::css::PseudoClassSelector "PseudoClassSelector"     | `:first-child` | Matches elements in a special state, such as the first child of their parent |
 | \ref donner::css::PseudoElementSelector "PseudoElementSelector" | `::first-line` | Not yet supported, matches special elements in the tree, mostly for text     |
 
-Attribute, pseudo-class, and combinators provide several ways to match elements based on their state or relationships with other elements.
+Attribute selectors, pseudo-classes, and combinators match elements based on their state or their relationships with other elements.
 
 Selectors can be chained with combinators to create complex matching rules. For example, `div > p` matches `p` elements that are children of `div` elements.
 
@@ -95,7 +95,7 @@ Selectors can be chained with combinators to create complex matching rules. For 
 - `>` **Child**: Finds direct children in the tree.
 - `+` **NextSibling**: Finds the next sibling in the tree.
 - `~` **SubsequentSibling**: Finds all subsequent siblings in the tree.
-- `||` **Column**: Finds the next column in the tree. Note that this is a new feature in CSS Selectors Level 4, but isn't applicable to SVG.
+- `||` **Column**: Finds the next column in the tree. This is new in CSS Selectors Level 4 and is not applicable to SVG.
 
 #### Attribute selectors
 
@@ -103,7 +103,7 @@ Attribute selectors are used within square brackets on the selector list, such a
 
 | Matcher | Enum           | Description                                                                                                         |
 | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `~=`    | Includes       | Interprets the attribute value as a space-separated list of values. Matches if the any value of the list is equal   |
+| `~=`    | Includes       | Interprets the attribute value as a space-separated list of values. Matches if any value in the list is equal       |
 | `\|=`   | DashMatch      | Matches if the attribute value either exactly matches, or begins with the value immediately followed by a dash, `-` |
 | `^=`    | PrefixMatch    | Matches if the attribute value begins with the matcher value                                                        |
 | `$=`    | SuffixMatch    | Matches if the attribute value ends with the matcher value                                                          |
@@ -120,11 +120,11 @@ If no matcher is specified, the attribute is matched if it is set to any value, 
 | `a[href^="https://"]` | All `a` elements with an `href` attribute that begins with "https://"                                |
 | `a[href$=".pdf"]`     | All `a` elements with an `href` attribute that ends with `.pdf`                                      |
 | `a[href*=".pdf"]`     | All `a` elements with an `href` attribute that contains `.pdf`                                       |
-| `a[class~="link"]`    | A fun second way of writing `a.link`, which has no purpose other than illustrating the `~=` matcher. |
+| `a[class~="link"]`    | An alternate way of writing `a.link`, included here to illustrate the `~=` matcher.                  |
 
 #### Pseudo-class selectors
 
-Pseudo-classes are used to match elements in special states, such as the first child of their parent or whether a child element matches a selector.
+Pseudo-classes match elements in special states, such as being the first child of their parent, or having a child that matches a selector.
 
 | Pseudo-class                   | Description                                                                                                                                                                                                                                     |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -152,7 +152,7 @@ Pseudo-classes are used to match elements in special states, such as the first c
 
   \snippet custom_css_parser.cc parse_stylesheet
 
-- \ref donner::css::CSS::ParseStyleAttribute "CSS::ParseStyleAttribute" parses `style="..."` attributes values, which are a list of `key: value;` pairs.
+- \ref donner::css::CSS::ParseStyleAttribute "CSS::ParseStyleAttribute" parses `style="..."` attribute values, which are a list of `key: value;` pairs.
 
   \snippet custom_css_parser.cc parse_style_attribute
 

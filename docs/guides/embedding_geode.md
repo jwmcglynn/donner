@@ -6,9 +6,9 @@ Geode is Donner's GPU-native SVG rendering backend. In most uses it runs
 target texture (typically a swap-chain image), and Geode draws into that
 texture without creating any WebGPU objects of its own.
 
-Reach for embedded mode when you want to render SVG into an existing WebGPU
-frame alongside other GPU work — a game engine UI layer, a native editor
-window, a composited WebGPU canvas — without paying for a second device.
+Use embedded mode to draw SVG into an existing WebGPU frame alongside other GPU
+work (a game engine UI layer, a native editor window, a composited WebGPU
+canvas) without creating a second device.
 
 ## Prerequisites
 
@@ -17,15 +17,11 @@ window, a composited WebGPU canvas — without paying for a second device.
 - The host's `wgpu::Instance` when synchronous snapshots must dispatch WebGPU
   map callbacks, as required by browser embedders.
 - A target `wgpu::Texture` with `TextureUsage::RenderAttachment` in its usage
-  flags. `CopySrc` is required in addition if you plan to call
+  flags. `CopySrc` is also required if you call
   `RendererGeode::takeSnapshot()`.
 - A build with Geode enabled:
   `bazel build --config=geode //your:target` (the config sets
   `--//donner/svg/renderer/geode:enable_geode=true`).
-
-Geode is confirmed against the wgpu-native backend that ships in
-`third_party/webgpu-cpp`. The Dawn C++ wrapper exposes the same C++ API
-surface but a few status enumerants differ (see Troubleshooting below).
 
 ## Embedding walkthrough
 
@@ -48,8 +44,8 @@ config.adapter = hostAdapter;      // optional; retained for adapter metadata qu
 The `instance` and `adapter` fields are optional. Browser embedders should
 supply `instance` when calling `RendererGeode::takeSnapshot()` so synchronous
 readback can wait for map callback completion through `Instance::waitAny()`. When
-supplied, Geode preserves `adapter` for callers that need metadata about the
-adapter associated with the external device.
+supplied, `adapter` is retained for callers that need metadata about the adapter
+associated with the external device.
 
 ### 2. Construct a non-owning `GeodeDevice`
 
@@ -89,10 +85,9 @@ renderer.clearTargetTexture();
 ```
 
 Call `setTargetTexture` once per frame (before `beginFrame` / `draw` /
-`endFrame`, which `RendererGeode::draw` fuses together internally), and call
-`clearTargetTexture` after each frame if you intend to mix embedded and
-headless output — it reverts the renderer to the internal offscreen target
-path.
+`endFrame`, which `RendererGeode::draw` fuses together internally). Call
+`clearTargetTexture` after each frame if you mix embedded and headless output;
+it reverts the renderer to the internal offscreen target path.
 
 ## Lifetime rules
 
@@ -111,13 +106,13 @@ path.
 
 | Requirement | Why |
 |-------------|-----|
-| `usage` includes `wgpu::TextureUsage::RenderAttachment` | Geode draws into the texture via a render pass. |
+| `usage` includes `wgpu::TextureUsage::RenderAttachment` | Geode draws into the texture through a render pass. |
 | `format` matches `GeodeEmbedConfig::textureFormat` | The internal pipelines are built against a single color format. |
 | `usage` includes `wgpu::TextureUsage::CopySrc` | Only needed for `RendererGeode::takeSnapshot()`; omit otherwise. |
 | `sampleCount` is 1 | Geode renders directly into a single-sample target. |
 
-If the format doesn't match, Geode will reject the texture at `beginFrame`
-time and fall back to its internal offscreen target for that frame.
+If the format does not match, Geode rejects the texture at `beginFrame` and
+falls back to its internal offscreen target for that frame.
 
 ## Complete example
 
@@ -132,11 +127,11 @@ bazel run --config=geode //examples:geode_embed -- path/to/drawing.svg
 
 The example handles the full host lifecycle:
 
-1. Parses the SVG via `SVGParser::ParseSVG`.
+1. Parses the SVG with `SVGParser::ParseSVG`.
 2. Creates a GLFW window with `GLFW_NO_API` (no GL context).
 3. Creates `wgpu::Instance`, `wgpu::Surface`, `wgpu::Adapter`, `wgpu::Device`,
    and queries `SurfaceCapabilities` for a supported 8-bit color format.
-4. Wraps the resulting device via `GeodeDevice::CreateFromExternal`, then
+4. Wraps the resulting device with `GeodeDevice::CreateFromExternal`, then
    constructs one `RendererGeode` and reuses it across every frame.
 5. In the main loop: `glfwPollEvents`, `surface.getCurrentTexture`,
    `renderer.setTargetTexture`, `renderer.draw`, `surface.present`,
@@ -147,9 +142,9 @@ The example handles the full host lifecycle:
 ### X11 header ordering on Linux
 
 Defining `GLFW_EXPOSE_NATIVE_X11` pulls in `<X11/Xlib.h>`, which
-`#define`s `None`, `True`, `False`, and `Status` — all of which collide
-with C++ names used elsewhere (for example `wgpu::Status`, an enum class in
-`third_party/webgpu-cpp/webgpu.hpp`). Two fixes, in order of preference:
+`#define`s `None`, `True`, `False`, and `Status`. All four collide with C++
+names used elsewhere (for example the `wgpu::Status` enum class). Two fixes, in
+order of preference:
 
 1. **Isolate the GLFW-native call in its own translation unit** that
    includes only `webgpu.hpp` plus `GLFW/glfw3native.h` and `#undef`s the
@@ -160,20 +155,14 @@ with C++ names used elsewhere (for example `wgpu::Status`, an enum class in
    for small prototypes, but the macros will re-trip anyone who later adds
    an include above the `#undef`s.
 
-### wgpu-native vs. Dawn surface-texture API drift
+### Surface-texture status values
 
 `wgpu::Surface::getCurrentTexture` writes status into
-`WGPUSurfaceTexture::status`, and the **success** enumerant on wgpu-native
-is `SuccessOptimal` (not `Success`). Treat both `SuccessOptimal` and
+`WGPUSurfaceTexture::status`, and the **success** enumerant is
+`SuccessOptimal` (not `Success`). Treat both `SuccessOptimal` and
 `SuccessSuboptimal` as renderable; skip the frame on `Timeout`, `Outdated`,
-`Lost`, and reconfigure the surface on `Outdated`. Similarly,
-`Instance::requestAdapter` and `Adapter::requestDevice` are callback-based
-in the C API; the webgpu-cpp wrapper provides synchronous overloads that
-work on wgpu-native because the callback fires before the call returns.
-Dawn requires driving the future explicitly — the wrapper handles that
-transparently too, but be aware that synchronous wrapper calls are a
-wgpu-native-specific convenience.
+`Lost`, and reconfigure the surface on `Outdated`.
 
-If you see `surface.getCurrentTexture` always reporting `Outdated`, the
-surface dimensions probably don't match the `SurfaceConfiguration` — call
+If `surface.getCurrentTexture` always reports `Outdated`, the surface
+dimensions probably do not match the `SurfaceConfiguration`; call
 `surface.configure` again after any window resize.

@@ -2,7 +2,7 @@
 
 Donner uses a unified diagnostics system for all parsers (XML, SVG, CSS, path, transform, etc.).
 Every diagnostic carries a severity level, a human-readable message, and a precise source range
-indicating exactly where in the input the problem occurred. A console renderer can display
+indicating where in the input the problem occurred. A console renderer can display
 diagnostics with source context and caret/tilde indicators, similar to clang or rustc output.
 
 **Issue:** https://github.com/jwmcglynn/donner/issues/442
@@ -14,7 +14,7 @@ The diagnostics system has two channels:
 - **Fatal errors** flow through `ParseResult<T>`, which holds either a successful result, a
   `ParseDiagnostic` error, or both (partial result with error).
 - **Non-fatal warnings** flow through `ParseWarningSink`, a collector passed to parser entry points.
-  When disabled, warning emission is near-zero-cost---the factory callable is never invoked.
+  When disabled, warning emission costs almost nothing: the factory callable is never invoked.
 
 ```mermaid
 flowchart TD
@@ -96,10 +96,10 @@ The `FileOffset` overloads create a point range (zero-width) at the given locati
 
 ### `ParseWarningSink`
 
-Collects non-fatal warnings during parsing. The key design property is **implicit zero-cost
-suppression**: the `add(Factory&&)` overload accepts a callable that is only invoked when the
-sink is enabled. This means `RcString::fromFormat` and other formatting work inside the lambda
-is automatically skipped when warnings are disabled---callers don't need to check anything.
+Collects non-fatal warnings during parsing. Suppression is implicit and zero-cost: the `add(Factory&&)` overload
+accepts a callable that is invoked only when the sink is enabled, so `RcString::fromFormat` and
+other formatting work inside the lambda is skipped when warnings are disabled. Callers do not need
+to check anything.
 
 ```cpp
 class ParseWarningSink {
@@ -157,7 +157,7 @@ public:
 
 ### Returning errors from a parser
 
-Return a `ParseDiagnostic` via `ParseResult`:
+Return a `ParseDiagnostic` through `ParseResult`:
 
 ```cpp
 return ParseDiagnostic::Error("Unexpected character",
@@ -184,7 +184,7 @@ warningSink.add(ParseDiagnostic::Warning("Missing attribute", range));
 ### Calling a parser
 
 All parser entry points require an explicit `ParseWarningSink&` parameter. There are no
-convenience overloads---warning collection is always visible at the call site.
+convenience overloads, so warning collection is visible at every call site.
 
 ```cpp
 ParseWarningSink warningSink;
@@ -251,7 +251,7 @@ warning: Invalid paint server value
    |             ^~~~~~
 ```
 
-The renderer handles edge cases gracefully:
+The renderer handles these edge cases:
 - **Zero-length (point) ranges**: single caret at the insertion point.
 - **EndOfString offsets**: severity label and message only, no source context.
 - **Out-of-bounds offsets**: severity label and message only.
@@ -320,7 +320,7 @@ subparsers (which operate on substrings) back to the original input coordinates.
   `ParseDiagnostic` is slightly larger than the old `ParseError` (adds severity + range end),
   but this only matters on error paths.
 - **LineOffsets reuse**: `DiagnosticRenderer::formatAll()` computes `LineOffsets` once and
-  shares it across all diagnostics via a file-local `formatWithLineOffsets()` helper.
+  shares it across all diagnostics through a file-local `formatWithLineOffsets()` helper.
 
 ### Design decisions
 

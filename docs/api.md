@@ -36,7 +36,7 @@ flowchart TD
 
 ### Value types
 
-- Implementation details about memory allocation are hidden, and the API is designed to be used with value types. For example, \ref donner::svg::SVGElement is can be copied and passed by value.
+- Implementation details about memory allocation are hidden, and the API is designed to be used with value types. For example, \ref donner::svg::SVGElement can be copied and passed by value.
 
 ### Error handling
 
@@ -44,7 +44,7 @@ flowchart TD
 
 - `std::optional` and \ref donner::ParseResult are used to return values from functions. This allows the caller to check for errors and handle them as needed. `ParseResult` behaves similarly to `std::expected` (new in C++23), and may be replaced with it in the future.
 
-- Callers can `if` init-statements to check for success:
+- Callers can use `if` init-statements to check for success:
 
   ```cpp
   if (ParseResult<int> maybeInt = NumberParser::parse("123"); maybeInt.hasResult()) {
@@ -71,7 +71,7 @@ flowchart TD
 
 ### String handling
 
-- \ref donner::RcString is used to store strings. This is a reference counted string, which allows cheap copy and move operations. `RcString` implements the small-string optimization and does not allocate memory for strings shorter than 31 characters (on 64-bit platforms).
+- \ref donner::RcString is used to store strings. This is a reference counted string, which allows cheap copy and move operations. `RcString` implements the small-string optimization and does not allocate memory for strings of 31 characters or fewer (on 64-bit platforms).
 
 - Use `std::string_view` for APIs that only need to read the input string and not store it.
 
@@ -118,7 +118,7 @@ To parse an SVG document, use the `SVGParser` class:
 
 \snippet svg_to_png.cc load_file
 
-Store the resulting \ref donner::svg::SVGDocument to keep the document in-memory, and use it to inspect or modify the document.
+Store the resulting \ref donner::svg::SVGDocument to keep the document in memory, then inspect or modify it.
 
 For example, to get the \ref donner::svg::SVGPathElement for a \ref xml_path element:
 
@@ -221,9 +221,9 @@ To render an SVG document, use the \ref donner::svg::Renderer class.
 
 \snippet svg_to_png.cc render
 
-`Renderer` is backend-agnostic and resolves to the active build backend (Skia or tiny-skia).
+`Renderer` resolves to the backend selected at build time, either tiny_skia or Geode.
 
-The output size is determined by \ref donner::svg::SVGDocument, which can either be detected from the file itself or overridden with SVGDocument APIs:
+The output size comes from the \ref donner::svg::SVGDocument. It is detected from the file itself, or overridden with these APIs:
 
 - \ref donner::svg::SVGDocument::setCanvasSize()
 - \ref donner::svg::SVGDocument::useAutomaticCanvasSize()
@@ -246,10 +246,10 @@ independent of the active renderer.
 `hitTestLink` implements the SVG enclosing-`<a>` semantics: a point over any descendant of an `<a>`
 resolves to that link, so the whole subtree of a link is clickable. Donner never navigates; it
 returns the link target verbatim (a raw `href` such as `"#section"`, `"../other.svg"`, or an
-absolute URL) and the embedding application resolves and follows it. Because it is a stateless
-query rather than a navigation callback, the application drives it from its own pointer events and
-uses the same call for both a click (activate the link) and hover (show a pointer cursor, a hover
-highlight, or a tooltip), deciding for itself what each gesture does.
+absolute URL) and the embedding application resolves and follows it. The query is stateless rather
+than a navigation callback, so the application calls it from its own pointer events and uses the
+same call for a click (activate the link) and for hover (show a pointer cursor, a hover highlight,
+or a tooltip).
 
 ```cpp
 donner::svg::DonnerController controller(document);

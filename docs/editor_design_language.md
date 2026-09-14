@@ -209,7 +209,7 @@ ranges remain legible.
 ## Welcome And Samples
 
 Launching without a filename, including the WebAssembly build, opens a first-run surface over the
-real editor workspace. It keeps Donner as the first visual signal, offers Open SVG and a fixed
+real editor workspace. It presents the Donner branding first, offers Open SVG and a fixed
 GitHub destination, and lists a bounded offline catalog of reviewed SVG samples. Loading a sample
 creates an untitled document, so Save cannot overwrite a local file without an explicit path.
 Each sample card uses a small bitmap rendered by Donner from the exact bundled SVG source. ImGui

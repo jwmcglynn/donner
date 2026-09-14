@@ -1,7 +1,7 @@
 # Project Roadmap {#DonnerProjectRoadmap}
 
 **Status:** Active
-**Updated:** 2026-08-13
+**Updated:** 2026-09-14
 
 ## Summary
 
@@ -14,7 +14,7 @@ collected as **v0.5**, skipping intermediate milestones that were overtaken by t
 development.
 
 The next release target is **v0.8: Donner SVG Editor & Engine**. Its scope is everything completed
-since v0.5, plus the editor showcase work needed to honestly demonstrate Donner deriving a new
+since v0.5, plus the editor showcase work needed to demonstrate Donner deriving a new
 composition from its own splash: a complete Layers panel, shape cut/copy/paste, a tuned Pen tool, text creation,
 text-to-outline conversion, viewport SVG export, and optional editor overlay export. The broader
 production-quality v1.0 milestone remains the follow-up release for animation, scripting,
@@ -22,29 +22,29 @@ conformance completion, parser hardening, and ecosystem integration.
 
 ---
 
-## v0.1 — Static Rendering Baseline (shipped)
+## v0.1: Static Rendering Baseline (shipped)
 
 Core static SVG path/shape rendering and CSS cascade foundation. Established the ECS architecture,
 XML parser, CSS parser, and Skia-based renderer.
 
 ---
 
-## v0.5 — Rendering Engine (shipped)
+## v0.5: Rendering Engine (shipped)
 
 Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ### Renderer Architecture
 
-- **Renderer interface abstraction** — `RendererInterface` split from the original full-Skia renderer with
+- **Renderer interface abstraction**: `RendererInterface` split from the original full-Skia renderer with
   `RendererDriver` traversing a flat render tree. Enables future backend swaps.
   ([design](design_docs/0003-renderer_interface_design.md))
-- **tiny-skia software renderer** — Full software rasterizer (fill, stroke, gradients, patterns,
-  shaders, lowp/highp pipeline) as an alternative to Skia. All render operations within 1.5× of
+- **tiny-skia software renderer**: Full software rasterizer (fill, stroke, gradients, patterns,
+  shaders, lowp/highp pipeline) as an alternative to Skia. All render operations within 1.5x of
   Skia performance.
 
 ### Text Rendering
 
-- Phases 1–5: stb_truetype font loading, glyph outlines, `TextLayout`, WOFF2 support,
+- Phases 1-5: stb_truetype font loading, glyph outlines, `TextLayout`, WOFF2 support,
   `dominant-baseline`.
 - Phase 6: Optional HarfBuzz text shaping tier (`--config=text-full`).
 - `<textPath>` element support for text rendered along arbitrary paths.
@@ -57,18 +57,18 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 - Float-precision filter pipeline with SIMD optimizations (NEON): Gaussian blur, morphology,
   color matrix, turbulence, convolution, blend, composite, lighting, displacement map, component
   transfer, flood, offset, merge, tile.
-- All 23 filter benchmarks within 1.5× of Skia; 21 of 23 are faster.
+- All 23 filter benchmarks within 1.5x of Skia; 21 of 23 are faster.
 - ([perf](design_docs/0014-filter_performance.md))
 
 ### Infrastructure
 
 - Auto-detect font backends, crash handling hardening.
-- Filter and render benchmark suites with perf regression tests (1.5× threshold enforcement).
+- Filter and render benchmark suites with perf regression tests (1.5x threshold enforcement).
 - resvg test suite integration for golden image validation.
 
 ---
 
-## v0.8 — Donner SVG Editor & Engine (next release)
+## v0.8: Donner SVG Editor & Engine (next release)
 
 Focus: rebrand Donner around the editor and engine, release the accumulated editor/Geode/path work,
 and use the editor live to style and record the v0.8 showcase.
@@ -107,28 +107,28 @@ The release collects all completed editor/toolkit work since v0.5, including:
 The editor capabilities and automated fixture needed for the v0.8 showcase are implemented. Release
 QA, operator-directed styling, screen recording, and packaging remain:
 
-- [x] **Shape cut/copy/paste** — duplicate, cut, and paste selected SVG shapes/groups with source
+- [x] **Shape cut/copy/paste**: duplicate, cut, and paste selected SVG shapes/groups with source
       sync, undo, selection restoration, default paste offset, Paste in Front, and deterministic ID
       handling.
-- [x] **Tuned Pen tool** — path creation that supports line/curve anchors, close/cancel, live
+- [x] **Tuned Pen tool**: path creation that supports line/curve anchors, close/cancel, live
       preview, immediate bounds/overlay updates, root-contained source insertion, and undo/redo.
-- [x] **Complete Layers panel** — replace the tree view with an editable group/shape hierarchy.
+- [x] **Complete Layers panel**: replace the tree view with an editable group/shape hierarchy.
       Show previews and stable names at each tier and sync selection with canvas/source.
-- [x] **Text authoring UI** — create and edit short SVG text from the editor.
-- [x] **Convert Text to Outlines** — convert selected `<text>` into deterministic path geometry
+- [x] **Text authoring UI**: create and edit short SVG text from the editor.
+- [x] **Convert Text to Outlines**: convert selected `<text>` into deterministic path geometry
       using Donner text layout and glyph outlines.
-- [x] **Viewport SVG export** — export the current editor viewport as cropped SVG.
-- [x] **Overlay SVG export** — optional export of selected path outlines, bounds, and handles as
+- [x] **Viewport SVG export**: export the current editor viewport as cropped SVG.
+- [x] **Overlay SVG export**: optional export of selected path outlines, bounds, and handles as
       vector editor chrome.
-- [x] **Automated showcase fixture** — generate a derived splash from `donner_splash.svg`, add `SVG`,
+- [x] **Automated showcase fixture**: generate a derived splash from `donner_splash.svg`, add `SVG`,
       convert it to outlines, select the outlined letters, and export the viewport with overlay
       enabled without checking generated variants into the repository root. This proves the workflow,
       not the final composition.
-- [x] **Reproducibility** — preserve the generator, automated test, and manual checklist needed to
+- [x] **Reproducibility**: preserve the generator, automated test, and manual checklist needed to
       recreate the temporary showcase output on demand.
-- [x] **Rebrand updates** — update public docs, release notes, and user-facing labels to
+- [x] **Rebrand updates**: update public docs, release notes, and user-facing labels to
       **Donner SVG Editor & Engine**.
-- [ ] **Live showcase recording** — style the release-facing composition in Donner Editor under
+- [ ] **Live showcase recording**: style the release-facing composition in Donner Editor under
       operator direction, screen record the authoring session, and review its legibility, pacing,
       composition, and editor UI clarity.
 
@@ -159,7 +159,7 @@ retrospective.
 
 ---
 
-## v1.0 — Production Release (future)
+## v1.0: Production Release (future)
 
 The production-quality milestone that follows the v0.8 **Donner SVG Editor & Engine** release.
 
@@ -167,9 +167,9 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 ### SVG Animation
 
-- Phases 1–9: timing model, interpolation engine, sandwich composition, attribute targeting,
+- Phases 1-9: timing model, interpolation engine, sandwich composition, attribute targeting,
   `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
-- [ ] **Lottie playback (probable)** -- Play back Lottie animations (the JSON-based After
+- [ ] **Lottie playback (probable)**: Play back Lottie animations (the JSON-based After
       Effects export format, `.json`/`.lottie`) on top of the same animation timeline
       machinery. Lottie is the dominant interchange format for production vector animation,
       and runtimes such as ThorVG and dotLottie demonstrate the demand.
@@ -180,13 +180,13 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 ### Interactivity
 
-- Phases 1–6: `EventSystem` with `SpatialGrid`-accelerated hit testing, event dispatch (mouse,
+- Phases 1-6: `EventSystem` with `SpatialGrid`-accelerated hit testing, event dispatch (mouse,
   pointer), CSS cursor property, `DonnerController` public API (`addEventListener`,
   `elementFromPoint`, `findIntersectingRect`, `getWorldBounds`), incremental spatial index updates.
 
 ### Incremental Invalidation
 
-- **Partial computed tree invalidation** — When DOM mutations occur, only invalidate the
+- **Partial computed tree invalidation**: When DOM mutations occur, only invalidate the
   affected subtree of the computed style/layout tree rather than recomputing the entire
   document. CSS restyling performs differential updates: identify which elements' computed
   styles are affected by a change and re-resolve only those, propagating inherited property
@@ -196,129 +196,154 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 Production editor scope: a hybrid structured/freeform SVG editor workflow beyond the v0.8 showcase.
 
-- [ ] **Import donner-editor** — Move the `donner-editor` project into this repository and polish
-      for release.
-- [ ] **Structured editing API** — Programmatic DOM mutations that propagate through ECS with
-      incremental re-render (building on composited rendering + interactivity).
-- [ ] **Partial re-parsing** — Parser support for updating a document in-place from modified SVG
-      source. When a user edits source text, parse only the changed region and splice updates into
-      the live document.
-- [ ] **Reverse serialization** — From interactive editor operations, surgically splice updated
-      SVG content back into the source text, preserving surrounding structure and formatting. Enables
-      round-trip editing: source → DOM → visual edit → source.
-- [ ] **Invalid-region tolerance** — Graceful handling of temporarily invalid SVG during freeform
-      text editing. The editor should not crash or lose state when the user is mid-keystroke. This is
-      a hybrid approach — not a "true" structured editor, but a text editor with syntax-aware support.
+- [x] **Import donner-editor**: Shipped in #529. The editor lives in-tree at `donner/editor`
+      (`EditorApp`, `donner/editor/app`) with its own test suite under `donner/editor/tests`.
+- [x] **Structured editing API**: Shipped in #598. `SVGDocument::setElementAttribute`,
+      `insertElement`, `removeElement`, and `setElementTextContent` return an
+      `ApplySourceEditResult` whose `XMLMutation` stream drives incremental re-render through the
+      ECS (`donner/svg/tests/SVGInvalidation_tests.cc`).
+- [x] **Partial re-parsing**: Shipped in #598. `XMLIncrementalParser` and
+      `XMLDocument::applySourceEdit` reparse the smallest affected subtree
+      (`ReparseScope::Subtree`) and splice the result into the live document, widening to a
+      document-scoped reparse only when the local parse fails.
+- [x] **Reverse serialization**: Shipped in #598. Canvas and DOM operations emit byte-level
+      `XMLSourceDelta`s through `XMLSourceStore`, and
+      `DocumentSyncController::mirrorSourceDeltas` replays them into the source pane in place,
+      preserving the surrounding text and formatting. See
+      [structured_source_editing](structured_source_editing.md).
+- [x] **Invalid-region tolerance**: Shipped in #531. `DocumentSyncController::syncParseErrorMarkers`
+      surfaces parse diagnostics as source-pane markers, and selection and document state survive
+      transiently invalid source, covered by
+      `DocumentSyncControllerTest.PartialOpeningTagEditPreservesSelectionWhileInvalid` and the
+      editor state-machine fuzzer.
 
 ### Parser Improvements
 
-- [ ] **`ParseWarning` type** — Introduce a first-class `ParseWarning` type (or `ParseWarnings`
-      container) replacing the current `vector<ParseError>` pattern. Warnings vs errors should be
-      distinct at the type level.
-- [ ] **Source location audit** — Review all current parse errors to verify correct source
-      locations are reported.
-- [ ] **Full source ranges** — Extend parse errors/warnings to carry full source ranges
-      (start + end), not just the start index.
-- [ ] **CSS parser update** — Consider making the CSS parser streaming, potentially using C++20
+- [x] **`ParseWarning` type**: Shipped in #459. `ParseDiagnostic` carries a `DiagnosticSeverity`
+      (`Warning`/`Error`) and non-fatal warnings flow through the zero-cost `ParseWarningSink`;
+      the `vector<ParseError>` pattern and the `ParseError` type are gone. See
+      [parser_diagnostics](parser_diagnostics.md).
+- [x] **Source location audit**: Shipped in #459
+      ([#442](https://github.com/jwmcglynn/donner/issues/442)). Every parser entry point takes an
+      explicit warning sink, subparser ranges are remapped into parent coordinates by
+      `ParseWarningSink::mergeFromSubparser`, and range correctness is covered by per-parser tests
+      plus `DiagnosticRenderer` caret/tilde output.
+- [x] **Full source ranges**: Shipped in #459. `SourceRange` (`donner/base/FileOffset.h`) is a
+      half-open `[start, end)` span of `FileOffset` values carried by every `ParseDiagnostic`.
+- [ ] **CSS parser update**: Consider making the CSS parser streaming, potentially using C++20
       coroutines (`co_await`). Reduce places where we tokenize to a vector. Add support for source
-      ranges and incremental updates matching the XML parser's capabilities.
-- [ ] **XML parser conformance** — Fix bugs like non-conforming `Name` token acceptance
+      ranges and incremental updates matching the XML parser's capabilities. Partially shipped:
+      the tokenizer is pull-based with no `vector<Token>` materialization and declarations and
+      rules carry `SourceRange`s
+      ([0019](design_docs/0019-css_token_stream.md), which rejected coroutine token generation by
+      measurement); incremental CSS updates are not implemented.
+- [x] **XML parser conformance**: Shipped in #462. `Name` tokens are validated against the XML
+      1.0 `NameStartChar`/`NameChar` productions in `XMLParser.cc`
       ([#304](https://github.com/jwmcglynn/donner/issues/304)).
-- [ ] **CSS3 gap closure** — Audit CSS3 property and selector support against the properties
+- [ ] **CSS3 gap closure**: Audit CSS3 property and selector support against the properties
       used by SVG2. Close gaps in selectors, cascading, specificity, shorthand expansion, and
       value parsing for properties referenced by the SVG2 spec.
 
 ### Entity Lifecycle
 
-- [ ] **Node removal cleanup** — Implement proper cleanup for nodes removed from the document
-      graph. Currently removed entities are leaked in the ECS registry. Add destruction hooks that
-      tear down components, release resources, and remove entities from spatial indices and caches.
+- [x] **Node removal cleanup**: Shipped in #596. `NodeLifetimeComponent` tracks detached-root
+      metadata and `NodeLifetimeCollector` destroys detached subtrees once no public handle or
+      render snapshot retains them, with detached-node diagnostics counters and the
+      `//donner/benchmarks:dom_lifetime_perf_capture` budget. See
+      [dom_element_lifetime](dom_element_lifetime.md).
 
 ### DOM Support
 
-- [ ] **SVG2 DOM gap analysis** — Audit current DOM implementation against the full SVG2 DOM
+- [ ] **SVG2 DOM gap analysis**: Audit current DOM implementation against the full SVG2 DOM
       specification. Identify missing interfaces, attributes, and methods across all element types.
-- [ ] **Close DOM gaps** — Implement missing DOM interfaces and properties identified by the audit,
+- [ ] **Close DOM gaps**: Implement missing DOM interfaces and properties identified by the audit,
       prioritizing those needed for interactive editing and JavaScript integration.
 
 ### Conformance & Testing
 
-- [ ] **SVG2 conformance pass** — Systematic audit of SVG2 spec coverage. Identify and close
+- [ ] **SVG2 conformance pass**: Systematic audit of SVG2 spec coverage. Identify and close
       high-impact gaps across all element categories.
-- [ ] **90% code coverage** — Achieve and maintain ≥90% line coverage across all production code.
+- [ ] **90% code coverage**: Achieve and maintain >=90% line coverage across all production code.
       Identify under-covered subsystems and add targeted tests.
-- [ ] **Animation test suite** — Comprehensive test coverage for the animation system
-      (Phases 1–9), including timing edge cases, interpolation correctness, and event-based triggers.
-- [x] **Update resvg test suite** — Shipped in #500. Vendored the post-Great-Rename
-      `linebender/resvg-test-suite`, migrated all test entries via a rename-map codemod, and
+- [ ] **Animation test suite**: Comprehensive test coverage for the animation system
+      (Phases 1-9), including timing edge cases, interpolation correctness, and event-based triggers.
+- [x] **Update resvg test suite**: Shipped in #500. Vendored the post-Great-Rename
+      `linebender/resvg-test-suite`, migrated all test entries with a rename-map codemod, and
       introduced a reason-string Skip/RenderOnly/WithThreshold API. Follow-up feature gaps and
       bugs tracked in
       [resvg_feature_gaps.md](design_docs/0021-resvg_feature_gaps.md).
-- [x] **Enable text resvg tests** — Shipped as part of the v0.5 text-rendering work: 37
+- [x] **Enable text resvg tests**: Shipped as part of the v0.5 text-rendering work: 37
       `e-textPath-*` tests passing plus per-character positioning, letter-spacing, baseline-shift,
       writing-mode, and alignment-baseline coverage. Remaining gaps (e.g. bidi, complex emoji)
       tracked in the feature-gaps doc.
-- [ ] **Add Donner to resvg test harness** — Contribute Donner as a backend in the upstream resvg
+- [ ] **Add Donner to resvg test harness**: Contribute Donner as a backend in the upstream resvg
       test suite repository (external repo contribution).
 
 ### SVG Feature Gaps
 
-- [ ] **`<symbol>` refX/refY units** — Support `<length>` values and keyword tokens
-      (left/center/right, top/center/bottom) per SVG2 spec
+- [x] **`<symbol>` refX/refY units**: Shipped in #638. `SymbolComponent` stores refX/refY as
+      `Lengthd`, and the left/center/right and top/center/bottom keywords map to 0%/50%/100%
+      resolved against the symbol's viewBox
       ([#318](https://github.com/jwmcglynn/donner/issues/318)).
-- [ ] **`<marker>` attribute units** — Support `<length-percentage>`, `<number>`, and keyword
-      tokens for refX/refY/markerWidth/markerHeight per SVG2
+- [x] **`<marker>` attribute units**: Shipped in #636. `MarkerComponent` stores
+      refX/refY/markerWidth/markerHeight as unresolved `Lengthd` so percentages and keywords
+      resolve against the referencing viewport at render time
       ([#316](https://github.com/jwmcglynn/donner/issues/316)).
-- [x] **`<clipPath>` `<use>` support** — Shipped in v0.5. `<use>` children referencing path/shape
+- [x] **`<clipPath>` `<use>` support**: Shipped in v0.5. `<use>` children referencing path/shape
       elements inside `<clipPath>` now resolve correctly per CSS Masking spec
       ([#238](https://github.com/jwmcglynn/donner/issues/238)).
 
 ### Security
 
-- [ ] **AI-assisted security pass** — Comprehensive security audit using AI-assisted analysis.
-      Add new fuzzers for under-covered parser surfaces (CSS, filter parameters, animation timing,
-      edit/patch paths). Scan for vulnerabilities across all input-handling code (XML, CSS, SVG
-      attributes, external references).
+- [x] **AI-assisted security pass**: Shipped across the input-bounding series (#1033, #1035,
+      #1036, #1037, #1038, #1044, #1053), which bounded base parsing, CSS parsing and selector
+      work, SVG runtime payloads and reference work, external resource admission, glyph decoding,
+      CLI input, and renderer geometry materialization. Fuzzers now cover the surfaces called out
+      here, including CSS, animation timing (`ClockValueParser`, `AnimateValue`,
+      `AnimateTransformValue`), edit/patch paths (`XMLParser_structured`, `EditorStateMachine`,
+      `ShapeClipboardPaste`, `ViewportSvgExportRoundTrip`), and external references (`UrlLoader`,
+      `SandboxedFileResourceLoader`, `ImageLoader`); `.github/workflows/fuzz.yml` runs a scheduled
+      sanitizer-backed mutation lane on top of per-PR corpus replay.
 
 ### Optional Extensions
 
-- [ ] **JavaScript support** — Identify a small embeddable JavaScript engine and integrate as an
+- [ ] **JavaScript support**: Identify a small embeddable JavaScript engine and integrate as an
       optional feature (similar to how filters are optional). Enable scripted SVG content for
       interactive applications.
 
 ### Optimization
 
-- [ ] **Performance profiling** — Profile end-to-end render paths and identify remaining
+- [ ] **Performance profiling**: Profile end-to-end render paths and identify remaining
       bottlenecks. Target hot paths in parsing, style resolution, layout, and rasterization.
-- [ ] **Code size reduction** — Audit binary size contributions by subsystem. Reduce template
+- [ ] **Code size reduction**: Audit binary size contributions by subsystem. Reduce template
       bloat, eliminate dead code, and ensure optional features (text, filters, JS) compile out cleanly.
-- [ ] **Memory usage** — Reduce peak and steady-state memory consumption. Audit ECS component
+- [ ] **Memory usage**: Reduce peak and steady-state memory consumption. Audit ECS component
       sizes, pixmap allocations, and intermediate buffers in filter/render pipelines.
-- [ ] **Compile time** — Reduce build times. Audit heavy template instantiations, consider
+- [ ] **Compile time**: Reduce build times. Audit heavy template instantiations, consider
       explicit template instantiation, forward declarations, and pimpl patterns where header
       fan-out is excessive.
-- [ ] **"Donner Tiny" build profile** — A minimal-footprint tier that strips text, filters,
+- [ ] **"Donner Tiny" build profile**: A minimal-footprint tier that strips text, filters,
       animation, and JavaScript, producing the smallest possible binary for embedded/constrained
-      environments. Each feature is independently opt-in via build flags (CMake options / Bazel
+      environments. Each feature is independently opt-in through build flags (CMake options / Bazel
       configs), so users can compose exactly the feature set they need. Document the size impact of
       each optional module and provide pre-defined profiles: `tiny` (core rendering only), `standard`
       (current default), `full` (everything including JS).
 
 ### Ecosystem
 
-- [ ] **Comparison with other SVG libraries** — Publish a detailed comparison of Donner against
+- [ ] **Comparison with other SVG libraries**: Publish a detailed comparison of Donner against
       lunasvg and resvg, covering feature support, conformance, performance, API design, binary size,
       and build complexity. Include reproducible benchmarks and conformance test results.
 
 ### Documentation
 
-- [ ] **Design docs → developer docs** — Convert all shipped design documents into
+- [ ] **Design docs -> developer docs**: Convert all shipped design documents into
       developer-facing architecture documentation. Remove planning/status artifacts, focus on
       how-it-works descriptions for contributors and embedders.
-- [ ] **In-code documentation cleanup** — Review and update code comments, Doxygen annotations,
+- [ ] **In-code documentation cleanup**: Review and update code comments, Doxygen annotations,
       and API documentation across public headers. Ensure all public APIs have clear documentation
       ready for consumption.
-- [ ] **Embedding guide** — End-to-end guide for integrating Donner into applications, covering
+- [ ] **Embedding guide**: End-to-end guide for integrating Donner into applications, covering
       build configuration, feature toggles, rendering setup, and common workflows.
 
 ### v1.0 Release Criteria
@@ -326,7 +351,7 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 - All v1.0 issues closed.
 - SVG2 conformance report published with known limitations documented.
 - Stable API surface for rendering, editing, and authoring operations.
-- ≥90% code coverage across production code.
+- >=90% code coverage across production code.
 - CSS3 gap analysis complete, all SVG2-referenced properties supported.
 - Performance and binary-size profiles documented.
 - Release documentation complete for embedders.
@@ -370,9 +395,9 @@ flowchart TD
 
 | Document                                                                             | Status                                   |
 | ------------------------------------------------------------------------------------ | ---------------------------------------- |
-| [Renderer Interface](design_docs/0003-renderer_interface_design.md)                  | Shipped (Phases 1–2a)                    |
-| [Text Rendering](design_docs/0010-text_rendering.md)                                 | Shipped (Phases 1–6)                     |
-| [Filter Performance](design_docs/0014-filter_performance.md)                         | Shipped (all 17 primitives, within 1.5×) |
+| [Renderer Interface](design_docs/0003-renderer_interface_design.md)                  | Shipped (Phases 1-2a)                    |
+| [Text Rendering](design_docs/0010-text_rendering.md)                                 | Shipped (Phases 1-6)                     |
+| [Filter Performance](design_docs/0014-filter_performance.md)                         | Shipped (all 17 primitives, within 1.5x) |
 | [v0.5 Release](design_docs/0011-v0_5_release.md)                                     | Shipped                                  |
 | [Editor Fluid Canvas Rendering](design_docs/0044-2-editor_fluid_canvas_rendering.md) | v0.8 scope                               |
 | [Editor Group Layers](design_docs/0046-editor_group_layers.md)                       | v0.8 showcase scope                      |

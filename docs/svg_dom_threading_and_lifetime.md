@@ -10,8 +10,8 @@ or keep handles to elements that are removed from the document tree.
 `SVGDocument` starts in single-threaded mode. This is the lowest-overhead mode and is the right
 choice when one thread owns parsing, DOM updates, and rendering.
 
-In single-threaded mode, do not call APIs on the same document from multiple threads at the same
-time. If an application needs worker threads to inspect or mutate the same document, opt into
+In single-threaded mode, do not call APIs on the same document from more than one thread at a time.
+An application that needs worker threads to inspect or mutate the same document must opt into
 concurrent DOM mode before sharing the document.
 
 ## Concurrent DOM Mode
@@ -32,7 +32,7 @@ is already being drawn; it is visible to a later render.
 
 ## Batching Access
 
-Individual DOM calls are safe in concurrent DOM mode and are convenient for occasional work:
+Individual DOM calls are safe in concurrent DOM mode and are suitable for occasional work:
 
 ```cpp
 if (std::optional<SVGElement> rect = document.querySelector("#status")) {
