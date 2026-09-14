@@ -347,7 +347,6 @@ donner_cc_library(
         "programs/SolidFill.cc",
         "programs/SubregionClip.cc",
         "programs/Tile.cc",
-        "programs/Turbulence.cc",
     ],
     hdrs = [
         "programs/Checkerboard.h",
@@ -369,7 +368,6 @@ donner_cc_library(
         "programs/SolidFill.h",
         "programs/SubregionClip.h",
         "programs/Tile.h",
-        "programs/Turbulence.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -459,7 +457,10 @@ donner_cc_test(
         ":specular_lighting_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
+        ":turbulence_api",
         ":turbulence_artifact",
+        ":turbulence_source",
+        ":turbulence_test_artifact",
         ":wgsl_emitter",
         "//donner/base:base_test_utils",
         "//donner/gpu:gpu_test_utils",
@@ -531,6 +532,7 @@ donner_cc_test(
         ":slug_mask_test_artifact",
         ":specular_lighting_test_artifact",
         ":stage_io_test_modules",
+        ":turbulence_test_artifact",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
     ],
@@ -562,6 +564,7 @@ donner_cc_test(
         ":specular_lighting_test_artifact",
         ":spirv_emitter",
         ":stage_io_test_modules",
+        ":turbulence_test_artifact",
         "//donner/base:base_test_utils",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
@@ -597,6 +600,9 @@ donner_cc_test(
         ":specular_lighting_api",
         ":specular_lighting_artifact",
         ":specular_lighting_test_artifact",
+        ":turbulence_api",
+        ":turbulence_artifact",
+        ":turbulence_test_artifact",
         ":wgsl_emitter",
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
@@ -756,19 +762,66 @@ donner_cc_library(
     deps = ["//donner/gpu:descriptors"],
 )
 
-genrule(
-    name = "turbulence_generated",
-    outs = ["generated/TurbulenceShader.h"],
-    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) turbulence " +
-          "$(location generated/TurbulenceShader.h) --descriptor-header",
-    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+donner_cc_library(
+    name = "turbulence_api",
+    hdrs = ["programs/Turbulence.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":program_bindings",
+    ],
+)
+
+donner_cc_library(
+    name = "turbulence_source",
+    hdrs = ["programs/TurbulenceSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "turbulence_validation",
+    hdrs = ["programs/TurbulenceArtifactValidation.h"],
+    deps = [":turbulence_api"],
 )
 
 donner_cc_library(
     name = "turbulence_artifact",
-    hdrs = ["generated/TurbulenceShader.h"],
+    srcs = ["programs/Turbulence.cc"],
     visibility = donner_internal_visibility(),
-    deps = ["//donner/gpu:descriptors"],
+    deps = [
+        ":turbulence_api",
+        ":turbulence_source",
+        ":turbulence_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "turbulence_native_artifact",
+    srcs = ["programs/TurbulenceNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":turbulence_api",
+        ":turbulence_source",
+        ":turbulence_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "turbulence_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledTurbulence.cc"],
+    hdrs = ["tests/CompiledTurbulence.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":turbulence_source",
+    ],
 )
 
 genrule(
@@ -1071,6 +1124,7 @@ donner_cc_library(
         ":specular_lighting_artifact",
         ":subregion_clip_artifact",
         ":tile_artifact",
+        ":turbulence_api",
         ":turbulence_artifact",
     ],
 )

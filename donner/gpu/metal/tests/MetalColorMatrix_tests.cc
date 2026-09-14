@@ -24,17 +24,18 @@
 #include "donner/gpu/shader/generated/DisplacementMapShader.h"
 #include "donner/gpu/shader/generated/DropShadowShader.h"
 #include "donner/gpu/shader/generated/FilterImageShader.h"
-#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/SpecularLighting.h"
 #include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
+#include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/tests/BlurSlice.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
@@ -414,8 +415,24 @@ TEST_F(MetalColorMatrixTest, ComponentTransferCoversFunctionsAndPackedTableBound
 
 TEST_F(MetalColorMatrixTest, TurbulencePreservesSeedsOctavesTransformsAndStitching) {
   gpu::tests::CheckTurbulenceStorage(
-      *device_, gpu::generated::turbulence::BuildDescriptor(ShaderSourceKind::Msl),
+      *device_, shader::programs::TurbulenceNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(MetalColorMatrixTest, TurbulenceUsesReflectedBindingsAndWorkgroups) {
+  gpu::tests::CheckTurbulenceStorage(
+      *device_, shader::tests::TurbulenceMutatedAllProjections(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, WgslEightArgumentCallsPreserveOperandOrder) {
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::EightArgumentCallAllProjections(),
+                                   device_->shaderSourceKind(), "eight arguments"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, {0.125f, 0.25f, 0.5f, 0.75f},
+      {114.125f, 114.125f, 114.125f, 114.125f});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

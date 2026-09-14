@@ -242,13 +242,14 @@ enum class ExpressionKind : uint8_t {
 
 /// One typed expression node. Operands are in source order.
 struct Expression {
+  static constexpr uint8_t kMaxOperands = 8;      //!< Maximum call arity and expression operands.
   ExpressionKind kind = ExpressionKind::Literal;  //!< Node category.
   Type type;                                      //!< Statically resolved result type.
   SourceSpan span;                                //!< Source bytes covering this expression.
-  std::array<ArenaId, 4> operands = {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
-                                     kInvalidArenaId};  //!< Child expressions.
-  uint8_t operandCount = 0;                             //!< Number of valid operands.
-  uint32_t payload = 0;                                 //!< Kind-specific bits or arena identifier.
+  std::array<ArenaId, kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
+                                                kInvalidArenaId};  //!< Child expressions.
+  uint8_t operandCount = 0;                                        //!< Number of valid operands.
+  uint32_t payload = 0;          //!< Kind-specific bits or arena identifier.
   uint32_t literalHighBits = 0;  //!< Upper bits for abstract scalar literals.
 };
 

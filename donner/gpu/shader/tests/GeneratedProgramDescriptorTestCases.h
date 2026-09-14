@@ -19,7 +19,6 @@
 #include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
 #include "donner/gpu/shader/generated/SubregionClipShader.h"
 #include "donner/gpu/shader/generated/TileShader.h"
-#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
@@ -92,7 +91,11 @@ inline const Program kPrograms[] = {
      true, programs::ConvolveMatrixShader},
     {"filter_image", programs::BuildFilterImageModule, generated::filter_image::BuildDescriptor,
      true},
-    {"turbulence", programs::BuildTurbulenceModule, generated::turbulence::BuildDescriptor, true},
+    {"turbulence", nullptr,
+     [](ShaderSourceKind kind) {
+       return MakeShaderDescriptor(programs::TurbulenceShader(), kind, "Turbulence");
+     },
+     true, programs::TurbulenceShader},
     {"diffuse_lighting", programs::BuildDiffuseLightingModule,
      generated::diffuse_lighting::BuildDescriptor, true},
     {"specular_lighting", nullptr,

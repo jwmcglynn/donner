@@ -43,7 +43,6 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
-#include "donner/gpu/shader/programs/Turbulence.h"
 
 namespace donner::gpu::shader {
 namespace {
@@ -70,7 +69,6 @@ constexpr ProgramEntry kPrograms[] = {
     {"displacement_map", 1, &programs::BuildDisplacementMapModule},
     {"drop_shadow", 1, &programs::BuildDropShadowModule},
     {"tile", 1, &programs::BuildTileModule},
-    {"turbulence", 1, &programs::BuildTurbulenceModule},
     {"snapshot_unpremultiply", 1, &programs::BuildSnapshotUnpremultiplyModule},
     {"subregion_clip", 1, &programs::BuildSubregionClipModule},
 };

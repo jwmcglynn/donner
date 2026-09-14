@@ -299,6 +299,76 @@ py_test(
 )
 
 donner_cc_binary(
+    name = "turbulence_wgsl_probe",
+    testonly = 1,
+    srcs = ["TurbulenceWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:turbulence_api",
+        "//donner/gpu/shader:turbulence_artifact",
+    ],
+)
+
+py_test(
+    name = "turbulence_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=turbulence",
+        "--binary=$(rootpath :turbulence_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":turbulence_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "turbulence_native_probe",
+    testonly = 1,
+    srcs = ["TurbulenceNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:turbulence_api",
+        "//donner/gpu/shader:turbulence_native_artifact",
+    ],
+)
+
+py_test(
+    name = "turbulence_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=turbulence",
+        "--binary=$(rootpath :turbulence_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":turbulence_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "turbulence_all_probe",
+    testonly = 1,
+    srcs = ["TurbulenceAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:turbulence_source"],
+)
+
+py_test(
+    name = "turbulence_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=turbulence",
+        "--binary=$(rootpath :turbulence_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":turbulence_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
     name = "filter_resolve_wgsl_probe",
     testonly = 1,
     srcs = ["FilterResolveWgslProbe.cc"],

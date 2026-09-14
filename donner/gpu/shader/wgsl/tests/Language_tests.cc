@@ -12,12 +12,12 @@ namespace donner::gpu::shader::wgsl {
 namespace {
 
 TEST(Language, AcceptsEightArgumentHelpersAndMaterializesEveryOperand) {
-  const auto parsed = Parse(R"wgsl(
+  const auto parsed = Parse(R"(
 fn weighted(a:f32,b:f32,c:f32,d:f32,e:f32,f:f32,g:f32,h:f32)->f32 {
   return a+b+c+d+e+f+g+h;
 }
 fn caller(x:f32)->f32 { return weighted(x,2,3,4,5,6,7,8); }
-)wgsl");
+)");
   ASSERT_TRUE(parsed.hasResult()) << unsigned(parsed.diagnostic.code);
   const Expression* call = nullptr;
   for (uint16_t i = 0; i < parsed.module.expressionCount; ++i)

@@ -89,7 +89,7 @@ struct ConstantRecord {
 };
 struct FunctionTypeRecord {
   uint32_t result = 0;
-  std::array<uint32_t, 4> parameters{};
+  std::array<uint32_t, Expression::kMaxOperands> parameters{};
   uint16_t count = 0;
   uint32_t id = 0;
 };
@@ -874,11 +874,11 @@ constexpr uint32_t Emitter::emitConstruct(const Expression& node) {
 }
 
 constexpr uint32_t Emitter::emitCall(const Expression& node) {
-  if (node.payload >= module_.functionCount) {
+  if (node.payload >= module_.functionCount || node.operandCount > node.operands.size()) {
     fail(SpirvEmitError::InvalidNode);
     return 0;
   }
-  std::array<uint32_t, 4> arguments{};
+  std::array<uint32_t, Expression::kMaxOperands> arguments{};
   for (uint8_t i = 0; i < node.operandCount; ++i) arguments[i] = emitExpression(node.operands[i]);
   const uint32_t result = id();
   functions_.word((uint32_t(node.operandCount + 4) << 16) | 57u);

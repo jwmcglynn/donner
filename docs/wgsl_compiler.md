@@ -60,7 +60,7 @@ field offsets are checked against reflection independently for each retained pro
 The compute frontend supports the migrated filter families with: flat numeric buffer structures,
 fixed numeric array members of buffer structs, root runtime storage arrays, group-zero sampled/storage textures and samplers, bounded decimal/hexadecimal
 numeric literals and abstract scalar constants, scalar/vector expressions and conversions, local bindings, conditionals,
-incrementing loops, read-only numeric helpers, and one compute entry with a global-invocation ID.
+incrementing loops, read-only numeric helpers with up to eight parameters, and one compute entry with a global-invocation ID.
 `Parser.h` describes exact literal and constant-expression restrictions. Helpers cannot write
 textures; texture writes occur in the compute entry. Mutable local declarations may omit an initializer and receive a zero value; immutable declarations require one.
 `floor`, `sign`, `sin`, `cos` and `pow` support runtime f32 scalar/vector operands.

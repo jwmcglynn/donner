@@ -36,13 +36,13 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
-#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
+#include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
@@ -298,7 +298,8 @@ TEST(MslXcrunValidation, EmittedComponentTransferComputeCompilesWithMetalCompile
 
 TEST(MslXcrunValidation, EmittedTurbulenceComputeCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  ExpectCompilesWithMetalCompiler(programs::BuildTurbulenceModule(), "turbulence");
+  ExpectCompilesWithMetalCompiler(tests::TurbulenceAllProjections().msl, "turbulence");
+  ExpectCompilesWithMetalCompiler(tests::EightArgumentCallAllProjections().msl, "eight_arguments");
 }
 
 TEST(MslXcrunValidation, EmittedDropShadowComputeCompilesWithMetalCompiler) {

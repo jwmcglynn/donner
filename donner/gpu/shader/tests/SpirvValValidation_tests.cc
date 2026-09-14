@@ -38,13 +38,13 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
-#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
+#include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -301,7 +301,10 @@ TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation
 
 TEST(SpirvValValidation, EmittedTurbulenceComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectValidatesForVulkan11(spirvVal, programs::BuildTurbulenceModule(), "turbulence.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::TurbulenceAllProjections().spirv,
+                                 "turbulence.spv");
+  ExpectWordsValidateForVulkan11(spirvVal, tests::EightArgumentCallAllProjections().spirv,
+                                 "eight_arguments.spv");
 }
 
 TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {

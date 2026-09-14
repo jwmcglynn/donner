@@ -381,6 +381,7 @@ donner_cc_library(
         "//donner/gpu/shader:specular_lighting_artifact",
         "//donner/gpu/shader:subregion_clip_artifact",
         "//donner/gpu/shader:tile_artifact",
+        "//donner/gpu/shader:turbulence_api",
         "//donner/gpu/shader:turbulence_artifact",
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",

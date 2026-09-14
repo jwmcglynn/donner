@@ -156,7 +156,9 @@ donner_cc_test(
         "//donner/gpu/shader:specular_lighting_api",
         "//donner/gpu/shader:specular_lighting_native_artifact",
         "//donner/gpu/shader:specular_lighting_test_artifact",
-        "//donner/gpu/shader:turbulence_artifact",
+        "//donner/gpu/shader:turbulence_api",
+        "//donner/gpu/shader:turbulence_native_artifact",
+        "//donner/gpu/shader:turbulence_test_artifact",
         "@com_google_gtest//:gtest_main",
     ],
 )

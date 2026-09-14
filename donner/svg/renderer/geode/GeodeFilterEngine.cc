@@ -34,7 +34,6 @@
 #include "donner/gpu/shader/generated/MorphologyShader.h"
 #include "donner/gpu/shader/generated/SubregionClipShader.h"
 #include "donner/gpu/shader/generated/TileShader.h"
-#include "donner/gpu/shader/generated/TurbulenceShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/ComponentTransferBindings.h"
 #include "donner/gpu/shader/programs/CompositeBindings.h"
@@ -53,6 +52,7 @@
 #include "donner/gpu/shader/programs/SpecularLighting.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/gpu/shader/programs/TileBindings.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/programs/TurbulenceBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
@@ -727,37 +727,11 @@ struct MorphologyParams {
   uint32_t pad;
 };
 
-/// GPU storage buffer layout matching the WGSL `TurbulenceParams` struct.
-struct TurbulenceParams {
-  float baseFreqX;
-  float baseFreqY;
-  int32_t numOctaves;
-  int32_t seed;
-  uint32_t stitchTiles;
-  uint32_t typeFlag;
-  float tileWidth;
-  float tileHeight;
-  float filterFromDeviceA;
-  float filterFromDeviceB;
-  float filterFromDeviceC;
-  float filterFromDeviceD;
-};
-
-/// Pre-computed permutation + gradient tables for feTurbulence.
-/// Matches the SVG spec's Perlin noise algorithm (Park-Miller LCG + Fisher-Yates shuffle).
-/// Layout matches the WGSL `TurbulenceTables` struct.
-constexpr int kTurbBLen = 256;
-constexpr int kTurbBLenPlus2 = kTurbBLen + 2;               // 258
-constexpr int kTurbTableSize = kTurbBLen + kTurbBLenPlus2;  // 514
-
-struct TurbulenceTables {
-  int32_t lattice[kTurbTableSize];  // Permutation table (514 entries).
-  float gradX[4 * kTurbTableSize];  // Gradient X: [channel * 514 + index].
-  float gradY[4 * kTurbTableSize];  // Gradient Y: [channel * 514 + index].
-};
-
-static_assert(sizeof(TurbulenceParams) == 48);
-static_assert(sizeof(TurbulenceTables) == 18504);
+using TurbulenceParams = gpu::shader::programs::TurbulenceParams;
+using TurbulenceTables = gpu::shader::programs::TurbulenceTables;
+constexpr int kTurbBLen = gpu::shader::programs::kTurbulenceBaseTableSize;
+constexpr int kTurbBLenPlus2 = kTurbBLen + 2;
+constexpr int kTurbTableSize = gpu::shader::programs::kTurbulenceTableSize;
 
 // Park-Miller LCG constants matching tiny-skia/resvg.
 constexpr long kRandM = 2147483647;  // 2^31 - 1  // NOLINT
@@ -1652,17 +1626,13 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   convolveMatrixProgram_ = CreateReflectedFilterProgram(
       device_.adapterDevice(), gpu::shader::programs::ConvolveMatrixShader(), "ConvolveMatrix");
 
-  // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
-    using gpu::shader::programs::TurbulenceBinding;
+    const auto& shader = gpu::shader::programs::TurbulenceShader();
     turbulenceProgram_ = CreateRuntimeComputeProgram(
         device_.adapterDevice(),
-        gpu::generated::turbulence::BuildDescriptor(device_.adapterDevice().shaderSourceKind()),
-        {StorageOutputEntry(static_cast<uint32_t>(TurbulenceBinding::OutputTexture)),
-         {static_cast<uint32_t>(TurbulenceBinding::Params), gpu::ShaderStage::Compute,
-          gpu::BindingType::ReadOnlyStorageBuffer},
-         {static_cast<uint32_t>(TurbulenceBinding::Tables), gpu::ShaderStage::Compute,
-          gpu::BindingType::ReadOnlyStorageBuffer}});
+        gpu::shader::MakeShaderDescriptor(shader, device_.adapterDevice().shaderSourceKind(),
+                                          "Turbulence"),
+        gpu::shader::MakeBindingLayout(shader));
   }
 
   {
@@ -3432,23 +3402,22 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   if (outputView == nullptr || paramsSlot.buffer == nullptr || tablesSlot.buffer == nullptr) {
     return {};
   }
-  using gpu::shader::programs::TurbulenceBinding;
+  const auto& shader = gpu::shader::programs::TurbulenceShader();
   const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
       turbulenceProgram_.bindGroupLayout,
-      {{static_cast<uint32_t>(TurbulenceBinding::OutputTexture),
-        gpu::TextureViewBinding{*outputView}},
-       {static_cast<uint32_t>(TurbulenceBinding::Params),
+      {{shader.resource("outputTexture")->binding, gpu::TextureViewBinding{*outputView}},
+       {shader.resource("params")->binding,
         gpu::BufferBinding{*paramsSlot.buffer, paramsSlot.offset, sizeof(params)}},
-       {static_cast<uint32_t>(TurbulenceBinding::Tables),
+       {shader.resource("tables")->binding,
         gpu::BufferBinding{*tablesSlot.buffer, tablesSlot.offset, sizeof(tables)}}},
       "FilterTurbulenceBindGroup");
   if (bindGroup == nullptr) {
     return {};
   }
-  constexpr uint32_t kWorkgroup = gpu::shader::programs::kTurbulenceWorkgroupSize;
+  const auto workgroup = turbulenceProgram_.workgroupSize;
   if (!arena.dispatchComputePass("FilterTurbulencePass", turbulenceProgram_.pipeline, *bindGroup,
-                                 (width + kWorkgroup - 1) / kWorkgroup,
-                                 (height + kWorkgroup - 1) / kWorkgroup)) {
+                                 (width + workgroup.x - 1) / workgroup.x,
+                                 (height + workgroup.y - 1) / workgroup.y)) {
     return {};
   }
   return device_.adapterDevice().wgpuTextureOf(*output);

@@ -1048,6 +1048,10 @@ private:
   }
 
   constexpr void ParseFunctionParameter(Function* function) {
+    if (function->parameterCount >= Expression::kMaxOperands) {
+      Fail(ErrorCode::UnsupportedConstruct, token_.span);
+      return;
+    }
     Attributes attributes;
     ParseLeadingAttributes(&attributes);
     const Token name = ExpectIdentifier();
@@ -1819,8 +1823,8 @@ private:
   }
 
   constexpr ExpressionInfo ParseMatrixConstruction(Token name, Type type) {
-    std::array<ArenaId, 4> operands{kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
-                                    kInvalidArenaId};
+    std::array<ArenaId, Expression::kMaxOperands> operands{kInvalidArenaId, kInvalidArenaId,
+                                                           kInvalidArenaId, kInvalidArenaId};
     uint8_t count = 0;
     if (token_.kind != TokenKind::RightParen) {
       do {
@@ -1848,7 +1852,7 @@ private:
   }
 
   constexpr ExpressionInfo ParseConstruction(Token constructor, Type type) {
-    std::array<ExpressionInfo, 4> arguments;
+    std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
     uint8_t count = 0;
     if (token_.kind != TokenKind::RightParen) {
       do {
@@ -1876,8 +1880,8 @@ private:
         count == 1 && firstArgumentType.isNumeric() && firstArgumentType.lanes == type.lanes;
     valid = scalarOrComponentConstruction || vectorConversion;
     if (!valid) Fail(ErrorCode::InvalidCall, constructor.span);
-    std::array<ArenaId, 4> operands = {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
-                                       kInvalidArenaId};
+    std::array<ArenaId, Expression::kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId,
+                                                              kInvalidArenaId, kInvalidArenaId};
     for (uint8_t i = 0; i < count; ++i) operands[i] = arguments[i].id;
     return AddExpression(Expression{ExpressionKind::Construct, type,
                                     SourceSpan{constructor.span.begin, end.end}, operands, count},
@@ -1885,7 +1889,7 @@ private:
   }
 
   constexpr ExpressionInfo ParseCall(Token name) {
-    std::array<ExpressionInfo, 4> arguments;
+    std::array<ExpressionInfo, Expression::kMaxOperands> arguments;
     uint8_t count = 0;
     if (token_.kind != TokenKind::RightParen) {
       do {
@@ -1898,8 +1902,8 @@ private:
     }
     const SourceSpan end = token_.span;
     Expect(TokenKind::RightParen);
-    std::array<ArenaId, 4> operands = {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
-                                       kInvalidArenaId};
+    std::array<ArenaId, Expression::kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId,
+                                                              kInvalidArenaId, kInvalidArenaId};
     for (uint8_t i = 0; i < count; ++i) operands[i] = arguments[i].id;
     Builtin builtin;
     if (BuiltinNamed(name, &builtin)) {
@@ -1999,9 +2003,9 @@ private:
     return builtin == Builtin::Dot || builtin == Builtin::Length || builtin == Builtin::Normalize;
   }
 
-  constexpr bool ValidateVectorMathBuiltin(Builtin builtin,
-                                           const std::array<ExpressionInfo, 4>& arguments,
-                                           uint8_t count, Type* result) const {
+  constexpr bool ValidateVectorMathBuiltin(
+      Builtin builtin, const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      uint8_t count, Type* result) const {
     const Type type = BuiltinArgumentType(arguments, 0);
     if (type.kind != TypeKind::F32 || type.lanes < 2 || count != (builtin == Builtin::Dot ? 2 : 1))
       return false;
@@ -2010,8 +2014,9 @@ private:
     return true;
   }
 
-  constexpr bool ValidatePowBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
-                                    Type* result) const {
+  constexpr bool ValidatePowBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type value = BuiltinArgumentType(arguments, 0);
     if (count != 2 || value.kind != TypeKind::F32 || value != BuiltinArgumentType(arguments, 1))
       return false;
@@ -2019,9 +2024,9 @@ private:
     return true;
   }
 
-  constexpr bool ValidateValueBuiltin(Builtin builtin,
-                                      const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
-                                      Type* result) const {
+  constexpr bool ValidateValueBuiltin(
+      Builtin builtin, const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      uint8_t count, Type* result) const {
     switch (builtin) {
       case Builtin::All:
       case Builtin::Any: return ValidateAnyBuiltin(arguments, count, result);
@@ -2034,8 +2039,9 @@ private:
     }
   }
 
-  constexpr bool ValidateBuiltin(Builtin builtin, const std::array<ExpressionInfo, 4>& arguments,
-                                 uint8_t count, Type* result) const {
+  constexpr bool ValidateBuiltin(
+      Builtin builtin, const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      uint8_t count, Type* result) const {
     if (IsUnaryFloatBuiltin(builtin)) return ValidateFloatBuiltin(arguments, count, result);
     if (IsVectorMathBuiltin(builtin))
       return ValidateVectorMathBuiltin(builtin, arguments, count, result);
@@ -2047,21 +2053,23 @@ private:
     }
   }
 
-  constexpr Type BuiltinArgumentType(const std::array<ExpressionInfo, 4>& arguments,
-                                     uint8_t index) const {
+  constexpr Type BuiltinArgumentType(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t index) const {
     return ExpressionAt(arguments[index].id).type;
   }
 
-  constexpr bool ValidateAnyBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
-                                    Type* result) const {
+  constexpr bool ValidateAnyBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type value = BuiltinArgumentType(arguments, 0);
     if (count != 1 || value.kind != TypeKind::Bool || value.lanes < 2) return false;
     *result = Type{TypeKind::Bool};
     return true;
   }
 
-  constexpr bool ValidateClampBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
-                                      Type* result) const {
+  constexpr bool ValidateClampBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type value = BuiltinArgumentType(arguments, 0);
     if (count != 3 || !value.isNumeric() || value != BuiltinArgumentType(arguments, 1) ||
         value != BuiltinArgumentType(arguments, 2))
@@ -2070,8 +2078,9 @@ private:
     return true;
   }
 
-  constexpr bool ValidateSelectBuiltin(const std::array<ExpressionInfo, 4>& arguments,
-                                       uint8_t count, Type* result) const {
+  constexpr bool ValidateSelectBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type falseValue = BuiltinArgumentType(arguments, 0);
     const Type condition = BuiltinArgumentType(arguments, 2);
     if (count != 3 || (falseValue.kind != TypeKind::Bool && !falseValue.isNumeric()) ||
@@ -2082,24 +2091,27 @@ private:
     return true;
   }
 
-  constexpr bool ValidateMinBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
-                                    Type* result) const {
+  constexpr bool ValidateMinBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type lhs = BuiltinArgumentType(arguments, 0);
     if (count != 2 || !lhs.isNumeric() || lhs != BuiltinArgumentType(arguments, 1)) return false;
     *result = lhs;
     return true;
   }
 
-  constexpr bool ValidateFloatBuiltin(const std::array<ExpressionInfo, 4>& arguments, uint8_t count,
-                                      Type* result) const {
+  constexpr bool ValidateFloatBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type value = BuiltinArgumentType(arguments, 0);
     if (count != 1 || value.kind != TypeKind::F32) return false;
     *result = value;
     return true;
   }
 
-  constexpr bool ValidateTextureLoadBuiltin(const std::array<ExpressionInfo, 4>& arguments,
-                                            uint8_t count, Type* result) const {
+  constexpr bool ValidateTextureLoadBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     if (count != 3 || BuiltinArgumentType(arguments, 0) != Type{TypeKind::SampledTexture2d} ||
         BuiltinArgumentType(arguments, 1) != Type{TypeKind::I32, 2} ||
         BuiltinArgumentType(arguments, 2) != Type{TypeKind::I32})
@@ -2108,8 +2120,9 @@ private:
     return true;
   }
 
-  constexpr bool ValidateTextureDimensionsBuiltin(const std::array<ExpressionInfo, 4>& arguments,
-                                                  uint8_t count, Type* result) const {
+  constexpr bool ValidateTextureDimensionsBuiltin(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Type* result) const {
     const Type texture = BuiltinArgumentType(arguments, 0);
     if (count != 1 ||
         (texture.kind != TypeKind::SampledTexture2d && texture.kind != TypeKind::StorageTexture2d))
@@ -2118,9 +2131,9 @@ private:
     return true;
   }
 
-  constexpr int32_t BuiltinUpperBound(Builtin builtin,
-                                      const std::array<ExpressionInfo, 4>& arguments,
-                                      uint8_t count) const {
+  constexpr int32_t BuiltinUpperBound(
+      Builtin builtin, const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
+      uint8_t count) const {
     if (builtin == Builtin::Min && count == 2) {
       const int32_t a = arguments[0].i32UpperBound;
       const int32_t b = arguments[1].i32UpperBound;
@@ -2129,8 +2142,8 @@ private:
     return std::numeric_limits<int32_t>::max();
   }
 
-  constexpr bool AllConstantSyntax(const std::array<ExpressionInfo, 4>& arguments,
-                                   uint8_t count) const {
+  constexpr bool AllConstantSyntax(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count) const {
     if (count == 0) return false;
     for (uint8_t i = 0; i < count; ++i) {
       if (!IsConstantSyntax(arguments[i].id)) return false;
@@ -2138,8 +2151,8 @@ private:
     return true;
   }
 
-  constexpr bool HasValidStaticClampBounds(const std::array<ExpressionInfo, 4>& arguments,
-                                           uint8_t count) const {
+  constexpr bool HasValidStaticClampBounds(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count) const {
     if (count != 3) return true;
     const bool lowStatic = IsConstantSyntax(arguments[1].id);
     const bool highStatic = IsConstantSyntax(arguments[2].id);
@@ -2324,8 +2337,8 @@ private:
     return NumericLiteral(input.type, bits, {op.span.begin, input.span.end});
   }
 
-  constexpr void MaterializeBuiltinArguments(std::array<ExpressionInfo, 4>& arguments,
-                                             uint8_t count) {
+  constexpr void MaterializeBuiltinArguments(
+      std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count) {
     Type target;
     for (uint8_t i = 0; i < count; ++i) {
       const Type type = ExpressionAt(arguments[i].id).type;
