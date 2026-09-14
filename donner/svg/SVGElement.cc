@@ -7,6 +7,8 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGPolygonElement.h"
+#include "donner/svg/SVGPolylineElement.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
@@ -26,6 +28,7 @@
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextRootComponent.h"
+#include "donner/svg/parser/PointsListParser.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 
 namespace donner::svg {
@@ -69,6 +72,49 @@ void markNeedsFullStyleRecompute(EntityHandle handle) {
 void markConditionalProcessingChanged(EntityHandle handle) {
   markNeedsFullStyleRecompute(handle);
   markStyleCascadeDirty(handle);
+}
+
+bool SetCoreXmlAttribute(SVGElement element, const xml::XMLQualifiedNameRef& name,
+                         std::string_view value) {
+  if (name == xml::XMLQualifiedNameRef("id")) {
+    element.setId(value);
+  } else if (name == xml::XMLQualifiedNameRef("class")) {
+    element.setClassName(value);
+  } else if (name == xml::XMLQualifiedNameRef("style")) {
+    element.setStyle(value);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+bool IsPolyPointsAttribute(const xml::XMLQualifiedNameRef& name, ElementType type) {
+  return name == xml::XMLQualifiedNameRef("points") &&
+         (type == ElementType::Polygon || type == ElementType::Polyline);
+}
+
+void SetPolyPoints(SVGElement element, std::vector<Vector2d> points) {
+  if (element.type() == ElementType::Polygon) {
+    element.cast<SVGPolygonElement>().setPoints(std::move(points));
+  } else {
+    element.cast<SVGPolylineElement>().setPoints(std::move(points));
+  }
+  const EntityHandle handle = element.entityHandle();
+  markNeedsFullStyleRecompute(handle);
+  invalidateComputedStyle(handle);
+  markStyleCascadeDirty(handle, components::DirtyFlagsComponent::Shape);
+}
+
+std::optional<ParseDiagnostic> SetPolyPointsAttribute(SVGElement element, std::string_view value) {
+  auto parsed = parser::PointsListParser::Parse(value);
+  SetPolyPoints(element, parsed.hasResult() ? std::move(parsed.result()) : std::vector<Vector2d>{});
+  SVGDocument document = element.ownerDocument();
+  [[maybe_unused]] DocumentWriteAccess access = document.writeAccess();
+  const EntityHandle handle = element.entityHandle();
+  handle.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      *handle.registry(), xml::XMLQualifiedName(RcString("points")), RcString(value));
+  if (parsed.hasError()) return std::move(parsed.error());
+  return std::nullopt;
 }
 
 void invalidateComputedStyleForDescendants(EntityHandle handle) {
@@ -594,15 +640,12 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
   }
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
-  if (name == xml::XMLQualifiedNameRef("id")) {
-    setId(value);
+  if (SetCoreXmlAttribute(*this, name, value)) {
     return std::nullopt;
-  } else if (name == xml::XMLQualifiedNameRef("class")) {
-    setClassName(value);
-    return std::nullopt;
-  } else if (name == xml::XMLQualifiedNameRef("style")) {
-    setStyle(value);
-    return std::nullopt;
+  }
+
+  if (IsPolyPointsAttribute(name, type())) {
+    return SetPolyPointsAttribute(*this, value);
   }
 
   if (components::IsConditionalProcessingAttribute(name)) {
@@ -666,6 +709,8 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
     setClassName("");
   } else if (name == xml::XMLQualifiedNameRef("style")) {
     setStyle("");
+  } else if (IsPolyPointsAttribute(name, type())) {
+    SetPolyPoints(*this, {});
   } else if (components::IsConditionalProcessingAttribute(name)) {
     if (auto* conditional = handle_.try_get<components::ConditionalProcessingComponent>(access)) {
       (void)components::RemoveConditionalProcessingAttribute(*conditional, name);

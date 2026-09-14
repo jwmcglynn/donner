@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -26,6 +27,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -93,6 +95,34 @@ bool HasAssignedAncestor(Registry& registry, Entity entity) {
     cursor = ancestorTree != nullptr ? ancestorTree->parent() : entt::null;
   }
   return false;
+}
+
+std::unordered_set<Entity> DirtyClipAncestors(Registry& registry,
+                                              const std::vector<Entity>& dirtyEntities) {
+  std::unordered_set<Entity> clips;
+  for (Entity entity : dirtyEntities) {
+    while (entity != entt::null && registry.valid(entity)) {
+      if (registry.all_of<components::ClipPathComponent>(entity)) clips.insert(entity);
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+      entity = tree != nullptr ? tree->parent() : entt::null;
+    }
+  }
+  return clips;
+}
+
+std::vector<Entity> ClipPathDependents(Registry& registry,
+                                       const std::vector<Entity>& dirtyEntities) {
+  const auto clips = DirtyClipAncestors(registry, dirtyEntities);
+  std::vector<Entity> dependents;
+  if (clips.empty()) return dependents;
+  for (const auto entity : registry.view<components::RenderingInstanceComponent>()) {
+    const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+    if (instance.clipPath && clips.contains(instance.clipPath->reference.handle.entity()) &&
+        std::find(dirtyEntities.begin(), dirtyEntities.end(), entity) == dirtyEntities.end()) {
+      dependents.push_back(entity);
+    }
+  }
+  return dependents;
 }
 
 }  // namespace
@@ -2211,10 +2241,14 @@ std::vector<CompositorController::DirtyEntityInvalidation>
 CompositorController::captureDirtyEntityInvalidations(
     const std::vector<Entity>& dirtyEntities) const {
   Registry& registry = document().registry();
+  // Clip definitions have no paint-order slot; their users own the cached pixels.
+  std::vector<Entity> affectedEntities = dirtyEntities;
+  const auto clipDependents = ClipPathDependents(registry, dirtyEntities);
+  affectedEntities.insert(affectedEntities.end(), clipDependents.begin(), clipDependents.end());
   std::vector<DirtyEntityInvalidation> result;
-  result.reserve(dirtyEntities.size());
+  result.reserve(affectedEntities.size());
 
-  for (const Entity entity : dirtyEntities) {
+  for (const Entity entity : affectedEntities) {
     DirtyEntityInvalidation invalidation;
     invalidation.entity = entity;
 
