@@ -335,6 +335,24 @@ void ExpectPresentedFrameMatchesFinalAfterClick(const json& frames,
       << json(PreviewTileGenerationSignature((*targetFrame)["presented_frame"])).dump();
 }
 
+TEST(EditorControlSessionTest, LoadsAndRendersLayeredGeodeSplashThroughMcp) {
+  const auto splash = donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  ASSERT_THAT(splash.ok(), ::testing::Eq(true)) << splash.error;
+  EditorControlSession session;
+  const ToolCallResult result =
+      session.handleToolCall("load_svg", json{{"svg_source", splash.contents},
+                                              {"canvas_width", 1536},
+                                              {"canvas_height", 1024},
+                                              {"device_pixel_ratio", 2},
+                                              {"include_final_frame", true},
+                                              {"render_after_load", true}});
+  ASSERT_THAT(result.isError, ::testing::Eq(false)) << result.body.dump(2);
+  EXPECT_THAT(result.body.value("ok", false), ::testing::Eq(true)) << result.body.dump(2);
+  const auto frame = session.handleToolCall("render_frame", json{{"include_final_frame", true}});
+  EXPECT_THAT(frame.isError, ::testing::Eq(false)) << frame.body.dump(2);
+  EXPECT_THAT(frame.images, ::testing::Not(::testing::IsEmpty())) << frame.body.dump(2);
+}
+
 TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   const json tools = EditorControlSession::toolList();
 

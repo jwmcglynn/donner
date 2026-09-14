@@ -15,9 +15,11 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <iostream>
 #include <memory>
 #include <string>
 
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/gui/EditorWindow.h"
@@ -55,31 +57,32 @@ protected:
   std::unique_ptr<EditorShell> shell;
   std::uint64_t nextId = 1;
 
+  virtual gui::EditorWindowOptions windowOptions() {
+    return {.title = "Collaboration UI test",
+            .initialWidth = 900,
+            .initialHeight = 650,
+            .visible = false,
+            .offscreen = true,
+            .forceOffscreenRenderTarget = true,
+            .enableFramebufferReadback = true};
+  }
+  virtual std::string initialSource() {
+    return R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="160"><rect id="face" x="10" y="10" width="150" height="120" fill="red"/></svg>)";
+  }
   void SetUp() override {
     char pattern[] = "/tmp/donner-collaboration-ui-XXXXXX";
     char* created = mkdtemp(pattern);
     ASSERT_THAT(created != nullptr, Eq(true));
     directory = created;
     endpoint = (directory / "editor.sock").string();
-    window = std::make_unique<gui::EditorWindow>(
-        gui::EditorWindowOptions{.title = "Collaboration UI test",
-                                 .initialWidth = 900,
-                                 .initialHeight = 650,
-                                 .visible = false,
-                                 .offscreen = true,
-                                 .forceOffscreenRenderTarget = true,
-                                 .enableFramebufferReadback = true});
+    window = std::make_unique<gui::EditorWindow>(windowOptions());
     ASSERT_THAT(window->valid(), Eq(true));
     shell = std::make_unique<EditorShell>(
-        *window,
-        EditorShellOptions{
-            .initialSource =
-                R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="160"><rect id="face" x="10" y="10" width="150" height="120" fill="red"/></svg>
-)",
-            .initialPath = (directory / "art.svg").string(),
-            .allowFileSystemActions = false,
-            .allowHostClipboardAccess = false,
-            .controlSocketPath = endpoint});
+        *window, EditorShellOptions{.initialSource = initialSource(),
+                                    .initialPath = (directory / "art.svg").string(),
+                                    .allowFileSystemActions = false,
+                                    .allowHostClipboardAccess = false,
+                                    .controlSocketPath = endpoint});
     ASSERT_THAT(shell->valid(), Eq(true));
   }
   void TearDown() override {
@@ -175,6 +178,42 @@ protected:
             {"source_revision", result["source_revision"]}};
   }
 };
+
+class GeodeSplashCollaborationUiTest : public EditorCollaborationUiTest {
+protected:
+  gui::EditorWindowOptions windowOptions() override {
+    auto options = EditorCollaborationUiTest::windowOptions();
+    options.initialWidth = 3200;
+    options.initialHeight = 1800;
+    options.offscreenContentScale = 2.0;
+    return options;
+  }
+  std::string initialSource() override {
+    const auto splash = donner::tests::ReadRequiredRunfile("geode_splash.svg");
+    EXPECT_THAT(splash.ok(), Eq(true)) << splash.error;
+    return splash.contents;
+  }
+};
+
+TEST_F(GeodeSplashCollaborationUiTest, PresentsTheFullArtworkAndRespondsToMcp) {
+  std::cerr << "Startup window=" << window->windowSize().x << "x" << window->windowSize().y
+            << " displayScale=" << window->displayScale() << "\n";
+  EXPECT_THAT(call("get_editor_state")["has_document"], Eq(true));
+  EXPECT_THAT(call("get_svg_source")["source"].get<std::string>(), HasSubstr("background-glow"));
+  (void)captureDocumentPixel(Vector2d(100, 100));
+  window->beginFrame();
+  shell->runFrame();
+  const auto bitmap = window->endFrameAndReadPixels();
+  ASSERT_THAT(bitmap.empty(), Eq(false));
+  const char* output = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  ASSERT_THAT(output != nullptr, Eq(true));
+  std::cerr << "Startup framebuffer=" << bitmap.dimensions.x << "x" << bitmap.dimensions.y << "\n";
+  const std::string path = (std::filesystem::path(output) / "native-geode-splash.png").string();
+  EXPECT_THAT(svg::RendererImageIO::writeRgbaPixelsToPngFile(
+                  path.c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                  bitmap.rowBytes / 4),
+              Eq(true));
+}
 
 TEST_F(EditorCollaborationUiTest, McpEditsTheVisibleDocumentAndUndoRestoresIt) {
   Json edit = revision();

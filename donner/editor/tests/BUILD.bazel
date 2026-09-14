@@ -1413,10 +1413,12 @@ donner_cc_test(
 donner_cc_test(
     name = "editor_collaboration_ui_tests",
     srcs = ["EditorCollaborationUi_tests.cc"],
+    data = ["//:geode_splash.svg"],
     opens_gpu_device = True,
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_shell",
         "//donner/editor:imgui_headers",
         "//donner/editor/gui:editor_window",

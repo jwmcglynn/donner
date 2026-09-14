@@ -86,8 +86,10 @@ donner_cc_test(
     srcs = ["EditorControlSession_tests.cc"],
     data = [
         "//:donner_splash.svg",
+        "//:geode_splash.svg",
         "//donner/editor/tests:filtered_element_flash_after_drags_2_rnr",
     ],
+    opens_gpu_device = True,
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         ":editor_control_session",
