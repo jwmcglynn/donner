@@ -340,7 +340,8 @@ TEST_P(TextBackendTest, MissingXHeightUsesTheSelectedGlyphMetric) {
     }
   }
   ASSERT_THAT(changed, testing::IsTrue());
-  const FontHandle font = fontManager_.loadFontData(bytes, FontDataTrust::Untrusted);
+  const FontDataTrust trust = isSimple() ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
+  const FontHandle font = fontManager_.loadFontData(bytes, trust);
   ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
   const auto shaped = backend().shapeRun(font, 20.0f, "x", 0, 1, false, FontVariant::Normal, false);
   ASSERT_THAT(shaped.glyphs, SizeIs(1));

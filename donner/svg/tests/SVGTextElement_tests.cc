@@ -485,6 +485,8 @@ TEST(SVGTextElementPublicApiTests, ZeroAdjustedSizePreservesAddressableCharacter
   ASSERT_EQ(span.getNumberOfChars(), 2);
   EXPECT_DOUBLE_EQ(root.getComputedTextLength(), 0.0);
   EXPECT_DOUBLE_EQ(root.getSubStringLength(1, 2), 0.0);
+  EXPECT_THAT(root.convertToPath(), testing::IsEmpty());
+  EXPECT_THAT(root.inkBoundingBox().isEmpty(), testing::IsTrue());
   for (long index = 0; index < 3; ++index) {
     EXPECT_EQ(root.getStartPositionOfChar(index), Vector2d(10, 20));
     EXPECT_EQ(root.getEndPositionOfChar(index), Vector2d(10, 20));
@@ -508,6 +510,22 @@ TEST(SVGTextElementPublicApiTests, ZeroAdjustedSizeFollowsAnchoringAndLengthAdju
     EXPECT_EQ(root.getStartPositionOfChar(1), root.getEndPositionOfChar(0));
     EXPECT_EQ(root.getEndPositionOfChar(1), root.getEndPositionOfChar(0));
   }
+}
+
+TEST(SVGTextElementPublicApiTests, ZeroAdjustedSizeConsumesPositionListsWithoutInk) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="root" x="10 30 60" y="20" dx="0 2 3" font-size="20" font-size-adjust="0">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  ASSERT_EQ(root.getNumberOfChars(), 3);
+  EXPECT_EQ(root.getStartPositionOfChar(0), Vector2d(10, 20));
+  EXPECT_EQ(root.getStartPositionOfChar(1), Vector2d(32, 20));
+  EXPECT_EQ(root.getStartPositionOfChar(2), Vector2d(63, 20));
+  EXPECT_THAT(root.convertToPath(), testing::IsEmpty());
+  EXPECT_THAT(root.inkBoundingBox().isEmpty(), testing::IsTrue());
 }
 
 TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {

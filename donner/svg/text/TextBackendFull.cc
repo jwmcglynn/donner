@@ -81,6 +81,20 @@ bool CanDecodeGlyphOutline(const FontManager& fontManager, FontHandle font, int 
           fontManager.glyphOutlineComplexity(font, glyphIndex).has_value());
 }
 
+/// Measure the lowercase x top in unscaled design units when the font omits sxHeight.
+int MeasureXHeight(const FontManager& manager, FontHandle handle, hb_font_t* font) {
+  if (!font) return 0;
+  FT_Face face = hb_ft_font_get_ft_face(font);
+  if (!face) return 0;
+  const FT_UInt glyph = FT_Get_Char_Index(face, 'x');
+  if (glyph == 0 || !CanDecodeGlyphOutline(manager, handle, static_cast<int>(glyph), 1.0f))
+    return 0;
+  if (FT_Load_Glyph(face, glyph, FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP))
+    return 0;
+  const FT_Pos top = face->glyph->metrics.horiBearingY;
+  return top > 0 && top <= std::numeric_limits<int>::max() ? static_cast<int>(top) : 0;
+}
+
 /// Checks the exclusive fixed-point bound before converting to FreeType's signed integer type.
 std::optional<FT_F26Dot6> CheckedCharacterSize(float sizePx) {
   const double fixedSize = static_cast<double>(sizePx) * 64.0;
@@ -312,6 +326,9 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
         metrics.xHeight = ReadInt16Be(*os2, 86);
       }
     }
+    if (metrics.xHeight <= 0) {
+      metrics.xHeight = MeasureXHeight(fontManager_, font, getOrCreateHbFont(font));
+    }
     return metrics;
   }
 
@@ -328,6 +345,7 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
   metrics.ascent = ftFace->ascender;
   metrics.descent = ftFace->descender;
   metrics.lineGap = ftFace->height - (ftFace->ascender - ftFace->descender);
+  metrics.xHeight = MeasureXHeight(fontManager_, font, hbFont);
   return metrics;
 }
 
@@ -1010,9 +1028,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
 // Cross-span kerning
 // ---------------------------------------------------------------------------
 
-double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle /*curFont*/,
-                                      float /*curSizePx*/, uint32_t prevCodepoint,
+double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
+                                      float curSizePx, uint32_t prevCodepoint,
                                       uint32_t curCodepoint, bool isVertical) const {
+  if (prevFont != curFont || prevSizePx != curSizePx) return 0.0;
   hb_font_t* hbFont = getOrCreateHbFont(prevFont);
   if (!hbFont) {
     return 0.0;

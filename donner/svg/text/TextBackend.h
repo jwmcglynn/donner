@@ -14,8 +14,8 @@ struct FontVMetrics {
   int ascent = 0;   ///< Positive, above baseline.
   int descent = 0;  ///< Negative, below baseline.
   int lineGap = 0;  ///< Extra spacing between lines.
-  /// x-height (OS/2 `sxHeight`), or 0 when the font does not provide it. Consumers should
-  /// fall back to 0.45 * (ascent - descent) when 0, matching Firefox and resvg.
+  /// x-height in design units, from OS/2 sxHeight or the lowercase x glyph's top bearing.
+  /// Zero means neither metric is available.
   int xHeight = 0;
 };
 

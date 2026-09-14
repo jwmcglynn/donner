@@ -61,13 +61,14 @@ public:
   bool clusterCombiningMarks = false;
   std::optional<SubSuperMetrics> subSuper;
   std::shared_ptr<float> shapedFontSizePx;
+  int xHeight = 500;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
     return FontVMetrics{
         .ascent = 1000,
         .descent = -200,
         .lineGap = 0,
-        .xHeight = 500,
+        .xHeight = xHeight,
     };
   }
 
@@ -1506,6 +1507,21 @@ TEST(TextEngineScriptedTest, UnrepresentableSizeAdjustmentDoesNotReachShaping) {
   }
 }
 
+TEST(TextEngineScriptedTest, UnknownXHeightDoesNotGuessSizeAdjustment) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->xHeight = 0;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("x"));
+  auto params = MakeTextParams(20.0);
+  params.fontSizeAdjust = 0.3;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  EXPECT_FLOAT_EQ(runs.front().usedFontSizePx, 20.0f);
+}
+
 TEST(TextEngineScriptedTest, FontSizeAdjustChangesUsedFontSizeFromXHeight) {
   Registry registry;
   FontManager fontManager(registry);
@@ -1615,7 +1631,7 @@ TEST(TextEngineScriptedTest, ZeroUsedSizeDoesNotBridgeCrossSpanKerning) {
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
   ASSERT_THAT(
-      runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(IsEmpty()), RunGlyphsAre(SizeIs(1))));
+      runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
   EXPECT_THAT(runs[0].usedFontSizePx, FloatEq(20.0f));
   EXPECT_THAT(runs[1].usedFontSizePx, FloatEq(0.0f));
   EXPECT_THAT(runs[2].usedFontSizePx, FloatEq(20.0f));
@@ -1623,6 +1639,9 @@ TEST(TextEngineScriptedTest, ZeroUsedSizeDoesNotBridgeCrossSpanKerning) {
   EXPECT_THAT(runs[2].font, Eq(runs[0].font));
   EXPECT_THAT(runs[0].glyphs,
               ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphXAdvanceIs(DoubleEq(10.0)))));
+  EXPECT_THAT(runs[1].glyphs,
+              ElementsAre(AllOf(GlyphIndexIs(Eq(0)), GlyphXPositionIs(DoubleEq(10.0)),
+                                GlyphXAdvanceIs(DoubleEq(0.0)))));
   EXPECT_THAT(runs[2].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(10.0))));
 }
 

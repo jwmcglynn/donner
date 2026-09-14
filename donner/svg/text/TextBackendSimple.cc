@@ -88,6 +88,13 @@ FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
       metrics.xHeight = ReadInt16Be(*os2, 86);
     }
   }
+  if (metrics.xHeight <= 0) {
+    const int glyph = stbtt_FindGlyphIndex(info, 'x');
+    int top = 0;
+    if (glyph != 0 && stbtt_GetGlyphBox(info, glyph, nullptr, nullptr, nullptr, &top)) {
+      metrics.xHeight = std::max(top, 0);
+    }
+  }
   return metrics;
 }
 
@@ -362,11 +369,13 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
   return result;
 }
 
-double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx,
-                                        FontHandle /*curFont*/, float /*curSizePx*/,
-                                        uint32_t prevCodepoint, uint32_t curCodepoint,
-                                        bool isVertical) const {
-  if (!std::isfinite(prevSizePx) || prevSizePx <= 0.0f) return 0.0;
+double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
+                                        float curSizePx, uint32_t prevCodepoint,
+                                        uint32_t curCodepoint, bool isVertical) const {
+  if (prevFont != curFont || prevSizePx != curSizePx || !std::isfinite(prevSizePx) ||
+      prevSizePx <= 0.0f) {
+    return 0.0;
+  }
   const stbtt_fontinfo* info = getFontInfo(prevFont);
   if (!info) {
     return 0.0;

@@ -1528,13 +1528,53 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
   if (sizePx == 0.0f || !fontSizeAdjust) return sizePx;
   if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust < 0.0) return 0.0f;
   const FontVMetrics metrics = backend.fontVMetrics(font);
-  const double xHeight = metrics.xHeight > 0
-                             ? static_cast<double>(metrics.xHeight)
-                             : static_cast<double>(metrics.ascent - metrics.descent) * 0.45;
+  const double xHeight = metrics.xHeight;
   const float scale = backend.scaleForEmToPixels(font, sizePx);
   const double aspect = xHeight * scale / sizePx;
   if (!std::isfinite(aspect) || aspect <= 0.0) return sizePx;
   return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
+}
+
+/// Cross-span pairs must use the same resolved font, used size, and glyph variant.
+bool CompatibleKerningRuns(const TextRun& current, FontVariant currentVariant,
+                           FontHandle previousFont, float previousSizePx,
+                           FontVariant previousVariant, bool currentKerning, bool previousKerning) {
+  return currentKerning && previousKerning && current.font == previousFont &&
+         current.usedFontSizePx == previousSizePx && currentVariant == previousVariant;
+}
+
+/// Keep source clusters in the positioning pipeline without invoking a font backend at size zero.
+TextBackend::ShapedRun ShapeAddressableZeroSizeText(std::string_view text, size_t start,
+                                                    size_t length) {
+  TextBackend::ShapedRun result;
+  const size_t end = start + length;
+  for (size_t offset = start; offset < end;) {
+    TextBackend::ShapedGlyph glyph;
+    glyph.cluster = static_cast<uint32_t>(offset);
+    result.glyphs.push_back(glyph);
+    decodeUtf8(text, offset);
+  }
+  return result;
+}
+
+/// Select zero-advance character records or the normal kerning-aware shaping path.
+TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun& run,
+                                      std::string_view text, const ChunkRange& chunk, bool vertical,
+                                      FontVariant variant, bool kerning) {
+  if (run.usedFontSizePx == 0.0f) {
+    return ShapeAddressableZeroSizeText(text, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
+  }
+  return kerning
+             ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                chunk.byteEnd - chunk.byteStart, vertical, variant, false)
+             : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                         chunk.byteEnd - chunk.byteStart, vertical, variant, false);
+}
+
+/// Valid zero adjustment retains characters; other unusable sizes do not reach layout.
+bool HasAddressableSpanText(std::string_view text, float size,
+                            const std::optional<double>& adjustment) {
+  return !text.empty() && (HasRenderableSpanText(text, size) || adjustment == 0.0);
 }
 
 /// Nonempty unshaped text interrupts kerning; an empty span keeps the previous pair.
@@ -1579,6 +1619,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   FontHandle prevSpanFont;
   float prevSpanFontSizePx = 0.0f;
   bool prevSpanFontKerning = true;
+  FontVariant prevSpanFontVariant = FontVariant::Normal;
   Entity prevTextPathSource = entt::null;
   std::optional<size_t> firstPathRun;
   TextPathStagingState pathStaging;
@@ -1709,7 +1750,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
     // Propagate the span-start position even when the span produces no glyphs.
-    if (!HasRenderableSpanText(spanText, spanFontSizePx)) {
+    if (!HasAddressableSpanText(spanText, spanFontSizePx, fontSizeAdjust)) {
       currentPenX = penX;
       currentPenY = penY;
       prevDefaultY = defaultY;
@@ -1744,13 +1785,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
-      const auto shaped =
-          spanFontKerning ? backend_->shapeRun(spanFont, spanFontSizePx, spanText, chunk.byteStart,
-                                               chunk.byteEnd - chunk.byteStart, vertical,
-                                               span.fontVariant, false)
-                          : backend_->shapeRunNoKerning(
-                                spanFont, spanFontSizePx, spanText, chunk.byteStart,
-                                chunk.byteEnd - chunk.byteStart, vertical, span.fontVariant, false);
+      const auto shaped = ShapeSpanChunk(*backend_, run, spanText, chunk, vertical,
+                                         span.fontVariant, spanFontKerning);
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
       // When a multi-glyph RTL chunk starts because of an absolute y position on the
@@ -1790,7 +1826,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         size_t firstByteIdx = chunk.byteStart;
         const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
         crossKern =
-            spanFontKerning && prevSpanFontKerning
+            CompatibleKerningRuns(run, span.fontVariant, prevSpanFont, prevSpanFontSizePx,
+                                  prevSpanFontVariant, spanFontKerning, prevSpanFontKerning)
                 ? backend_->crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont,
                                           spanFontSizePx, prevSpanLastCodepoint, firstCp, vertical)
                 : 0.0;
@@ -2069,6 +2106,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     prevSpanFont = spanFont;
     prevSpanFontSizePx = spanFontSizePx;
     prevSpanFontKerning = spanFontKerning;
+    prevSpanFontVariant = span.fontVariant;
 
     // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
     // are not rendered. Clear the glyph list so the renderer skips this run.
@@ -2296,6 +2334,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       charGeom.endPosition =
           Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance);
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
+
+      if (runFontSizePx == 0.0f) continue;
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
       Path glyphPath = glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
