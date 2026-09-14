@@ -102,6 +102,9 @@ public:
   /// Whether a document has been loaded.
   [[nodiscard]] bool hasDocument() const { return document_.hasDocument(); }
 
+  /// Identity of an explicitly opened document, stable across source edits and undo/redo.
+  [[nodiscard]] std::uint64_t documentSessionId() const { return documentSessionId_; }
+
   /// Direct access to the wrapped `AsyncSVGDocument`. Used by the main loop
   /// for `flushFrame()` and `currentFrameVersion()`, and by tests.
   [[nodiscard]] AsyncSVGDocument& document() { return document_; }
@@ -648,6 +651,7 @@ private:
   };
 
   AsyncSVGDocument document_;
+  std::uint64_t documentSessionId_ = 0;
   std::vector<svg::SVGElement> selection_;
   /// Mirrors `selection_.front()` (or `std::nullopt`) so the
   /// single-element compatibility accessor can hand out a reference.

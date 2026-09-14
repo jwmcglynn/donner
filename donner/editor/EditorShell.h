@@ -19,6 +19,7 @@
 #include "donner/editor/DocumentPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorCommentsPresenter.h"
 #include "donner/editor/EditorInputBridge.h"
 #include "donner/editor/EditorShellLayout.h"
 #include "donner/editor/EditorShellPresentation.h"
@@ -27,6 +28,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #include "donner/editor/LayersPanel.h"
+#include "donner/editor/LocalEditorControl.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/NativeDialogCoordinator.h"
 #include "donner/editor/PenTool.h"
@@ -99,6 +101,8 @@ struct EditorShellOptions {
   /// `ReproRecorder` and snapshots ImGui input state at the start of
   /// every frame. Written to disk in the destructor.
   std::optional<std::string> reproOutputPath;
+  /// Opt-in local MCP endpoint; its parent directory must be private (0700).
+  std::optional<std::string> controlSocketPath;
 };
 
 /// Document-space replay input consumed by the editor shell test harness.
@@ -255,6 +259,7 @@ struct LayerInspectorStatusReadback {
 /// Stateful advanced editor frontend shell. Owns all long-lived GUI/editor orchestration state.
 class EditorShell {
   friend class EditorShellTestAccess;
+  friend class EditorCollaborationUiTestAccess;
 
 public:
   EditorShell(gui::EditorWindow& window, EditorShellOptions options);
@@ -331,6 +336,14 @@ public:
   }
 
 private:
+  bool initializeCollaboration();
+  void processCollaboration();
+  bool collaborationFrameReady();
+  bool collaborationCanvasControlHovered(Vector2d point) const;
+  void renderCollaborationPins(const ViewportState& presentedViewport, bool liveDrag);
+  void renderCollaborationContextMenu(bool rendererBusy);
+  void persistCollaborationFeedback();
+  void renderCollaborationPanel();
   void configureClipboardCapability();
   void assignInitialFilePathIfAllowed();
   [[nodiscard]] bool discardDisabledFileDialogRequests();
@@ -567,6 +580,9 @@ private:
   bool valid_ = false;
 
   EditorApp app_;
+  std::unique_ptr<EditorCollaboration> collaboration_;
+  std::unique_ptr<LocalEditorControl> editorControl_;
+  EditorCommentsPresenter commentsPresenter_;
   SelectTool selectTool_;
   PenTool penTool_;
   TextTool textTool_;

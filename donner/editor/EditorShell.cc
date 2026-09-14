@@ -1361,7 +1361,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
 
   showSamplePicker_ = options_.showWelcome;
   welcomePlaceholderActive_ = options_.showWelcome;
-  valid_ = true;
+  valid_ = initializeCollaboration();
   // Safari cannot safely resume a second WebGPU device's Promise completion while the main
   // pthread is suspended in the Asyncify readbacks used to rasterize custom cursors. Start the
   // renderer pthread only after all synchronous UI GPU setup and its wake callback are complete.
@@ -1404,6 +1404,8 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+  persistCollaborationFeedback();
+  if (editorControl_) editorControl_->stop();
 #ifdef DONNER_EDITOR_WGPU
   if (directOverlayRenderer_ != nullptr) {
     ResetEmbeddedSvgIconRenderer(*directOverlayRenderer_);
@@ -4219,11 +4221,10 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   }
 
   const ImVec2 hoverMousePos = ImGui::GetMousePos();
-  const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
-      adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
-      Vector2d(hoverMousePos.x, hoverMousePos.y));
+  const bool overCanvasControl =
+      collaborationCanvasControlHovered(Vector2d(hoverMousePos.x, hoverMousePos.y));
   const bool toolEligible =
-      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
+      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasControl;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const bool textToolActive = activeTool_ == ActiveTool::Text;
@@ -4555,6 +4556,7 @@ void EditorShell::renderRenderPanePresentation(
     if (adaptiveUiLayout_.showCanvasScrollbars) {
       renderCanvasScrollbars();
     }
+    renderCollaborationPins(presentedDocumentViewport, liveActiveDragPreview.has_value());
     renderRenderPaneContextMenu();
   }
 }
@@ -6441,6 +6443,8 @@ void EditorShell::renderRenderPaneContextMenu() {
     ImGui::EndDisabled();
   }
 
+  renderCollaborationContextMenu(rendererBusy);
+
   ImGui::Separator();
   if (ImGui::MenuItem("Clear Selection", nullptr, false, app_.hasSelection())) {
     app_.clearSelection();
@@ -6835,6 +6839,7 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 }
 
 void EditorShell::prepareFrame() {
+  processCollaboration();
   const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
   if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
@@ -7335,6 +7340,7 @@ void EditorShell::runFrame() {
                        ImVec2(static_cast<float>(windowSize.x), paneHeight));
   }
   markPhase(mainFrameCost.splittersMs);
+  renderCollaborationPanel();
   applyDeferredRenderRequest();
   penDragFlushedThisFrame_ = false;
   markPhase(mainFrameCost.endRenderRequestMs);

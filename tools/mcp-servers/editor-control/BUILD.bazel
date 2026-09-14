@@ -129,3 +129,12 @@ py_test(
     ],
     main = "editor_control_wrapper_tests.py",
 )
+
+py_test(
+    name = "editor_control_native_tests",
+    srcs = [
+        "editor_control_native_tests.py",
+        "editor_control_wrapper.py",
+    ],
+    main = "editor_control_native_tests.py",
+)

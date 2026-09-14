@@ -1388,3 +1388,40 @@ donner_cc_test(
 )
 
 donner_package()
+
+donner_cc_test(
+    name = "editor_collaboration_tests",
+    srcs = ["EditorCollaboration_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:editor_collaboration",
+        "@com_google_gtest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)
+
+donner_cc_test(
+    name = "local_editor_control_tests",
+    srcs = ["LocalEditorControl_tests.cc"],
+    deps = [
+        "//donner/editor:local_editor_control",
+        "@com_google_gtest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_collaboration_ui_tests",
+    srcs = ["EditorCollaborationUi_tests.cc"],
+    opens_gpu_device = True,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        "//donner/editor:editor_shell",
+        "//donner/editor:imgui_headers",
+        "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer:renderer_image_io",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+        "@nlohmann_json//:json",
+    ],
+)

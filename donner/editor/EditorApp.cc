@@ -932,6 +932,7 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   // now matches the last-loaded bytes. `setCurrentFilePath` should be
   // called separately by the caller if the bytes came from a file.
   if (result) {
+    ++documentSessionId_;
     isDirty_ = false;
   }
   return result;

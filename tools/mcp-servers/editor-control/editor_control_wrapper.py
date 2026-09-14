@@ -536,7 +536,116 @@ def handle_request(proxy: EditorControlProxy, request: JsonObject) -> JsonObject
   return response
 
 
+# Native attachment owns no document and never starts or stops the visible editor.
+NATIVE_MAX_REQUEST = 1024 * 1024
+NATIVE_MAX_RESPONSE = 16 * 1024 * 1024
+
+
+def read_native_message(stream: BinaryIO) -> tuple[JsonObject | None, bool]:
+  """Accept MCP JSON-lines plus the existing editor wrapper's legacy framing."""
+  first = stream.readline(NATIVE_MAX_REQUEST + 1)
+  if not first:
+    return None, False
+  if len(first) > NATIVE_MAX_REQUEST:
+    raise ProtocolError("native MCP request exceeds 1 MiB")
+  if first.lstrip().startswith(b"{"):
+    message = json.loads(first)
+    framed = False
+  else:
+    headers = {}
+    total = 0
+    line = first
+    while line not in (b"\n", b"\r\n"):
+      total += len(line)
+      if total > 8192 or not line:
+        raise ProtocolError("invalid or oversized native MCP header")
+      key, separator, value = line.decode("ascii").partition(":")
+      if not separator or key.lower() in headers:
+        raise ProtocolError("invalid or duplicate native MCP header")
+      headers[key.lower()] = value.strip()
+      line = stream.readline(8193)
+    raw_length = headers.get("content-length", "")
+    if not raw_length.isascii() or not raw_length.isdecimal():
+      raise ProtocolError("invalid native MCP Content-Length")
+    length = int(raw_length)
+    if length <= 0 or length > NATIVE_MAX_REQUEST:
+      raise ProtocolError("native MCP request length must be 1 byte to 1 MiB")
+    body = stream.read(length)
+    if len(body) != length:
+      raise ProtocolError("truncated native MCP request")
+    message = json.loads(body)
+    framed = True
+  if not isinstance(message, dict):
+    raise ProtocolError("native MCP request must be a JSON object")
+  return message, framed
+
+
+def native_request(socket_path: Path, request: JsonObject) -> JsonObject | None:
+  """Exchange one request with an already-running editor over its private socket."""
+  import socket
+  import stat
+
+  parent = socket_path.parent.lstat()
+  endpoint = socket_path.lstat()
+  if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid()
+      or parent.st_mode & 0o077 or not stat.S_ISSOCK(endpoint.st_mode)
+      or endpoint.st_uid != os.getuid() or endpoint.st_mode & 0o077):
+    raise ProtocolError("native endpoint and parent must be private and owned by the current user")
+  payload = json.dumps(request, separators=(",", ":")).encode("utf-8")
+  if len(payload) > NATIVE_MAX_REQUEST:
+    raise ProtocolError("native MCP request exceeds 1 MiB")
+  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+    connection.settimeout(35)
+    connection.connect(str(socket_path))
+    connection.sendall(payload + b"\n")
+    with connection.makefile("rb") as stream:
+      response = stream.readline(NATIVE_MAX_RESPONSE + 1)
+  if not response.endswith(b"\n") or len(response) > NATIVE_MAX_RESPONSE:
+    raise ProtocolError("native editor returned a truncated or oversized response")
+  value = json.loads(response)
+  if value is not None and not isinstance(value, dict):
+    raise ProtocolError("native editor returned an invalid response")
+  if "id" not in request:
+    return None
+  if value is None or value.get("id") != request["id"]:
+    raise ProtocolError("native response ID does not match the request")
+  return value
+
+
+def native_main(socket_path: Path) -> int:
+  """Proxy standard MCP transport to the operator's visible editor session."""
+  if not socket_path.is_absolute():
+    print("--socket requires an absolute path", file=sys.stderr)
+    return 2
+  while True:
+    framed = False
+    try:
+      request, framed = read_native_message(sys.stdin.buffer)
+    except (ProtocolError, UnicodeError, ValueError, RecursionError) as exc:
+      response = error_response(None, -32700, str(exc))
+      sys.stdout.buffer.write(json.dumps(response).encode() + b"\n")
+      sys.stdout.buffer.flush()
+      return 2
+    if request is None:
+      return 0
+    try:
+      response = native_request(socket_path, request)
+    except (OSError, ProtocolError, ValueError, RecursionError) as exc:
+      response = error_response(request.get("id"), -32000, str(exc)) if "id" in request else None
+    if response is not None:
+      if framed:
+        write_message(sys.stdout.buffer, response)
+      else:
+        sys.stdout.buffer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
+        sys.stdout.buffer.flush()
+
+
 def main() -> int:
+  if len(sys.argv) == 3 and sys.argv[1] == "--socket":
+    return native_main(Path(sys.argv[2]))
+  if len(sys.argv) != 1:
+    print("usage: editor_control_wrapper.py [--socket /absolute/private/editor.sock]", file=sys.stderr)
+    return 2
   proxy = EditorControlProxy()
   try:
     while True:

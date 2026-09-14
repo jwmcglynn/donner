@@ -1045,6 +1045,7 @@ donner_cc_library(
     name = "editor_shell",
     srcs = [
         "EditorShell.cc",
+        "EditorShellCollaboration.cc",
         "FillStrokeWidget.cc",
     ],
     hdrs = [
@@ -1070,6 +1071,8 @@ donner_cc_library(
         ":document_sync_controller",
         ":drag_coalesce",
         ":editor_app",
+        ":editor_collaboration",
+        ":editor_comments_presenter",
         ":editor_dock_layout",
         ":editor_input_bridge",
         ":editor_sample_catalog",
@@ -1088,6 +1091,7 @@ donner_cc_library(
         ":layer_inspector_diagnostics",
         ":layer_tree_model",
         ":layers_panel",
+        ":local_editor_control",
         ":lock_state",
         ":menu_bar_presenter",
         ":native_dialog_coordinator",
@@ -1134,6 +1138,7 @@ donner_cc_library(
         "//third_party/fira-code",
         "//third_party/roboto",
         "@imgui",
+        "@nlohmann_json//:json",
     ] + select({
         ":wasm_geode_enabled": [
             "//donner/svg/renderer:renderer_geode",
@@ -1654,3 +1659,36 @@ donner_cc_library(
 )
 
 donner_package()
+
+donner_cc_library(
+    name = "editor_collaboration",
+    srcs = ["EditorCollaboration.cc"],
+    hdrs = ["EditorCollaboration.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":lock_state",
+        "//donner/base",
+        "//donner/svg",
+        "@nlohmann_json//:json",
+    ],
+)
+
+donner_cc_library(
+    name = "local_editor_control",
+    srcs = ["LocalEditorControl.cc"],
+    hdrs = ["LocalEditorControl.h"],
+    deps = ["@nlohmann_json//:json"],
+)
+
+donner_cc_library(
+    name = "editor_comments_presenter",
+    srcs = ["EditorCommentsPresenter.cc"],
+    hdrs = ["EditorCommentsPresenter.h"],
+    deps = [
+        ":editor_collaboration",
+        ":imgui_headers",
+        ":viewport_state",
+        "@imgui",
+    ],
+)

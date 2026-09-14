@@ -141,7 +141,7 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
   // result. Stamp it exactly once so probes can pair the two product
   // timestamps.
   const workerStats = window['__donnerWorkerStats'];
-  if (workerStats && workerStats['presentedAtMs'] === undefined) {
+  if (workerStats && workerStats['presentedAtMs'] == = undefined) {
     workerStats['presentedAtMs'] = performance.now();
   }
 });
@@ -352,19 +352,30 @@ int main(int argc, char** argv) {
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
   std::optional<std::string> reproOutputPath;
+  std::optional<std::string> controlSocketPath;
   bool showWelcome = false;
 #ifdef __EMSCRIPTEN__
   initialSource = kWelcomePlaceholderSvg;
   showWelcome = true;
 #else
   constexpr std::string_view kUsage =
-      "Usage: donner-editor [--experimental] [--save-repro <path>] [filename]\n";
+      "Usage: donner-editor [--experimental] [--save-repro <path>] [--control-socket <path>] "
+      "[filename]\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
       // Developer CLI contract: keep accepting this flag even when it is a
       // no-op. Old repro scripts and launch aliases pass it, and removing it
       // breaks callers.
+      continue;
+    }
+
+    if (arg == "--control-socket") {
+      if (i + 1 >= argc) {
+        std::cerr << "--control-socket requires a path\n" << kUsage;
+        return 1;
+      }
+      controlSocketPath = std::string(argv[++i]);
       continue;
     }
 
@@ -418,7 +429,8 @@ int main(int argc, char** argv) {
                    .showWelcome = showWelcome,
                    .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
                    .editorBuildInfo = EmbeddedBytesToString(donner::embedded::kEditorBuildInfo),
-                   .reproOutputPath = reproOutputPath});
+                   .reproOutputPath = reproOutputPath,
+                   .controlSocketPath = controlSocketPath});
   if (!shell->valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";
