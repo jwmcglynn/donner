@@ -87,6 +87,7 @@ donner_cc_test(
     srcs = [
         "tests/Compiler_tests.cc",
         "tests/Graphics_tests.cc",
+        "tests/ImageFeatures_tests.cc",
         "tests/Language_tests.cc",
         "tests/Parser_tests.cc",
         "tests/TextEmitter_tests.cc",
