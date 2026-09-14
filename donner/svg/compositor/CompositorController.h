@@ -473,8 +473,8 @@ public:
   /// the early return skipped, so the next `renderFrame` picks up
   /// without re-doing already-rasterized layers / segments.
   ///
-  /// Returns true on full completion, false on early cancellation.
-  /// The non-token overload above delegates with a no-op token.
+  /// Returns true on completion, false on cancellation or surface-budget refusal.
+  /// Use resourceLimitRejected() to distinguish budget refusal from cancellation.
   bool renderFrame(const RenderViewport& viewport, CancellationToken& token);
 
   /// Cancellable variant of the camera-transform render path.

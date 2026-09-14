@@ -2005,6 +2005,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   {
     ZoneScopedN("Compositor::composeLayers");
     composeLayers(viewport, surfaceFromCanvas);
+    if (resourceLimitRejected_) return;
   }
 
   // Dual-path pixel-identity assertion. When enabled, capture the composited
