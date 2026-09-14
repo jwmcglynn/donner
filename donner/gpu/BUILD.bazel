@@ -379,12 +379,12 @@ donner_cc_library(
     hdrs = ["tests/ImageBlitSlice.h"],
     visibility = donner_internal_visibility(),
     deps = [
+        ":blend_reference",
         ":gpu",
         ":gpu_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:image_blit_api",
         "@com_google_gtest//:gtest",
-        "@tiny-skia-cpp//src/tiny_skia:tiny_skia_painter",
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
@@ -416,6 +416,49 @@ donner_cc_library(
         ":slug_mask_slice",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
+    name = "blend_reference",
+    testonly = 1,
+    hdrs = ["tests/BlendReference.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "@tiny-skia-cpp//src/tiny_skia:tiny_skia_painter",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_gradient_slice",
+    testonly = 1,
+    hdrs = ["tests/SlugGradientSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":slug_mask_slice",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:slug_gradient_api",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_blend_slice",
+    testonly = 1,
+    hdrs = ["tests/FilterBlendSlice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":blend_reference",
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu/shader:filter_blend_api",
+        "@com_google_gtest//:gtest",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 

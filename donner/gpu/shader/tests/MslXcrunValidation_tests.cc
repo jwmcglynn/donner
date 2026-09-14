@@ -37,11 +37,13 @@
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledFilterBlend.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugFill.h"
+#include "donner/gpu/shader/tests/CompiledSlugGradient.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
@@ -390,6 +392,25 @@ TEST(MslXcrunValidation, StructConstruction) {
 TEST(MslXcrunValidation, VectorMix) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(tests::VectorMixAllProjections().msl, "VectorMix");
+}
+
+TEST(MslXcrunValidation, SlugGradient) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::SlugGradientAllProjections().msl, "slug_gradient");
+}
+TEST(MslXcrunValidation, SlugGradientMutated) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::SlugGradientMutatedAllProjections().msl,
+                                  "slug_gradientMutated");
+}
+TEST(MslXcrunValidation, FilterBlend) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::FilterBlendAllProjections().msl, "filter_blend");
+}
+TEST(MslXcrunValidation, FilterBlendMutated) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::FilterBlendMutatedAllProjections().msl,
+                                  "filter_blendMutated");
 }
 
 TEST(MslXcrunValidation, SlugFill) {

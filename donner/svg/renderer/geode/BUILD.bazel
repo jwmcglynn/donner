@@ -15,7 +15,6 @@ To enable:
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
@@ -362,6 +361,8 @@ donner_cc_library(
         "//donner/gpu/shader:convolve_matrix_artifact",
         "//donner/gpu/shader:displacement_map_artifact",
         "//donner/gpu/shader:drop_shadow_artifact",
+        "//donner/gpu/shader:filter_blend_api",
+        "//donner/gpu/shader:filter_blend_artifact",
         "//donner/gpu/shader:filter_color_matrix_artifact",
         "//donner/gpu/shader:filter_image_artifact",
         "//donner/gpu/shader:filter_resolve_api",
@@ -379,6 +380,8 @@ donner_cc_library(
         "//donner/gpu/shader:program_bindings",
         "//donner/gpu/shader:slug_fill_api",
         "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:snapshot_unpremultiply_artifact",
@@ -448,28 +451,6 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# Linear-gradient fragment shader. Shares the vertex pipeline / band layout
-# with slug_fill.wgsl but the fragment stage reads a larger uniform that
-# carries gradient parameters (transform, start/end, spread, stops).
-embed_resources(
-    name = "slug_gradient_wgsl",
-    header_output = "embed_resources/SlugGradientWgsl.h",
-    resources = {
-        "kSlugGradientWgsl": "shaders/slug_gradient.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# feBlend W3C Compositing 1 blend-mode compute shader.
-embed_resources(
-    name = "filter_blend_wgsl",
-    header_output = "embed_resources/FilterBlendWgsl.h",
-    resources = {
-        "kFilterBlendWgsl": "shaders/filter_blend.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -477,18 +458,16 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
-        ":filter_blend_wgsl",
-        ":geode_wgpu_util",
-        ":slug_gradient_wgsl",
         "//donner/base",
         "//donner/gpu",
         "//donner/gpu/shader:image_blit_api",
         "//donner/gpu/shader:image_blit_artifact",
         "//donner/gpu/shader:slug_fill_api",
         "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -501,13 +480,14 @@ donner_cc_test(
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
-        ":slug_gradient_wgsl",
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu:slug_fill_slice",
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:slug_fill_api",
         "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:wgsl_emitter",
@@ -568,6 +548,8 @@ donner_cc_library(
         "//donner/css",
         "//donner/gpu/shader:slug_fill_api",
         "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
         "//donner/svg/core",

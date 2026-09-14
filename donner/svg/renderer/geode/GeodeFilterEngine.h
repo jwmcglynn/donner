@@ -71,6 +71,8 @@ struct RuntimeComputeProgram {
   std::array<uint32_t, 3> inputOutputParameterBindings = {0, 1, 2};
   //!< Input texture, output texture, and uniform resource bindings.
   std::optional<uint32_t> transferTableBinding;  //!< Optional reflected lookup-table binding.
+  std::optional<std::array<uint32_t, 4>> twoInputBindings;
+  //!< Reflected source, backdrop, output and parameter bindings; also selects reflected X/Y.
   bool useReflectedInputOutputMetadata = false;  //!< Selects the reflected dispatch contract.
 };
 
@@ -515,8 +517,7 @@ private:
   RuntimeComputeProgram compositeProgram_;
 
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> blendPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
+  RuntimeComputeProgram blendProgram_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
   RuntimeComputeProgram morphologyProgram_;

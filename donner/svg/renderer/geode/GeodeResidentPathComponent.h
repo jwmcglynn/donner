@@ -990,9 +990,9 @@ private:
 /// \ref GeodeResidentSlot: a combined-usage
 /// buffer holds the same eight analytic dual-ray SSBO regions, but the
 /// uniform region holds the 672-byte gradient uniform block (stops inline,
-/// `shaders/slug_gradient.wgsl`) and the cached bind group uses the
-/// 11-binding gradient pipeline layout with the device-owned dummy
-/// clip-mask texture/sampler in bindings 3 and 4. Residence is only taken
+/// `donner/gpu/shader/programs/SlugGradientSource.h`) and the cached bind group uses the
+/// reflected ten-resource gradient pipeline layout with the device-owned dummy
+/// clip-mask texture. Residence is only taken
 /// when no clip mask, clip polygon, or mask pass is active (the gradient
 /// shader's clip flags must stay zero for the cached bind group to remain
 /// stable), exactly like the solid-fill residence gate.

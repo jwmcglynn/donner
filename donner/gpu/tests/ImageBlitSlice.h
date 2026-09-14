@@ -16,8 +16,8 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
+#include "donner/gpu/tests/BlendReference.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "tiny_skia/Painter.h"
 #include "tiny_skia/filter/Blend.h"
 
 namespace donner::gpu::tests {
@@ -133,22 +133,6 @@ inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
   return result;
 }
 
-/// Uses the raster blend implementation's CSS luminance coefficients for nonseparable modes.
-inline std::vector<uint8_t> NonseparableExpected(const Scenario& scenario,
-                                                 const tiny_skia::filter::FloatPixmap& background,
-                                                 const tiny_skia::filter::FloatPixmap& foreground) {
-  constexpr std::array modes{tiny_skia::BlendMode::Hue, tiny_skia::BlendMode::Saturation,
-                             tiny_skia::BlendMode::Color, tiny_skia::BlendMode::Luminosity};
-  auto target = background.toPixmap();
-  const auto source = foreground.toPixmap();
-  auto view = target.mutableView();
-  tiny_skia::PixmapPaint paint;
-  paint.blendMode = modes[scenario.blendMode - 12];
-  paint.forceHqPipeline = true;
-  tiny_skia::Painter::drawPixmap(view, 0, 0, source.view(), paint);
-  return {target.data().begin(), target.data().end()};
-}
-
 inline bool OutsideRectangle(float x, float y, const std::array<float, 4>& rect) {
   return x < rect[0] || x >= rect[2] || y < rect[1] || y >= rect[3];
 }
@@ -206,7 +190,8 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
       BlendMode::Darken,    BlendMode::Lighten,    BlendMode::ColorDodge, BlendMode::ColorBurn,
       BlendMode::HardLight, BlendMode::SoftLight,  BlendMode::Difference, BlendMode::Exclusion,
       BlendMode::Hue,       BlendMode::Saturation, BlendMode::Color,      BlendMode::Luminosity};
-  if (scenario.blendMode >= 12) return NonseparableExpected(scenario, background, foreground);
+  if (scenario.blendMode >= 12)
+    return NonseparableBlendReference(scenario.blendMode, background, foreground);
   tiny_skia::filter::blend(background, foreground, output, modes[scenario.blendMode]);
   const auto pixels = output.toPixmap();
   return {pixels.data().begin(), pixels.data().end()};

@@ -9,6 +9,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
+#include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
@@ -38,12 +39,6 @@ gpu::BlendState PremultipliedSourceOverBlend() {
                           gpu::BlendOperation::Add},
       gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
                           gpu::BlendOperation::Add}};
-}
-
-/// A fragment-visible read-only storage buffer entry at \p binding.
-gpu::BindGroupLayoutEntry FragmentStorageEntry(uint32_t binding) {
-  return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Fragment,
-                                   gpu::BindingType::ReadOnlyStorageBuffer};
 }
 
 }  // namespace
@@ -102,27 +97,8 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
 GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice,
                                              gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
-  // Eleven bindings - uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
-  // clip-mask sampler, and (analytic dual-ray) V bands SSBO, V curves
-  // SSBO, H band grid, V band grid, and compact references into each canonical
-  // curve array. The clip-mask bindings always carry something valid; when
-  // `hasClipMask == 0` a 1x1 dummy texture is bound and the shader skips the
-  // sample work.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      FragmentStorageEntry(1),
-      FragmentStorageEntry(2),
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      FragmentStorageEntry(5),
-      FragmentStorageEntry(6),
-      FragmentStorageEntry(7),
-      FragmentStorageEntry(8),
-      FragmentStorageEntry(9),
-      FragmentStorageEntry(10),
-  };
+  const auto& shader = gpu::shader::programs::SlugGradientShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ =
       UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                         gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
@@ -137,9 +113,10 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
 
   pipeline_ = UnwrapOrAbort(
       adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "GeodeSlugGradient", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          "GeodeSlugGradient", pipelineLayout_,
+          gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,
-                             "fs_main",
+                             RcString(shader.entryPoints[1].name.view()),
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugGradient createRenderPipeline");

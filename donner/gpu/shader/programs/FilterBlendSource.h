@@ -1,7 +1,13 @@
-// Geode feBlend compute pipeline: W3C Compositing 1 blend modes.
+#pragma once
+/// @file
+/// Authoritative WGSL for FilterBlend.
+#include "donner/gpu/shader/wgsl/Compiler.h"
+namespace donner::gpu::shader::programs {
+inline constexpr wgsl::SourceText kFilterBlendSource{
+    R"wgsl(// Geode feBlend compute pipeline: W3C Compositing 1 blend modes.
 //
 // Applies one of the 16 W3C blend modes to two premultiplied-alpha
-// input textures. The blend formula follows §5 Source-over + blend:
+// input textures. The blend formula follows section 5 Source-over + blend:
 //
 //   B     = blend_mode(Cb, Cs)         // per-channel blend
 //   Cs'   = (1 - Ab) * Cs + Ab * B    // blended source
@@ -154,26 +160,12 @@ fn sat_of(c: vec3f) -> f32 {
 }
 
 fn set_sat(c_in: vec3f, s: f32) -> vec3f {
-  let r = c_in.x;
-  let g = c_in.y;
-  let b = c_in.z;
-  let cmax = max(r, max(g, b));
-  let cmin = min(r, min(g, b));
-  let cmid = r + g + b - cmax - cmin;
-
-  var new_min = 0.0;
-  var new_mid = 0.0;
-  var new_max = 0.0;
+  let cmax = max(c_in.x, max(c_in.y, c_in.z));
+  let cmin = min(c_in.x, min(c_in.y, c_in.z));
   if (cmax > cmin) {
-    new_mid = ((cmid - cmin) * s) / (cmax - cmin);
-    new_max = s;
+    return (c_in - vec3f(cmin)) * (s / (cmax - cmin));
   }
-
-  var out: vec3f;
-  out.x = select(new_min, select(new_max, new_mid, r == cmid), r == cmax);
-  out.y = select(new_min, select(new_max, new_mid, g == cmid), g == cmax);
-  out.z = select(new_min, select(new_max, new_mid, b == cmid), b == cmax);
-  return out;
+  return vec3f(0.0);
 }
 
 fn blend_hue(cb: vec3f, cs: vec3f) -> vec3f {
@@ -214,7 +206,7 @@ fn apply_blend_fn(mode: u32, cb: vec3f, cs: vec3f) -> vec3f {
 }
 
 @compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
+fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let size = vec2i(textureDimensions(output_tex));
   let coord = vec2i(gid.xy);
 
@@ -248,3 +240,5 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   textureStore(output_tex, coord, clamp(vec4f(co, ao), vec4f(0.0), vec4f(1.0)));
 }
+)wgsl"};
+}  // namespace donner::gpu::shader::programs

@@ -39,11 +39,13 @@
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledFilterBlend.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugFill.h"
+#include "donner/gpu/shader/tests/CompiledSlugGradient.h"
 #include "donner/gpu/shader/tests/CompiledSlugMask.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
@@ -446,6 +448,23 @@ TEST(SpirvValValidation, StructConstruction) {
 TEST(SpirvValValidation, VectorMix) {
   ExpectWordsValidateForVulkan11(SpirvVal(), tests::VectorMixAllProjections().spirv,
                                  "VectorMix.spv");
+}
+
+TEST(SpirvValValidation, SlugGradient) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugGradientAllProjections().spirv,
+                                 "slug_gradient.spv");
+}
+TEST(SpirvValValidation, SlugGradientMutated) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugGradientMutatedAllProjections().spirv,
+                                 "slug_gradientMutated.spv");
+}
+TEST(SpirvValValidation, FilterBlend) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::FilterBlendAllProjections().spirv,
+                                 "filter_blend.spv");
+}
+TEST(SpirvValValidation, FilterBlendMutated) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::FilterBlendMutatedAllProjections().spirv,
+                                 "filter_blendMutated.spv");
 }
 
 TEST(SpirvValValidation, SlugFill) {

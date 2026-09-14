@@ -1,7 +1,7 @@
 # WGSL shader compilation {#WgslCompiler}
 
 Gaussian/box blur, matrix convolution, Slug mask, offset, filter resolve, specular lighting,
-turbulence, image blit and Slug fill are authored as inline WGSL in
+turbulence, image blit, Slug fill, dedicated gradients and feBlend are authored as inline WGSL in
 `donner/gpu/shader/programs/*Source.h`. The C++20 compiler validates each source, produces immutable
 shader projections and derives its resource interface during constant evaluation. Each artifact
 implementation checks the shared host parameter layout. Application code consumes frozen data
@@ -244,3 +244,31 @@ linear/radial gradients, painter ordering and reads limited to a declared record
 contour even-odd cancellation is checked in binary mode; analytic single-contour coverage is a
 separate case. The inherited analytic coverage approximation is not a proof of duplicate-contour
 cancellation. These tests use strict pixel comparison and do not change the coverage algorithm.
+
+## Dedicated gradients and filter blend
+
+`SlugGradientSource.h` owns the dedicated linear/radial gradient program. Its 672-byte,
+16-byte-aligned host block contains sixteen straight-alpha stop colors, packed offsets, transforms,
+clip planes and bounding geometry. Both transient and resident draw paths use the reflected ten
+resources and two entry names. Each band layout and every host member is checked, including the
+stop and clip array strides. The unused clip sampler and its last device allocation are removed.
+Gradient interpolation remains in straight alpha, with premultiplication at fragment output.
+
+`FilterBlendSource.h` owns the sixteen SVG blend modes with a 16-byte parameter block aligned to
+four bytes. Both sampled inputs, the float storage output and parameters use reflected bindings.
+The runtime compute path derives independent X/Y dispatch counts from the entry's workgroup shape;
+other two-input programs retain their existing binding defaults until they are migrated. The
+obsolete raw-wgpu blend pipeline and its separate parameter pool are removed. Hue and saturation
+use range normalization so the middle color channel survives saturation adjustment.
+
+The portable v1 profile still rejects local declarations that shadow module names and MSL entry
+names reserved by the target language. The gradient's local `linear_t` becomes `linear_parameter`,
+and feBlend's entry becomes `cs_main`; these identifier changes preserve shader behavior. Full
+language/target name handling belongs to the broader compiler scope.
+
+Dedicated gradients have a bounded 4,194,304-step Clang evaluator cap; feBlend retains the default
+1,048,576-step cap. Native acceptance covers negative repeat/reflect coordinates, transformed
+ramps, unequal stop alphas, sixteen-stop arrays, empty/single-stop ramps, radial/focal cases,
+clipping, winding and declared ranges. Blend references cover all sixteen modes, premultiplied and
+transparent inputs, differently sized input textures and the default switch branch. Mutation
+controls change bindings, entry names and feBlend's workgroup to 4x2 on a 7x5 output.

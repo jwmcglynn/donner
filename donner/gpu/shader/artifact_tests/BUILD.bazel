@@ -651,4 +651,145 @@ py_test(
     target_compatible_with = _NATIVE,
 )
 
+donner_cc_binary(
+    name = "slug_gradient_wgsl_probe",
+    testonly = 1,
+    srcs = ["SlugGradientWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
+    ],
+)
+
+py_test(
+    name = "slug_gradient_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug_gradient",
+        "--binary=$(rootpath :slug_gradient_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":slug_gradient_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "slug_gradient_native_probe",
+    testonly = 1,
+    srcs = ["SlugGradientNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_native_artifact",
+    ],
+)
+
+py_test(
+    name = "slug_gradient_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug_gradient",
+        "--binary=$(rootpath :slug_gradient_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":slug_gradient_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "slug_gradient_all_probe",
+    testonly = 1,
+    srcs = ["SlugGradientAllProbe.cc"],
+    copts = ["-fconstexpr-steps=4194304"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:slug_gradient_source"],
+)
+
+py_test(
+    name = "slug_gradient_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=slug_gradient",
+        "--binary=$(rootpath :slug_gradient_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":slug_gradient_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_blend_wgsl_probe",
+    testonly = 1,
+    srcs = ["FilterBlendWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_blend_api",
+        "//donner/gpu/shader:filter_blend_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_blend_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_blend",
+        "--binary=$(rootpath :filter_blend_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":filter_blend_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_blend_native_probe",
+    testonly = 1,
+    srcs = ["FilterBlendNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:filter_blend_api",
+        "//donner/gpu/shader:filter_blend_native_artifact",
+    ],
+)
+
+py_test(
+    name = "filter_blend_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_blend",
+        "--binary=$(rootpath :filter_blend_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":filter_blend_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "filter_blend_all_probe",
+    testonly = 1,
+    srcs = ["FilterBlendAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:filter_blend_source"],
+)
+
+py_test(
+    name = "filter_blend_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=filter_blend",
+        "--binary=$(rootpath :filter_blend_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":filter_blend_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
 donner_package()

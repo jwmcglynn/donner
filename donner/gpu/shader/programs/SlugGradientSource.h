@@ -1,10 +1,16 @@
-// Slug gradient-fill: analytic dual-ray coverage at 1 sample/pixel.
+#pragma once
+/// @file
+/// Authoritative WGSL for SlugGradient.
+#include "donner/gpu/shader/wgsl/Compiler.h"
+namespace donner::gpu::shader::programs {
+inline constexpr wgsl::SourceText kSlugGradientSource{
+    R"wgsl(// Slug gradient-fill: analytic dual-ray coverage at 1 sample/pixel.
 //
-// Parallel to slug_fill.wgsl (see that file for the full analytic-AA
+// Parallel to SlugFillSource.h (see that file for the full analytic-AA
 // commentary) but the fragment evaluates a linear/radial gradient
 // at the pixel center instead of a solid color, then folds the analytic
 // coverage into the premultiplied output. Single convex bounding fan + dense H/V
-// band grids → no band-seam double-count.
+// band grids -> no band-seam double-count.
 
 // ============================================================================
 // Uniforms
@@ -64,7 +70,6 @@ struct Band {
 @group(0) @binding(1) var<storage, read> bands: array<Band>;
 @group(0) @binding(2) var<storage, read> curveData: array<f32>;
 @group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
-@group(0) @binding(4) var clipMaskSampler: sampler;
 // Vertical bands, curves, and dense grids support the second analytic ray.
 @group(0) @binding(5) var<storage, read> vBands: array<Band>;
 @group(0) @binding(6) var<storage, read> vCurveData: array<f32>;
@@ -264,7 +269,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 // ============================================================================
-// Quadratic root solving + analytic per-ray coverage (mirrors slug_fill.wgsl)
+// Quadratic root solving + analytic per-ray coverage (mirrors SlugFillSource.h)
 // ============================================================================
 
 struct Quadratic {
@@ -535,11 +540,11 @@ fn radial_t(gpos: vec2f) -> f32 {
     if (abs(B) < 1e-8) {
       return 1.0;
     }
-    let linear_t = Ce / (2.0 * B);
-    if (Fr + linear_t * Dr < 0.0) {
+    let linear_parameter = Ce / (2.0 * B);
+    if (Fr + linear_parameter * Dr < 0.0) {
       return kInvalidGradientT;
     }
-    return linear_t;
+    return linear_parameter;
   }
 
   let disc = B * B - A * Ce;
@@ -656,3 +661,5 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   out.color = vec4f(straight.rgb * straight.a, straight.a) * coverage;
   return out;
 }
+)wgsl"};
+}  // namespace donner::gpu::shader::programs

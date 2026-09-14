@@ -31,11 +31,13 @@
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/shader/tests/CompiledConvolve.h"
+#include "donner/gpu/shader/tests/CompiledFilterBlend.h"
 #include "donner/gpu/shader/tests/CompiledFilterResolve.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
 #include "donner/gpu/shader/tests/CompiledImageBlit.h"
 #include "donner/gpu/shader/tests/CompiledOffset.h"
 #include "donner/gpu/shader/tests/CompiledSlugFill.h"
+#include "donner/gpu/shader/tests/CompiledSlugGradient.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
@@ -45,6 +47,7 @@
 #include "donner/gpu/tests/ConvolveMatrixSlice.h"
 #include "donner/gpu/tests/DisplacementMapSlice.h"
 #include "donner/gpu/tests/DropShadowSlice.h"
+#include "donner/gpu/tests/FilterBlendSlice.h"
 #include "donner/gpu/tests/FilterImageSlice.h"
 #include "donner/gpu/tests/FilterResolveSlice.h"
 #include "donner/gpu/tests/FlatInterfaceSlice.h"
@@ -54,6 +57,7 @@
 #include "donner/gpu/tests/MorphologySlice.h"
 #include "donner/gpu/tests/OffsetSlice.h"
 #include "donner/gpu/tests/SlugFillSlice.h"
+#include "donner/gpu/tests/SlugGradientSlice.h"
 #include "donner/gpu/tests/SlugMaskSlice.h"
 #include "donner/gpu/tests/TileSlice.h"
 #include "donner/gpu/tests/TurbulenceSlice.h"
@@ -844,6 +848,309 @@ TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResultWithoutUnifiedM
   // is what a virtualized Metal device shows and what unified-memory hardware hides. Forcing the
   // model here is what puts that path under test on hardware that would never take it.
   runColorMatrixSlice(MetalDevice::MemoryModel::ForceNonUnified);
+}
+
+TEST_F(MetalColorMatrixTest, SlugGradientLinear) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Linear);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientBinary) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Binary);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientReflect) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Reflect);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientRepeat) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Repeat);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientTransformed) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Transformed);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientTransparentStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::TransparentStops);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientManyStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::ManyStops);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientEmptyStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::EmptyStops);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientSingleStop) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::SingleStop);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientRadial) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Radial);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientFocal) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::Focal);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientFocalRadius) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::FocalRadius);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientRadialOutside) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::RadialOutside);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientRadialDegenerate) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::RadialDegenerate);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientZeroRadius) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::ZeroRadius);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientClipMask) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::ClipMask);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientClipPolygon) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::ClipPolygon);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientEvenOdd) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::EvenOdd);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientDeclaredRange) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::DeclaredRange);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientMutated) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::tests::SlugGradientMutatedAllProjections(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_slice::Case::ManyStops);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque0) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {0u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque1) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {1u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque2) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {2u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque3) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {3u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque4) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {4u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque5) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {5u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque6) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {6u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque7) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {7u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque8) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {8u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque9) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {9u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque10) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {10u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque11) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {11u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque12) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {12u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque13) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {13u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque14) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {14u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendOpaque15) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {15u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendPremultiplied0) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {0u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendPremultiplied1) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {1u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendPremultiplied2) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {2u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendPremultiplied12) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {12u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendPremultiplied13) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {13u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendPremultiplied15) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {15u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendTransparent0) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {0u, gpu::tests::filter_blend_slice::Case::Transparent});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendTransparent12) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {12u, gpu::tests::filter_blend_slice::Case::Transparent});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendBounds) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {2u, gpu::tests::filter_blend_slice::Case::Bounds});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendUnknownMode) {
+  gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {42u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, FilterBlendMutated) {
+  gpu::tests::CheckFilterBlend(*device_, shader::tests::FilterBlendMutatedAllProjections(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {12u, gpu::tests::filter_blend_slice::Case::Opaque});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 TEST_F(MetalColorMatrixTest, SlugFillAnalytic) {

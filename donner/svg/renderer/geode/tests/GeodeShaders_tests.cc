@@ -15,6 +15,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
+#include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/tests/SlugFillSlice.h"
@@ -23,7 +24,6 @@
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-#include "embed_resources/SlugGradientWgsl.h"
 
 namespace donner::geode {
 namespace {
@@ -150,8 +150,7 @@ protected:
     }
     if (shader == EndpointShader::Fill)
       return std::string(gpu::shader::programs::SlugFillShader().wgsl);
-    const auto bytes = embedded::kSlugGradientWgsl;
-    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return std::string(gpu::shader::programs::SlugGradientShader().wgsl);
   }
 
   static std::vector<uint8_t> readback(const wgpu::Buffer& buffer) {

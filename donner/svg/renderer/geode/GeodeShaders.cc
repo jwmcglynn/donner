@@ -1,59 +1,11 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 
-#include <string_view>
-
-#include "donner/base/RcString.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
+#include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-#include "embed_resources/FilterBlendWgsl.h"
-#include "embed_resources/SlugGradientWgsl.h"
 
 namespace donner::geode {
-
-namespace {
-
-/// Build a `wgpu::ShaderModule` from a raw byte buffer of WGSL source.
-/// The embedded WGSL blobs in `//donner/svg/renderer/geode:*_wgsl` land
-/// here as `std::span<const unsigned char>` - wgpu-native's shader-
-/// module descriptor wants a pointer + length as a `WGPUStringView`
-/// (since the newer WebGPU headers use string views everywhere instead
-/// of NUL-terminated C strings).
-///
-/// `wgpu::ShaderSourceWGSL{wgpu::Default}` runs the generated
-/// `setDefault()` which fills in `chain.sType = SType::ShaderSourceWGSL`
-/// so the downstream `nextInChain = &source.chain` pointer walks the
-/// right struct type.
-wgpu::ShaderModule createShaderFromWgsl(const wgpu::Device& device, const char* label,
-                                        const unsigned char* source, size_t sourceSize) {
-  wgpu::ShaderSourceWGSL wgslSource{wgpu::Default};
-  wgslSource.code.data = reinterpret_cast<const char*>(source);
-  wgslSource.code.length = sourceSize;
-
-  wgpu::ShaderModuleDescriptor desc{wgpu::Default};
-  desc.label = wgpuLabel(label);
-  desc.nextInChain = &wgslSource.chain;
-
-  return device.createShaderModule(desc);
-}
-
-/// Build a `donner::gpu` WGSL shader module from an embedded source blob: the pipeline-family
-/// path through the Donner GPU runtime. The source bytes are identical
-/// to what the raw-wgpu helper above fed the driver, so migrated pipelines compile
-/// byte-identical WGSL.
-gpu::Result<gpu::ShaderModule> createGpuShaderFromWgsl(gpu::Device& device, const char* label,
-                                                       const unsigned char* source,
-                                                       size_t sourceSize) {
-  gpu::ShaderModuleDescriptor descriptor;
-  descriptor.label = label;
-  descriptor.sourceText =
-      RcString(std::string_view(reinterpret_cast<const char*>(source), sourceSize));
-  descriptor.sourceKind = gpu::ShaderSourceKind::Wgsl;
-  return device.createShaderModule(descriptor);
-}
-
-}  // namespace
 
 gpu::Result<gpu::ShaderModule> createSlugFillShader(gpu::Device& device) {
   return device.createShaderModule(gpu::shader::MakeShaderDescriptor(
@@ -61,8 +13,8 @@ gpu::Result<gpu::ShaderModule> createSlugFillShader(gpu::Device& device) {
 }
 
 gpu::Result<gpu::ShaderModule> createSlugGradientShader(gpu::Device& device) {
-  return createGpuShaderFromWgsl(device, "SlugGradient", donner::embedded::kSlugGradientWgsl.data(),
-                                 donner::embedded::kSlugGradientWgsl.size());
+  return device.createShaderModule(gpu::shader::MakeShaderDescriptor(
+      gpu::shader::programs::SlugGradientShader(), gpu::ShaderSourceKind::Wgsl, "SlugGradient"));
 }
 
 gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
@@ -73,11 +25,6 @@ gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
   return device.createShaderModule(gpu::shader::MakeShaderDescriptor(
       gpu::shader::programs::ImageBlitShader(), gpu::ShaderSourceKind::Wgsl, "ImageBlit"));
-}
-
-wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterBlend", donner::embedded::kFilterBlendWgsl.data(),
-                              donner::embedded::kFilterBlendWgsl.size());
 }
 
 }  // namespace donner::geode

@@ -589,6 +589,7 @@ donner_cc_test(
     deps = [
         ":convolve_matrix_test_artifact",
         ":external_tool_gate",
+        ":filter_blend_test_artifact",
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
@@ -598,6 +599,7 @@ donner_cc_test(
         ":programs",
         ":shader",
         ":slug_fill_test_artifact",
+        ":slug_gradient_test_artifact",
         ":slug_mask_test_artifact",
         ":specular_lighting_test_artifact",
         ":stage_io_test_modules",
@@ -623,6 +625,7 @@ donner_cc_test(
     data = ["@spirv_tools//:spirv-val"],
     deps = [
         ":convolve_matrix_test_artifact",
+        ":filter_blend_test_artifact",
         ":filter_resolve_test_artifact",
         ":float_storage_test_module",
         ":gaussian_blur_test_artifact",
@@ -631,6 +634,7 @@ donner_cc_test(
         ":programs",
         ":shader",
         ":slug_fill_test_artifact",
+        ":slug_gradient_test_artifact",
         ":slug_mask_test_artifact",
         ":specular_lighting_test_artifact",
         ":spirv_emitter",
@@ -1299,6 +1303,131 @@ donner_cc_library(
         ":slug_fill_api",
         ":slug_fill_source",
         ":slug_fill_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_gradient_api",
+    hdrs = ["programs/SlugGradient.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "slug_gradient_source",
+    hdrs = ["programs/SlugGradientSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "slug_gradient_validation",
+    hdrs = ["programs/SlugGradientArtifactValidation.h"],
+    deps = [":slug_gradient_api"],
+)
+
+donner_cc_library(
+    name = "slug_gradient_artifact",
+    srcs = ["programs/SlugGradient.cc"],
+    copts = ["-fconstexpr-steps=4194304"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":slug_gradient_api",
+        ":slug_gradient_source",
+        ":slug_gradient_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_gradient_native_artifact",
+    srcs = ["programs/SlugGradientNative.cc"],
+    copts = ["-fconstexpr-steps=4194304"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":slug_gradient_api",
+        ":slug_gradient_source",
+        ":slug_gradient_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "slug_gradient_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledSlugGradient.cc"],
+    hdrs = ["tests/CompiledSlugGradient.h"],
+    copts = ["-fconstexpr-steps=4194304"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":slug_gradient_api",
+        ":slug_gradient_source",
+        ":slug_gradient_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_blend_api",
+    hdrs = ["programs/FilterBlend.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":compiled_shader"],
+)
+
+donner_cc_library(
+    name = "filter_blend_source",
+    hdrs = ["programs/FilterBlendSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "filter_blend_validation",
+    hdrs = ["programs/FilterBlendArtifactValidation.h"],
+    deps = [":filter_blend_api"],
+)
+
+donner_cc_library(
+    name = "filter_blend_artifact",
+    srcs = ["programs/FilterBlend.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_blend_api",
+        ":filter_blend_source",
+        ":filter_blend_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_blend_native_artifact",
+    srcs = ["programs/FilterBlendNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":filter_blend_api",
+        ":filter_blend_source",
+        ":filter_blend_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "filter_blend_test_artifact",
+    testonly = 1,
+    srcs = ["tests/CompiledFilterBlend.cc"],
+    hdrs = ["tests/CompiledFilterBlend.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":filter_blend_api",
+        ":filter_blend_source",
+        ":filter_blend_validation",
     ],
 )
 

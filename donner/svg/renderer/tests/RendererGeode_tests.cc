@@ -2094,12 +2094,10 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   ASSERT_NE(gpuContext.dummyPatternTextureView, nullptr);
   ASSERT_NE(gpuContext.dummyPatternSampler, nullptr);
   ASSERT_NE(gpuContext.dummyClipMaskTextureView, nullptr);
-  ASSERT_NE(gpuContext.dummyClipMaskSampler, nullptr);
   ASSERT_NE(gpuContext.identityInstanceRecordBuffer, nullptr);
   ASSERT_TRUE(gpuContext.dummyPatternTextureView->isValid());
   ASSERT_TRUE(gpuContext.dummyPatternSampler->isValid());
   ASSERT_TRUE(gpuContext.dummyClipMaskTextureView->isValid());
-  ASSERT_TRUE(gpuContext.dummyClipMaskSampler->isValid());
   ASSERT_TRUE(gpuContext.identityInstanceRecordBuffer->isValid());
 
   RendererGeode renderer(embedded);

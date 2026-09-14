@@ -10,6 +10,8 @@ MACHO_MAGICS = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b
 ELF_MAGIC = b"\x7fELF"
 SPIRV_HEADER = b"\x03\x02\x23\x07\x00\x03\x01\x00\x00\x00\x00\x00"
 PAYLOAD_MARKERS = {
+    "slug_gradient": (b"struct GradientUniforms", b"donner_msl_member_radialFocalRadius"),
+    "filter_blend": (b"fn blend_soft_light_channel", b"donner_msl_member_mode"),
     "gaussian": (b"struct BlurParams", b"donner_msl_member_stdDeviation"),
     "convolve": (b"struct ConvolveMatrixParams", b"donner_msl_member_coefficients"),
     "filter_resolve": (b"const kTransferCount:", b"donner_msl_member_userX0"),
