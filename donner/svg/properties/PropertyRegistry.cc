@@ -1665,6 +1665,56 @@ ParseDiagnostic FontParseError(std::span<const css::ComponentValue> components,
   return error;
 }
 
+/// CSS-wide and reserved identifiers cannot name an unquoted font family.
+bool IsReservedFontFamilyIdentifier(const RcString& value) {
+  for (std::string_view keyword :
+       {"inherit", "initial", "unset", "revert", "revert-layer", "default"}) {
+    if (value.equalsLowercase(keyword)) return true;
+  }
+  return false;
+}
+
+/// Joins the identifier words in one unquoted family name.
+ParseResult<RcString> ParseUnquotedFontFamily(std::span<const css::ComponentValue>& components) {
+  std::string name;
+  while (!components.empty() && components.front().isToken<css::Token::Ident>()) {
+    const auto& ident = components.front().get<css::Token>().get<css::Token::Ident>().value;
+    if (IsReservedFontFamilyIdentifier(ident)) {
+      return FontParseError(components, "Invalid font-family identifier");
+    }
+    if (!name.empty()) name.push_back(' ');
+    name.append(ident);
+    components = components.subspan(1);
+    SkipWhitespace(components);
+  }
+  if (name.empty()) return FontParseError(components, "Missing font family");
+  return RcString(name);
+}
+
+/// Consumes one quoted, generic-function, or unquoted family name.
+ParseResult<RcString> ParseFontFamilyName(std::span<const css::ComponentValue>& components) {
+  RcString name;
+  if (const auto* quoted = components.front().tryGetToken<css::Token::String>()) {
+    name = quoted->value;
+  } else if (components.front().is<css::Function>()) {
+    const auto& function = components.front().get<css::Function>();
+    if (!function.name.equalsLowercase("generic")) {
+      return FontParseError(components, "Invalid font-family function");
+    }
+    auto inner = std::span(function.values);
+    SkipWhitespace(inner);
+    if (inner.size() != 1 || !inner.front().isToken<css::Token::Ident>()) {
+      return FontParseError(components, "Invalid generic-family");
+    }
+    name = inner.front().get<css::Token>().get<css::Token::Ident>().value;
+  } else {
+    return ParseUnquotedFontFamily(components);
+  }
+  components = components.subspan(1);
+  SkipWhitespace(components);
+  return name;
+}
+
 /// Parses the common comma-separated family grammar used by longhand and shorthand.
 ParseResult<SmallVector<RcString, 1>> ParseFontFamily(
     std::span<const css::ComponentValue> components) {
@@ -1672,40 +1722,9 @@ ParseResult<SmallVector<RcString, 1>> ParseFontFamily(
   while (true) {
     SkipWhitespace(components);
     if (components.empty()) return FontParseError(components, "Missing font family");
-    std::string name;
-    if (const auto* quoted = components.front().tryGetToken<css::Token::String>()) {
-      name = quoted->value;
-      components = components.subspan(1);
-      SkipWhitespace(components);
-    } else if (components.front().is<css::Function>()) {
-      const auto& function = components.front().get<css::Function>();
-      if (!function.name.equalsLowercase("generic")) {
-        return FontParseError(components, "Invalid font-family function");
-      }
-      auto inner = std::span(function.values);
-      SkipWhitespace(inner);
-      if (inner.size() != 1 || !inner.front().isToken<css::Token::Ident>()) {
-        return FontParseError(components, "Invalid generic-family");
-      }
-      name = inner.front().get<css::Token>().get<css::Token::Ident>().value;
-      components = components.subspan(1);
-      SkipWhitespace(components);
-    } else {
-      while (!components.empty() && components.front().isToken<css::Token::Ident>()) {
-        const auto& ident = components.front().get<css::Token>().get<css::Token::Ident>().value;
-        if (ident.equalsLowercase("inherit") || ident.equalsLowercase("initial") ||
-            ident.equalsLowercase("unset") || ident.equalsLowercase("revert") ||
-            ident.equalsLowercase("revert-layer") || ident.equalsLowercase("default")) {
-          return FontParseError(components, "Invalid font-family identifier");
-        }
-        if (!name.empty()) name.push_back(' ');
-        name.append(ident);
-        components = components.subspan(1);
-        SkipWhitespace(components);
-      }
-      if (name.empty()) return FontParseError(components, "Missing font family");
-    }
-    families.emplace_back(RcString(name));
+    auto name = ParseFontFamilyName(components);
+    if (name.hasError()) return name.error();
+    families.emplace_back(std::move(name.result()));
     if (components.empty()) return families;
     if (!TrySkipToken<css::Token::Comma>(components)) {
       return FontParseError(components, "Expected comma after font family");
@@ -1775,47 +1794,57 @@ ParseResult<FontShorthandValues> ParseFontShorthandSuffix(
   return result;
 }
 
-/// Tries at most five suffix positions, preferring a complete optional-prefix parse over an
-/// ambiguous bare-number size. Both CSS declarations and presentation attributes allow user units.
-ParseResult<FontShorthandValues> ParseFontShorthandValues(
-    std::span<const css::ComponentValue> components, bool allowUserUnits) {
-  FontShorthandValues prefix;
-  std::optional<FontShorthandValues> candidate;
+/// Accepts a prefix component only once, preserving the longhand parser's value.
+template <typename T>
+bool TryFontPrefixValue(const ParseResult<T>& parsed, bool& seen, T& destination) {
+  if (parsed.hasError() || seen) return false;
+  destination = parsed.result();
+  seen = true;
+  return true;
+}
+
+/// Relative stretch keywords remain longhand-only.
+bool IsAbsoluteFontStretch(const ParseResult<int>& stretch) {
+  return !stretch.hasError() && stretch.result() >= static_cast<int>(FontStretch::UltraCondensed) &&
+         stretch.result() <= static_cast<int>(FontStretch::UltraExpanded);
+}
+
+/// Tracks assigned optional components while candidate suffixes remain transactional.
+struct FontShorthandPrefix {
+  FontShorthandValues values;
   bool sawStyle = false;
   bool sawVariant = false;
   bool sawWeight = false;
   bool sawStretch = false;
+
+  bool consume(std::span<const css::ComponentValue> current) {
+    const auto* ident = current.front().tryGetToken<css::Token::Ident>();
+    if (ident && ident->value.equalsLowercase("normal")) return true;
+    const auto style = ParseFontStyle(current);
+    const auto variant = ParseFontVariant(current);
+    const auto weight = ParseFontWeight(current);
+    const auto stretch = ParseFontStretch(current);
+    return TryFontPrefixValue(style, sawStyle, values.style) ||
+           TryFontPrefixValue(variant, sawVariant, values.variant) ||
+           TryFontPrefixValue(weight, sawWeight, values.weight) ||
+           (IsAbsoluteFontStretch(stretch) &&
+            TryFontPrefixValue(stretch, sawStretch, values.stretch));
+  }
+};
+
+/// Tries at most five suffix positions, preferring a complete optional-prefix parse over an
+/// ambiguous bare-number size. Both CSS declarations and presentation attributes allow user units.
+ParseResult<FontShorthandValues> ParseFontShorthandValues(
+    std::span<const css::ComponentValue> components, bool allowUserUnits) {
+  FontShorthandPrefix prefix;
+  std::optional<FontShorthandValues> candidate;
   size_t optionalCount = 0;
   SkipWhitespace(components);
   while (!components.empty()) {
-    auto suffix = ParseFontShorthandSuffix(components, prefix, allowUserUnits);
+    auto suffix = ParseFontShorthandSuffix(components, prefix.values, allowUserUnits);
     if (!suffix.hasError()) candidate = std::move(suffix.result());
     if (optionalCount++ == 4) break;
-    const auto current = components.first(1);
-    const auto* ident = current.front().tryGetToken<css::Token::Ident>();
-    if (!(ident && ident->value.equalsLowercase("normal"))) {
-      const auto style = ParseFontStyle(current);
-      const auto variant = ParseFontVariant(current);
-      const auto weight = ParseFontWeight(current);
-      const auto stretch = ParseFontStretch(current);
-      if (!style.hasError() && !sawStyle) {
-        prefix.style = style.result();
-        sawStyle = true;
-      } else if (!variant.hasError() && !sawVariant) {
-        prefix.variant = variant.result();
-        sawVariant = true;
-      } else if (!weight.hasError() && !sawWeight) {
-        prefix.weight = weight.result();
-        sawWeight = true;
-      } else if (!stretch.hasError() && !sawStretch &&
-                 stretch.result() >= static_cast<int>(FontStretch::UltraCondensed) &&
-                 stretch.result() <= static_cast<int>(FontStretch::UltraExpanded)) {
-        prefix.stretch = stretch.result();
-        sawStretch = true;
-      } else {
-        break;
-      }
-    }
+    if (!prefix.consume(components.first(1))) break;
     components = components.subspan(1);
     SkipWhitespace(components);
   }

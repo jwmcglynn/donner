@@ -165,7 +165,7 @@ test("native kerning boundaries", async ({ page, browserName, browser }) => {
       {
         browser: browserName,
         version: browser.version(),
-        fonts: fonts.map(({ base64, ...font }) => font),
+        fonts: fonts.map(({ family, weight, file, sha256 }) => ({ family, weight, file, sha256 })),
         scenarios,
         ...measurements,
       },
