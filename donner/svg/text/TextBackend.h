@@ -17,6 +17,8 @@ struct FontVMetrics {
   /// x-height in design units, from OS/2 sxHeight or the lowercase x glyph's top bearing.
   /// Zero means neither metric is available.
   int xHeight = 0;
+  /// Number of design units in one em, or zero when unavailable.
+  int unitsPerEm = 0;
 };
 
 /// Line decoration positioning metrics in font design units.

@@ -69,6 +69,7 @@ public:
         .descent = -200,
         .lineGap = 0,
         .xHeight = xHeight,
+        .unitsPerEm = 1000,
     };
   }
 

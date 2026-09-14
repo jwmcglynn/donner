@@ -345,6 +345,16 @@ components::ResolvedPaintServer resolvePaintServer(Registry& registry, const Pai
   return PaintServer::None();
 }
 
+/// Resolve decoration metrics only when the text engine is available for this draw.
+std::optional<ResolvedTextFont> ResolveDecorationFont(Registry& registry, Entity source,
+                                                      const Box2d& viewBox,
+                                                      const FontMetrics& fontMetrics) {
+  const auto* engine = registry.ctx().find<TextEngine>();
+  return engine ? std::optional(
+                      engine->resolveUsedFont(EntityHandle(registry, source), viewBox, fontMetrics))
+                : std::nullopt;
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 ///
@@ -468,10 +478,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
           span.decorationStrokeOpacity = decoProps.strokeOpacity.get().value();
           span.decorationStrokeWidth =
               decoProps.strokeWidth.get().value().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
-          if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-            span.decorationFont = textEngine->resolveUsedFont(
-                EntityHandle(registry, decorationPaintEntity), viewBox, baseFm);
-          }
+          span.decorationFont =
+              ResolveDecorationFont(registry, decorationPaintEntity, viewBox, baseFm);
         }
       }
     }

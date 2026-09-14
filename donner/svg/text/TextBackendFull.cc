@@ -28,6 +28,12 @@ int16_t ReadInt16Be(std::span<const uint8_t> data, size_t offset) {
       static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]));
 }
 
+/// Read the exact design-unit denominator without a pixel-scale round trip.
+int ReadUnitsPerEm(const FontManager& manager, FontHandle font) {
+  const auto head = manager.sfntTable(font, "head");
+  return head && head->size() >= 20 ? static_cast<uint16_t>(ReadInt16Be(*head, 18)) : 0;
+}
+
 /// Lazily-initialized FreeType library (process-global, never destroyed).
 FT_Library getFtLibrary() {
   static FT_Library lib = [] {
@@ -317,6 +323,7 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
     metrics.ascent = ReadInt16Be(*hhea, 4);
     metrics.descent = ReadInt16Be(*hhea, 6);
     metrics.lineGap = ReadInt16Be(*hhea, 8);
+    metrics.unitsPerEm = ReadUnitsPerEm(fontManager_, font);
 
     // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
     const auto os2 = fontManager_.sfntTable(font, "OS/2");
@@ -345,6 +352,7 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
   metrics.ascent = ftFace->ascender;
   metrics.descent = ftFace->descender;
   metrics.lineGap = ftFace->height - (ftFace->ascender - ftFace->descender);
+  metrics.unitsPerEm = ftFace->units_per_EM;
   metrics.xHeight = MeasureXHeight(fontManager_, font, hbFont);
   return metrics;
 }

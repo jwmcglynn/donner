@@ -350,6 +350,7 @@ TEST_P(TextBackendTest, MissingXHeightUsesTheSelectedGlyphMetric) {
   const double actualXHeight = -outline.bounds().topLeft.y;
   ASSERT_GT(actualXHeight, 0.0);
   EXPECT_DOUBLE_EQ(backend().fontVMetrics(font).xHeight, actualXHeight);
+  EXPECT_EQ(backend().fontVMetrics(font).unitsPerEm, 1000);
 }
 
 TEST_P(TextBackendTest, CrossSpanKerningRequiresMatchingFaceAndSize) {
@@ -368,6 +369,7 @@ TEST_P(TextBackendTest, FontVMetricsReturnsZeroForInvalidFont) {
   EXPECT_EQ(metrics.ascent, 0);
   EXPECT_EQ(metrics.descent, 0);
   EXPECT_EQ(metrics.lineGap, 0);
+  EXPECT_EQ(metrics.unitsPerEm, 0);
 }
 
 TEST_P(TextBackendTest, ScaleForPixelHeightIsPositive) {

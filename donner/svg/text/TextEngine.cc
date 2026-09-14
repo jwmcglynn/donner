@@ -1526,12 +1526,10 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
                      const std::optional<double>& fontSizeAdjust) {
   sizePx = CheckedFontSizePx(sizePx);
   if (sizePx == 0.0f || !fontSizeAdjust) return sizePx;
-  if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust < 0.0) return 0.0f;
+  if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust <= 0.0) return 0.0f;
   const FontVMetrics metrics = backend.fontVMetrics(font);
-  const double xHeight = metrics.xHeight;
-  const float scale = backend.scaleForEmToPixels(font, sizePx);
-  const double aspect = xHeight * scale / sizePx;
-  if (!std::isfinite(aspect) || aspect <= 0.0) return sizePx;
+  if (metrics.xHeight <= 0 || metrics.unitsPerEm <= 0) return sizePx;
+  const double aspect = static_cast<double>(metrics.xHeight) / metrics.unitsPerEm;
   return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
 }
 

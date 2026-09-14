@@ -14,6 +14,12 @@ int16_t ReadInt16Be(std::span<const uint8_t> data, size_t offset) {
       static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]));
 }
 
+/// Read the exact design-unit denominator without a pixel-scale round trip.
+int ReadUnitsPerEm(const FontManager& manager, FontHandle font) {
+  const auto head = manager.sfntTable(font, "head");
+  return head && head->size() >= 20 ? static_cast<uint16_t>(ReadInt16Be(*head, 18)) : 0;
+}
+
 /// Decode one UTF-8 codepoint from \p str starting at \p i. Advances \p i past the codepoint.
 uint32_t decodeUtf8(std::string_view str, size_t& i) {
   const auto [cp, length] = Utf8::NextCodepoint(str.substr(i));
@@ -80,6 +86,7 @@ FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
   }
   FontVMetrics metrics;
   stbtt_GetFontVMetrics(info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
+  metrics.unitsPerEm = ReadUnitsPerEm(fontManager_, font);
 
   // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
   if (const auto os2 = fontManager_.sfntTable(font, "OS/2"); os2 && os2->size() >= 88) {

@@ -377,6 +377,7 @@ TEST_F(TextBackendSimpleTest, MetricsComeFromAuthoredTables) {
   EXPECT_EQ(metrics.descent, -200);
   EXPECT_EQ(metrics.lineGap, 100);
   EXPECT_EQ(metrics.xHeight, 480);
+  EXPECT_EQ(metrics.unitsPerEm, 1000);
 
   const auto underline = backend_.underlineMetrics(font);
   ASSERT_TRUE(underline.has_value());
