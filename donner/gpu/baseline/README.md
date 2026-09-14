@@ -85,6 +85,11 @@ test environment and a marker that is not named there can never be seen. The rul
 the thing that keeps the gate from going quiet is checked on every lane rather than only on the
 ones with a device.
 
+A mismatch against an existing baseline also emits a complete current adapter capture under
+`current_capture/` in the test outputs. Its source revision and tree state are `unknown` because
+the test cannot inspect Git. Bind those fields to the actual test candidate before a deliberate
+refresh; the extra capture does not turn the failed comparison into a pass.
+
 The PNG bytes are versioned in git, which is also their integrity record; the provenance file
 records what produced them, not a second hash of them.
 
