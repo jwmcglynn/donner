@@ -1521,7 +1521,7 @@ bool IsLockGatedCommand(const EditorCommand& command) {
   }
 }
 
-void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) {
+void EditorApp::setElementVisible(svg::SVGElement element, bool visible) {
   const auto entryIt =
       std::find_if(hiddenElementAuthorDisplay_.begin(), hiddenElementAuthorDisplay_.end(),
                    [&element](const auto& entry) { return entry.first == element; });
@@ -1617,7 +1617,7 @@ void EditorApp::addToSelection(const svg::SVGElement& element) {
   refreshFirstSelectionCache();
 }
 
-bool EditorApp::enterGroupEdit(const svg::SVGElement& group) {
+bool EditorApp::enterGroupEdit(svg::SVGElement group) {
   if (!document_.hasDocument() || group.tryType() != svg::ElementType::G || IsLocked(group)) {
     return false;
   }
