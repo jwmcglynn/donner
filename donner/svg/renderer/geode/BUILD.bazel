@@ -159,6 +159,7 @@ donner_cc_test(
         ":geode_stroke_tolerance",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
+        "@@abseil-cpp+//absl/numeric:int128",
     ],
 )
 
