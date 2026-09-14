@@ -222,6 +222,49 @@ protected:
   }
 };
 
+class PolygonClipCollaborationUiTest : public EditorCollaborationUiTest {
+protected:
+  std::string initialSource() override {
+    return R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="160">
+      <rect width="200" height="160" fill="white"/>
+      <rect id="face" x="10" y="10" width="150" height="120" fill="red"/>
+    </svg>)";
+  }
+};
+
+TEST_F(PolygonClipCollaborationUiTest, GenericPointsEditsRenderLivePolygonClips) {
+  const auto red = captureDocumentPixel(Vector2d(50, 50));
+  const auto white = captureDocumentPixel(Vector2d(180, 140));
+  ASSERT_THAT(red.empty(), Eq(false));
+  ASSERT_THAT(white.empty(), Eq(false));
+  auto args = revision();
+  args.update({{"parent", "svg"}, {"tag", "clipPath"}, {"attributes", {{"id", "clip"}}}});
+  call("insert_element", args);
+  args = revision();
+  args.update({{"parent", "#clip"},
+               {"tag", "polygon"},
+               {"attributes", {{"id", "clip-shape"}, {"points", "0,0 200,0 200,160 0,160"}}}});
+  call("insert_element", args);
+  args = revision();
+  args["edits"] = {{{"selector", "#face"}, {"attribute", "clip-path"}, {"value", "url(#clip)"}}};
+  call("apply_edits", args);
+  tests::CompareBitmapToBitmap(captureDocumentPixel(Vector2d(50, 50)), red,
+                               "native_polygon_clip_insert", tests::PixelmatchIdentityParams());
+  args = revision();
+  args["edits"] = {
+      {{"selector", "#clip-shape"}, {"attribute", "points"}, {"value", "0,0 20,0 0,20"}}};
+  call("apply_edits", args);
+  tests::CompareBitmapToBitmap(captureDocumentPixel(Vector2d(50, 50)), white,
+                               "native_polygon_clip_edit", tests::PixelmatchIdentityParams());
+  args = revision();
+  args["edits"][0]["selector"] = "#clip-shape";
+  args["edits"][0]["attribute"] = "points";
+  args["edits"][0]["value"] = "0,0 200,0 200,160 0,160";
+  call("apply_edits", args);
+  tests::CompareBitmapToBitmap(captureDocumentPixel(Vector2d(50, 50)), red,
+                               "native_polygon_clip_restore", tests::PixelmatchIdentityParams());
+}
+
 class GeodeSplashCollaborationUiTest : public EditorCollaborationUiTest {
 protected:
   gui::EditorWindowOptions windowOptions() override {

@@ -45,6 +45,41 @@ TEST(SVGPolygonPolylineElementTests, PolylineDefaultsAndSetPoints) {
   EXPECT_THAT(polyline.tryCast<SVGGeometryElement>(), Ne(std::nullopt));
 }
 
+TEST(SVGPolygonPolylineElementTests, GenericPointsAttributePopulatesDetachedPolygon) {
+  SVGDocument document;
+  auto polygon = SVGPolygonElement::Create(document);
+  polygon.setAttribute("points", "10,10 40,10 10,40");
+  EXPECT_THAT(polygon.points(), ElementsAre(Vector2d(10, 10), Vector2d(40, 10), Vector2d(10, 40)));
+}
+
+TEST(SVGPolygonPolylineElementTests, GenericPointsAttributePopulatesDetachedPolyline) {
+  SVGDocument document;
+  auto polyline = SVGPolylineElement::Create(document);
+  polyline.setAttribute("points", "10,10 40,10 10,40");
+  EXPECT_THAT(polyline.points(), ElementsAre(Vector2d(10, 10), Vector2d(40, 10), Vector2d(10, 40)));
+}
+
+TEST(SVGPolygonPolylineElementTests, GenericPointsMutationUpdatesAndRemovesParsedGeometry) {
+  auto parsed =
+      instantiateSubtreeElementAs<SVGPolygonElement>(R"(<polygon points="0,0 20,0 0,20"/>)");
+  auto& polygon = parsed.element;
+  (void)polygon.computedSpline();
+  polygon.setAttribute("points", "10,10 40,10 10,40");
+  EXPECT_THAT(polygon.points(), ElementsAre(Vector2d(10, 10), Vector2d(40, 10), Vector2d(10, 40)));
+  polygon.removeAttribute("points");
+  EXPECT_THAT(polygon.points(), testing::IsEmpty());
+}
+
+TEST(SVGPolygonPolylineElementTests, GenericPointsMutationReportsErrorsAndKeepsValidPrefix) {
+  SVGDocument document;
+  auto polyline = SVGPolylineElement::Create(document);
+  auto result = document.setElementAttribute(polyline, "points", "10,10 40,10 20,");
+  EXPECT_THAT(result.diagnostic, Ne(std::nullopt));
+  EXPECT_THAT(polyline.points(), ElementsAre(Vector2d(10, 10), Vector2d(40, 10)));
+  polyline.removeAttribute("points");
+  EXPECT_THAT(polyline.points(), testing::IsEmpty());
+}
+
 TEST(SVGPolygonPolylineElementTests, PolygonComputedSplineClosesPath) {
   EXPECT_THAT(
       instantiateSubtreeElementAs<SVGPolygonElement>(R"(<polygon points="10,10 20,20 30,10"/>)"),
