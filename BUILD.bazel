@@ -84,7 +84,6 @@ exports_files(
         ".github/workflows/sanitizers.yml",
         ".bazelversion",
         ".bazelrc",
-        "zoom-out-drag-jump.rnr",
     ],
     visibility = ["//visibility:public"],
 )

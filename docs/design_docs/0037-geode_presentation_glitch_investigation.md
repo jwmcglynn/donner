@@ -59,7 +59,7 @@ reproducing the overlay misalignment. This is currently associated with:
 
 ```sh
 bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
-  --rnr zoom-out-drag-jump.rnr \
+  --rnr donner/editor/tests/zoom-out-drag-jump.rnr \
   --out-dir /tmp/donner-geode-overlay-repro \
   --capture-frame 142 \
   --max-frame 190 \
@@ -76,7 +76,7 @@ The same tracked fixture was the initial texture-splat repro:
 
 ```sh
 bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
-  --rnr zoom-out-drag-jump.rnr \
+  --rnr donner/editor/tests/zoom-out-drag-jump.rnr \
   --out-dir /tmp/donner-geode-texture-splat-repro \
   --capture-frame 142 \
   --capture-frame 150 \
