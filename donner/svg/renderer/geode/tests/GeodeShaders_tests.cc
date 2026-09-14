@@ -252,8 +252,7 @@ fn endpoint_coverage() {
     if (shader == EndpointShader::Fill) {
       wgsl += "  var paint: PaintParams;\n";
     }
-    wgsl += "  let ray = " + function + "(" + paint + "0u, endpointSamples[0], 2.0" +
-            std::string(shader == EndpointShader::TypedFill ? "" : ", true") + ");\n";
+    wgsl += "  let ray = " + function + "(" + paint + "0u, endpointSamples[0], 2.0, true);\n";
     if (!probeBody.empty()) {
       return wgsl + std::string(probeBody) + "\n}\n";
     }
@@ -620,6 +619,10 @@ TEST_F(SlugEndpointTest, TypedFillNonzeroRayEvents) {
 
 TEST_F(SlugEndpointTest, TypedFillBoundedRayEvents) {
   expectBoundedRayEvents(EndpointShader::TypedFill);
+}
+
+TEST_F(SlugEndpointTest, TypedFillRaySelection) {
+  expectRaySelection(EndpointShader::TypedFill);
 }
 
 TEST_F(SlugEndpointTest, FillNonzeroRayEvents) {
