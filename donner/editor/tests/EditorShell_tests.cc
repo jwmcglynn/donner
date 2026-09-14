@@ -954,6 +954,10 @@ public:
     return shell.sampleThumbnailGenerationCursor_;
   }
 
+  static std::size_t VisibleSamplePreviewCount(const EditorShell& shell) {
+    return shell.visibleSamplePreviewIndices_.size();
+  }
+
   static std::size_t SampleThumbnailSlotCount(const EditorShell& shell) {
     return shell.sampleThumbnailBitmaps_.size();
   }
@@ -4757,7 +4761,13 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
 }
 
 TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames) {
-  gui::EditorWindow window = MakeHiddenWindow();
+  // Every card must be visible before this test requires every thumbnail.
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Donner complete sample picker test",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+  });
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
@@ -4781,6 +4791,7 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
   shell.runFrame();
   window.endFrame();
 
+  ASSERT_EQ(EditorShellTestAccess::VisibleSamplePreviewCount(shell), sampleCount);
   EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailCursor(shell), 0u);
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);

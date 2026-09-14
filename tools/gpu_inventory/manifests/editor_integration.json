@@ -274,6 +274,9 @@
       ]
     },
     "donner/editor/tests/EditorShell_tests.cc": {
+      "operations": [
+        "draw"
+      ],
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
