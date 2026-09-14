@@ -3266,9 +3266,13 @@ TEST(Path, StrokeToFillIndexesLargePolylineBeforeExtractingManyDashes) {
 }
 
 TEST(Path, StrokeToFillHugeRoundStrokeHasBoundedSubdivision) {
+  // Wide enough that the round subdivision cap binds, and narrow enough that
+  // the piece corner products still fit a double. Strokes whose products
+  // overflow fail closed instead; see
+  // StrokeToFillFailsClosedWhenPieceOrientationOverflows.
   const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
   StrokeStyle style;
-  style.width = 1e300;
+  style.width = 1e150;
   style.cap = LineCap::Round;
   style.join = LineJoin::Round;
 
@@ -3279,9 +3283,12 @@ TEST(Path, StrokeToFillHugeRoundStrokeHasBoundedSubdivision) {
 }
 
 TEST(Path, StrokeToFillAggregateRoundDashGeometryIsBounded) {
+  // Each zero-length round dash is a full 4096-point circle at this width,
+  // and its corner products still fit a double, so the dashes are emitted
+  // until the aggregate point budget stops the pattern.
   const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
   StrokeStyle style;
-  style.width = 1e300;
+  style.width = 1e150;
   style.cap = LineCap::Round;
   style.join = LineJoin::Round;
   style.dashArray = {0.0, 0.0001};
@@ -3299,6 +3306,24 @@ TEST(Path, StrokeToFillCurveFlatteningSharesAggregateGeometryBudget) {
 
   const StrokeStyle style{.width = 10.0, .cap = LineCap::Round, .join = LineJoin::Round};
   EXPECT_TRUE(builder.build().strokeToFill(style, 0.0).empty());
+}
+
+TEST(Path, StrokeToFillFailsClosedWhenPieceOrientationOverflows) {
+  // At this width every piece's corner products overflow, so no piece has a
+  // finite orientation and nothing downstream could render the outline. The
+  // stroke must fail closed instead of emitting pieces it cannot wind.
+  const Path path = PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0, 0.0}).build();
+  const StrokeStyle solid{.width = 1.0e300, .cap = LineCap::Round, .join = LineJoin::Round};
+  EXPECT_TRUE(path.strokeToFill(solid, 0.25).empty());
+
+  // Zero-length round dashes are circles with the same overflow. The rejection
+  // ends the pattern on its first dash rather than walking the whole dash and
+  // point budgets, even when other dashes in the pattern have visible length.
+  const StrokeStyle mixed{.width = 1.0e300,
+                          .cap = LineCap::Round,
+                          .join = LineJoin::Round,
+                          .dashArray = {0.0, 0.25, 0.25, 0.25}};
+  EXPECT_TRUE(path.strokeToFill(mixed, 0.25).empty());
 }
 
 TEST(Path, StrokeSeamSubdivisionPreservesPositiveWinding) {

@@ -442,7 +442,9 @@ public:
    * The result is a union of overlapping, positive-winding pieces and must
    * be consumed with \ref FillRule::NonZero.
    *
-   * @return A new Path representing the filled outline of the stroke.
+   * @return A new Path representing the filled outline of the stroke, or an empty Path when the
+   *   outline cannot be represented: the aggregate point budget is exhausted, or a piece's
+   *   coordinates or corner products do not fit a double.
    */
   Path strokeToFill(const StrokeStyle& style, double flattenTolerance) const;
 
@@ -638,6 +640,12 @@ public:
 
   /// Returns true if a command was rejected because the configured point limit was reached.
   bool exceededMaximumPoints() const { return exceededMaximumPoints_; }
+
+  /// Refuse every further command, reported through \ref exceededMaximumPoints. A caller uses
+  /// this when it cannot represent its geometry, so the caller can fail closed instead of
+  /// building a partial path. \ref build clears the flag, so the caller decides what an
+  /// exceeded builder becomes.
+  void rejectRemainingCommands() { exceededMaximumPoints_ = true; }
 
   /// @}
 

@@ -1848,11 +1848,19 @@ void EmitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder,
   if (builder.exceededMaximumPoints() || points.size() < 3) {
     return;
   }
+  // A piece whose corners are not finite, or whose corner products overflow so
+  // its orientation is not finite, cannot be wound or rendered. Dropping it
+  // would leave a partial stroke, so the whole outline fails closed instead.
   if (!StrokePieceCoordinatesFinite(points, seams)) {
+    builder.rejectRemainingCommands();
     return;
   }
   const double orientation = StrokePieceOrientation(points);
-  if (orientation == 0.0 || std::isnan(orientation)) {
+  if (!std::isfinite(orientation)) {
+    builder.rejectRemainingCommands();
+    return;
+  }
+  if (orientation == 0.0) {
     return;
   }
   const bool reversed = orientation < 0.0;
