@@ -169,25 +169,38 @@ jobs:
           mkdir -p "${site_dir}" "${deploy_dir}"
           cp -R "${pkg_dir}/." "${site_dir}/"
 
+          python3 donner/editor/wasm/catalog_package_integrity_test.py --package "${site_dir}"
           expected_site_files=$(
-            printf '%s\n' \
-              donner_icon.svg \
-              editor-bootstrap.js \
-              editor.css \
-              editor.js \
-              editor.wasm \
-              enable-threads.js \
-              index.html \
-              | LC_ALL=C sort
+            {
+              printf '%s\n' \
+                CatalogFontNotices.txt \
+                catalog-fonts.js \
+                catalog-fonts.json \
+                donner_icon.svg \
+                editor-bootstrap.js \
+                editor.css \
+                editor.js \
+                editor.wasm \
+                enable-threads.js \
+                index.html
+              python3 -c 'import json, sys; print("\n".join(font["path"] for font in json.load(open(sys.argv[1]))["fonts"]))' \
+                "${site_dir}/catalog-fonts.json"
+            } | LC_ALL=C sort
           )
           actual_site_files=$(cd "${site_dir}" && find . -type f | sed 's|^./||' | LC_ALL=C sort)
-          test "${actual_site_files}" = "${expected_site_files}"
+          if [[ "${actual_site_files}" != "${expected_site_files}" ]]; then
+            printf 'Package file set mismatch. Expected:\n%s\nActual:\n%s\n' \
+              "${expected_site_files}" "${actual_site_files}" >&2
+            exit 1
+          fi
 
           for file in \
+            CatalogFontNotices.txt catalog-fonts.js catalog-fonts.json \
             donner_icon.svg editor-bootstrap.js editor.css editor.js \
             enable-threads.js index.html; do
             cp "${site_dir}/${file}" "${deploy_dir}/${file}"
           done
+          cp -R "${site_dir}/fonts" "${deploy_dir}/fonts"
           gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"
           test "$(wc -c < "${deploy_dir}/editor.wasm.gz")" -le 20971520
 
