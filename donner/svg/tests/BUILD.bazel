@@ -101,6 +101,7 @@ donner_cc_test(
         "//donner/css:core",
         "//donner/svg",
         "//donner/svg/core/tests:core_test_utils",
+        "//donner/svg/renderer",
         "//donner/svg/renderer/tests:renderer_test_utils",
         "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",

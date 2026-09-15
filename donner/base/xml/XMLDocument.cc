@@ -76,6 +76,32 @@ struct SourceEditClassification {
 
 using AttributeMap = std::map<XMLQualifiedName, RcString>;
 
+std::optional<XMLNode> XmlSiblingAtOrAfter(Registry& registry, Entity entity) {
+  while (entity != entt::null) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    if (tree == nullptr) {
+      return std::nullopt;
+    }
+    if (std::optional<XMLNode> node = XMLNode::TryCast(EntityHandle(registry, entity))) {
+      return node;
+    }
+    entity = tree->nextSibling();
+  }
+  return std::nullopt;
+}
+
+std::optional<XMLNode> FirstXmlChild(const XMLNode& node) {
+  Registry& registry = *node.entityHandle().registry();
+  const Entity first = node.entityHandle().get<donner::components::TreeComponent>().firstChild();
+  return XmlSiblingAtOrAfter(registry, first);
+}
+
+std::optional<XMLNode> NextXmlSibling(const XMLNode& node) {
+  Registry& registry = *node.entityHandle().registry();
+  const Entity next = node.entityHandle().get<donner::components::TreeComponent>().nextSibling();
+  return XmlSiblingAtOrAfter(registry, next);
+}
+
 bool IsXmlWhitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 }
@@ -255,8 +281,8 @@ void BuildSourceIntervalIndex(const XMLNode& node, std::size_t depth, SourceInte
     });
   }
 
-  for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();
+       child = NextXmlSibling(*child)) {
     BuildSourceIntervalIndex(*child, depth + 1, index);
   }
 }
@@ -391,8 +417,8 @@ std::optional<TextNodeEdit> GetTextNodeEdit(const XMLDocument& document, SourceE
     return std::nullopt;
   }
 
-  for (std::optional<XMLNode> child = node->firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(*node); child.has_value();
+       child = NextXmlSibling(*child)) {
     if (child->type() == XMLNode::Type::Data || IsRawTextLikeNode(child->type())) {
       std::optional<SourceEditRange> childValueRange =
           ResolveNodeValueRange(*child, document.source());
@@ -570,9 +596,9 @@ SourceRange MakeNodeDiagnosticRange(const XMLNode& node) {
 }
 
 void ClearSourceLocationsRecursive(XMLNode node) {
-  for (std::optional<XMLNode> child = node.firstChild(); child.has_value();) {
+  for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();) {
     XMLNode currentChild = *child;
-    child = currentChild.nextSibling();
+    child = NextXmlSibling(currentChild);
     ClearSourceLocationsRecursive(currentChild);
   }
 
@@ -1203,8 +1229,8 @@ std::optional<std::uint64_t> CountSubtreeNodes(const XMLNode& root) {
     if (!CheckedAccumulate(count, 1)) {
       return std::nullopt;
     }
-    for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
-         child = child->nextSibling()) {
+    for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();
+         child = NextXmlSibling(*child)) {
       stack.push_back(*child);
     }
   }
@@ -1214,15 +1240,15 @@ std::optional<std::uint64_t> CountSubtreeNodes(const XMLNode& root) {
 std::optional<std::uint64_t> CountNewNodesRequired(const XMLNode& target,
                                                    const XMLNode& parsedTarget) {
   std::vector<XMLNode> oldChildren;
-  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
+       child = NextXmlSibling(*child)) {
     oldChildren.push_back(*child);
   }
   std::vector<bool> usedChildren(oldChildren.size(), false);
 
   std::uint64_t required = 0;
-  for (std::optional<XMLNode> parsedChild = parsedTarget.firstChild(); parsedChild.has_value();
-       parsedChild = parsedChild->nextSibling()) {
+  for (std::optional<XMLNode> parsedChild = FirstXmlChild(parsedTarget); parsedChild.has_value();
+       parsedChild = NextXmlSibling(*parsedChild)) {
     if (std::optional<std::size_t> oldIndex =
             FindReusableChild(*parsedChild, oldChildren, usedChildren)) {
       usedChildren[*oldIndex] = true;
@@ -1296,8 +1322,8 @@ std::size_t MaximumElementDepth(const XMLNode& root, std::size_t rootDepth,
       ++depth;
       maximumDepth = std::max(maximumDepth, depth);
     }
-    for (std::optional<XMLNode> child = pending.node.firstChild(); child.has_value();
-         child = child->nextSibling()) {
+    for (std::optional<XMLNode> child = FirstXmlChild(pending.node); child.has_value();
+         child = NextXmlSibling(*child)) {
       stack.push_back(PendingNode{*child, depth});
     }
   }
@@ -1318,8 +1344,8 @@ std::optional<std::uint64_t> CountSubtreeAttributes(const XMLNode& root) {
     if (!CheckedAccumulate(count, AttributeCount(node))) {
       return std::nullopt;
     }
-    for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
-         child = child->nextSibling()) {
+    for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();
+         child = NextXmlSibling(*child)) {
       stack.push_back(*child);
     }
   }
@@ -1356,14 +1382,14 @@ bool ApplySyncedSubtreeAttributeCount(std::uint64_t& total, const XMLNode& targe
 bool ApplyReplacedChildrenAttributeCount(std::uint64_t& total, const XMLNode& target,
                                          const XMLNode& parsedTarget) {
   std::vector<XMLNode> oldChildren;
-  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
+       child = NextXmlSibling(*child)) {
     oldChildren.push_back(*child);
   }
   std::vector<bool> usedChildren(oldChildren.size(), false);
 
-  for (std::optional<XMLNode> parsedChild = parsedTarget.firstChild(); parsedChild.has_value();
-       parsedChild = parsedChild->nextSibling()) {
+  for (std::optional<XMLNode> parsedChild = FirstXmlChild(parsedTarget); parsedChild.has_value();
+       parsedChild = NextXmlSibling(*parsedChild)) {
     if (std::optional<std::size_t> oldIndex =
             FindReusableChild(*parsedChild, oldChildren, usedChildren)) {
       usedChildren[*oldIndex] = true;
@@ -1443,10 +1469,12 @@ std::optional<ParseDiagnostic> ValidateIncrementalTreeLimits(XMLDocument& docume
   return std::nullopt;
 }
 
-XMLParser::Options IncrementalPreflightOptions(XMLDocument& document,
-                                               std::size_t maximumInputSize) {
+XMLParser::Options IncrementalReparseOptions(XMLDocument& document, std::size_t maximumInputSize) {
   const auto& context = document.registry().ctx().get<XMLDocumentContext>();
   XMLParser::Options options;
+  // Source-backed edits retain authored nodes even when the initial parse filtered them.
+  options.parseComments = true;
+  options.parseProcessingInstructions = true;
   options.maximumInputSize = maximumInputSize;
   options.maxElements = context.maximumSourceEditTreeNodes;
   options.maxNestingDepth = context.maximumSourceEditTreeDepth;
@@ -1496,6 +1524,71 @@ bool HasCompatibleNodeIdentity(const XMLNode& target, const XMLNode& parsedNode)
   UTILS_UNREACHABLE();
 }
 
+bool HasCompatibleSubtreeShape(const XMLNode& target, const XMLNode& parsedNode) {
+  std::vector<std::pair<XMLNode, XMLNode>> pending{{target, parsedNode}};
+  while (!pending.empty()) {
+    const auto [current, parsed] = pending.back();
+    pending.pop_back();
+    if (!HasCompatibleNodeIdentity(current, parsed)) {
+      return false;
+    }
+    std::optional<XMLNode> currentChild = FirstXmlChild(current);
+    std::optional<XMLNode> parsedChild = FirstXmlChild(parsed);
+    while (currentChild && parsedChild) {
+      pending.emplace_back(*currentChild, *parsedChild);
+      currentChild = NextXmlSibling(*currentChild);
+      parsedChild = NextXmlSibling(*parsedChild);
+    }
+    if (currentChild || parsedChild) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<ParseDiagnostic> ValidateStructuralTreeLimits(
+    XMLDocument& document, const XMLNode& parent, const XMLNode& node, const XMLNode& parsedNode,
+    bool syncByPosition, SourceRange diagnosticRange) {
+  const auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  // Detached DOM nodes remain live; only reconciliation clones add to the registry count.
+  const std::uint64_t liveNodes = CountLiveXmlNodes(document);
+  const std::optional<std::uint64_t> addedNodes =
+      syncByPosition ? std::optional<std::uint64_t>(0) : CountNewNodesRequired(node, parsedNode);
+  if (!addedNodes || liveNodes > context.maximumSourceEditTreeNodes ||
+      *addedNodes > context.maximumSourceEditTreeNodes - liveNodes) {
+    return MakeEditDiagnostic("Structural edit exceeds the document tree-node limit",
+                              diagnosticRange);
+  }
+
+  const std::size_t parentDepth = ElementDepth(parent);
+  const std::size_t subtreeDepth = MaximumElementDepth(parsedNode, 1);
+  const std::size_t outsideDepth =
+      MaximumElementDepth(document.root(), 0, node.entityHandle().entity());
+  if (context.maximumSourceEditTreeDepth < 0 ||
+      subtreeDepth > std::numeric_limits<std::size_t>::max() - parentDepth ||
+      std::max(outsideDepth, parentDepth + subtreeDepth) >
+          static_cast<std::size_t>(context.maximumSourceEditTreeDepth)) {
+    return MakeEditDiagnostic("Structural edit exceeds the document tree-depth limit",
+                              diagnosticRange);
+  }
+
+  std::optional<std::uint64_t> attributes = CountLiveXmlAttributes(document);
+  bool attributesValid = attributes.has_value();
+  if (attributesValid && syncByPosition) {
+    const std::optional<std::uint64_t> oldAttributes = CountSubtreeAttributes(node);
+    const std::optional<std::uint64_t> newAttributes = CountSubtreeAttributes(parsedNode);
+    attributesValid = oldAttributes && newAttributes &&
+                      ReplaceAttributeCount(*attributes, *oldAttributes, *newAttributes);
+  } else if (attributesValid) {
+    attributesValid = ApplySyncedSubtreeAttributeCount(*attributes, node, parsedNode);
+  }
+  if (!attributesValid || *attributes > context.maximumSourceEditTotalAttributes) {
+    return MakeEditDiagnostic("Structural edit exceeds the document total-attribute limit",
+                              diagnosticRange);
+  }
+  return std::nullopt;
+}
+
 bool SyncSourceLocationsFromParsedByPosition(XMLNode& target, const XMLNode& parsedNode,
                                              std::size_t sourceOffsetBase) {
   if (!HasCompatibleNodeIdentity(target, parsedNode)) {
@@ -1503,14 +1596,14 @@ bool SyncSourceLocationsFromParsedByPosition(XMLNode& target, const XMLNode& par
   }
 
   std::vector<XMLNode> targetChildren;
-  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
+       child = NextXmlSibling(*child)) {
     targetChildren.push_back(*child);
   }
 
   std::vector<XMLNode> parsedChildren;
-  for (std::optional<XMLNode> child = parsedNode.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(parsedNode); child.has_value();
+       child = NextXmlSibling(*child)) {
     parsedChildren.push_back(*child);
   }
 
@@ -1569,8 +1662,8 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
                                    std::vector<XMLMutation>* mutations,
                                    ReparseScope mutationScope) {
   std::vector<XMLNode> oldChildren;
-  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
+       child = NextXmlSibling(*child)) {
     oldChildren.push_back(*child);
   }
 
@@ -1579,8 +1672,8 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
   }
 
   std::vector<bool> usedChildren(oldChildren.size(), false);
-  for (std::optional<XMLNode> child = parsedTarget.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<XMLNode> child = FirstXmlChild(parsedTarget); child.has_value();
+       child = NextXmlSibling(*child)) {
     std::optional<XMLNode> nodeToAppend;
     bool reusedExistingChild = false;
     if (std::optional<std::size_t> oldIndex =
@@ -1715,15 +1808,6 @@ std::optional<ParseDiagnostic> IncrementalLimitParseDiagnostic(const ParseDiagno
   return std::nullopt;
 }
 
-std::optional<ParseDiagnostic> OpeningTagLimitParseDiagnostic(const ParseDiagnostic& diagnostic,
-                                                              SourceRange range) {
-  if (std::string_view(diagnostic.reason) == "Maximum total attribute count exceeded") {
-    return MakeEditDiagnostic("Incremental source edit exceeds the document total-attribute limit",
-                              range);
-  }
-  return std::nullopt;
-}
-
 std::optional<XMLNode> SingleMatchingElement(XMLDocument& parsedDocument,
                                              const XMLQualifiedNameRef& expectedName) {
   std::optional<XMLNode> parsedNode = parsedDocument.root().firstChild();
@@ -1732,6 +1816,34 @@ std::optional<XMLNode> SingleMatchingElement(XMLDocument& parsedDocument,
     return std::nullopt;
   }
   return parsedNode;
+}
+
+struct StructuralReparse {
+  XMLDocument document;
+  XMLNode node;  //!< Handle owned by document.
+  bool syncByPosition;
+};
+
+ParseResult<StructuralReparse> ParseStructuralSubtree(XMLDocument& document, const XMLNode& parent,
+                                                      const XMLNode& node, std::string_view source,
+                                                      SourceEditRange sourceRange,
+                                                      SourceRange diagnosticRange,
+                                                      RcString missingElementReason) {
+  ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
+      source, IncrementalReparseOptions(document, source.size()));
+  if (parsed.hasError()) {
+    return RebaseDiagnosticToDirtyRange(std::move(parsed).error(), sourceRange);
+  }
+  std::optional<XMLNode> parsedNode = SingleMatchingElement(parsed.result(), node.tagName());
+  if (!parsedNode) {
+    return MakeEditDiagnostic(std::move(missingElementReason), diagnosticRange);
+  }
+  const bool syncByPosition = HasCompatibleSubtreeShape(node, *parsedNode);
+  if (auto diagnostic = ValidateStructuralTreeLimits(document, parent, node, *parsedNode,
+                                                     syncByPosition, diagnosticRange)) {
+    return *diagnostic;
+  }
+  return StructuralReparse{std::move(parsed.result()), *parsedNode, syncByPosition};
 }
 
 std::optional<ParseDiagnostic> PreflightOpeningTagEdit(XMLDocument& document, XMLSourceStore& store,
@@ -1746,9 +1858,9 @@ std::optional<ParseDiagnostic> PreflightOpeningTagEdit(XMLDocument& document, XM
   }
 
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseOpeningTag(
-      *prospective, IncrementalPreflightOptions(document, prospective->size()));
+      *prospective, IncrementalReparseOptions(document, prospective->size()));
   if (parsed.hasError()) {
-    return OpeningTagLimitParseDiagnostic(parsed.error(), intent.range);
+    return IncrementalLimitParseDiagnostic(parsed.error(), intent.range);
   }
 
   std::optional<XMLNode> parsedNode = SingleMatchingElement(parsed.result(), edit.node.tagName());
@@ -1788,7 +1900,7 @@ std::optional<ParseDiagnostic> PreflightElementSubtreeEdit(XMLDocument& document
   }
 
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
-      *prospective, IncrementalPreflightOptions(document, prospective->size()));
+      *prospective, IncrementalReparseOptions(document, prospective->size()));
   if (parsed.hasError()) {
     return IncrementalLimitParseDiagnostic(parsed.error(), intent.range);
   }
@@ -1854,8 +1966,9 @@ ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XML
         edit.node);
   }
 
-  ParseResult<XMLDocument> parsed =
-      XMLIncrementalParser::ParseOpeningTag(document.source().substr(tagStart, *tagEnd - tagStart));
+  const std::string_view fragment = document.source().substr(tagStart, *tagEnd - tagStart);
+  ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseOpeningTag(
+      fragment, IncrementalReparseOptions(document, fragment.size()));
   if (parsed.hasError()) {
     return FinishSourceEditWithDiagnostic(
         document, std::move(result),
@@ -2014,8 +2127,9 @@ ApplySourceEditResult ApplyElementSubtreeSourceEdit(XMLDocument& document,
 
   const std::size_t nodeStart = *nodeLocation->start.offset;
   const std::size_t nodeEnd = *nodeLocation->end.offset;
-  ParseResult<XMLDocument> parsed =
-      XMLIncrementalParser::ParseElement(document.source().substr(nodeStart, nodeEnd - nodeStart));
+  const std::string_view fragment = document.source().substr(nodeStart, nodeEnd - nodeStart);
+  ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
+      fragment, IncrementalReparseOptions(document, fragment.size()));
   if (parsed.hasError()) {
     return FinishSourceEditWithDiagnostic(
         document, std::move(result),
@@ -2603,19 +2717,15 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       return result;
     }
 
-    ParseResult<XMLDocument> parsedMoved = XMLIncrementalParser::ParseElement(serialized);
+    ParseResult<StructuralReparse> parsedMoved = ParseStructuralSubtree(
+        *this, parent, node, serialized, *removalRange, MakeNodeDiagnosticRange(node),
+        "Moved source did not produce an element");
     if (parsedMoved.hasError()) {
-      result.diagnostic =
-          RebaseDiagnosticToDirtyRange(std::move(parsedMoved).error(), *removalRange);
+      result.diagnostic = std::move(parsedMoved).error();
       return result;
     }
-
-    std::optional<XMLNode> parsedNode = parsedMoved.result().root().firstChild();
-    if (!parsedNode.has_value()) {
-      result.diagnostic = MakeEditDiagnostic("Moved source did not produce an element",
-                                             MakeNodeDiagnosticRange(node));
-      return result;
-    }
+    const XMLNode& parsedNode = parsedMoved.result().node;
+    const bool syncByPosition = parsedMoved.result().syncByPosition;
 
     NodeInsertionPlan appliedInsertionPlan = *insertionPlan;
     const std::string replacement =
@@ -2672,9 +2782,11 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
     result.applied = true;
     ClearSourceLocationsRecursive(node);
     ApplyParentInsertionPlan(parent, appliedInsertionPlan);
-    if (!SyncSourceLocationsFromParsedByPosition(node, *parsedNode,
-                                                 appliedInsertionPlan.insertedNodeOffset)) {
-      SyncNodeFromParsed(*this, node, *parsedNode, appliedInsertionPlan.insertedNodeOffset);
+    if (syncByPosition) {
+      SyncSourceLocationsFromParsedByPosition(node, parsedNode,
+                                              appliedInsertionPlan.insertedNodeOffset);
+    } else {
+      SyncNodeFromParsed(*this, node, parsedNode, appliedInsertionPlan.insertedNodeOffset);
     }
     parent.insertBefore(node, referenceNode);
     result.mutations.push_back(XMLMutation{
@@ -2703,22 +2815,17 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
     return result;
   }
 
-  ParseResult<XMLDocument> parsedInserted = XMLIncrementalParser::ParseElement(serialized);
+  ParseResult<StructuralReparse> parsedInserted =
+      ParseStructuralSubtree(*this, parent, node, serialized,
+                             SourceEditRange{.start = insertionPlan->insertedNodeOffset,
+                                             .end = insertionPlan->insertedNodeOffset},
+                             diagnosticRange, "Serialized node did not produce an element");
   if (parsedInserted.hasError()) {
-    result.diagnostic = RebaseDiagnosticToDirtyRange(std::move(parsedInserted).error(),
-                                                     SourceEditRange{
-                                                         .start = insertionPlan->insertedNodeOffset,
-                                                         .end = insertionPlan->insertedNodeOffset,
-                                                     });
+    result.diagnostic = std::move(parsedInserted).error();
     return result;
   }
-
-  std::optional<XMLNode> parsedNode = parsedInserted.result().root().firstChild();
-  if (!parsedNode.has_value()) {
-    result.diagnostic =
-        MakeEditDiagnostic("Serialized node did not produce an element", diagnosticRange);
-    return result;
-  }
+  const XMLNode& parsedNode = parsedInserted.result().node;
+  const bool syncByPosition = parsedInserted.result().syncByPosition;
 
   const std::string replacement = insertionPlan->prefix + serialized + insertionPlan->suffix;
   std::optional<XMLSourceDelta> delta = store->replace(
@@ -2734,9 +2841,10 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
 
   ApplyParentInsertionPlan(parent, *insertionPlan);
 
-  if (!SyncSourceLocationsFromParsedByPosition(node, *parsedNode,
-                                               insertionPlan->insertedNodeOffset)) {
-    SyncNodeFromParsed(*this, node, *parsedNode, insertionPlan->insertedNodeOffset);
+  if (syncByPosition) {
+    SyncSourceLocationsFromParsedByPosition(node, parsedNode, insertionPlan->insertedNodeOffset);
+  } else {
+    SyncNodeFromParsed(*this, node, parsedNode, insertionPlan->insertedNodeOffset);
   }
   parent.insertBefore(node, referenceNode);
   result.mutations.push_back(XMLMutation{
