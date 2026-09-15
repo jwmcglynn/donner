@@ -562,7 +562,7 @@ public:
    *
    * The caller has already packed each transform into the wire format
    * the shader expects: two `vec4f` rows per instance (row-major affine,
-   * 32 bytes per entry). See `donner/svg/renderer/geode/shaders/slug_fill.wgsl`
+   * 32 bytes per entry). See `donner/gpu/shader/programs/SlugFillSource.h`
    * `struct InstanceTransform` for the exact layout.
    *
    * The vertex shader composes each instance's transform with the

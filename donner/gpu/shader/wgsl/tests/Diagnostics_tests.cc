@@ -96,7 +96,8 @@ TEST(Diagnostics, TokenLimitTripsBeforeOtherArenas) {
 }
 
 TEST(Diagnostics, IdentifierLimitTripsOnTheSecondLongName) {
-  // Two declared names whose combined length is one byte over the identifier arena.
+  // The parser records a function name twice (the function and its symbol), so the first name
+  // fills the identifier arena exactly and the second declaration trips the limit.
   const std::string first(ModuleLimits::kMaxIdentifierBytes / 2, 'a');
   const std::string second(ModuleLimits::kMaxIdentifierBytes / 2 + 1, 'b');
   const std::string source = "fn " + first + "() {}\nfn " + second + "() {}\n";

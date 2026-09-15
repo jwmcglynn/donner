@@ -152,33 +152,25 @@ All paths under `donner/svg/renderer/geode/` unless noted:
 | `GeodePathCacheComponent.h`                                                             | Per-entity ECS cache of encoded paths; fill slot invalidated by entt signal when the source `ComputedPathComponent` changes, stroke slot keyed by `StrokeStyle` |
 | `GeodeTextureEncoder.{h,cc}`                                                            | Buffer→texture uploads; normalizes `bytesPerRow` to WebGPU's required 256-byte alignment                                                                        |
 | `GeodePipeline.{h,cc}`, `GeodeImagePipeline.{h,cc}`, `GeodeCheckerboardPipeline.{h,cc}` | Pipeline classes (allowlisted create-callers)                                                                                                                   |
-| `GeodeFilterEngine.{h,cc}` + `shaders/filter_*.wgsl`, `gaussian_blur.wgsl`              | SVG filter effects on the GPU                                                                                                                                   |
-| `shaders/slug_fill.wgsl`, `slug_gradient.wgsl`, `slug_mask.wgsl`, `image_blit.wgsl`     | Core draw shaders; WGSL is embedded into C++ via `embed_resources()` rules in `BUILD.bazel` (edit the `.wgsl`, the header regenerates)                          |
+| `GeodeFilterEngine.{h,cc}` + `//donner/gpu/shader/programs/*Source.h` filter artifacts    | SVG filter effects on the GPU; every program is compiled at build time by the C++20 WGSL compiler                                                                |
+| `//donner/gpu/shader/programs/Slug{Fill,Gradient,Mask}Source.h`, `ImageBlitSource.h`     | Core draw shaders, authored as inline WGSL and frozen into reflected artifacts (see `docs/wgsl_compiler.md`)                                                    |
 | `GeodeCounters.h`                                                                       | Perf instrumentation counters; ceilings asserted by `tests/GeodePerf_tests.cc` (design doc 0030)                                                                |
 | `GeodeWgpuUtil.h`                                                                       | `wgpuLabel()` string-view shim + `ScopedWgpuHandle` RAII for raw WebGPU handles                                                                                 |
 | `../RendererGeode.{h,cc}`, `../RendererGeodeBackend.cc`                                 | `RendererInterface` implementation on top of the above                                                                                                          |
 
-**Adding a NEW shader** (editing an existing `.wgsl` needs no BUILD change): hand-author an
-`embed_resources()` block in `BUILD.bazel` — there is no macro; copy an existing one (e.g.
-`slug_fill_wgsl`) and follow the naming convention `shaders/foo_bar.wgsl` → symbol `kFooBarWgsl`
-→ `header_output = "embed_resources/FooBarWgsl.h"` → target `foo_bar_wgsl`:
-
-```python
-embed_resources(
-    name = "foo_bar_wgsl",
-    header_output = "embed_resources/FooBarWgsl.h",
-    resources = {"kFooBarWgsl": "shaders/foo_bar.wgsl"},
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-```
-
-Then add the new target to the `deps` of whichever library uses it (filter shaders go into
-`geode_shaders`'s deps).
+**Adding a NEW shader**: author the WGSL as an inline `wgsl::SourceText` in a
+`donner/gpu/shader/programs/FooBarSource.h`, add the artifact libraries (`foo_bar_api`,
+`foo_bar_source`, `foo_bar_validation`, `foo_bar_artifact`, `foo_bar_native_artifact`,
+`foo_bar_test_artifact`) and the three linked isolation probes following an existing family in
+`donner/gpu/shader/BUILD.bazel` and `artifact_tests/BUILD.bazel`, write the consteval host-layout
+check, and build the pipeline from the artifact's reflected bindings. The compiler accepts only the
+documented v1 profile; a construct it rejects is added to the profile with tests, not worked
+around. `docs/wgsl_compiler.md` is the reference.
 
 ## 6. Anti-aliasing and per-backend goldens
 
 - Geode computes **analytic dual-ray Slug coverage at 1 sample per pixel** — see the header
-  comment of `shaders/slug_fill.wgsl` and design doc
+  comment of `donner/gpu/shader/programs/SlugFillSource.h` and design doc
   `docs/design_docs/0041-geode_analytical_aa.md`. `GeodeDevice::sampleCount()` returns `1`.
   Some `sampleCount = 4` defaults and MSAA plumbing remain in `GeodePipeline.h` / `GeoEncoder.cc`
   signatures; they are inactive at runtime because everything reads `device.sampleCount()`.

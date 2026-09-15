@@ -14,11 +14,11 @@ namespace donner::gpu::shader::wgsl {
 /// A binary-emission failure. No output is usable after an error.
 enum class SpirvEmitError : uint8_t { None, InvalidModule, UnsupportedType, InvalidNode, Capacity };
 
-/// Caller-owned binary output or a counting sink when data is null.
 /// Word capacity of a frozen SPIR-V projection. The compiler's emission buffer and the parser
 /// fuzzer's sink share this bound.
 inline constexpr uint32_t kMaxSpirvEmitWords = 24576;
 
+/// Caller-owned binary output or a counting sink when data is null.
 struct SpirvSink {
   uint32_t* data = nullptr;                     //!< Output words, borrowed for the call.
   uint32_t capacity = 0;                        //!< Output capacity in words.

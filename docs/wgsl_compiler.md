@@ -77,7 +77,18 @@ v1 makes these claims and no others:
   validators, the native execution suites and the parser fuzzer. Full WGSL conformance, the
   optional feature extensions and the WebGPU conformance test suite are outside v1.
 
-Outside the profile, and rejected explicitly: `f16` and matrix types; `atomic`, `bitcast`, `override` and pipeline-overridable constants; `alias`, `const_assert`, `enable` and `requires` directives; the `workgroup` and `private` address spaces, workgroup shared memory and barriers; `binding_array`, depth, cube, 1D, 3D and arrayed textures and texture builtins other than `textureDimensions`, `textureLoad`, `textureSample`, `textureSampleLevel` and `textureStore`; bit shifts and bitwise operators other than the boolean forms the profile lists; constant f32 arithmetic in constant expressions (integer constant expressions only); `continuing` blocks; pointers outside a call argument or dereference, including pointers to resources, immutables, members and array elements; arrays of structures, nested arrays, array parameters and returns; module-scope mutable variables; bindings outside group zero; and any source byte outside ASCII. `Parser.h` and the profile section above are the exact record; the compiler names the construct it rejects.
+Outside the profile, and rejected explicitly: `f16` and matrices with a non-f32 element type;
+`atomic`, `bitcast`, `override` and pipeline-overridable constants; `alias`, `const_assert`,
+`enable` and `requires` directives; the `workgroup` and `private` address spaces, workgroup shared
+memory and barriers; `binding_array`, depth, cube, 1D, 3D and arrayed textures and texture builtins
+other than `textureDimensions`, `textureLoad`, `textureSample`, `textureSampleLevel` and
+`textureStore`; bit shifts, and bitwise operators other than the integer AND the Slug profile lists;
+constant f32 arithmetic in constant expressions (integer constant expressions only); `continuing`
+blocks; pointers outside a call argument or dereference, including pointers to resources,
+immutables, members and array elements; fixed arrays of structures, nested arrays, array parameters
+and returns; module-scope mutable variables; bindings outside group zero; and any source byte
+outside ASCII. `Parser.h` and the profile section above are the exact record; the compiler names the
+construct it rejects.
 
 Extending the profile is the intended response when a production shader needs a construct the
 compiler rejects: add the construct to the parser and to all three emitters together, add positive

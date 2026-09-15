@@ -348,7 +348,7 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
 
 /// Hard cap on gradient stops baked into the uniform buffer. Must be
 /// <= `GeoEncoder`'s internal `kMaxGradientStops` (which mirrors the WGSL
-/// constant in `slug_gradient.wgsl`). Values beyond this cap are truncated
+/// constant in `SlugGradientSource.h`). Values beyond this cap are truncated
 /// with a one-shot warning; the follow-up is a texture-based stop lookup
 /// (a `GeodeGradientCacheComponent` holding a stop texture).
 constexpr size_t kMaxGradientStopsClient = 16;
@@ -2518,7 +2518,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Capture the exact post-vertex Slug triangles at the GPU submission
-  /// boundary. This reproduces `slug_fill.wgsl`'s half-pixel miter dilation
+  /// boundary. This reproduces `SlugFillSource.h`'s half-pixel miter dilation
   /// and its ill-conditioned-transform AABB fallbacks before mapping the
   /// vertices into root-target device pixels.
   void recordSlugDraw(const geode::EncodedPath& encoded, const Transform2d& targetFromPath,
@@ -3620,7 +3620,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Pack a 2D affine into the 8-float wire format the shader expects
   /// (two `vec4f` rows, `(a, c, e, 0)` / `(b, d, f, 0)` - see
-  /// `struct InstanceTransform` in `shaders/slug_fill.wgsl`).
+  /// `struct InstanceTransform` in `donner/gpu/shader/programs/SlugFillSource.h`).
   /// `Transform2d::data` is column-major `[a, b, c, d, e, f]`.
   static void packTransform(const Transform2d& xf, float out[8]) {
     out[0] = static_cast<float>(xf.data[0]);  // a
