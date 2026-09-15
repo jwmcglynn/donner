@@ -168,7 +168,7 @@ commits and their fixes together in a focused reviewable change.
 
 ### Browser bridge
 
-- [x] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
+- [ ] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
       configuration, completion, mapping, and device-loss propagation behind the runtime contract.
       `donner/gpu/browser` supplies a `gpu::Device` whose hooks express validated operations to
       `navigator.gpu` through `library_donner_gpu.js`. Browser objects are named by identifiers
