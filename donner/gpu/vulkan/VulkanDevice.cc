@@ -710,29 +710,12 @@ std::vector<const char*> EnumeratePresentationExtensions(
     return enabledExtensions;
   }
 
-  const auto offers = [&extensions](const char* name) {
-    return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
-      return std::strcmp(extension.extensionName, name) == 0;
-    });
-  };
-  if (!offers(VK_KHR_SURFACE_EXTENSION_NAME)) {
-    return enabledExtensions;  // Without the base extension nothing else is usable.
+  std::vector<const char*> offeredExtensions;
+  offeredExtensions.reserve(extensions.size());
+  for (const VkExtensionProperties& extension : extensions) {
+    offeredExtensions.push_back(extension.extensionName);
   }
-  enabledExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-  if (offers(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
-    enabledExtensions.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-  }
-  for (const char* required : requiredExtensions) {
-    if (required == nullptr || !offers(required)) {
-      return {};
-    }
-    if (std::ranges::none_of(enabledExtensions, [required](const char* enabled) {
-          return std::strcmp(enabled, required) == 0;
-        })) {
-      enabledExtensions.push_back(required);
-    }
-  }
-  return enabledExtensions;
+  return SelectPresentationExtensionsForTest(offeredExtensions, requiredExtensions);
 }
 
 /// Opens the Vulkan loader, checks that it offers the API version this backend targets, and
@@ -837,6 +820,34 @@ InstanceSetup CreateInstance(bool withPresentation = false,
 }
 
 }  // namespace
+
+std::vector<const char*> SelectPresentationExtensionsForTest(
+    std::span<const char* const> offeredExtensions,
+    std::span<const char* const> requiredExtensions) {
+  const auto offers = [offeredExtensions](const char* name) {
+    return std::ranges::any_of(offeredExtensions, [name](const char* offered) {
+      return offered != nullptr && std::strcmp(offered, name) == 0;
+    });
+  };
+  if (!offers(VK_KHR_SURFACE_EXTENSION_NAME)) {
+    return {};
+  }
+  std::vector<const char*> enabledExtensions = {VK_KHR_SURFACE_EXTENSION_NAME};
+  if (offers(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
+    enabledExtensions.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+  }
+  for (const char* required : requiredExtensions) {
+    if (required == nullptr || !offers(required)) {
+      return {};
+    }
+    if (std::ranges::none_of(enabledExtensions, [required](const char* enabled) {
+          return std::strcmp(enabled, required) == 0;
+        })) {
+      enabledExtensions.push_back(required);
+    }
+  }
+  return enabledExtensions;
+}
 
 /// Vulkan state of a VulkanDevice: instance/device/queue handles plus per-resource slot tables
 /// mirroring the validated slot indices handed to the `on*` hooks.

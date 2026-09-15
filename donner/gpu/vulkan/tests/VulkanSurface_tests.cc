@@ -273,6 +273,17 @@ TEST_F(VulkanSurfaceTest, EnablesAnEmbedderRequiredInstanceExtension) {
   EXPECT_THAT(required->createSurface(headlessDescriptor()), IsOk());
 }
 
+TEST(VulkanPresentationCreationTest, ForwardsARequiredPlatformCompanionExtension) {
+  static constexpr const char* kXcbSurfaceExtension = "VK_KHR_xcb_surface";
+  static constexpr const char* kOffered[] = {
+      VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, kXcbSurfaceExtension};
+  static constexpr const char* kRequired[] = {kXcbSurfaceExtension};
+  EXPECT_THAT(SelectPresentationExtensionsForTest(kOffered, kRequired),
+              testing::ElementsAre(testing::StrEq(VK_KHR_SURFACE_EXTENSION_NAME),
+                                   testing::StrEq(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME),
+                                   testing::StrEq(kXcbSurfaceExtension)));
+}
+
 TEST(VulkanPresentationCreationTest, ExpandsTheUndefinedSurfaceFormatWildcard) {
   const std::vector<VkSurfaceFormatKHR> wildcard = {
       {VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};

@@ -15,6 +15,14 @@ namespace donner::gpu::vulkan {
 
 struct VulkanApi;
 
+/// Selects presentation instance extensions from the names a loader offers.
+/// Exposed for deterministic platform-companion extension tests.
+/// @param offeredExtensions NUL-terminated names offered by the loader.
+/// @param requiredExtensions NUL-terminated embedder-required names.
+std::vector<const char*> SelectPresentationExtensionsForTest(
+    std::span<const char* const> offeredExtensions,
+    std::span<const char* const> requiredExtensions);
+
 /**
  * Vulkan backend of the Donner GPU runtime.
  *
