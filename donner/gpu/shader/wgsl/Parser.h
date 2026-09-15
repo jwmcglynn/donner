@@ -1311,8 +1311,15 @@ private:
   constexpr bool ValidLocationInterpolation(Stage stage, bool input, Type type, bool flat) const {
     const bool interstage =
         (stage == Stage::Vertex && !input) || (stage == Stage::Fragment && input);
-    if (!interstage) return type.kind == TypeKind::F32 && !flat;
-    return type.kind == TypeKind::F32 || flat;
+    if (interstage) return type.kind == TypeKind::F32 || flat;
+    if (flat) return false;
+    // A vertex attribute is fetched from a buffer rather than interpolated, so an integer
+    // attribute carries no interpolation qualifier. A fragment output is written to a color
+    // attachment, and every render target format this runtime accepts is float.
+    if (stage == Stage::Vertex && input) {
+      return type.kind == TypeKind::F32 || type.kind == TypeKind::U32 || type.kind == TypeKind::I32;
+    }
+    return type.kind == TypeKind::F32;
   }
 
   constexpr void ValidateLocation(Stage stage, bool input, Type type,
