@@ -407,7 +407,8 @@ private:
   void requestHistoryAction(HistoryAction action);
   void applyPendingHistoryActions();
   void applyMenuActions(const MenuBarActions& menuActions);
-  void applyOverlayStateChanges(bool compositorTileOverlayBefore, bool geometryDebugOverlayBefore);
+  [[gnu::noinline]] void applyOverlayStateChanges(bool compositorTileOverlayBefore,
+                                                  bool geometryDebugOverlayBefore);
 #ifdef __EMSCRIPTEN__
   void applyBrowserOverlayStateRequest();
 #endif

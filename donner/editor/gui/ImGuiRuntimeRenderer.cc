@@ -212,11 +212,8 @@ gpu::Status ValidateCommandIndices(const ImDrawCmd& command, const ImDrawList& l
     const ImDrawIdx index = list.IdxBuffer[static_cast<int>(indexOffset)];
     const std::optional<uint64_t> vertex = gpu::CheckedAdd(command.VtxOffset, index);
     if (!vertex.has_value() || *vertex >= static_cast<uint64_t>(list.VtxBuffer.Size)) {
-      return gpu::GpuError{
-          gpu::GpuErrorType::OutOfBounds,
-          std::format("UI draw command index value {} with base vertex offset {} leaves its owning "
-                      "draw list of {} vertices",
-                      index, command.VtxOffset, list.VtxBuffer.Size)};
+      return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
+                           "UI draw command index value leaves its owning draw list"};
     }
   }
   return gpu::OkStatus();
@@ -469,9 +466,10 @@ std::vector<UiTextureId> ImGuiRuntimeRenderer::advanceFrame() {
   for (const UiTextureId id : released) {
     std::erase_if(textureBindings_, [id](const TextureBinding& cached) { return cached.id == id; });
   }
-  std::erase_if(retiredTextureBackings_, [&released](const RetiredTextureBacking& backing) {
-    return std::ranges::find(released, backing.id) != released.end();
-  });
+  for (const UiTextureId id : released) {
+    std::erase_if(retiredTextureBackings_,
+                  [id](const RetiredTextureBacking& backing) { return backing.id == id; });
+  }
   return released;
 }
 
