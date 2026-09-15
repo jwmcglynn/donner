@@ -503,6 +503,8 @@ test("drag failure readbacks are archived after sampling with exact frame identi
         ),
       /budget/i,
     );
+    assert.equal(attachments.length, 4, "invalid evidence must not attach a partial set");
+    assert.deepEqual(readFileSync(path.join(temporary, "composited-frame-341.png")), png);
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }

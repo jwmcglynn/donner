@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { readEditorPixelBounds } from "./canvas-color-stats";
 import {
+  attachCompositedReadbacks,
   blackFrameStats,
   type CompositedProbeResult,
   type CompositedSample,
@@ -299,18 +300,7 @@ const kMinimumProbeSamples = process.env.CI ? 12 : 16;
 
 test.describe("composited drag invariants", () => {
   test("g: a shape drag never presents a position it already left", async ({ browserName, page }) => {
-    // GUARDS: the drag pop-back. While dragging a shape in a stock browser the
-    // object intermittently snaps to a position it already left.
-    //
-    // Measured at 204c60176 on stock Chrome and stock Firefox over a 2-3 s
-    // reversing drag: zero out-of-order presentations in every run. Enforced
-    // from now on so a future pipeline cannot reintroduce it.
-    //
-    // This used to assert on a presented frame LABEL moving backward, with the
-    // pixel half deferred to (j). The single-canvas replacement deleted the label with the epoch
-    // acceptance flow, and the pixel measurement absorbs it: content moving
-    // against the pointer is the same defect, observed one step closer to the
-    // user, and a monotone label never ruled it out anyway.
+    // Preserve same-frame images while the aggregate drag-ordering candidates are investigated.
     test.setTimeout(scaledMs(120_000));
     const failures = await openEditor(page);
     const { documentRect } = await openDonnerSplash(page);
@@ -337,15 +327,15 @@ test.describe("composited drag invariants", () => {
     // distinct presented positions out of 537 samples over the whole canvas,
     // 68 with this window.
     await installCompositedProbe(page, {
+      captureReadbacks: true,
       sampleRegionCss: letterTravelRegion(stem, -140, -70),
       sampleWidth: 96,
       sampleHeight: 96,
       // The Splash artboard background is #10131e, whose channel spread is 14 -
       // just above the probe's default chromatic threshold of 12. With the
       // default the background counts as content, outnumbers the letter, and
-      // pins the centroid at the window's center no matter what the letter
-      // does. Raising the bar keeps only strongly chromatic pixels, which on
-      // this artboard is the letter itself.
+      // pins the centroid at the window's center. Strongly chromatic pixels still include other
+      // artwork in this crop, so a candidate requires inspection of its retained images.
       minColorAlpha: 64,
       minColorSpread: 60,
     });
@@ -363,19 +353,24 @@ test.describe("composited drag invariants", () => {
 
     assertProbeUsable(result, kMinimumProbeSamples);
 
-    // The single-canvas replacement removed the presented-epoch token, so ordering is no longer
-    // observable as a counter on the page. What "older frame after a newer one"
-    // means to the user is unchanged, and it is directly measurable: the
-    // presented content moving against the pointer. `dragRegressions` is that
-    // measurement, and it is strictly stronger than the counter was, because a
-    // monotone counter could still carry stale pixels.
-    // The reversal-latency excuse window must scale with the same CI factor as
-    // every timeout in this suite: on a loaded CI runner the presentation lags
-    // the pointer by several hundred ms, so a 150 ms horizon misses reversals
-    // the presented content is legitimately still finishing (observed live:
-    // a violation whose presented delta tracked the pre-reversal direction
-    // with the turn ~2 samples beyond the unscaled horizon).
+    // A centroid change needs object-identity evidence before it can establish an older frame.
+    // Keep the existing latency window while retaining the exact images behind each candidate.
     const violations = dragRegressions(result.samples, stream.trace, 1.0, 2.0, scaledMs(150));
+    if (violations.length > 0) {
+      const baselineIndex = result.samples.findIndex((sample) =>
+        sample.drawOk && sample.coloredWidth > 0
+      );
+      const indices = [
+        baselineIndex,
+        ...violations.slice(0, 5).flatMap((violation) => [
+          violation.predecessorIndex,
+          violation.sampleIndex,
+          violation.sampleIndex + 1,
+        ]),
+      ];
+      const readbacks = await attachCompositedReadbacks(page, test.info(), indices);
+      console.log(`drag-readback-evidence ${JSON.stringify({ baselineIndex, ...readbacks })}`);
+    }
     const presentedFrames = new Set(
       result.samples.filter((sample) => sample.drawOk && sample.coloredWidth > 0).map((sample) =>
         `${Math.round(sample.coloredCentroidX)}x${Math.round(sample.coloredCentroidY)}`
@@ -846,6 +841,7 @@ test.describe("dragRegressions classifier (pure)", () => {
 
 test("composited readback capture keeps exact slots and bounds retained memory", async () => {
   const pending: Array<() => void> = [];
+  let drawable = true;
   const pixels = new Uint8ClampedArray([255, 0, 0, 255]);
   const context = {
     clearRect() {},
@@ -867,7 +863,7 @@ test("composited readback capture keeps exact slots and bounds retained memory",
   };
   const globals = {
     window: {},
-    document: { createElement: () => readback, querySelector: () => surface },
+    document: { createElement: () => readback, querySelector: () => drawable ? surface : null },
     requestAnimationFrame: (callback: () => void) => pending.push(callback),
   };
   const previous = new Map(
@@ -908,13 +904,28 @@ test("composited readback capture keeps exact slots and bounds retained memory",
       new Uint8ClampedArray([0, 255, 0, 255]),
     ]);
     expect(probe.rawReadbackBytes).toBe(8);
-    probe.rawReadbackBytes = 64 * 1024 * 1024 - 3;
+    await expect(attachCompositedReadbacks(fakePage, test.info(), [0])).rejects.toThrow(/Stop/);
+    drawable = false;
     pending.shift()!();
     expect(probe.rawReadbacks[2]).toBeNull();
+    expect(probe.rawReadbackOverflow).toBe(false);
+    drawable = true;
+    probe.rawReadbackBytes = 64 * 1024 * 1024 - 3;
+    pending.shift()!();
+    expect(probe.rawReadbacks[3]).toBeNull();
     expect(probe.rawReadbackBytes).toBe(64 * 1024 * 1024 - 3);
     expect(probe.rawReadbackOverflow).toBe(true);
     expect(probe.rawReadbacks.length).toBe(probe.samples.length);
     probe.stop();
+    await expect(attachCompositedReadbacks(fakePage, test.info(), [0])).rejects.toThrow(
+      /memory budget/,
+    );
+    probe.rawReadbackOverflow = false;
+    await expect(attachCompositedReadbacks(fakePage, test.info(), [2])).rejects.toThrow(/Missing/);
+    probe.rawReadbacks[0] = new Uint8ClampedArray([1, 2]);
+    await expect(attachCompositedReadbacks(fakePage, test.info(), [0])).rejects.toThrow(
+      /dimensions/,
+    );
   } finally {
     for (const [name, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
