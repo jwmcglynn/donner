@@ -61,6 +61,11 @@ struct ComputedTextComponent {
     /// (fill, opacity, font-weight, clip-path, mask, filter, baseline-shift, etc.).
     entt::entity sourceEntity = entt::null;
 
+    /// The text content element whose rendering instance paints this span, or `entt::null` when
+    /// the text root's own instance paints it. Set when an ancestor-or-self span declares
+    /// `clip-path`, `mask`, or `filter` and therefore renders in its own layer.
+    entt::entity effectOwner = entt::null;
+
     /// True when this span starts a new text chunk (has explicit x or y positioning).
     /// A new chunk resets the current text position and suppresses cross-span kerning.
     bool startsNewChunk = false;

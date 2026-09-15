@@ -907,6 +907,10 @@ struct TextParams {
   std::span<const css::FontFace> fontFaces;
   /// Entity of the text root element, for cached layout lookup. entt::null if unknown.
   entt::entity textRootEntity = entt::null;
+  /// Paints only the spans whose `effectOwner` matches this entity. `entt::null` selects the spans
+  /// that no span-level `clip-path`, `mask`, or `filter` claims, which is what the text root's own
+  /// draw paints.
+  entt::entity spanEffectOwner = entt::null;
 };
 
 /**

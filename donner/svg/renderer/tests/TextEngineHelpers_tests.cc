@@ -1289,7 +1289,7 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
   EXPECT_THAT(hangingPosition.y, testing::DoubleEq(autoPosition.y));
 }
 
-TEST_F(TextEngineLayoutTest, VisibilityHiddenAdvancesButClearsGlyphs) {
+TEST_F(TextEngineLayoutTest, VisibilityHiddenAdvancesAndKeepsGlyphs) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))
       .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
@@ -1309,8 +1309,12 @@ TEST_F(TextEngineLayoutTest, VisibilityHiddenAdvancesButClearsGlyphs) {
 
   const auto runs = engine_->layout(text, makeParams());
 
+  // `visibility: hidden` suppresses painting, not layout: the hidden span keeps its positioned
+  // glyphs so it still contributes to the text element's object bounding box, and it advances the
+  // pen for the following span. Renderers skip the run by consulting the span's visibility.
   EXPECT_THAT(runs,
-              ElementsAre(RunGlyphsAre(IsEmpty()),
+              ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(0.0, 0.1)),
+                                                   GlyphXPositionIs(DoubleNear(10.0, 0.1)))),
                           RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(20.0, 0.1))))));
 }
 
@@ -1340,7 +1344,7 @@ TEST_F(TextEngineLayoutTest, HiddenSpanProducesEmptyGlyphs) {
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty())));
 }
 
-TEST_F(TextEngineLayoutTest, TextPathVisibilityHiddenClearsGlyphsAfterPathLayout) {
+TEST_F(TextEngineLayoutTest, TextPathVisibilityHiddenKeepsGlyphsAfterPathLayout) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))
       .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
@@ -1356,8 +1360,11 @@ TEST_F(TextEngineLayoutTest, TextPathVisibilityHiddenClearsGlyphsAfterPathLayout
 
   const auto runs = engine_->layout(text, makeParams());
 
-  EXPECT_THAT(runs,
-              ElementsAre(AllOf(Field("onPath", &TextRun::onPath, true), RunGlyphsAre(IsEmpty()))));
+  // A hidden `textPath` span is still placed along the path; only painting is suppressed.
+  EXPECT_THAT(
+      runs, ElementsAre(AllOf(Field("onPath", &TextRun::onPath, true),
+                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(0.0, 0.1)),
+                                                       GlyphXPositionIs(DoubleNear(10.0, 0.1)))))));
 }
 
 TEST_F(TextEngineLayoutTest, EmptyTextPathHidesGlyphsAndLeavesPathRun) {

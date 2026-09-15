@@ -304,11 +304,11 @@ class RealTreeParityReportTests(unittest.TestCase):
         # link-to-rect.svg, with-path.svg, and with-path-and-xlink-href.svg now compare against
         # their vendored references; spacing=auto.svg compares against a shared golden, which is
         # also the one added shared-golden case; side=right.svg compares under one added pixel
-        # budget source.
-        self.assertEqual(summary["skip_cases"], 125)
+        # budget source. Two more drop out with clip-path and mask on a tspan applied.
+        self.assertEqual(summary["skip_cases"], 123)
         self.assertEqual(summary["render_only_cases"], 78)
-        self.assertEqual(summary["pixel_budget_sources"], 101)
-        self.assertEqual(summary["effective_pixel_budget_cases"], 123)
+        self.assertEqual(summary["pixel_budget_sources"], 99)
+        self.assertEqual(summary["effective_pixel_budget_cases"], 121)
         # Two text/font-family cases carry a simple-text-only budget: Source Sans Pro kerns through
         # GPOS, which the stb_truetype backend does not read, so only that tier needs an allowance.
         self.assertEqual(summary["simple_text_pixel_budget_cases"], 4)

@@ -118,6 +118,18 @@ public:
   /// Return the object bounding box for the text subtree rooted at \p handle.
   Box2d computedObjectBoundingBox(EntityHandle handle) const;
 
+  /**
+   * @brief The root \ref xml_text element that \p handle takes part in, if any.
+   *
+   * Every geometry query here resolves through the text root and requires one to exist. Element
+   * types that carry text components without always being text content, notably \ref xml_a, reach
+   * those queries from outside any text element, so callers test this first.
+   *
+   * @param handle The element to resolve.
+   * @return The root text entity, or `entt::null` when \p handle is not inside a text element.
+   */
+  Entity textRootEntity(EntityHandle handle) const;
+
   /// Return the number of addressable characters for the text subtree rooted at \p handle.
   long getNumberOfChars(EntityHandle handle) const;
 

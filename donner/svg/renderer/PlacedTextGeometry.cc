@@ -117,6 +117,17 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   return TransformPath(glyphPath, glyphFromLocal);
 }
 
+void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
+                              entt::entity spanEffectOwner, std::vector<TextRun>& runs) {
+  const size_t count = std::min(runs.size(), text.spans.size());
+  for (size_t runIndex = 0; runIndex < count; ++runIndex) {
+    const auto& span = text.spans[runIndex];
+    if (span.visibility != Visibility::Visible || span.effectOwner != spanEffectOwner) {
+      runs[runIndex].glyphs.clear();
+    }
+  }
+}
+
 Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs) {
   double minX = std::numeric_limits<double>::max();
   double minY = std::numeric_limits<double>::max();

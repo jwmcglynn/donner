@@ -54,6 +54,7 @@ cc_library(
         "//donner/svg/components/style:style_system",
     ] + select({
         "//donner/svg/renderer:text_enabled": [
+            "//donner/svg/components/text:components",
             "//donner/svg/resources:font_manager",
             "//donner/svg/text:text_engine",
         ],

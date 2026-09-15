@@ -35,6 +35,7 @@ using ::testing::Field;
 using ::testing::FloatEq;
 using ::testing::Gt;
 using ::testing::IsEmpty;
+using ::testing::Lt;
 using ::testing::Not;
 using ::testing::SizeIs;
 
@@ -562,12 +563,14 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
   EXPECT_THAT(
-      runs, ElementsAre(AllOf(RunOnPathIs(Eq(true)),
-                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(4.5, 0.001)),
-                                                       GlyphXPositionIs(DoubleNear(15.5, 0.001))))),
-                        AllOf(RunOnPathIs(Eq(true)),
-                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(25.5, 0.001))))),
-                        AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
+      runs,
+      ElementsAre(AllOf(RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(4.5, 0.001)),
+                                                 GlyphXPositionIs(DoubleNear(15.5, 0.001))))),
+                  AllOf(RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(25.5, 0.001))))),
+                  AllOf(RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(100.0, 0.001)))))));
 }
 
 std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true,
@@ -707,10 +710,13 @@ TEST(TextEngineScriptedTest, TextPathLengthHandlesEmptySingleZeroNegativeAndLarg
 TEST(TextEngineScriptedTest, TextPathLengthRetainsHiddenAdvancesAndIgnoresDisplayNone) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="90" lengthAdjust="spacingAndGlyphs">A<tspan visibility="hidden">B</tspan><tspan display="none">ignored</tspan>C</textPath>)");
+  // `visibility: hidden` keeps the span in layout (it is skipped at paint time instead), while
+  // `display: none` removes it entirely and contributes no advance.
   EXPECT_THAT(
       glyphs,
       ElementsAre(
           AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
+          AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
           AllOf(GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0)))));
 }
 
@@ -1843,6 +1849,111 @@ TEST(TextEngineScriptedTest, InlineSizeLineHeightFallsBackWhenFontMetricsAreEmpt
 
   // Zero font metrics force the 1.2 * font-size (24px) line-height fallback.
   EXPECT_THAT(baselines, ElementsAre(0, 24));
+}
+
+// `visibility: hidden` suppresses painting, not layout, so a hidden span takes part in its chunk's
+// text-anchor measurement. The chunk's anchor comes from its first span, and the hidden span's
+// glyphs count toward the measured width.
+TEST(TextEngineScriptedTest, HiddenFirstSpanAnchorsItsChunk) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  components::ComputedTextComponent text;
+  auto hidden = MakeSpan("AB");
+  hidden.visibility = Visibility::Hidden;
+  hidden.textAnchor = TextAnchor::Start;
+
+  auto visible = MakeSpan("CD");
+  visible.startsNewChunk = false;
+  visible.textAnchor = TextAnchor::Middle;
+
+  text.spans.push_back(std::move(visible));
+  const auto centredAlone = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(centredAlone.at(0).glyphs, SizeIs(2));
+  const double centredAloneX = centredAlone.at(0).glyphs.front().xPosition;
+
+  text.spans.insert(text.spans.begin(), std::move(hidden));
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs.at(0).glyphs, SizeIs(2));
+  ASSERT_THAT(runs.at(1).glyphs, SizeIs(2));
+
+  // The chunk takes the first span's `start` anchor, so the pen runs forward from the origin: the
+  // hidden span occupies the front of the chunk and the visible span follows it, instead of the
+  // visible span being centred on the origin by its own anchor.
+  EXPECT_THAT(runs.at(0).glyphs.front().xPosition, Gt(centredAloneX));
+  EXPECT_THAT(runs.at(1).glyphs.front().xPosition, Gt(runs.at(0).glyphs.back().xPosition));
+}
+
+// A centred chunk measures the hidden span's advance too, so the whole chunk including the hidden
+// run is what gets centred on the anchor point.
+TEST(TextEngineScriptedTest, HiddenSpanCountsTowardChunkCentring) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const auto layoutFirstGlyphX = [&](std::optional<Visibility> trailingVisibility) {
+    components::ComputedTextComponent text;
+    auto visible = MakeSpan("AB");
+    visible.xList = {Lengthd(100.0, Lengthd::Unit::None)};
+    visible.textAnchor = TextAnchor::Middle;
+    text.spans.push_back(std::move(visible));
+
+    if (trailingVisibility.has_value()) {
+      auto trailing = MakeSpan("CDEF");
+      trailing.startsNewChunk = false;
+      trailing.visibility = trailingVisibility.value();
+      text.spans.push_back(std::move(trailing));
+    }
+
+    const auto runs = engine.layout(text, MakeTextParams(20.0));
+    return runs.at(0).glyphs.at(0).xPosition;
+  };
+
+  const double withHiddenTrailing = layoutFirstGlyphX(Visibility::Hidden);
+
+  // Centring the chunk with the hidden span in it shifts its start left exactly as a visible span
+  // of the same width would, and further left than the two visible glyphs alone.
+  EXPECT_THAT(withHiddenTrailing, DoubleNear(layoutFirstGlyphX(Visibility::Visible), 0.001));
+  EXPECT_THAT(withHiddenTrailing, Lt(layoutFirstGlyphX(std::nullopt)));
+}
+
+// Inline-size wrapping sees the hidden span's words, so they occupy line width and push the
+// following visible word onto the next line.
+TEST(TextEngineScriptedTest, HiddenSpanOccupiesInlineSizeLineWidth) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  const auto lineCount = [&](Visibility firstVisibility) {
+    components::ComputedTextComponent text;
+    auto first = MakeSpan("aa ");
+    first.visibility = firstVisibility;
+
+    auto second = MakeSpan("bb");
+    second.startsNewChunk = false;
+
+    text.spans.push_back(std::move(first));
+    text.spans.push_back(std::move(second));
+
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.inlineSizePx = 25.0;  // Each two-glyph word (21px) fits alone; both do not.
+    const auto runs = engine.layout(text, params);
+
+    std::vector<long> baselines;
+    for (const auto& run : runs) {
+      for (const auto& glyph : run.glyphs) {
+        baselines.push_back(std::lround(glyph.yPosition));
+      }
+    }
+    std::sort(baselines.begin(), baselines.end());
+    baselines.erase(std::unique(baselines.begin(), baselines.end()), baselines.end());
+    return baselines.size();
+  };
+
+  EXPECT_THAT(lineCount(Visibility::Hidden), Eq(lineCount(Visibility::Visible)));
+  EXPECT_THAT(lineCount(Visibility::Hidden), Eq(2u));
 }
 
 TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {

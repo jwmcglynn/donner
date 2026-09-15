@@ -664,9 +664,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "painting/fill",
                 {
                     {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
-                    {"linear-gradient-on-text.svg", Params::WithThreshold(kDefaultThreshold, 500)},
                     {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
-                    {"radial-gradient-on-text.svg", Params::WithThreshold(kDefaultThreshold, 500)},
                     {"rgb-int-int-int.svg", Params::RenderOnly("UB: rgb(int int int)")},
                     {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
                      Params::Skip("Not impl: Fallback with icc-color")},
@@ -792,12 +790,25 @@ INSTANTIATE_TEST_SUITE_P(
                     {"control-points-clamping-1.svg",
                      WithMaxPixels(150, "Stroke control-point clamping edge coverage")
                          .withGeodeMaxPixelsDifferent(500)},
+                    // Both references map a stroke paint server's objectBoundingBox units through
+                    // the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..110.40
+                    // user units at font-size 60) instead of the glyph cells that SVG 1.1 and
+                    // SVG 2 define: advance width by the font's full ascent and descent (42.20..
+                    // 157.40 x 45.66..127.38). The sibling painting/fill references for the same
+                    // text pin the glyph-cell box, so the corpus disagrees with itself and only
+                    // one of the two can be matched. Donner follows the specification.
+                    //
+                    // A default linear gradient runs along x only, where the two boxes differ by
+                    // under 2 user units, so it stays inside a loosened per-pixel tolerance. The
+                    // radial gradient sees the full 1.9x height difference and cannot.
                     {"linear-gradient-on-text.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")
+                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
+                                           "Reference uses text ink extents for stroke paint")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"pattern-on-text.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
-                    {"radial-gradient-on-text.svg", Params::Skip("Bug: Gradient stroke on text")},
+                    {"radial-gradient-on-text.svg",
+                     Params::Skip("Reference uses text ink extents for stroke paint")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -865,8 +876,16 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/visibility",
                 {
+                    // The reference maps the objectBoundingBox clip through the union of the two
+                    // text elements' glyph *ink* extents (measured 50.5..144.4 x 69.3..105.5 user
+                    // units), not their glyph cells. SVG 1.1 and SVG 2 both define the object
+                    // bounding box of text as the union of full glyph cells: advance width by the
+                    // font's full ascent and descent. Donner follows the specification, which the
+                    // same corpus pins in painting/fill/{linear,radial}-gradient-on-text.svg, so
+                    // the two references disagree with each other and this one cannot be matched
+                    // without also breaking those.
                     {"bbox-impact-3.svg",
-                     Params::Skip("Not impl: <text> contributing to bbox handling")},
+                     Params::Skip("Reference uses text ink extents for objectBoundingBox")},
                     {"collapse-on-tspan.svg",
                      Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"hidden-on-tspan.svg",
@@ -1669,7 +1688,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-coordinates-on-textPath.png")
                      .withReason("Minor char")},
-                {"with-filter.svg", Params::Skip("Not impl: filter on textPath")},
+                // The filter itself is applied to the textPath now, but Donner's glyph coverage
+                // is about 5% lighter than the reference's (measured on the unfiltered
+                // text/tspan/with-clip-path case: 1140473 versus 1208567 total alpha over the
+                // glyphs). The unfiltered comparisons pass because pixelmatch excludes
+                // anti-aliased edge pixels, while a Gaussian blur spreads the missing coverage
+                // into the glyph interiors, where it is counted.
+                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
                 {"with-invalid-path-and-xlink-href.svg",
                  Params::Skip("Reference disagrees with the corpus: after the invalid `path` is "
                               "ignored, the remaining `xlink:href=\"path1\"` has no fragment, so "
@@ -1723,21 +1748,23 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextTspan, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/tspan",
-                {
-                    {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
-                    {"nested-rotate.svg",
-                     Params::Skip("Bug: Applying rotation indices across nested tspans")},
-                    {"nested-whitespaces.svg", Params().withMaxPixelsDifferent(400).withReason(
-                                                   "Vertical axis has different AA")},
-                    {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
-                                             "Crosshair thin-line AA + underline uses")},
-                    {"with-clip-path.svg", Params::Skip("Not impl: Interaction with `clip-path`")},
-                    {"with-filter.svg", Params::Skip("Not impl: Interaction with `filter`")},
-                    {"with-mask.svg", Params::Skip("Not impl: Interaction with `mask`")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/tspan",
+            {
+                {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
+                {"nested-rotate.svg",
+                 Params::Skip("Bug: Applying rotation indices across nested tspans")},
+                {"nested-whitespaces.svg",
+                 Params().withMaxPixelsDifferent(400).withReason("Vertical axis has different AA")},
+                {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
+                                         "Crosshair thin-line AA + underline uses")},
+                // Same cause as text/textPath/with-filter.svg: the span filter applies, but
+                // Donner's glyph coverage is about 5% lighter than the reference's, which only
+                // a blur makes visible away from the glyph edges.
+                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

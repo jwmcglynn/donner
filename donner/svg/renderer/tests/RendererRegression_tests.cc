@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -10,11 +11,15 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/SVGImageElement.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -38,10 +43,34 @@ constexpr std::string_view kBlueImageDataUri =
     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYPgPRmAKABf2A/1+6zfzAAAAAElFTkSu"
     "QmCC";
 
+/// RGBA pixel at (x, y) in a tightly packed snapshot bitmap. Returns transparent for a pixel
+/// outside the bitmap so an assertion fails cleanly instead of reading out of bounds.
+std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
+  const size_t offset = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
+  if (offset + 4 > bitmap.pixels.size()) {
+    return {0, 0, 0, 0};
+  }
+  return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
+          bitmap.pixels[offset + 3]};
+}
+
 ImageComparisonParams GoldenParams() {
   Params params;
   params.enableGoldenUpdateFromEnv();
   return params;
+}
+
+/// Uses the existing pixelmatch assertion to require that two renders are NOT identical, so an
+/// equivalence test cannot pass by having neither side render the thing under test.
+void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& expected,
+                         std::string_view label) {
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    ExpectBitmapsIdentical(actual, expected, label);
+  }
+  EXPECT_THAT(differences.size(), testing::Ge(1)) << label << ": expected the renders to differ";
 }
 
 /// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result.
@@ -513,6 +542,217 @@ TEST_F(RendererRegressionTests, ImageHrefChangeInvalidatesTinySkiaPremultipliedI
       RenderDocumentWithBackend(freshFragment.document, RendererBackend::TinySkia);
   ASSERT_FALSE(fresh.empty());
   ExpectBitmapsIdentical(afterMutation, fresh, "tiny_skia_image_cache_invalidation");
+}
+
+// Per the SVG 2 object-bounding-box definition, a container's box is the union of its
+// children's boxes, and text contributes the union of its glyph cells: advance width by the
+// font's full ascent and descent. `visibility: hidden` suppresses painting only, so a hidden text
+// child still contributes.
+TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans" font-size="40">
+      <g id="group">
+        <text id="hidden" x="50" y="105" font-size="50" visibility="hidden">Text</text>
+        <text id="shown" x="60" y="100">Text</text>
+      </g>
+    </svg>
+  )",
+                                            {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  // Rendering prepares the text layout that the bounding box is derived from.
+  ASSERT_THAT(RenderDocumentWithBackend(document, RendererBackend::TinySkia).empty(),
+              testing::IsFalse());
+
+  auto group = document.querySelector("#group");
+  auto hidden = document.querySelector("#hidden");
+  auto shown = document.querySelector("#shown");
+  ASSERT_THAT(group.has_value(), testing::IsTrue());
+  ASSERT_THAT(hidden.has_value(), testing::IsTrue());
+  ASSERT_THAT(shown.has_value(), testing::IsTrue());
+
+  const Box2d hiddenBox = hidden->cast<SVGTextElement>().objectBoundingBox();
+  const Box2d shownBox = shown->cast<SVGTextElement>().objectBoundingBox();
+  ASSERT_THAT(hiddenBox.isEmpty(), testing::IsFalse())
+      << "a `visibility: hidden` text element still has an object bounding box";
+  ASSERT_THAT(shownBox.isEmpty(), testing::IsFalse());
+  const Box2d expected = Box2d::Union(hiddenBox, shownBox);
+
+  const std::optional<Box2d> actual =
+      components::ShapeSystem().getShapeBounds(group->entityHandle());
+  ASSERT_THAT(actual.has_value(), testing::IsTrue())
+      << "a group whose only children are <text> must still report an object bounding box";
+  EXPECT_THAT(*actual, BoxEq(Vector2Near(expected.topLeft.x, expected.topLeft.y),
+                             Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
+}
+
+// SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
+// covers all of its text element's content must render exactly as the same effect on the text
+// element. Both forms resolve objectBoundingBox effect regions through the same glyph-cell box, so
+// the two renders are pixel-identical and neither needs a golden image.
+TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElement) {
+  struct Effect {
+    const char* name;
+    const char* defs;
+    const char* attribute;
+  };
+  const Effect kEffects[] = {
+      {"clip_path",
+       R"svg(<clipPath id="e"><rect x="0" y="0" width="200" height="80"/></clipPath>)svg",
+       R"svg(clip-path="url(#e)")svg"},
+      {"mask",
+       R"svg(<mask id="e"><rect x="20" y="20" width="160" height="160" fill="gray"/></mask>)svg",
+       R"svg(mask="url(#e)")svg"},
+      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="4"/></filter>)svg",
+       R"svg(filter="url(#e)")svg"},
+  };
+
+  for (const Effect& effect : kEffects) {
+    SCOPED_TRACE(effect.name);
+
+    const std::string prefix =
+        std::string(effect.defs) + R"svg(<g font-family="Noto Sans" font-size="64">)svg";
+    const std::string onSpanMarkup = prefix + R"svg(<text x="33" y="100"><tspan )svg" +
+                                     effect.attribute + R"svg(>Text</tspan></text></g>)svg";
+    const std::string onTextMarkup =
+        prefix + R"svg(<text x="33" y="100" )svg" + effect.attribute + R"svg(>Text</text></g>)svg";
+    const std::string plainMarkup = prefix + R"svg(<text x="33" y="100">Text</text></g>)svg";
+
+    SVGDocument onSpan = instantiateSubtree(onSpanMarkup, {}, Vector2i(200, 200));
+    SVGDocument onText = instantiateSubtree(onTextMarkup, {}, Vector2i(200, 200));
+    SVGDocument plain = instantiateSubtree(plainMarkup, {}, Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(onSpan, ResvgResourceRoot() / "fonts");
+    RegisterFontsFromDirectoryForTesting(onText, ResvgResourceRoot() / "fonts");
+    RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
+
+    const RendererBitmap actual = RenderDocumentWithBackend(onSpan, ActiveRendererBackend());
+    const RendererBitmap expected = RenderDocumentWithBackend(onText, ActiveRendererBackend());
+    const RendererBitmap unaffected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    ASSERT_THAT(expected.empty(), testing::IsFalse());
+    ExpectVisibleBitmap(unaffected, std::string("plain_text_visible_") + effect.name);
+    ExpectBitmapsDiffer(expected, unaffected, std::string("effect_on_text_changes_") + effect.name);
+    ExpectBitmapsIdentical(actual, expected, std::string("effect_on_tspan_") + effect.name);
+  }
+}
+
+// A `<use>` copy renders the referenced text through the light tree's laid-out spans, but the
+// per-span instances that carry `clip-path`, `mask`, and `filter` exist only in the light tree.
+// The copy must still paint every span; it does so without those effects, which is what it did
+// before spans could own an effect at all. Pinning that as an equivalence keeps a later change
+// deliberate: once a copy instantiates its own span instances, this comparison must be updated.
+//
+// The clip rect covers the referenced text where it renders in place and excludes the copy, so
+// the referenced text is identical in both documents and only the copy can differ.
+TEST_F(RendererRegressionTests, UseCopyPaintsEveryTextSpanWithoutSpanEffects) {
+  const std::string kPrefix =
+      R"svg(<clipPath id="c"><rect x="0" y="0" width="200" height="120"/></clipPath>)svg"
+      R"svg(<g font-family="Noto Sans" font-size="40"><text id="t" x="20" y="60">)svg";
+  const std::string kSuffix = R"svg(</text></g>)svg";
+  const std::string kUse = R"svg(<use href="#t" y="100"/>)svg";
+  const std::string kSpanWithEffect = R"svg(<tspan clip-path="url(#c)">Text</tspan>)svg";
+  const std::string kSpanWithoutEffect = R"svg(<tspan>Text</tspan>)svg";
+
+  SVGDocument withEffect =
+      instantiateSubtree(kPrefix + kSpanWithEffect + kSuffix + kUse, {}, Vector2i(200, 200));
+  SVGDocument withoutEffect =
+      instantiateSubtree(kPrefix + kSpanWithoutEffect + kSuffix + kUse, {}, Vector2i(200, 200));
+  SVGDocument withoutUse =
+      instantiateSubtree(kPrefix + kSpanWithEffect + kSuffix, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(withEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(withoutEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(withoutUse, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(withEffect, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(withoutEffect, ActiveRendererBackend());
+  const RendererBitmap noCopy = RenderDocumentWithBackend(withoutUse, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ExpectBitmapsDiffer(actual, noCopy, "use_copy_of_effect_span_adds_ink");
+  ExpectBitmapsIdentical(actual, expected, "use_copy_paints_span_without_effect");
+}
+
+// `<a>` carries the text components unconditionally so it can act as a text content element inside
+// text, so an objectBoundingBox effect on an `<a>` that groups ordinary graphics must resolve its
+// region from the children's shapes rather than reaching the text engine, which requires a text
+// root. Outside text `<a>` is an ordinary group, so each form must render exactly as `<g>` does.
+TEST_F(RendererRegressionTests, ObjectBoundingBoxEffectOnAnchorGroupingShapes) {
+  struct Effect {
+    const char* name;
+    const char* defs;
+    const char* attribute;
+    /// False for an effect a container element does not apply yet, where comparing against the
+    /// same document without the effect would prove nothing.
+    bool observableOnAContainer;
+  };
+  const Effect kEffects[] = {
+      {"clip_path", R"svg(<clipPath id="e"><circle cx="90" cy="80" r="40"/></clipPath>)svg",
+       R"svg(clip-path="url(#e)")svg", true},
+      // A `mask` on a container element is dropped. That predates this behavior and is unrelated
+      // to it: reverting the bounding box source leaves the same result, and `<g>` in place of
+      // `<a>` renders identically, so only the equivalence below is asserted for it.
+      {"mask",
+       R"svg(<mask id="e"><rect x="0" y="0" width="90" height="200" fill="white"/></mask>)svg",
+       R"svg(mask="url(#e)")svg", false},
+      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="3"/></filter>)svg",
+       R"svg(filter="url(#e)")svg", true},
+  };
+
+  for (const Effect& effect : kEffects) {
+    SCOPED_TRACE(effect.name);
+
+    const std::string rect = R"svg(<rect x="33" y="40" width="120" height="80"/>)svg";
+    const std::string onAnchor =
+        std::string(effect.defs) + "<a " + effect.attribute + ">" + rect + "</a>";
+    const std::string onGroup =
+        std::string(effect.defs) + "<g " + effect.attribute + ">" + rect + "</g>";
+    const std::string plainMarkup = std::string(effect.defs) + rect;
+
+    SVGDocument anchor = instantiateSubtree(onAnchor, {}, Vector2i(200, 200));
+    SVGDocument group = instantiateSubtree(onGroup, {}, Vector2i(200, 200));
+    SVGDocument plain = instantiateSubtree(plainMarkup, {}, Vector2i(200, 200));
+
+    const RendererBitmap actual = RenderDocumentWithBackend(anchor, ActiveRendererBackend());
+    const RendererBitmap expected = RenderDocumentWithBackend(group, ActiveRendererBackend());
+    const RendererBitmap unaffected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    ASSERT_THAT(expected.empty(), testing::IsFalse());
+    if (effect.observableOnAContainer) {
+      ExpectBitmapsDiffer(expected, unaffected,
+                          std::string("anchor_effect_changes_") + effect.name);
+    }
+    ExpectBitmapsIdentical(actual, expected, std::string("anchor_effect_") + effect.name);
+  }
+}
+
+// A span that owns an effect paints after the spans the text root still paints, rather than in
+// document order. That is a known limitation of giving a span its own rendering instance, and this
+// pins it so a change to it is deliberate.
+//
+// The first span's filter floods a region wide enough to reach over the first glyph of the later
+// span, and only that glyph. Sampling inside its stem discriminates the two orders: the flood wins
+// there only because the span that owns it paints last. The later span's second glyph sits outside
+// the flood region and stays its own color, which proves the sampled pixel is glyph ink the flood
+// covered rather than a gap between the spans.
+TEST_F(RendererRegressionTests, EffectSpanPaintsAfterTheTextRootsRemainingSpans) {
+  const std::string markup =
+      R"svg(<filter id="e" x="-5%" y="-5%" width="160%" height="110%">)svg"
+      R"svg(<feFlood flood-color="blue"/></filter>)svg"
+      R"svg(<g font-family="Noto Sans" font-size="64"><text x="20" y="100">)svg"
+      R"svg(<tspan filter="url(#e)">AA</tspan><tspan fill="red">BB</tspan>)svg"
+      R"svg(</text></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  const RendererBitmap bitmap = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ASSERT_THAT(bitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(bitmap.dimensions, testing::Eq(Vector2i(200, 200)));
+
+  // Noto Sans at 64 px: the filtered span's glyph cells run x 20 to 101.8, so a 160% region ends
+  // at x 146.8. The later span's glyphs ink x 108.0 to 139.9 and x 149.6 to 181.5, putting the
+  // first inside the flood and the second outside it.
+  EXPECT_THAT(PixelAt(bitmap, 111, 75), test::RgbaEq(0, 0, 255, 255))
+      << "the span that owns the filter must paint after the text root's remaining spans";
+  EXPECT_THAT(PixelAt(bitmap, 152, 75), test::RgbaEq(255, 0, 0, 255))
+      << "the sampled glyph must be ink the flood covered, not a gap between the spans";
 }
 
 }  // namespace

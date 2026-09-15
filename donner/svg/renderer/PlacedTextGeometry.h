@@ -144,4 +144,30 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
  */
 Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs);
 
+/**
+ * @brief Drop the glyphs of runs this draw is not responsible for painting.
+ *
+ * Two reasons take a run out of a draw:
+ *
+ * 1. `visibility: hidden` and `visibility: collapse` suppress painting only, so such a span is
+ *    still laid out, still advances the pen for the spans that follow it, and still contributes to
+ *    the element's object bounding box.
+ * 2. A span whose `clip-path`, `mask`, or `filter` gives it its own rendering instance is painted
+ *    by that instance, inside that effect's layer, and not by the text root's draw. `effectOwner`
+ *    names the instance responsible, and \p spanEffectOwner is the one doing the drawing.
+ *
+ * Backends call this on their local copy of the layout runs after \ref ComputeTextBounds, so the
+ * element-level bounding box that `objectBoundingBox` paint maps through stays the same for every
+ * draw of the element.
+ *
+ * Runs are index-aligned with \p text.spans; a run past the end of the span list is left alone.
+ *
+ * @param text The computed text component supplying per-span visibility and ownership.
+ * @param spanEffectOwner The span entity this draw paints, or `entt::null` for the text root's own
+ *   draw.
+ * @param runs Layout runs to filter in place.
+ */
+void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
+                              entt::entity spanEffectOwner, std::vector<TextRun>& runs);
+
 }  // namespace donner::svg
