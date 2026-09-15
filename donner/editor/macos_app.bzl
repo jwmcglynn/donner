@@ -1,9 +1,23 @@
 """macOS application assembly from the editor's declared runtime closure."""
 
+def _packaged_editor_transition_impl(settings, attr):
+    return {"//build_defs:enable_tracy": False}
+
+_packaged_editor_transition = transition(
+    implementation = _packaged_editor_transition_impl,
+    inputs = [],
+    outputs = ["//build_defs:enable_tracy"],
+)
+
 def _macos_editor_app_impl(ctx):
-    info = ctx.attr.editor[DefaultInfo]
+    editor = ctx.attr.editor
+    if type(editor) == "list":
+        if len(editor) != 1:
+            fail("Expected one packaged editor configuration")
+        editor = editor[0]
+    info = editor[DefaultInfo]
     binary = info.files_to_run.executable
-    alias = "_donner_transitioned/{}/{}".format(ctx.attr.editor.label.package, ctx.attr.editor.label.name)
+    alias = "_donner_transitioned/{}/{}".format(editor.label.package, editor.label.name)
     for entry in info.default_runfiles.root_symlinks.to_list():
         if entry.path == alias:
             binary = entry.target_file
@@ -44,7 +58,8 @@ def _macos_editor_app_impl(ctx):
 macos_editor_app = rule(
     implementation = _macos_editor_app_impl,
     attrs = {
-        "editor": attr.label(mandatory = True),
+        "editor": attr.label(mandatory = True, cfg = _packaged_editor_transition),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
         "renderer": attr.label(executable = True, cfg = "exec", mandatory = True),
         "packager": attr.label(executable = True, cfg = "exec", mandatory = True),
         "icon": attr.label(allow_single_file = [".svg"], mandatory = True),

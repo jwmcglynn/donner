@@ -12,6 +12,7 @@ checksum. The package includes the native editor, relocated runtime libraries, a
 rendered from `editor_icon.svg` with Donner, and agent guidance. Assembly signs the app
 ad hoc and verifies the signature and runtime paths before creating the archive.
 These development signatures are not Developer ID signing or notarization.
+The app target disables Tracy profiling, including its developer network listener.
 
 The macOS Editor App workflow produces the same archive in CI. The release workflow
 builds it once, verifies its checksum, attests it, and uploads those exact bytes with the
