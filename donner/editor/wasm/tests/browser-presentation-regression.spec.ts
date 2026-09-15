@@ -77,10 +77,9 @@ declare global {
       displayedDocVersion: number;
       overlayVersionGateSuppressions: number;
     };
-    __donnerSetOverlayState?: (
-      key: "compositorTileOverlay" | "geometryDebugOverlay",
-      enabled: boolean,
-    ) => boolean;
+    Module?: {
+      _donner_set_overlay_state?: (key: number, enabled: number) => number;
+    };
     __donnerViewportStats?: ViewportStats;
     __donnerEditorFrameRequested?: boolean;
   }
@@ -772,7 +771,9 @@ async function setViewOverlayState(
   enabled: boolean,
 ): Promise<void> {
   const accepted = await page.evaluate(
-    ({ k, want }) => window.__donnerSetOverlayState?.(k, want) ?? false,
+    ({ k, want }) =>
+      window.Module?._donner_set_overlay_state?.(k === "compositorTileOverlay" ? 0 : 1, want ? 1 : 0)
+        === 1,
     { k: key, want: enabled },
   );
   expect(accepted, `the browser overlay control rejected ${key}=${enabled}`).toBe(true);
@@ -835,13 +836,13 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   const failures = await openEditor(page, true);
   const { canvasBounds, documentClip } = await openBasicShapes(page);
   const rejectedControlInputs = await page.evaluate(() => {
-    const control = window.__donnerSetOverlayState;
+    const control = window.Module?._donner_set_overlay_state;
     return [
-      control?.("unknownOverlay" as "compositorTileOverlay", true),
-      control?.("compositorTileOverlay", 1 as unknown as boolean),
+      control?.(2, 1),
+      control?.(0, 2),
     ];
   });
-  expect(rejectedControlInputs).toEqual([false, false]);
+  expect(rejectedControlInputs).toEqual([0, 0]);
   const baseline = await page.screenshot({ clip: documentClip });
   await test.info().attach("overlay-baseline", { body: baseline, contentType: "image/png" });
   // Since the single-canvas architecture the document has no element of its own to measure, so the

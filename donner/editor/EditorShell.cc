@@ -123,13 +123,13 @@ bool ShouldRequestSaveShortcut(bool allowed, bool anyPopupOpen, bool command, bo
 #ifdef __EMSCRIPTEN__
 namespace {
 
-std::atomic<int> gBrowserOverlayStateRequest{0};
-std::atomic<bool> gBrowserOverlayControlEnabled{false};
+// Negative disables the opt-in browser test control; zero means enabled with no request.
+std::atomic<int> gBrowserOverlayStateRequest{-1};
 
 }  // namespace
 
 extern "C" EMSCRIPTEN_KEEPALIVE int donner_set_overlay_state(int key, int enabled) {
-  if (!gBrowserOverlayControlEnabled.load(std::memory_order_acquire) || (key != 0 && key != 1) ||
+  if (gBrowserOverlayStateRequest.load(std::memory_order_acquire) < 0 || (key != 0 && key != 1) ||
       (enabled != 0 && enabled != 1)) {
     return 0;
   }
@@ -286,22 +286,6 @@ void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
                          double displayedDocVersion, double overlayVersionGateSuppressions) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        const overlayControlEnabled =
-            new URLSearchParams(window.location.search).get('testControl') == 'overlay';
-        if (overlayControlEnabled && typeof window['__donnerSetOverlayState'] != 'function') {
-          window['__donnerSetOverlayState'] = function(key, enabled) {
-            if ((key != 'compositorTileOverlay' && key != 'geometryDebugOverlay') ||
-                typeof enabled != 'boolean') {
-              return false;
-            }
-            const keyValue = key == 'compositorTileOverlay' ? 0 : 1;
-            const accepted = _donner_set_overlay_state(keyValue, enabled ? 1 : 0) == 1;
-            if (accepted) {
-              window['__donnerEditorFrameRequested'] = true;
-            }
-            return accepted;
-          };
-        }
         window['__donnerOverlayStats'] = ({
           'compositorTileOverlay' : !!$0,
           'geometryDebugOverlay' : !!$1,
@@ -1282,9 +1266,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
 #ifdef __EMSCRIPTEN__
-  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
-  gBrowserOverlayControlEnabled.store(BrowserOverlayControlEnabledForTesting(),
-                                      std::memory_order_release);
+  gBrowserOverlayStateRequest.store(BrowserOverlayControlEnabledForTesting() ? 0 : -1,
+                                    std::memory_order_release);
   renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
       SampleThumbnailRendererCreationRequestForTesting(),
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
@@ -1468,8 +1451,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 
 EditorShell::~EditorShell() {
 #ifdef __EMSCRIPTEN__
-  gBrowserOverlayControlEnabled.store(false, std::memory_order_release);
-  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+  gBrowserOverlayStateRequest.store(-1, std::memory_order_release);
 #endif
   if (catalogFontWakeTarget_) {
     std::lock_guard lock(catalogFontWakeTarget_->mutex);
