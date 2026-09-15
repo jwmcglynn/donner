@@ -838,6 +838,28 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
+test("browser overlay control stays disabled after a normal editor frame", async ({ page }) => {
+  const failures = await openEditor(page);
+  const before = await page.evaluate(() => ({
+    frames: window.__donnerMainLoopRenderedFrames || 0,
+    overlays: window.__donnerOverlayStats,
+  }));
+  const accepted = await page.evaluate(() => {
+    const result = window.Module?._donner_set_overlay_state?.(0, 1) ?? 0;
+    window.__donnerEditorFrameRequested = true;
+    return result;
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0))
+    .toBeGreaterThan(before.frames);
+  const after = await page.evaluate(() => window.__donnerOverlayStats);
+
+  expect(accepted, "a normal editor URL must reject the browser overlay control").toBe(0);
+  expect(after?.compositorTileOverlay).toBe(before.overlays?.compositorTileOverlay);
+  expect(after?.geometryDebugOverlay).toBe(before.overlays?.geometryDebugOverlay);
+  expect(failures).toEqual([]);
+});
+
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
   const failures = await openEditor(page, true);
   const { canvasBounds, documentClip } = await openBasicShapes(page);
