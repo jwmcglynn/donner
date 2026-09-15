@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <string>
 #include <unordered_map>
 
@@ -105,6 +106,35 @@ FontHandle findCoverageFallbackFont(const TextBackend& backend, FontManager& fon
   }
 
   return currentFont;
+}
+
+/**
+ * Returns the face for the first family in @p families that a registered `@font-face` rule or the
+ * font provider actually supplies.
+ *
+ * The availability test is separate from the lookup because \ref FontManager::findFont answers an
+ * unknown family with the embedded fallback rather than an invalid handle; without it a list like
+ * `Invalid, Noto Sans` would stop at its first entry and never reach the family that exists.
+ *
+ * @param fontManager Font manager to query.
+ * @param families Font families in cascade order, highest priority first.
+ * @param weight CSS font-weight value (100-900, 400=normal, 700=bold).
+ * @param style CSS font-style value (0=normal, 1=italic, 2=oblique).
+ * @param stretch CSS font-stretch value (1-9, 5=normal, matching FontStretch).
+ * @return The first available face, or an invalid handle when no family is available.
+ */
+FontHandle FindFirstAvailableFont(FontManager& fontManager, std::span<const RcString> families,
+                                  int weight = 400, int style = 0, int stretch = 5) {
+  for (const RcString& family : families) {
+    if (!fontManager.hasFamily(family)) {
+      continue;
+    }
+    if (const FontHandle candidate = fontManager.findFont(family, weight, style, stretch)) {
+      return candidate;
+    }
+  }
+
+  return {};
 }
 
 /// Substitute the trusted embedded fallback before a backend can see unsupported font bytes.
@@ -1495,26 +1525,17 @@ FontHandle ResolveSpanFace(FontManager& fontManager,
                            const SmallVector<RcString, 1>& families, FontHandle fallback) {
   const SmallVector<RcString, 1>& spanFamilies =
       span.fontFamilies.empty() ? families : span.fontFamilies;
-  FontHandle spanFont;
-  for (const auto& family : spanFamilies) {
-    spanFont = fontManager.findFont(family);
-    if (spanFont) {
-      break;
-    }
-  }
+  FontHandle spanFont = FindFirstAvailableFont(fontManager, spanFamilies);
   if (!spanFont) {
     spanFont = fallback;
   }
   if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
       span.fontStretch != FontStretch::Normal) {
-    for (const auto& family : spanFamilies) {
-      FontHandle candidate =
-          fontManager.findFont(family, span.fontWeight, static_cast<int>(span.fontStyle),
-                               static_cast<int>(span.fontStretch));
-      if (candidate) {
-        spanFont = candidate;
-        break;
-      }
+    const FontHandle candidate = FindFirstAvailableFont(fontManager, spanFamilies, span.fontWeight,
+                                                        static_cast<int>(span.fontStyle),
+                                                        static_cast<int>(span.fontStretch));
+    if (candidate) {
+      spanFont = candidate;
     }
   }
 
@@ -1614,13 +1635,7 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
   // ── Resolve base font ─────────────────────────────────────────────────────────
-  FontHandle font;
-  for (const auto& family : params.fontFamilies) {
-    font = fontManager_.findFont(family);
-    if (font) {
-      break;
-    }
-  }
+  FontHandle font = FindFirstAvailableFont(fontManager_, params.fontFamilies);
   if (!font) {
     font = fontManager_.fallbackFont();
   }
@@ -2209,13 +2224,7 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
   std::vector<FontFaceDependency> dependencies;
   const auto measured = [&]() -> std::optional<double> {
     const auto capture = fontManager_.captureDependencies(dependencies);
-    FontHandle font;
-    for (const auto& family : fontFamilies) {
-      font = fontManager_.findFont(family);
-      if (font) {
-        break;
-      }
-    }
+    FontHandle font = FindFirstAvailableFont(fontManager_, fontFamilies);
     if (!font) {
       font = fontManager_.fallbackFont();
     }

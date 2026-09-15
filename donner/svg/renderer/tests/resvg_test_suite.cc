@@ -935,11 +935,18 @@ INSTANTIATE_TEST_SUITE_P(StructureA, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     StructureDefs, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/defs",
-                                        {
-                                            {"style-inheritance-on-text.svg",
-                                             Params::WithThreshold(kDefaultThreshold, 6500)},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "structure/defs",
+                {
+                    {"style-inheritance-on-text.svg",
+                     Params::WithThreshold(kDefaultThreshold, 5500,
+                                           "Larger threshold due to font-size on the <use> not "
+                                           "reaching the referenced <text>, which lays out at "
+                                           "the size inherited in its original tree instead; "
+                                           "moving font-size onto the <text> matches the golden "
+                                           "exactly. Measured 5351 simple, 5350 full, 5370 "
+                                           "Geode (#1167)")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1210,9 +1217,17 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/font",
                 {
+                    // All 388 mismatches sit on the vertical gray hairline and none on the text,
+                    // so the `font` shorthand itself round-trips exactly. That hairline is 1.25
+                    // device px wide centered on device x=250: Donner splits its coverage 160/160
+                    // across the two pixels, the exact area split, where the reference uses
+                    // 128/192. Donner emits that same 128/192 split for the geometrically
+                    // identical horizontal hairline, so Donner's two axes disagree with each other
+                    // and this is stroke rasterization, not font handling.
                     {"font-shorthand.svg",
-                     Params::Skip(
-                         "Vertical gray crosshair stroke comparison remains unresolved (#1173)")},
+                     Params::Skip("Vertical hairline coverage splits 160/160 against the "
+                                  "reference's 128/192, while the horizontal hairline matches; "
+                                  "the text under the shorthand is pixel-exact (#1173)")},
                     {"simple-case.svg", Params::Skip("Canvas size mismatch (400 vs 500)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
@@ -1224,24 +1239,64 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/font-family",
             {
-                {"bold-sans-serif.svg", Params::WithThreshold(kDefaultThreshold, 5200,
-                                                              "Bold sans-serif (Noto Sans Bold)")},
+                // The five generic-family goldens (cursive, fantasy, monospace, sans-serif,
+                // serif) disagree with the rest of this directory on the same four pixels of the
+                // plain frame <rect>, at (3,3), (496,3), (3,496) and (496,496), which no font
+                // choice can affect. They come from a different rendering than the goldens Donner
+                // matches exactly: noto-sans, double-quoted and fallback-2, plus font-list and
+                // source-sans-pro under full shaping. Which face each family resolves to is
+                // asserted directly in FontSelection_tests.cc, so these allowances no longer stand
+                // in for selection coverage. Each allowance sits about 2% above the largest
+                // measured residual across the simple and full text tiers, except serif and
+                // sans-serif, which keep their existing tighter numbers rather than being raised.
+                // The Geode lane contributes no residual here: it reports no text-rendering
+                // support, so every text/ case is skipped there.
+                {"bold-sans-serif.svg",
+                 Params::WithThreshold(
+                     kDefaultThreshold, 5200,
+                     "Larger threshold due to a golden bold face that is not the vendored Noto "
+                     "Sans Bold: that face's ink box is 205x73 px against the golden's 181x67 px. "
+                     "Measured 5078 simple, 5081 full (#1167)")},
                 {"cursive.svg",
-                 Params::WithThreshold(kDefaultThreshold, 5000, "cursive (Yellowtail)")},
-                {"fallback-1.svg", Params::Skip("Fallback from invalid family (different")},
-                {"fallback-2.svg", Params::WithThreshold(kDefaultThreshold, 1000,
-                                                         "Fallback list: \"Invalid, Noto Sans\"")},
+                 Params::WithThreshold(kDefaultThreshold, 4800,
+                                       "Larger threshold due to a golden that no checked-in face "
+                                       "reproduces and that disagrees on the frame <rect> "
+                                       "corners. Measured 4658 simple, 4660 full (#1167)")},
+                {"fallback-1.svg",
+                 Params::Skip("Golden is byte-identical to sans-serif.png, which is a centered "
+                              "different-family rendering, so it cannot match this left-anchored "
+                              "x=70 text (#1167)")},
                 {"fantasy.svg",
-                 Params::WithThreshold(kDefaultThreshold, 5200, "fantasy (Sedgwick Ave Display)")},
-                {"font-list.svg", Params::WithThreshold(kDefaultThreshold, 1300,
-                                                        "Font list: Source Sans Pro fallback")},
+                 Params::WithThreshold(kDefaultThreshold, 5150,
+                                       "Larger threshold due to a golden that no checked-in face "
+                                       "reproduces and that disagrees on the frame <rect> "
+                                       "corners. Measured 5011 simple, 5009 full (#1167)")},
+                {"font-list.svg",
+                 Params().withSimpleTextMaxPixels(1300).withReason(
+                     "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
+                     "does not read; full shaping matches the golden exactly. Measured 1273 "
+                     "simple, 0 full (#1167)")},
                 {"monospace.svg",
-                 Params::WithThreshold(kDefaultThreshold, 600, "monospace (Noto Mono)")},
+                 Params::WithThreshold(kDefaultThreshold, 600,
+                                       "Larger threshold due to a golden that matches the "
+                                       "checked-in Noto Mono advances exactly but draws a 3 px "
+                                       "shorter cap height, and disagrees on the frame <rect> "
+                                       "corners. Measured 569 simple, 562 full (#1167)")},
                 {"sans-serif.svg",
-                 Params::WithThreshold(kDefaultThreshold, 1900, "sans-serif (Noto Sans)")},
-                {"serif.svg", Params::WithThreshold(kDefaultThreshold, 4200, "serif (Noto Serif)")},
+                 Params::WithThreshold(kDefaultThreshold, 1900,
+                                       "Larger threshold due to a golden that no checked-in face "
+                                       "reproduces and that disagrees on the frame <rect> "
+                                       "corners. Measured 1875 simple, 1864 full (#1167)")},
+                {"serif.svg",
+                 Params::WithThreshold(kDefaultThreshold, 4200,
+                                       "Larger threshold due to a golden that no checked-in face "
+                                       "reproduces and that disagrees on the frame <rect> "
+                                       "corners. Measured 4146 simple, 4140 full (#1167)")},
                 {"source-sans-pro.svg",
-                 Params::WithThreshold(kDefaultThreshold, 1300, "Source Sans Pro")},
+                 Params().withSimpleTextMaxPixels(1300).withReason(
+                     "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
+                     "does not read; full shaping matches the golden exactly. Measured 1273 "
+                     "simple, 0 full (#1167)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1281,7 +1336,11 @@ INSTANTIATE_TEST_SUITE_P(
             "text/font-size-adjust",
             {{"simple-case.svg",
               Params::Skip(
-                  "Legacy font-size-adjust reference placement remains unqualified (#1173)")}})),
+                  "Reference places the adjusted text about 4 device px left of center. Both "
+                  "renderings use the same adjusted size, 64 * 0.3 / (536/1000) = 35.8, and the "
+                  "same glyph advances; only the anchor origin differs, and Donner's text-anchor "
+                  "placement for this string and face is exact where font-size-adjust is absent "
+                  "(#1173)")}})),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1369,7 +1428,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"mixed-scripts.svg",
                      Params::Skip("Needs BiDi: mixed LTR Latin + RTL Arabic in one span")},
                     {"non-ASCII-character.svg",
-                     Params::Skip("Bug? We render with a different CJK glyph. Wrong font?")},
+                     Params::Skip("Mplus 1p is the only checked-in face covering U+534A, so the "
+                                  "golden's glyph comes from a font that is not in the test font "
+                                  "set; the whole 108x110 px glyph body differs (#1167)")},
                     {"on-Arabic.svg", Params()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
@@ -1423,7 +1484,13 @@ INSTANTIATE_TEST_SUITE_P(
                          .onlyTextFull()
                          .withReason("Arabic text shaping; vertical-axis AA diff not "
                                      "the focus of the test")},
-                    {"xml-lang=ja.svg", Params::WithThreshold(kDefaultThreshold, 19100)},
+                    {"xml-lang=ja.svg",
+                     Params::WithThreshold(
+                         kDefaultThreshold, 7600,
+                         "Larger threshold due to Mplus 1p being the only checked-in face "
+                         "covering these CJK codepoints, so all three lines fall back to it "
+                         "while the golden's per-language faces are not in the test font set. "
+                         "Measured 7400 simple, 7377 full (#1167)")},
                     {"xml-space.svg", Params::WithThreshold(kDefaultThreshold, 1400)},
                     {"zalgo.svg", Params().withMaxPixelsDifferent(300).onlyTextFull().withReason(
                                       "Complex diacritics; vertical-axis AA diff "

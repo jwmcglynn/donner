@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -190,6 +191,33 @@ public:
   void setGenericFamilyMapping(std::string_view genericName, std::string_view realFamily);
 
   /**
+   * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
+   * after resolving CSS generic names.
+   *
+   * A `font-family` list must skip entries nothing provides so a later entry can match.
+   * `findFont()` cannot express that, because an unmatched family is answered with the embedded
+   * fallback rather than an invalid handle, so callers walking a list test availability here
+   * first. This performs no loading and leaves the resolution cache untouched.
+   *
+   * Text layout asks this once per family per span, and neither the family-list length nor the
+   * registered-rule count is bounded by anything but the document, so registered families are
+   * answered from a lowercased index maintained by \ref addFontFace rather than by rescanning the
+   * rules. That index is per FontManager instance and covers the rules this instance has seen: it
+   * is seeded from the registry at construction and extended on each registration, so a second
+   * manager over the same registry that registers its own rules does not update this one's.
+   *
+   * Like every other query here this writes nothing, so it is safe to run in parallel under the
+   * registry read lock. A family the provider already resolved through \ref findFont is answered
+   * from a second index that resolution fills, and anything still unknown falls through to the
+   * provider, which is why \ref FontFamilyProvider::hasFamily must answer in constant or
+   * logarithmic time.
+   *
+   * @param family Font family name to test, before generic-name resolution.
+   * @return True when a registered rule or the provider claims the resolved family.
+   */
+  bool hasFamily(std::string_view family) const;
+
+  /**
    * Find or load a font matching the given family name.
    *
    * Resolution order:
@@ -337,6 +365,7 @@ public:
       providerFonts_.clear();
       providerFailures_.clear();
       providerDependencies_.clear();
+      providerResolvedFamiliesLower_.clear();
       fontDependenciesOverflowed_ = false;
       ++fontResourceRevision_;
       cache_.clear();
@@ -558,6 +587,18 @@ private:
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;
+
+  /// Lowercased family names claimed by the `@font-face` rules this instance knows about, so
+  /// \ref hasFamily answers without rescanning them. Seeded from the registry at construction and
+  /// extended by \ref addFontFace, which is the only place `FontFaceComponent` entities are
+  /// created. Both are serialized write paths, which keeps \ref hasFamily a pure read.
+  std::unordered_set<std::string> registeredFamiliesLower_;
+
+  /// Lowercased family names the provider has already claimed during a \ref findFont resolution,
+  /// so later availability queries for a family this document already uses answer without going
+  /// back to the provider at all. Written only by \ref findFont, which is a serialized write path,
+  /// and dropped with the rest of the provider state when the provider changes.
+  std::unordered_set<std::string> providerResolvedFamiliesLower_;
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;

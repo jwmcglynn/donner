@@ -519,6 +519,36 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "font_selection_tests",
+    srcs = ["FontSelection_tests.cc"],
+    data = [
+        "//third_party/resvg-test-suite:fonts",
+    ],
+    target_compatible_with = select({
+        "//donner/svg/renderer:resvg_test_suite_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    # The full-text variant runs the same face-selection contract through FreeType and HarfBuzz,
+    # which matters most for the codepoint-coverage fallback: the two text backends answer glyph
+    # coverage independently, so a face that covers a codepoint under one must under the other.
+    variants = [
+        "text_full",
+    ],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "//donner/svg/components/text:components",
+        "//donner/svg/parser",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/resources:font_metadata",
+        "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_layout_params",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_engine_tests",
     srcs = ["TextEngine_tests.cc"],
     data = [

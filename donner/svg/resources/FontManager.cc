@@ -286,7 +286,15 @@ FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
     : registry_(registry),
       provider_(g_defaultFontProvider.load(std::memory_order_acquire)),
       candidateBudgetState_(std::make_shared<FontBudgetState>(FontBudgetState{
-          maximumLoadedFontBytes, maximumLoadedFonts, maximumFontValidationWork, 0, 0, 0, {}})) {}
+          maximumLoadedFontBytes, maximumLoadedFonts, maximumFontValidationWork, 0, 0, 0, {}})) {
+  // Another manager may have registered rules on this registry already, and hasFamily() must not
+  // write, so the family index is complete before the first query rather than filled by one.
+  auto view = registry_.view<FontFaceComponent>();
+  for (const Entity entity : view) {
+    registeredFamiliesLower_.insert(
+        ToLowerAscii(view.get<FontFaceComponent>(entity).face.familyName));
+  }
+}
 FontManager::~FontManager() = default;
 
 size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) const noexcept {
@@ -470,6 +478,7 @@ void FontManager::addFontFace(const css::FontFace& face) {
   const Entity entity = registry_.create();
   registry_.emplace<FontFaceComponent>(entity, face, nextFaceSequence_++);
   faceEntities_.emplace(std::move(key), entity);
+  registeredFamiliesLower_.insert(ToLowerAscii(face.familyName));
   // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
   // have to be recomputed.
   cache_.clear();
@@ -500,6 +509,21 @@ std::string_view FontManager::faceFamilyName(size_t index) const {
 void FontManager::setGenericFamilyMapping(std::string_view genericName,
                                           std::string_view realFamily) {
   genericFamilyMap_[ToLowerAscii(genericName)] = std::string(realFamily);
+}
+
+bool FontManager::hasFamily(std::string_view family) const {
+  const std::string familyLower = ToLowerAscii(family);
+  const auto generic = genericFamilyMap_.find(familyLower);
+  const bool isGeneric = generic != genericFamilyMap_.end();
+  const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
+  const std::string resolvedLower = isGeneric ? ToLowerAscii(resolved) : familyLower;
+
+  if (registeredFamiliesLower_.count(resolvedLower) != 0 ||
+      providerResolvedFamiliesLower_.count(resolvedLower) != 0) {
+    return true;
+  }
+
+  return provider_ != nullptr && provider_->hasFamily(resolved);
 }
 
 FontHandle FontManager::findFont(std::string_view family) {
@@ -626,6 +650,8 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   };
 
   if (provider_ != nullptr && provider_->hasFamily(family)) {
+    // Record the claim so later availability queries for this family skip the provider entirely.
+    providerResolvedFamiliesLower_.insert(ToLowerAscii(family));
     return findProviderFont(family, dependencyKey, cacheKey, matchedSourceFailedToLoad);
   }
 
