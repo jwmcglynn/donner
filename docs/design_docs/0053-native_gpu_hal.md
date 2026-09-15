@@ -99,18 +99,23 @@ commits and their fixes together in a focused reviewable change.
       `MakeShaderDescriptor(view, device.shaderSourceKind(), label)` supplies WGSL text, MSL text or
       SPIR-V words, and a device refuses a descriptor whose projection is absent from the linked
       artifact instead of compiling nothing. The filter engine, the shared render pipeline and the
-      checkerboard pipeline pass the device's kind; the Slug fill, gradient, mask and image-blit
-      module constructors in `GeodeShaders.cc` still pass the WGSL kind explicitly.
-- [ ] Link the native artifact library (`<family>_native_artifact`, MSL on Apple platforms and
-      SPIR-V on Linux) into the Geode libraries for each production family, as the checkerboard
-      pipeline already does through a platform `select()`, switch the `GeodeShaders.cc`
-      constructors to the device's kind, and keep the WebAssembly editor on the WGSL-only
-      artifacts. This is the remaining shader work for the native cutover; it is a build, linkage
-      and constructor change, not a shader change.
+      checkerboard pipeline pass the device's kind, and so do the Slug fill, gradient, mask and
+      image-blit module constructors in `GeodeShaders.cc`. No production call site names a
+      projection of its own.
+- [x] The native artifact library (`<family>_native_artifact`, MSL on Apple platforms and SPIR-V
+      on Linux) is linked into the Geode libraries for every production family through the shared
+      platform `select()` the checkerboard pipeline established, and the `GeodeShaders.cc`
+      constructors select the device's kind. The WebAssembly package contributes no native
+      artifact and keeps linking the WGSL artifacts only. A probe binary linking the production
+      family set proves one linked binary carries the authored WGSL and the platform-native
+      payload of each family and nothing from the other platform's projection, and the module
+      constructors are covered against a device reporting each source kind, including refusal of
+      a kind the linked artifact does not carry.
 - [ ] Qualify each family through the selected native backend with strict pixel acceptance:
       resvg filter cases, chained filters, fractional alpha, nonzero subregions, refusal paths and
       DPR2. The native Metal and Vulkan execution suites establish per-shader correctness today; they
-      do not close this item on their own.
+      do not close this item on their own. The artifacts and the projection selection are in
+      place, so what remains is running the qualification through a native production device.
 - [ ] Shader profile additions follow the compiler's rules: a construct the v1 profile rejects is
       added to the compiler with tests across all three projections rather than worked around, and
       the UI renderer's shaders are authored as WGSL sources under the same contract.
