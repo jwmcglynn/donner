@@ -131,9 +131,15 @@ commits and their fixes together in a focused reviewable change.
 
 ### Resource plumbing and uploads
 
-- [ ] Convert `GeodeFilterEngine::FilterResourceArena`, intermediate textures, shared pipeline
-      resources, and frame recording to runtime handles and encoders. Remove raw export/reimport
-      cycles and concrete host-encoder access as their callers migrate.
+- [ ] `GeodeFilterEngine::FilterResourceArena` and the intermediate textures it hands out are
+      runtime textures end to end: allocation, exact-descriptor reuse, color-space caching,
+      transparent clears, tile copies and the graph's result are runtime handles, with no backend
+      export or reimport left between primitives. `execute` takes the source graphic as a runtime
+      texture and returns an explicit outcome whose output the caller owns and releases through the
+      same allocator that issued it; `RendererGeode` passes its pooled captures straight in.
+- [ ] Convert the shared Geode pipeline resources and filter frame recording to runtime handles and
+      encoders. Remove the remaining raw export/reimport cycles and concrete host-encoder access as
+      their callers migrate.
 - [ ] Add a checked destination origin to `Device::writeTexture` and implement the same subrectangle
       semantics in each backend. Preserve extent, row-stride, data-size, and overflow validation.
 - [ ] Move `GlTextureCache` bitmap/thumbnail uploads, border replication, clear operations, and

@@ -268,11 +268,6 @@ const wgpu::TextureView& RendererGeodeTextureSnapshot::textureView() const {
 
 namespace {
 
-// Render-target texture format stored per-instance in Impl::textureFormat (initialized from
-// GeodeDevice). Filter-engine intermediate textures always use RGBA8Unorm for compute-shader
-// compatibility regardless of the host format.
-constexpr wgpu::TextureFormat kFilterIntermediateFormat = wgpu::TextureFormat::RGBA8Unorm;
-
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
 /// matching the CPU-renderer helper.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
@@ -1534,12 +1529,29 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return frameImportedTextureViews.back();
   }
 
-  /// Names a filter-engine result texture. Filter intermediates are storage-writable, a
-  /// capability the runtime does not model; what survives the mapping is exactly what the
-  /// compositing draw needs, which is the ability to sample it.
-  const gpu::Texture& importFilterResult(const wgpu::Texture& texture) {
-    return importTexture(texture, kFilterIntermediateFormat,
-                         wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
+  /// The texture a finished filter execution composites, or null when it produced nothing.
+  ///
+  /// A declined graph composites the caller's own capture unchanged, so the outcomes differ in
+  /// which texture is drawn, not in whether one is drawn.
+  /// @param result Outcome of the execution.
+  /// @param sourceGraphic Capture the execution ran against.
+  static const gpu::Texture* filterOutput(const geode::FilterExecutionResult& result,
+                                          const gpu::Texture& sourceGraphic) {
+    switch (result.kind) {
+      case geode::FilterExecutionResult::Kind::Failed: return nullptr;
+      case geode::FilterExecutionResult::Kind::SourceGraphic: return &sourceGraphic;
+      case geode::FilterExecutionResult::Kind::Output: return &result.texture;
+    }
+    return nullptr;
+  }
+
+  /// The descriptor the composited filter texture was allocated with.
+  /// @param result Outcome of the execution.
+  /// @param sourceGraphicDesc Descriptor of the capture the execution ran against.
+  static const gpu::TextureDescriptor& filterOutputDesc(
+      const geode::FilterExecutionResult& result, const gpu::TextureDescriptor& sourceGraphicDesc) {
+    return result.kind == geode::FilterExecutionResult::Kind::Output ? result.desc
+                                                                     : sourceGraphicDesc;
   }
 
   /// Names a pooled texture as a runtime handle, taking its capabilities from the descriptor it
@@ -2240,7 +2252,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!localTexture.isValid()) {
       return false;
     }
-    const wgpu::Texture localBackendTexture = backendTextureOf(localTexture);
 
     const Transform2d filterFromDevice = frame.deviceFromFilter.inverse();
     const Transform2d localFromDevice = filterFromDevice *
@@ -2248,12 +2259,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                                                -geometry->paddedRegion.topLeft.y) *
                                         Transform2d::Scale(geometry->scaleX, geometry->scaleY);
     geode::GeoEncoder resampleEncoder(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                      importTarget(localBackendTexture), localDesc.size,
-                                      *frameGpuEncoder);
+                                      localTexture, localDesc.size, *frameGpuEncoder);
     configureEncoder(resampleEncoder);
     resampleEncoder.setTransform(localFromDevice);
     resampleEncoder.drawTexture(
-        importTarget(backendTextureOf(frame.layerTexture)),
+        frame.layerTexture,
         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
                         static_cast<double>(frame.layerDesc.size.height)),
         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
@@ -2268,8 +2278,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
       return false;
     }
-    wgpu::Texture localFiltered = filterEngine->execute(
-        frame.filterGraph, localBackendTexture, localFilterRegion, localDeviceFromFilter, *this,
+    geode::FilterExecutionResult localFiltered = filterEngine->execute(
+        frame.filterGraph, localTexture, localDesc, localFilterRegion, localDeviceFromFilter, *this,
         frameCommandEncoder, nullptr, frame.localFilterPlan);
 
     const Transform2d deviceFromLocal =
@@ -2284,15 +2294,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     compositeEncoder->setLoadPreserve();
     encoder = std::move(compositeEncoder);
     updateEncoderScissor();
-    if (localFiltered) {
+    if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
       encoder->setTransform(deviceFromLocal);
-      encoder->drawTexture(importFilterResult(localFiltered),
+      encoder->drawTexture(*composited,
                            Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
                                            static_cast<double>(geometry->height)),
                            kWholeTextureUv, 1.0, /*pixelated=*/false,
                            /*sourceIsPremultiplied=*/true);
       encoder->setTransform(Transform2d());
     }
+    releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
     frame.localRasterRequiredForBudget = false;
     return true;
@@ -5636,23 +5647,24 @@ void RendererGeode::popFilterLayer() {
     return;
   }
 
-  // Run the filter graph on the captured layer texture. The filter engine still records
-  // through wgpu directly, so it takes the backend alias of the pooled capture and hands back
-  // another backend texture its own arena owns.
-  const wgpu::Texture layerBackendTexture = impl_->backendTextureOf(frame.layerTexture);
-  wgpu::Texture filteredTexture = layerBackendTexture;
+  // Run the filter graph on the captured layer texture. Nothing runs it when the graph is empty,
+  // in which case the capture itself is what gets composited back.
+  geode::FilterExecutionResult filtered;
+  filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
   if (frame.localRasterRequiredForBudget) {
     impl_->filterExecutionBudget->reject();
-    filteredTexture = wgpu::Texture{};
+    filtered.kind = geode::FilterExecutionResult::Kind::Failed;
   } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
              static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
                  components::kMaximumFilterSurfacePixels) {
     UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
                              "Failed to replay recorded draws before the filter passes");
-    filteredTexture = impl_->filterEngine->execute(
-        frame.filterGraph, layerBackendTexture, frame.filterRegion, bufferDeviceFromFilter, *impl_,
-        impl_->frameCommandEncoder, nullptr, frame.fullFilterPlan);
+    filtered = impl_->filterEngine->execute(
+        frame.filterGraph, frame.layerTexture, frame.layerDesc, frame.filterRegion,
+        bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder, nullptr, frame.fullFilterPlan);
   }
+  const gpu::Texture* filteredTexture = Impl::filterOutput(filtered, frame.layerTexture);
+  const gpu::TextureDescriptor& filteredDesc = Impl::filterOutputDesc(filtered, frame.layerDesc);
 
   // Restore outer target and create a fresh encoder that preserves its
   // existing contents. Composite the filtered texture back with full
@@ -5665,8 +5677,9 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  if (!filteredTexture) {
+  if (filteredTexture == nullptr) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
+    impl_->releaseTextureAtFrameEnd(std::move(filtered.texture), filtered.desc);
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
@@ -5677,19 +5690,18 @@ void RendererGeode::popFilterLayer() {
     const uint32_t vpH = static_cast<uint32_t>(impl_->pixelHeight);
 
     const gpu::TextureDescriptor vpDesc{"RendererGeodeFilterViewport", gpu::Extent2d{vpW, vpH},
-                                        geode::GpuTextureFormatFromWgpu(kFilterIntermediateFormat),
+                                        filteredDesc.format,
                                         gpu::TextureUsage::CopyDst | gpu::TextureUsage::Sampled};
     gpu::Texture viewportTexture = impl_->acquireTexture(vpDesc);
 
     if (viewportTexture.isValid()) {
-      const gpu::Texture& filteredHandle = impl_->importFilterResult(filteredTexture);
       const gpu::Texture& viewportHandle = viewportTexture;
 
       // Everything recorded before this point has already been replayed into the frame command
       // encoder by the encoder retire above, so the copy lands after those draws and before the
       // composite recorded below.
       const gpu::Status copied = impl_->frameGpuEncoder->copyTextureToTexture(
-          filteredHandle, viewportHandle, gpu::Extent2d{vpW, vpH},
+          *filteredTexture, viewportHandle, gpu::Extent2d{vpW, vpH},
           gpu::Origin2d{static_cast<uint32_t>(frame.filterBufferOffsetX),
                         static_cast<uint32_t>(frame.filterBufferOffsetY)});
       UTILS_RELEASE_ASSERT_MSG(!copied.hasError(),
@@ -5704,13 +5716,13 @@ void RendererGeode::popFilterLayer() {
     // coordinates, not pixel-space; we'd need to transform by the current
     // CTM snapshot before using it as a scissor. Skipping for this PR -
     // all current feGaussianBlur resvg tests pass without the clip.
-    impl_->encoder->blitFullTarget(impl_->importFilterResult(filteredTexture), 1.0);
+    impl_->encoder->blitFullTarget(*filteredTexture, 1.0);
   }
-  // Defer release to endFrame: `blitFullTarget` recorded a sample from
-  // `filteredTexture` (which is `frame.layerTexture` when the filter
-  // graph is empty) into the frame encoder. Filter-engine-owned
-  // intermediates have already been queued for frame-end pool release
-  // through `FilterTextureAllocator`; recycle the layer capture here.
+  // Defer release to endFrame: `blitFullTarget` recorded a sample from the composited texture
+  // (which is `frame.layerTexture` when the filter graph is empty) into the frame encoder. The
+  // execution's intermediates have already been queued for frame-end pool release through
+  // `FilterTextureAllocator`; its output and the layer capture are recycled here.
+  impl_->releaseTextureAtFrameEnd(std::move(filtered.texture), filtered.desc);
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
   impl_->filterExecutionBudget->release(frame.filterReservation);
 }

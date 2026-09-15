@@ -3,8 +3,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <limits>
 #include <memory>
+#include <ostream>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -18,6 +20,25 @@
 namespace donner::geode {
 namespace {
 
+/// Slot and generation of a runtime texture, printed so a mismatch names both halves.
+struct TextureIdentity {
+  uint32_t slot = 0;        //!< Resource slot index.
+  uint32_t generation = 0;  //!< Slot generation.
+
+  /// Equality operator. @param other Identity to compare against.
+  bool operator==(const TextureIdentity& other) const = default;
+};
+
+/// Streams \p identity for diagnostics. @param os Output stream. @param identity Value to print.
+std::ostream& operator<<(std::ostream& os, const TextureIdentity& identity) {
+  return os << "texture#" << identity.slot << "@" << identity.generation;
+}
+
+/// Identity of \p texture. @param texture Live runtime texture.
+TextureIdentity IdentityOf(const gpu::Texture& texture) {
+  return TextureIdentity{texture.slotIndex(), texture.generation()};
+}
+
 class RefusingTextureAllocator final : public FilterTextureAllocator {
 public:
   RefusingTextureAllocator(GeodeWgpuAdapterDevice& device, std::string_view refusedLabel,
@@ -26,6 +47,8 @@ public:
 
   gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& descriptor) override {
     requestedLabels.push_back(descriptor.label);
+    requestedSizes.push_back(descriptor.size);
+    ++requests;
     if (refusals != 0) {
       ++requestsAfterRefusal;
     }
@@ -46,7 +69,9 @@ public:
       missingUploadUsage.usage = gpu::TextureUsage::Sampled;
       return gpu::GetResultOrFail(device_.createTexture(missingUploadUsage));
     }
-    return gpu::GetResultOrFail(device_.createTexture(descriptor));
+    gpu::Texture texture = gpu::GetResultOrFail(device_.createTexture(descriptor));
+    issued.push_back(IdentityOf(texture));
+    return texture;
   }
 
   void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
@@ -55,12 +80,15 @@ public:
   }
 
   bool denyImageUploads = false;
+  size_t requests = 0;
   size_t refusals = 0;
   size_t requestsAfterRefusal = 0;
   size_t allocations = 0;
   size_t colorConversions = 0;
   uint64_t retainedTextureBytes = 0;
   std::vector<RcString> requestedLabels;
+  std::vector<gpu::Extent2d> requestedSizes;
+  std::vector<TextureIdentity> issued;
   std::vector<gpu::Texture> retired;
 
 private:
@@ -68,6 +96,61 @@ private:
   RcString refusedLabel_;
   size_t refusedOccurrence_;
   size_t matchingRequests_ = 0;
+};
+
+/// Texture pool with the renderer's deferral: a release only becomes available for reuse once
+/// the frame it was recorded into has ended.
+class PoolingTextureAllocator final : public FilterTextureAllocator {
+public:
+  /// @param device Device the pool creates textures on.
+  explicit PoolingTextureAllocator(GeodeWgpuAdapterDevice& device) : device_(device) {}
+
+  gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& descriptor) override {
+    for (size_t i = 0; i < free_.size(); ++i) {
+      if (Matches(free_[i].desc, descriptor)) {
+        gpu::Texture texture = std::move(free_[i].texture);
+        free_.erase(free_.begin() + static_cast<std::ptrdiff_t>(i));
+        reissued.push_back(IdentityOf(texture));
+        issued.push_back(IdentityOf(texture));
+        return texture;
+      }
+    }
+    gpu::Texture texture = gpu::GetResultOrFail(device_.createTexture(descriptor));
+    issued.push_back(IdentityOf(texture));
+    return texture;
+  }
+
+  void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
+                                      const gpu::TextureDescriptor& desc) override {
+    pending_.push_back({std::move(texture), desc});
+  }
+
+  /// Makes everything released during the frame available again, as the renderer does once the
+  /// frame's command buffer has submitted.
+  void endFrame() {
+    for (Entry& entry : pending_) {
+      free_.push_back(std::move(entry));
+    }
+    pending_.clear();
+  }
+
+  std::vector<TextureIdentity> issued;    //!< Every texture handed out, in order.
+  std::vector<TextureIdentity> reissued;  //!< The subset that came back out of the free list.
+
+private:
+  struct Entry {
+    gpu::Texture texture;
+    gpu::TextureDescriptor desc;
+  };
+
+  static bool Matches(const gpu::TextureDescriptor& lhs, const gpu::TextureDescriptor& rhs) {
+    return lhs.size == rhs.size && lhs.format == rhs.format && lhs.usage == rhs.usage &&
+           lhs.sampleCount == rhs.sampleCount;
+  }
+
+  GeodeWgpuAdapterDevice& device_;
+  std::vector<Entry> pending_;
+  std::vector<Entry> free_;
 };
 
 svg::components::FilterGraph MakeGraph(bool composite) {
@@ -99,13 +182,21 @@ svg::components::FilterGraph MakeDirectGraph(bool composite, bool distinctInputs
   return graph;
 }
 
+/// What an execution produced, captured before its output goes back to the pool.
+struct ExecutedFilter {
+  FilterExecutionResult::Kind kind = FilterExecutionResult::Kind::Failed;
+  TextureIdentity identity;     //!< Runtime identity of the output texture.
+  uint64_t deviceId = 0;        //!< Device the output belongs to.
+  gpu::TextureDescriptor desc;  //!< Descriptor the output was allocated with.
+};
+
 class GeodeFilterEngineTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = GeodeDevice::CreateHeadless();
     ASSERT_THAT(device_, testing::NotNull());
-    source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(gpu::TextureDescriptor{
-        "source", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled}));
+    setSource(gpu::TextureDescriptor{
+        "source", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled});
     ASSERT_THAT(source_.isValid(), testing::IsTrue());
     encoder_.reset(device_->device().createCommandEncoder());
     ASSERT_THAT(static_cast<bool>(encoder_.get()), testing::IsTrue());
@@ -131,15 +222,42 @@ protected:
     }
   }
 
+  /// Replaces the source graphic with one allocated from \p desc, keeping the descriptor the
+  /// engine is handed in step with the handle.
+  void setSource(const gpu::TextureDescriptor& desc) {
+    sourceDesc_ = desc;
+    source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(desc));
+  }
+
+  /// Runs \p graph against the current source graphic, then releases the output the way the
+  /// renderer does, so the allocator observes every intermediate and the output retired exactly
+  /// once.
+  ExecutedFilter execute(const svg::components::FilterGraph& graph,
+                         FilterTextureAllocator& allocator,
+                         svg::components::FilterExecutionBudget* budget = nullptr,
+                         std::optional<FilterTilePlan> plan = std::nullopt) {
+    FilterExecutionResult result =
+        engine_->execute(graph, source_, sourceDesc_, Box2d({0, 0}, {4, 4}), Transform2d(),
+                         allocator, encoder_, budget, plan);
+    ExecutedFilter executed;
+    executed.kind = result.kind;
+    executed.desc = result.desc;
+    if (result.texture.isValid()) {
+      executed.identity = IdentityOf(result.texture);
+      executed.deviceId = result.texture.deviceId();
+      allocator.releaseFilterTextureAtFrameEnd(std::move(result.texture), result.desc);
+    }
+    return executed;
+  }
+
   void runGraph(const svg::components::FilterGraph& graph, std::string_view refusedLabel,
                 size_t refusedOccurrence = 1, bool expectRefusal = true) {
     allocator_ = std::make_unique<RefusingTextureAllocator>(device_->adapterDevice(), refusedLabel,
                                                             refusedOccurrence);
-    const wgpu::Texture output =
-        engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
-                         Box2d({0, 0}, {4, 4}), Transform2d(), *allocator_, encoder_);
     const bool refused = expectRefusal && !refusedLabel.empty();
-    EXPECT_THAT(static_cast<bool>(output), testing::Eq(!refused));
+    const ExecutedFilter result = execute(graph, *allocator_);
+    EXPECT_THAT(result.kind, testing::Eq(refused ? FilterExecutionResult::Kind::Failed
+                                                 : FilterExecutionResult::Kind::Output));
     EXPECT_THAT(allocator_->refusals, testing::Eq(refused ? 1u : 0u));
     EXPECT_THAT(allocator_->requestsAfterRefusal, testing::Eq(0u));
     EXPECT_THAT(allocator_->retired, testing::SizeIs(allocator_->allocations));
@@ -147,6 +265,7 @@ protected:
 
   std::unique_ptr<GeodeDevice> device_;
   gpu::Texture source_;
+  gpu::TextureDescriptor sourceDesc_;
   ScopedWgpuHandle<wgpu::CommandEncoder> encoder_;
   std::unique_ptr<GeodeFilterEngine> engine_;
   std::unique_ptr<RefusingTextureAllocator> allocator_;
@@ -190,10 +309,8 @@ TEST_P(ImageUploadRefusalTest, RefusedUploadReturnsNoOutputAndRetiresResources) 
 
   allocator_ = std::make_unique<RefusingTextureAllocator>(device_->adapterDevice(), "");
   allocator_->denyImageUploads = true;
-  const wgpu::Texture output =
-      engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
-                       Box2d({0, 0}, {4, 4}), Transform2d(), *allocator_, encoder_);
-  EXPECT_THAT(static_cast<bool>(output), testing::IsFalse());
+  const ExecutedFilter result = execute(graph, *allocator_);
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
   EXPECT_THAT(
       allocator_->requestedLabels,
       testing::Contains(RcString(GetParam() ? "FilterImageSource" : "FilterImageEmptySource")));
@@ -584,14 +701,29 @@ TEST_F(GeodeFilterEngineTest, Dpr2PlanChargesAllTileWorkUnderTheWasmMemoryCap) {
 }
 
 TEST_F(GeodeFilterEngineTest, RefusedTileSurfacesStopBeforeFurtherAllocation) {
-  source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(
-      gpu::TextureDescriptor{"tiled source",
-                             {32, 32},
-                             gpu::TextureFormat::RGBA8Unorm,
-                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  setSource(gpu::TextureDescriptor{"tiled source",
+                                   {32, 32},
+                                   gpu::TextureFormat::RGBA8Unorm,
+                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   engine_->setMaximumTileExtentForTesting(16);
   runGraph(MakeGraph(true), "FilterTiledOutput");
   runGraph(MakeGraph(true), "FilterTileInput");
+}
+
+TEST_F(GeodeFilterEngineTest, TilesASourceWhoseFormatIsNotTheIntermediateOne) {
+  // An embedder surface can be BGRA, and a tiled execution copies the source straight into its
+  // tile buffer. A tile buffer pinned to one format makes that copy fail on such a surface, and
+  // the whole filter is lost rather than one tile.
+  setSource(gpu::TextureDescriptor{"bgra tiled source",
+                                   {32, 32},
+                                   gpu::TextureFormat::BGRA8Unorm,
+                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  engine_->setMaximumTileExtentForTesting(16);
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  const ExecutedFilter result = execute(MakeGraph(true), allocator);
+
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  EXPECT_THAT(engine_->lastExecutionMemory().tileExecutions, testing::Gt(1u));
 }
 
 TEST_F(GeodeFilterEngineTest, LargeBlurHalosUseBoundedStripsAtHighDprZoom) {
@@ -613,11 +745,10 @@ TEST_F(GeodeFilterEngineTest, LargeBlurHalosUseBoundedStripsAtHighDprZoom) {
 
 TEST_F(GeodeFilterEngineTest, InvalidAdmittedPlansFailBeforeAllocation) {
   using namespace svg::components;
-  source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(
-      gpu::TextureDescriptor{"admitted source",
-                             {4, 4},
-                             gpu::TextureFormat::RGBA8Unorm,
-                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  setSource(gpu::TextureDescriptor{"admitted source",
+                                   {4, 4},
+                                   gpu::TextureFormat::RGBA8Unorm,
+                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   FilterGraph graph;
   FilterNode blur;
   blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 1, .stdDeviationY = 1};
@@ -641,10 +772,8 @@ TEST_F(GeodeFilterEngineTest, InvalidAdmittedPlansFailBeforeAllocation) {
       plan.tiles = 16;
     }
     RefusingTextureAllocator allocator(device_->adapterDevice(), "");
-    const auto output =
-        engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
-                         Box2d({0, 0}, {4, 4}), Transform2d(), allocator, encoder_, nullptr, plan);
-    EXPECT_FALSE(output);
+    const ExecutedFilter result = execute(graph, allocator, nullptr, plan);
+    EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
     EXPECT_EQ(allocator.allocations, 0u);
   }
 }
@@ -656,12 +785,98 @@ TEST_F(GeodeFilterEngineTest, FailedAdmittedBudgetDoesNotBypassTheFilter) {
   FilterExecutionBudget budget;
   budget.reject();
   RefusingTextureAllocator allocator(device_->adapterDevice(), "");
-  const auto output =
-      engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
-                       Box2d({0, 0}, {4, 4}), Transform2d(), allocator, encoder_, &budget, plan);
-  EXPECT_FALSE(output);
+  const ExecutedFilter result = execute(graph, allocator, &budget, plan);
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
   EXPECT_EQ(allocator.allocations, 0u);
   EXPECT_EQ(engine_->lastExecutionMemory().tileExecutions, 0u);
+}
+
+TEST_F(GeodeFilterEngineTest, OutputIsTheRuntimeTextureThePoolIssued) {
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  const ExecutedFilter result = execute(MakeGraph(false), allocator);
+
+  ASSERT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  // The output leaves the engine as the pool's own handle: same device, and an identity the pool
+  // minted, so nothing along the way replaced it with a second name for the same storage.
+  EXPECT_THAT(result.deviceId, testing::Eq(device_->adapterDevice().deviceId()));
+  EXPECT_THAT(allocator.issued, testing::Contains(result.identity));
+  EXPECT_THAT(result.desc.format, testing::Eq(gpu::TextureFormat::RGBA8Unorm));
+  EXPECT_THAT(allocator.retired, testing::SizeIs(allocator.allocations));
+}
+
+TEST_F(GeodeFilterEngineTest, RepeatedResizesReallocateAndRetireEverythingTheyTake) {
+  const std::vector<uint32_t> extents = {4, 16, 4};
+  std::vector<TextureIdentity> seen;
+  for (const uint32_t extent : extents) {
+    SCOPED_TRACE(extent);
+    setSource(gpu::TextureDescriptor{"resized source",
+                                     {extent, extent},
+                                     gpu::TextureFormat::RGBA8Unorm,
+                                     gpu::TextureUsage::Sampled});
+    RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+    const ExecutedFilter result = execute(MakeGraph(false), allocator);
+
+    ASSERT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+    EXPECT_THAT(allocator.requestedSizes,
+                testing::Each(testing::Field("width", &gpu::Extent2d::width, testing::Eq(extent))));
+    // Every texture the execution took is handed back to the pool before it returns, so the
+    // retained set does not grow across resizes.
+    EXPECT_THAT(allocator.retired, testing::SizeIs(allocator.allocations));
+    EXPECT_THAT(engine_->lastExecutionMemory().textures,
+                testing::Eq(allocator.retainedTextureBytes));
+
+    for (const TextureIdentity& identity : allocator.issued) {
+      EXPECT_THAT(seen, testing::Not(testing::Contains(identity)));
+    }
+    seen.insert(seen.end(), allocator.issued.begin(), allocator.issued.end());
+  }
+}
+
+TEST_F(GeodeFilterEngineTest, OverlappingExecutionsDoNotReuseAnUnsubmittedIntermediate) {
+  // Two graphs in one frame record into the same command encoder, so the first execution's
+  // intermediates are still referenced by unsubmitted work while the second one runs. They come
+  // back to the pool as frame-end releases, and nothing may hand them out again until the frame
+  // ends.
+  PoolingTextureAllocator pool(device_->adapterDevice());
+  const ExecutedFilter first = execute(MakeGraph(false), pool);
+  const size_t issuedByFirst = pool.issued.size();
+  const ExecutedFilter second = execute(MakeGraph(false), pool);
+
+  ASSERT_THAT(first.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  ASSERT_THAT(second.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  ASSERT_THAT(issuedByFirst, testing::Gt(0u));
+  ASSERT_THAT(pool.issued, testing::SizeIs(testing::Gt(issuedByFirst)));
+  const std::vector<TextureIdentity> firstIssued(
+      pool.issued.begin(), pool.issued.begin() + static_cast<std::ptrdiff_t>(issuedByFirst));
+  for (size_t i = issuedByFirst; i < pool.issued.size(); ++i) {
+    EXPECT_THAT(firstIssued, testing::Not(testing::Contains(pool.issued[i])));
+  }
+  EXPECT_THAT(pool.reissued, testing::IsEmpty());
+
+  // The same pool does recycle once the frame ends, so the disjointness above is a real deferral
+  // and not a pool that never reuses anything.
+  pool.endFrame();
+  const ExecutedFilter third = execute(MakeGraph(false), pool);
+  ASSERT_THAT(third.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  EXPECT_THAT(pool.reissued, testing::Not(testing::IsEmpty()));
+}
+
+TEST_F(GeodeFilterEngineTest, RefusalDetachesNothingAndRetiresEachTextureExactlyOnce) {
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "FilterSubregionClipOutput");
+  const ExecutedFilter result = execute(MakeGraph(false), allocator);
+
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
+  // A failure hands the caller nothing, so every texture the execution took comes back through
+  // the pool exactly once. A detach that also left its record in the arena, or one that removed a
+  // record the arena still had to release, shows up here as a duplicate or a missing identity
+  // rather than as a count that happens to match.
+  EXPECT_THAT(result.identity, testing::Eq(TextureIdentity{}));
+  std::vector<TextureIdentity> retired;
+  retired.reserve(allocator.retired.size());
+  for (const gpu::Texture& texture : allocator.retired) {
+    retired.push_back(IdentityOf(texture));
+  }
+  EXPECT_THAT(retired, testing::UnorderedElementsAreArray(allocator.issued));
 }
 
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,

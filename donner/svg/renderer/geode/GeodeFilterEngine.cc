@@ -121,31 +121,31 @@ struct FilterResourceArena {
         encoderSlot_(&commandEncoder),
         passesInCommandBuffer_(passesInCommandBuffer) {}
   ~FilterResourceArena() {
-    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : backendBuffers_) {
-      device_.deferDestroy(buffer.take());
-    }
     for (auto& owned : textures_) {
-      textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
+      // A detached output left its record behind with a null handle; the caller owns it now.
+      if (owned.texture.isValid()) {
+        textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
+      }
     }
   }
 
   FilterResourceArena(const FilterResourceArena&) = delete;
   FilterResourceArena& operator=(const FilterResourceArena&) = delete;
 
-  /// Imports carry sRGB. A produced value records the space its primitive evaluated in.
-  bool isLinearRgb(const wgpu::Texture& texture) const {
+  /// Borrowed sources carry sRGB. A produced value records the space its primitive evaluated in.
+  bool isLinearRgb(FilterTexture texture) const {
     return std::any_of(colorValues_.begin(), colorValues_.end(),
                        [&](const auto& value) { return value.linear == texture; });
   }
 
-  void markLinearRgb(const wgpu::Texture& texture, bool linear) {
+  void markLinearRgb(FilterTexture texture, bool linear) {
     if (linear && !isLinearRgb(texture)) {
       colorValues_.push_back({{}, texture});
     }
   }
 
   /// Reuses the requested representation when an earlier edge already converted this value.
-  wgpu::Texture convertedTexture(const wgpu::Texture& input, bool linear) const {
+  FilterTexture convertedTexture(FilterTexture input, bool linear) const {
     if (isLinearRgb(input) == linear) {
       return input;
     }
@@ -157,7 +157,7 @@ struct FilterResourceArena {
     return {};
   }
 
-  void rememberConversion(const wgpu::Texture& input, const wgpu::Texture& output, bool linear) {
+  void rememberConversion(FilterTexture input, FilterTexture output, bool linear) {
     for (auto& value : colorValues_) {
       if (value.srgb == input || value.linear == input) {
         (linear ? value.linear : value.srgb) = output;
@@ -169,12 +169,13 @@ struct FilterResourceArena {
 
   /// Makes dead intermediates available after a whole node has finished recording.
   /// Both color representations of every retained logical value stay live.
-  void retainValues(std::span<const wgpu::Texture> values) {
-    const auto live = [&](const wgpu::Texture& texture) {
+  void retainValues(std::span<const FilterTexture> values) {
+    UTILS_RELEASE_ASSERT_MSG(!detached_, "filter arena retained values after detaching its output");
+    const auto live = [&](FilterTexture texture) {
       return texture && std::find(values.begin(), values.end(), texture) != values.end();
     };
     for (OwnedTexture& owned : textures_) {
-      const wgpu::Texture texture = device_.adapterDevice().wgpuTextureOf(owned.texture);
+      const FilterTexture texture{&owned.texture, &owned.desc};
       const bool representationIsLive =
           std::any_of(colorValues_.begin(), colorValues_.end(), [&](const ColorValue& value) {
             return (value.srgb == texture || value.linear == texture) &&
@@ -187,82 +188,56 @@ struct FilterResourceArena {
   }
 
   /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
-  /// ends. Null when the pool refuses the allocation.
+  /// ends. Empty when the pool refuses the allocation.
   ///
-  /// The returned reference names storage this arena keeps for its whole lifetime, so a caller
-  /// may hold it across further allocations.
+  /// The returned value names storage this arena keeps for its whole lifetime, so a caller may
+  /// hold it across further allocations.
   /// @param desc Descriptor the intermediate is allocated with.
-  const gpu::Texture* createRuntimeTexture(const gpu::TextureDescriptor& desc) {
+  FilterTexture createRuntimeTexture(const gpu::TextureDescriptor& desc) {
+    UTILS_RELEASE_ASSERT_MSG(!detached_,
+                             "filter arena allocated a texture after detaching its output");
     for (OwnedTexture& owned : textures_) {
       if (owned.available && owned.desc.size == desc.size && owned.desc.format == desc.format &&
           owned.desc.usage == desc.usage && owned.desc.sampleCount == desc.sampleCount) {
-        const wgpu::Texture texture = device_.adapterDevice().wgpuTextureOf(owned.texture);
+        const FilterTexture texture{&owned.texture, &owned.desc};
         // The physical allocation now carries a new logical value.
         std::erase_if(colorValues_, [&](const ColorValue& value) {
           return value.srgb == texture || value.linear == texture;
         });
         owned.available = false;
-        return &owned.texture;
+        return texture;
       }
     }
     gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
     if (!texture.isValid()) {
-      return nullptr;
+      return {};
     }
 
     textureBytes +=
         uint64_t{desc.size.width} * desc.size.height * gpu::TextureFormatBytesPerTexel(desc.format);
     textures_.push_back({std::move(texture), desc});
-    const gpu::Texture* result = &textures_.back().texture;
-    runtimeNameByBackendTexture_.emplace_back(
-        static_cast<WGPUTexture>(device_.adapterDevice().wgpuTextureOf(*result)), result);
-    return result;
+    return FilterTexture{&textures_.back().texture, &textures_.back().desc};
   }
 
-  /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
-  /// ends.
+  /// Hands the execution's result to the caller, which becomes responsible for releasing it.
   ///
-  /// The arena's currency with the renderer is the runtime handle, which is what the pool
-  /// allocates and what the frame-end release takes back. The backend texture is returned to the
-  /// engine's own recording code, which still speaks wgpu directly; it borrows, and this arena
-  /// owns.
-  /// @param desc Descriptor the intermediate is allocated with.
-  wgpu::Texture createTexture(const gpu::TextureDescriptor& desc) {
-    const gpu::Texture* texture = createRuntimeTexture(desc);
-    if (texture == nullptr) {
-      return {};
-    }
-    return device_.adapterDevice().wgpuTextureOf(*texture);
-  }
-
-  /// Names \p texture for the runtime so a pass can bind it, owned by this arena until the frame
-  /// ends. Null when the runtime refuses the handle.
-  ///
-  /// The engine threads intermediates between passes as backend textures, so a pass recorded
-  /// through the runtime has to name its source rather than allocate it. The runtime borrows: the
-  /// texture is still owned by whoever allocated it.
-  /// @param texture Backend texture to name.
-  const gpu::Texture* importRuntimeTexture(const wgpu::Texture& texture) {
-    // One runtime name per backend texture: a filter graph feeds the same intermediate to several
-    // passes, and an intermediate this arena allocated already has a name, so importing would give
-    // one texture two live slots.
-    const WGPUTexture key = static_cast<WGPUTexture>(texture);
-    for (const auto& [backend, named] : runtimeNameByBackendTexture_) {
-      if (backend == key) {
-        return named;
+  /// The record stays in place holding a null handle rather than being erased, because every
+  /// other value of this execution points into the same storage.
+  /// Nothing may allocate or retain through this arena afterwards: the moved-from record is
+  /// still in the table, and marking it available would hand the caller's own output out again.
+  /// \ref createRuntimeTexture and \ref retainValues assert that.
+  /// @param value Arena-allocated value to hand over; must not be a borrowed texture.
+  /// @param outDesc Receives the descriptor the texture must be released with.
+  gpu::Texture detachTexture(FilterTexture value, gpu::TextureDescriptor* outDesc) {
+    detached_ = true;
+    for (OwnedTexture& owned : textures_) {
+      if (&owned.texture == value.texture) {
+        *outDesc = owned.desc;
+        owned.available = false;
+        return std::move(owned.texture);
       }
     }
-
-    gpu::Result<gpu::Texture> imported = device_.adapterDevice().importExternalTexture(
-        texture, gpu::Extent2d{texture.getWidth(), texture.getHeight()},
-        GpuTextureFormatFromWgpu(texture.getFormat()), GpuTextureUsageFromWgpu(texture.getUsage()));
-    if (!imported.hasResult()) {
-      return nullptr;
-    }
-    importedTextures_.push_back(std::move(imported).result());
-    const gpu::Texture* result = &importedTextures_.back();
-    runtimeNameByBackendTexture_.emplace_back(key, result);
-    return result;
+    return {};
   }
 
   /// A whole-texture view of \p texture, owned by this arena until the frame ends. Null when the
@@ -270,6 +245,8 @@ struct FilterResourceArena {
   /// @param texture Live runtime texture. @param label Debug label for the view.
   const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
     // One view per named texture per frame, for the same reason the names themselves are reused.
+    // A hit keeps the label the view was opened with: the views are otherwise identical, and the
+    // label only names the pass in diagnostics.
     for (const auto& [named, view] : viewByTexture_) {
       if (named == &texture) {
         return view;
@@ -376,23 +353,49 @@ struct FilterResourceArena {
   }
 
   /// Copies through the runtime into the owning host encoder, preserving order with filter passes.
-  bool copyTexture(const wgpu::Texture& source, const wgpu::Texture& destination,
-                   gpu::Extent2d size, gpu::Origin2d sourceOrigin,
-                   gpu::Origin2d destinationOrigin) {
+  bool copyTexture(FilterTexture source, FilterTexture destination, gpu::Extent2d size,
+                   gpu::Origin2d sourceOrigin, gpu::Origin2d destinationOrigin) {
     (void)commandEncoder();
     UTILS_RELEASE_ASSERT_MSG(
         *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
         "filter copy replayed into a command encoder the arena does not own");
-    const gpu::Texture* src = importRuntimeTexture(source);
-    const gpu::Texture* dst = importRuntimeTexture(destination);
-    if (!src || !dst) {
+    if (!source || !destination) {
       return false;
     }
     auto encoder = device_.adapterDevice().createCommandEncoder();
-    if (!encoder.hasResult() ||
-        encoder.result()
-            ->copyTextureToTexture(*src, *dst, size, sourceOrigin, destinationOrigin)
-            .hasError()) {
+    if (!encoder.hasResult() || encoder.result()
+                                    ->copyTextureToTexture(*source.texture, *destination.texture,
+                                                           size, sourceOrigin, destinationOrigin)
+                                    .hasError()) {
+      return false;
+    }
+    auto commands = encoder.result()->finish();
+    return commands.hasResult() &&
+           !device_.adapterDevice().submit(std::move(commands).result()).hasError();
+  }
+
+  /// Records a clear of \p value to transparent black through the runtime, in order with the
+  /// filter passes around it. False when the runtime refuses any step.
+  /// @param value Render-attachment-capable value to clear.
+  [[nodiscard]] bool clearTexture(FilterTexture value) {
+    (void)commandEncoder();
+    UTILS_RELEASE_ASSERT_MSG(
+        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
+        "filter clear replayed into a command encoder the arena does not own");
+    const gpu::TextureView* view =
+        createRuntimeTextureView(*value.texture, RcString("FilterTransparentClearPass"));
+    if (view == nullptr) {
+      return false;
+    }
+    auto encoder = device_.adapterDevice().createCommandEncoder();
+    if (!encoder.hasResult()) {
+      return false;
+    }
+    gpu::Result<gpu::RenderPassEncoder*> pass =
+        encoder.result()->beginRenderPass(gpu::RenderPassDescriptor{
+            RcString("FilterTransparentClearPass"),
+            {gpu::RenderPassColorAttachment{*view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {}}}});
+    if (!pass.hasResult() || pass.result()->end().hasError()) {
       return false;
     }
     auto commands = encoder.result()->finish();
@@ -406,20 +409,7 @@ struct FilterResourceArena {
     retainValues({});
   }
 
-  FilterExecutionMemory memory() const { return {textureBytes, standaloneBufferBytes, 0}; }
-
-  wgpu::Buffer createBuffer(const wgpu::Device& device, const wgpu::BufferDescriptor& desc) {
-    ScopedWgpuHandle<wgpu::Buffer> buffer(device.createBuffer(desc));
-    if (!buffer) {
-      return {};
-    }
-
-    device_.countBuffer();
-    wgpu::Buffer result = buffer.get();
-    standaloneBufferBytes += desc.size;
-    backendBuffers_.push_back(std::move(buffer));
-    return result;
-  }
+  FilterExecutionMemory memory() const { return {textureBytes, 0}; }
 
   /// Maximum compute/render passes recorded into one shared command buffer
   /// before the arena finishes + submits it and starts a fresh encoder on the
@@ -517,26 +507,22 @@ private:
   /// Deques rather than vectors: the accessors above hand out references into these, and a
   /// vector would move them on growth.
   std::deque<OwnedTexture> textures_;
-  std::deque<gpu::Texture> importedTextures_;
   std::deque<gpu::TextureView> textureViews_;
   std::deque<gpu::BindGroup> bindGroups_;
   /// Flat rather than hashed: a filter graph names a handful of textures, so a linear scan is
   /// both smaller and faster than a hash table over that many entries.
-  std::vector<std::pair<WGPUTexture, const gpu::Texture*>> runtimeNameByBackendTexture_;
   std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
   uint64_t textureBytes = 0;
-  uint64_t standaloneBufferBytes = 0;
-  std::vector<ScopedWgpuHandle<wgpu::Buffer>> backendBuffers_;
+  /// Set once the output has been handed to the caller; see \ref detachTexture.
+  bool detached_ = false;
   struct ColorValue {
-    wgpu::Texture srgb;
-    wgpu::Texture linear;
+    FilterTexture srgb;
+    FilterTexture linear;
   };
   std::vector<ColorValue> colorValues_;
 };
 
 namespace {
-
-constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA32Float;
 
 double boundedPositiveFilterPixels(double value) {
   if (!std::isfinite(value) || value <= 0.0) {
@@ -800,9 +786,9 @@ uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeM
 
 /// Create a texture usable as both a compute output (storage) and a
 /// subsequent compute / render input (texture binding).
-wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::Device&,
-                                        uint32_t width, uint32_t height, const char* label) {
-  return arena.createTexture(gpu::TextureDescriptor{
+FilterTexture createIntermediateTexture(FilterResourceArena& arena, uint32_t width, uint32_t height,
+                                        const char* label) {
+  return arena.createRuntimeTexture(gpu::TextureDescriptor{
       RcString(label), gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
 }
@@ -812,31 +798,15 @@ wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::
 /// Newly-created WebGPU textures read as zero, but a pooled texture retains its previous contents.
 /// Filter primitives that short-circuit to transparent output must therefore record a clear before
 /// returning the texture.
-wgpu::Texture createTransparentIntermediateTexture(FilterResourceArena& arena, uint32_t width,
+FilterTexture createTransparentIntermediateTexture(FilterResourceArena& arena, uint32_t width,
                                                    uint32_t height, const char* label) {
-  wgpu::Texture texture = arena.createTexture(gpu::TextureDescriptor{
+  const FilterTexture texture = arena.createRuntimeTexture(gpu::TextureDescriptor{
       RcString(label), gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::Sampled | gpu::TextureUsage::StorageBinding | gpu::TextureUsage::CopySrc |
           gpu::TextureUsage::RenderAttachment});
-  if (!texture) {
+  if (!texture || !arena.clearTexture(texture)) {
     return {};
   }
-
-  ScopedWgpuHandle<wgpu::TextureView> view(texture.createView());
-  wgpu::RenderPassColorAttachment color{};
-  color.view = view.get();
-  color.loadOp = wgpu::LoadOp::Clear;
-  color.storeOp = wgpu::StoreOp::Store;
-  color.clearValue = {0.0, 0.0, 0.0, 0.0};
-  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-  wgpu::RenderPassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterTransparentClearPass");
-  passDesc.colorAttachmentCount = 1;
-  passDesc.colorAttachments = &color;
-  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(arena.commandEncoder().beginRenderPass(passDesc));
-  pass.get().end();
-
   return texture;
 }
 
@@ -988,8 +958,8 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param transferTable Optional read-only storage table bound at its reflected slot.
 /// @param destinationExtent Optional dispatch extent; defaults to the source dimensions.
 [[nodiscard]] bool dispatchRuntimeInputOutputParameters(
-    FilterResourceArena& arena, const RuntimeComputeProgram& program, const wgpu::Texture& input,
-    const gpu::Texture& output, std::span<const uint8_t> uniforms, const char* label,
+    FilterResourceArena& arena, const RuntimeComputeProgram& program, FilterTexture input,
+    FilterTexture output, std::span<const uint8_t> uniforms, const char* label,
     const gpu::Buffer* transferTable = nullptr,
     std::optional<gpu::Extent2d> destinationExtent = std::nullopt) {
   if (!program.pipeline.isValid()) {
@@ -998,12 +968,13 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 
   if ((transferTable != nullptr) != program.transferTableBinding.has_value()) return false;
 
-  const gpu::Texture* source = arena.importRuntimeTexture(input);
-  if (source == nullptr) {
+  if (!input || !output) {
     return false;
   }
-  const gpu::TextureView* sourceView = arena.createRuntimeTextureView(*source, RcString(label));
-  const gpu::TextureView* destinationView = arena.createRuntimeTextureView(output, RcString(label));
+  const gpu::TextureView* sourceView =
+      arena.createRuntimeTextureView(*input.texture, RcString(label));
+  const gpu::TextureView* destinationView =
+      arena.createRuntimeTextureView(*output.texture, RcString(label));
   const FilterResourceCache::RuntimeParameterSlot uniformSlot =
       arena.writeRuntimeParameterSlot(uniforms);
   if (sourceView == nullptr || destinationView == nullptr || uniformSlot.buffer == nullptr) {
@@ -1027,8 +998,8 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
-  const gpu::Extent2d extent = destinationExtent.value_or(
-      gpu::Extent2d{.width = input.getWidth(), .height = input.getHeight()});
+  const gpu::Extent2d extent =
+      destinationExtent.value_or(gpu::Extent2d{.width = input.width(), .height = input.height()});
   const gpu::WorkgroupSize shape = program.workgroupSize;
   return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
                                    (extent.width + shape.x - 1) / shape.x,
@@ -1043,23 +1014,18 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param label Debug label.
 [[nodiscard]] bool dispatchRuntimeTwoInput(FilterResourceArena& arena,
                                            const RuntimeComputeProgram& program,
-                                           const wgpu::Texture& source,
-                                           const wgpu::Texture& destination,
-                                           const gpu::Texture& output, gpu::Extent2d extent,
+                                           FilterTexture source, FilterTexture destination,
+                                           FilterTexture output, gpu::Extent2d extent,
                                            std::span<const uint8_t> uniforms, const char* label) {
-  if (!program.pipeline.isValid()) {
-    return false;
-  }
-  const gpu::Texture* runtimeSource = arena.importRuntimeTexture(source);
-  const gpu::Texture* runtimeDestination = arena.importRuntimeTexture(destination);
-  if (runtimeSource == nullptr || runtimeDestination == nullptr) {
+  if (!program.pipeline.isValid() || !source || !destination || !output) {
     return false;
   }
   const gpu::TextureView* sourceView =
-      arena.createRuntimeTextureView(*runtimeSource, RcString(label));
+      arena.createRuntimeTextureView(*source.texture, RcString(label));
   const gpu::TextureView* destinationView =
-      arena.createRuntimeTextureView(*runtimeDestination, RcString(label));
-  const gpu::TextureView* outputView = arena.createRuntimeTextureView(output, RcString(label));
+      arena.createRuntimeTextureView(*destination.texture, RcString(label));
+  const gpu::TextureView* outputView =
+      arena.createRuntimeTextureView(*output.texture, RcString(label));
   if (sourceView == nullptr || destinationView == nullptr || outputView == nullptr) {
     return false;
   }
@@ -1114,10 +1080,10 @@ svg::components::FilterInput filterInputOrDefault(const svg::components::FilterN
 }
 
 /// Resolve an input reference to a texture.
-wgpu::Texture resolveInput(const svg::components::FilterInput& input,
-                           const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
-                           const wgpu::Texture* sourceAlpha) {
+FilterTexture resolveInput(const svg::components::FilterInput& input,
+                           const std::unordered_map<std::string, FilterTexture>& namedBuffers,
+                           FilterTexture currentBuffer, FilterTexture sourceGraphic,
+                           const FilterTexture* sourceAlpha) {
   using namespace svg::components;
   if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
     auto it = namedBuffers.find(named->name.str());
@@ -1411,7 +1377,7 @@ struct FilterExecutionCoordinates {
   using FilterInput = svg::components::FilterInput;
   using FilterNode = svg::components::FilterNode;
 
-  FilterExecutionCoordinates(const FilterGraph& graph, const wgpu::Texture& sourceGraphic,
+  FilterExecutionCoordinates(const FilterGraph& graph, FilterTexture sourceGraphic,
                              const Box2d& filterRegion, const Transform2d& deviceFromFilter)
       : graph(graph),
         filterRegion(filterRegion),
@@ -1504,16 +1470,16 @@ struct FilterExecutionCoordinates {
   std::unordered_map<std::string, Box2d> namedSubregions;
 
 private:
-  Box2d computePrimitiveUnitsBounds(const wgpu::Texture& sourceGraphic) const {
+  Box2d computePrimitiveUnitsBounds(FilterTexture sourceGraphic) const {
     if (isObjectBoundingBox) {
       return graph.elementBoundingBox.value_or(Box2d(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
     }
     const double userWidth = NearZero(scaleX, 1e-12)
-                                 ? static_cast<double>(sourceGraphic.getWidth())
-                                 : static_cast<double>(sourceGraphic.getWidth()) / scaleX;
+                                 ? static_cast<double>(sourceGraphic.width())
+                                 : static_cast<double>(sourceGraphic.width()) / scaleX;
     const double userHeight = NearZero(scaleY, 1e-12)
-                                  ? static_cast<double>(sourceGraphic.getHeight())
-                                  : static_cast<double>(sourceGraphic.getHeight()) / scaleY;
+                                  ? static_cast<double>(sourceGraphic.height())
+                                  : static_cast<double>(sourceGraphic.height()) / scaleY;
     return Box2d::FromXYWH(0.0, 0.0, userWidth, userHeight);
   }
 
@@ -1628,7 +1594,7 @@ namespace fp = svg::components::filter_primitive;
 /// Values and coordinates retained while one filter graph executes.
 struct FilterGraphExecution {
   FilterGraphExecution(GeodeFilterEngine& engine, const svg::components::FilterGraph& graph,
-                       const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
+                       FilterTexture sourceGraphic, const Box2d& filterRegion,
                        const Transform2d& deviceFromFilter,
                        FilterTextureAllocator& textureAllocator,
                        ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
@@ -1646,28 +1612,28 @@ struct FilterGraphExecution {
         axisAligned(NearZero(deviceFromFilter.data[1], 1e-6) &&
                     NearZero(deviceFromFilter.data[2], 1e-6)) {}
 
-  wgpu::Texture run();
-  wgpu::Texture runNodes();
-  wgpu::Texture runTiled(const FilterTilePlan& plan);
-  wgpu::Texture inputFor(const svg::components::FilterNode& node, size_t index) const;
-  wgpu::Texture clip(const wgpu::Texture& input, const Box2d& region, bool transformed,
+  FilterTexture run();
+  FilterTexture runNodes();
+  FilterTexture runTiled(const FilterTilePlan& plan);
+  FilterTexture inputFor(const svg::components::FilterNode& node, size_t index) const;
+  FilterTexture clip(FilterTexture input, const Box2d& region, bool transformed,
                      bool resolve = false);
-  void record(const svg::components::FilterNode& node, const Box2d& subregion,
-              const wgpu::Texture& output, size_t nodeIndex);
+  void record(const svg::components::FilterNode& node, const Box2d& subregion, FilterTexture output,
+              size_t nodeIndex);
   void findLastNamedUses();
   void retainLiveValues(size_t nodeIndex);
 
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
-  wgpu::Texture sourceGraphic;
+  FilterTexture sourceGraphic;
   Vector2d tileOrigin = Vector2d::Zero();
   svg::components::FilterExecutionBudget* executionBudget;
   std::optional<FilterTilePlan> admittedPlan;
   FilterResourceArena arena;
   FilterExecutionCoordinates coordinates;
-  wgpu::Texture currentBuffer;
-  std::optional<wgpu::Texture> sourceAlpha;
-  std::unordered_map<std::string, wgpu::Texture> namedBuffers;
+  FilterTexture currentBuffer;
+  std::optional<FilterTexture> sourceAlpha;
+  std::unordered_map<std::string, FilterTexture> namedBuffers;
   std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
   uint64_t executedTiles = 0;
@@ -1689,34 +1655,34 @@ struct FilterNodeExecution {
             svg::ColorInterpolationFilters::SRGB),
         outputLinear(linearRgb) {}
 
-  wgpu::Texture run();
-  wgpu::Texture toNodeSpace(const wgpu::Texture& texture);
-  bool convertBinaryInputs(wgpu::Texture& second);
+  FilterTexture run();
+  FilterTexture toNodeSpace(FilterTexture texture);
+  bool convertBinaryInputs(FilterTexture& second);
   std::optional<Box2d> blurClip(double sx, double sy) const;
-  wgpu::Texture apply(const fp::GaussianBlur& primitive);
-  wgpu::Texture apply(const fp::Offset& primitive);
-  wgpu::Texture apply(const fp::ColorMatrix& primitive);
-  wgpu::Texture apply(const fp::Flood& primitive);
-  wgpu::Texture apply(const fp::Merge& primitive);
-  wgpu::Texture apply(const fp::Composite& primitive);
-  wgpu::Texture apply(const fp::Blend& primitive);
-  wgpu::Texture apply(const fp::Morphology& primitive);
-  wgpu::Texture apply(const fp::ComponentTransfer& primitive);
-  wgpu::Texture apply(const fp::ConvolveMatrix& primitive);
-  wgpu::Texture apply(const fp::Turbulence& primitive);
-  wgpu::Texture apply(const fp::DisplacementMap& primitive);
-  wgpu::Texture apply(const fp::DiffuseLighting& primitive);
-  wgpu::Texture apply(const fp::SpecularLighting& primitive);
-  wgpu::Texture apply(const fp::DropShadow& primitive);
-  wgpu::Texture apply(const fp::Image& primitive);
-  wgpu::Texture apply(const fp::Tile& primitive);
+  FilterTexture apply(const fp::GaussianBlur& primitive);
+  FilterTexture apply(const fp::Offset& primitive);
+  FilterTexture apply(const fp::ColorMatrix& primitive);
+  FilterTexture apply(const fp::Flood& primitive);
+  FilterTexture apply(const fp::Merge& primitive);
+  FilterTexture apply(const fp::Composite& primitive);
+  FilterTexture apply(const fp::Blend& primitive);
+  FilterTexture apply(const fp::Morphology& primitive);
+  FilterTexture apply(const fp::ComponentTransfer& primitive);
+  FilterTexture apply(const fp::ConvolveMatrix& primitive);
+  FilterTexture apply(const fp::Turbulence& primitive);
+  FilterTexture apply(const fp::DisplacementMap& primitive);
+  FilterTexture apply(const fp::DiffuseLighting& primitive);
+  FilterTexture apply(const fp::SpecularLighting& primitive);
+  FilterTexture apply(const fp::DropShadow& primitive);
+  FilterTexture apply(const fp::Image& primitive);
+  FilterTexture apply(const fp::Tile& primitive);
 
   FilterGraphExecution& execution;
   const svg::components::FilterNode& node;
   GeodeFilterEngine& engine;
   FilterResourceArena& arena;
   FilterExecutionCoordinates& coordinates;
-  wgpu::Texture input;
+  FilterTexture input;
   Box2d subregion;
   bool linearRgb;
   bool outputLinear;
@@ -2000,32 +1966,49 @@ uint64_t GeodeFilterEngine::retainedBufferBytes() const {
          (colorTransferTable_.isValid() ? svg::components::kGpuFilterTransferTableBytes : 0);
 }
 
-wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
-                                         const wgpu::Texture& sourceGraphic,
-                                         const Box2d& filterRegion,
-                                         const Transform2d& deviceFromFilter,
-                                         FilterTextureAllocator& textureAllocator,
-                                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                                         svg::components::FilterExecutionBudget* executionBudget,
-                                         std::optional<FilterTilePlan> admittedPlan) {
-  FilterGraphExecution execution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
+FilterExecutionResult GeodeFilterEngine::execute(
+    const svg::components::FilterGraph& graph, const gpu::Texture& sourceGraphic,
+    const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
+    const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
+    ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
+    svg::components::FilterExecutionBudget* executionBudget,
+    std::optional<FilterTilePlan> admittedPlan) {
+  // Borrowed for the call: the caller owns the source graphic and its descriptor, and both
+  // outlive the execution.
+  const FilterTexture source{&sourceGraphic, &sourceGraphicDesc};
+  FilterGraphExecution execution(*this, graph, source, filterRegion, deviceFromFilter,
                                  textureAllocator, commandEncoder, executionBudget, admittedPlan);
-  const wgpu::Texture output = execution.run();
+  const FilterTexture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
   lastExecutionMemory_.tileExecutions = execution.executedTiles;
   lastExecutionMemory_.workUnits = execution.admittedWorkUnits;
-  return output;
+
+  FilterExecutionResult result;
+  if (!output) {
+    return result;
+  }
+  if (output == source) {
+    result.kind = FilterExecutionResult::Kind::SourceGraphic;
+    return result;
+  }
+  // Detaching before the arena unwinds is what hands the caller the output instead of releasing
+  // it with the intermediates around it.
+  result.texture = execution.arena.detachTexture(output, &result.desc);
+  if (result.texture.isValid()) {
+    result.kind = FilterExecutionResult::Kind::Output;
+  }
+  return result;
 }
 
-wgpu::Texture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
+FilterTexture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
                                              size_t index) const {
   return resolveInput(filterInputOrDefault(node, index), namedBuffers, currentBuffer, sourceGraphic,
                       sourceAlpha ? &*sourceAlpha : nullptr);
 }
 
-wgpu::Texture FilterGraphExecution::clip(const wgpu::Texture& input, const Box2d& region,
-                                         bool transformed, bool resolve) {
+FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& region, bool transformed,
+                                         bool resolve) {
   if (transformed) {
     return engine.applySubregionClip(arena, input, coordinates.filterFromDevice, region.topLeft.x,
                                      region.topLeft.y, region.bottomRight.x, region.bottomRight.y,
@@ -2056,18 +2039,18 @@ void FilterGraphExecution::retainLiveValues(size_t nodeIndex) {
   };
   std::erase_if(namedBuffers, expired);
   std::erase_if(coordinates.namedSubregions, expired);
-  SmallVector<wgpu::Texture, 8> live{sourceGraphic, currentBuffer};
+  SmallVector<FilterTexture, 8> live{sourceGraphic, currentBuffer};
   if (sourceAlpha) {
     live.push_back(*sourceAlpha);
   }
   for (const auto& [name, texture] : namedBuffers) {
     live.push_back(texture);
   }
-  arena.retainValues(std::span<const wgpu::Texture>(live.data(), live.size()));
+  arena.retainValues(std::span<const FilterTexture>(live.data(), live.size()));
 }
 
 void FilterGraphExecution::record(const svg::components::FilterNode& node, const Box2d& subregion,
-                                  const wgpu::Texture& output, size_t nodeIndex) {
+                                  FilterTexture output, size_t nodeIndex) {
   if (node.result.has_value()) {
     coordinates.namedSubregions[node.result->str()] = subregion;
     namedBuffers[node.result->str()] = output;
@@ -2077,18 +2060,18 @@ void FilterGraphExecution::record(const svg::components::FilterNode& node, const
   retainLiveValues(nodeIndex);
 }
 
-wgpu::Texture FilterGraphExecution::run() {
+FilterTexture FilterGraphExecution::run() {
   using namespace svg::components;
   FilterTilePlan plan =
       admittedPlan ? *admittedPlan
-                   : engine.executionPlan(graph, sourceGraphic.getWidth(),
-                                          sourceGraphic.getHeight(), coordinates.deviceFromFilter);
+                   : engine.executionPlan(graph, sourceGraphic.width(), sourceGraphic.height(),
+                                          coordinates.deviceFromFilter);
   if (admittedPlan &&
-      !AdmittedFilterPlanFitsSource(graph, plan, sourceGraphic.getWidth(),
-                                    sourceGraphic.getHeight(), coordinates.deviceFromFilter)) {
+      !AdmittedFilterPlanFitsSource(graph, plan, sourceGraphic.width(), sourceGraphic.height(),
+                                    coordinates.deviceFromFilter)) {
     return {};
   }
-  if (plan.tiles > 1 && !(sourceGraphic.getUsage() & wgpu::TextureUsage::CopySrc)) {
+  if (plan.tiles > 1 && !gpu::HasAllFlags(sourceGraphic.usage(), gpu::TextureUsage::CopySrc)) {
     if (admittedPlan) {
       return {};
     }
@@ -2101,17 +2084,17 @@ wgpu::Texture FilterGraphExecution::run() {
                                     plan.additionalTextureBytes(), engine.retainedBufferBytes(),
                                     plan.pixels(), plan.tiles);
   if (!reservation) {
-    return admittedPlan ? wgpu::Texture{} : sourceGraphic;
+    return admittedPlan ? FilterTexture{} : sourceGraphic;
   }
   admittedWorkUnits = budget.workUnits() - workBefore;
-  const wgpu::Texture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
+  const FilterTexture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
   budget.release(*reservation);
   return result;
 }
 
-wgpu::Texture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
-  const wgpu::Texture fullSource = sourceGraphic;
-  const wgpu::Texture output = arena.createTexture(
+FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
+  const FilterTexture fullSource = sourceGraphic;
+  const FilterTexture output = arena.createRuntimeTexture(
       {"FilterTiledOutput",
        {plan.width, plan.height},
        gpu::TextureFormat::RGBA8Unorm,
@@ -2119,11 +2102,14 @@ wgpu::Texture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   if (!output) {
     return {};
   }
-  const wgpu::Texture tileInput =
-      arena.createTexture({"FilterTileInput",
-                           {plan.tileWidth, plan.tileHeight},
-                           gpu::TextureFormat::RGBA8Unorm,
-                           gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  // The tile buffer is filled by copying from the source, and a texture-to-texture copy requires
+  // both sides to have one format, so it takes the source's rather than the intermediate one: an
+  // embedder surface can be BGRA.
+  const FilterTexture tileInput =
+      arena.createRuntimeTexture({"FilterTileInput",
+                                  {plan.tileWidth, plan.tileHeight},
+                                  fullSource.format(),
+                                  gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   if (!tileInput) {
     return {};
   }
@@ -2144,7 +2130,7 @@ wgpu::Texture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
       coordinates.namedSubregions.clear();
       coordinates.previousOutputSubregion = coordinates.filterRegion;
       tileOrigin = Vector2d(originX, originY);
-      const wgpu::Texture result = runNodes();
+      const FilterTexture result = runNodes();
       if (!result || !arena.copyTexture(result, output,
                                         {std::min(plan.coreWidth, plan.width - x),
                                          std::min(plan.coreHeight, plan.height - y)},
@@ -2156,7 +2142,7 @@ wgpu::Texture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   return output;
 }
 
-wgpu::Texture FilterGraphExecution::runNodes() {
+FilterTexture FilterGraphExecution::runNodes() {
   using namespace svg::components;
   ++executedTiles;
   if (graphUsesStandardInput(graph, FilterStandardInput::SourceAlpha)) {
@@ -2172,7 +2158,7 @@ wgpu::Texture FilterGraphExecution::runNodes() {
     primitive.finalResolve = index + 1 == graph.nodes.size() &&
                              std::holds_alternative<fp::DropShadow>(node.primitive) &&
                              axisAligned && primitive.subregion == coordinates.filterRegion;
-    const wgpu::Texture output = primitive.run();
+    const FilterTexture output = primitive.run();
     if (!output) {
       return {};
     }
@@ -2181,17 +2167,17 @@ wgpu::Texture FilterGraphExecution::runNodes() {
       return clip(currentBuffer, coordinates.filterRegion, false, true);
     }
   }
-  const wgpu::Texture srgb =
+  const FilterTexture srgb =
       engine.applyColorSpaceConversion(arena, currentBuffer, /*srgbToLinear=*/false);
   return srgb ? clip(srgb, coordinates.filterRegion, !axisAligned, /*resolve=*/true)
-              : wgpu::Texture();
+              : FilterTexture();
 }
 
-wgpu::Texture FilterNodeExecution::run() {
+FilterTexture FilterNodeExecution::run() {
   if (!input) {
     return {};
   }
-  wgpu::Texture output =
+  FilterTexture output =
       std::visit([this](const auto& primitive) { return apply(primitive); }, node.primitive);
   if (!output) {
     return {};
@@ -2206,11 +2192,11 @@ wgpu::Texture FilterNodeExecution::run() {
   return output;
 }
 
-wgpu::Texture FilterNodeExecution::toNodeSpace(const wgpu::Texture& texture) {
+FilterTexture FilterNodeExecution::toNodeSpace(FilterTexture texture) {
   return engine.applyColorSpaceConversion(arena, texture, linearRgb);
 }
 
-bool FilterNodeExecution::convertBinaryInputs(wgpu::Texture& second) {
+bool FilterNodeExecution::convertBinaryInputs(FilterTexture& second) {
   second = execution.inputFor(node, 1);
   input = toNodeSpace(input);
   if (!input) {
@@ -2241,7 +2227,7 @@ std::optional<Box2d> FilterNodeExecution::blurClip(double sx, double sy) const {
   return rounded;
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
   const double sx = primitive.stdDeviationX >= 0
                         ? boundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
                         : 0.0;
@@ -2254,7 +2240,7 @@ wgpu::Texture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
                                   toShaderEdgeMode(primitive.edgeMode), clip ? &*clip : nullptr);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Offset& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::Offset& primitive) {
   const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
   fp::Offset scaled = primitive;
   scaled.dx = boundedSignedFilterPixels(offset.x);
@@ -2263,7 +2249,7 @@ wgpu::Texture FilterNodeExecution::apply(const fp::Offset& primitive) {
   return engine.applyOffset(arena, input, scaled);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::ColorMatrix& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::ColorMatrix& primitive) {
   if (isIdentityColorMatrix(buildColorMatrix(primitive))) {
     outputLinear = arena.isLinearRgb(input);
     return input;
@@ -2271,30 +2257,30 @@ wgpu::Texture FilterNodeExecution::apply(const fp::ColorMatrix& primitive) {
   return engine.applyColorMatrix(arena, toNodeSpace(input), primitive);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Flood& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::Flood& primitive) {
   outputLinear = false;
-  return engine.applyFlood(arena, input.getWidth(), input.getHeight(), primitive);
+  return engine.applyFlood(arena, input.width(), input.height(), primitive);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Merge&) {
+FilterTexture FilterNodeExecution::apply(const fp::Merge&) {
   return engine.applyMerge(arena, node, execution.namedBuffers, execution.currentBuffer,
                            execution.sourceGraphic,
                            execution.sourceAlpha ? &*execution.sourceAlpha : nullptr, linearRgb);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Composite& primitive) {
-  wgpu::Texture second;
+FilterTexture FilterNodeExecution::apply(const fp::Composite& primitive) {
+  FilterTexture second;
   return convertBinaryInputs(second) ? engine.applyComposite(arena, input, second, primitive)
-                                     : wgpu::Texture();
+                                     : FilterTexture();
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Blend& primitive) {
-  wgpu::Texture second;
+FilterTexture FilterNodeExecution::apply(const fp::Blend& primitive) {
+  FilterTexture second;
   return convertBinaryInputs(second) ? engine.applyBlend(arena, input, second, primitive)
-                                     : wgpu::Texture();
+                                     : FilterTexture();
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Morphology& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::Morphology& primitive) {
   // Test signed SVG radii before toPixelX/Y turn them into magnitudes.
   if (primitive.radiusX < 0 || primitive.radiusY < 0 ||
       (primitive.radiusX == 0 && primitive.radiusY == 0)) {
@@ -2308,44 +2294,44 @@ wgpu::Texture FilterNodeExecution::apply(const fp::Morphology& primitive) {
   return engine.applyMorphology(arena, toNodeSpace(input), primitive, rx, ry);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::ComponentTransfer& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::ComponentTransfer& primitive) {
   return engine.applyComponentTransfer(arena, toNodeSpace(input), primitive);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::ConvolveMatrix& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::ConvolveMatrix& primitive) {
   return engine.applyConvolveMatrix(arena, toNodeSpace(input), primitive);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Turbulence& primitive) {
-  return engine.applyTurbulence(arena, input.getWidth(), input.getHeight(), primitive,
+FilterTexture FilterNodeExecution::apply(const fp::Turbulence& primitive) {
+  return engine.applyTurbulence(arena, input.width(), input.height(), primitive,
                                 coordinates.deviceFromFilter);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
   double scale = primitive.scale;
   if (coordinates.isObjectBoundingBox) {
     scale *= std::sqrt(coordinates.boundingBoxWidth * coordinates.boundingBoxHeight);
   }
   scale *= std::sqrt(coordinates.scaleX * coordinates.scaleY);
-  wgpu::Texture second;
+  FilterTexture second;
   return convertBinaryInputs(second) ? engine.applyDisplacementMap(arena, input, second, primitive,
                                                                    boundedSignedFilterPixels(scale))
-                                     : wgpu::Texture();
+                                     : FilterTexture();
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::DiffuseLighting& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::DiffuseLighting& primitive) {
   const Box2d bounds = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
   return engine.applyDiffuseLighting(arena, input, primitive, execution.graph,
                                      coordinates.deviceFromFilter, bounds, linearRgb);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::SpecularLighting& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::SpecularLighting& primitive) {
   const Box2d bounds = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
   return engine.applySpecularLighting(arena, input, primitive, execution.graph,
                                       coordinates.deviceFromFilter, bounds, linearRgb);
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
   const double sx = primitive.stdDeviationX >= 0
                         ? boundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
                         : 0.0;
@@ -2358,7 +2344,7 @@ wgpu::Texture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
                                 boundedSignedFilterPixels(offset.y));
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Image& primitive) {
+FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
   const bool isOBB = coordinates.isObjectBoundingBox;
   const double bboxW = coordinates.boundingBoxWidth;
   const double bboxH = coordinates.boundingBoxHeight;
@@ -2377,12 +2363,11 @@ wgpu::Texture FilterNodeExecution::apply(const fp::Image& primitive) {
       node.height ? coordinates.resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
                   : coordinates.filterRegion.height();
   outputLinear = false;
-  return engine.applyImage(arena, primitive, input.getWidth(), input.getHeight(), execution.graph,
-                           node, coordinates.deviceFromFilter,
-                           Box2d::FromXYWH(x, y, width, height));
+  return engine.applyImage(arena, primitive, input.width(), input.height(), execution.graph, node,
+                           coordinates.deviceFromFilter, Box2d::FromXYWH(x, y, width, height));
 }
 
-wgpu::Texture FilterNodeExecution::apply(const fp::Tile&) {
+FilterTexture FilterNodeExecution::apply(const fp::Tile&) {
   outputLinear = arena.isLinearRgb(input);
   const Box2d source = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
   // transformBox normalizes inverted rectangles, so reject empty user-space bounds first.
@@ -2434,24 +2419,22 @@ BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviatio
 
 }  // namespace
 
-wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
-                                                   const wgpu::Texture& input, double stdDeviationX,
-                                                   double stdDeviationY, uint32_t edgeMode,
-                                                   const Box2d* outputClip) {
+FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, FilterTexture input,
+                                                   double stdDeviationX, double stdDeviationY,
+                                                   uint32_t edgeMode, const Box2d* outputClip) {
   if (!input) {
     return {};
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const uint32_t width = input.width();
+  const uint32_t height = input.height();
   const BlurDispatchPlan plan = CreateBlurDispatchPlan(stdDeviationX, stdDeviationY);
-  std::array<wgpu::Texture, 2> scratch{};
-  wgpu::Texture current = input;
+  std::array<FilterTexture, 2> scratch{};
+  FilterTexture current = input;
   for (size_t i = 0; i < plan.count; ++i) {
-    wgpu::Texture& output = scratch[i % scratch.size()];
+    FilterTexture& output = scratch[i % scratch.size()];
     if (!output) {
-      output =
-          createIntermediateTexture(arena, device_.device(), width, height, "GaussianBlurScratch");
+      output = createIntermediateTexture(arena, width, height, "GaussianBlurScratch");
     }
     const BlurDispatch& pass = plan.passes[i];
     const Box2d* clip = i + 1 == plan.count ? outputClip : nullptr;
@@ -2469,10 +2452,10 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
   return current;
 }
 
-wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
-                                             const wgpu::Texture& output, uint32_t width,
-                                             uint32_t height, float stdDeviation, uint32_t axis,
-                                             uint32_t edgeMode, const Box2d* clip) {
+FilterTexture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, FilterTexture input,
+                                             FilterTexture output, uint32_t width, uint32_t height,
+                                             float stdDeviation, uint32_t axis, uint32_t edgeMode,
+                                             const Box2d* clip) {
   if (!input || !output) {
     return {};
   }
@@ -2493,18 +2476,15 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   }
   params.pad = 0;
 
-  const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
-  if (runtimeOutput == nullptr ||
-      !dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, *runtimeOutput,
+  if (!dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, output,
                                             UniformBytes(params), "GaussianBlurPass")) {
     return {};
   }
   return output;
 }
 
-wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
-                                                const wgpu::Texture& input,
-                                                const wgpu::Texture& output, uint32_t width,
+FilterTexture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena, FilterTexture input,
+                                                FilterTexture output, uint32_t width,
                                                 uint32_t height, int32_t boxLeft, int32_t boxRight,
                                                 uint32_t axis, uint32_t edgeMode,
                                                 const Box2d* clip) {
@@ -2527,17 +2507,15 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   }
   params.pad = 0;
 
-  const gpu::Texture* runtimeOutput = arena.importRuntimeTexture(output);
-  if (runtimeOutput == nullptr ||
-      !dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, *runtimeOutput,
+  if (!dispatchRuntimeInputOutputParameters(arena, blurProgram_, input, output,
                                             UniformBytes(params), "BoxBlurPass")) {
     return {};
   }
   return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyOffset(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyOffset(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::Offset& primitive) {
   if (!input) {
     return {};
@@ -2548,11 +2526,11 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
     return input;
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterOffsetOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterOffsetOutput", gpu::Extent2d{input.width(), input.height()},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -2563,16 +2541,16 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
   params.pad0 = 0;
   params.pad1 = 0;
 
-  if (!dispatchRuntimeInputOutputParameters(arena, offsetProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, offsetProgram_, input, output,
                                             UniformBytes(params), "FilterOffsetPass")) {
     return {};
   }
 
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyColorMatrix(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyColorMatrix(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::ColorMatrix& primitive) {
   if (!input) {
     return {};
@@ -2587,33 +2565,32 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     return input;
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterColorMatrixOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterColorMatrixOutput", gpu::Extent2d{input.width(), input.height()},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
-  if (!dispatchRuntimeInputOutputParameters(arena, colorMatrixProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, colorMatrixProgram_, input, output,
                                             UniformBytes(params), "FilterColorMatrixPass")) {
     return {};
   }
 
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
-                                                  const wgpu::Texture& input) {
+FilterTexture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena, FilterTexture input) {
   if (!input) {
     return {};
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterSourceAlphaOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterSourceAlphaOutput", gpu::Extent2d{input.width(), input.height()},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -2622,25 +2599,25 @@ wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
   FilterColorMatrixParams params{};
   params.col3[3] = 1.0f;
 
-  if (!dispatchRuntimeInputOutputParameters(arena, colorMatrixProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, colorMatrixProgram_, input, output,
                                             UniformBytes(params), "FilterSourceAlphaPass")) {
     return {};
   }
 
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyFlood(
+FilterTexture GeodeFilterEngine::applyFlood(
     FilterResourceArena& arena, uint32_t width, uint32_t height,
     const svg::components::filter_primitive::Flood& primitive) {
   if (!floodProgram_.pipeline.isValid()) {
     return {};
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterFloodOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -2654,7 +2631,7 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   params.color[3] = static_cast<float>(std::round(255.0 * alpha)) / 255.0f;
 
   const gpu::TextureView* outputView =
-      arena.createRuntimeTextureView(*output, "FilterFloodOutputView");
+      arena.createRuntimeTextureView(*output.texture, "FilterFloodOutputView");
   const FilterResourceCache::RuntimeParameterSlot uniforms =
       arena.writeRuntimeParameterSlot(UniformBytes(params));
   if (outputView == nullptr || uniforms.buffer == nullptr) {
@@ -2680,16 +2657,15 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
     return {};
   }
 
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyMerge(
+FilterTexture GeodeFilterEngine::applyMerge(
     FilterResourceArena& arena, const svg::components::FilterNode& node,
-    const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-    const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
-    const wgpu::Texture* sourceAlpha, bool linearRGB) {
-  const uint32_t width = currentBuffer.getWidth();
-  const uint32_t height = currentBuffer.getHeight();
+    const std::unordered_map<std::string, FilterTexture>& namedBuffers, FilterTexture currentBuffer,
+    FilterTexture sourceGraphic, const FilterTexture* sourceAlpha, bool linearRGB) {
+  const uint32_t width = currentBuffer.width();
+  const uint32_t height = currentBuffer.height();
 
   if (node.inputs.empty()) {
     svg::components::filter_primitive::Flood transparent;
@@ -2698,12 +2674,12 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
     return applyFlood(arena, width, height, transparent);
   }
 
-  const auto inWorkingSpace = [&](const wgpu::Texture& texture) {
+  const auto inWorkingSpace = [&](FilterTexture texture) {
     return applyColorSpaceConversion(arena, texture, linearRGB);
   };
 
   // Resolve first input as the initial accumulator.
-  wgpu::Texture accumulator = inWorkingSpace(
+  FilterTexture accumulator = inWorkingSpace(
       resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
 
   if (!accumulator) {
@@ -2712,7 +2688,7 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
 
   // Alpha-over composite each subsequent input on top.
   for (size_t i = 1; i < node.inputs.size(); ++i) {
-    wgpu::Texture src = inWorkingSpace(
+    FilterTexture src = inWorkingSpace(
         resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
     accumulator = runMergePass(arena, src, accumulator, width, height);
     if (!accumulator) {
@@ -2723,34 +2699,33 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
   return accumulator;
 }
 
-wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const wgpu::Texture& src,
-                                              const wgpu::Texture& dst, uint32_t width,
-                                              uint32_t height) {
+FilterTexture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, FilterTexture src,
+                                              FilterTexture dst, uint32_t width, uint32_t height) {
   if (!src || !dst) {
     return {};
   }
   const gpu::Extent2d extent{width, height};
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterMergeOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr || !dispatchRuntimeTwoInput(arena, mergeProgram_, src, dst, *output, extent,
-                                                    {}, "FilterMergePass")) {
+  if (!output || !dispatchRuntimeTwoInput(arena, mergeProgram_, src, dst, output, extent, {},
+                                          "FilterMergePass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyComposite(
-    FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
+FilterTexture GeodeFilterEngine::applyComposite(
+    FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
     const svg::components::filter_primitive::Composite& primitive) {
   if (!in1 || !in2) {
     return {};
   }
-  const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const gpu::Extent2d extent{in1.width(), in1.height()};
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterCompositeOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -2764,50 +2739,50 @@ wgpu::Texture GeodeFilterEngine::applyComposite(
   params.k3 = static_cast<float>(primitive.k3);
   params.k4 = static_cast<float>(primitive.k4);
 
-  if (!dispatchRuntimeTwoInput(arena, compositeProgram_, in1, in2, *output, extent,
+  if (!dispatchRuntimeTwoInput(arena, compositeProgram_, in1, in2, output, extent,
                                UniformBytes(params), "FilterCompositePass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyBlend(
-    FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
+FilterTexture GeodeFilterEngine::applyBlend(
+    FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
     const svg::components::filter_primitive::Blend& primitive) {
   if (!in1 || !in2) return {};
-  const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const gpu::Extent2d extent{in1.width(), in1.height()};
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterBlendOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) return {};
+  if (!output) return {};
   const BlendParams params{static_cast<uint32_t>(primitive.mode), 0, 0, 0};
-  if (!dispatchRuntimeTwoInput(arena, blendProgram_, in1, in2, *output, extent,
-                               UniformBytes(params), "FilterBlendPass"))
+  if (!dispatchRuntimeTwoInput(arena, blendProgram_, in1, in2, output, extent, UniformBytes(params),
+                               "FilterBlendPass"))
     return {};
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyMorphology(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyMorphology(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::Morphology& primitive, int pixelRadiusX,
     int pixelRadiusY) {
   if (!input) {
     return {};
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const uint32_t width = input.width();
+  const uint32_t height = input.height();
   constexpr int kMaximumRadiusPerPass = 31;
   const std::array<int, 2> radii{std::max(pixelRadiusX, 0), std::max(pixelRadiusY, 0)};
   constexpr const char* kLabels[] = {"FilterMorphologyPassX", "FilterMorphologyPassY"};
-  std::array<const gpu::Texture*, 2> scratch{};
+  std::array<FilterTexture, 2> scratch{};
   size_t scratchIndex = 0;
-  wgpu::Texture current = input;
+  FilterTexture current = input;
   for (uint32_t axis = 0; axis < radii.size(); ++axis) {
     int remaining = radii[axis];
     while (remaining > 0) {
       const int radius = std::min(remaining, kMaximumRadiusPerPass);
-      const gpu::Texture*& output = scratch[scratchIndex];
+      FilterTexture& output = scratch[scratchIndex];
       if (!output) {
         output = arena.createRuntimeTexture(
             gpu::TextureDescriptor{"FilterMorphologyOutput",
@@ -2824,11 +2799,11 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
       params.radiusX = axis == 0 ? radius : 0;
       params.radiusY = axis == 1 ? radius : 0;
       params.op = primitive.op == Op::Dilate ? 1u : 0u;
-      if (!dispatchRuntimeInputOutputParameters(arena, morphologyProgram_, current, *output,
+      if (!dispatchRuntimeInputOutputParameters(arena, morphologyProgram_, current, output,
                                                 UniformBytes(params), kLabels[axis])) {
         return {};
       }
-      current = device_.adapterDevice().wgpuTextureOf(*output);
+      current = output;
       scratchIndex = (scratchIndex + 1) % scratch.size();
       remaining -= radius;
     }
@@ -2836,8 +2811,8 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
   return current;
 }
 
-wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyComponentTransfer(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::ComponentTransfer& primitive) {
   if (!input) {
     return {};
@@ -2847,21 +2822,21 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   if (!data) {
     return {};
   }
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterComponentTransferOutput",
-      {input.getWidth(), input.getHeight()},
+      {input.width(), input.height()},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
   const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data->data()),
                                        data->size() * sizeof(float));
-  if (!dispatchRuntimeInputOutputParameters(arena, componentTransferProgram_, input, *output, bytes,
+  if (!dispatchRuntimeInputOutputParameters(arena, componentTransferProgram_, input, output, bytes,
                                             "FilterComponentTransferPass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
 namespace {
@@ -2924,15 +2899,15 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
 
 }  // namespace
 
-wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyConvolveMatrix(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::ConvolveMatrix& primitive) {
   if (!input) {
     return {};
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const uint32_t width = input.width();
+  const uint32_t height = input.height();
 
   const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
   const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
@@ -2949,20 +2924,20 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
                                                 "FilterConvolveMatrixTransparent");
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterConvolveMatrixOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
-  if (!dispatchRuntimeInputOutputParameters(arena, convolveMatrixProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, convolveMatrixProgram_, input, output,
                                             UniformBytes(*params), "FilterConvolveMatrixPass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyTurbulence(
+FilterTexture GeodeFilterEngine::applyTurbulence(
     FilterResourceArena& arena, uint32_t width, uint32_t height,
     const svg::components::filter_primitive::Turbulence& primitive,
     const Transform2d& deviceFromFilter) {
@@ -2977,12 +2952,12 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
                                                 "FilterTurbulenceTransparent");
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterTurbulenceOutput",
       {width, height},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -2997,7 +2972,7 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
     return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
   };
   const gpu::TextureView* outputView =
-      arena.createRuntimeTextureView(*output, "FilterTurbulenceOutputView");
+      arena.createRuntimeTextureView(*output.texture, "FilterTurbulenceOutputView");
   const FilterResourceCache::RuntimeParameterSlot paramsSlot =
       arena.writeRuntimeParameterSlot(bytesOf(params));
   const FilterResourceCache::RuntimeParameterSlot tablesSlot =
@@ -3023,21 +2998,21 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
                                  (height + workgroup.y - 1) / workgroup.y)) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
-    FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
+FilterTexture GeodeFilterEngine::applyDisplacementMap(
+    FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
     const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale) {
   if (!in1 || !in2) {
     return {};
   }
 
-  const gpu::Extent2d extent{in1.getWidth(), in1.getHeight()};
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const gpu::Extent2d extent{in1.width(), in1.height()};
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterDisplacementMapOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -3058,11 +3033,11 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
   params.yChannel = toIndex(primitive.yChannelSelector);
   params.padding = 0;
 
-  if (!dispatchRuntimeTwoInput(arena, displacementMapProgram_, in1, in2, *output, extent,
+  if (!dispatchRuntimeTwoInput(arena, displacementMapProgram_, in1, in2, output, extent,
                                UniformBytes(params), "FilterDisplacementMapPass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
 namespace {
@@ -3160,8 +3135,8 @@ void fillLightParams(const svg::components::filter_primitive::LightSource& light
 
 }  // namespace
 
-wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyDiffuseLighting(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::DiffuseLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
     const Box2d& sampleSubregion, bool linearRGB) {
@@ -3169,8 +3144,8 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
     return {};
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const uint32_t width = input.width();
+  const uint32_t height = input.height();
 
   // Per Filter Effects §15.9, a lighting primitive with no child light source has
   // no defined light and produces transparent-black output. The CPU path matches
@@ -3182,12 +3157,12 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
                                                 "FilterDiffuseLightingTransparent");
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterDiffuseLightingOutput",
       {width, height},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -3226,15 +3201,15 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   params.sampleMaxY =
       boundedCeilInt32(samplePixels.bottomRight.y, 1, static_cast<int32_t>(height)) - 1;
 
-  if (!dispatchRuntimeInputOutputParameters(arena, diffuseLightingProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, diffuseLightingProgram_, input, output,
                                             UniformBytes(params), "FilterDiffuseLightingPass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applySpecularLighting(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applySpecularLighting(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::SpecularLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
     const Box2d& sampleSubregion, bool linearRGB) {
@@ -3242,8 +3217,8 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
     return {};
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const uint32_t width = input.width();
+  const uint32_t height = input.height();
 
   // Per SVG spec, specularExponent must be in [1, 128]: values < 1 produce
   // transparent output, values > 128 clamp to 128 (matches tiny-skia).
@@ -3252,12 +3227,12 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
                                                 "FilterSpecularLightingTransparent");
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterSpecularLightingOutput",
       {width, height},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -3302,34 +3277,34 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   params.sampleMaxY =
       boundedCeilInt32(samplePixels.bottomRight.y, 1, static_cast<int32_t>(height)) - 1;
 
-  if (!dispatchRuntimeInputOutputParameters(arena, specularLightingProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, specularLightingProgram_, input, output,
                                             UniformBytes(params), "FilterSpecularLightingPass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyDropShadow(
-    FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyDropShadow(
+    FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::DropShadow& primitive, double pixelStdDevX,
     double pixelStdDevY, double pixelDx, double pixelDy) {
   if (!input) {
     return {};
   }
 
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const uint32_t width = input.width();
+  const uint32_t height = input.height();
 
   // Blur the input first (if any deviation). The compose shader reads the
   // blurred texture's alpha at (coord - offset); blurring RGB at the same
   // time is free because we already have to walk the taps.
-  wgpu::Texture blurred =
+  FilterTexture blurred =
       applyGaussianBlur(arena, input, pixelStdDevX, pixelStdDevY, /*edgeMode=*/0);
   if (!blurred) {
     return {};
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterDropShadowOutput",
       {width, height},
       gpu::TextureFormat::RGBA32Float,
@@ -3360,11 +3335,11 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   params.pad0 = 0;
   params.pad1 = 0;
 
-  if (!dispatchRuntimeTwoInput(arena, dropShadowProgram_, input, blurred, *output, {width, height},
+  if (!dispatchRuntimeTwoInput(arena, dropShadowProgram_, input, blurred, output, {width, height},
                                UniformBytes(params), "FilterDropShadowPass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
 constexpr std::optional<uint32_t> FilterImageRowPitch(uint32_t width, uint32_t height) {
@@ -3437,29 +3412,29 @@ std::optional<ImageParams> CreateFragmentImageParams(
   return params;
 }
 
-wgpu::Texture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
-                                                        const gpu::Texture& output,
+FilterTexture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
+                                                        FilterTexture output,
                                                         gpu::Extent2d destinationExtent) {
-  const gpu::Texture* empty = arena.createRuntimeTexture(
+  const FilterTexture empty = arena.createRuntimeTexture(
       gpu::TextureDescriptor{"FilterImageEmptySource",
                              {1, 1},
                              gpu::TextureFormat::RGBA8Unorm,
                              gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   const std::array<uint8_t, 4> zero{};
-  if (empty == nullptr ||
-      device_.adapterDevice().writeTexture(*empty, zero, {0, 256, 1}, {1, 1}).hasError()) {
+  if (!empty ||
+      device_.adapterDevice().writeTexture(*empty.texture, zero, {0, 256, 1}, {1, 1}).hasError()) {
     return {};
   }
 
   ImageParams params{};
   params.m02 = -1000.0f;
   params.m12 = -1000.0f;
-  if (!dispatchRuntimeInputOutputParameters(
-          arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*empty), output,
-          UniformBytes(params), "FilterImageEmptyPass", nullptr, destinationExtent)) {
+  if (!dispatchRuntimeInputOutputParameters(arena, imageProgram_, empty, output,
+                                            UniformBytes(params), "FilterImageEmptyPass", nullptr,
+                                            destinationExtent)) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(output);
+  return output;
 }
 
 namespace {
@@ -3565,25 +3540,25 @@ ImageParams CreateRasterFilterImageParams(const svg::components::filter_primitiv
 
 }  // namespace
 
-wgpu::Texture GeodeFilterEngine::applyImage(
+FilterTexture GeodeFilterEngine::applyImage(
     FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
     uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
     const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
     const Box2d& placementRegionUser) {
   const std::optional<uint32_t> uploadRowPitch =
       FilterImageUploadRowPitch(primitive, device_.maxTextureDimension2D());
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterImageOutput",
       {width, height},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
   // Empty, malformed, degenerate, or device-oversized sources remain transparent.
   if (!uploadRowPitch) {
-    return renderTransparentImage(arena, *output, {width, height});
+    return renderTransparentImage(arena, output, {width, height});
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
@@ -3603,14 +3578,14 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     }
   }
 
-  const gpu::Texture* image = arena.createRuntimeTexture(gpu::TextureDescriptor{
+  const FilterTexture image = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (image == nullptr) {
+  if (!image) {
     return {};
   }
   if (device_.adapterDevice()
-          .writeTexture(*image, premultiplied, {0, *uploadRowPitch, imgH}, {imgW, imgH})
+          .writeTexture(*image.texture, premultiplied, {0, *uploadRowPitch, imgH}, {imgW, imgH})
           .hasError()) {
     return {};
   }
@@ -3621,37 +3596,36 @@ wgpu::Texture GeodeFilterEngine::applyImage(
       fragmentParams ? *fragmentParams
                      : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
   if (!dispatchRuntimeInputOutputParameters(
-          arena, imageProgram_, device_.adapterDevice().wgpuTextureOf(*image), *output,
-          UniformBytes(params), fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass",
-          nullptr, gpu::Extent2d{width, height})) {
+          arena, imageProgram_, image, output, UniformBytes(params),
+          fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass", nullptr,
+          gpu::Extent2d{width, height})) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applyTile(FilterResourceArena& arena, FilterTexture input,
                                            int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH) {
   if (!input) {
     return {};
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterTileOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterTileOutput", gpu::Extent2d{input.width(), input.height()},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
   const TileParams params{srcX, srcY, srcW, srcH};
-  if (!dispatchRuntimeInputOutputParameters(arena, tileProgram_, input, *output,
+  if (!dispatchRuntimeInputOutputParameters(arena, tileProgram_, input, output,
                                             UniformBytes(params), "FilterTilePass")) {
     return {};
   }
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
-                                                    const wgpu::Texture& input,
+FilterTexture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena, FilterTexture input,
                                                     const Transform2d& filterFromDevice,
                                                     double usrX0, double usrY0, double usrX1,
                                                     double usrY1, bool resolve) {
@@ -3659,11 +3633,11 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
     return {};
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterSubregionClipOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterSubregionClipOutput", gpu::Extent2d{input.width(), input.height()},
       resolve ? gpu::TextureFormat::RGBA8Unorm : gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -3682,31 +3656,30 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   params.pad1 = 0;
 
   if (!dispatchRuntimeInputOutputParameters(
-          arena, resolve ? filterResolveProgram_ : subregionClipProgram_, input, *output,
+          arena, resolve ? filterResolveProgram_ : subregionClipProgram_, input, output,
           UniformBytes(params), "FilterSubregionClipPass",
           resolve ? &colorTransferTable_ : nullptr)) {
     return {};
   }
 
-  return device_.adapterDevice().wgpuTextureOf(*output);
+  return output;
 }
 
-wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& arena,
-                                                           const wgpu::Texture& input,
-                                                           bool srgbToLinear) {
+FilterTexture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& arena,
+                                                           FilterTexture input, bool srgbToLinear) {
   if (!input) {
     return {};
   }
 
-  if (const wgpu::Texture converted = arena.convertedTexture(input, srgbToLinear)) {
+  if (const FilterTexture converted = arena.convertedTexture(input, srgbToLinear)) {
     return converted;
   }
 
-  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterColorSpaceConvertOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterColorSpaceConvertOutput", gpu::Extent2d{input.width(), input.height()},
       gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (output == nullptr) {
+  if (!output) {
     return {};
   }
 
@@ -3718,13 +3691,13 @@ wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& 
   params.pad2 = 0;
 
   if (!colorTransferTable_.isValid() ||
-      !dispatchRuntimeInputOutputParameters(arena, colorSpaceConvertProgram_, input, *output,
+      !dispatchRuntimeInputOutputParameters(arena, colorSpaceConvertProgram_, input, output,
                                             UniformBytes(params), "FilterColorSpaceConvertPass",
                                             &colorTransferTable_)) {
     return {};
   }
 
-  const wgpu::Texture converted = device_.adapterDevice().wgpuTextureOf(*output);
+  const FilterTexture converted = output;
   arena.rememberConversion(input, converted, srgbToLinear);
   return converted;
 }
