@@ -200,9 +200,15 @@ public:
    * first. This performs no loading and leaves the resolution cache untouched.
    *
    * Text layout asks this once per family per span, and neither the family-list length nor the
-   * registered-rule count is bounded by anything but the document, so the answer is served from a
-   * lowercased family index built once per `@font-face` registration rather than by rescanning the
-   * rules, and provider answers are memoized rather than re-enumerating the provider's families.
+   * registered-rule count is bounded by anything but the document, so registered families are
+   * answered from a lowercased index maintained by \ref addFontFace rather than by rescanning the
+   * rules. That index is per FontManager instance and covers the rules this instance has seen: it
+   * is seeded from the registry at construction and extended on each registration, so a second
+   * manager over the same registry that registers its own rules does not update this one's.
+   *
+   * Like every other query here this writes nothing, so it is safe to run in parallel under the
+   * registry read lock. Families no registered rule claims fall through to the provider on every
+   * call, which is why \ref FontFamilyProvider::hasFamily must answer cheaply.
    *
    * @param family Font family name to test, before generic-name resolution.
    * @return True when a registered rule or the provider claims the resolved family.
@@ -357,7 +363,6 @@ public:
       providerFonts_.clear();
       providerFailures_.clear();
       providerDependencies_.clear();
-      providerFamilyAvailability_.clear();
       fontDependenciesOverflowed_ = false;
       ++fontResourceRevision_;
       cache_.clear();
@@ -580,18 +585,11 @@ private:
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;
 
-  /// Lowercased family names claimed by registered `@font-face` rules. Built on the first
-  /// \ref hasFamily query after a registration and reused until the next one, so repeated
-  /// availability tests during layout never rescan the rules. `FontFaceComponent` entities are
-  /// only ever created by \ref addFontFace, which is therefore the only point that can stale it.
-  mutable std::unordered_set<std::string> registeredFamiliesLower_;
-
-  /// Whether \ref registeredFamiliesLower_ reflects the currently registered rules.
-  mutable bool registeredFamiliesIndexValid_ = false;
-
-  /// Memoized provider availability answers, keyed by lowercased resolved family. Cleared with the
-  /// resolution cache whenever the provider changes, since another provider may answer differently.
-  mutable std::unordered_map<std::string, bool> providerFamilyAvailability_;
+  /// Lowercased family names claimed by the `@font-face` rules this instance knows about, so
+  /// \ref hasFamily answers without rescanning them. Seeded from the registry at construction and
+  /// extended by \ref addFontFace, which is the only place `FontFaceComponent` entities are
+  /// created. Both are serialized write paths, which keeps \ref hasFamily a pure read.
+  std::unordered_set<std::string> registeredFamiliesLower_;
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;

@@ -157,7 +157,17 @@ public:
   /// List the families this provider can supply.
   virtual std::vector<FontFamilyInfo> families() const = 0;
 
-  /// Returns true if \p family is available (case-insensitive).
+  /**
+   * Returns true if \p family is available.
+   *
+   * Matching must be case-insensitive: callers fold family names when they index them, so a
+   * provider that compared case-sensitively would disagree with its own caller about which
+   * families exist. Text layout calls this once per unresolved family per span, so it must also
+   * answer cheaply, without I/O or re-enumerating the underlying font source on each call.
+   *
+   * @param family Font family name to test.
+   * @return True when this provider can supply the family.
+   */
   virtual bool hasFamily(std::string_view family) const = 0;
 
   /// Metadata only; the default preserves existing synchronous/system/custom providers.

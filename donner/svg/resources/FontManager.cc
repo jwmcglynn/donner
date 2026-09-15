@@ -286,7 +286,15 @@ FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
     : registry_(registry),
       provider_(g_defaultFontProvider.load(std::memory_order_acquire)),
       candidateBudgetState_(std::make_shared<FontBudgetState>(FontBudgetState{
-          maximumLoadedFontBytes, maximumLoadedFonts, maximumFontValidationWork, 0, 0, 0, {}})) {}
+          maximumLoadedFontBytes, maximumLoadedFonts, maximumFontValidationWork, 0, 0, 0, {}})) {
+  // Another manager may have registered rules on this registry already, and hasFamily() must not
+  // write, so the family index is complete before the first query rather than filled by one.
+  auto view = registry_.view<FontFaceComponent>();
+  for (const Entity entity : view) {
+    registeredFamiliesLower_.insert(
+        ToLowerAscii(view.get<FontFaceComponent>(entity).face.familyName));
+  }
+}
 FontManager::~FontManager() = default;
 
 size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) const noexcept {
@@ -470,10 +478,10 @@ void FontManager::addFontFace(const css::FontFace& face) {
   const Entity entity = registry_.create();
   registry_.emplace<FontFaceComponent>(entity, face, nextFaceSequence_++);
   faceEntities_.emplace(std::move(key), entity);
+  registeredFamiliesLower_.insert(ToLowerAscii(face.familyName));
   // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
-  // have to be recomputed, and the new family becomes available to a font-family list walk.
+  // have to be recomputed.
   cache_.clear();
-  registeredFamiliesIndexValid_ = false;
 }
 
 size_t FontManager::numFaces() const {
@@ -510,34 +518,11 @@ bool FontManager::hasFamily(std::string_view family) const {
   const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
   const std::string resolvedLower = isGeneric ? ToLowerAscii(resolved) : familyLower;
 
-  if (!registeredFamiliesIndexValid_) {
-    registeredFamiliesLower_.clear();
-    auto view = registry_.view<FontFaceComponent>();
-    for (const Entity entity : view) {
-      registeredFamiliesLower_.insert(
-          ToLowerAscii(view.get<FontFaceComponent>(entity).face.familyName));
-    }
-    registeredFamiliesIndexValid_ = true;
-  }
-
   if (registeredFamiliesLower_.count(resolvedLower) != 0) {
     return true;
   }
 
-  if (provider_ == nullptr) {
-    return false;
-  }
-
-  if (const auto memo = providerFamilyAvailability_.find(resolvedLower);
-      memo != providerFamilyAvailability_.end()) {
-    return memo->second;
-  }
-
-  // Enumerating a system provider's families is the expensive half of this query, so the answer is
-  // kept until the provider itself changes.
-  const bool available = provider_->hasFamily(resolved);
-  providerFamilyAvailability_.emplace(resolvedLower, available);
-  return available;
+  return provider_ != nullptr && provider_->hasFamily(resolved);
 }
 
 FontHandle FontManager::findFont(std::string_view family) {

@@ -1258,25 +1258,42 @@ TEST(FontManagerTest, LoadWoff2Data) {
 }
 #endif
 
-TEST(FontManagerTest, FamilyAvailabilityAsksTheProviderOncePerFamily) {
+TEST(FontManagerTest, RegisteredFamilyAvailabilityNeverConsultsTheProvider) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Registered Family"));
+  FakeFontProvider provider({"Provided Family"});
+  manager.setFontProvider(&provider);
+
+  // Layout asks once per family per span. A document's own @font-face families are answered from
+  // the index, so neither the rules nor the provider are scanned for them however often we ask.
+  for (int i = 0; i < 32; ++i) {
+    EXPECT_TRUE(manager.hasFamily("Registered Family"));
+  }
+  EXPECT_THAT(provider.hasFamilyCalls, Eq(0));
+}
+
+TEST(FontManagerTest, FamilyAvailabilityIsStableAcrossRepeatedQueries) {
   Registry registry;
   FontManager manager(registry);
   FakeFontProvider provider({"Provided Family"});
   manager.setFontProvider(&provider);
 
-  EXPECT_THAT(provider.hasFamilyCalls, Eq(0));
-
-  EXPECT_TRUE(manager.hasFamily("Provided Family"));
-  EXPECT_FALSE(manager.hasFamily("Absent Family"));
-  EXPECT_THAT(provider.hasFamilyCalls, Eq(2));
-
-  // Layout asks once per family per span, so repeats must be served from the memo. Without it this
-  // re-enumerates the provider's families every time.
-  for (int i = 0; i < 32; ++i) {
+  for (int i = 0; i < 8; ++i) {
     EXPECT_TRUE(manager.hasFamily("Provided Family"));
     EXPECT_FALSE(manager.hasFamily("Absent Family"));
   }
-  EXPECT_THAT(provider.hasFamilyCalls, Eq(2));
+}
+
+TEST(FontManagerTest, SecondManagerSeesFacesRegisteredBeforeItWasConstructed) {
+  Registry registry;
+  FontManager first(registry);
+  first.addFontFace(MakeEmbeddedFace("Shared Family"));
+
+  // The index is per instance and seeded at construction, so a manager built afterwards still
+  // answers for rules that were already on the registry.
+  FontManager second(registry);
+  EXPECT_TRUE(second.hasFamily("Shared Family"));
 }
 
 TEST(FontManagerTest, ChangingTheProviderReopensFamilyAvailability) {
