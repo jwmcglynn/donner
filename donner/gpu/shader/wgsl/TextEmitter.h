@@ -1572,17 +1572,50 @@ constexpr TextEmitResult EmitMsl(const Module& module, TextSink& sink) {
   return detail::MslTextEmitter(module, sink).emit();
 }
 
-/// Copies the validated WGSL projection retained by p module into p sink.
+namespace detail {
+
+/// Trims spaces, tabs and carriage returns from both ends of one source line.
+constexpr std::string_view TrimLine(std::string_view line) {
+  constexpr std::string_view kBlank = " \t\r";
+  const size_t first = line.find_first_not_of(kBlank);
+  if (first == std::string_view::npos) return {};
+  const size_t last = line.find_last_not_of(kBlank);
+  return line.substr(first, last - first + 1);
+}
+
+}  // namespace detail
+
+/// Writes the validated WGSL projection of p module into p sink.
+///
+/// The projection is the authored source with every `//` comment, all indentation and every blank
+/// line removed; token spelling and intra-line spacing are kept, and each remaining line ends with
+/// a newline. WGSL has no string literals, so `//` always begins a comment, and the lexer accepts
+/// no other comment form. The result parses to the same module and therefore to the same MSL and
+/// SPIR-V bytes, which the compiler tests check.
 ///
 /// @param module Validated parsed WGSL module.
 /// @param sink Caller-owned output storage.
 constexpr TextEmitResult EmitWgsl(const Module& module, TextSink& sink) {
   sink.clear();
-  const TextEmitError error =
-      !module.isValid() || module.sourceByteCount > ModuleLimits::kMaxSourceBytes
-          ? TextEmitError::InvalidModule
-      : !sink.append(module.source()) ? TextEmitError::SinkTooSmall
-                                      : TextEmitError::None;
+  TextEmitError error = TextEmitError::None;
+  if (!module.isValid() || module.sourceByteCount > ModuleLimits::kMaxSourceBytes) {
+    error = TextEmitError::InvalidModule;
+  } else {
+    const std::string_view source = module.source();
+    size_t cursor = 0;
+    while (cursor < source.size() && error == TextEmitError::None) {
+      size_t end = source.find('\n', cursor);
+      if (end == std::string_view::npos) end = source.size();
+      std::string_view line = source.substr(cursor, end - cursor);
+      const size_t comment = line.find("//");
+      if (comment != std::string_view::npos) line = line.substr(0, comment);
+      line = detail::TrimLine(line);
+      if (!line.empty() && (!sink.append(line) || !sink.append('\n'))) {
+        error = TextEmitError::SinkTooSmall;
+      }
+      cursor = end + 1;
+    }
+  }
   if (error != TextEmitError::None) {
     sink.size = 0;
     sink.diagnostic = error;

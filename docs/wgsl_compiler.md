@@ -28,7 +28,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )wgsl", donner::gpu::shader::wgsl::Projection::Wgsl>();
 ```
 
-The result owns exact-sized WGSL, MSL and SPIR-V arrays plus reflected resource/member data. Its
+The result owns exact-sized WGSL, MSL and SPIR-V arrays plus reflected resource/member data. The
+WGSL projection is the authored source with every `//` comment, all indentation and every blank line
+removed; the authored file keeps its commentary, and the compiler tests check that the projection
+parses to the same module and native bytes. A WebGPU implementation's diagnostics therefore quote
+the stripped text and its line numbers, not the authored file's. Its
 `view()` borrows those arrays and cannot be called on a temporary. Keep compiler instantiations in
 implementation files, and keep the owning artifact alive while a view is used. Text views carry an
 explicit length and do not promise a trailing NUL.

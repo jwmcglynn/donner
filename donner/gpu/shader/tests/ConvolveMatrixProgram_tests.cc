@@ -45,7 +45,10 @@ TEST(ConvolveMatrixProgramTests, EmitsDeterministically) {
   EXPECT_EQ(std::string_view(msl.data(), mslSink.size), frozen.msl);
   EXPECT_TRUE(std::equal(spirv.begin(), spirv.begin() + spirvSink.size, frozen.spirv.begin(),
                          frozen.spirv.end()));
-  EXPECT_EQ(EmitConvolveMatrixWgsl(), programs::kConvolveMatrixSource.view());
+  const std::string projection = EmitConvolveMatrixWgsl();
+  EXPECT_EQ(projection.find("//"), std::string::npos);
+  EXPECT_LT(projection.size(), programs::kConvolveMatrixSource.view().size());
+  EXPECT_TRUE(wgsl::Parse(projection).hasResult());
 }
 
 TEST(ConvolveMatrixProgramTests, NativeEmittersAcceptPortableParameterMemberNames) {

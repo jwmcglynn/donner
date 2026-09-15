@@ -62,10 +62,13 @@ consteval bool RequireValidSource() {
 }
 
 struct Emitted {
+  std::array<char, ModuleLimits::kMaxSourceBytes> wgsl{};
   std::array<char, kMaxTextEmitBytes> msl{};
   std::array<uint32_t, kMaxSpirvEmitWords> spirv{};
+  uint32_t wgslSize = 0;
   uint32_t mslSize = 0;
   uint32_t spirvSize = 0;
+  TextEmitError wgslError = TextEmitError::None;
   TextEmitError textError = TextEmitError::None;
   SpirvEmitError binaryError = SpirvEmitError::None;
 };
@@ -73,6 +76,11 @@ struct Emitted {
 template <Projection Target>
 constexpr Emitted Emit(const Module& module) {
   Emitted output;
+  if constexpr ((uint8_t(Target) & uint8_t(Projection::Wgsl)) != 0) {
+    TextSink sink{output.wgsl.data(), uint32_t(output.wgsl.size())};
+    output.wgslError = EmitWgsl(module, sink).error;
+    output.wgslSize = sink.size;
+  }
   if constexpr ((uint8_t(Target) & uint8_t(Projection::Msl)) != 0) {
     TextSink sink{output.msl.data(), uint32_t(output.msl.size())};
     output.textError = EmitMsl(module, sink).error;
@@ -260,15 +268,14 @@ consteval auto Compile() {
   static_assert(compiler_detail::FitsNames(parsed.module),
                 "WGSL interface name exceeds artifact limit");
   constexpr const auto& emitted = compiler_detail::kEmittedSource<Source, Target>;
+  static_assert(emitted.wgslError == TextEmitError::None, "WGSL projection failed");
   static_assert(emitted.textError == TextEmitError::None, "WGSL text projection failed");
   static_assert(emitted.binaryError == SpirvEmitError::None, "WGSL SPIR-V projection failed");
-  constexpr size_t wgslBytes =
-      (uint8_t(Target) & uint8_t(Projection::Wgsl)) ? Source.view().size() : 0;
-  CompiledShader<wgslBytes, emitted.mslSize, emitted.spirvSize, parsed.module.bindingCount,
+  CompiledShader<emitted.wgslSize, emitted.mslSize, emitted.spirvSize, parsed.module.bindingCount,
                  parsed.module.structMemberCount, compiler_detail::EntryCount(parsed.module),
                  parsed.module.interfaceVariableCount>
       result;
-  for (size_t i = 0; i < wgslBytes; ++i) result.wgsl[i] = Source.bytes[i];
+  for (size_t i = 0; i < emitted.wgslSize; ++i) result.wgsl[i] = emitted.wgsl[i];
   for (size_t i = 0; i < emitted.mslSize; ++i) result.msl[i] = emitted.msl[i];
   for (size_t i = 0; i < emitted.spirvSize; ++i) result.spirv[i] = emitted.spirv[i];
   compiler_detail::FreezeInterface(parsed.module, result);

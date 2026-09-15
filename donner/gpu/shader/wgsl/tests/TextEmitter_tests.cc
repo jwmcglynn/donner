@@ -4,9 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <string>
 #include <string_view>
 
 #include "donner/gpu/shader/wgsl/Parser.h"
+#include "donner/gpu/shader/wgsl/SpirvEmitter.h"
 
 namespace donner::gpu::shader::wgsl {
 namespace {
@@ -82,12 +84,95 @@ fn storage_entry(@builtin(global_invocation_id) gid: vec3<u32>) {}
 constexpr ParseResult kStorageArrayParsed = Parse(kStorageArraySource);
 static_assert(kStorageArrayParsed.hasResult());
 
-TEST(TextEmitter, ProjectsValidatedWgslBytesExactly) {
+constexpr std::string_view kCommentedSource = R"(
+// Leading comment before any declaration.
+struct commented_params {   // trailing comment after a brace
+  gain: f32,  // member comment with tokens: fn struct @group(9)
+  selector: u32,
+  padding: vec2<u32>,
+}
+
+@group(0) @binding(0) var input_commented: texture_2d<f32>;
+    @group(0) @binding(1) var output_commented: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var<uniform> params_commented: commented_params;
+
+@compute @workgroup_size(8, 8, 1)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+	let coord = vec2<i32>(gid.xy);	// tab-indented line with a trailing tab comment
+  // A comment-only line between statements.
+
+  textureStore(output_commented, coord,
+               textureLoad(input_commented, coord, 0i) * vec4<f32>(params_commented.gain));
+}
+)";
+
+constexpr std::string_view kStrippedSource =
+    "struct commented_params {\n"
+    "gain: f32,\n"
+    "selector: u32,\n"
+    "padding: vec2<u32>,\n"
+    "}\n"
+    "@group(0) @binding(0) var input_commented: texture_2d<f32>;\n"
+    "@group(0) @binding(1) var output_commented: texture_storage_2d<rgba32float, write>;\n"
+    "@group(0) @binding(2) var<uniform> params_commented: commented_params;\n"
+    "@compute @workgroup_size(8, 8, 1)\n"
+    "fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n"
+    "let coord = vec2<i32>(gid.xy);\n"
+    "textureStore(output_commented, coord,\n"
+    "textureLoad(input_commented, coord, 0i) * vec4<f32>(params_commented.gain));\n"
+    "}\n";
+
+constexpr ParseResult kCommentedParsed = Parse(kCommentedSource);
+static_assert(kCommentedParsed.hasResult());
+
+TEST(TextEmitter, ProjectsWgslWithoutCommentsIndentationOrBlankLines) {
+  std::array<char, 4096> output = {};
+  TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
+
+  EXPECT_TRUE(EmitWgsl(kCommentedParsed.module, sink).ok());
+  EXPECT_EQ(sink.view(), kStrippedSource);
+}
+
+TEST(TextEmitter, StrippedWgslProjectionCompilesToIdenticalNativeBytes) {
+  std::array<char, 4096> projection = {};
+  TextSink projectionSink{projection.data(), static_cast<uint32_t>(projection.size())};
+  ASSERT_TRUE(EmitWgsl(kCommentedParsed.module, projectionSink).ok());
+  const ParseResult reparsed = Parse(projectionSink.view());
+  ASSERT_TRUE(reparsed.hasResult());
+
+  std::array<char, 16384> original = {};
+  std::array<char, 16384> roundTrip = {};
+  TextSink originalSink{original.data(), static_cast<uint32_t>(original.size())};
+  TextSink roundTripSink{roundTrip.data(), static_cast<uint32_t>(roundTrip.size())};
+  ASSERT_TRUE(EmitMsl(kCommentedParsed.module, originalSink).ok());
+  ASSERT_TRUE(EmitMsl(reparsed.module, roundTripSink).ok());
+  EXPECT_EQ(originalSink.view(), roundTripSink.view());
+
+  std::array<uint32_t, 8192> originalWords = {};
+  std::array<uint32_t, 8192> roundTripWords = {};
+  SpirvSink originalSpirv{originalWords.data(), static_cast<uint32_t>(originalWords.size())};
+  SpirvSink roundTripSpirv{roundTripWords.data(), static_cast<uint32_t>(roundTripWords.size())};
+  ASSERT_TRUE(EmitSpirv(kCommentedParsed.module, originalSpirv).isSuccess());
+  ASSERT_TRUE(EmitSpirv(reparsed.module, roundTripSpirv).isSuccess());
+  ASSERT_EQ(originalSpirv.size, roundTripSpirv.size);
+  EXPECT_EQ(originalWords, roundTripWords);
+}
+
+TEST(TextEmitter, WgslProjectionOfCommentFreeSourceKeepsEveryLine) {
   std::array<char, 4096> output = {};
   TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
 
   EXPECT_TRUE(EmitWgsl(kParsed.module, sink).ok());
-  EXPECT_EQ(sink.view(), kSource);
+  std::string expected;
+  for (size_t start = 0; start < kSource.size();) {
+    size_t end = kSource.find('\n', start);
+    if (end == std::string_view::npos) end = kSource.size();
+    std::string_view line = kSource.substr(start, end - start);
+    while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
+    if (!line.empty()) expected.append(line).push_back('\n');
+    start = end + 1;
+  }
+  EXPECT_EQ(sink.view(), expected);
 }
 
 TEST(TextEmitter, MslManglesNamesAndForwardsUsedResourcesToHelpers) {

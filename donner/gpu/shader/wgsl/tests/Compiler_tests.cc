@@ -49,7 +49,9 @@ constexpr auto kPadTypeArtifact = Compile<kPadTypeMutation, Projection::All>();
 
 TEST(Compiler, FreezesAllGaussianBlurProjectionsAndMetadata) {
   constexpr CompiledShaderView shader = kGaussianArtifact.view();
-  static_assert(shader.wgsl == programs::kGaussianBlurSource.view());
+  static_assert(!shader.wgsl.empty() &&
+                shader.wgsl.size() < programs::kGaussianBlurSource.view().size());
+  static_assert(shader.wgsl.find("//") == std::string_view::npos);
   static_assert(!shader.msl.empty());
   static_assert(shader.spirv[0] == 0x07230203u);
   static_assert(shader.spirv[1] == 0x00010300u);
@@ -57,7 +59,7 @@ TEST(Compiler, FreezesAllGaussianBlurProjectionsAndMetadata) {
   static_assert(shader.members.size() == 10);
   static_assert(shader.entryPoints.front().name.view() == "cs_main");
 
-  EXPECT_EQ(shader.wgsl, programs::kGaussianBlurSource.view());
+  EXPECT_TRUE(Parse(shader.wgsl).hasResult());
   constexpr CompiledShaderView repeated = kRepeatedGaussianArtifact.view();
   EXPECT_EQ(shader.wgsl, repeated.wgsl);
   EXPECT_EQ(shader.msl, repeated.msl);
@@ -82,6 +84,27 @@ TEST(Compiler, ReflectionTracksBindingAndWorkgroupMutations) {
   ASSERT_EQ(descriptor.bufferBindings->size(), 1u);
   EXPECT_EQ(descriptor.bufferBindings->front().binding, 7u);
   EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+}
+
+TEST(Compiler, FrozenWgslProjectionReparsesToTheFrozenNativeBytes) {
+  const std::string_view projection = kGaussianArtifact.view().wgsl;
+  EXPECT_EQ(projection.find("//"), std::string_view::npos);
+  EXPECT_EQ(projection.find("\n "), std::string_view::npos);
+  EXPECT_EQ(projection.find("\n\n"), std::string_view::npos);
+
+  const ParseResult reparsed = Parse(projection);
+  ASSERT_TRUE(reparsed.hasResult());
+
+  std::array<char, kGaussianArtifact.msl.size()> text{};
+  TextSink textSink{text.data(), uint32_t(text.size())};
+  ASSERT_TRUE(EmitMsl(reparsed.module, textSink).ok());
+  EXPECT_EQ(std::string_view(text.data(), textSink.size), kGaussianArtifact.view().msl);
+
+  std::array<uint32_t, kGaussianArtifact.spirv.size()> words{};
+  SpirvSink wordSink{words.data(), uint32_t(words.size())};
+  ASSERT_TRUE(EmitSpirv(reparsed.module, wordSink).isSuccess());
+  ASSERT_EQ(wordSink.size, words.size());
+  EXPECT_EQ(words, kGaussianArtifact.spirv);
 }
 
 TEST(Compiler, OrdinaryEvaluationMatchesFrozenProjections) {

@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/shader/tests/GeneratedProgramDescriptorTestCases.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/wgsl/Parser.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
 namespace donner::gpu::shader {
@@ -62,6 +64,19 @@ TEST_P(GeneratedProgramDescriptorTests, PreservesSourceAndCompleteInterface) {
     EXPECT_THAT(device.createShaderModule(unavailable),
                 IsGpuError(GpuErrorType::InvalidDescriptor));
   }
+}
+
+TEST_P(GeneratedProgramDescriptorTests, ShipsCommentFreeWgslThatParsesToTheSameInterface) {
+  const CompiledShaderView& shader = GetParam().compiledShader();
+  const std::string_view wgsl = shader.wgsl;
+  EXPECT_EQ(wgsl.find("//"), std::string_view::npos) << GetParam().name;
+  EXPECT_EQ(wgsl.find("\n "), std::string_view::npos) << GetParam().name;
+  EXPECT_EQ(wgsl.find("\n\t"), std::string_view::npos) << GetParam().name;
+  EXPECT_EQ(wgsl.find("\n\n"), std::string_view::npos) << GetParam().name;
+
+  const wgsl::ParseResult reparsed = wgsl::Parse(wgsl);
+  ASSERT_TRUE(reparsed.hasResult()) << GetParam().name;
+  EXPECT_EQ(reparsed.module.bindingCount, shader.resources.size()) << GetParam().name;
 }
 
 TEST_P(GeneratedProgramDescriptorTests, ValidatesProductionDescriptorBufferLayoutsAndRanges) {

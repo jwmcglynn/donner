@@ -43,7 +43,11 @@ TEST(SpecularLightingProgramTests, OrdinaryAndFrozenNativeProjectionsAgree) {
   wgsl::SpirvSink binary{words.data(), uint32_t(words.size())};
   ASSERT_EQ(wgsl::EmitSpirv(parsed.module, binary).error, wgsl::SpirvEmitError::None);
   EXPECT_THAT(std::span(words.data(), binary.size), testing::ElementsAreArray(frozen.spirv));
-  EXPECT_EQ(frozen.wgsl, programs::kSpecularLightingSource.view());
+  // The frozen WGSL projection is the authored source without comments, indentation or blank
+  // lines; it must still parse and stay no larger than the source.
+  EXPECT_EQ(frozen.wgsl.find("//"), std::string_view::npos);
+  EXPECT_LT(frozen.wgsl.size(), programs::kSpecularLightingSource.view().size());
+  EXPECT_TRUE(wgsl::Parse(frozen.wgsl).hasResult());
 }
 TEST(SpecularLightingProgramTests, MutationPropagatesThroughDescriptorAndBindingLayout) {
   const auto& shader = tests::SpecularLightingMutatedAllProjections();
