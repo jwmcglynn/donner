@@ -190,6 +190,19 @@ public:
   void setGenericFamilyMapping(std::string_view genericName, std::string_view realFamily);
 
   /**
+   * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
+   * after resolving CSS generic names.
+   *
+   * A `font-family` list must skip entries nothing provides so a later entry can match.
+   * `findFont()` cannot express that, because an unmatched family is answered with the embedded
+   * fallback rather than an invalid handle, so callers walking a list test availability here
+   * first. This performs no loading and leaves the resolution cache untouched.
+   *
+   * @param family Font family name to test, before generic-name resolution.
+   */
+  bool hasFamily(std::string_view family) const;
+
+  /**
    * Find or load a font matching the given family name.
    *
    * Resolution order:
