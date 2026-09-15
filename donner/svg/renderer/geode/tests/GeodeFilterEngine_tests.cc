@@ -709,6 +709,22 @@ TEST_F(GeodeFilterEngineTest, RefusedTileSurfacesStopBeforeFurtherAllocation) {
   runGraph(MakeGraph(true), "FilterTileInput");
 }
 
+TEST_F(GeodeFilterEngineTest, TilesASourceWhoseFormatIsNotTheIntermediateOne) {
+  // An embedder surface can be BGRA, and a tiled execution copies the source straight into its
+  // tile buffer. A tile buffer pinned to one format makes that copy fail on such a surface, and
+  // the whole filter is lost rather than one tile.
+  setSource(gpu::TextureDescriptor{"bgra tiled source",
+                                   {32, 32},
+                                   gpu::TextureFormat::BGRA8Unorm,
+                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  engine_->setMaximumTileExtentForTesting(16);
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  const ExecutedFilter result = execute(MakeGraph(true), allocator);
+
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  EXPECT_THAT(engine_->lastExecutionMemory().tileExecutions, testing::Gt(1u));
+}
+
 TEST_F(GeodeFilterEngineTest, LargeBlurHalosUseBoundedStripsAtHighDprZoom) {
   using namespace svg::components;
   FilterGraph graph;
