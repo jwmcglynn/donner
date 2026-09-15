@@ -348,6 +348,73 @@ TEST_F(VulkanSurfaceTest, PresentsAFrameNothingDrewInto) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(VulkanSurfaceTest, KeepsItsAcquisitionRingStraightAcrossAnOutOfDateRebuild) {
+  const Surface surface = configuredSurface();
+
+  // One frame first, so the acquisition counter is not zero when the rebuild resets it. That is
+  // the whole bug: an out-of-date acquisition rebuilds the swapchain mid-acquire, which replaces
+  // the acquisition ring and restarts its counter, and a retry that keeps the slot it computed
+  // against the destroyed ring signals one slot's semaphore while filing its fence under
+  // another. With the counter already at one, those two slots differ for any ring size.
+  SurfaceTexture warmup = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(warmup.texture.isValid());
+  renderClear(warmup.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+
+  device_->forceNextAcquireOutOfDateForTest(surface.slotIndex());
+  SurfaceTexture rebuilt = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  EXPECT_EQ(rebuilt.status, SurfaceStatus::Outdated)
+      << "A rebuilt swapchain still hands back a frame, with the signal to reconfigure";
+  ASSERT_TRUE(rebuilt.texture.isValid());
+  renderClear(rebuilt.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+
+  // Deliberately not waiting for each frame: the fence filed against a ring slot is what stops
+  // its semaphore being signalled again before the previous wait has run, so a fence filed under
+  // the wrong slot only shows up while frames are still in flight.
+  uint64_t lastSerial = 0;
+  for (int frameIndex = 0; frameIndex < 12; ++frameIndex) {
+    SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+    ASSERT_TRUE(frame.texture.isValid()) << "frame " << frameIndex;
+    lastSerial = renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+    EXPECT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success)
+        << "frame " << frameIndex;
+  }
+
+  EXPECT_TRUE(device_->waitForSerial(lastSerial, /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanSurfaceTest, OneSurfacesSubmissionDoesNotConsumeAnothersAcquisitionWait) {
+  const Surface first = configuredSurface();
+  const Surface second = configuredSurface();
+
+  SurfaceTexture firstFrame =
+      unwrap(device_->acquireCurrentTexture(first), "acquireCurrentTexture");
+  SurfaceTexture secondFrame =
+      unwrap(device_->acquireCurrentTexture(second), "acquireCurrentTexture");
+  ASSERT_TRUE(firstFrame.texture.isValid());
+  ASSERT_TRUE(secondFrame.texture.isValid());
+
+  // Writing one surface's frame says nothing about when the other's is safe to write. A
+  // submission that swept up both waits would leave the second surface's own writer carrying
+  // none, and its first transition would race the presentation engine's read of that image.
+  const uint64_t firstSerial =
+      renderClear(firstFrame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  EXPECT_EQ(unwrap(device_->presentSurface(first), "presentSurface"), SurfaceStatus::Success);
+  EXPECT_TRUE(device_->waitForSerial(firstSerial, /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
+
+  const uint64_t secondSerial =
+      renderClear(secondFrame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  EXPECT_EQ(unwrap(device_->presentSurface(second), "presentSurface"), SurfaceStatus::Success);
+  EXPECT_TRUE(device_->waitForSerial(secondSerial, /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
+
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
 TEST_F(VulkanSurfaceTest, AbandonsMoreFramesThanTheSwapchainHoldsImages) {
   const Surface surface = configuredSurface();
 

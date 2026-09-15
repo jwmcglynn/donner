@@ -142,6 +142,14 @@ public:
   /// recreation that reclaims it.
   Status abandon();
 
+  /// Makes the next acquisition report the swapchain as out of date, before it asks for an image.
+  ///
+  /// Test seam. A presentation engine decides on its own when a swapchain has been outgrown, and
+  /// a headless surface has no window to resize, so the retry path has no other way to run. The
+  /// injected result stands in for one that acquires nothing and signals nothing, which is what
+  /// an out-of-date acquisition does.
+  void forceNextAcquireOutOfDateForTest() { forceNextAcquireOutOfDate_ = true; }
+
   /// Configuration the swapchain was created with, or nothing before it is configured.
   const std::optional<SurfaceConfiguration>& configuration() const { return configuration_; }
 
@@ -220,6 +228,7 @@ private:
   uint32_t imageIndex_ = 0;                          //!< Index of the frame currently held.
   bool hasFrame_ = false;                            //!< Whether a frame is currently held.
   VkSemaphore pendingAcquireWait_ = VK_NULL_HANDLE;  //!< Acquire semaphore nothing has taken yet.
+  bool forceNextAcquireOutOfDate_ = false;           //!< One-shot injected out-of-date acquisition.
   /// True once a frame was discarded rather than presented: Vulkan reclaims it only when the
   /// swapchain that owns it is replaced.
   bool needsRecreation_ = false;
