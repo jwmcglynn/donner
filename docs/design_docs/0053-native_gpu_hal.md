@@ -110,11 +110,13 @@ commits and their fixes together in a focused reviewable change.
       device, the module constructors and the geometry encoder, while the WebAssembly package
       contributes no native artifact and keeps linking the WGSL artifacts only. A probe binary
       names both accessors of every production family, so linkage is enforced at link time: the
-      probe cannot link unless each family's WGSL and native artifact is present. Inspecting the
-      linked probe adds that the authored WGSL is present and the other platform's projection is
-      absent. Selection is done in the `GeodeShaders.cc` constructors, which are covered against
-      a device reporting each source kind, including refusal of a kind the linked artifact does
-      not carry. The item stays open on the rest of the selection: the filter engine and the
+      probe cannot link unless each family's WGSL and native artifact is present. The
+      `//donner/gpu/shader/artifact_tests:geode_linkage_isolation_tests` target inspects the linked
+      probe to verify that the authored WGSL is present and the other platform's projection is
+      absent. Selection is done in the `GeodeShaders.cc` constructors, which
+      `//donner/svg/renderer/geode:geode_shader_projection_tests` covers against a device reporting
+      each source kind, including refusal of a kind the linked artifact does not carry. The item
+      stays open on the rest of the selection: the filter engine and the
       shared render pipeline still name the WGSL view, so the native objects for their families
       are linked but dropped by the linker.
 - [ ] Qualify each family through the selected native backend with strict pixel acceptance:
