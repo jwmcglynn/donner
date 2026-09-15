@@ -874,10 +874,8 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_filter_engine_tests",
-    # Moderate rather than short, for the reason on the implementation target above: the
-    # suite this wraps uses most of its 60 s budget uninstrumented and roughly twice it
-    # under a sanitizer. Moderate still kills a hung driver in five minutes rather than
-    # the 900 s that large would allow.
+    # This timeout, not the size above, is what governs on the sanitizer lane: that lane runs
+    # the package without --config=geode, so the implementation target is skipped there.
     timeout = "moderate",
     testonly = 1,
     dep = ":geode_filter_engine_tests_impl",
