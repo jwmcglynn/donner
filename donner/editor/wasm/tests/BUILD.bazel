@@ -170,6 +170,8 @@ playwright_bin.playwright_test(
     },
     tags = [
         "manual",
+        # Firefox cannot initialize its macOS sandbox inside Bazel's sandbox.
+        "no-sandbox",
         "perf",
     ],
     target_compatible_with = [
