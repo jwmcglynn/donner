@@ -634,6 +634,66 @@ TEST_F(TextSystemTest, TextPathSelfReferencingHrefFails) {
   EXPECT_TRUE(span.textPathFailed);
 }
 
+// --- textPath layout options: side ---
+
+TEST_F(TextSystemTest, TextPathSideLeftKeepsTravelDirection) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 100 0"/></defs>
+      <text id="t"><textPath href="#p" side="left">Left</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(0.0, 0.0), Vector2Near(100.0, 0.0)));
+}
+
+TEST_F(TextSystemTest, TextPathSideRightReversesTravelDirection) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 100 0"/></defs>
+      <text id="t"><textPath href="#p" side="right">Right</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(100.0, 0.0), Vector2Near(0.0, 0.0)));
+}
+
+TEST_F(TextSystemTest, TextPathSideRightMeasuresStartOffsetFromTheOriginalEnd) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 100 0"/></defs>
+      <text id="t"><textPath href="#p" side="right" startOffset="30">Right</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathStartOffset, testing::DoubleEq(30.0));
+
+  const Path::PointOnPath start = span.pathSpline->pointAtArcLength(span.pathStartOffset);
+  ASSERT_TRUE(start.valid);
+  EXPECT_THAT(start.point, Vector2Near(70.0, 0.0));
+}
+
+TEST_F(TextSystemTest, TextPathSideRightAppliesToInlinePathGeometry) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath path="M 0 0 L 100 0" side="right">Right</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(100.0, 0.0), Vector2Near(0.0, 0.0)));
+}
+
 TEST_F(TextSystemTest, TextPathInlinePathWithModerateCoordinatesResolvesPercentOffset) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">

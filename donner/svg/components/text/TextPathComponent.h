@@ -2,6 +2,7 @@
 /// @file
 
 #include <optional>
+#include <ostream>
 
 #include "donner/base/Length.h"
 #include "donner/base/Path.h"
@@ -11,21 +12,50 @@ namespace donner::svg::components {
 
 /// Method for placing glyphs along a path in \ref xml_textPath.
 enum class TextPathMethod {
-  Align,    ///< Glyphs are aligned to the tangent of the path.
-  Stretch,  ///< Glyphs are stretched along the tangent to match path curvature.
+  Align,    ///< Each glyph is rigidly rotated and translated onto the path tangent.
+  Stretch,  ///< Glyph outlines are warped along the path. Donner places these glyphs with
+            ///< \ref TextPathMethod::Align, since outline warping is not implemented.
 };
+
+/// Ostream output operator for \ref TextPathMethod.
+inline std::ostream& operator<<(std::ostream& os, TextPathMethod method) {
+  switch (method) {
+    case TextPathMethod::Align: return os << "Align";
+    case TextPathMethod::Stretch: return os << "Stretch";
+  }
+  return os << "Unknown";
+}
 
 /// Which side of the path to render text in \ref xml_textPath.
 enum class TextPathSide {
   Left,   ///< Text rendered on the left side (default).
-  Right,  ///< Text rendered on the right side (reversed direction).
+  Right,  ///< Text rendered on the other side, by reversing the direction of travel.
 };
+
+/// Ostream output operator for \ref TextPathSide.
+inline std::ostream& operator<<(std::ostream& os, TextPathSide side) {
+  switch (side) {
+    case TextPathSide::Left: return os << "Left";
+    case TextPathSide::Right: return os << "Right";
+  }
+  return os << "Unknown";
+}
 
 /// Spacing mode for \ref xml_textPath.
 enum class TextPathSpacing {
-  Auto,   ///< UA determines spacing.
-  Exact,  ///< Exact inter-character spacing.
+  Auto,   ///< The user agent chooses the inter-glyph spacing. Donner chooses the same spacing as
+          ///< \ref TextPathSpacing::Exact.
+  Exact,  ///< Glyphs advance by exactly their shaped widths.
 };
+
+/// Ostream output operator for \ref TextPathSpacing.
+inline std::ostream& operator<<(std::ostream& os, TextPathSpacing spacing) {
+  switch (spacing) {
+    case TextPathSpacing::Auto: return os << "Auto";
+    case TextPathSpacing::Exact: return os << "Exact";
+  }
+  return os << "Unknown";
+}
 
 /**
  * Stores attributes specific to \ref xml_textPath elements.

@@ -122,26 +122,23 @@ void applyStartOffset(const TextPathComponent& textPath, ComputedTextComponent::
   }
 }
 
-/// Resolves the geometry and start offset a \ref xml_textPath places glyphs on, leaving \p span
-/// unchanged when the element names no usable geometry.
-void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
-                     ComputedTextComponent::TextSpan& span) {
+/// Resolves the geometry a \ref xml_textPath places glyphs on, in the textPath element's own user
+/// space, or an empty result when the element names no usable geometry.
+std::optional<Path> resolveTextPathGeometry(Registry& registry, const TextPathComponent& textPath) {
   // The `path` attribute wins over `href` when it parsed to geometry; its coordinates are already
   // in the textPath element's user space, so no referenced-element transform applies.
   if (textPath.inlinePath && !textPath.inlinePath->empty()) {
-    span.pathSpline = *textPath.inlinePath;
-    applyStartOffset(textPath, span);
-    return;
+    return *textPath.inlinePath;
   }
 
   if (textPath.href.empty()) {
-    return;
+    return std::nullopt;
   }
 
   const Reference ref(textPath.href);
   const auto resolved = ref.resolve(registry);
   if (!resolved || !resolved->handle) {
-    return;
+    return std::nullopt;
   }
 
   // TODO(jwm): Resolve dependency cycle with ShapeSystem so that we don't need to re-parse the path
@@ -165,7 +162,7 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   }
 
   if (!computedPath || computedPath->spline.empty()) {
-    return;
+    return std::nullopt;
   }
 
   // The referenced path is treated as if it were defined in the textPath user space. Its own
@@ -196,11 +193,25 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
         case Path::Verb::ClosePath: builder.closePath(); break;
       }
     }
-    span.pathSpline = builder.build();
-  } else {
-    span.pathSpline = computedPath->spline;
+    return builder.build();
   }
 
+  return computedPath->spline;
+}
+
+/// Resolves the geometry and start offset a \ref xml_textPath places glyphs on, leaving \p span
+/// unchanged when no usable geometry exists.
+void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
+                     ComputedTextComponent::TextSpan& span) {
+  std::optional<Path> geometry = resolveTextPathGeometry(registry, textPath);
+  if (!geometry) {
+    return;
+  }
+
+  // `side="right"` puts glyphs on the other side of the path, which is the same as travelling the
+  // path backwards: glyphs face the opposite way and `startOffset` counts from what was the end.
+  span.pathSpline =
+      textPath.side == TextPathSide::Right ? geometry->reversed() : std::move(*geometry);
   applyStartOffset(textPath, span);
 }
 

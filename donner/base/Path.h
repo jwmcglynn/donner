@@ -418,6 +418,20 @@ public:
   Path flatten(double tolerance = 0.25) const;
 
   /**
+   * Reverse the direction of travel, tracing the same geometry from end to start.
+   *
+   * Subpaths are emitted in reverse order and each is traced backwards, so a distance measured
+   * from the start of the result covers the same points as the same distance measured back from
+   * the end of the original. A closed subpath stays closed.
+   *
+   * The result carries no arc-decomposition grouping: an arc that was expanded into several
+   * cubics reverses into ordinary cubics, so marker placement must use the original path.
+   *
+   * @return A new Path tracing this path's geometry in the opposite direction.
+   */
+  Path reversed() const;
+
+  /**
    * Convert this path's stroke to a filled outline.
    *
    * Takes stroke parameters and returns a new closed Path whose fill region represents the area

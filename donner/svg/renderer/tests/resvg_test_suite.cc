@@ -1526,7 +1526,11 @@ INSTANTIATE_TEST_SUITE_P(
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
-                {"method=stretch.svg", Params::Skip("Not impl: method=stretch")},
+                {"method=stretch.svg",
+                 Params::Skip("Not impl: method=stretch outline warping; the vendored reference is "
+                              "byte-identical to simple-case.png (align placement, which resvg "
+                              "also fails), so a passing comparison would pin align behaviour that "
+                              "a correct stretch implementation must change")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
@@ -1539,11 +1543,20 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-path-with-ClosePath.png")
                      .withReason("Minor char")},
-                {"side=right.svg", Params::Skip("Not impl: side=right (SVG 2)")},
+                {"side=right.svg",
+                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
+                                       "Half-turned glyph edges: 3427 of 3430 raw differences are "
+                                       "boundary texels, centroid within 0.1px, ink within 0.03%")},
                 {"simple-case.svg", Params::WithGoldenOverride(
                                         "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
                                         .withReason("Minor char")},
-                {"spacing=auto.svg", Params::Skip("Not impl: spacing=auto")},
+                {"spacing=auto.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
+                     .withReason("spacing=auto lets the user agent choose, and Donner chooses the "
+                                 "same spacing as exact, so this draws simple-case.svg exactly; "
+                                 "its own vendored PNG is byte-identical to the stale "
+                                 "simple-case.png")},
                 {"startOffset=-100.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-startOffset=-100.png")

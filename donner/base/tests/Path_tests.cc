@@ -2918,6 +2918,97 @@ TEST(Path, OstreamVertex) {
 }
 
 // =============================================================================
+// Path::reversed
+// =============================================================================
+
+TEST(PathReversed, EmptyPath) {
+  EXPECT_EQ(Path().reversed().toSVGPathData(), "");
+}
+
+TEST(PathReversed, MoveToOnly) {
+  const Path path = PathBuilder().moveTo({10, 20}).build();
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 10 20");
+}
+
+TEST(PathReversed, OpenPolyline) {
+  const Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 5}).build();
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 10 5 L 10 0 L 0 0");
+}
+
+TEST(PathReversed, CubicControlPointsSwap) {
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .curveTo({1, 2}, {3, 4}, {5, 6})
+                        .curveTo({7, 8}, {9, 10}, {11, 12})
+                        .build();
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 11 12 C 9 10 7 8 5 6 C 3 4 1 2 0 0");
+}
+
+TEST(PathReversed, QuadraticKeepsItsControlPoint) {
+  const Path path = PathBuilder().moveTo({0, 0}).quadTo({5, 10}, {10, 0}).build();
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 10 0 Q 5 10 0 0");
+}
+
+TEST(PathReversed, ClosedPolygonStaysClosed) {
+  const Path path = PathBuilder().addRect(Box2d(Vector2d(0, 0), Vector2d(10, 10))).build();
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 0 0 L 0 10 L 10 10 L 10 0 Z");
+}
+
+TEST(PathReversed, ClosedSubpathRetracesItsClosingLine) {
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .curveTo({1, 1}, {2, 2}, {3, 3})
+                        .lineTo({6, 0})
+                        .closePath()
+                        .build();
+  // Travel starts at the subpath start, runs back along the implicit closing line to (6, 0), then
+  // back through each segment, and the trailing Z redraws the (0, 0) endpoint.
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 0 0 L 6 0 L 3 3 C 2 2 1 1 0 0 Z");
+}
+
+TEST(PathReversed, SubpathsAreEmittedInReverseOrder) {
+  const Path path =
+      PathBuilder().moveTo({0, 0}).lineTo({1, 0}).moveTo({10, 10}).lineTo({11, 10}).build();
+  EXPECT_EQ(path.reversed().toSVGPathData(), "M 11 10 L 10 10 M 1 0 L 0 0");
+}
+
+TEST(PathReversed, ReversingTwiceRestoresTheOriginal) {
+  const Path path = PathBuilder()
+                        .moveTo({20, 100})
+                        .curveTo({35, 135}, {85, 135}, {100, 100})
+                        .curveTo({115, 65}, {165, 65}, {180, 100})
+                        .build();
+  EXPECT_EQ(path.reversed().reversed().toSVGPathData(), path.toSVGPathData());
+}
+
+TEST(PathReversed, PreservesTotalLength) {
+  const Path path = PathBuilder()
+                        .moveTo({20, 100})
+                        .curveTo({35, 135}, {85, 135}, {100, 100})
+                        .curveTo({115, 65}, {165, 65}, {180, 100})
+                        .build();
+  EXPECT_THAT(path.reversed().pathLength(), testing::DoubleNear(path.pathLength(), 1e-9));
+}
+
+TEST(PathReversed, SamplesTheMirroredPointAtTheSameDistance) {
+  const Path path = PathBuilder()
+                        .moveTo({20, 100})
+                        .curveTo({35, 135}, {85, 135}, {100, 100})
+                        .curveTo({115, 65}, {165, 65}, {180, 100})
+                        .build();
+  const Path reversed = path.reversed();
+  const double length = path.pathLength();
+
+  const Path::PointOnPath forward = path.pointAtArcLength(length * 0.25);
+  const Path::PointOnPath backward = reversed.pointAtArcLength(length * 0.75);
+  ASSERT_TRUE(forward.valid);
+  ASSERT_TRUE(backward.valid);
+  EXPECT_THAT(backward.point, Vector2dNear(forward.point, 1e-6));
+  // Reversed travel faces the opposite way, a half turn from the forward tangent.
+  EXPECT_THAT(std::cos(backward.angle - forward.angle), testing::DoubleNear(-1.0, 1e-9));
+}
+
+// =============================================================================
 // Path::toSVGPathData
 // =============================================================================
 
