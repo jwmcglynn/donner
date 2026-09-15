@@ -693,6 +693,58 @@ TEST(BrowserDevice, AbandoningAFrameReleasesTheBrowserTextureBehindIt) {
   EXPECT_THAT(fixture.bridge->objectCount(), 1u);  // Only the surface remains.
 }
 
+TEST(BrowserDevice, ReusingTheSlotOfAnOutstandingFrameHandsTheFrameBackFirst) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  SurfaceDescriptor surfaceDescriptor;
+  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
+  surfaceDescriptor.native.selector = RcString("#canvas");
+  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  ASSERT_THAT(surface, HasResult());
+
+  SurfaceConfiguration configuration;
+  configuration.size = Extent2d{8, 8};
+  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+  ASSERT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), true);
+
+  // Destroying the surface with a frame outstanding reaches no hook on this backend: the runtime
+  // releases the surface and the frame's texture slot without telling it. The frame is still
+  // recorded against that slot at this point.
+  ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
+
+  // The next texture takes the released slot. The frame has to be handed back before it does, or
+  // the record would name a slot the caller now owns.
+  Result<Texture> reused = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
+  ASSERT_THAT(reused, HasResult());
+  EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), false);
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 3), true);
+
+  // Teardown destroys the caller's texture and does not reach the frame, which the canvas owns.
+  fixture.device.reset();
+  EXPECT_THAT(objects->size(), 0u);
+  EXPECT_THAT(FindCall(*calls, "destroyObject kind=texture id=3"), true);
+  EXPECT_THAT(FindCall(*calls, "destroyObject kind=texture id=2"), false);
+}
+
+TEST(BrowserDeviceRequest, CarriesTheBrowsersReasonOutOfAFailedBegin) {
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->beginStatus = BridgeStatus::Failed;
+  bridge->requestError = RcString("protocol entry 7 is 4 and this library assigns 8");
+
+  BrowserDeviceRequest request = BrowserDeviceRequest::Begin(std::move(bridge));
+  EXPECT_THAT(request.state(), BrowserDeviceRequestState::Failed);
+  // The detail is the diagnosis; flattening it into the generic refusal would lose which entry
+  // disagreed.
+  EXPECT_THAT(request.error().str(), HasSubstr("protocol entry 7"));
+}
+
 TEST(BrowserDevice, AcquiringFromALostDeviceReportsTheLossAsASurfaceStatus) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

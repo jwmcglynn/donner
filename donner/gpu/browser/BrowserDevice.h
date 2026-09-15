@@ -252,6 +252,11 @@ private:
   /// @param surfaceSlotIndex Surface slot holding the frame.
   void releaseAcquiredFrame(uint32_t surfaceSlotIndex);
 
+  /// Hands back every frame recorded against \p textureSlotIndex, so no surface goes on naming a
+  /// texture slot that is about to change hands.
+  /// @param textureSlotIndex Runtime texture slot index.
+  void releaseFramesNaming(uint32_t textureSlotIndex);
+
   /// Replays one validated command onto the bridge, dispatching to the \ref replay overload for
   /// its type.
   /// @param command Recorded command. @param operation Operation name for the error message.

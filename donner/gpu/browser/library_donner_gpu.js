@@ -15,8 +15,11 @@
  *
  * Structured descriptors arrive one item at a time, matching how recorded commands are replayed:
  * nothing here decodes a packed buffer, so there is no length, offset or arity arithmetic to get
- * wrong. Every numeric code below is fixed for the life of the protocol and is pinned on the C++
- * side by `BrowserWireCodes_tests.cc`; the two lists change together or not at all.
+ * wrong. Every numeric code below is fixed for the life of the protocol. Two things hold this list
+ * to the one `BrowserWireCodes.h` assigns: `BrowserWireCodes_tests.cc` reads this file and compares
+ * the `protocolCodes` array below against the C++ table, and `donner_gpu_check_protocol` compares
+ * them again at runtime before a device is requested. The first is what fails a build; a C++ test
+ * that did not read this file could not see a change here at all.
  */
 
 var LibraryDonnerGpu = {
@@ -393,10 +396,11 @@ var LibraryDonnerGpu = {
         case 3: entry.texture = { sampleType: 'float' }; break;
         case 4: entry.sampler = { type: 'filtering' }; break;
         case 5:
-          entry.storageTexture = {
-            access: 'write-only',
-            format: DonnerGpu.textureFormat(item.storageFormat),
-          };
+          var storageFormat = DonnerGpu.textureFormat(item.storageFormat);
+          if (storageFormat === null) {
+            return null;
+          }
+          entry.storageTexture = { access: 'write-only', format: storageFormat };
           break;
         case 6: entry.texture = { sampleType: 'unfilterable-float' }; break;
         default: return null;

@@ -211,9 +211,14 @@ BrowserDeviceRequest BrowserDeviceRequest::Begin(std::unique_ptr<BrowserBridge> 
   }
   const BridgeStatus status = bridge->beginDeviceRequest();
   if (status != BridgeStatus::Success) {
-    return BrowserDeviceRequest(
-        std::move(bridge),
-        RcString(ErrorForBridgeStatus(status, "BrowserDeviceRequest::Begin").message));
+    // The bridge may already know more than the status says - a protocol table that disagreed
+    // names the entry it disagreed on - and that detail is the whole diagnosis, so it is carried
+    // out rather than flattened into "the browser refused the operation".
+    const GpuError error = ErrorForBridgeStatus(status, "BrowserDeviceRequest::Begin");
+    const RcString detail = bridge->deviceRequestError();
+    RcString reason = detail.empty() ? RcString(error.message)
+                                     : RcString(std::format("{}: {}", error.message, detail.str()));
+    return BrowserDeviceRequest(std::move(bridge), std::move(reason));
   }
   return BrowserDeviceRequest(std::move(bridge), RcString());
 }
@@ -331,11 +336,17 @@ Result<BrowserObjectId> BrowserDevice::objectFor(BrowserObjectKind kind, uint32_
 
 Result<BrowserObjectId> BrowserDevice::registerObject(BrowserObjectKind kind, uint32_t slotIndex,
                                                       std::string_view operation) {
-  // A displaced identifier is released the way the object it named would have been: a frame texture
-  // goes back to its surface, anything else is destroyed.
-  const bool displacedFrame = kind == BrowserObjectKind::Texture && isAcquiredFrame(slotIndex);
+  // A texture slot about to be reused may still be named as some surface's frame, because dropping
+  // a Surface handle reaches no backend hook: the runtime releases the surface and its frame
+  // without telling this device. Hand that frame back before the slot changes hands, or the record
+  // would go on naming a slot the caller now owns and teardown would take the caller's texture
+  // while orphaning the frame.
+  if (kind == BrowserObjectKind::Texture) {
+    releaseFramesNaming(slotIndex);
+  }
+
   const BrowserObjectInsertion insertion = objects_.insert(kind, slotIndex);
-  if (insertion.displaced != kNoBrowserObject && !displacedFrame) {
+  if (insertion.displaced != kNoBrowserObject) {
     bridge_->destroyObject(kind, insertion.displaced);
   }
   if (insertion.id == kNoBrowserObject) {
@@ -368,6 +379,16 @@ bool BrowserDevice::isAcquiredFrame(uint32_t textureSlotIndex) const {
   return false;
 }
 
+void BrowserDevice::releaseFramesNaming(uint32_t textureSlotIndex) {
+  for (uint32_t surfaceSlotIndex = 0;
+       surfaceSlotIndex < static_cast<uint32_t>(acquiredTextureBySurface_.size());
+       ++surfaceSlotIndex) {
+    if (acquiredTextureBySurface_[surfaceSlotIndex] == textureSlotIndex) {
+      releaseAcquiredFrame(surfaceSlotIndex);
+    }
+  }
+}
+
 void BrowserDevice::releaseObject(BrowserObjectKind kind, uint32_t slotIndex) {
   if (!onOwnerThread()) {
     // Keep the entry: teardown runs on the owning thread and frees it there, whereas naming it to
@@ -378,14 +399,8 @@ void BrowserDevice::releaseObject(BrowserObjectKind kind, uint32_t slotIndex) {
   if (kind == BrowserObjectKind::Texture && isAcquiredFrame(slotIndex)) {
     // The canvas owns this texture; handing the frame back is the release, and destroying it would
     // take away the surface's own texture instead.
-    for (uint32_t surfaceSlotIndex = 0;
-         surfaceSlotIndex < static_cast<uint32_t>(acquiredTextureBySurface_.size());
-         ++surfaceSlotIndex) {
-      if (acquiredTextureBySurface_[surfaceSlotIndex] == slotIndex) {
-        releaseAcquiredFrame(surfaceSlotIndex);
-        return;
-      }
-    }
+    releaseFramesNaming(slotIndex);
+    return;
   }
   const std::optional<BrowserObjectId> id = objects_.remove(kind, slotIndex);
   if (id.has_value()) {

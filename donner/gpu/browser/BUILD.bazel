@@ -127,9 +127,13 @@ donner_cc_test(
         "tests/BrowserObjectTable_tests.cc",
         "tests/BrowserWireCodes_tests.cc",
     ],
+    # The library's own text, so the protocol table can be compared against the one the JavaScript
+    # half holds here rather than only by the two halves at runtime in a browser.
+    data = ["library_donner_gpu.js"],
     deps = [
         ":browser_device",
         ":fake_browser_bridge",
+        "//donner/base:runfiles",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "@com_google_gtest//:gtest_main",

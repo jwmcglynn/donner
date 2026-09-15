@@ -66,8 +66,9 @@ std::optional<uint32_t> WireTextureUsage(TextureUsage value) {
       {TextureUsage::CopySrc, 1u << 2},          {TextureUsage::CopyDst, 1u << 3},
       {TextureUsage::StorageBinding, 1u << 4},
   };
-  // Every flag the enumeration defines has a code here; a flag added to it without a code
-  // would otherwise be refused at runtime as an unrecognized bit instead of at build time.
+  // The two lists are written out separately, so this holds them equal rather than checking
+  // either against the enumeration, which defines no all-flags member to check against. It
+  // still catches a flag dropped from one list and not the other.
   static_assert(FlagUnion(kFlags) ==
                     static_cast<uint32_t>(TextureUsage::RenderAttachment | TextureUsage::Sampled |
                                           TextureUsage::CopySrc | TextureUsage::CopyDst |
@@ -83,8 +84,9 @@ std::optional<uint32_t> WireBufferUsage(BufferUsage value) {
       {BufferUsage::CopySrc, 1u << 4}, {BufferUsage::CopyDst, 1u << 5},
       {BufferUsage::MapRead, 1u << 6},
   };
-  // Every flag the enumeration defines has a code here; a flag added to it without a code
-  // would otherwise be refused at runtime as an unrecognized bit instead of at build time.
+  // The two lists are written out separately, so this holds them equal rather than checking
+  // either against the enumeration, which defines no all-flags member to check against. It
+  // still catches a flag dropped from one list and not the other.
   static_assert(
       FlagUnion(kFlags) ==
           static_cast<uint32_t>(BufferUsage::Vertex | BufferUsage::Index | BufferUsage::Uniform |
@@ -100,8 +102,9 @@ std::optional<uint32_t> WireShaderStage(ShaderStage value) {
       {ShaderStage::Fragment, 1u << 1},
       {ShaderStage::Compute, 1u << 2},
   };
-  // Every flag the enumeration defines has a code here; a flag added to it without a code
-  // would otherwise be refused at runtime as an unrecognized bit instead of at build time.
+  // The two lists are written out separately, so this holds them equal rather than checking
+  // either against the enumeration, which defines no all-flags member to check against. It
+  // still catches a flag dropped from one list and not the other.
   static_assert(
       FlagUnion(kFlags) ==
           static_cast<uint32_t>(ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Compute),
@@ -116,8 +119,9 @@ std::optional<uint32_t> WireColorWriteMask(ColorWriteMask value) {
       {ColorWriteMask::Blue, 1u << 2},
       {ColorWriteMask::Alpha, 1u << 3},
   };
-  // Every flag the enumeration defines has a code here; a flag added to it without a code
-  // would otherwise be refused at runtime as an unrecognized bit instead of at build time.
+  // ColorWriteMask names its complete set, so this checks the table against the enumeration
+  // itself: a flag added to it without a code here fails the build rather than being refused
+  // at runtime as an unrecognized bit.
   static_assert(FlagUnion(kFlags) == static_cast<uint32_t>(ColorWriteMask::All),
                 "a ColorWriteMask flag was added or removed without updating this table");
   return EncodeMask(value, kFlags);
@@ -316,6 +320,32 @@ void AppendCode(std::optional<uint32_t> encoded, std::vector<uint32_t>& table) {
   table.push_back(encoded.value_or(0));
 }
 
+// How many codes each decoded enumeration assigns, derived from its own last enumerator rather
+// than written as a number, so inserting a value into one of them widens the table with it.
+constexpr uint32_t kBridgeStatusCodeCount = static_cast<uint32_t>(BridgeStatus::Failed) + 1;
+constexpr uint32_t kRequestStateCodeCount =
+    static_cast<uint32_t>(BrowserDeviceRequestState::Failed) + 1;
+constexpr uint32_t kMapSliceStateCodeCount = static_cast<uint32_t>(MapSliceState::Failed) + 1;
+constexpr uint32_t kSurfaceStatusCodeCount = static_cast<uint32_t>(SurfaceStatus::Timeout) + 1;
+
+/// Appends what each code from 1 to \p Count decodes to, as the enumerator's own value offset by
+/// one so that nothing decoding to the first enumerator is confused with the zero that marks a
+/// code this protocol does not assign.
+///
+/// Deriving the entry from the enumerator rather than from the code is what makes a transposition
+/// visible: two cases swapped in \p decode change which enumerator each code produces, so the
+/// table changes even though the same set of codes still decodes.
+///
+/// @tparam Enum Enumeration being decoded. @tparam Count Codes the enumeration assigns.
+/// @param decode Translation from code to enumerator. @param table Table being built.
+template <typename Enum, uint32_t Count>
+void AppendDecoded(std::optional<Enum> (*decode)(uint32_t), std::vector<uint32_t>& table) {
+  for (uint32_t code = 1; code <= Count; ++code) {
+    const std::optional<Enum> decoded = decode(code);
+    table.push_back(decoded.has_value() ? static_cast<uint32_t>(*decoded) + 1 : 0);
+  }
+}
+
 /// Builds the protocol table from the translations above, so it describes what is actually sent.
 std::vector<uint32_t> BuildProtocolCodeTable() {
   std::vector<uint32_t> table;
@@ -396,20 +426,13 @@ std::vector<uint32_t> BuildProtocolCodeTable() {
     AppendCode(WireBrowserObjectKind(static_cast<BrowserObjectKind>(kindIndex)), table);
   }
 
-  // The four decoded enumerations are pinned by the code each value comes back as, walked in the
-  // same order, so the table covers both directions of the boundary.
-  for (uint32_t code = 1; code <= 6; ++code) {
-    table.push_back(BridgeStatusFromWire(code).has_value() ? code : 0);
-  }
-  for (uint32_t code = 1; code <= 4; ++code) {
-    table.push_back(RequestStateFromWire(code).has_value() ? code : 0);
-  }
-  for (uint32_t code = 1; code <= 4; ++code) {
-    table.push_back(MapSliceStateFromWire(code).has_value() ? code : 0);
-  }
-  for (uint32_t code = 1; code <= 5; ++code) {
-    table.push_back(SurfaceStatusFromWire(code).has_value() ? code : 0);
-  }
+  // The four decoded enumerations are covered by what each code decodes TO, not by whether it
+  // decodes at all: an entry derived from presence alone would be byte-identical if two cases were
+  // transposed, and transposing Lost with DeviceLost would send a caller down the wrong recovery.
+  AppendDecoded<BridgeStatus, kBridgeStatusCodeCount>(&BridgeStatusFromWire, table);
+  AppendDecoded<BrowserDeviceRequestState, kRequestStateCodeCount>(&RequestStateFromWire, table);
+  AppendDecoded<MapSliceState, kMapSliceStateCodeCount>(&MapSliceStateFromWire, table);
+  AppendDecoded<SurfaceStatus, kSurfaceStatusCodeCount>(&SurfaceStatusFromWire, table);
 
   return table;
 }
