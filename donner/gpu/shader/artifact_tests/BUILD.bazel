@@ -1,6 +1,13 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary")
+load(
+    "//donner/gpu/shader:shader_families.bzl",
+    "GEODE_SHADER_FAMILIES",
+    "native_shader_artifacts",
+    "shader_apis",
+    "shader_artifacts",
+)
 
 _NATIVE = select({
     "@platforms//os:macos": [],
@@ -1838,6 +1845,41 @@ py_test(
         "--spirv",
     ],
     data = [":diffuse_lighting_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+# Payload-marker key for the families whose probe name differs from their target name.
+_MARKER_KEYS = {
+    "convolve_matrix": "convolve",
+    "gaussian_blur": "gaussian",
+    "slug_mask": "slug",
+}
+
+# Links what the production Geode libraries link: the authored WGSL artifact and the
+# platform-native artifact of every family they reach.
+donner_cc_binary(
+    name = "geode_linkage_probe",
+    testonly = 1,
+    srcs = ["GeodeLinkageProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+               "//donner/gpu/shader:compiled_shader",
+           ] + shader_apis(GEODE_SHADER_FAMILIES) +
+           shader_artifacts(GEODE_SHADER_FAMILIES) +
+           native_shader_artifacts(GEODE_SHADER_FAMILIES),
+)
+
+py_test(
+    name = "geode_linkage_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--binary=$(rootpath :geode_linkage_probe)",
+    ] + [
+        "--family=" + _MARKER_KEYS.get(family, family)
+        for family in GEODE_SHADER_FAMILIES
+    ] + _FORMAT + ["--wgsl"] + _NATIVE_FLAGS,
+    data = [":geode_linkage_probe"],
     main = "inspect_projection_binary.py",
     target_compatible_with = _NATIVE,
 )

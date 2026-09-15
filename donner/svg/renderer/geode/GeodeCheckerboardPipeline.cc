@@ -4,6 +4,7 @@
 
 #include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/programs/Checkerboard.h"
+#include "donner/svg/renderer/geode/GeodeShaderSelection.h"
 
 namespace donner::geode {
 
@@ -14,12 +15,8 @@ namespace {
 /// WebAssembly package never links.
 /// @param device Device the pipeline is created on.
 const gpu::shader::CompiledShaderView& SelectCheckerboardShader(const gpu::Device& device) {
-#if (defined(__APPLE__) || defined(__linux__)) && !defined(__EMSCRIPTEN__)
-  if (device.shaderSourceKind() != gpu::ShaderSourceKind::Wgsl) {
-    return gpu::shader::programs::CheckerboardNativeShader();
-  }
-#endif
-  return gpu::shader::programs::CheckerboardShader();
+  return SelectShaderProjection(device, gpu::shader::programs::CheckerboardShader(),
+                                DONNER_GEODE_NATIVE_SHADER(Checkerboard));
 }
 
 /// True when \p shader exposes the vertex/fragment pair and its uniform block.
