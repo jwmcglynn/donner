@@ -538,7 +538,9 @@ Status VulkanSwapchain::createSwapchainUnguarded() {
   VkSwapchainCreateInfoKHR swapchainInfo = {};
   swapchainInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
   swapchainInfo.surface = surface_;
-  swapchainInfo.minImageCount = ChooseImageCount(native);
+  swapchainInfo.minImageCount = std::exchange(forceMinimumImageCount_, false)
+                                    ? native.minImageCount
+                                    : ChooseImageCount(native);
   swapchainInfo.imageFormat = *format;
   swapchainInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
   swapchainInfo.imageExtent = extent.result();
@@ -826,6 +828,7 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
   // counter cannot file this fence against a slot that was never signalled for this frame.
   if (frameRingSlot_ < acquireRingFences_.size()) {
     acquireRingFences_[frameRingSlot_] = fence;
+    lastFencedRingSlot_ = frameRingSlot_;
   }
   pending_.push_back(PendingSubmission{fence, commandBuffer});
   return OkStatus();
@@ -942,6 +945,7 @@ void VulkanSwapchain::destroySwapchain() {
   }
   acquireSemaphores_.clear();
   acquireRingFences_.clear();
+  lastFencedRingSlot_.reset();
   images_.clear();
   hasFrame_ = false;
   frameTextureSlot_.reset();

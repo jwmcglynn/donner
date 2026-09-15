@@ -396,23 +396,98 @@ TEST_F(VulkanSurfaceTest, OneSurfacesSubmissionDoesNotConsumeAnothersAcquisition
       unwrap(device_->acquireCurrentTexture(second), "acquireCurrentTexture");
   ASSERT_TRUE(firstFrame.texture.isValid());
   ASSERT_TRUE(secondFrame.texture.isValid());
+  ASSERT_TRUE(device_->surfaceAcquisitionForTest(second.slotIndex()).owesAcquireWait);
 
   // Writing one surface's frame says nothing about when the other's is safe to write. A
   // submission that swept up both waits would leave the second surface's own writer carrying
-  // none, and its first transition would race the presentation engine's read of that image.
+  // none, and its first transition would then race the presentation engine's read of that image.
+  // On one in-order queue that race cannot be observed, so what is asserted is the contract
+  // itself: after a submission that names only the first frame, the second surface still owes
+  // its wait.
   const uint64_t firstSerial =
       renderClear(firstFrame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
-  EXPECT_EQ(unwrap(device_->presentSurface(first), "presentSurface"), SurfaceStatus::Success);
-  EXPECT_TRUE(device_->waitForSerial(firstSerial, /*timeoutSeconds=*/30.0))
-      << device_->lastErrorForTest();
 
+  EXPECT_TRUE(device_->surfaceAcquisitionForTest(second.slotIndex()).owesAcquireWait)
+      << "A submission that writes only the first surface's frame took the second's wait with it";
+  EXPECT_FALSE(device_->surfaceAcquisitionForTest(first.slotIndex()).owesAcquireWait)
+      << "The submission that writes a frame is the one that owes its wait";
+
+  // Both surfaces' work stays in flight until here, so the two submissions overlap rather than
+  // being serialised by a wait between them.
   const uint64_t secondSerial =
       renderClear(secondFrame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  EXPECT_EQ(unwrap(device_->presentSurface(first), "presentSurface"), SurfaceStatus::Success);
   EXPECT_EQ(unwrap(device_->presentSurface(second), "presentSurface"), SurfaceStatus::Success);
+
+  EXPECT_TRUE(device_->waitForSerial(firstSerial, /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
   EXPECT_TRUE(device_->waitForSerial(secondSerial, /*timeoutSeconds=*/30.0))
       << device_->lastErrorForTest();
-
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+TEST_F(VulkanSurfaceTest, FencesAFrameInTheRingSlotItsSemaphoreCameFrom) {
+  const Surface surface = configuredSurface();
+
+  // One frame first, so the acquisition counter is not zero when a rebuild resets it: that is
+  // the only state in which the slot computed against the old ring and the slot the restarted
+  // counter names differ.
+  SurfaceTexture warmup = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(warmup.texture.isValid());
+  renderClear(warmup.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+
+  device_->forceNextAcquireOutOfDateForTest(surface.slotIndex());
+  SurfaceTexture rebuilt = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_EQ(rebuilt.status, SurfaceStatus::Outdated);
+  ASSERT_TRUE(rebuilt.texture.isValid());
+
+  const size_t frameRingSlot =
+      device_->surfaceAcquisitionForTest(surface.slotIndex()).frameRingSlot;
+  renderClear(rebuilt.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+
+  // The fence that says when a ring slot's semaphore may be signalled again has to be filed
+  // against the slot whose semaphore this frame actually used. Filed anywhere else, a later
+  // acquisition skips a wait it owes, and the only symptom is a race that a fast driver wins.
+  const std::optional<size_t> fencedRingSlot =
+      device_->surfaceAcquisitionForTest(surface.slotIndex()).lastFencedRingSlot;
+  ASSERT_TRUE(fencedRingSlot.has_value());
+  EXPECT_EQ(*fencedRingSlot, frameRingSlot)
+      << "The frame's fence was filed against a ring slot whose semaphore it never used";
+}
+
+TEST_F(VulkanSurfaceTest, StaysInBoundsWhenARebuildShrinksTheAcquisitionRing) {
+  const Surface surface = configuredSurface();
+
+  // Land on the ring's last slot before rebuilding, because that is the slot a smaller new ring
+  // no longer has. A headless surface rebuilds to the same size on its own, so the smaller ring
+  // is asked for explicitly.
+  const size_t ringSize = device_->surfaceAcquisitionForTest(surface.slotIndex()).ringSize;
+  ASSERT_GT(ringSize, 1u);
+  for (size_t frameIndex = 0; frameIndex < ringSize + 1; ++frameIndex) {
+    SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+    ASSERT_TRUE(frame.texture.isValid()) << "frame " << frameIndex;
+    const bool onLastSlot =
+        device_->surfaceAcquisitionForTest(surface.slotIndex()).frameRingSlot == ringSize - 1;
+    renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+    ASSERT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+    if (onLastSlot) {
+      break;
+    }
+  }
+
+  device_->forceMinimumImageCountOnceForTest(surface.slotIndex());
+  device_->forceNextAcquireOutOfDateForTest(surface.slotIndex());
+
+  SurfaceTexture rebuilt = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  EXPECT_EQ(rebuilt.status, SurfaceStatus::Outdated);
+  EXPECT_TRUE(rebuilt.texture.isValid());
+  const VulkanDevice::SurfaceAcquisitionForTest acquisition =
+      device_->surfaceAcquisitionForTest(surface.slotIndex());
+  EXPECT_LT(acquisition.frameRingSlot, acquisition.ringSize)
+      << "The retry used a slot the rebuilt ring does not have";
+  EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
 }
 
 TEST_F(VulkanSurfaceTest, AbandonsMoreFramesThanTheSwapchainHoldsImages) {
