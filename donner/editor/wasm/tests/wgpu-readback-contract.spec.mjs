@@ -44,6 +44,19 @@ const emdawnWebgpuSource = await readFile(
   "utf8",
 );
 
+function extractAsyncFunction(sourceText, functionName) {
+  const signature = `async function ${functionName}(`;
+  const start = sourceText.indexOf(signature);
+  assert.ok(start >= 0, `expected the ${functionName} helper`);
+  const nextFunction = sourceText.slice(start + signature.length).search(
+    /\nasync function [A-Za-z_$][\w$]*\s*\(/,
+  );
+  const end = nextFunction < 0
+    ? sourceText.length
+    : start + signature.length + nextFunction;
+  return sourceText.slice(start, end);
+}
+
 test("late map rejection cannot clear a reused buffer handle's cleanup state", () => {
   const mapAsyncStart = emdawnWebgpuSource.search(/\bemwgpuBufferMapAsync\s*:/);
   assert.ok(mapAsyncStart >= 0, "expected the asynchronous buffer-map bridge");
@@ -382,13 +395,7 @@ test("the composited drag gate does not cancel first-use offscreen WebGPU work",
 });
 
 test("shared Basic Shapes visual gates settle first-use thumbnails before replacement", () => {
-  const helperStart = presentationRegressionSource.indexOf("async function openBasicShapes(");
-  const helperEnd = presentationRegressionSource.indexOf(
-    "async function toggleViewMenuItem(",
-    helperStart,
-  );
-  assert.ok(helperStart >= 0 && helperEnd > helperStart, "expected the Basic Shapes open helper");
-  const helper = presentationRegressionSource.slice(helperStart, helperEnd);
+  const helper = extractAsyncFunction(presentationRegressionSource, "openBasicShapes");
 
   const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
   const sampleClick = helper.indexOf("page.mouse.click");

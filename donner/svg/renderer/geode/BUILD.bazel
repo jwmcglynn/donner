@@ -18,6 +18,14 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
+exports_files(
+    [
+        "GeodeDevice.cc",
+        "GeodeDevice.h",
+    ],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 bool_flag(
     name = "enable_geode",
