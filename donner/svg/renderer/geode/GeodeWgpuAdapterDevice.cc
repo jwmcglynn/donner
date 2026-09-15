@@ -660,6 +660,20 @@ void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
   slot.hasAcquired = false;
 }
 
+void GeodeWgpuAdapterDevice::onDestroySurface(uint32_t slotIndex) {
+  if (slotIndex >= slotSurfaces_.size()) {
+    return;
+  }
+  // The slot is handed to the next surface, so the backend object goes with the surface that
+  // owned it rather than surviving until something happens to take the slot again.
+  SurfaceSlot& slot = slotSurfaces_[slotIndex];
+  if (slot.hasAcquired && slot.acquiredTextureSlot < slotTextures_.size() &&
+      slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
+    SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
+  }
+  slot = SurfaceSlot{};
+}
+
 gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
                                                      uint32_t bufferSlotIndex, gpu::MapMode mode,
                                                      uint64_t offsetBytes, uint64_t byteCount) {
