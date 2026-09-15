@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -48,7 +49,18 @@ TEST(ConvolveMatrixProgramTests, EmitsDeterministically) {
   const std::string projection = EmitConvolveMatrixWgsl();
   EXPECT_EQ(projection.find("//"), std::string::npos);
   EXPECT_LT(projection.size(), programs::kConvolveMatrixSource.view().size());
-  EXPECT_TRUE(wgsl::Parse(projection).hasResult());
+  // The stripped projection is the same module: emitting from it reproduces the frozen bytes.
+  const auto reparsed = wgsl::Parse(projection);
+  ASSERT_TRUE(reparsed.hasResult());
+  std::array<char, 32768> roundTripMsl{};
+  wgsl::TextSink roundTripText{roundTripMsl.data(), uint32_t(roundTripMsl.size())};
+  ASSERT_TRUE(wgsl::EmitMsl(reparsed.module, roundTripText).ok());
+  EXPECT_EQ(roundTripText.view(), tests::ConvolveMatrixAllProjections().msl);
+  std::array<uint32_t, 24576> roundTripWords{};
+  wgsl::SpirvSink roundTripBinary{roundTripWords.data(), uint32_t(roundTripWords.size())};
+  ASSERT_EQ(wgsl::EmitSpirv(reparsed.module, roundTripBinary).error, wgsl::SpirvEmitError::None);
+  EXPECT_THAT(std::span(roundTripWords.data(), roundTripBinary.size),
+              testing::ElementsAreArray(tests::ConvolveMatrixAllProjections().spirv));
 }
 
 TEST(ConvolveMatrixProgramTests, NativeEmittersAcceptPortableParameterMemberNames) {

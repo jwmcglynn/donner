@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <span>
 #include <string>
 
 #include "donner/gpu/shader/programs/Offset.h"
@@ -40,11 +41,21 @@ TEST(OffsetProgramTests, OrdinaryAndFrozenNativeProjectionsAgree) {
   wgsl::SpirvSink binary{words.data(), uint32_t(words.size())};
   ASSERT_EQ(wgsl::EmitSpirv(parsed.module, binary).error, wgsl::SpirvEmitError::None);
   EXPECT_THAT(std::span(words.data(), binary.size), testing::ElementsAreArray(frozen.spirv));
-  // The frozen WGSL projection is the authored source without comments, indentation or blank
-  // lines; it must still parse and stay smaller than the source.
+  // The frozen WGSL projection is the authored source without comments, indentation or blank lines.
   EXPECT_EQ(frozen.wgsl.find("//"), std::string_view::npos);
   EXPECT_LT(frozen.wgsl.size(), programs::kOffsetSource.view().size());
-  EXPECT_TRUE(wgsl::Parse(frozen.wgsl).hasResult());
+  // The stripped projection is the same module: emitting from it reproduces the frozen bytes.
+  const auto reparsed = wgsl::Parse(frozen.wgsl);
+  ASSERT_TRUE(reparsed.hasResult());
+  std::array<char, 8192> roundTripMsl{};
+  wgsl::TextSink roundTripText{roundTripMsl.data(), uint32_t(roundTripMsl.size())};
+  ASSERT_TRUE(wgsl::EmitMsl(reparsed.module, roundTripText).ok());
+  EXPECT_EQ(roundTripText.view(), frozen.msl);
+  std::array<uint32_t, 4096> roundTripWords{};
+  wgsl::SpirvSink roundTripBinary{roundTripWords.data(), uint32_t(roundTripWords.size())};
+  ASSERT_EQ(wgsl::EmitSpirv(reparsed.module, roundTripBinary).error, wgsl::SpirvEmitError::None);
+  EXPECT_THAT(std::span(roundTripWords.data(), roundTripBinary.size),
+              testing::ElementsAreArray(frozen.spirv));
 }
 TEST(OffsetProgramTests, MutationPropagatesThroughDescriptorAndBindingLayout) {
   const auto& shader = tests::OffsetMutatedAllProjections();
