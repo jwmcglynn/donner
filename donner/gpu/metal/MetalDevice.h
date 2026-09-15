@@ -40,6 +40,13 @@ namespace donner::gpu::metal {
  * compilation, including an explicitly empty list when no entry point uses buffers. Pipeline
  * creation checks the supplied facts against the layout's binding types and stage visibility.
  *
+ * Presentation goes through a Core Animation Metal layer the embedder supplies and continues to
+ * own: configuring sets the layer's pixel format, drawable extent, pacing and alpha compositing,
+ * each acquired frame is one of that layer's drawables, and presenting schedules the drawable on
+ * a command buffer committed after the frame's own work. The layer hands out a small fixed number
+ * of drawables, so a frame that is neither presented nor abandoned stalls the next acquisition
+ * until the layer gives up waiting.
+ *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary
  * submission. Repeated writes of the same resource range are coalesced. A batch adds one staging
@@ -218,6 +225,14 @@ protected:
                         const Extent2d& writeSize) override;
   Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                   std::span<const Command> commands) override;
+  Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) override;
+  Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
+  Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration) override;
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
+                                                uint32_t textureSlotIndex) override;
+  Result<SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
+  void onAbandonCurrentTexture(uint32_t slotIndex) override;
+  void onDestroySurface(uint32_t slotIndex) override;
 
 private:
   /// Constructs an empty device; \ref Create attaches the Metal device.

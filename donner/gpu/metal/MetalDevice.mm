@@ -24,6 +24,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/metal/MetalSurface.h"
 #include "donner/gpu/shader/MslBindingMap.h"
 
 namespace donner::gpu::metal {
@@ -544,6 +545,25 @@ struct MetalDevice::Impl {
 
   /// Records upload-only resource uses and consumes a successfully submitted upload batch.
   void didSubmitWrites(uint64_t submissionSerial);
+
+  /// Creates \ref commandQueue on first use, reporting why if Metal refuses.
+  Status ensureCommandQueue();
+
+  std::vector<std::unique_ptr<MetalSurface>> surfaces;  //!< Surface slots.
+  /// Texture slot each surface's acquired frame occupies, empty while it holds none.
+  std::vector<std::optional<uint32_t>> surfaceTextureSlots;
+
+  /// The surface at \p slotIndex, or null when that slot holds none.
+  /// @param slotIndex Surface slot.
+  MetalSurface* surfaceAt(uint32_t slotIndex) const {
+    return slotIndex < surfaces.size() ? surfaces[slotIndex].get() : nullptr;
+  }
+
+  /// Forgets the texture slot a surface's frame occupied, clearing the slot itself only while it
+  /// still names \p frameTexture - the caller may have destroyed the frame's handle already, and
+  /// the runtime hands a released slot to the next texture.
+  /// @param slotIndex Surface slot. @param frameTexture Texture the frame handed out, or nil.
+  void releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTexture> frameTexture);
 };
 
 std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
@@ -1816,11 +1836,8 @@ Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
 }
 
 Status MetalDevice::Impl::beginSubmission(EncodingState& state) {
-  if (commandQueue == nil) {
-    commandQueue = [device newCommandQueue];
-    if (commandQueue == nil) {
-      return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
-    }
+  if (Status status = ensureCommandQueue(); status.hasError()) {
+    return status;
   }
 
   state.commandBuffer = [commandQueue commandBuffer];
@@ -1895,6 +1912,112 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
   impl_->didSubmitWrites(submissionSerial);
 
   return OkStatus();
+}
+
+Status MetalDevice::Impl::ensureCommandQueue() {
+  if (commandQueue != nil) {
+    return OkStatus();
+  }
+  commandQueue = [device newCommandQueue];
+  if (commandQueue == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
+  }
+  return OkStatus();
+}
+
+void MetalDevice::Impl::releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTexture> frameTexture) {
+  const std::optional<uint32_t> textureSlot = GetSlot(surfaceTextureSlots, slotIndex);
+  if (textureSlot.has_value() && frameTexture != nil &&
+      GetSlot(textures, *textureSlot) == frameTexture) {
+    SetSlot(textures, *textureSlot, id<MTLTexture>(nil));
+  }
+  SetSlot(surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+}
+
+Status MetalDevice::onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) {
+  Result<std::unique_ptr<MetalSurface>> surface = MetalSurface::Create(impl_->device, descriptor);
+  if (surface.hasError()) {
+    return std::move(surface).error();
+  }
+
+  SetSlot(impl_->surfaces, slotIndex, std::move(surface).result());
+  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+  return OkStatus();
+}
+
+Result<SurfaceCapabilities> MetalDevice::onSurfaceCapabilities(uint32_t slotIndex) const {
+  const MetalSurface* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Metal layer", slotIndex)};
+  }
+  return surface->capabilities();
+}
+
+Status MetalDevice::onConfigureSurface(uint32_t slotIndex,
+                                       const SurfaceConfiguration& configuration) {
+  MetalSurface* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Metal layer", slotIndex)};
+  }
+  return surface->configure(configuration);
+}
+
+Result<SurfaceStatus> MetalDevice::onAcquireCurrentTexture(uint32_t slotIndex,
+                                                           uint32_t textureSlotIndex) {
+  MetalSurface* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Metal layer", slotIndex)};
+  }
+
+  Result<SurfaceStatus> status = surface->acquire();
+  if (status.hasError()) {
+    return status;
+  }
+
+  id<MTLTexture> frameTexture = surface->currentTexture();
+  if (frameTexture == nil) {
+    return status;  // No frame came back; the runtime releases the slot it proposed.
+  }
+
+  SetSlot(impl_->textures, textureSlotIndex, frameTexture);
+  SetSlot(impl_->textureUploadSerials, textureSlotIndex, uint64_t{0});
+  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>(textureSlotIndex));
+  return status;
+}
+
+Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
+  MetalSurface* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Metal layer", slotIndex)};
+  }
+  if (Status status = impl_->ensureCommandQueue(); status.hasError()) {
+    return std::move(status).error();
+  }
+
+  id<MTLTexture> frameTexture = surface->currentTexture();
+  Result<SurfaceStatus> status = surface->present(impl_->commandQueue);
+  impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
+  return status;
+}
+
+void MetalDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
+  MetalSurface* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return;
+  }
+
+  id<MTLTexture> frameTexture = surface->currentTexture();
+  surface->abandon();
+  impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
+}
+
+void MetalDevice::onDestroySurface(uint32_t slotIndex) {
+  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+  SetSlot(impl_->surfaces, slotIndex, std::unique_ptr<MetalSurface>());
 }
 
 }  // namespace donner::gpu::metal
