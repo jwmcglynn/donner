@@ -17,6 +17,8 @@
 
 namespace donner::gpu::vulkan {
 
+class VulkanSwapchainTestAccess;
+
 /// Converts native surface formats into the formats the runtime can present.
 /// Exposed for deterministic capability tests whose driver cannot advertise the wildcard.
 /// @param nativeFormats Formats reported by the presentation engine.
@@ -211,6 +213,8 @@ public:
   Extent2d extent() const { return extent_; }
 
 private:
+  friend class VulkanSwapchainTestAccess;
+
   /// Constructs a swapchain bound to \p surface.
   /// @param context Borrowed objects. @param surface Created surface.
   /// @param ownsSurface Whether destroying this also destroys \p surface.

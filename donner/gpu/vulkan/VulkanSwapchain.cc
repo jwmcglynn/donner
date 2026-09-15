@@ -374,6 +374,12 @@ std::optional<SurfaceStatus> RuntimeStatus(VkResult result) {
   }
 }
 
+/// Whether completion proves surface-owned objects are no longer in use. Device loss is terminal,
+/// so it also proves no queued work can use them again. @param result Completion result.
+bool CompletionProvesIdle(VkResult result) {
+  return result == VK_SUCCESS || result == VK_ERROR_DEVICE_LOST;
+}
+
 }  // namespace
 
 std::vector<TextureFormat> RuntimeSurfaceFormatsForTest(
@@ -424,10 +430,12 @@ VulkanSwapchain::VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceK
 
 VulkanSwapchain::~VulkanSwapchain() {
   const VkResult idle = context_.api->vkDeviceWaitIdle(context_.device);
-  if (idle != VK_SUCCESS && idle != VK_ERROR_DEVICE_LOST) {
+  if (!CompletionProvesIdle(idle)) {
     return;
   }
-  (void)drainPendingSubmissions();
+  if (drainPendingSubmissions().hasError()) {
+    return;
+  }
   destroySwapchain();
   // An embedder's surface outlives its swapchain: the library that made it destroys it, usually
   // with the window, and doing it here would destroy an object that library still tracks.
@@ -937,7 +945,7 @@ Status VulkanSwapchain::drainPendingSubmissions() {
     const VkResult result =
         api.vkWaitForFences(context_.device, static_cast<uint32_t>(fences.size()), fences.data(),
                             VK_TRUE, kDrainTimeoutNanoseconds);
-    if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST) {
+    if (!CompletionProvesIdle(result)) {
       return VkError("vkWaitForFences (surface drain)", result);
     }
   }

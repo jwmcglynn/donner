@@ -29,6 +29,96 @@
 #include "donner/gpu/vulkan/VulkanLoader.h"
 #include "donner/gpu/vulkan/VulkanSwapchain.h"
 
+namespace donner::gpu::vulkan {
+
+namespace {
+
+struct TeardownRecorder {
+  VkResult idleResult = VK_SUCCESS;
+  VkResult fenceResult = VK_SUCCESS;
+  std::vector<std::string_view> calls;
+};
+
+TeardownRecorder* gTeardownRecorder = nullptr;
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordDeviceWaitIdle(VkDevice) {
+  gTeardownRecorder->calls.push_back("wait-idle");
+  return gTeardownRecorder->idleResult;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordWaitForFences(VkDevice, uint32_t, const VkFence*, VkBool32,
+                                                   uint64_t) {
+  gTeardownRecorder->calls.push_back("wait-fences");
+  return gTeardownRecorder->fenceResult;
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordFreeCommandBuffers(VkDevice, VkCommandPool, uint32_t,
+                                                    const VkCommandBuffer*) {
+  gTeardownRecorder->calls.push_back("free-command-buffer");
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordDestroyFence(VkDevice, VkFence, const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-fence");
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordDestroySemaphore(VkDevice, VkSemaphore,
+                                                  const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-semaphore");
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordDestroySwapchain(VkDevice, VkSwapchainKHR,
+                                                  const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-swapchain");
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordDestroySurface(VkInstance, VkSurfaceKHR,
+                                                const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-surface");
+}
+
+template <typename T>
+T FakeHandle(uint64_t value) {
+  T result{};
+  static_assert(sizeof(result) == sizeof(value));
+  std::memcpy(&result, &value, sizeof(result));
+  return result;
+}
+
+}  // namespace
+
+class VulkanSwapchainTestAccess {
+public:
+  static void RunTeardown(TeardownRecorder& recorder) {
+    VulkanApi api;
+    api.vkDeviceWaitIdle = RecordDeviceWaitIdle;
+    api.vkWaitForFences = RecordWaitForFences;
+    api.vkFreeCommandBuffers = RecordFreeCommandBuffers;
+    api.vkDestroyFence = RecordDestroyFence;
+    api.vkDestroySemaphore = RecordDestroySemaphore;
+    api.vkDestroySwapchainKHR = RecordDestroySwapchain;
+    api.vkDestroySurfaceKHR = RecordDestroySurface;
+
+    VulkanSurfaceContext context;
+    context.api = &api;
+    context.instance = FakeHandle<VkInstance>(1);
+    context.device = FakeHandle<VkDevice>(2);
+    context.commandPool = FakeHandle<VkCommandPool>(3);
+
+    gTeardownRecorder = &recorder;
+    auto swapchain = std::unique_ptr<VulkanSwapchain>(
+        new VulkanSwapchain(context, FakeHandle<VkSurfaceKHR>(4), true));
+    swapchain->swapchain_ = FakeHandle<VkSwapchainKHR>(5);
+    swapchain->handoverSemaphores_.push_back(FakeHandle<VkSemaphore>(6));
+    swapchain->acquireSemaphores_.push_back(FakeHandle<VkSemaphore>(7));
+    swapchain->pending_.push_back(
+        VulkanSwapchain::PendingSubmission{FakeHandle<VkFence>(8), FakeHandle<VkCommandBuffer>(9)});
+    swapchain.reset();
+    gTeardownRecorder = nullptr;
+  }
+};
+
+}  // namespace donner::gpu::vulkan
+
 namespace donner::gpu::vulkan::tests {
 namespace {
 
@@ -176,11 +266,41 @@ TEST(VulkanPresentationCreationTest, RefusesAnUnavailableRequiredInstanceExtensi
   EXPECT_THAT(VulkanDevice::CreateWithPresentationSupport(kUnavailable), testing::IsNull());
 }
 
+TEST_F(VulkanSurfaceTest, EnablesAnEmbedderRequiredInstanceExtension) {
+  static constexpr const char* kRequired[] = {VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+  std::unique_ptr<VulkanDevice> required = VulkanDevice::CreateWithPresentationSupport(kRequired);
+  ASSERT_THAT(required, testing::NotNull());
+  EXPECT_THAT(required->createSurface(headlessDescriptor()), IsOk());
+}
+
 TEST(VulkanPresentationCreationTest, ExpandsTheUndefinedSurfaceFormatWildcard) {
   const std::vector<VkSurfaceFormatKHR> wildcard = {
       {VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
   EXPECT_THAT(RuntimeSurfaceFormatsForTest(wildcard),
               testing::UnorderedElementsAre(TextureFormat::BGRA8Unorm, TextureFormat::RGBA8Unorm));
+}
+
+TEST(VulkanPresentationCreationTest, TeardownWaitsForPresentAndSubmissionBeforeDestroying) {
+  TeardownRecorder recorder;
+  VulkanSwapchainTestAccess::RunTeardown(recorder);
+  EXPECT_THAT(recorder.calls,
+              testing::ElementsAre("wait-idle", "wait-fences", "free-command-buffer",
+                                   "destroy-fence", "destroy-semaphore", "destroy-semaphore",
+                                   "destroy-swapchain", "destroy-surface"));
+}
+
+TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhilePresentMayStillBePending) {
+  TeardownRecorder recorder;
+  recorder.idleResult = VK_TIMEOUT;
+  VulkanSwapchainTestAccess::RunTeardown(recorder);
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-idle"));
+}
+
+TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhenFenceCompletionFails) {
+  TeardownRecorder recorder;
+  recorder.fenceResult = VK_TIMEOUT;
+  VulkanSwapchainTestAccess::RunTeardown(recorder);
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-idle", "wait-fences"));
 }
 
 TEST_F(VulkanSurfaceTest, PointsAWindowSystemKindAtTheEmbedderPath) {
