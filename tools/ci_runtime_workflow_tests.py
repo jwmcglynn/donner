@@ -1,6 +1,5 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
-import faulthandler
 import gzip
 import hashlib
 import json
@@ -594,8 +593,4 @@ run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
 
 
 if __name__ == "__main__":
-    faulthandler.dump_traceback_later(20, repeat=True)
-    try:
-        unittest.main(verbosity=2)
-    finally:
-        faulthandler.cancel_dump_traceback_later()
+    unittest.main(verbosity=2)

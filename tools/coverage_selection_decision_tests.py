@@ -30,7 +30,6 @@ impossible: exactly one classifier call, exactly one cquery, both after every
 narrowing step.
 """
 
-import faulthandler
 import os
 from pathlib import Path
 import re
@@ -428,8 +427,4 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    faulthandler.dump_traceback_later(20, repeat=True)
-    try:
-        unittest.main(verbosity=2)
-    finally:
-        faulthandler.cancel_dump_traceback_later()
+    unittest.main(verbosity=2)
