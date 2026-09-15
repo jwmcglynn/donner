@@ -125,7 +125,9 @@ public:
    * created, since that is the first point at which the question can be asked.
    *
    * @param requiredInstanceExtensions Platform surface extensions the embedder needs enabled on
-   *   the returned instance. Creation fails when the loader does not offer any requested name.
+   *   the returned instance. The span and each non-null, NUL-terminated name it contains are
+   *   borrowed synchronously and must remain readable until this call returns. Creation fails
+   *   when the count does not fit Vulkan's uint32_t field or the loader does not offer a name.
    */
   static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport(
       std::span<const char* const> requiredInstanceExtensions = {});

@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -694,6 +695,9 @@ struct InstanceSetup {
 /// @param api Resolved global entry points.
 std::vector<const char*> EnumeratePresentationExtensions(
     const VulkanApi& api, std::span<const char* const> requiredExtensions) {
+  if (requiredExtensions.size() > std::numeric_limits<uint32_t>::max()) {
+    return {};
+  }
   std::vector<const char*> enabledExtensions;
   uint32_t extensionCount = 0;
   if (api.vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) != VK_SUCCESS ||
@@ -3878,8 +3882,14 @@ Result<SurfaceStatus> VulkanDevice::onPresentSurface(uint32_t slotIndex) {
   if (textureSlot.has_value()) {
     const Impl::TextureRecord* record = FindRecord(impl_->textures, *textureSlot);
     if (record == nullptr || record->image != frameImage) {
+      const Status abandoned = surface->abandon();
+      impl_->releaseFrameTextureSlot(slotIndex, frameImage);
+      if (abandoned.hasError()) {
+        return std::move(abandoned).error();
+      }
       return GpuError{GpuErrorType::InvalidState,
-                      "presentSurface: the acquired texture was released or replaced"};
+                      "presentSurface: the acquired texture was released or replaced; its frame "
+                      "was discarded"};
     }
     state = impl_->syncStates.committedStateOf(*textureSlot);
   }

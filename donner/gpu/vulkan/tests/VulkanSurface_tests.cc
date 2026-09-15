@@ -455,6 +455,11 @@ TEST_F(VulkanSurfaceTest, RefusesPresentationAfterTheAcquiredTextureIsReleasedAn
   ASSERT_EQ(replacement.slotIndex(), frameSlot);
   EXPECT_THAT(device_->presentSurface(surface),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("released or replaced")));
+
+  SurfaceTexture recovered =
+      unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture after refusal");
+  EXPECT_TRUE(recovered.texture.isValid());
+  EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
 }
 
 TEST_F(VulkanSurfaceTest, PresentsMoreFramesThanTheSwapchainHoldsImages) {
