@@ -1298,9 +1298,6 @@ struct VulkanDevice::Impl {
       releaseUpload(upload);
     }
     pendingUploads.clear();
-    // Before the command pool, device and instance below: a swapchain frees command buffers and
-    // destroys its swapchain and surface out of all three.
-    surfaces.clear();
 
     for (std::optional<RenderPipelineRecord>& record : renderPipelines) {
       if (record.has_value()) {
@@ -1367,6 +1364,12 @@ struct VulkanDevice::Impl {
     }
     buffers.clear();
 
+    // After the views and images above, because a view of a swapchain image must be destroyed
+    // before the swapchain that owns the image, and before the command pool and instance below,
+    // because a swapchain frees command buffers out of that pool and destroys its surface out of
+    // the instance.
+    surfaces.clear();
+
     if (commandPool != VK_NULL_HANDLE) {
       api->vkDestroyCommandPool(device, commandPool, nullptr);
       commandPool = VK_NULL_HANDLE;
@@ -1401,23 +1404,56 @@ struct VulkanDevice::Impl {
                                 queue, queueFamilyIndex, commandPool};
   }
 
-  /// The waits every surface holding an unclaimed frame still owes, claimed by the caller.
+  /// Waits taken from surfaces for one submission, and the surfaces they came from.
+  struct ClaimedSurfaceWaits {
+    SurfaceWaitSync sync;                //!< Semaphores and stages for the submission.
+    std::vector<uint32_t> surfaceSlots;  //!< Surfaces each semaphore came from, index-matched.
+  };
+
+  /// The waits owed by the surfaces whose frames \p usedTextureSlots says this submission writes.
   ///
-  /// Called once per submission: whichever submission comes first after an acquisition is the
-  /// one that waits, and a surface whose wait has already been claimed contributes nothing.
-  SurfaceWaitSync claimSurfaceWaits() {
-    SurfaceWaitSync combined;
-    for (const std::unique_ptr<VulkanSwapchain>& surface : surfaces) {
-      if (surface == nullptr) {
+  /// Only those: a submission that draws into one surface's frame says nothing about when another
+  /// surface's frame is safe to write, and sweeping up the second surface's wait here would leave
+  /// its own first writer carrying none.
+  ///
+  /// @param usedTextureSlots Texture slots this submission's recorded commands name.
+  ClaimedSurfaceWaits claimSurfaceWaits(const std::vector<uint32_t>& usedTextureSlots) {
+    ClaimedSurfaceWaits claimed;
+    for (uint32_t surfaceSlot = 0; surfaceSlot < surfaces.size(); ++surfaceSlot) {
+      VulkanSwapchain* surface = surfaces[surfaceSlot].get();
+      if (surface == nullptr || !surface->frameTextureSlot().has_value()) {
         continue;
       }
+      const uint32_t frameSlot = *surface->frameTextureSlot();
+      if (std::ranges::find(usedTextureSlots, frameSlot) == usedTextureSlots.end()) {
+        continue;
+      }
+
       SurfaceWaitSync wait = surface->takeAcquireWait();
-      combined.semaphores.insert(combined.semaphores.end(), wait.semaphores.begin(),
-                                 wait.semaphores.end());
-      combined.stages.insert(combined.stages.end(), wait.stages.begin(), wait.stages.end());
+      for (size_t i = 0; i < wait.semaphores.size(); ++i) {
+        claimed.sync.semaphores.push_back(wait.semaphores[i]);
+        claimed.sync.stages.push_back(wait.stages[i]);
+        claimed.surfaceSlots.push_back(surfaceSlot);
+      }
     }
-    return combined;
+    return claimed;
   }
+
+  /// Gives claimed waits back to the surfaces they came from, for a submission the queue refused.
+  /// @param claimed Waits taken for that submission.
+  void returnSurfaceWaits(const ClaimedSurfaceWaits& claimed) {
+    for (size_t i = 0; i < claimed.surfaceSlots.size(); ++i) {
+      if (VulkanSwapchain* surface = surfaceAt(claimed.surfaceSlots[i]); surface != nullptr) {
+        surface->restoreAcquireWait(claimed.sync.semaphores[i]);
+      }
+    }
+  }
+
+  /// Texture slots the submission being encoded has named, in encounter order with repeats.
+  ///
+  /// Recorded by \ref transitionTexture, which every texture use passes through, including the
+  /// uses whose layout already matches and so record no barrier.
+  std::vector<uint32_t> encodedTextureSlots;
 
   /// Forgets the texture slot a surface's frame occupied, clearing the slot itself only while it
   /// still names \p frameImage - the caller may have destroyed the frame's handle already, and
@@ -2961,6 +2997,10 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
 
 void VulkanDevice::Impl::transitionTexture(VkCommandBuffer commandBuffer, uint32_t textureSlot,
                                            const TextureRecord& record, TextureUsageKind usage) {
+  // Before the early return below: a use that needs no barrier is still a use, and a submission
+  // that writes a surface's frame has to carry that frame's acquisition wait either way.
+  encodedTextureSlots.push_back(textureSlot);
+
   const TextureSyncState current = syncStates.stateOf(textureSlot);
   const ImageBarrierParams params = TransitionFor(current, usage);
   const bool wasWritten = current.access != 0 && params.srcAccess != 0;
@@ -3556,6 +3596,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   // and are destroyed when the fence signals, on failure they are destroyed here.
   Impl::EncodingState state;
   state.commandBuffer = commandBufferResult.result();
+  impl.encodedTextureSlots.clear();
   const auto failEncoding = [&](Status error) -> Status {
     // Recoverable failures leave the queue unchanged. Device loss can execute work, but its
     // layouts are undefined and the error latch prevents any later submission from using them.
@@ -3601,10 +3642,13 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   }
 
   // A frame acquired from a surface comes back before the presentation engine has finished
-  // reading it, so the first submission after an acquisition carries that wait.
-  const VkResult submitResult =
-      impl.submitToQueue(state.commandBuffer, fence, impl.claimSurfaceWaits());
+  // reading it, so the first submission that writes that frame carries its wait.
+  const Impl::ClaimedSurfaceWaits claimed = impl.claimSurfaceWaits(impl.encodedTextureSlots);
+  const VkResult submitResult = impl.submitToQueue(state.commandBuffer, fence, claimed.sync);
   if (submitResult != VK_SUCCESS) {
+    // Nothing reached the queue, so the semaphores are neither waited on nor pending; they stay
+    // signalled, and are owed by their surfaces again rather than lost.
+    impl.returnSurfaceWaits(claimed);
     impl.drainAfterDeviceLoss(submitResult, "vkQueueSubmit");
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
     return failEncoding(VkError("vkQueueSubmit", submitResult));
@@ -3781,6 +3825,7 @@ Result<SurfaceStatus> VulkanDevice::onAcquireCurrentTexture(uint32_t slotIndex,
   // touched it; the acquisition wait is what the first barrier has to be ordered after.
   impl_->syncStates.reset(textureSlotIndex, AcquiredFrameSyncState());
   SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>(textureSlotIndex));
+  surface->setFrameTextureSlot(textureSlotIndex);
   return status;
 }
 
@@ -3798,8 +3843,9 @@ Result<SurfaceStatus> VulkanDevice::onPresentSurface(uint32_t slotIndex) {
   // What last touched the frame is the source scope of the barrier into the layout the
   // presentation engine reads; an untouched frame reports having touched nothing, which is
   // exactly the barrier a frame nobody drew into needs.
-  const TextureSyncState state =
-      textureSlot.has_value() ? impl_->syncStates.stateOf(*textureSlot) : TextureSyncState{};
+  const TextureSyncState state = textureSlot.has_value()
+                                     ? impl_->syncStates.committedStateOf(*textureSlot)
+                                     : TextureSyncState{};
 
   Result<SurfaceStatus> status = surface->present(state);
   impl_->releaseFrameTextureSlot(slotIndex, frameImage);

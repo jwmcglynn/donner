@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "donner/gpu/CheckedArithmetic.h"
+
 namespace donner::gpu::vulkan {
 
 namespace {
@@ -308,11 +310,16 @@ std::vector<SurfaceAlphaMode> RuntimeAlphaModes(VkCompositeAlphaFlagsKHR support
 /// drawn while another is on screen, clamped to whatever maximum it names.
 /// @param native Capabilities the surface reported.
 uint32_t ChooseImageCount(const VkSurfaceCapabilitiesKHR& native) {
-  const uint32_t preferred = native.minImageCount + 1;
-  if (native.maxImageCount != 0 && preferred > native.maxImageCount) {
+  // Checked, because the minimum comes from the driver: a reported minimum at the top of the
+  // range would otherwise wrap to zero and ask for a swapchain with no images at all.
+  const std::optional<uint32_t> preferred = CheckedAdd(native.minImageCount, uint32_t{1});
+  if (!preferred.has_value()) {
+    return native.minImageCount;
+  }
+  if (native.maxImageCount != 0 && *preferred > native.maxImageCount) {
     return native.maxImageCount;
   }
-  return preferred;
+  return *preferred;
 }
 
 /// The extent a swapchain must be created at, or a refusal naming what the surface will accept.
@@ -485,6 +492,18 @@ Status VulkanSwapchain::configure(const SurfaceConfiguration& configuration) {
 }
 
 Status VulkanSwapchain::createSwapchain() {
+  Status status = createSwapchainUnguarded();
+  if (status.hasError()) {
+    // Whatever failed, it failed after the previous swapchain was let go, so there is no
+    // swapchain and possibly no synchronization ring left. Acquiring has to say the surface is
+    // not configured rather than divide by an empty ring or index one.
+    configuration_.reset();
+    destroySwapchain();
+  }
+  return status;
+}
+
+Status VulkanSwapchain::createSwapchainUnguarded() {
   const VulkanApi& api = *context_.api;
   const SurfaceConfiguration& configuration = *configuration_;
 
@@ -637,7 +656,7 @@ Result<SurfaceStatus> VulkanSwapchain::acquire() {
   }
 
   const VulkanApi& api = *context_.api;
-  const size_t ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
+  size_t ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
   if (Status ready = waitForAcquireRingSlot(ringSlot); ready.hasError()) {
     return std::move(ready).error();
   }
@@ -658,6 +677,14 @@ Result<SurfaceStatus> VulkanSwapchain::acquire() {
       return std::move(rebuilt).error();
     }
     outgrown = true;
+    // The rebuild replaced the ring and restarted its counter, so the slot computed against the
+    // ring that has just been destroyed names nothing here: a smaller new ring would be indexed
+    // out of bounds, and an equal one would file this acquisition's fence under a slot whose
+    // semaphore was never waited on.
+    ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
+    if (Status ready = waitForAcquireRingSlot(ringSlot); ready.hasError()) {
+      return std::move(ready).error();
+    }
     result = api.vkAcquireNextImageKHR(context_.device, swapchain_, kAcquireTimeoutNanoseconds,
                                        acquireSemaphores_[ringSlot], VK_NULL_HANDLE, &imageIndex);
   }
@@ -675,13 +702,25 @@ Result<SurfaceStatus> VulkanSwapchain::acquire() {
 
   imageIndex_ = imageIndex;
   hasFrame_ = true;
+  frameTextureSlot_.reset();
+  frameRingSlot_ = ringSlot;
   pendingAcquireWait_ = acquireSemaphores_[ringSlot];
   ++acquireCount_;
   return outgrown ? SurfaceStatus::Outdated : SurfaceStatus::Success;
 }
 
+bool VulkanSwapchain::hasAddressableFrame() const {
+  return hasFrame_ && imageIndex_ < images_.size() && imageIndex_ < handoverSemaphores_.size();
+}
+
 VkImage VulkanSwapchain::currentImage() const {
-  return hasFrame_ && imageIndex_ < images_.size() ? images_[imageIndex_] : VK_NULL_HANDLE;
+  return hasAddressableFrame() ? images_[imageIndex_] : VK_NULL_HANDLE;
+}
+
+void VulkanSwapchain::restoreAcquireWait(VkSemaphore semaphore) {
+  if (semaphore != VK_NULL_HANDLE) {
+    pendingAcquireWait_ = semaphore;
+  }
 }
 
 SurfaceWaitSync VulkanSwapchain::takeAcquireWait() {
@@ -693,6 +732,31 @@ SurfaceWaitSync VulkanSwapchain::takeAcquireWait() {
   sync.stages.push_back(kAcquireWaitStage);
   pendingAcquireWait_ = VK_NULL_HANDLE;
   return sync;
+}
+
+void VulkanSwapchain::recordHandoverBarrier(VkCommandBuffer commandBuffer,
+                                            const std::optional<TextureSyncState>& state) {
+  if (!state.has_value() || !hasAddressableFrame()) {
+    return;
+  }
+
+  VkImageMemoryBarrier barrier = {};
+  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  barrier.srcAccessMask = state->access;
+  barrier.dstAccessMask = 0;
+  barrier.oldLayout = state->layout;
+  barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = images_[imageIndex_];
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.layerCount = 1;
+  // The presentation engine is outside the pipeline, so the destination scope is the bottom of it
+  // with no access to make visible; the semaphore the submission signals carries the rest.
+  context_.api->vkCmdPipelineBarrier(commandBuffer, state->stage,
+                                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                                     nullptr, 1, &barrier);
 }
 
 Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState>& state,
@@ -720,24 +784,7 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
     return VkError("vkBeginCommandBuffer (present)", result);
   }
 
-  if (state.has_value()) {
-    VkImageMemoryBarrier barrier = {};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = state->access;
-    barrier.dstAccessMask = 0;
-    barrier.oldLayout = state->layout;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = images_[imageIndex_];
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.layerCount = 1;
-    // The presentation engine is outside the pipeline, so the destination scope is the bottom of
-    // it with no access to make visible; the semaphore signalled below carries the rest.
-    api.vkCmdPipelineBarrier(commandBuffer, state->stage, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-  }
+  recordHandoverBarrier(commandBuffer, state);
 
   if (const VkResult result = api.vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
     api.vkFreeCommandBuffers(context_.device, context_.commandPool, 1, &commandBuffer);
@@ -775,8 +822,11 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
   }
 
   // The ring slot whose semaphore this submission waited on is reusable once this fence signals.
-  const size_t ringSlot = static_cast<size_t>((acquireCount_ - 1) % acquireSemaphores_.size());
-  acquireRingFences_[ringSlot] = fence;
+  // Taken from the frame rather than recomputed, so a rebuild that restarted the acquisition
+  // counter cannot file this fence against a slot that was never signalled for this frame.
+  if (frameRingSlot_ < acquireRingFences_.size()) {
+    acquireRingFences_[frameRingSlot_] = fence;
+  }
   pending_.push_back(PendingSubmission{fence, commandBuffer});
   return OkStatus();
 }
@@ -785,11 +835,21 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
   if (!hasFrame_) {
     return GpuError{GpuErrorType::InvalidState, "presentSurface: no frame is being held"};
   }
+  if (!hasAddressableFrame()) {
+    // The frame outlived the swapchain that handed it out, which nothing here should allow; fail
+    // closed rather than index the images or semaphores of a swapchain that no longer has it.
+    hasFrame_ = false;
+    frameTextureSlot_.reset();
+    needsRecreation_ = true;
+    return GpuError{GpuErrorType::InvalidState,
+                    "presentSurface: the frame is not one of this swapchain's images"};
+  }
 
   const VkSemaphore handover = handoverSemaphores_[imageIndex_];
   if (Status status = submitFrameHandover(state, handover); status.hasError()) {
     // The frame is still the swapchain's to reclaim, and only a new swapchain does that.
     hasFrame_ = false;
+    frameTextureSlot_.reset();
     needsRecreation_ = true;
     return std::move(status).error();
   }
@@ -804,6 +864,7 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
 
   const VkResult result = context_.api->vkQueuePresentKHR(context_.queue, &presentInfo);
   hasFrame_ = false;
+  frameTextureSlot_.reset();
 
   const std::optional<SurfaceStatus> status = RuntimeStatus(result);
   if (!status.has_value()) {
@@ -825,6 +886,7 @@ Status VulkanSwapchain::abandon() {
   // what this submission is for.
   const Status status = submitFrameHandover(std::nullopt, VK_NULL_HANDLE);
   hasFrame_ = false;
+  frameTextureSlot_.reset();
   needsRecreation_ = true;
   return status;
 }
@@ -882,6 +944,7 @@ void VulkanSwapchain::destroySwapchain() {
   acquireRingFences_.clear();
   images_.clear();
   hasFrame_ = false;
+  frameTextureSlot_.reset();
   pendingAcquireWait_ = VK_NULL_HANDLE;
   if (swapchain_ != VK_NULL_HANDLE) {
     api.vkDestroySwapchainKHR(context_.device, swapchain_, nullptr);
