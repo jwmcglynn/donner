@@ -772,7 +772,10 @@ async function setViewOverlayState(
 ): Promise<void> {
   const accepted = await page.evaluate(
     ({ k, want }) =>
-      window.Module?._donner_set_overlay_state?.(k === "compositorTileOverlay" ? 0 : 1, want ? 1 : 0)
+      window.Module?._donner_set_overlay_state?.(
+        k === "compositorTileOverlay" ? 0 : 1,
+        want ? 1 : 0,
+      )
         === 1,
     { k: key, want: enabled },
   );
