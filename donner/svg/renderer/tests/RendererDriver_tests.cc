@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -633,6 +634,46 @@ TEST_F(RendererDriverTest, EmitsMaskSequenceForMaskedElement) {
   EXPECT_GE(drawPathAfterTransition, 1)
       << "The masked element should be drawn after transitionMaskToContent";
 }
+
+class RendererGroupMaskTest : public RendererDriverTest,
+                              public testing::WithParamInterface<bool> {};
+
+TEST_P(RendererGroupMaskTest, KeepsMaskActiveThroughChildrenAndRestoresForSibling) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+        <rect width="4" height="8" fill="white" />
+      </mask>
+    </defs>
+    <g mask="url(#m)">
+      <rect width="8" height="4" fill="red" />
+      <g><rect y="4" width="8" height="4" fill="blue" /></g>
+    </g>
+    <rect x="12" width="4" height="8" fill="green" />
+  )svg");
+
+  std::vector<std::string_view> events;
+  EXPECT_CALL(renderer, pushMask(_, MaskType::Luminance))
+      .WillOnce([&](const std::optional<Box2d>&, MaskType) { events.push_back("push"); });
+  EXPECT_CALL(renderer, transitionMaskToContent()).WillOnce([&]() { events.push_back("content"); });
+  EXPECT_CALL(renderer, popMask()).WillOnce([&]() { events.push_back("pop"); });
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    events.push_back("draw");
+  });
+
+  if (GetParam()) {
+    EXPECT_THAT(driver.drawInterruptibly(document, RenderViewport{.size = Vector2d(16, 16)},
+                                         Transform2d(), []() { return false; }),
+                Eq(true));
+  } else {
+    driver.draw(document);
+  }
+
+  EXPECT_THAT(events,
+              testing::ElementsAre("push", "draw", "content", "draw", "draw", "pop", "draw"));
+}
+
+INSTANTIATE_TEST_SUITE_P(Traversal, RendererGroupMaskTest, testing::Bool());
 
 TEST_F(RendererDriverTest, EmitsMaskTypeFromReferencedMaskStyle) {
   SVGDocument document = makeDocument(R"svg(
