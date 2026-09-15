@@ -1405,14 +1405,7 @@ Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
                     record.result()->descriptor.byteSize)};
   }
 
-  // A mapping whose buffer was destroyed still names that buffer's slot, and the slot is handed
-  // to the next buffer created, so a retired mapping must not speak for the slot's new occupant.
-  bool alreadyMapped = false;
-  std::as_const(bufferMappings_).forEachLive([&](const MappingRecord& existing) {
-    alreadyMapped = alreadyMapped ||
-                    (!existing.bufferRetired && existing.bufferSlotIndex == buffer.slotIndex());
-  });
-  if (alreadyMapped) {
+  if (bufferHasOpenMapping(buffer.slotIndex())) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("mapBufferAsync: buffer \"{}\" already has an open mapping",
                                 record.result()->descriptor.label.str())};
@@ -1430,6 +1423,16 @@ Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
     return std::move(status).error();
   }
   return handle;
+}
+
+bool Device::bufferHasOpenMapping(uint32_t bufferSlotIndex) const {
+  // A mapping whose buffer was destroyed still names that buffer's slot, and the slot is handed
+  // to the next buffer created, so a retired mapping must not speak for the slot's new occupant.
+  bool open = false;
+  bufferMappings_.forEachLive([&](const MappingRecord& existing) {
+    open = open || (!existing.bufferRetired && existing.bufferSlotIndex == bufferSlotIndex);
+  });
+  return open;
 }
 
 void Device::noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome outcome) {
@@ -1834,6 +1837,12 @@ Status Device::writeBuffer(const Buffer& buffer, uint64_t offsetBytes,
                std::format("writeBuffer: buffer \"{}\" lacks the CopyDst usage",
                            record.result()->descriptor.label.str()));
   }
+  if (bufferHasOpenMapping(buffer.slotIndex())) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("writeBuffer: buffer \"{}\" has an open mapping; the write would change "
+                           "bytes the host is holding a view of",
+                           record.result()->descriptor.label.str()));
+  }
   const std::optional<uint64_t> endByte = CheckedAdd(offsetBytes, data.size());
   if (!endByte || *endByte > record.result()->descriptor.byteSize) {
     return Err(GpuErrorType::OutOfBounds,
@@ -1907,6 +1916,19 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
   Result<std::vector<SubmissionUse>> uses = validateSubmissionResources(commands);
   if (uses.hasError()) {
     return std::move(uses).error();
+  }
+
+  // The mapped range aliases the buffer's own storage and its readiness was fixed at the
+  // submission it was taken against, so work accepted now would be written underneath a host that
+  // still reads the mapping as ready. The buffer comes back when the mapping is released.
+  for (const SubmissionUse& use : uses.result()) {
+    if (use.kind == ResourceKind::Buffer && bufferHasOpenMapping(use.slotIndex)) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("submit: buffer (slot {}) has an open mapping; release it before submitting "
+                      "work that uses the buffer",
+                      use.slotIndex)};
+    }
   }
 
   // Advance the serial only after the backend accepts the submission: a failed submit must not

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/GpuLimits.h"
@@ -531,9 +532,14 @@ public:
    * \ref MapWaitOutcome::Ready; until one has, reading is refused rather than racing whatever
    * the GPU is still writing.
    *
+   * The span aliases the backend's allocation rather than a copy of it, so it lives only as long
+   * as the mapping does: \ref unmapBuffer, destroying the buffer, or losing the device all end
+   * it. A caller that keeps the bytes past any of those copies them out first.
+   *
    * @param mapping Live, completed mapping of this device.
    */
-  Result<std::span<const uint8_t>> mappedBytes(const BufferMapping& mapping) const;
+  Result<std::span<const uint8_t>> mappedBytes(const BufferMapping& mapping) const
+      UTILS_LIFETIME_BOUND;
 
   /**
    * Releases a mapping, invalidating the handle and every copy of it.
@@ -819,6 +825,14 @@ protected:
 
 private:
   friend class CommandEncoder;
+
+  /**
+   * Whether \p bufferSlotIndex currently has a mapping that can still be read. Mappings whose
+   * buffer was retired do not count: they name a slot whose occupant is gone.
+   *
+   * @param bufferSlotIndex Slot of the buffer.
+   */
+  [[nodiscard]] bool bufferHasOpenMapping(uint32_t bufferSlotIndex) const;
 
   /**
    * Records what a completed wait observed, so \ref mappedBytes knows whether a wait has seen

@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include "donner/base/Utils.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/GpuResult.h"
 
@@ -26,7 +27,8 @@ public:
 
   /**
    * Host-visible bytes of a live buffer slot, or an empty span when the slot holds no live
-   * mappable allocation.
+   * mappable allocation. The span aliases the backend's allocation and stays valid only while
+   * that allocation does, so the table re-asks rather than caching it.
    *
    * @param bufferSlotIndex Slot of the buffer.
    */
@@ -91,9 +93,14 @@ public:
   /**
    * Bytes of a completed mapping, or a failure while it is pending, released, or invalidated.
    *
+   * The span aliases the backend's own allocation rather than a copy of it, so it is valid only
+   * until whichever of these comes first: the mapping is released, its buffer is retired, or the
+   * device is lost. Callers that outlive any of those copy the bytes out; the annotation ties the
+   * span to this table so binding it to a temporary is rejected at compile time.
+   *
    * @param mappingSlotIndex Slot of the mapping.
    */
-  Result<std::span<const uint8_t>> bytes(uint32_t mappingSlotIndex) const;
+  Result<std::span<const uint8_t>> bytes(uint32_t mappingSlotIndex) const UTILS_LIFETIME_BOUND;
 
   /**
    * Releases a mapping, so every remaining handle naming it reads as released.
