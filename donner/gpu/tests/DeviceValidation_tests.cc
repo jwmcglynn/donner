@@ -843,7 +843,7 @@ TEST_F(WriteTextureTests, RejectsAZeroExtentWriteAtTheOriginAsBefore) {
                                     HasSubstr("copy size 4x0 has a zero dimension")));
 }
 
-TEST_F(WriteTextureTests, RejectsADestroyedTextureBeforeTheBackendSeesTheWrite) {
+TEST_F(WriteTextureTests, RejectsAnUnusableTextureBeforeTheBackendSeesTheWrite) {
   Texture doomed = GetResultOrFail(device_.createTexture(TextureDescriptor{
       "doomed", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
   ASSERT_THAT(device_.destroyTexture(std::move(doomed)), IsOk());
@@ -851,9 +851,19 @@ TEST_F(WriteTextureTests, RejectsADestroyedTextureBeforeTheBackendSeesTheWrite) 
   EXPECT_THAT(
       device_.writeTexture(doomed, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
                            Extent2d{2, 2}, Origin2d{1, 1}),
-      IsGpuError(GpuErrorType::InvalidHandle));
-  // The recording is the backend here, so an absent line proves the write never reached one.
+      IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("handle is null")));
+
+  RecordingDevice other;
+  const Texture foreign = GetResultOrFail(other.createTexture(TextureDescriptor{
+      "foreign", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+  EXPECT_THAT(
+      device_.writeTexture(foreign, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{1, 1}),
+      IsGpuErrorWithMessage(GpuErrorType::DeviceMismatch, HasSubstr("belongs to device")));
+
+  // The recordings are the backends here, so an absent line proves neither write reached one.
   EXPECT_THAT(device_.serialize(), testing::Not(HasSubstr("writeTexture")));
+  EXPECT_THAT(other.serialize(), testing::Not(HasSubstr("writeTexture")));
 }
 
 TEST_F(WriteTextureTests, RejectsMissingCopyDstUsage) {
