@@ -1925,8 +1925,8 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
     if (use.kind == ResourceKind::Buffer && bufferHasOpenMapping(use.slotIndex)) {
       return GpuError{
           GpuErrorType::InvalidState,
-          std::format("submit: buffer (slot {}) has an open mapping; release it before submitting "
-                      "work that uses the buffer",
+          std::format("submit: buffer (slot {}) has an open mapping; release it and record the "
+                      "work again before submitting work that uses the buffer",
                       use.slotIndex)};
     }
   }

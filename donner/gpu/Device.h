@@ -534,7 +534,10 @@ public:
    *
    * The span aliases the backend's allocation rather than a copy of it, so it lives only as long
    * as the mapping does: \ref unmapBuffer, destroying the buffer, or losing the device all end
-   * it. A caller that keeps the bytes past any of those copies them out first.
+   * it. A caller that keeps the bytes past any of those copies them out first. The
+   * \c UTILS_LIFETIME_BOUND annotation states that contract to the compiler; it is not relied on
+   * to catch every misuse, because the span is returned inside a \ref Result and the dangling
+   * diagnostic does not see through an unannotated class template.
    *
    * @param mapping Live, completed mapping of this device.
    */
@@ -552,7 +555,11 @@ public:
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
-   * A write never changes bytes an already submitted command still reads. MetalDevice and
+   * A write never changes bytes an already submitted command still reads, and for the same reason
+   * never changes bytes the host is reading: a buffer with an open mapping is refused with
+   * \ref GpuErrorType::InvalidState until \ref unmapBuffer releases it.
+   *
+   * MetalDevice and
    * VulkanDevice copy busy-buffer writes with four-byte-aligned offsets and sizes into a bounded
    * queue, flushed before the next ordinary submission, including an empty command stream.
    * Unaligned writes wait for that buffer's outstanding work and return
@@ -597,6 +604,13 @@ public:
    * closed with \ref GpuErrorType::InvalidHandle instead of reaching a backend. On success those
    * resources are marked in-use by the new serial, which defers their backend destruction until
    * the submission completes.
+   *
+   * A buffer with an open mapping is refused with \ref GpuErrorType::InvalidState, and the
+   * command buffer is consumed either way, so the work is recorded again after
+   * \ref unmapBuffer. This covers uses that only read the buffer as well: the mapped range
+   * aliases the buffer's own storage, and a reader cannot tell which parts of it a submission
+   * will touch, so the buffer belongs either to the host or to the device and not to both at
+   * once.
    *
    * @param commandBuffer Command buffer to submit; consumed even on failure.
    */

@@ -95,8 +95,9 @@ public:
    *
    * The span aliases the backend's own allocation rather than a copy of it, so it is valid only
    * until whichever of these comes first: the mapping is released, its buffer is retired, or the
-   * device is lost. Callers that outlive any of those copy the bytes out; the annotation ties the
-   * span to this table so binding it to a temporary is rejected at compile time.
+   * device is lost. Callers that outlive any of those copy the bytes out. The annotation states
+   * that contract to the compiler rather than enforcing it: the span is returned inside a
+   * \ref Result, and the dangling diagnostic does not see through an unannotated class template.
    *
    * @param mappingSlotIndex Slot of the mapping.
    */

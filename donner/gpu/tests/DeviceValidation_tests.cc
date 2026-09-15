@@ -1340,6 +1340,71 @@ TEST_F(BufferMappingTests, WritingAMappedBufferIsRefused) {
       << "A queue write would change bytes the host is holding a view of";
 }
 
+TEST_F(BufferMappingTests, SubmittingADrawThatOnlyReadsAMappedBufferIsAlsoRefused) {
+  // The rule is not "no writes": a mapped range aliases the buffer's own storage, and a reader
+  // cannot tell which parts of it a submission will touch, so the buffer belongs either to the
+  // host or to the device. Narrowing this to write-only uses later fails here.
+  const Buffer vertices = GetResultOrFail(device_.createBuffer(
+      BufferDescriptor{"vertices", 64, BufferUsage::Vertex | BufferUsage::MapRead}));
+  const Texture target = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView targetView =
+      GetResultOrFail(device_.createTextureView(target, TextureViewDescriptor{"targetView"}));
+  const PipelineLayout layout =
+      GetResultOrFail(device_.createPipelineLayout(PipelineLayoutDescriptor{"empty", {}}));
+  const ShaderModule shader = GetResultOrFail(device_.createShaderModule(ShaderModuleDescriptor{
+      "solid", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
+  const RenderPipeline pipeline =
+      GetResultOrFail(device_.createRenderPipeline(RenderPipelineDescriptor{
+          "solid", layout,
+          VertexState{
+              shader,
+              "vsMain",
+              {VertexBufferLayout{
+                  8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
+          FragmentState{shader, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(vertices, MapMode::Read, 0, 64));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+      "pass",
+      {RenderPassColorAttachment{targetView, LoadOp::Clear, StoreOp::Store, {0, 0, 0, 1}}}}));
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setVertexBuffer(0, vertices), IsOk());
+  ASSERT_THAT(pass->draw(3), IsOk());
+  ASSERT_THAT(pass->end(), IsOk());
+
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("open mapping")))
+      << "A draw that only reads the mapped buffer must be refused too";
+}
+
+TEST_F(BufferMappingTests, ANewBufferInARecycledSlotSubmitsAndAcceptsWrites) {
+  // The submit and write refusals use the same "open mapping" rule as mapBufferAsync, so they
+  // must ignore a mapping whose buffer was destroyed in the same way.
+  Buffer first = readableBuffer(1024);
+  device_.trailingState = MapSliceState::Ready;
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(first, MapMode::Read, 0, 1024));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+  ASSERT_THAT(device_.destroyBuffer(std::move(first)), IsOk());
+
+  const Buffer second = readableBuffer(1024);
+  const Texture target = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, second,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())), HasResult());
+  EXPECT_THAT(device_.writeBuffer(second, 0, std::vector<uint8_t>(16, 0x11)), IsOk());
+}
+
 TEST_F(BufferMappingTests, ABackendWithoutMappingReportsItUnsupported) {
   RecordingDevice plainDevice;
   const Buffer buffer = GetResultOrFail(plainDevice.createBuffer(
