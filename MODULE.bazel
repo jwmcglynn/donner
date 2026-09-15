@@ -186,6 +186,7 @@ playwright.repo(
     name = "playwright",
     browsers_json = "//donner/editor/wasm/tests:browsers.1.62.1.json",
     integrity_path_map = {
+        "builds/firefox/1538/firefox-mac-arm64.zip": "sha256-t7jgaPsXdt7oq/62Sa1jE/nsj2u6ozPY3ADQE8w4klY=",
         "builds/chromium/1234/chromium-linux-arm64.zip": "sha256-ta19j+cPIws0GY3bVibXF8AW2y9ifLRLkiurvK80ebk=",
     },
 )
