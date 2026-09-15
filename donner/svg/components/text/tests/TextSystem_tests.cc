@@ -575,6 +575,23 @@ TEST_F(TextSystemTest, TextPathInvalidInlinePathFallsBackToHref) {
               testing::ElementsAre(Vector2Near(0.0, 0.0), Vector2Near(40.0, 0.0)));
 }
 
+TEST_F(TextSystemTest, TextPathPartiallyValidInlinePathKeepsItsPrefixAndIgnoresHref) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 40 0"/></defs>
+      <text id="t"><textPath path="M 0 0 L 10 0 q" href="#p">Prefix</textPath></text>
+    </svg>
+  )svg");
+
+  // Path data is parsed up to but not including the command holding the first error, per SVG 2
+  // error handling, so `path` still yields geometry here and `href` is not consulted. Only a
+  // value that yields no subpath at all falls back.
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(0.0, 0.0), Vector2Near(10.0, 0.0)));
+}
+
 TEST_F(TextSystemTest, TextPathInvalidInlinePathWithoutHrefFails) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">

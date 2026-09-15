@@ -2990,6 +2990,33 @@ TEST(PathReversed, PreservesTotalLength) {
   EXPECT_THAT(path.reversed().pathLength(), testing::DoubleNear(path.pathLength(), 1e-9));
 }
 
+TEST(PathReversed, PreservesTotalLengthOfAClosedSubpath) {
+  // 30 along the base, 40 up the side, and 50 back along the hypotenuse that ClosePath draws.
+  const Path path =
+      PathBuilder().moveTo({0, 0}).lineTo({30, 0}).lineTo({30, 40}).closePath().build();
+  ASSERT_THAT(path.pathLength(), testing::DoubleNear(120.0, 1e-9));
+
+  EXPECT_THAT(path.reversed().pathLength(), testing::DoubleNear(120.0, 1e-9));
+}
+
+TEST(PathReversed, DropsArcDecompositionGrouping) {
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .arcTo(Vector2d(50, 50), 0.0, true, true, Vector2d(100, 0))
+                        .build();
+
+  const auto internalCount = [](const Path& p) {
+    return std::count_if(p.commands().begin(), p.commands().end(),
+                         [](const Path::Command& command) { return command.isInternal; });
+  };
+
+  // The arc expands into several cubics, all but the first marked internal so marker placement
+  // skips them. Reversal rebuilds ordinary cubics and loses that marking, which is why the
+  // header sends marker placement to the original path.
+  ASSERT_THAT(internalCount(path), testing::Gt(0));
+  EXPECT_THAT(internalCount(path.reversed()), testing::Eq(0));
+}
+
 TEST(PathReversed, SamplesTheMirroredPointAtTheSameDistance) {
   const Path path = PathBuilder()
                         .moveTo({20, 100})

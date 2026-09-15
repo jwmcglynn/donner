@@ -1554,9 +1554,9 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
                      .withReason("spacing=auto lets the user agent choose, and Donner chooses the "
-                                 "same spacing as exact, so this draws simple-case.svg exactly; "
-                                 "its own vendored PNG is byte-identical to the stale "
-                                 "simple-case.png")},
+                                 "same spacing as exact, so this draws the same picture as "
+                                 "simple-case.svg and shares its reference; its own vendored PNG "
+                                 "is byte-identical to the stale simple-case.png")},
                 {"startOffset=-100.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-startOffset=-100.png")
