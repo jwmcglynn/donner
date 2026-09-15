@@ -125,6 +125,18 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 collected,
             )
 
+    def test_failed_hosted_perf_retains_test_failure_artifacts(self):
+        workflow = self.supply_chain_files[".github/workflows/perf.yml"]
+        job = workflow.split("\n  macos:\n", 1)[1]
+        self.assertIn("runs-on: macos-26", job)
+        test_step = _step_body(job, "Test perf-tagged targets")
+        self.assertIn("id: perf", test_step)
+        artifacts = _step_body(job, "Upload perf test failure artifacts")
+        self.assertIn("if: failure() && steps.perf.outcome == 'failure'", artifacts)
+        self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", artifacts)
+        for identity in ("github.run_id", "github.run_attempt", "github.job"):
+            self.assertIn(identity, artifacts)
+
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
         action_line = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)\s*$")

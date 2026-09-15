@@ -117,9 +117,21 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     const tags = [...(/tags = \[([\s\S]*?)\]/.exec(lane)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
       .map(([, tag]) => tag);
     if (performanceLane) {
-      assert.deepEqual(tags.sort(), ["manual", "perf"], "responsiveness timing must remain opt-in");
+      assert.deepEqual(
+        tags.sort(),
+        ["manual", "no-sandbox", "perf"],
+        "responsiveness timing must remain opt-in while allowing Firefox's own sandbox",
+      );
       assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
       assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+      assert.doesNotMatch(
+        lane,
+        /"@playwright\/\/:(?:chromium|firefox)"/,
+        "macOS application symlinks must not travel inside Bazel tree artifacts",
+      );
+      assert.match(lane, /"DONNER_CHROMIUM_ARCHIVE":/);
+      assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
+      assert.ok(lane.includes("\"prepare-browser-archives.js\""));
     } else if (laneName === "firefox_composited_invariants_test") {
       assert.deepEqual(
         tags.sort(),
@@ -576,5 +588,26 @@ test("real Safari memory gate clicks Donner Splash and dwells for five minutes",
     harness,
     /__donnerSafariRegressionPageLifetimeToken[\s\S]*finalState\.pageLifetimeToken[\s\S]*kPageLifetimeToken/,
     "reload detection must use a stable page token rather than Safari's drifting time origin",
+  );
+});
+
+test("macOS perf Firefox archive has a content integrity pin", () => {
+  const packageJson = JSON.parse(readFileSync(path.join(testDirectory, "package.json"), "utf8"));
+  const version = packageJson.devDependencies["@playwright/test"];
+  const browserMetadata = JSON.parse(
+    readFileSync(path.join(testDirectory, `browsers.${version}.json`), "utf8"),
+  );
+  const firefox = browserMetadata.browsers.find((browser) => browser.name === "firefox");
+  assert.ok(firefox, "the browser metadata must include Firefox");
+  const moduleSource = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
+  const integrityMap = /integrity_path_map\s*=\s*\{([\s\S]*?)\}/.exec(moduleSource)?.[1] ?? "";
+  const entries = new Map(
+    [...integrityMap.matchAll(/"([^"\n]+)":\s*"([^"\n]+)"/g)].map((match) => [match[1], match[2]]),
+  );
+  const archive = `builds/firefox/${firefox.revision}/firefox-mac-arm64.zip`;
+  assert.match(
+    entries.get(archive) ?? "",
+    /^sha256-[A-Za-z0-9+/]{43}=$/,
+    "the native extractor must receive a content-authenticated Firefox archive",
   );
 });
