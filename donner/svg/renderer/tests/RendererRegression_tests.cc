@@ -626,5 +626,94 @@ TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElem
   }
 }
 
+// A `<use>` copy renders the referenced text through the light tree's laid-out spans, but the
+// per-span instances that carry `clip-path`, `mask`, and `filter` exist only in the light tree.
+// The copy must still paint every span; it does so without those effects, which is what it did
+// before spans could own an effect at all. Pinning that as an equivalence keeps a later change
+// deliberate: once a copy instantiates its own span instances, this comparison must be updated.
+//
+// The clip rect covers the referenced text where it renders in place and excludes the copy, so
+// the referenced text is identical in both documents and only the copy can differ.
+TEST_F(RendererRegressionTests, UseCopyPaintsEveryTextSpanWithoutSpanEffects) {
+  const std::string kPrefix =
+      R"svg(<clipPath id="c"><rect x="0" y="0" width="200" height="120"/></clipPath>)svg"
+      R"svg(<g font-family="Noto Sans" font-size="40"><text id="t" x="20" y="60">)svg";
+  const std::string kSuffix = R"svg(</text></g>)svg";
+  const std::string kUse = R"svg(<use href="#t" y="100"/>)svg";
+  const std::string kSpanWithEffect = R"svg(<tspan clip-path="url(#c)">Text</tspan>)svg";
+  const std::string kSpanWithoutEffect = R"svg(<tspan>Text</tspan>)svg";
+
+  SVGDocument withEffect =
+      instantiateSubtree(kPrefix + kSpanWithEffect + kSuffix + kUse, {}, Vector2i(200, 200));
+  SVGDocument withoutEffect =
+      instantiateSubtree(kPrefix + kSpanWithoutEffect + kSuffix + kUse, {}, Vector2i(200, 200));
+  SVGDocument withoutUse =
+      instantiateSubtree(kPrefix + kSpanWithEffect + kSuffix, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(withEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(withoutEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(withoutUse, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(withEffect, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(withoutEffect, ActiveRendererBackend());
+  const RendererBitmap noCopy = RenderDocumentWithBackend(withoutUse, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ExpectBitmapsDiffer(actual, noCopy, "use_copy_of_effect_span_adds_ink");
+  ExpectBitmapsIdentical(actual, expected, "use_copy_paints_span_without_effect");
+}
+
+// `<a>` carries the text components unconditionally so it can act as a text content element inside
+// text, so an objectBoundingBox effect on an `<a>` that groups ordinary graphics must resolve its
+// region from the children's shapes rather than reaching the text engine, which requires a text
+// root. Outside text `<a>` is an ordinary group, so each form must render exactly as `<g>` does.
+TEST_F(RendererRegressionTests, ObjectBoundingBoxEffectOnAnchorGroupingShapes) {
+  struct Effect {
+    const char* name;
+    const char* defs;
+    const char* attribute;
+    /// False for an effect a container element does not apply yet, where comparing against the
+    /// same document without the effect would prove nothing.
+    bool observableOnAContainer;
+  };
+  const Effect kEffects[] = {
+      {"clip_path", R"svg(<clipPath id="e"><circle cx="90" cy="80" r="40"/></clipPath>)svg",
+       R"svg(clip-path="url(#e)")svg", true},
+      // A `mask` on a container element is dropped. That predates this behavior and is unrelated
+      // to it: reverting the bounding box source leaves the same result, and `<g>` in place of
+      // `<a>` renders identically, so only the equivalence below is asserted for it.
+      {"mask",
+       R"svg(<mask id="e"><rect x="0" y="0" width="90" height="200" fill="white"/></mask>)svg",
+       R"svg(mask="url(#e)")svg", false},
+      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="3"/></filter>)svg",
+       R"svg(filter="url(#e)")svg", true},
+  };
+
+  for (const Effect& effect : kEffects) {
+    SCOPED_TRACE(effect.name);
+
+    const std::string rect = R"svg(<rect x="33" y="40" width="120" height="80"/>)svg";
+    const std::string onAnchor =
+        std::string(effect.defs) + "<a " + effect.attribute + ">" + rect + "</a>";
+    const std::string onGroup =
+        std::string(effect.defs) + "<g " + effect.attribute + ">" + rect + "</g>";
+    const std::string plainMarkup = std::string(effect.defs) + rect;
+
+    SVGDocument anchor = instantiateSubtree(onAnchor, {}, Vector2i(200, 200));
+    SVGDocument group = instantiateSubtree(onGroup, {}, Vector2i(200, 200));
+    SVGDocument plain = instantiateSubtree(plainMarkup, {}, Vector2i(200, 200));
+
+    const RendererBitmap actual = RenderDocumentWithBackend(anchor, ActiveRendererBackend());
+    const RendererBitmap expected = RenderDocumentWithBackend(group, ActiveRendererBackend());
+    const RendererBitmap unaffected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    ASSERT_THAT(expected.empty(), testing::IsFalse());
+    if (effect.observableOnAContainer) {
+      ExpectBitmapsDiffer(expected, unaffected,
+                          std::string("anchor_effect_changes_") + effect.name);
+    }
+    ExpectBitmapsIdentical(actual, expected, std::string("anchor_effect_") + effect.name);
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
