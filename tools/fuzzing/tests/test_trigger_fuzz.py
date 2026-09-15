@@ -16,11 +16,23 @@ SCRIPT = Path(__file__).resolve().parent.parent / "trigger_fuzz.sh"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
+def fixture_repo(state_dir: Path) -> Path:
+    """Exercise real Git semantics without depending on the caller's checkout."""
+    repo = state_dir / "source"
+    if not repo.exists():
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "Fixture"], check=True)
+        head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", head], check=True)
+    return repo
+
+
 def run_trigger(state_dir: Path, extra_env: dict = None, args: list = None) -> subprocess.CompletedProcess:
     """Run trigger_fuzz.sh with a controlled state directory."""
     env = os.environ.copy()
     env["FUZZ_STATE_DIR"] = str(state_dir)
-    env["FUZZ_REPO_DIR"] = str(REPO_ROOT)
+    env["FUZZ_REPO_DIR"] = str(fixture_repo(state_dir))
     if extra_env:
         env.update(extra_env)
 
@@ -86,17 +98,10 @@ class TestCommitCheck:
 
     def test_same_commit_skips(self, tmp_path):
         """Same commit as last run should skip."""
-        # Use origin/main (what the trigger compares against), not local HEAD
-        head = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "rev-parse", "origin/main"],
-            capture_output=True, text=True,
-        ).stdout.strip()
-        if not head or head.startswith("fatal"):
-            # Fall back to main if origin/main doesn't exist
-            head = subprocess.run(
-                ["git", "-C", str(REPO_ROOT), "rev-parse", "main"],
-                capture_output=True, text=True,
-            ).stdout.strip()
+        head = subprocess.check_output(
+            ["git", "-C", str(fixture_repo(tmp_path)), "rev-parse", "--verify", "refs/remotes/origin/main"],
+            text=True,
+        ).strip()
 
         commit_file = tmp_path / "last_run_commit"
         commit_file.write_text(head)
@@ -105,6 +110,16 @@ class TestCommitCheck:
         ts_file = tmp_path / "last_run_timestamp"
         ts_file.write_text("0")
 
+        result = run_trigger(tmp_path, args=["--dry-run"])
+        assert result.returncode == 0
+        assert "No new commits" in result.stdout
+
+    def test_local_main_fallback_is_one_valid_revision(self, tmp_path):
+        repo = fixture_repo(tmp_path)
+        head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        subprocess.run(["git", "-C", str(repo), "update-ref", "-d", "refs/remotes/origin/main"], check=True)
+        (tmp_path / "last_run_commit").write_text(head)
+        (tmp_path / "last_run_timestamp").write_text("0")
         result = run_trigger(tmp_path, args=["--dry-run"])
         assert result.returncode == 0
         assert "No new commits" in result.stdout

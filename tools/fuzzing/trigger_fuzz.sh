@@ -151,8 +151,8 @@ check_new_commits() {
     fi
 
     local current_head last_commit
-    current_head=$(git -C "$FUZZ_REPO_DIR" rev-parse origin/main 2>/dev/null || \
-                   git -C "$FUZZ_REPO_DIR" rev-parse main)
+    current_head=$(git -C "$FUZZ_REPO_DIR" rev-parse --verify refs/remotes/origin/main 2>/dev/null || \
+                   git -C "$FUZZ_REPO_DIR" rev-parse --verify refs/heads/main)
     last_commit=$(cat "$COMMIT_FILE" 2>/dev/null || echo "")
 
     if [ "$current_head" = "$last_commit" ]; then
@@ -295,8 +295,8 @@ check_quiet_hours() {
 
 run_fuzzing() {
     local current_head
-    current_head=$(git -C "$FUZZ_REPO_DIR" rev-parse origin/main 2>/dev/null || \
-                   git -C "$FUZZ_REPO_DIR" rev-parse main)
+    current_head=$(git -C "$FUZZ_REPO_DIR" rev-parse --verify refs/remotes/origin/main 2>/dev/null || \
+                   git -C "$FUZZ_REPO_DIR" rev-parse --verify refs/heads/main)
     local now
     now=$(date +%s)
 
