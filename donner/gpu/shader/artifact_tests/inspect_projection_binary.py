@@ -3,6 +3,12 @@
 
 Each --family names one shader family to check; repeat it to check every family a binary
 links, which is how the production link of a whole renderer is inspected in one pass.
+
+These markers discriminate projections, not families: a few families share an MSL marker, and
+the SPIR-V check is a single header match for the whole binary. So a multi-family run proves
+that the selected projections are present and the excluded ones are absent, not that every
+named family contributed its own payload. What a family is linked at all is enforced at link
+time instead, by the probe naming that family's accessors.
 """
 
 import argparse

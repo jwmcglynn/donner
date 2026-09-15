@@ -3,9 +3,9 @@
 Every family ships two library targets: `<family>_artifact`, the authored WGSL projection every
 device accepts, and `<family>_native_artifact`, the platform-native projection (MSL on Apple
 platforms, SPIR-V on Linux). A library that may run on a native device links both and selects
-between them at runtime from `Device::shaderSourceKind()`. The WebAssembly package has no native
-device, and `native_shader_artifacts` contributes nothing there, so that package keeps linking
-the WGSL artifacts only.
+between them at runtime from `Device::shaderSourceKind()`. The WebAssembly package has no device
+that consumes a native projection, and `native_shader_artifacts` contributes nothing there, so
+that package keeps linking the WGSL artifacts only.
 
 The groupings below name the families each production library links, so the artifact probe that
 asserts both projections reach a linked binary covers exactly the production set.
@@ -51,12 +51,16 @@ GEODE_MODULE_SHADER_FAMILIES = [
     "slug_mask",
 ]
 
-# Families the geometry encoder links.
-GEODE_ENCODER_SHADER_FAMILIES = [
+# The Slug text families. The geometry encoder links these, and so does the shader suite that
+# exercises their module constructors.
+SLUG_SHADER_FAMILIES = [
     "slug_fill",
     "slug_gradient",
     "slug_mask",
 ]
+
+# Families the geometry encoder links.
+GEODE_ENCODER_SHADER_FAMILIES = SLUG_SHADER_FAMILIES
 
 # Every family reachable from a production Geode library, each named once.
 GEODE_SHADER_FAMILIES = sorted({

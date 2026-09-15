@@ -4,6 +4,7 @@
 
 #include <string_view>
 
+#include "donner/base/Utils.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
 
@@ -42,8 +43,9 @@ namespace donner::geode {
  * @return The artifact view to build a descriptor from.
  */
 inline const gpu::shader::CompiledShaderView& SelectShaderProjection(
-    const gpu::Device& device, const gpu::shader::CompiledShaderView& wgslShader,
-    const gpu::shader::CompiledShaderView* nativeShader) {
+    const gpu::Device& device,
+    const gpu::shader::CompiledShaderView& wgslShader UTILS_LIFETIME_BOUND,
+    const gpu::shader::CompiledShaderView* nativeShader UTILS_LIFETIME_BOUND) {
   if (device.shaderSourceKind() == gpu::ShaderSourceKind::Wgsl || nativeShader == nullptr) {
     return wgslShader;
   }
