@@ -72,12 +72,13 @@ ImTextureID RegisterUiImportedTexture(const wgpu::Texture& texture, const Vector
                                       UiTextureBacking* backing);
 
 /**
- * Retires the registration \p texture names, so later draw data naming it is refused and its slot
- * is released once the frames a recorded draw can still be in flight have passed. A no-op for a
- * zero identifier or when there is no UI renderer.
+ * Retires the registration \p texture names and transfers \p backing to the renderer until that
+ * exact registration generation is released. Returns false without consuming \p backing when the
+ * UI renderer is unavailable or the registry refuses the retirement.
  *
  * @param texture Identifier to retire.
+ * @param backing Backing handles to retain through the registration's retirement window.
  */
-void RetireUiTexture(ImTextureID texture);
+bool RetireUiTexture(ImTextureID texture, UiTextureBacking* backing);
 
 }  // namespace donner::editor

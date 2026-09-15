@@ -243,7 +243,8 @@ private:
   /// Resolves \p id to a live slot, applying every validation \ref lookup documents except the
   /// view liveness check.
   /// @param id Identifier to resolve. @param operation Operation name for diagnostics.
-  gpu::Result<const Slot*> resolveSlot(UiTextureId id, std::string_view operation) const;
+  [[gnu::noinline]] gpu::Result<const Slot*> resolveSlot(UiTextureId id,
+                                                         std::string_view operation) const;
 
   const gpu::Device* device_;
   uint32_t retirementFrames_;

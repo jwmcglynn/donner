@@ -34,9 +34,10 @@ UiTextureAlphaMode UiAlphaModeOf(svg::AlphaType alphaType) {
 /// @param renderer Installed UI renderer. @param view View to register.
 /// @param dimensions Sampled extent in pixels. @param alphaMode Alpha interpretation.
 /// @param backing Receives the view.
-ImTextureID Register(ImGuiRuntimeRenderer& renderer, gpu::Result<gpu::TextureView>&& view,
-                     const Vector2i& dimensions, UiTextureAlphaMode alphaMode,
-                     UiTextureBacking* backing) {
+[[gnu::noinline]] ImTextureID Register(ImGuiRuntimeRenderer& renderer,
+                                       gpu::Result<gpu::TextureView>&& view,
+                                       const Vector2i& dimensions, UiTextureAlphaMode alphaMode,
+                                       UiTextureBacking* backing) {
   if (view.hasError()) {
     return 0;
   }
@@ -118,17 +119,23 @@ ImTextureID RegisterUiImportedTexture(const wgpu::Texture& texture, const Vector
   return handle;
 }
 
-void RetireUiTexture(ImTextureID texture) {
+bool RetireUiTexture(ImTextureID texture, UiTextureBacking* backing) {
+  ImGuiRuntimeRenderer* renderer = CurrentImGuiRuntimeRenderer();
   UiTextureRegistry* registry = CurrentUiTextureRegistry();
-  if (texture == 0 || registry == nullptr) {
-    return;
+  if (texture == 0 || backing == nullptr || renderer == nullptr || registry == nullptr) {
+    return false;
   }
-  const gpu::Status retired = registry->retire(UiTextureId::FromImTextureId(texture));
+  const UiTextureId id = UiTextureId::FromImTextureId(texture);
+  const gpu::Status retired = registry->retire(id);
   if (retired.hasError()) {
     // The registry reports a double release; swallowing it would hide the producer bug it exists
     // to name.
     std::fprintf(stderr, "UI texture retire failed: %s\n", retired.error().toString().c_str());
+    return false;
   }
+  renderer->retainTextureBackingUntilReleased(id, std::move(backing->texture),
+                                              std::move(backing->view));
+  return true;
 }
 
 }  // namespace donner::editor

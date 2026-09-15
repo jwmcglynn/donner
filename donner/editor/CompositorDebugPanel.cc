@@ -18,9 +18,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #ifdef DONNER_EDITOR_WGPU
-#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/editor/gui/UiTextureRegistration.h"
-#include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
@@ -759,20 +757,10 @@ void CompositorDebugPanel::releaseImGuiTexture(ThumbnailTextureHandle texture) {
   // Retiring refuses new draw data at once and releases the slot after the frames a recorded draw
   // can still be in flight, which is the window this panel already held its snapshots for.
   // RetireUiTexture reports a double release rather than swallowing it.
-  ImGuiRuntimeRenderer* renderer = CurrentImGuiRuntimeRenderer();
-  UiTextureRegistry* registry = CurrentUiTextureRegistry();
   const auto backing = registeredBackings_.find(texture);
-  if (renderer == nullptr || registry == nullptr || backing == registeredBackings_.end()) {
+  if (backing == registeredBackings_.end() || !RetireUiTexture(texture, &backing->second)) {
     return;
   }
-  const UiTextureId id = UiTextureId::FromImTextureId(texture);
-  const gpu::Status retired = registry->retire(id);
-  if (retired.hasError()) {
-    std::fprintf(stderr, "UI texture retire failed: %s\n", retired.error().toString().c_str());
-    return;
-  }
-  renderer->retainTextureBackingUntilReleased(id, std::move(backing->second.texture),
-                                              std::move(backing->second.view));
   registeredBackings_.erase(backing);
 }
 

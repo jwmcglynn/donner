@@ -2,14 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <utility>
 
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
-#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -959,20 +957,10 @@ ImTextureID GlTextureCache::ToImTextureId(NativeTextureHandle texture) {
 
 #ifdef DONNER_EDITOR_WGPU
 void GlTextureCache::releaseImGuiTexture(NativeTextureHandle texture) {
-  ImGuiRuntimeRenderer* renderer = CurrentImGuiRuntimeRenderer();
-  UiTextureRegistry* registry = CurrentUiTextureRegistry();
   const auto backing = registeredBackings_.find(texture);
-  if (renderer == nullptr || registry == nullptr || backing == registeredBackings_.end()) {
+  if (backing == registeredBackings_.end() || !RetireUiTexture(texture, &backing->second)) {
     return;
   }
-  const UiTextureId id = UiTextureId::FromImTextureId(texture);
-  const gpu::Status retired = registry->retire(id);
-  if (retired.hasError()) {
-    std::fprintf(stderr, "UI texture retire failed: %s\n", retired.error().toString().c_str());
-    return;
-  }
-  renderer->retainTextureBackingUntilReleased(id, std::move(backing->second.texture),
-                                              std::move(backing->second.view));
   registeredBackings_.erase(backing);
 }
 
