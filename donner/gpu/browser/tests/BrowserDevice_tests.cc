@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -66,6 +67,36 @@ ShaderModuleDescriptor SimpleShaderModule(std::string_view label) {
   descriptor.sourceText = RcString("@vertex fn main() {}");
   descriptor.sourceKind = ShaderSourceKind::Wgsl;
   return descriptor;
+}
+
+/// Records a command buffer holding one clear-only render pass targeting \p view.
+/// @param device Device to record against. @param view Attachment view.
+CommandBuffer RecordClearPass(Device& device, const TextureView& view) {
+  Result<std::unique_ptr<CommandEncoder>> encoder = device.createCommandEncoder();
+  EXPECT_THAT(encoder, HasResult());
+  std::unique_ptr<CommandEncoder> commands = std::move(encoder).result();
+
+  RenderPassDescriptor passDescriptor;
+  passDescriptor.colorAttachments.push_back(RenderPassColorAttachment{
+      TextureViewRef(view), LoadOp::Clear, StoreOp::Store, {0.0, 0.0, 0.0, 1.0}});
+  Result<RenderPassEncoder*> pass = commands->beginRenderPass(passDescriptor);
+  EXPECT_THAT(pass, HasResult());
+  if (pass.hasResult()) {
+    EXPECT_THAT(pass.result()->end(), IsOk());
+  }
+
+  Result<CommandBuffer> commandBuffer = commands->finish();
+  EXPECT_THAT(commandBuffer, HasResult());
+  if (commandBuffer.hasError()) {
+    return CommandBuffer();
+  }
+  return std::move(commandBuffer).result();
+}
+
+/// Whether \p calls contains \p line exactly.
+/// @param calls Recorded lines. @param line Line to look for.
+bool FindCall(const std::vector<std::string>& calls, std::string_view line) {
+  return std::find(calls.begin(), calls.end(), line) != calls.end();
 }
 
 }  // namespace
@@ -186,7 +217,7 @@ TEST(BrowserDevice, ReleasesEveryBrowserObjectWhenTheDeviceIsDestroyed) {
   EXPECT_THAT(objects->size(), 0u);
 }
 
-TEST(BrowserDevice, RefusesEveryOperationFromAContextThatDoesNotOwnTheDevice) {
+TEST(BrowserDevice, RefusesCreationFromAContextThatDoesNotOwnTheDevice) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
   fixture.bridge->owned = false;
@@ -195,7 +226,7 @@ TEST(BrowserDevice, RefusesEveryOperationFromAContextThatDoesNotOwnTheDevice) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another worker")));
 }
 
-TEST(BrowserDevice, RefusesEveryOperationFromAnotherThread) {
+TEST(BrowserDevice, RefusesCreationFromAnotherThread) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
 
@@ -209,7 +240,7 @@ TEST(BrowserDevice, RefusesEveryOperationFromAnotherThread) {
                                                                "thread")));
 }
 
-TEST(BrowserDevice, RefusesEveryOperationAfterTheDeviceIsLost) {
+TEST(BrowserDevice, RefusesCreationAfterTheDeviceIsLost) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
 
@@ -226,6 +257,115 @@ TEST(BrowserDevice, RefusesEveryOperationAfterTheDeviceIsLost) {
               IsGpuErrorWithMessage(
                   GpuErrorType::InvalidState,
                   AllOf(HasSubstr("was lost"), HasSubstr("the browser reset the adapter"))));
+}
+
+TEST(BrowserDevice, StillFreesItsBrowserObjectsAfterTheDeviceIsLost) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer = fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex));
+  ASSERT_THAT(buffer, HasResult());
+  EXPECT_THAT(fixture.bridge->objectCount(), 1u);
+
+  fixture.bridge->lost = true;
+
+  // Loss refuses what can be refused, but not a release: a lost device that kept its objects would
+  // strand them for the life of the page.
+  EXPECT_THAT(fixture.device->destroyBuffer(std::move(buffer).result()), IsOk());
+  EXPECT_THAT(fixture.bridge->objectCount(), 0u);
+}
+
+TEST(BrowserDevice, DoesNotReleaseBrowserObjectsFromAThreadThatDoesNotOwnTheDevice) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer = fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex));
+  ASSERT_THAT(buffer, HasResult());
+  ASSERT_THAT(fixture.bridge->objectCount(), 1u);
+
+  // Dropping the handle elsewhere would otherwise name the object to a worker that does not hold
+  // it, which releases nothing and loses the identifier.
+  std::thread other([&] { Buffer released = std::move(buffer).result(); });
+  other.join();
+
+  EXPECT_THAT(fixture.device->foreignThreadReleasesForTest(), 1u);
+  EXPECT_THAT(fixture.bridge->objectCount(), 1u);
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Buffer, 1), true);
+
+  // The entry is kept, so teardown on the owning thread still frees it.
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
+  fixture.device.reset();
+  EXPECT_THAT(objects->size(), 0u);
+}
+
+TEST(BrowserDevice, DiscardsARecordingLeftOpenByARefusedSubmission) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> target =
+      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // The browser refuses the pass, so the submission stops with a recording still open.
+  fixture.bridge->failOperation = "beginRenderPass";
+  fixture.bridge->failStatus = BridgeStatus::Failed;
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())),
+              IsGpuError(GpuErrorType::InvalidState));
+
+  // The next submission opens a fresh recording rather than continuing that one, so nothing
+  // recorded before the refusal can reach the queue.
+  fixture.bridge->failOperation.clear();
+  const size_t beforeSubmit = fixture.bridge->calls.size();
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
+
+  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
+                                          fixture.bridge->calls.end());
+  EXPECT_THAT(replayed, ElementsAre("beginCommandBuffer serial=1",
+                                    "beginRenderPass attachments=[(view=2 load=1 store=1 "
+                                    "clear=[0.000,0.000,0.000,1.000])]",
+                                    "endRenderPass", "endCommandBuffer serial=1"));
+}
+
+TEST(BrowserDevice, MapsBuffersForHostReadsOnly) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+
+  EXPECT_THAT(fixture.device->mapBufferAsync(buffer.result(), static_cast<MapMode>(7), 0, 4),
+              IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("host reads only")));
+}
+
+TEST(BrowserDevice, HandsAFrameBackRatherThanDestroyingItWhenTheDeviceIsDestroyed) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
+
+  SurfaceDescriptor surfaceDescriptor;
+  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
+  surfaceDescriptor.native.selector = RcString("#canvas");
+  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  ASSERT_THAT(surface, HasResult());
+
+  SurfaceConfiguration configuration;
+  configuration.size = Extent2d{8, 8};
+  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+  ASSERT_THAT(objects->size(), 2u);
+
+  // A frame texture belongs to the canvas that supplied it, so teardown gives it back through the
+  // surface rather than destroying it.
+  fixture.device.reset();
+  EXPECT_THAT(objects->size(), 0u);
+  EXPECT_THAT(FindCall(fixture.bridge->calls, "abandonCurrentTexture surface=1"), true);
+  EXPECT_THAT(FindCall(fixture.bridge->calls, "destroyObject kind=texture id=2"), false);
 }
 
 TEST(BrowserDevice, SurfacesTheBrowsersRefusalAsAnIdentifierFailure) {

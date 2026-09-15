@@ -230,9 +230,13 @@ public:
   }
 
   BridgeStatus destroyObject(BrowserObjectKind kind, BrowserObjectId id) override {
-    if (const BridgeStatus status = guard(std::format("destroyObject id={}", id));
-        status != BridgeStatus::Success) {
-      return status;
+    // Releases are not refused on a lost device: a lost device still has to free what it holds, and
+    // the browser side takes them for the same reason.
+    if (!owned) {
+      return BridgeStatus::NotOwner;
+    }
+    if (!failOperation.empty() && failOperation == "destroyObject") {
+      return failStatus;
     }
     if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
       return status;
@@ -263,10 +267,21 @@ public:
   }
 
   BridgeStatus beginCommandBuffer(uint64_t submissionSerial) override {
-    return operate(std::format("beginCommandBuffer serial={}", submissionSerial));
+    const BridgeStatus status =
+        operate(std::format("beginCommandBuffer serial={}", submissionSerial));
+    if (status == BridgeStatus::Success) {
+      // A recording left open by a submission that was refused partway is discarded here rather
+      // than continued, so nothing recorded before the refusal can reach the queue.
+      encoderOpen_ = true;
+      passOpen_ = false;
+    }
+    return status;
   }
 
   BridgeStatus beginRenderPass(std::span<const BrowserColorAttachment> colorAttachments) override {
+    if (!encoderOpen_ || passOpen_) {
+      return BridgeStatus::Failed;
+    }
     std::string line = "beginRenderPass attachments=[";
     for (const BrowserColorAttachment& attachment : colorAttachments) {
       if (const BridgeStatus status = require(BrowserObjectKind::TextureView, attachment.viewId);
@@ -279,58 +294,87 @@ public:
                           attachment.clearColor[2], attachment.clearColor[3]);
     }
     line += "]";
-    return operate(line);
+    const BridgeStatus status = operate(line);
+    if (status == BridgeStatus::Success) {
+      passOpen_ = true;
+    }
+    return status;
   }
 
-  BridgeStatus endRenderPass() override { return operate("endRenderPass"); }
+  BridgeStatus endRenderPass() override {
+    const BridgeStatus status = requirePass("endRenderPass");
+    if (status != BridgeStatus::Success) {
+      return status;
+    }
+    calls.push_back("endRenderPass");
+    passOpen_ = false;
+    return BridgeStatus::Success;
+  }
 
-  BridgeStatus beginComputePass() override { return operate("beginComputePass"); }
+  BridgeStatus beginComputePass() override {
+    if (!encoderOpen_ || passOpen_) {
+      return BridgeStatus::Failed;
+    }
+    const BridgeStatus status = operate("beginComputePass");
+    if (status == BridgeStatus::Success) {
+      passOpen_ = true;
+    }
+    return status;
+  }
 
-  BridgeStatus endComputePass() override { return operate("endComputePass"); }
+  BridgeStatus endComputePass() override {
+    const BridgeStatus status = requirePass("endComputePass");
+    if (status != BridgeStatus::Success) {
+      return status;
+    }
+    calls.push_back("endComputePass");
+    passOpen_ = false;
+    return BridgeStatus::Success;
+  }
 
   BridgeStatus setRenderPipeline(BrowserObjectId pipelineId) override {
-    return operate(std::format("setRenderPipeline pipeline={}", pipelineId),
-                   BrowserObjectKind::RenderPipeline, pipelineId);
+    return operateInPass(std::format("setRenderPipeline pipeline={}", pipelineId),
+                         BrowserObjectKind::RenderPipeline, pipelineId);
   }
 
   BridgeStatus setComputePipeline(BrowserObjectId pipelineId) override {
-    return operate(std::format("setComputePipeline pipeline={}", pipelineId),
-                   BrowserObjectKind::ComputePipeline, pipelineId);
+    return operateInPass(std::format("setComputePipeline pipeline={}", pipelineId),
+                         BrowserObjectKind::ComputePipeline, pipelineId);
   }
 
   BridgeStatus setBindGroup(uint32_t index, BrowserObjectId bindGroupId) override {
-    return operate(std::format("setBindGroup index={} bindGroup={}", index, bindGroupId),
-                   BrowserObjectKind::BindGroup, bindGroupId);
+    return operateInPass(std::format("setBindGroup index={} bindGroup={}", index, bindGroupId),
+                         BrowserObjectKind::BindGroup, bindGroupId);
   }
 
   BridgeStatus setVertexBuffer(uint32_t slot, BrowserObjectId bufferId,
                                uint64_t offsetBytes) override {
-    return operate(
+    return operateInPass(
         std::format("setVertexBuffer slot={} buffer={} offset={}", slot, bufferId, offsetBytes),
         BrowserObjectKind::Buffer, bufferId);
   }
 
   BridgeStatus setIndexBuffer(BrowserObjectId bufferId, uint32_t indexFormatCode,
                               uint64_t offsetBytes) override {
-    return operate(std::format("setIndexBuffer buffer={} format={} offset={}", bufferId,
-                               indexFormatCode, offsetBytes),
-                   BrowserObjectKind::Buffer, bufferId);
+    return operateInPass(std::format("setIndexBuffer buffer={} format={} offset={}", bufferId,
+                                     indexFormatCode, offsetBytes),
+                         BrowserObjectKind::Buffer, bufferId);
   }
 
   BridgeStatus setScissorRect(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override {
-    return operate(std::format("setScissorRect x={} y={} size={}x{}", x, y, width, height));
+    return operateInPass(std::format("setScissorRect x={} y={} size={}x{}", x, y, width, height));
   }
 
   BridgeStatus setViewport(float x, float y, float width, float height, float minDepth,
                            float maxDepth) override {
-    return operate(
+    return operateInPass(
         std::format("setViewport x={:.3f} y={:.3f} size={:.3f}x{:.3f} depth={:.3f}..{:.3f}", x, y,
                     width, height, minDepth, maxDepth));
   }
 
   BridgeStatus draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex,
                     uint32_t firstInstance) override {
-    return operate(
+    return operateInPass(
         std::format("draw vertexCount={} instanceCount={} firstVertex={} "
                     "firstInstance={}",
                     vertexCount, instanceCount, firstVertex, firstInstance));
@@ -338,14 +382,14 @@ public:
 
   BridgeStatus drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex,
                            int32_t baseVertex, uint32_t firstInstance) override {
-    return operate(
+    return operateInPass(
         std::format("drawIndexed indexCount={} instanceCount={} firstIndex={} "
                     "baseVertex={} firstInstance={}",
                     indexCount, instanceCount, firstIndex, baseVertex, firstInstance));
   }
 
   BridgeStatus dispatchWorkgroups(uint32_t countX, uint32_t countY, uint32_t countZ) override {
-    return operate(std::format("dispatchWorkgroups count={}x{}x{}", countX, countY, countZ));
+    return operateInPass(std::format("dispatchWorkgroups count={}x{}x{}", countX, countY, countZ));
   }
 
   BridgeStatus copyTextureToBuffer(BrowserObjectId textureId, BrowserObjectId bufferId,
@@ -355,11 +399,14 @@ public:
         status != BridgeStatus::Success) {
       return status;
     }
-    return operate(std::format("copyTextureToBuffer texture={} buffer={} offset={} "
-                               "bytesPerRow={} rowsPerImage={} size={}x{}",
-                               textureId, bufferId, layout.offsetBytes, layout.bytesPerRow,
-                               layout.rowsPerImage, region.width, region.height),
-                   BrowserObjectKind::Buffer, bufferId);
+    if (passOpen_) {
+      return BridgeStatus::Failed;
+    }
+    return operateInEncoder(std::format("copyTextureToBuffer texture={} buffer={} offset={} "
+                                        "bytesPerRow={} rowsPerImage={} size={}x{}",
+                                        textureId, bufferId, layout.offsetBytes, layout.bytesPerRow,
+                                        layout.rowsPerImage, region.width, region.height),
+                            BrowserObjectKind::Buffer, bufferId);
   }
 
   BridgeStatus copyTextureToTexture(BrowserObjectId sourceTextureId,
@@ -369,7 +416,10 @@ public:
         status != BridgeStatus::Success) {
       return status;
     }
-    return operate(
+    if (passOpen_) {
+      return BridgeStatus::Failed;
+    }
+    return operateInEncoder(
         std::format("copyTextureToTexture source={} destination={} sourceOrigin=({},{}) "
                     "destinationOrigin=({},{}) size={}x{}",
                     sourceTextureId, destinationTextureId, region.sourceX, region.sourceY,
@@ -378,7 +428,16 @@ public:
   }
 
   BridgeStatus endCommandBuffer(uint64_t submissionSerial) override {
-    return operate(std::format("endCommandBuffer serial={}", submissionSerial));
+    const std::string line = std::format("endCommandBuffer serial={}", submissionSerial);
+    if (const BridgeStatus status = requireEncoder(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    if (passOpen_) {
+      return BridgeStatus::Failed;
+    }
+    calls.push_back(line);
+    encoderOpen_ = false;
+    return BridgeStatus::Success;
   }
 
   BridgeStatus mapBufferAsync(BrowserObjectId mappingId, BrowserObjectId bufferId,
@@ -514,6 +573,24 @@ private:
     return BrowserObjectKind::Buffer;
   }
 
+  /// Refuses a command recorded with no open encoder, mirroring the browser side, which has no
+  /// encoder to record onto. @param line Recorded line naming the operation.
+  BridgeStatus requireEncoder(const std::string& line) {
+    if (!encoderOpen_) {
+      return BridgeStatus::Failed;
+    }
+    return guard(line);
+  }
+
+  /// Refuses a pass command recorded with no open pass, mirroring the browser side.
+  /// @param line Recorded line naming the operation.
+  BridgeStatus requirePass(const std::string& line) {
+    if (!encoderOpen_ || !passOpen_) {
+      return BridgeStatus::Failed;
+    }
+    return guard(line);
+  }
+
   /// Applies the checks every call shares: ownership, loss, and the programmed refusal.
   /// @param line Recorded line, whose leading word names the operation.
   BridgeStatus guard(const std::string& line) const {
@@ -579,8 +656,46 @@ private:
     return BridgeStatus::Success;
   }
 
+  /// Records a pass-scoped \p line, refusing when no pass is open. @param line Line to record.
+  BridgeStatus operateInPass(const std::string& line) {
+    if (const BridgeStatus status = requirePass(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    calls.push_back(line);
+    return BridgeStatus::Success;
+  }
+
+  /// Records a pass-scoped \p line naming \p id, refusing when no pass is open.
+  /// @param line Line to record. @param kind Expected kind of \p id. @param id Identifier used.
+  BridgeStatus operateInPass(const std::string& line, BrowserObjectKind kind, BrowserObjectId id) {
+    if (const BridgeStatus status = requirePass(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
+      return status;
+    }
+    calls.push_back(line);
+    return BridgeStatus::Success;
+  }
+
+  /// Records an encoder-scoped \p line naming \p id, refusing when no encoder is open.
+  /// @param line Line to record. @param kind Expected kind of \p id. @param id Identifier used.
+  BridgeStatus operateInEncoder(const std::string& line, BrowserObjectKind kind,
+                                BrowserObjectId id) {
+    if (const BridgeStatus status = requireEncoder(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
+      return status;
+    }
+    calls.push_back(line);
+    return BridgeStatus::Success;
+  }
+
   std::map<BrowserObjectId, Mapping> mappings_;
   std::map<BrowserObjectId, BrowserObjectId> frames_;
+  bool encoderOpen_ = false;
+  bool passOpen_ = false;
 };
 
 }  // namespace donner::gpu::browser

@@ -17,8 +17,10 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/browser/BrowserBridge.h"
 
 namespace donner::gpu::browser {
 
@@ -82,5 +84,44 @@ std::optional<uint32_t> WirePresentMode(PresentMode value);
 
 /// Code for \p value, or nullopt if it is not a known enumerator. @param value Value to encode.
 std::optional<uint32_t> WireSurfaceAlphaMode(SurfaceAlphaMode value);
+
+// The identifier, status and outcome enumerations below cross the boundary the same way the
+// descriptor enumerations above do: as codes assigned here rather than as the underlying values of
+// the C++ enumerators. That is what stops an enumerator inserted in the middle of one of them from
+// silently changing what a number means on the other side - the code is written out per enumerator,
+// so inserting one shifts nothing and removing one stops compiling.
+
+/// Code for \p value, or nullopt if it is not a known kind. @param value Kind to encode.
+std::optional<uint32_t> WireBrowserObjectKind(BrowserObjectKind value);
+
+/// The status \p code stands for, or nullopt if this protocol assigns it none.
+/// @param code Code the browser side returned.
+std::optional<BridgeStatus> BridgeStatusFromWire(uint32_t code);
+
+/// The request state \p code stands for, or nullopt if this protocol assigns it none.
+/// @param code Code the browser side returned.
+std::optional<BrowserDeviceRequestState> RequestStateFromWire(uint32_t code);
+
+/// The mapping state \p code stands for, or nullopt if this protocol assigns it none.
+/// @param code Code the browser side returned.
+std::optional<MapSliceState> MapSliceStateFromWire(uint32_t code);
+
+/// The surface outcome \p code stands for, or nullopt if this protocol assigns it none.
+/// @param code Code the browser side returned.
+std::optional<SurfaceStatus> SurfaceStatusFromWire(uint32_t code);
+
+/**
+ * Every code this protocol assigns, in one fixed order.
+ *
+ * This is the table the two halves of the bridge agree on. It is built from the translations above
+ * rather than written out a second time, so it cannot describe something other than what is
+ * actually sent, and `library_donner_gpu.js` holds the same sequence. The bridge compares the two
+ * before it asks for a device, so a code that means one thing here and another there stops the
+ * device request instead of reaching a browser call as a number that was read as something else.
+ *
+ * Appending to this table is a protocol change: both sides change together or the comparison fails,
+ * which is the point.
+ */
+std::span<const uint32_t> ProtocolCodeTable();
 
 }  // namespace donner::gpu::browser

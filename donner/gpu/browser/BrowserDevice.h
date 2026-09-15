@@ -2,6 +2,7 @@
 /// @file
 /// \c donner::gpu::browser::BrowserDevice - the browser backend of the Donner GPU runtime.
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -97,10 +98,11 @@ private:
  * - An operation issued from a context that does not own the browser device fails with
  *   \ref GpuErrorType::InvalidState. A browser device belongs to the worker that obtained it and
  *   its objects are unusable elsewhere, so this is a hard boundary, not a convention.
- * - Every operation after the browser reports the device lost fails with
- *   \ref GpuErrorType::InvalidState. Loss is permanent: a lost device is never regained, and a
- *   pending mapping on one can never complete, so waits end immediately rather than spending
- *   their budget.
+ * - Every operation that can be refused fails with \ref GpuErrorType::InvalidState once the
+ *   browser reports the device lost. Loss is permanent: a lost device is never regained, and a
+ *   pending mapping on one can never complete, so waits end immediately rather than spending their
+ *   budget. Release and teardown paths deliberately proceed instead, so a lost device still frees
+ *   the browser objects it holds; refusing those would strand them for the life of the page.
  *
  * Presentation follows the browser's model rather than the runtime's default one: a browser
  * decides for itself when a canvas is shown, so \ref Device::presentSurface is refused on this
@@ -136,6 +138,12 @@ public:
   /// Number of browser objects this device currently owns. Test accessor, for the teardown and
   /// slot-reuse contracts.
   size_t liveObjectCountForTest() const { return objects_.liveCount(); }
+
+  /// How many releases this device refused because they came from a thread that does not own the
+  /// browser device. Test accessor; a nonzero count is a caller error, not a device state.
+  uint64_t foreignThreadReleasesForTest() const {
+    return foreignThreadReleases_.load(std::memory_order_relaxed);
+  }
 
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
@@ -217,10 +225,19 @@ private:
   /**
    * Releases the browser object backing (\p kind, \p slotIndex), if any, and forgets it.
    *
+   * Refused when the caller is not the thread that owns the browser device: the objects belong to
+   * the owning context, so naming one from here would ask a worker that does not hold it to
+   * release it, which reports nothing the dropped handle could act on and leaves the object in
+   * place. The entry is kept instead, so device teardown on the owning thread still frees it, and
+   * the refusal is counted for \ref foreignThreadReleasesForTest.
+   *
    * @param kind Kind of object to release.
    * @param slotIndex Runtime slot index.
    */
   void releaseObject(BrowserObjectKind kind, uint32_t slotIndex);
+
+  /// Whether the caller is the thread that owns the browser device.
+  bool onOwnerThread() const { return std::this_thread::get_id() == ownerThread_; }
 
   /// Records the texture slot \p surfaceSlotIndex has acquired, growing the per-surface record.
   /// @param surfaceSlotIndex Surface slot. @param textureSlotIndex Acquired texture slot, or
@@ -329,6 +346,17 @@ private:
 
   /// Value in \ref acquiredTextureBySurface_ meaning the surface holds no frame.
   static constexpr uint32_t kNoAcquiredTexture = UINT32_MAX;
+
+  /// Whether \p textureSlotIndex is the frame some surface currently holds.
+  ///
+  /// A frame texture belongs to the canvas that supplied it, so it is handed back rather than
+  /// destroyed however its identifier stops being used.
+  ///
+  /// @param textureSlotIndex Runtime texture slot index.
+  bool isAcquiredFrame(uint32_t textureSlotIndex) const;
+
+  /// Releases from a thread that does not own the browser device, counted rather than performed.
+  std::atomic<uint64_t> foreignThreadReleases_ = 0;
 
   /// Thread that obtained the browser device. Browser objects are unusable off it, so every
   /// operation checks it rather than relying on the runtime's documented affinity alone.

@@ -125,12 +125,13 @@ std::optional<BrowserObjectKind> KindForResourceName(std::string_view resourceNa
   return std::nullopt;
 }
 
-/// Decodes \p codes into the runtime enumerators they stand for, dropping any this protocol has
-/// no meaning for.
+/// Returns the enumerators of \p known whose codes appear in \p codes, in the order \p codes
+/// lists them, and drops any code \p known has no enumerator for.
 ///
 /// What a browser reports describes the browser, not this process, so an unrecognized code is
 /// dropped rather than cast into an enumerator that would then flow into format and layout
-/// decisions.
+/// decisions. Dropping is right here and refusing is right on the sending side: this is a menu the
+/// caller chooses from, so a entry that cannot be named is simply not offered.
 ///
 /// @tparam Enum Runtime enumeration being decoded.
 /// @param codes Codes the browser reported.
@@ -145,6 +146,25 @@ std::vector<Enum> DecodeList(const std::vector<uint32_t>& codes, const Enum (&kn
       if (encode(candidate) == code) {
         decoded.push_back(candidate);
       }
+    }
+  }
+  return decoded;
+}
+
+/// Returns the flags of \p known whose codes are set in \p bits, ignoring any bit \p known has no
+/// flag for, for the same reason \ref DecodeList drops an unrecognized code.
+///
+/// @tparam Enum Runtime bitmask enumeration being decoded.
+/// @param bits Mask the browser reported.
+/// @param known Every flag this protocol can express.
+/// @param encode Translation from flag to code.
+template <typename Enum, size_t N>
+Enum DecodeMask(uint32_t bits, const Enum (&known)[N], std::optional<uint32_t> (*encode)(Enum)) {
+  Enum decoded = {};
+  for (const Enum candidate : known) {
+    const std::optional<uint32_t> bit = encode(candidate);
+    if (bit.has_value() && (bits & *bit) != 0) {
+      decoded |= candidate;
     }
   }
   return decoded;
@@ -168,12 +188,7 @@ SurfaceCapabilities DecodeSurfaceCapabilities(const BrowserSurfaceCapabilities& 
   capabilities.presentModes =
       DecodeList(reported.presentModeCodes, kPresentModes, &WirePresentMode);
   capabilities.alphaModes = DecodeList(reported.alphaModeCodes, kAlphaModes, &WireSurfaceAlphaMode);
-  for (const TextureUsage usage : kUsages) {
-    const std::optional<uint32_t> bit = WireTextureUsage(usage);
-    if (bit.has_value() && (reported.usageBits & *bit) != 0) {
-      capabilities.usages |= usage;
-    }
-  }
+  capabilities.usages = DecodeMask(reported.usageBits, kUsages, &WireTextureUsage);
   return capabilities;
 }
 
@@ -254,6 +269,16 @@ BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge)
     : bridge_(std::move(bridge)), ownerThread_(std::this_thread::get_id()) {}
 
 BrowserDevice::~BrowserDevice() {
+  // Hand back any frame a surface still holds first: a frame texture belongs to the canvas that
+  // supplied it, so the sweep below must not reach one.
+  for (uint32_t surfaceSlotIndex = 0;
+       surfaceSlotIndex < static_cast<uint32_t>(acquiredTextureBySurface_.size());
+       ++surfaceSlotIndex) {
+    if (acquiredTextureBySurface_[surfaceSlotIndex] != kNoAcquiredTexture) {
+      releaseAcquiredFrame(surfaceSlotIndex);
+    }
+  }
+
   // The base destructor has not run yet, so handles may still name live resources; releasing the
   // browser objects here and clearing the table keeps each one released exactly once whichever
   // order the remaining handles unwind in.
@@ -306,8 +331,11 @@ Result<BrowserObjectId> BrowserDevice::objectFor(BrowserObjectKind kind, uint32_
 
 Result<BrowserObjectId> BrowserDevice::registerObject(BrowserObjectKind kind, uint32_t slotIndex,
                                                       std::string_view operation) {
+  // A displaced identifier is released the way the object it named would have been: a frame texture
+  // goes back to its surface, anything else is destroyed.
+  const bool displacedFrame = kind == BrowserObjectKind::Texture && isAcquiredFrame(slotIndex);
   const BrowserObjectInsertion insertion = objects_.insert(kind, slotIndex);
-  if (insertion.displaced != kNoBrowserObject) {
+  if (insertion.displaced != kNoBrowserObject && !displacedFrame) {
     bridge_->destroyObject(kind, insertion.displaced);
   }
   if (insertion.id == kNoBrowserObject) {
@@ -331,7 +359,34 @@ uint32_t BrowserDevice::acquiredTexture(uint32_t surfaceSlotIndex) const {
   return acquiredTextureBySurface_[surfaceSlotIndex];
 }
 
+bool BrowserDevice::isAcquiredFrame(uint32_t textureSlotIndex) const {
+  for (const uint32_t acquired : acquiredTextureBySurface_) {
+    if (acquired == textureSlotIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void BrowserDevice::releaseObject(BrowserObjectKind kind, uint32_t slotIndex) {
+  if (!onOwnerThread()) {
+    // Keep the entry: teardown runs on the owning thread and frees it there, whereas naming it to
+    // this worker would release nothing and lose the identifier.
+    foreignThreadReleases_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (kind == BrowserObjectKind::Texture && isAcquiredFrame(slotIndex)) {
+    // The canvas owns this texture; handing the frame back is the release, and destroying it would
+    // take away the surface's own texture instead.
+    for (uint32_t surfaceSlotIndex = 0;
+         surfaceSlotIndex < static_cast<uint32_t>(acquiredTextureBySurface_.size());
+         ++surfaceSlotIndex) {
+      if (acquiredTextureBySurface_[surfaceSlotIndex] == slotIndex) {
+        releaseAcquiredFrame(surfaceSlotIndex);
+        return;
+      }
+    }
+  }
   const std::optional<BrowserObjectId> id = objects_.remove(kind, slotIndex);
   if (id.has_value()) {
     bridge_->destroyObject(kind, *id);
@@ -1048,10 +1103,16 @@ Status BrowserDevice::onSubmit(uint64_t submissionSerial, uint32_t /*commandBuff
 }
 
 Status BrowserDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
-                                       MapMode /*mode*/, uint64_t offsetBytes, uint64_t byteCount) {
+                                       MapMode mode, uint64_t offsetBytes, uint64_t byteCount) {
   static constexpr std::string_view kOperation = "mapBufferAsync";
   if (Status status = checkUsable(kOperation); status.hasError()) {
     return status;
+  }
+  if (mode != MapMode::Read) {
+    // Only host reads cross this bridge. A mode added later would otherwise be mapped as a read,
+    // which is the wrong access for whatever it turns out to mean.
+    return Err(GpuErrorType::Unsupported,
+               std::format("{}: the browser bridge maps buffers for host reads only", kOperation));
   }
   Result<BrowserObjectId> bufferId =
       objectFor(BrowserObjectKind::Buffer, bufferSlotIndex, kOperation);
@@ -1109,6 +1170,12 @@ Result<std::span<const uint8_t>> BrowserDevice::onMappedBytes(uint32_t mappingSl
 }
 
 void BrowserDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
+  if (!onOwnerThread()) {
+    // Same reasoning as \ref releaseObject: the mapping belongs to the owning context, so it is
+    // kept for teardown there rather than named to a worker that does not hold it.
+    foreignThreadReleases_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
   const std::optional<BrowserObjectId> mappingId =
       objects_.remove(BrowserObjectKind::BufferMapping, mappingSlotIndex);
   if (mappingId.has_value()) {

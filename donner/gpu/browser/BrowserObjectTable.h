@@ -31,10 +31,13 @@ enum class BrowserObjectKind : uint8_t {
   ComputePipeline,  //!< A compute pipeline.
   Surface,          //!< A presentation surface and the canvas context behind it.
   BufferMapping,    //!< A host mapping of a buffer range.
+  /// Number of kinds. Not a kind; it exists so per-kind storage and the protocol table below are
+  /// sized by the enumeration itself rather than by a number kept in step with it by hand.
+  kCount,
 };
 
 /// Number of \ref BrowserObjectKind enumerators, for per-kind table sizing.
-inline constexpr size_t kBrowserObjectKindCount = 12;
+inline constexpr size_t kBrowserObjectKindCount = static_cast<size_t>(BrowserObjectKind::kCount);
 
 /// Returns the name of \p kind, e.g. `"buffer"`. Used in diagnostics.
 /// @param kind Kind to name.
@@ -81,6 +84,14 @@ struct BrowserObjectInsertion {
  */
 class BrowserObjectTable {
 public:
+  /// Largest slot index this table will store.
+  ///
+  /// Per-kind storage is a dense vector indexed by slot, so a slot index decides an allocation
+  /// size. The runtime allocates slots densely from zero and its resource limits are far below
+  /// this, so a slot index anywhere near it did not come from the runtime; refusing it keeps a
+  /// wrong index from becoming a large allocation.
+  static constexpr uint32_t kMaxSlotIndex = (1u << 20) - 1;
+
   /**
    * Mints an identifier for \p slotIndex of \p kind and records the mapping.
    *
@@ -92,8 +103,9 @@ public:
    * caller release it on the browser side in that case, and makes the common case where nothing
    * was displaced visible rather than assumed.
    *
-   * Returns a null \ref BrowserObjectInsertion::id if the identifier space is exhausted; callers
-   * fail closed on that rather than proceeding with an identifier the browser side would refuse.
+   * Returns a null \ref BrowserObjectInsertion::id if the identifier space is exhausted or
+   * \p slotIndex is beyond \ref kMaxSlotIndex; callers fail closed on that rather than proceeding
+   * with an identifier the browser side would refuse.
    *
    * @param kind Kind of object occupying the slot.
    * @param slotIndex Runtime slot index of the resource.

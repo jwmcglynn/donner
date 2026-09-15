@@ -3,8 +3,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <span>
+#include <vector>
+
 namespace donner::gpu::browser {
 
+using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
 
@@ -92,6 +97,63 @@ TEST(BrowserWireCodes, EncodesTheRemainingDescriptorEnumerations) {
   EXPECT_THAT(WireSurfaceAlphaMode(SurfaceAlphaMode::Opaque), Optional(Eq(1u)));
   EXPECT_THAT(WireSurfaceAlphaMode(SurfaceAlphaMode::Premultiplied), Optional(Eq(2u)));
   EXPECT_THAT(WireSurfaceAlphaMode(SurfaceAlphaMode::Inherit), Optional(Eq(3u)));
+}
+
+TEST(BrowserWireCodes, EncodesEveryBrowserObjectKind) {
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::Buffer), Optional(Eq(1u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::Texture), Optional(Eq(2u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::TextureView), Optional(Eq(3u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::Sampler), Optional(Eq(4u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::BindGroupLayout), Optional(Eq(5u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::BindGroup), Optional(Eq(6u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::PipelineLayout), Optional(Eq(7u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::ShaderModule), Optional(Eq(8u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::RenderPipeline), Optional(Eq(9u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::ComputePipeline), Optional(Eq(10u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::Surface), Optional(Eq(11u)));
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::BufferMapping), Optional(Eq(12u)));
+
+  // The sentinel is a count, not a kind, and encoding it would name a thirteenth object kind.
+  EXPECT_THAT(WireBrowserObjectKind(BrowserObjectKind::kCount), Eq(std::nullopt));
+}
+
+TEST(BrowserWireCodes, DecodesTheStatusesAndOutcomesTheBrowserReports) {
+  EXPECT_THAT(BridgeStatusFromWire(1), Optional(Eq(BridgeStatus::Success)));
+  EXPECT_THAT(BridgeStatusFromWire(6), Optional(Eq(BridgeStatus::Failed)));
+  EXPECT_THAT(RequestStateFromWire(2), Optional(Eq(BrowserDeviceRequestState::Ready)));
+  EXPECT_THAT(MapSliceStateFromWire(3), Optional(Eq(MapSliceState::DeviceLost)));
+  EXPECT_THAT(SurfaceStatusFromWire(5), Optional(Eq(SurfaceStatus::Timeout)));
+}
+
+TEST(BrowserWireCodes, RefusesAStatusCodeThisProtocolAssignsNoMeaning) {
+  // Zero is never assigned, so a value that arrives unset decodes to nothing rather than to the
+  // first enumerator.
+  EXPECT_THAT(BridgeStatusFromWire(0), Eq(std::nullopt));
+  EXPECT_THAT(RequestStateFromWire(0), Eq(std::nullopt));
+  EXPECT_THAT(MapSliceStateFromWire(0), Eq(std::nullopt));
+  EXPECT_THAT(SurfaceStatusFromWire(0), Eq(std::nullopt));
+
+  EXPECT_THAT(BridgeStatusFromWire(7), Eq(std::nullopt));
+  EXPECT_THAT(RequestStateFromWire(5), Eq(std::nullopt));
+  EXPECT_THAT(MapSliceStateFromWire(5), Eq(std::nullopt));
+  EXPECT_THAT(SurfaceStatusFromWire(6), Eq(std::nullopt));
+}
+
+TEST(BrowserWireCodes, ProtocolTableMatchesTheOneTheJavaScriptLibraryHolds) {
+  // `library_donner_gpu.js` holds this same sequence and the bridge compares the two before it
+  // asks for a device. Pinning the length and the section boundaries here means a code added on
+  // the C++ side without adding it there fails this test rather than only failing in a browser.
+  const std::span<const uint32_t> table = ProtocolCodeTable();
+  EXPECT_THAT(table.size(), 92u);
+
+  // No entry is zero: zero is the value an unassigned code encodes as, so one here would mean an
+  // enumerator lost its code and the table no longer describes what is sent.
+  EXPECT_THAT(std::count(table.begin(), table.end(), 0u), 0);
+
+  EXPECT_THAT(std::vector<uint32_t>(table.begin(), table.begin() + 4), ElementsAre(1u, 2u, 3u, 4u));
+  EXPECT_THAT(std::vector<uint32_t>(table.begin() + 4, table.begin() + 9),
+              ElementsAre(1u, 2u, 4u, 8u, 16u));
+  EXPECT_THAT(std::vector<uint32_t>(table.end() - 5, table.end()), ElementsAre(1u, 2u, 3u, 4u, 5u));
 }
 
 }  // namespace donner::gpu::browser

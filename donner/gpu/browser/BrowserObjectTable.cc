@@ -18,6 +18,7 @@ std::string_view BrowserObjectKindName(BrowserObjectKind kind) {
     case BrowserObjectKind::ComputePipeline: return "compute pipeline";
     case BrowserObjectKind::Surface: return "surface";
     case BrowserObjectKind::BufferMapping: return "buffer mapping";
+    case BrowserObjectKind::kCount: break;
   }
   return "unknown object";
 }
@@ -28,7 +29,7 @@ std::ostream& operator<<(std::ostream& os, BrowserObjectKind value) {
 
 BrowserObjectInsertion BrowserObjectTable::insert(BrowserObjectKind kind, uint32_t slotIndex) {
   const size_t kindIndex = static_cast<size_t>(kind);
-  if (kindIndex >= kBrowserObjectKindCount) {
+  if (kindIndex >= kBrowserObjectKindCount || slotIndex > kMaxSlotIndex) {
     return BrowserObjectInsertion{};
   }
   if (nextId_ == std::numeric_limits<BrowserObjectId>::max()) {

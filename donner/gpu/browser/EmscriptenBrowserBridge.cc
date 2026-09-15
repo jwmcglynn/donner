@@ -2,8 +2,13 @@
 
 #include <array>
 #include <cstddef>
+#include <limits>
+#include <optional>
+#include <span>
 #include <string>
 #include <utility>
+
+#include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
 
@@ -16,6 +21,7 @@ namespace donner::gpu::browser {
 // offset or arity arithmetic to get wrong, because every item it sees is one it was called for.
 extern "C" {
 
+int donner_gpu_check_protocol(const unsigned int* codes, int count);
 int donner_gpu_begin_device_request();
 int donner_gpu_device_request_state();
 int donner_gpu_read_request_error(char* destination, int capacity);
@@ -133,53 +139,43 @@ namespace {
 /// diagnostic, so it is truncated rather than allowed to size an allocation.
 constexpr int kMaxMessageBytes = 512;
 
-/// Translates a status the browser side returned. An unrecognized value becomes
+/// Translates a status the browser side returned. A code this protocol assigns no meaning becomes
 /// \ref BridgeStatus::Failed rather than being cast into an enumerator, so a JavaScript half that
 /// has drifted from this one refuses operations instead of appearing to succeed.
 /// @param status Value the browser side returned.
 BridgeStatus StatusFromBrowser(int status) {
-  switch (status) {
-    case 0: return BridgeStatus::Success;
-    case 1: return BridgeStatus::UnknownObject;
-    case 2: return BridgeStatus::WrongObjectKind;
-    case 3: return BridgeStatus::NotOwner;
-    case 4: return BridgeStatus::DeviceLost;
-    default: return BridgeStatus::Failed;
+  if (status < 0) {
+    return BridgeStatus::Failed;
   }
+  return BridgeStatusFromWire(static_cast<uint32_t>(status)).value_or(BridgeStatus::Failed);
 }
 
 /// Translates a device-request state the browser side returned.
 /// @param state Value the browser side returned.
 BrowserDeviceRequestState RequestStateFromBrowser(int state) {
-  switch (state) {
-    case 0: return BrowserDeviceRequestState::Pending;
-    case 1: return BrowserDeviceRequestState::Ready;
-    case 2: return BrowserDeviceRequestState::Unavailable;
-    default: return BrowserDeviceRequestState::Failed;
+  if (state < 0) {
+    return BrowserDeviceRequestState::Failed;
   }
+  return RequestStateFromWire(static_cast<uint32_t>(state))
+      .value_or(BrowserDeviceRequestState::Failed);
 }
 
 /// Translates a mapping state the browser side returned.
 /// @param state Value the browser side returned.
 MapSliceState MappingStateFromBrowser(int state) {
-  switch (state) {
-    case 0: return MapSliceState::Pending;
-    case 1: return MapSliceState::Ready;
-    case 2: return MapSliceState::DeviceLost;
-    default: return MapSliceState::Failed;
+  if (state < 0) {
+    return MapSliceState::Failed;
   }
+  return MapSliceStateFromWire(static_cast<uint32_t>(state)).value_or(MapSliceState::Failed);
 }
 
-/// Translates a surface status the browser side returned.
+/// Translates a surface outcome the browser side returned. An unassigned code becomes
+/// \ref SurfaceStatus::Lost: a frame whose outcome cannot be read is not one to draw into, and
+/// Lost is the outcome whose recovery - build a new surface - is safe to take when the report
+/// itself is not trustworthy.
 /// @param status Value the browser side returned.
 SurfaceStatus SurfaceStatusFromBrowser(unsigned int status) {
-  switch (status) {
-    case 0: return SurfaceStatus::Success;
-    case 1: return SurfaceStatus::Outdated;
-    case 2: return SurfaceStatus::Lost;
-    case 3: return SurfaceStatus::DeviceLost;
-    default: return SurfaceStatus::Timeout;
-  }
+  return SurfaceStatusFromWire(status).value_or(SurfaceStatus::Lost);
 }
 
 /// Reads a bounded message the browser side exposes through \p reader.
@@ -202,6 +198,16 @@ EmscriptenBrowserBridge::EmscriptenBrowserBridge() = default;
 EmscriptenBrowserBridge::~EmscriptenBrowserBridge() = default;
 
 BridgeStatus EmscriptenBrowserBridge::beginDeviceRequest() {
+  // The two halves agree on what their numbers mean before anything is built on them. Checking
+  // here rather than later is what keeps a disagreement from reaching a browser call as a value
+  // that was read as something else: nothing else on this interface may run until the request is
+  // ready, so this is the one place every later call is downstream of.
+  const std::span<const uint32_t> codes = ProtocolCodeTable();
+  if (const BridgeStatus status = StatusFromBrowser(
+          donner_gpu_check_protocol(codes.data(), static_cast<int>(codes.size())));
+      status != BridgeStatus::Success) {
+    return status;
+  }
   return StatusFromBrowser(donner_gpu_begin_device_request());
 }
 
@@ -360,7 +366,11 @@ BridgeStatus EmscriptenBrowserBridge::createComputePipeline(
 
 BridgeStatus EmscriptenBrowserBridge::destroyObject(BrowserObjectKind kind, BrowserObjectId id) {
   mappings_.erase(id);
-  return StatusFromBrowser(donner_gpu_destroy_object(static_cast<unsigned int>(kind), id));
+  const std::optional<uint32_t> kindCode = WireBrowserObjectKind(kind);
+  if (!kindCode.has_value()) {
+    return BridgeStatus::WrongObjectKind;
+  }
+  return StatusFromBrowser(donner_gpu_destroy_object(*kindCode, id));
 }
 
 BridgeStatus EmscriptenBrowserBridge::writeBuffer(BrowserObjectId bufferId, uint64_t offsetBytes,
@@ -508,6 +518,13 @@ BridgeStatus EmscriptenBrowserBridge::mappedBytes(BrowserObjectId mappingId,
     return BridgeStatus::UnknownObject;
   }
   if (!it->second.copied) {
+    // The mapped range is copied out of the browser's heap into this module's own, so a readback
+    // costs its own size again here; the runtime's 1 GiB buffer cap therefore bounds a single
+    // mapping's copy at 1 GiB on top of the buffer itself. On a 32-bit heap a length that does not
+    // fit a size_t cannot be allocated at all, so it is refused rather than truncated into one.
+    if (it->second.byteCount > std::numeric_limits<size_t>::max()) {
+      return BridgeStatus::Failed;
+    }
     it->second.bytes.resize(static_cast<size_t>(it->second.byteCount));
     const BridgeStatus status = StatusFromBrowser(donner_gpu_copy_mapped_bytes(
         mappingId, it->second.bytes.data(), static_cast<double>(it->second.byteCount)));

@@ -58,12 +58,16 @@ donner_cc_library(
 
 exports_files(["library_donner_gpu.js"])
 
-# Proves the two halves of the bridge still name the same set of functions.
+# Links the bridge against its JavaScript library.
 #
-# The C++ half declares its entry points and the JavaScript half defines them; nothing but a link
-# checks that those two lists match, and neither language's compiler can see the other side. This
-# module links the bridge with its library, so a function added, renamed or dropped on one side
-# without the other fails the build instead of failing in a browser.
+# What this catches: a function the C++ half references that the JavaScript half does not define.
+# Emscripten resolves every declared entry point against the library at link time, so a rename or
+# deletion on either side fails the build rather than a browser call.
+#
+# What it does NOT catch: parameter drift. A JavaScript function ignores extra arguments and reads
+# missing ones as undefined, so a changed parameter list links clean. The values that cross are
+# kept in agreement instead by the protocol table in BrowserWireCodes.h, which both halves compare
+# element by element before a device is requested.
 cc_binary(
     name = "_browser_bridge_link_probe",
     srcs = ["tests/browser_bridge_link_probe.cc"],
@@ -91,7 +95,10 @@ wasm_cc_binary(
         "_browser_bridge_link_probe.js",
         "_browser_bridge_link_probe.wasm",
     ],
-    tags = ["manual"],
+    # Deliberately not `manual`: a link gate that no lane builds is not a gate. This is reached by
+    # a wildcard build under the WebAssembly Geode configuration, the same way the renderer module
+    # beside it is, and carries that lane's tag.
+    tags = ["codeql_wasm_geode"],
     target_compatible_with = select({
         "//donner/svg/renderer/wasm:wasm_geode": [],
         "//conditions:default": ["@platforms//:incompatible"],
