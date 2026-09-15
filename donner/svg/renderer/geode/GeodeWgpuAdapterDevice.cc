@@ -1359,6 +1359,7 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
 
   wgpu::TexelCopyTextureInfo destination = {};
   destination.texture = texture;
+  destination.origin = {destinationOrigin.x, destinationOrigin.y, 0u};
   wgpu::TexelCopyBufferLayout layout = {};
   layout.offset = uploadLayout.offsetBytes;
   layout.bytesPerRow = uploadLayout.bytesPerRow;
