@@ -1688,7 +1688,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-coordinates-on-textPath.png")
                      .withReason("Minor char")},
-                {"with-filter.svg", Params::Skip("Not impl: filter on textPath")},
+                // The filter itself is applied to the textPath now, but Donner's glyph coverage
+                // is about 5% lighter than the reference's (measured on the unfiltered
+                // text/tspan/with-clip-path case: 1140473 versus 1208567 total alpha over the
+                // glyphs). The unfiltered comparisons pass because pixelmatch excludes
+                // anti-aliased edge pixels, while a Gaussian blur spreads the missing coverage
+                // into the glyph interiors, where it is counted.
+                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
                 {"with-invalid-path-and-xlink-href.svg",
                  Params::Skip("Reference disagrees with the corpus: after the invalid `path` is "
                               "ignored, the remaining `xlink:href=\"path1\"` has no fragment, so "
@@ -1742,21 +1748,23 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextTspan, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/tspan",
-                {
-                    {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
-                    {"nested-rotate.svg",
-                     Params::Skip("Bug: Applying rotation indices across nested tspans")},
-                    {"nested-whitespaces.svg", Params().withMaxPixelsDifferent(400).withReason(
-                                                   "Vertical axis has different AA")},
-                    {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
-                                             "Crosshair thin-line AA + underline uses")},
-                    {"with-clip-path.svg", Params::Skip("Not impl: Interaction with `clip-path`")},
-                    {"with-filter.svg", Params::Skip("Not impl: Interaction with `filter`")},
-                    {"with-mask.svg", Params::Skip("Not impl: Interaction with `mask`")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/tspan",
+            {
+                {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
+                {"nested-rotate.svg",
+                 Params::Skip("Bug: Applying rotation indices across nested tspans")},
+                {"nested-whitespaces.svg",
+                 Params().withMaxPixelsDifferent(400).withReason("Vertical axis has different AA")},
+                {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
+                                         "Crosshair thin-line AA + underline uses")},
+                // Same cause as text/textPath/with-filter.svg: the span filter applies, but
+                // Donner's glyph coverage is about 5% lighter than the reference's, which only
+                // a blur makes visible away from the glyph edges.
+                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
