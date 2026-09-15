@@ -300,11 +300,16 @@ class RealTreeParityReportTests(unittest.TestCase):
         self.assertEqual(summary["total_cases"], 1679)
         self.assertEqual(summary["active_cases"], 1679)
         self.assertEqual(summary["disabled_cases"], 0)
-        self.assertEqual(summary["skip_cases"], 130)
+        # Five fewer skips than before textPath geometry sources and layout options landed.
+        # link-to-rect.svg, with-path.svg, and with-path-and-xlink-href.svg now compare against
+        # their vendored references; spacing=auto.svg compares against a shared golden, which is
+        # also the one added shared-golden case; side=right.svg compares under one added pixel
+        # budget source.
+        self.assertEqual(summary["skip_cases"], 125)
         self.assertEqual(summary["render_only_cases"], 78)
-        self.assertEqual(summary["pixel_budget_sources"], 103)
-        self.assertEqual(summary["effective_pixel_budget_cases"], 125)
-        self.assertEqual(summary["shared_golden_cases"], 36)
+        self.assertEqual(summary["pixel_budget_sources"], 104)
+        self.assertEqual(summary["effective_pixel_budget_cases"], 126)
+        self.assertEqual(summary["shared_golden_cases"], 37)
         self.assertEqual(summary["geode_golden_cases"], 4)
         self.assertEqual(summary["backend_disabled_cases"], 0)
 
