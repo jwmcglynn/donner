@@ -1,5 +1,6 @@
 #include "donner/editor/gui/UiTextureRegistration.h"
 
+#include <cstdio>
 #include <utility>
 
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
@@ -10,12 +11,18 @@ namespace donner::editor {
 
 namespace {
 
-/// The device the UI renderer draws on, which every UI texture must be registered against. The
-/// editor always draws through the transition adapter, so the cast holds for as long as an
-/// imported texture is how a backend texture reaches the interface.
+/// Device published by \ref SetUiTextureImportDevice, or null while none is.
+geode::GeodeWgpuAdapterDevice* gImportDevice = nullptr;
+
+/// The published import device when it is the one \p renderer draws on, or null. A device that
+/// cannot import is not an error to have: it means a backend texture cannot reach the interface
+/// on this device, which the caller reports as a refused registration.
 /// @param renderer Installed UI renderer.
-geode::GeodeWgpuAdapterDevice& UiRendererDevice(ImGuiRuntimeRenderer& renderer) {
-  return static_cast<geode::GeodeWgpuAdapterDevice&>(renderer.device());
+geode::GeodeWgpuAdapterDevice* ImportDeviceFor(ImGuiRuntimeRenderer& renderer) {
+  if (gImportDevice == nullptr || gImportDevice->deviceId() != renderer.device().deviceId()) {
+    return nullptr;
+  }
+  return gImportDevice;
 }
 
 /// The UI alpha interpretation matching \p alphaType.
@@ -48,6 +55,10 @@ ImTextureID Register(ImGuiRuntimeRenderer& renderer, gpu::Result<gpu::TextureVie
 }
 
 }  // namespace
+
+void SetUiTextureImportDevice(geode::GeodeWgpuAdapterDevice* device) {
+  gImportDevice = device;
+}
 
 bool HasUiTextureRegistry() {
   return CurrentUiTextureRegistry() != nullptr;
@@ -91,7 +102,11 @@ ImTextureID RegisterUiImportedTexture(const wgpu::Texture& texture, const Vector
     return 0;
   }
 
-  gpu::Result<gpu::Texture> imported = UiRendererDevice(*renderer).importExternalTexture(
+  geode::GeodeWgpuAdapterDevice* importDevice = ImportDeviceFor(*renderer);
+  if (importDevice == nullptr) {
+    return 0;
+  }
+  gpu::Result<gpu::Texture> imported = importDevice->importExternalTexture(
       texture, {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y)}, format,
       gpu::TextureUsage::Sampled);
   if (imported.hasError()) {
@@ -115,7 +130,11 @@ void RetireUiTexture(ImTextureID texture) {
     return;
   }
   const gpu::Status retired = registry->retire(UiTextureId::FromImTextureId(texture));
-  (void)retired;
+  if (retired.hasError()) {
+    // The registry reports a double release; swallowing it would hide the producer bug it exists
+    // to name.
+    std::fprintf(stderr, "UI texture retire failed: %s\n", retired.error().toString().c_str());
+  }
 }
 
 }  // namespace donner::editor

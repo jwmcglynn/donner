@@ -48,11 +48,15 @@ extern "C" {
 #include "donner/editor/ImGuiInternalIncludes.h"
 #ifdef DONNER_EDITOR_WGPU
 #ifndef __EMSCRIPTEN__
+// Presenting to a platform window is desktop-only; the browser tier presents through its canvas.
 #include "donner/editor/gui/EditorWgpuSurface.h"
+#endif
+// The UI is drawn through the runtime on every tier that defines DONNER_EDITOR_WGPU, including
+// the browser one, so these are not part of the desktop-only block above.
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
+#include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/gpu/CommandEncoder.h"
-#endif
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -1372,7 +1376,7 @@ std::optional<gpu::TextureFormat> RuntimeFormatOf(wgpu::TextureFormat format) {
 /// @param registry Registry the renderer resolves draw commands against.
 /// @param surfaceFormat Surface format the pipelines must target.
 /// @param fonts Font atlas uploaded and registered as the UI's font texture.
-std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(gpu::Device& device,
+std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(geode::GeodeWgpuAdapterDevice& device,
                                                        UiTextureRegistry& registry,
                                                        wgpu::TextureFormat surfaceFormat,
                                                        ImFontAtlas& fonts) {
@@ -1390,9 +1394,14 @@ std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(gpu::Device& device,
   }
   std::unique_ptr<ImGuiRuntimeRenderer> created = std::move(renderer).result();
   created->install();
+  SetUiTextureImportDevice(&device);
   if (const gpu::Status uploaded = created->buildFontAtlas(fonts); uploaded.hasError()) {
     std::fprintf(stderr, "EditorWindow: UI font atlas upload failed: %s\n",
                  uploaded.error().toString().c_str());
+    // Abandoning it while still published would leave both texture producers resolving
+    // registrations through a destroyed renderer.
+    SetUiTextureImportDevice(nullptr);
+    created->uninstall();
     return nullptr;
   }
   return created;
@@ -1404,10 +1413,13 @@ std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(gpu::Device& device,
 /// @param registry Registry whose frame is advanced, or null before one exists.
 /// @param renderer Renderer owning the font atlas, or null before one exists.
 void BeginUiFrame(UiTextureRegistry* registry, ImGuiRuntimeRenderer* renderer) {
-  if (registry != nullptr) {
-    registry->advanceFrame();
+  if (renderer == nullptr) {
+    return;
   }
-  if (renderer == nullptr || ImGui::GetIO().Fonts->IsBuilt()) {
+  // Advancing through the renderer releases the registrations whose retirement frames have passed
+  // and drops the bind group cached for each, so neither outlives the other.
+  renderer->advanceFrame();
+  if (ImGui::GetIO().Fonts->IsBuilt()) {
     return;
   }
   if (const gpu::Status rebuilt = renderer->buildFontAtlas(*ImGui::GetIO().Fonts);
@@ -1435,8 +1447,15 @@ bool RenderUiDrawData(geode::GeodeWgpuAdapterDevice& device, ImGuiRuntimeRendere
   if (!targetFormat.has_value()) {
     return false;
   }
+  // The scissor is clamped to this extent, so it must be the attachment's own size rather than a
+  // separately computed one: clamping against a larger size would let a rectangle past the edge.
+  const gpu::Extent2d attachmentSize{target.getWidth(), target.getHeight()};
+  if (attachmentSize.width != targetSize.width || attachmentSize.height != targetSize.height) {
+    std::fprintf(stderr, "EditorWindow: frame target is %ux%u but the frame reported %ux%u\n",
+                 attachmentSize.width, attachmentSize.height, targetSize.width, targetSize.height);
+  }
   gpu::Result<gpu::Texture> runtimeTarget = device.importExternalTexture(
-      target, targetSize, *targetFormat, gpu::TextureUsage::RenderAttachment);
+      target, attachmentSize, *targetFormat, gpu::TextureUsage::RenderAttachment);
   if (runtimeTarget.hasError()) {
     return false;
   }
@@ -1457,7 +1476,7 @@ bool RenderUiDrawData(geode::GeodeWgpuAdapterDevice& device, ImGuiRuntimeRendere
   if (pass.hasError()) {
     return false;
   }
-  const gpu::Status drawn = renderer.render(*ImGui::GetDrawData(), *pass.result(), targetSize);
+  const gpu::Status drawn = renderer.render(*ImGui::GetDrawData(), *pass.result(), attachmentSize);
   if (drawn.hasError()) {
     std::fprintf(stderr, "EditorWindow: UI draw failed: %s\n", drawn.error().toString().c_str());
   }
@@ -1918,7 +1937,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOther failed\n");
     return;
   }
-  gpu::Device& runtimeDevice = wgpuState_->framebufferGeodeDevice->adapterDevice();
+  geode::GeodeWgpuAdapterDevice& runtimeDevice =
+      wgpuState_->framebufferGeodeDevice->adapterDevice();
   wgpuState_->uiTextureRegistry = std::make_unique<UiTextureRegistry>(runtimeDevice);
   wgpuState_->uiRenderer = CreateUiRenderer(runtimeDevice, *wgpuState_->uiTextureRegistry,
                                             wgpuState_->surfaceFormat, *io.Fonts);
@@ -1952,6 +1972,7 @@ EditorWindow::~EditorWindow() {
   if (imguiInitialized_) {
 #ifdef DONNER_EDITOR_WGPU
     if (wgpuState_ != nullptr && wgpuState_->uiRenderer != nullptr) {
+      SetUiTextureImportDevice(nullptr);
       wgpuState_->uiRenderer->uninstall();
       wgpuState_->uiRenderer.reset();
       wgpuState_->uiTextureRegistry.reset();

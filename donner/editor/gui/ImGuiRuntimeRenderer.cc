@@ -1,6 +1,7 @@
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <format>
@@ -129,6 +130,14 @@ std::optional<ScissorRect> ScissorFor(const ImDrawCmd& command, const ImDrawData
   const float maxX = static_cast<float>(targetSizePx.width);
   const float maxY = static_cast<float>(targetSizePx.height);
 
+  // A non-finite clip rectangle would survive clamping, because every comparison against a NaN is
+  // false, and converting it to an unsigned scissor bound is undefined. Draw data is untrusted, so
+  // the command is dropped instead.
+  if (!std::isfinite(command.ClipRect.x) || !std::isfinite(command.ClipRect.y) ||
+      !std::isfinite(command.ClipRect.z) || !std::isfinite(command.ClipRect.w)) {
+    return std::nullopt;
+  }
+
   const uint32_t minLeft = static_cast<uint32_t>(
       std::clamp((command.ClipRect.x - drawData.DisplayPos.x) * scaleX, 0.0f, maxX));
   const uint32_t minTop = static_cast<uint32_t>(
@@ -150,12 +159,21 @@ struct DrawRange {
   int32_t baseVertex = 0;   //!< Value added to every index value before the vertex fetch.
 };
 
-/// Offsets \p command's own list-relative range by its list's start in the combined buffers.
+/// Offsets \p command's own list-relative range by its list's start in the combined buffers, and
+/// refuses a range that leaves the frame's own geometry.
+///
+/// The runtime range-checks an indexed draw's index range but not the elements its index values
+/// reach, because those live in GPU memory. Draw data is untrusted here, so the base vertex is
+/// checked against the frame's vertex count: an index value can still reach past it, but a base
+/// that is already outside cannot address anything this frame uploaded.
 /// @param command Command whose range is computed.
 /// @param listBaseVertex First vertex of the command's list.
 /// @param listFirstIndex First index of the command's list.
+/// @param frameVertexCount Vertices the frame uploaded.
+/// @param frameIndexCount Indices the frame uploaded.
 gpu::Result<DrawRange> DrawRangeFor(const ImDrawCmd& command, int32_t listBaseVertex,
-                                    uint32_t listFirstIndex) {
+                                    uint32_t listFirstIndex, uint32_t frameVertexCount,
+                                    uint32_t frameIndexCount) {
   const std::optional<uint64_t> firstIndex = gpu::CheckedAdd(listFirstIndex, command.IdxOffset);
   if (!firstIndex.has_value() || *firstIndex > UINT32_MAX) {
     return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
@@ -167,6 +185,19 @@ gpu::Result<DrawRange> DrawRangeFor(const ImDrawCmd& command, int32_t listBaseVe
     return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
                          "UI draw command's base vertex overflows the frame vertex range"};
   }
+  if (*baseVertex >= frameVertexCount) {
+    return gpu::GpuError{
+        gpu::GpuErrorType::OutOfBounds,
+        std::format("UI draw command's base vertex {} is outside the frame's {} vertices",
+                    *baseVertex, frameVertexCount)};
+  }
+  const std::optional<uint64_t> lastIndex = gpu::CheckedAdd(*firstIndex, command.ElemCount);
+  if (!lastIndex.has_value() || *lastIndex > frameIndexCount) {
+    return gpu::GpuError{
+        gpu::GpuErrorType::OutOfBounds,
+        std::format("UI draw command's index range ends past the frame's {} indices",
+                    frameIndexCount)};
+  }
   return DrawRange{static_cast<uint32_t>(*firstIndex), static_cast<int32_t>(*baseVertex)};
 }
 
@@ -175,7 +206,11 @@ gpu::Result<DrawRange> DrawRangeFor(const ImDrawCmd& command, int32_t listBaseVe
 ImGuiRuntimeRenderer::ImGuiRuntimeRenderer(gpu::Device& device, UiTextureRegistry& registry)
     : device_(&device), registry_(&registry) {}
 
-ImGuiRuntimeRenderer::~ImGuiRuntimeRenderer() = default;
+ImGuiRuntimeRenderer::~ImGuiRuntimeRenderer() {
+  // A renderer that is still published when it is destroyed would leave both producers reading
+  // freed memory through the accessors below.
+  uninstall();
+}
 
 gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> ImGuiRuntimeRenderer::Create(
     gpu::Device& device, UiTextureRegistry& registry, gpu::TextureFormat targetFormat) {
@@ -407,6 +442,14 @@ UiTextureRegistry* CurrentUiTextureRegistry() {
   return renderer != nullptr ? &renderer->registry() : nullptr;
 }
 
+std::vector<UiTextureId> ImGuiRuntimeRenderer::advanceFrame() {
+  std::vector<UiTextureId> released = registry_->advanceFrame();
+  for (const UiTextureId id : released) {
+    std::erase_if(textureBindings_, [id](const TextureBinding& cached) { return cached.id == id; });
+  }
+  return released;
+}
+
 void ImGuiRuntimeRenderer::resetRendererState() {
   textureBindings_.clear();
 }
@@ -464,10 +507,9 @@ gpu::Status ImGuiRuntimeRenderer::writeProjection(const ImDrawData& drawData) {
 }
 
 gpu::Result<const gpu::BindGroup*> ImGuiRuntimeRenderer::bindGroupFor(
-    const UiTextureBinding& binding) {
-  const gpu::ResourceIdentity identity{binding.view.slotIndex(), binding.view.generation()};
+    UiTextureId id, const UiTextureBinding& binding) {
   for (const TextureBinding& cached : textureBindings_) {
-    if (cached.viewIdentity == identity) {
+    if (cached.id == id) {
       return &cached.bindGroup;
     }
   }
@@ -482,7 +524,7 @@ gpu::Result<const gpu::BindGroup*> ImGuiRuntimeRenderer::bindGroupFor(
     return std::move(created).error();
   }
 
-  textureBindings_.push_back(TextureBinding{identity, std::move(created).result()});
+  textureBindings_.push_back(TextureBinding{id, std::move(created).result()});
   return &textureBindings_.back().bindGroup;
 }
 
@@ -512,6 +554,8 @@ gpu::Status ImGuiRuntimeRenderer::uploadGeometry(const ImDrawData& drawData,
     return indexCapacity;
   }
 
+  frameVertexCount_ = static_cast<uint32_t>(drawData.TotalVtxCount);
+  frameIndexCount_ = static_cast<uint32_t>(drawData.TotalIdxCount);
   vertexStaging_.clear();
   indexStaging_.clear();
   geometry.baseVertex.assign(static_cast<size_t>(drawData.CmdListsCount), 0);
@@ -582,8 +626,8 @@ gpu::Status ImGuiRuntimeRenderer::recordCommand(const ImDrawCmd& command,
     return gpu::OkStatus();
   }
 
-  gpu::Result<UiTextureBinding> binding =
-      registry_->lookup(UiTextureId::FromImTextureId(command.GetTexID()));
+  const UiTextureId textureId = UiTextureId::FromImTextureId(command.GetTexID());
+  gpu::Result<UiTextureBinding> binding = registry_->lookup(textureId);
   if (binding.hasError()) {
     return std::move(binding).error();
   }
@@ -593,7 +637,7 @@ gpu::Status ImGuiRuntimeRenderer::recordCommand(const ImDrawCmd& command,
     return pipeline;
   }
 
-  gpu::Result<const gpu::BindGroup*> group = bindGroupFor(binding.result());
+  gpu::Result<const gpu::BindGroup*> group = bindGroupFor(textureId, binding.result());
   if (group.hasError()) {
     return std::move(group).error();
   }
@@ -608,7 +652,8 @@ gpu::Status ImGuiRuntimeRenderer::recordCommand(const ImDrawCmd& command,
     return scissorSet;
   }
 
-  gpu::Result<DrawRange> range = DrawRangeFor(command, listBaseVertex, listFirstIndex);
+  gpu::Result<DrawRange> range =
+      DrawRangeFor(command, listBaseVertex, listFirstIndex, frameVertexCount_, frameIndexCount_);
   if (range.hasError()) {
     return std::move(range).error();
   }

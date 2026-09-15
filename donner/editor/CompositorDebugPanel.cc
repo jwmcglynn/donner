@@ -423,13 +423,12 @@ void CompositorDebugPanel::render(
       ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, state.canvasSize);
   const bool commitStalled = canvasFreshness == CanvasFreshness::CommitStalled;
   const bool rasterizeBehind = canvasFreshness == CanvasFreshness::CompositorBehind;
-  ImGui::TextColored(commitStalled
-                         ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
-                         : ImGui::GetStyle().Colors[ImGuiCol_Text],
-                     "  viewport: zoom=%.3f  dpr=%.3f  → desired %d×%d", viewportZoom, viewportDpr,
-                     viewportDesiredCanvas.x, viewportDesiredCanvas.y);
-  ImGui::TextColored(commitStalled
-                         ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
+  ImGui::TextColored(
+      commitStalled ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
+                    : ImGui::GetStyle().Colors[ImGuiCol_Text],
+      "  viewport: zoom=%.3f  dpr=%.3f  → desired %d×%d", viewportZoom, viewportDpr,
+      viewportDesiredCanvas.x, viewportDesiredCanvas.y);
+  ImGui::TextColored(commitStalled ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
                      : rasterizeBehind ? ImVec4(1.0f, 0.7f, 0.4f, 1.0f)
                                        : ImGui::GetStyle().Colors[ImGuiCol_Text],
                      "  document canvas: %d×%d%s", documentCanvas.x, documentCanvas.y,
@@ -750,6 +749,7 @@ CompositorDebugPanel::RetiredSnapshot CompositorDebugPanel::RetireSnapshot(
 void CompositorDebugPanel::releaseImGuiTexture(ThumbnailTextureHandle texture) {
   // Retiring refuses new draw data at once and releases the slot after the frames a recorded draw
   // can still be in flight, which is the window this panel already held its snapshots for.
+  // RetireUiTexture reports a double release rather than swallowing it.
   RetireUiTexture(texture);
   registeredBackings_.erase(texture);
 }

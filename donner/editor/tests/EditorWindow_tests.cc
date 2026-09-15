@@ -20,13 +20,7 @@
 #include <string_view>
 #include <thread>
 
-#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
-#include "donner/editor/gui/UiTextureRegistry.h"
-#include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-
 #if defined(DONNER_EDITOR_WGPU)
-#include "backends/imgui_impl_wgpu.h"
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/RunfileGate.h"
@@ -42,12 +36,16 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
+#include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/StrokeParams.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #endif

@@ -2246,8 +2246,6 @@ donner_cc_library(
     ],
 )
 
-donner_package()
-
 donner_cc_test(
     name = "filter_compositing_parity_tests_impl",
     srcs = ["tests/FilterCompositingParity_tests.cc"],
@@ -2325,3 +2323,5 @@ donner_cc_library(
         ":ui_draw_validation",
     ],
 )
+
+donner_package()

@@ -545,8 +545,6 @@ donner_cc_test(
     ],
 )
 
-donner_package()
-
 donner_cc_test(
     name = "metal_ui_renderer_tests",
     srcs = ["MetalUiRenderer_tests.cc"],
@@ -564,3 +562,5 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_package()

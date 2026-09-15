@@ -16,6 +16,10 @@ namespace wgpu {
 class Texture;
 }  // namespace wgpu
 
+namespace donner::geode {
+class GeodeWgpuAdapterDevice;
+}  // namespace donner::geode
+
 namespace donner::editor {
 
 /**
@@ -30,6 +34,20 @@ struct UiTextureBacking {
   /// View the registration samples.
   gpu::TextureView view;
 };
+
+/**
+ * Publishes the device a backend texture is imported into, which the embedder that owns the
+ * backend sets alongside the UI renderer and clears with it.
+ *
+ * Importing is specific to the transition adapter, and the runtime interface cannot be asked at
+ * run time which backend is behind it: this build has no RTTI, so a cast from the renderer's
+ * device would be unchecked. While this is unset, or names a device other than the one the UI is
+ * drawn on, a texture that is not already a runtime texture on the UI device cannot be registered
+ * and registration fails closed instead.
+ *
+ * @param device Device to import through, or null to clear.
+ */
+void SetUiTextureImportDevice(geode::GeodeWgpuAdapterDevice* device);
 
 /**
  * True when a UI renderer is installed, so a texture registered now will have an identifier draw

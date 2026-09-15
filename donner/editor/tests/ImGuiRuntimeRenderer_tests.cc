@@ -285,5 +285,112 @@ TEST_F(ImGuiRuntimeRendererTest, ResettingRendererStateRebuildsTextureBindings) 
   EXPECT_THAT(afterReset.find("createBindGroup", createdBefore + 1), Not(Eq(std::string::npos)));
 }
 
+TEST_F(ImGuiRuntimeRendererTest, DestroyingAnInstalledRendererLeavesNothingPublished) {
+  ImGuiContext* context = ImGui::CreateContext();
+  ImGui::SetCurrentContext(context);
+  {
+    auto created = ImGuiRuntimeRenderer::Create(device_, registry_, gpu::TextureFormat::RGBA8Unorm);
+    ASSERT_THAT(created, gpu::HasResult());
+    const std::unique_ptr<ImGuiRuntimeRenderer> installed = std::move(created).result();
+    installed->install();
+    EXPECT_THAT(CurrentImGuiRuntimeRenderer(), Eq(installed.get()));
+    EXPECT_THAT(CurrentUiTextureRegistry(), Eq(&registry_));
+  }
+
+  // A renderer abandoned while published, which is what a failed font atlas upload does, would
+  // leave both texture producers resolving registrations through freed memory.
+  EXPECT_THAT(CurrentImGuiRuntimeRenderer(), testing::IsNull());
+  EXPECT_THAT(CurrentUiTextureRegistry(), testing::IsNull());
+  ImGui::DestroyContext(context);
+}
+
+TEST_F(ImGuiRuntimeRendererTest, ARetiredRegistrationsBindingIsDroppedAfterItsFrames) {
+  const std::unique_ptr<tests::UiSceneDrawLists> scene =
+      tests::BuildUiScene(premultiplied_, straight_);
+  ASSERT_THAT(recordFrame(scene->drawData), gpu::IsOk());
+  ASSERT_THAT(renderer_->cachedBindingCount(), Eq(2u));
+
+  ASSERT_THAT(registry_.retire(premultiplied_), gpu::IsOk());
+  for (uint32_t frame = 1; frame < registry_.retirementFrames(); ++frame) {
+    EXPECT_THAT(renderer_->advanceFrame(), testing::IsEmpty());
+    EXPECT_THAT(renderer_->cachedBindingCount(), Eq(2u));
+  }
+
+  // The cache and the device bind group it holds must not outlive the registration they were
+  // built for, or both grow for every tile and thumbnail the session ever draws.
+  EXPECT_THAT(renderer_->advanceFrame(), testing::ElementsAre(premultiplied_));
+  EXPECT_THAT(renderer_->cachedBindingCount(), Eq(1u));
+}
+
+TEST_F(ImGuiRuntimeRendererTest, CommandOffsetsAreAddedToTheirListsRange) {
+  std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(straight_, straight_);
+  // Give the second list a second quad and draw only that one, through the command's own offsets.
+  ImDrawList& list = *scene->lists[1];
+  const std::array<ImDrawVert, 4> extra =
+      tests::UiSceneQuadVertices(0.0f, 0.0f, 1.0f, 1.0f, IM_COL32_WHITE);
+  const std::array<ImDrawIdx, 6> extraIndices = tests::UiSceneQuadIndices();
+  const int baseVertices = list.VtxBuffer.Size;
+  const int baseIndices = list.IdxBuffer.Size;
+  list.VtxBuffer.resize(baseVertices + 4);
+  std::memcpy(list.VtxBuffer.Data + baseVertices, extra.data(), sizeof(extra));
+  list.IdxBuffer.resize(baseIndices + 6);
+  std::memcpy(list.IdxBuffer.Data + baseIndices, extraIndices.data(), sizeof(extraIndices));
+  ImDrawCmd offsetCommand = list.CmdBuffer[0];
+  offsetCommand.VtxOffset = static_cast<unsigned int>(baseVertices);
+  offsetCommand.IdxOffset = static_cast<unsigned int>(baseIndices);
+  list.CmdBuffer.push_back(offsetCommand);
+  scene->drawData.TotalVtxCount += 4;
+  scene->drawData.TotalIdxCount += 6;
+
+  ASSERT_THAT(recordFrame(scene->drawData), gpu::IsOk());
+
+  // The second list starts at vertex 4 / index 6, so its offset command draws from 8 / 12.
+  EXPECT_THAT(device_.serialize(),
+              HasSubstr("drawIndexed indexCount=6 instanceCount=1 firstIndex=12 baseVertex=8"));
+}
+
+TEST_F(ImGuiRuntimeRendererTest, ABaseVertexOutsideTheFrameIsRefused) {
+  std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(straight_, straight_);
+  scene->lists[0]->CmdBuffer[0].VtxOffset = 4096;
+
+  EXPECT_THAT(recordFrame(scene->drawData),
+              gpu::IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("base vertex")));
+}
+
+TEST_F(ImGuiRuntimeRendererTest, AnOddIndexCountIsPaddedToTheUploadAlignment) {
+  std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(straight_, straight_);
+  // One extra index makes the payload an odd number of 2-byte indices, which is two bytes short
+  // of the four a buffer upload must be a multiple of.
+  ImDrawList& list = *scene->lists[1];
+  list.IdxBuffer.resize(list.IdxBuffer.Size + 1);
+  list.IdxBuffer.Data[list.IdxBuffer.Size - 1] = 0;
+  scene->drawData.TotalIdxCount += 1;
+
+  ASSERT_THAT(recordFrame(scene->drawData), gpu::IsOk());
+  EXPECT_THAT(renderer_->indexCapacityBytes() % 4u, Eq(0u));
+}
+
+TEST_F(ImGuiRuntimeRendererTest, TheFontAtlasIsUploadedWithAnAlignedRowStride) {
+  ImGuiContext* context = ImGui::CreateContext();
+  ImGui::SetCurrentContext(context);
+  ImFontAtlas atlas;
+  atlas.AddFontDefault();
+
+  ASSERT_THAT(renderer_->buildFontAtlas(atlas), gpu::IsOk());
+  EXPECT_THAT(renderer_->fontAtlasTexture().isValid(), Eq(true));
+
+  // An atlas width is not guaranteed to make width*4 a multiple of 256, so the rows are repacked;
+  // the recorded stride is what the upload contract requires.
+  const std::string recording = device_.serialize();
+  const size_t writeAt = recording.find("writeTexture");
+  ASSERT_THAT(writeAt, Not(Eq(std::string::npos)));
+  const size_t strideAt = recording.find("bytesPerRow=", writeAt);
+  ASSERT_THAT(strideAt, Not(Eq(std::string::npos)));
+  const uint32_t stride = static_cast<uint32_t>(
+      std::stoul(recording.substr(strideAt + std::string("bytesPerRow=").size())));
+  EXPECT_THAT(stride % 256u, Eq(0u));
+  ImGui::DestroyContext(context);
+}
+
 }  // namespace
 }  // namespace donner::editor

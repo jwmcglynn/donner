@@ -92,10 +92,21 @@ public:
                      const gpu::Extent2d& targetSizePx);
 
   /**
+   * Advances one presentation frame: releases the registrations whose retirement frames have
+   * passed and drops the bind group cached for each, so a cache entry and its device bind group
+   * do not outlive the registration they were built for. Returns the released identifiers so the
+   * caller can drop whatever backing it held for them.
+   */
+  std::vector<UiTextureId> advanceFrame();
+
+  /**
    * Drops the cached per-texture bind groups and the recorded pipeline selection, so the next
    * \ref render rebinds from scratch. The buffers and their capacity are retained.
    */
   void resetRendererState();
+
+  /// Number of bind groups currently cached, one per registration drawn since the last reset.
+  size_t cachedBindingCount() const { return textureBindings_.size(); }
 
   /**
    * Publishes this renderer on the current ImGui context, so UI code that owns a texture can
@@ -131,10 +142,10 @@ public:
   uint64_t indexCapacityBytes() const { return indexCapacityBytes_; }
 
 private:
-  /// One cached bind group and the view identity it was built for.
+  /// One cached bind group and the registration it was built for.
   struct TextureBinding {
-    gpu::ResourceIdentity viewIdentity;  //!< View the group samples.
-    gpu::BindGroup bindGroup;            //!< Group holding the uniform, sampler and that view.
+    UiTextureId id;            //!< Registration the group samples.
+    gpu::BindGroup bindGroup;  //!< Group holding the uniform, sampler and that view.
   };
 
   /// Where each draw list's geometry starts within the frame's combined buffers.
@@ -209,8 +220,10 @@ private:
                              uint64_t maxBytes, gpu::BufferUsage usage, const char* label);
 
   /// Returns the bind group sampling \p binding's view, creating and caching it on first use.
+  /// The cache is keyed by \p id so \ref advanceFrame can drop it with its registration.
+  /// @param id Registration the binding was resolved from.
   /// @param binding Validated registration to bind.
-  gpu::Result<const gpu::BindGroup*> bindGroupFor(const UiTextureBinding& binding);
+  gpu::Result<const gpu::BindGroup*> bindGroupFor(UiTextureId id, const UiTextureBinding& binding);
 
   /// Writes the projection that maps logical UI coordinates to clip space.
   /// @param drawData Draw data whose display rectangle defines the projection.
@@ -231,6 +244,9 @@ private:
   gpu::Buffer indexBuffer_;
   uint64_t vertexCapacityBytes_ = 0;
   uint64_t indexCapacityBytes_ = 0;
+  /// Geometry the frame being recorded uploaded, so a draw range that leaves it is refused.
+  uint32_t frameVertexCount_ = 0;
+  uint32_t frameIndexCount_ = 0;
 
   gpu::Texture fontAtlasTextureResource_;
   gpu::TextureView fontAtlasView_;

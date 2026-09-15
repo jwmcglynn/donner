@@ -95,6 +95,7 @@ donner_cc_library(
     ] + select({
         "//donner/editor:wasm_geode_enabled": [
             ":imgui_runtime_renderer",
+            ":ui_texture_registration",
             ":ui_texture_registry",
             "//donner/gpu",
             "//donner/svg/renderer/geode:geode_device",
@@ -107,6 +108,7 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_backend_geode": [
             ":editor_wgpu_surface",
             ":imgui_runtime_renderer",
+            ":ui_texture_registration",
             ":ui_texture_registry",
             "//donner/gpu",
             "//donner/svg/renderer/geode:geode_device",
@@ -139,8 +141,6 @@ donner_cc_library(
     ],
 )
 
-donner_package()
-
 donner_cc_library(
     name = "imgui_runtime_renderer",
     srcs = ["ImGuiRuntimeRenderer.cc"],
@@ -159,3 +159,5 @@ donner_cc_library(
         "//conditions:default": [],
     }),
 )
+
+donner_package()

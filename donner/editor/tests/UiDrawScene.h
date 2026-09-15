@@ -67,6 +67,11 @@ inline std::array<ImDrawVert, 4> UiSceneQuadVertices(float left, float top, floa
            {{left, bottom}, {0.0f, 1.0f}, color}}};
 }
 
+/// Vertex tint of the straight-alpha quad. Deliberately asymmetric across the channels so a
+/// swapped channel order anywhere from the packed vertex color to the attachment fails the exact
+/// comparison instead of producing the same gray.
+inline constexpr ImU32 kUiSceneStraightTint = IM_COL32(255, 128, 64, 255);
+
 /// The six indices of a quad's two triangles.
 inline std::array<ImDrawIdx, 6> UiSceneQuadIndices() {
   return {0, 1, 2, 0, 2, 3};
@@ -97,8 +102,9 @@ inline std::unique_ptr<UiSceneDrawLists> BuildUiScene(UiTextureId premultipliedT
     const float left = quadIndex == 0 ? 0.0f : static_cast<float>(kUiSceneLogicalWidth) / 2.0f;
     const float right = quadIndex == 0 ? static_cast<float>(kUiSceneLogicalWidth) / 2.0f
                                        : static_cast<float>(kUiSceneLogicalWidth);
-    const std::array<ImDrawVert, 4> vertices = UiSceneQuadVertices(
-        left, 0.0f, right, static_cast<float>(kUiSceneLogicalHeight), IM_COL32_WHITE);
+    const ImU32 tint = quadIndex == 0 ? IM_COL32_WHITE : kUiSceneStraightTint;
+    const std::array<ImDrawVert, 4> vertices =
+        UiSceneQuadVertices(left, 0.0f, right, static_cast<float>(kUiSceneLogicalHeight), tint);
     const std::array<ImDrawIdx, 6> indices = UiSceneQuadIndices();
 
     list->VtxBuffer.resize(static_cast<int>(vertices.size()));
@@ -136,9 +142,10 @@ inline std::unique_ptr<UiSceneDrawLists> BuildUiScene(UiTextureId premultipliedT
  *
  * The sampled texel is 50% gray at 50% alpha, stored premultiplied. Through the premultiplied
  * entry its color reaches the attachment unscaled, so the left quad is mid gray. Through the
- * straight entry the same texel is scaled by its own alpha a second time at blend, so the right
- * quad is a quarter gray. The left quad's clip rectangle is in logical units and the scissor is in
- * device pixels, so at this device-pixel ratio it covers the top half of the attachment.
+ * straight entry the same texel is scaled by its own alpha a second time at blend and by the
+ * quad's asymmetric tint, giving three different channel values. The left quad's clip rectangle is
+ * in logical units and the scissor is in device pixels, so at this device-pixel ratio it covers
+ * the top half of the attachment.
  */
 inline svg::RendererBitmap ExpectedUiScenePixels() {
   svg::RendererBitmap expected;
@@ -154,7 +161,9 @@ inline svg::RendererBitmap ExpectedUiScenePixels() {
           color = {128, 128, 128, 255};
         }
       } else {
-        color = {64, 64, 64, 255};
+        // texel 128/255, tint (255,128,64)/255, then source-alpha blend over black:
+        // 0.50196*1.0*0.50196 -> 64, 0.50196*0.50196*0.50196 -> 32, 0.50196*0.25098*0.50196 -> 16.
+        color = {64, 32, 16, 255};
       }
       std::copy(color.begin(), color.end(),
                 expected.pixels.begin() + static_cast<size_t>(y) * expected.rowBytes +
