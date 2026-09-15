@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -287,6 +288,26 @@ public:
   /// why a headless surface needs one.
   /// @param surfaceSlotIndex Slot of a live surface of this device.
   void forceNextAcquireOutOfDateForTest(uint32_t surfaceSlotIndex);
+
+  /// Makes the next swapchain creation for the surface at \p surfaceSlotIndex ask for the fewest
+  /// images allowed, so a rebuild shrinks its acquisition ring. Test seam.
+  /// @param surfaceSlotIndex Slot of a live surface of this device.
+  void forceMinimumImageCountOnceForTest(uint32_t surfaceSlotIndex);
+
+  /// What a surface's acquisition bookkeeping looks like from outside, for the contracts whose
+  /// only other symptom is timing dependent.
+  struct SurfaceAcquisitionForTest {
+    bool live = false;             //!< Whether that slot holds a surface at all.
+    bool owesAcquireWait = false;  //!< Whether it still owes its frame's acquisition wait.
+    size_t frameRingSlot = 0;      //!< Ring slot the frame it holds was acquired on.
+    std::optional<size_t> lastFencedRingSlot;  //!< Ring slot its last handover fenced.
+    size_t ringSize = 0;                       //!< Slots in its acquisition ring.
+  };
+
+  /// Reads the acquisition bookkeeping of the surface at \p surfaceSlotIndex. Test accessor.
+  /// @param surfaceSlotIndex Slot of a surface of this device.
+  [[nodiscard]] SurfaceAcquisitionForTest surfaceAcquisitionForTest(
+      uint32_t surfaceSlotIndex) const;
 
   /// First latched Vulkan failure observed during submission, polling, or waiting on fences
   /// (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.

@@ -3752,6 +3752,23 @@ void VulkanDevice::forceNextAcquireOutOfDateForTest(uint32_t surfaceSlotIndex) {
   }
 }
 
+void VulkanDevice::forceMinimumImageCountOnceForTest(uint32_t surfaceSlotIndex) {
+  if (VulkanSwapchain* surface = impl_->surfaceAt(surfaceSlotIndex); surface != nullptr) {
+    surface->forceMinimumImageCountOnceForTest();
+  }
+}
+
+VulkanDevice::SurfaceAcquisitionForTest VulkanDevice::surfaceAcquisitionForTest(
+    uint32_t surfaceSlotIndex) const {
+  const VulkanSwapchain* surface = impl_->surfaceAt(surfaceSlotIndex);
+  if (surface == nullptr) {
+    return SurfaceAcquisitionForTest{};
+  }
+  return SurfaceAcquisitionForTest{
+      true, surface->owesAcquireWaitForTest(), surface->frameRingSlotForTest(),
+      surface->lastFencedRingSlotForTest(), surface->acquireRingSizeForTest()};
+}
+
 void* VulkanDevice::nativeInstance() const {
   return impl_->presentationEnabled ? impl_->instance : nullptr;
 }

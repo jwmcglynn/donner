@@ -167,6 +167,34 @@ public:
   /// an out-of-date acquisition does.
   void forceNextAcquireOutOfDateForTest() { forceNextAcquireOutOfDate_ = true; }
 
+  /// Makes the next swapchain creation ask for the fewest images this surface allows, so a
+  /// rebuild produces a smaller acquisition ring than the one it replaces. Test seam: a headless
+  /// surface otherwise rebuilds to the same size every time, which is the one shape in which
+  /// reusing a slot computed against the old ring cannot go out of bounds.
+  void forceMinimumImageCountOnceForTest() { forceMinimumImageCount_ = true; }
+
+  /// Whether this surface still owes the acquisition wait for the frame it holds.
+  ///
+  /// Test accessor. Which submission takes that wait is the contract, and a submission that took
+  /// one it had no business taking leaves no other trace on a single in-order queue.
+  [[nodiscard]] bool owesAcquireWaitForTest() const {
+    return pendingAcquireWait_ != VK_NULL_HANDLE;
+  }
+
+  /// The acquisition-ring slot the frame currently held was acquired on. Test accessor.
+  [[nodiscard]] size_t frameRingSlotForTest() const { return frameRingSlot_; }
+
+  /// The ring slot the most recent frame handover filed its fence under, or nothing when none
+  /// has. Test accessor: that slot has to be the one whose semaphore the frame used, and the two
+  /// drifting apart has only a timing-dependent symptom.
+  [[nodiscard]] const std::optional<size_t>& lastFencedRingSlotForTest() const {
+    return lastFencedRingSlot_;
+  }
+
+  /// Number of slots in the acquisition ring. Test accessor, for a test that has to land on a
+  /// particular slot without knowing how many images the driver gave this swapchain.
+  [[nodiscard]] size_t acquireRingSizeForTest() const { return acquireSemaphores_.size(); }
+
   /// Configuration the swapchain was created with, or nothing before it is configured.
   const std::optional<SurfaceConfiguration>& configuration() const { return configuration_; }
 
@@ -269,6 +297,8 @@ private:
   bool hasFrame_ = false;                            //!< Whether a frame is currently held.
   VkSemaphore pendingAcquireWait_ = VK_NULL_HANDLE;  //!< Acquire semaphore nothing has taken yet.
   bool forceNextAcquireOutOfDate_ = false;           //!< One-shot injected out-of-date acquisition.
+  bool forceMinimumImageCount_ = false;              //!< One-shot smallest-allowed image count.
+  std::optional<size_t> lastFencedRingSlot_;         //!< Ring slot the last handover fenced.
   /// True once a frame was discarded rather than presented: Vulkan reclaims it only when the
   /// swapchain that owns it is replaced.
   bool needsRecreation_ = false;
