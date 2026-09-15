@@ -804,6 +804,34 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagUpdatesAttributeSet) {
                                                           XMLMutation::Kind::AttributeSet));
 }
 
+TEST_F(XMLDocumentTests, OpeningTagPreflightRejectsZeroTreeBudgetsTransactionally) {
+  for (bool zeroNodeBudget : {true, false}) {
+    SCOPED_TRACE(zeroNodeBudget ? "zero nodes" : "zero depth");
+    XMLDocument doc = ParseDocument("<svg><rect/></svg>");
+    XMLNode rect = *doc.root().firstChild()->firstChild();
+    doc.setSourceEditTreeLimits(zeroNodeBudget ? 0 : 10, zeroNodeBudget ? 10 : 0);
+    const std::string sourceBefore(doc.source());
+    const std::uint64_t versionBefore = doc.sourceVersion();
+    const std::optional<SourceRange> locationBefore = rect.getNodeLocation();
+    const std::size_t insertion = doc.source().find("/>");
+    ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(insertion), FileOffset::Offset(insertion)},
+        .replacement = R"( fill="red")",
+        .sourceVersion = versionBefore,
+    });
+    EXPECT_FALSE(result.applied);
+    EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+    EXPECT_THAT(result,
+                DiagnosticReasonContains(zeroNodeBudget ? "tree-node limit" : "tree-depth limit"));
+    EXPECT_THAT(result.sourceDeltas, IsEmpty());
+    EXPECT_THAT(result.mutations, IsEmpty());
+    EXPECT_EQ(doc.source(), sourceBefore);
+    EXPECT_EQ(doc.sourceVersion(), versionBefore);
+    EXPECT_THAT(rect.getNodeLocation(), Eq(locationBefore));
+    EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
+  }
+}
+
 TEST_F(XMLDocumentTests, ParsedLimitsRejectRepeatedOpeningTagAttributeGrowthTransactionally) {
   XMLParser::Options options;
   options.maxElements = 2;
