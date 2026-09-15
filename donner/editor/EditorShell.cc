@@ -852,6 +852,7 @@ ToolbarPaintSlotState ToolbarPaintSlotStateForPaintServer(const svg::PaintServer
     state.isNone = false;
     state.isCustom = true;
     state.reference = ToolbarPaintReferenceStateFor(document, source, ref.reference);
+    state.reference->fallback = ref.fallback;
     if (ref.fallback.has_value()) {
       state.color = ref.fallback->resolve(currentColor, 1.0f);
     }
@@ -3456,8 +3457,9 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       if (toolbarPaintSnapshot_ != nullptr) {
         std::swap(toolbarPaintSnapshot_->fill, toolbarPaintSnapshot_->stroke);
       }
-      bool changed = app_.setStylePropertyOnSelection("fill", strokeStr);
-      changed = app_.setStylePropertyOnSelection("stroke", fillStr) || changed;
+      const std::pair<std::string_view, std::string_view> paints[] = {{"fill", strokeStr},
+                                                                      {"stroke", fillStr}};
+      const bool changed = app_.setStylePropertiesOnSelection(paints);
       if (changed) {
         flushQueuedMutationAndRefreshOverlay();
       } else {

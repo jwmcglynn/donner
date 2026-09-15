@@ -659,6 +659,40 @@ TEST(EditorAppTest, SetStylePropertyOnSelectionSkipsUnparseableDeclarations) {
   EXPECT_EQ(app.document().queue().size(), 0u);
 }
 
+TEST(EditorAppTest, RelatedStylePropertiesUseOneQueuedWriteAndPreserveOtherDeclarations) {
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="target"
+      style="opacity: 0.5; fill: red; stroke: blue"/></svg>)"),
+            true);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  app.setSelection(*target);
+  const std::pair<std::string_view, std::string_view> paints[] = {
+      {"fill", "blue"}, {"stroke", "url(#missing) currentColor"}};
+  ASSERT_EQ(app.setStylePropertiesOnSelection(paints), true);
+  EXPECT_EQ(app.document().queue().size(), 1u);
+  ASSERT_EQ(app.flushFrame(), true);
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(
+                  testing::Eq("opacity: 0.5; fill: blue; stroke: url(#missing) currentColor")));
+}
+
+TEST(EditorAppTest, RelatedStylePropertiesRejectInvalidBatchBeforeQueueing) {
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(kTrivialSvg), true);
+  const std::pair<std::string_view, std::string_view> paints[] = {{"fill", "blue"},
+                                                                  {"", "invalid"}};
+  EXPECT_EQ(app.setStylePropertiesOnSelection(paints), false);
+  auto target = app.document().document().querySelector("#r1");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  app.setSelection(*target);
+  const std::string sourceBefore(app.document().document().source());
+  EXPECT_EQ(app.setStylePropertiesOnSelection({}), false);
+  EXPECT_EQ(app.setStylePropertiesOnSelection(paints), false);
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+}
+
 TEST(EditorAppTest, SetStrokeWidthOnSelectionClampsNegativeValues) {
   constexpr std::string_view kStyledSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">

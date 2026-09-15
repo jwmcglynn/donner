@@ -3700,6 +3700,7 @@ TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTool
 struct PaintSwapFallbackCase {
   const char* name;
   const char* value;
+  const char* reference = "#missing";
 };
 
 class PaintSwapFallbackTest : public testing::TestWithParam<PaintSwapFallbackCase> {};
@@ -3708,11 +3709,15 @@ TEST_P(PaintSwapFallbackTest, ToolbarSwapPreservesPaintAndSourceRoundTrip) {
   const PaintSwapFallbackCase testCase = GetParam();
   const auto sourceFor = [](std::string_view fill, std::string_view stroke) {
     return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" )") +
-           R"(color="#336699"><rect id="target" x="12" y="12" width="40" height="40" )" +
+           R"(color="#336699"><defs><linearGradient id="paint">)" +
+           R"(<stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>)" +
+           R"(</linearGradient></defs><rect id="target" x="12" y="12" width="40" height="40" )" +
            R"(stroke-width="4" fill=")" + std::string(fill) + R"(" stroke=")" +
            std::string(stroke) + R"("/></svg>)";
   };
-  const std::string referencedPaint = std::string("url(#missing) ") + testCase.value;
+  const std::string referencedPaint =
+      std::string("url(") + testCase.reference + ")" +
+      (std::string_view(testCase.value).empty() ? "" : std::string(" ") + testCase.value);
   const std::string initialSource = sourceFor(referencedPaint, "blue");
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -3769,7 +3774,8 @@ INSTANTIATE_TEST_SUITE_P(UnresolvedPaint, PaintSwapFallbackTest,
                          testing::Values(PaintSwapFallbackCase{"red", "red"},
                                          PaintSwapFallbackCase{"alpha", "#33669980"},
                                          PaintSwapFallbackCase{"currentColor", "currentColor"},
-                                         PaintSwapFallbackCase{"none", "none"}),
+                                         PaintSwapFallbackCase{"none", "none"},
+                                         PaintSwapFallbackCase{"referenceOnly", "", "#paint"}),
                          [](const testing::TestParamInfo<PaintSwapFallbackCase>& info) {
                            return info.param.name;
                          });
