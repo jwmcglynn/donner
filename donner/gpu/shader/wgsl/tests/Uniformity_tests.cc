@@ -161,6 +161,125 @@ fn demote()->vec2f{discard;return vec2f(0);}
     {"partial_array",
      R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{var v:array<f32,2>;v[1u]=p.x;if(v[0u]>0.0){return textureSample(t,s,vec2f(0.5));}return vec4f(0);})",
      ErrorCode::NonUniformControl},
+    {"derivative_before_pointer_loops",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct Cell{value:f32,hit:bool,}
+fn fill(cell:ptr<function,Cell>,x:f32){
+  var i=0u;
+  loop{if(i==4u){break;}(*cell).value+=x;i+=1u;}
+  (*cell).hit=true;
+}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  let d=fwidth(p.x);var cell:Cell;fill(&cell,p.y);
+  var j=0u;while(j<4u){cell.value+=1.0;j+=1u;}
+  return vec4f(d+cell.value);
+}
+)",
+     ErrorCode::None},
+    {"pointer_write_branches_control",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct Cell{value:f32,hit:bool,}
+fn fill(cell:ptr<function,Cell>,x:f32){(*cell).value=x;}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var cell:Cell;fill(&cell,p.x);
+  if(cell.value>0.0){return textureSample(t,s,vec2f(0.5));}
+  return vec4f(0);
+}
+)",
+     ErrorCode::NonUniformControl},
+    {"uniform_pointer_write_stays_uniform",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct Cell{value:f32,hit:bool,}
+struct U{flags:vec4u,} @group(0) @binding(2)var<uniform>u:U;
+fn fill(cell:ptr<function,Cell>,x:f32){(*cell).value=x;}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var cell:Cell;fill(&cell,f32(u.flags.x));
+  if(cell.value>0.0){return textureSample(t,s,vec2f(0.5));}
+  return vec4f(0);
+}
+)",
+     ErrorCode::None},
+    {"while_early_return_then_sample",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct Cell{value:f32,hit:bool,}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var i=0u;
+  while(i<4u){if(p.x>f32(i)){return vec4f(0);}i+=1u;}
+  return textureSample(t,s,vec2f(0.5));
+}
+)",
+     ErrorCode::NonUniformControl},
+    {"loop_break_reconverges",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct Cell{value:f32,hit:bool,}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var i=0u;
+  loop{if(p.x>f32(i)){break;}i+=1u;if(i==4u){break;}}
+  return textureSample(t,s,vec2f(0.5));
+}
+)",
+     ErrorCode::None},
+    {"loop_carried_sample_then_break",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct Cell{value:f32,hit:bool,}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var c=vec4f(0);var i=0u;
+  loop{c=textureSample(t,s,vec2f(0.5));if(p.x>f32(i)){break;}i+=1u;if(i==4u){break;}}
+  return c;
+}
+)",
+     ErrorCode::NonUniformControl},
+    {"loop_carried_pointer_write",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+fn spin(p:ptr<function,f32>,seed:f32)->f32{
+  var i=0u;
+  loop{
+    if((*p)>0.5){let d=fwidth(seed);}
+    *p=seed;
+    i+=1u;
+    if(i==2u){break;}
+  }
+  return *p;
+}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var x=0.0;
+  return vec4f(spin(&x,p.x));
+}
+)",
+     ErrorCode::NonUniformControl},
+    {"escaped_texture_load_matches_inlined",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+fn fill(c:ptr<function,f32>){*c=textureLoad(t,vec2i(0,0),0).x;}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var cell=0.0;
+  fill(&cell);
+  if(cell>0.0){return textureSample(t,s,vec2f(0.5));}
+  return vec4f(0);
+}
+)",
+     ErrorCode::NonUniformControl},
+    {"inlined_texture_load_control",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var cell=0.0;
+  cell=textureLoad(t,vec2i(0,0),0).x;
+  if(cell>0.0){return textureSample(t,s,vec2f(0.5));}
+  return vec4f(0);
+}
+)",
+     ErrorCode::NonUniformControl},
+    {"escaped_uniform_write_stays_uniform",
+     R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;
+struct U{flags:vec4u,} @group(0) @binding(2)var<uniform>u:U;
+fn fill(c:ptr<function,f32>){*c=f32(u.flags.x);}
+@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{
+  var cell=0.0;
+  fill(&cell);
+  if(cell>0.0){return textureSample(t,s,vec2f(0.5));}
+  return vec4f(0);
+}
+)",
+     ErrorCode::None},
     {"unconditional_reset",
      R"(@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{var flag=p.x>0.0;flag=false;if(flag){return textureSample(t,s,vec2f(0.5));}return vec4f(0);})",
      ErrorCode::None},

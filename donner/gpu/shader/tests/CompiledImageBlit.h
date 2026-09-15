@@ -17,4 +17,8 @@ const CompiledShaderView& LoopSwitchAllProjections();
 const CompiledShaderView& VectorMixAllProjections();
 /// Returns zero, scalar-member and vector-member structure construction.
 const CompiledShaderView& StructConstructionAllProjections();
+/// Returns function-address-space pointer parameters over a bool-bearing value structure.
+const CompiledShaderView& PointerStructAllProjections();
+/// Returns `loop`/`while` control flow with integer and float compound assignments.
+const CompiledShaderView& LoopWhileAllProjections();
 }  // namespace donner::gpu::shader::tests

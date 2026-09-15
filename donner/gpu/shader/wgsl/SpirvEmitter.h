@@ -273,6 +273,7 @@ private:
   constexpr uint32_t id() { return nextId_++; }
 
   constexpr uint32_t typeId(Type type) {
+    if (type.kind == TypeKind::Pointer) return pointerType(typeId(type.elementType()), 7);
     for (uint32_t i = 0; i < typeCount_; ++i)
       if (types_[i].type == type) return types_[i].id;
     if (typeCount_ == types_.size()) {
@@ -338,6 +339,8 @@ private:
     declarations_.word(value);
     for (uint16_t i = 0; i < structure.memberCount; ++i) {
       declarations_.word(members[i]);
+      // A structure reaching a bool has no defined buffer layout, so it carries no byte offsets.
+      if (!structure.hostShareable) continue;
       annotations_.instruction(72, value, i, 35,
                                module_.structMembers[structure.firstMember + i].offset);
       const Type memberType = module_.structMembers[structure.firstMember + i].type;
@@ -646,6 +649,7 @@ private:
     for (uint16_t depth = 0; depth < ModuleLimits::kMaxNesting; ++depth) {
       if (expression >= module_.expressionCount) return false;
       const Expression& node = module_.expressions[expression];
+      if (node.kind == ExpressionKind::Deref) return true;
       if (node.kind == ExpressionKind::Symbol && node.payload < module_.symbolCount) {
         const auto& symbol = module_.symbols[node.payload];
         return localStorage(symbol) || symbol.kind == SymbolKind::Binding;
@@ -677,6 +681,7 @@ private:
         return symbolValues_[node.payload];
       }
     }
+    if (node.kind == ExpressionKind::Deref) return pointerValue(node.operands[0], storage);
     if (node.kind == ExpressionKind::Index) return indexedPointer(node, storage);
     if (node.kind == ExpressionKind::Member && node.operandCount == 1) {
       const auto& base = module_.expressions[node.operands[0]];
@@ -702,10 +707,35 @@ private:
     return 0;
   }
 
+  /// Returns the SPIR-V pointer produced by a pointer-typed expression.
+  /// @param expression `&local` or a pointer parameter reference.
+  /// @param storage Receives the SPIR-V storage class of the result.
+  constexpr uint32_t pointerValue(ArenaId expression, uint32_t& storage) {
+    if (expression >= module_.expressionCount) {
+      fail(SpirvEmitError::InvalidNode);
+      return 0;
+    }
+    const Expression& node = module_.expressions[expression];
+    if (node.kind == ExpressionKind::AddressOf && node.operandCount == 1) {
+      const uint32_t pointer = lvalue(node.operands[0], storage);
+      if (storage != 7) fail(SpirvEmitError::InvalidNode, node.span);
+      return pointer;
+    }
+    if (node.kind == ExpressionKind::Symbol && node.payload < module_.symbolCount &&
+        module_.symbols[node.payload].type.kind == TypeKind::Pointer) {
+      storage = 7;
+      return symbolValues_[node.payload];
+    }
+    fail(SpirvEmitError::InvalidNode, node.span);
+    return 0;
+  }
+
   constexpr uint32_t emitExpression(ArenaId index);
   constexpr uint32_t arrayPointer(ArenaId expression, uint32_t& storage, SourceSpan span);
   constexpr uint32_t indexedPointer(const Expression& node, uint32_t& storage);
   constexpr uint32_t emitValue(const Expression& node);
+  constexpr uint32_t emitPointerOperator(const Expression& node);
+  constexpr uint32_t emitUnary(const Expression& node);
   constexpr uint32_t emitAccess(ArenaId index, const Expression& node);
   constexpr uint32_t emitSymbol(const Expression& node);
   constexpr uint32_t emitSwizzle(const Expression& node);
@@ -724,6 +754,8 @@ private:
       SourceSpan span);
   constexpr void emitSwitch(const Statement& node);
   constexpr void emitFor(const Statement& node);
+  constexpr void emitWhile(const Statement& node);
+  constexpr void emitLoop(const Statement& node);
   constexpr uint32_t convert(Type from, Type to, uint32_t operand);
   constexpr uint32_t emitBinary(const Expression& expression);
   constexpr uint32_t emitMix(const Expression& node, std::array<uint32_t, 4> args);
@@ -899,16 +931,31 @@ constexpr uint32_t Emitter::emitAccess(ArenaId index, const Expression& node) {
   return operation(61, node.type, lvalue(index, storage));
 }
 
+constexpr uint32_t Emitter::emitPointerOperator(const Expression& node) {
+  uint32_t storage = 0;
+  if (node.kind == ExpressionKind::Deref)
+    return operation(61, node.type, pointerValue(node.operands[0], storage));
+  const uint32_t pointer = lvalue(node.operands[0], storage);
+  if (storage != 7) {
+    fail(SpirvEmitError::InvalidNode, node.span);
+    return 0;
+  }
+  return pointer;
+}
+
+constexpr uint32_t Emitter::emitUnary(const Expression& node) {
+  const uint32_t operand = emitExpression(node.operands[0]);
+  if (static_cast<UnaryOp>(node.payload) == UnaryOp::Not) return operation(168, node.type, operand);
+  return operation(node.type.kind == TypeKind::F32 ? 127 : 126, node.type, operand);
+}
+
 constexpr uint32_t Emitter::emitValue(const Expression& node) {
   switch (node.kind) {
     default: break;
+    case ExpressionKind::AddressOf:
+    case ExpressionKind::Deref: return emitPointerOperator(node);
     case ExpressionKind::Swizzle: return emitSwizzle(node);
-    case ExpressionKind::Unary: {
-      const uint32_t operand = emitExpression(node.operands[0]);
-      const UnaryOp op = static_cast<UnaryOp>(node.payload);
-      if (op == UnaryOp::Not) return operation(168, node.type, operand);
-      return operation(node.type.kind == TypeKind::F32 ? 127 : 126, node.type, operand);
-    }
+    case ExpressionKind::Unary: return emitUnary(node);
     case ExpressionKind::Binary: return emitBinary(node);
     case ExpressionKind::Construct: return emitConstruct(node);
     case ExpressionKind::Convert: {
@@ -1396,6 +1443,47 @@ constexpr void Emitter::emitFor(const Statement& node) {
   label(merge);
 }
 
+constexpr void Emitter::emitWhile(const Statement& node) {
+  const uint32_t header = id(), conditionBlock = id(), body = id(), continuing = id(), merge = id();
+  branch(header);
+  label(header);
+  functions_.instruction(246, merge, continuing, 0);
+  branch(conditionBlock);
+  label(conditionBlock);
+  const uint32_t condition = emitExpression(node.expression);
+  functions_.instruction(250, condition, body, merge);
+  label(body);
+  const uint32_t outerBreak = breakTarget_, outerContinue = continueTarget_;
+  breakTarget_ = merge;
+  continueTarget_ = continuing;
+  emitBlock(node.firstBody);
+  breakTarget_ = outerBreak;
+  continueTarget_ = outerContinue;
+  branch(continuing);
+  label(continuing);
+  branch(header);
+  label(merge);
+}
+
+constexpr void Emitter::emitLoop(const Statement& node) {
+  const uint32_t header = id(), body = id(), continuing = id(), merge = id();
+  branch(header);
+  label(header);
+  functions_.instruction(246, merge, continuing, 0);
+  branch(body);
+  label(body);
+  const uint32_t outerBreak = breakTarget_, outerContinue = continueTarget_;
+  breakTarget_ = merge;
+  continueTarget_ = continuing;
+  emitBlock(node.firstBody);
+  breakTarget_ = outerBreak;
+  continueTarget_ = outerContinue;
+  branch(continuing);
+  label(continuing);
+  branch(header);
+  label(merge);
+}
+
 constexpr void Emitter::emitLoopExit(const Statement& node) {
   const uint32_t target = node.kind == StatementKind::Break ? breakTarget_ : continueTarget_;
   if (target == 0)
@@ -1426,6 +1514,9 @@ constexpr void Emitter::emitStatement(const Statement& node) {
     case StatementKind::Assign: emitAssignment(node); break;
     case StatementKind::If: emitIf(node); break;
     case StatementKind::For: emitFor(node); break;
+    case StatementKind::Call: emitExpression(node.expression); break;
+    case StatementKind::While: emitWhile(node); break;
+    case StatementKind::Loop: emitLoop(node); break;
     case StatementKind::Switch: emitSwitch(node); break;
     default: emitControlStatement(node); break;
     case StatementKind::TextureStore: {

@@ -482,6 +482,15 @@ TEST(SpirvValValidation, StructConstruction) {
                                  "StructConstruction.spv");
 }
 
+TEST(SpirvValValidation, PointerStruct) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::PointerStructAllProjections().spirv,
+                                 "PointerStruct.spv");
+}
+TEST(SpirvValValidation, LoopWhile) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::LoopWhileAllProjections().spirv,
+                                 "LoopWhile.spv");
+}
+
 TEST(SpirvValValidation, VectorMix) {
   ExpectWordsValidateForVulkan11(SpirvVal(), tests::VectorMixAllProjections().spirv,
                                  "VectorMix.spv");

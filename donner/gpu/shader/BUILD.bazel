@@ -137,7 +137,9 @@ donner_cc_library(
     ],
 )
 
-# Slug mask compilation uses a measured, bounded target-local evaluator budget.
+# Slug mask compilation uses a measured, bounded target-local evaluator budget. Its per-fragment
+# ray-event sorting needs about 2.45M Apple Clang evaluation steps, so it shares the 4,194,304
+# budget the other two Slug programs already use.
 donner_cc_library(
     name = "slug_mask_api",
     hdrs = ["programs/SlugMask.h"],
@@ -161,7 +163,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_mask_artifact",
     srcs = ["programs/SlugMask.cc"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = ["-fconstexpr-steps=4194304"],
     visibility = donner_internal_visibility(),
     deps = [
         ":slug_mask_api",
@@ -173,7 +175,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_mask_native_artifact",
     srcs = ["programs/SlugMaskNative.cc"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = ["-fconstexpr-steps=4194304"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -192,7 +194,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledSlugMask.cc"],
     hdrs = ["tests/CompiledSlugMask.h"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = ["-fconstexpr-steps=4194304"],
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",

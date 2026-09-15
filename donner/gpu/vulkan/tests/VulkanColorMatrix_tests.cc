@@ -727,6 +727,24 @@ TEST_F(VulkanColorMatrixTest, WgslStructConstruction) {
       {0.125f, 0.25f, 0.5f, 0.75f});
 }
 
+TEST_F(VulkanColorMatrixTest, WgslPointerStruct) {
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::PointerStructAllProjections(),
+                                   device_->shaderSourceKind(), "PointerStruct"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, {0.125f, 0.25f, 0.5f, 0.75f},
+      {2.125f, 3.25f, 5.5f, 7.75f});
+}
+
+TEST_F(VulkanColorMatrixTest, WgslLoopWhile) {
+  gpu::tests::CheckFloatTextureStorage(
+      *device_,
+      shader::MakeShaderDescriptor(shader::tests::LoopWhileAllProjections(),
+                                   device_->shaderSourceKind(), "LoopWhile"),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); }, {0.125f, 0.25f, 0.5f, 0.75f},
+      {0.875f, 1.5f, 2.75f, 4.0f});
+}
+
 TEST_F(VulkanColorMatrixTest, WgslVectorMix) {
   gpu::tests::CheckFloatTextureStorage(
       *device_,

@@ -53,6 +53,7 @@ enum class ErrorCode : uint8_t {
   NonUniformControl,
   UniformityLimit,
   InvalidStage,
+  InvalidPointer,
 };
 
 /// A fail-closed parser diagnostic.
@@ -108,6 +109,8 @@ enum class TokenKind : uint8_t {
   And,
   Or,
   Arrow,
+  PlusAssign,
+  MinusAssign,
 };
 
 struct Token {
@@ -125,8 +128,8 @@ inline constexpr PunctuationEntry kSingleCharacterPunctuation[] = {
     {'@', TokenKind::At},           {'(', TokenKind::LeftParen},  {')', TokenKind::RightParen},
     {'{', TokenKind::LeftBrace},    {'}', TokenKind::RightBrace}, {'[', TokenKind::LeftBracket},
     {']', TokenKind::RightBracket}, {',', TokenKind::Comma},      {':', TokenKind::Colon},
-    {';', TokenKind::Semicolon},    {'.', TokenKind::Dot},        {'+', TokenKind::Plus},
-    {'*', TokenKind::Star},         {'/', TokenKind::Slash},      {'%', TokenKind::Percent},
+    {';', TokenKind::Semicolon},    {'.', TokenKind::Dot},        {'*', TokenKind::Star},
+    {'/', TokenKind::Slash},        {'%', TokenKind::Percent},
 };
 
 inline constexpr std::string_view kReservedDeclarationNames[] = {
@@ -466,7 +469,10 @@ private:
     switch (ch) {
       case '<': return PunctuationSuffix('=', TokenKind::LessEqual, TokenKind::Less);
       case '>': return PunctuationSuffix('=', TokenKind::GreaterEqual, TokenKind::Greater);
-      case '-': return PunctuationSuffix('>', TokenKind::Arrow, TokenKind::Minus);
+      case '+': return PunctuationSuffix('=', TokenKind::PlusAssign, TokenKind::Plus);
+      case '-':
+        if (Peek('>')) return TokenKind::Arrow;
+        return PunctuationSuffix('=', TokenKind::MinusAssign, TokenKind::Minus);
       case '=': return PunctuationSuffix('=', TokenKind::Equal, TokenKind::Assign);
       case '!': return PunctuationSuffix('=', TokenKind::NotEqual, TokenKind::Not);
       case '&': return PunctuationSuffix('&', TokenKind::And, TokenKind::BitAnd);
@@ -756,6 +762,7 @@ private:
     const Type type = ParseType();
     Expect(TokenKind::Comma);
     if (!ValidateStructMember(*structure, name, type)) return;
+    if (!TypeHostShareable(type)) structure->hostShareable = false;
     uint32_t alignment = 0;
     uint32_t size = 0;
     if (!LayoutOf(type, &alignment, &size)) {
@@ -797,7 +804,23 @@ private:
       Fail(ErrorCode::UnsupportedConstruct, name.span);
       return false;
     }
+    if (type.kind == TypeKind::Pointer) {
+      Fail(ErrorCode::InvalidPointer, name.span);
+      return false;
+    }
     return true;
+  }
+
+  /// Returns whether a value type may be placed in a uniform or storage buffer.
+  ///
+  /// `bool` has no defined buffer representation, so a structure that reaches one is function-scope
+  /// only and is also emitted without explicit layout decorations.
+  /// @param type Resolved value type.
+  constexpr bool TypeHostShareable(Type type) const {
+    if (type.kind == TypeKind::Bool) return false;
+    if (type.kind == TypeKind::Array) return TypeHostShareable(type.elementType());
+    if (type.kind != TypeKind::Struct) return true;
+    return type.structId < module_.structCount && module_.structs[type.structId].hostShareable;
   }
 
   constexpr uint32_t RoundUp(uint32_t value, uint32_t alignment) const {
@@ -814,6 +837,7 @@ private:
     const Token name = ExpectIdentifier();
     if (Type scalar = ScalarType(name); scalar.kind != TypeKind::Void) return scalar;
     if (TextEquals(name.text, "array")) return ParseArrayType(name);
+    if (TextEquals(name.text, "ptr")) return ParsePointerType(name);
     if (TextEquals(name.text, "sampler")) return Type{TypeKind::Sampler};
     if (TextEquals(name.text, "texture_2d")) return ParseSampledTextureType();
     if (TextEquals(name.text, "texture_storage_2d")) return ParseStorageTextureType();
@@ -864,6 +888,49 @@ private:
     array.structId = element.structId;
     array.arrayCount = static_cast<uint16_t>(count);
     return array;
+  }
+
+  /// Returns whether a type may be the pointee of a `ptr<function, T>`.
+  /// @param type Resolved value type.
+  constexpr bool IsPointee(Type type) const {
+    return type.kind == TypeKind::Struct || ((type.isNumeric() || type.kind == TypeKind::Bool) &&
+                                             type.lanes >= 1 && type.lanes <= 4);
+  }
+
+  /// Returns a `ptr<function, T>` type, encoding the pointee in the element fields.
+  /// @param name The `ptr` token, used for the diagnostic span.
+  constexpr Type ParsePointerType(Token name) {
+    Expect(TokenKind::Less);
+    const Token addressSpace = ExpectIdentifier();
+    Expect(TokenKind::Comma);
+    const Type pointee = ParseType();
+    Token accessMode;
+    if (Match(TokenKind::Comma)) accessMode = ExpectIdentifier();
+    Expect(TokenKind::Greater);
+    if (!TextEquals(addressSpace.text, "function")) {
+      Fail(ErrorCode::InvalidPointer, addressSpace.span);
+      return {};
+    }
+    if (!accessMode.text.empty() && !TextEquals(accessMode.text, "read_write")) {
+      Fail(ErrorCode::InvalidPointer, accessMode.span);
+      return {};
+    }
+    if (!IsPointee(pointee)) {
+      Fail(ErrorCode::InvalidPointer, name.span);
+      return {};
+    }
+    return PointerTo(pointee);
+  }
+
+  /// Returns the function-address-space pointer type addressing p pointee.
+  /// @param pointee Scalar, vector or structure value type.
+  constexpr Type PointerTo(Type pointee) const {
+    Type result;
+    result.kind = TypeKind::Pointer;
+    result.elementKind = pointee.kind;
+    result.elementLanes = pointee.lanes;
+    result.structId = pointee.structId;
+    return result;
   }
 
   constexpr Type ParseSampledTextureType() {
@@ -954,6 +1021,10 @@ private:
     Expect(TokenKind::Colon);
     const Type type = ParseType();
     Expect(TokenKind::Semicolon);
+    if (!TypeHostShareable(type)) {
+      Fail(ErrorCode::InvalidLayout, name.span);
+      return;
+    }
     if (!BindingAttributesValid(attributes)) {
       Fail(ErrorCode::InvalidAttribute, begin);
       return;
@@ -1132,7 +1203,9 @@ private:
     const Type type = ParseType();
     if (function->stage == Stage::Compute && type.kind == TypeKind::Struct)
       Fail(ErrorCode::UnsupportedConstruct, name.span);
-    if (attributes.nonInterface() || !IsValueType(type) ||
+    if (type.kind == TypeKind::Pointer && function->stage != Stage::None)
+      Fail(ErrorCode::InvalidPointer, name.span);
+    if (attributes.nonInterface() || (!IsValueType(type) && type.kind != TypeKind::Pointer) ||
         (function->stage == Stage::None && attributes.interface().present()))
       Fail(ErrorCode::InvalidAttribute, name.span);
     const ArenaId symbol = AddSymbol(SymbolKind::Parameter, type, name, false);
@@ -1159,6 +1232,7 @@ private:
     if (attributes.nonInterface() ||
         (function->stage == Stage::None && attributes.interface().present()))
       Fail(ErrorCode::InvalidAttribute, name.span);
+    if (function->returnType.kind == TypeKind::Pointer) Fail(ErrorCode::InvalidPointer, name.span);
     if (function->returnType.kind != TypeKind::Void && !IsValueType(function->returnType))
       Fail(ErrorCode::UnsupportedConstruct, name.span);
     if (function->stage == Stage::Compute && function->returnType.kind != TypeKind::Void)
@@ -1369,6 +1443,12 @@ private:
     }
     if (MatchIdentifier("if")) return ParseIf(alwaysTerminates);
     if (MatchIdentifier("for")) return ParseFor();
+    if (MatchIdentifier("loop")) return ParseLoop();
+    if (MatchIdentifier("while")) return ParseWhile();
+    if (MatchIdentifier("continuing")) {
+      Fail(ErrorCode::InvalidLoop, token_.span);
+      return kInvalidArenaId;
+    }
     if (MatchIdentifier("switch")) return ParseSwitch(alwaysTerminates);
     if (MatchIdentifier("return")) return ParseReturnStatement(alwaysTerminates);
     if (MatchIdentifier("break") || MatchIdentifier("continue") || MatchIdentifier("discard")) {
@@ -1502,6 +1582,8 @@ private:
         switchBreakSeen_[switchDepth_ - 1] = true;
       else if (loopDepth_ == 0)
         Fail(ErrorCode::InvalidLoop, keyword.span);
+      else if (kind == StatementKind::Break)
+        loopBreakSeen_[loopDepth_ - 1] = true;
     }
     Next();
     Expect(TokenKind::Semicolon);
@@ -1516,9 +1598,61 @@ private:
       Fail(ErrorCode::UnsupportedConstruct, keyword.span);
   }
 
+  /// Returns whether an expression tree contains a call, which a compound assignment would
+  /// evaluate twice.
+  /// @param id Expression to inspect. @param depth Current recursion depth.
+  constexpr bool ContainsCall(ArenaId id, uint16_t depth = 0) const {
+    if (!HasExpression(id) || depth >= ModuleLimits::kMaxNesting) return depth != 0;
+    const Expression& node = ExpressionAt(id);
+    if (node.kind == ExpressionKind::FunctionCall || node.kind == ExpressionKind::BuiltinCall)
+      return true;
+    for (uint8_t i = 0; i < node.operandCount; ++i)
+      if (ContainsCall(node.operands[i], depth + 1)) return true;
+    return false;
+  }
+
+  /// Parses `target += value;` or `target -= value;` as the equivalent assignment of a sum or
+  /// difference, so integer wrapping and lowering match the spelled-out form exactly.
+  /// @param target Already-parsed assignment target. @param begin Target location.
+  constexpr ArenaId ParseCompoundAssignment(ExpressionInfo target, SourceSpan begin) {
+    Token arithmetic = token_;
+    arithmetic.kind = token_.kind == TokenKind::PlusAssign ? TokenKind::Plus : TokenKind::Minus;
+    Next();
+    const Type targetType = ExpressionAt(target.id).type;
+    const ExpressionInfo value = Materialize(ParseExpression(), targetType);
+    Expect(TokenKind::Semicolon);
+    if (!target.mutableLvalue) Fail(ErrorCode::ImmutableAssignment, begin);
+    // The target is re-evaluated for the read, so a call inside it would run twice.
+    if (ContainsCall(target.id)) Fail(ErrorCode::UnsupportedConstruct, begin);
+    ExpressionInfo read = target;
+    read.ungroupedBinary = 0;
+    const ExpressionInfo combined = MakeBinary(arithmetic, read, value);
+    if (ExpressionAt(combined.id).type != targetType) Fail(ErrorCode::TypeMismatch, begin);
+    return AddStatement(Statement{StatementKind::Assign, begin, kInvalidArenaId, kInvalidArenaId,
+                                  target.id, combined.id});
+  }
+
+  /// Parses `helper(args);`, the only statement form that evaluates an expression for its writes
+  /// through pointer parameters rather than for a value.
+  /// @param call Already-parsed expression. @param begin Expression location.
+  constexpr ArenaId ParseCallStatement(ExpressionInfo call, SourceSpan begin) {
+    Expect(TokenKind::Semicolon);
+    const Expression& node = ExpressionAt(call.id);
+    if (node.kind != ExpressionKind::FunctionCall || node.type.kind != TypeKind::Void) {
+      Fail(ErrorCode::InvalidCall, begin);
+      return kInvalidArenaId;
+    }
+    Statement statement{StatementKind::Call, begin};
+    statement.expression = call.id;
+    return AddStatement(statement);
+  }
+
   constexpr ArenaId ParseAssignmentStatement() {
     const ExpressionInfo target = ParseExpression();
     const SourceSpan begin = ExpressionAt(target.id).span;
+    if (token_.kind == TokenKind::Semicolon) return ParseCallStatement(target, begin);
+    if (token_.kind == TokenKind::PlusAssign || token_.kind == TokenKind::MinusAssign)
+      return ParseCompoundAssignment(target, begin);
     Expect(TokenKind::Assign);
     const ExpressionInfo value = Materialize(ParseExpression(), ExpressionAt(target.id).type);
     Expect(TokenKind::Semicolon);
@@ -1565,6 +1699,7 @@ private:
   }
 
   constexpr void ValidateLocalType(Type declared, ExpressionInfo initializer, SourceSpan span) {
+    if (declared.kind == TypeKind::Pointer) Fail(ErrorCode::InvalidPointer, span);
     if (!IsValueType(declared) && !IsLocalArray(declared))
       Fail(ErrorCode::UnsupportedConstruct, span);
     if (initializer.id != kInvalidArenaId && declared != ExpressionAt(initializer.id).type)
@@ -1620,6 +1755,52 @@ private:
                                   elseBody.first});
   }
 
+  /// Enters a loop body, bounding loop nesting and resetting this level's break record.
+  /// @param span Loop keyword location used for a nesting diagnostic.
+  constexpr bool EnterLoop(SourceSpan span) {
+    if (loopDepth_ >= ModuleLimits::kMaxLoopDepth) {
+      Fail(ErrorCode::NestingLimit, span);
+      return false;
+    }
+    loopBreakSeen_[loopDepth_++] = false;
+    return true;
+  }
+
+  /// Leaves a loop body and reports whether a `break` targeted it.
+  constexpr bool ExitLoop() {
+    if (loopDepth_ == 0) return false;
+    return loopBreakSeen_[--loopDepth_];
+  }
+
+  constexpr ArenaId ParseLoop() {
+    const SourceSpan begin = token_.span;
+    Next();
+    if (!EnterLoop(begin)) return kInvalidArenaId;
+    const BlockInfo body = ParseBlock();
+    // A `loop` has no condition, so only a `break` can reach the statement after it.
+    if (!ExitLoop()) Fail(ErrorCode::InvalidLoop, begin);
+    Statement statement{StatementKind::Loop, begin};
+    statement.firstBody = body.first;
+    return AddStatement(statement);
+  }
+
+  constexpr ArenaId ParseWhile() {
+    const SourceSpan begin = token_.span;
+    Next();
+    Expect(TokenKind::LeftParen);
+    const ExpressionInfo condition = ParseExpression();
+    Expect(TokenKind::RightParen);
+    if (ExpressionAt(condition.id).type != Type{TypeKind::Bool})
+      Fail(ErrorCode::InvalidCondition, ExpressionAt(condition.id).span);
+    if (!EnterLoop(begin)) return kInvalidArenaId;
+    const BlockInfo body = ParseBlock();
+    ExitLoop();
+    Statement statement{StatementKind::While, begin};
+    statement.expression = condition.id;
+    statement.firstBody = body.first;
+    return AddStatement(statement);
+  }
+
   constexpr ArenaId ParseFor() {
     const SourceSpan begin = token_.span;
     Next();
@@ -1642,9 +1823,12 @@ private:
     Expect(TokenKind::RightParen);
     bool valid = target.mutableLvalue && target.rootSymbol == loopSymbol &&
                  IsFiniteIncrementLoop(condition, loopSymbol, value, target.id);
-    ++loopDepth_;
+    if (!EnterLoop(begin)) {
+      PopScope();
+      return kInvalidArenaId;
+    }
     const BlockInfo body = ParseBlock();
-    --loopDepth_;
+    ExitLoop();
     PopScope();
     if (!valid) Fail(ErrorCode::InvalidLoop, begin);
     return AddStatement(Statement{StatementKind::For, begin, kInvalidArenaId, kInvalidArenaId,
@@ -1761,8 +1945,51 @@ private:
     }
   }
 
+  constexpr bool IsUnaryOperator(TokenKind kind) const {
+    return kind == TokenKind::Minus || kind == TokenKind::Not || kind == TokenKind::BitAnd ||
+           kind == TokenKind::Star;
+  }
+
+  /// Returns `&localVar`. Only a whole function-scope `var` has a stable address in this profile,
+  /// so resource variables, immutable bindings, members and array elements are rejected.
+  /// @param op The `&` token. @param operand Parsed operand.
+  constexpr ExpressionInfo MakeAddressOf(Token op, ExpressionInfo operand) {
+    const Expression& value = ExpressionAt(operand.id);
+    const Type pointee = value.type;
+    if (value.kind != ExpressionKind::Symbol || !operand.mutableLvalue ||
+        !HasSymbol(operand.rootSymbol) || SymbolAt(operand.rootSymbol).kind != SymbolKind::Var ||
+        !IsPointee(pointee)) {
+      Fail(ErrorCode::InvalidPointer, op.span);
+      return ErrorExpression(op.span);
+    }
+    return AddExpression(Expression{ExpressionKind::AddressOf,
+                                    PointerTo(pointee),
+                                    SourceSpan{op.span.begin, value.span.end},
+                                    {operand.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
+                                    1,
+                                    0},
+                         false, operand.rootSymbol, std::numeric_limits<int32_t>::max());
+  }
+
+  /// Returns `*pointer`, an assignable value in the function address space.
+  /// @param op The `*` token. @param operand Parsed operand.
+  constexpr ExpressionInfo MakeDereference(Token op, ExpressionInfo operand) {
+    const Expression& value = ExpressionAt(operand.id);
+    if (value.type.kind != TypeKind::Pointer) {
+      Fail(ErrorCode::InvalidPointer, op.span);
+      return ErrorExpression(op.span);
+    }
+    return AddExpression(Expression{ExpressionKind::Deref,
+                                    value.type.elementType(),
+                                    SourceSpan{op.span.begin, value.span.end},
+                                    {operand.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
+                                    1,
+                                    0},
+                         true, operand.rootSymbol, std::numeric_limits<int32_t>::max());
+  }
+
   constexpr ExpressionInfo ParseUnary() {
-    if (token_.kind == TokenKind::Minus || token_.kind == TokenKind::Not) {
+    if (IsUnaryOperator(token_.kind)) {
       const Token op = token_;
       Next();
       if (unaryDepth_ == ModuleLimits::kMaxNesting) {
@@ -1772,6 +1999,8 @@ private:
       ++unaryDepth_;
       const ExpressionInfo operand = ParseUnary();
       --unaryDepth_;
+      if (op.kind == TokenKind::BitAnd) return MakeAddressOf(op, operand);
+      if (op.kind == TokenKind::Star) return MakeDereference(op, operand);
       Type type = ExpressionAt(operand.id).type;
       if (type.isAbstract()) return NegateAbstract(op, operand);
       if (!ValidUnaryType(op.kind, type)) Fail(ErrorCode::TypeMismatch, op.span);
@@ -2228,6 +2457,26 @@ private:
         false, kInvalidArenaId, BuiltinUpperBound(builtin, arguments, count));
   }
 
+  /// Rejects two pointer arguments of one call that address the same variable.
+  ///
+  /// WGSL forbids the aliasing outright, and the analyses here assume each pointee is reached
+  /// through one name per call.
+  /// @param arguments Materialized call arguments. @param count Argument count.
+  /// @param name Callee name, used for the diagnostic span.
+  constexpr void ValidateArgumentAliasing(
+      const std::array<ExpressionInfo, Expression::kMaxOperands>& arguments, uint8_t count,
+      Token name) {
+    for (uint8_t i = 0; i < count; ++i) {
+      if (ExpressionAt(arguments[i].id).type.kind != TypeKind::Pointer) continue;
+      for (uint8_t j = i + 1; j < count; ++j) {
+        if (ExpressionAt(arguments[j].id).type.kind != TypeKind::Pointer) continue;
+        if (arguments[i].rootSymbol != kInvalidArenaId &&
+            arguments[i].rootSymbol == arguments[j].rootSymbol)
+          Fail(ErrorCode::InvalidPointer, name.span);
+      }
+    }
+  }
+
   constexpr ExpressionInfo ParseFunctionCall(
       Token name, SourceSpan end, std::array<ExpressionInfo, Expression::kMaxOperands>& arguments,
       const std::array<ArenaId, Expression::kMaxOperands>& operands, uint8_t count) {
@@ -2241,6 +2490,7 @@ private:
           valid = SymbolAt(function.firstParameter + j).type == ExpressionAt(arguments[j].id).type;
         }
         if (!valid) Fail(ErrorCode::InvalidCall, name.span);
+        ValidateArgumentAliasing(arguments, count, name);
         if (currentFunctionId_ >= module_.functionCount) {
           Fail(ErrorCode::InvalidConstantExpression, name.span);
           return ErrorExpression(name.span);
@@ -3196,6 +3446,7 @@ private:
   uint16_t switchDepth_ = 0;
   std::array<uint16_t, ModuleLimits::kMaxNesting> switchLoopDepth_{};
   std::array<bool, ModuleLimits::kMaxNesting> switchBreakSeen_{};
+  std::array<bool, ModuleLimits::kMaxLoopDepth> loopBreakSeen_{};
   uint16_t conditionalDepth_ = 0;
 };
 

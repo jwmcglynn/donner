@@ -418,6 +418,15 @@ TEST(MslXcrunValidation, StructConstruction) {
                                   "StructConstruction");
 }
 
+TEST(MslXcrunValidation, PointerStruct) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::PointerStructAllProjections().msl, "PointerStruct");
+}
+TEST(MslXcrunValidation, LoopWhile) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  ExpectCompilesWithMetalCompiler(tests::LoopWhileAllProjections().msl, "LoopWhile");
+}
+
 TEST(MslXcrunValidation, VectorMix) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(tests::VectorMixAllProjections().msl, "VectorMix");

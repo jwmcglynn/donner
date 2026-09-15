@@ -488,7 +488,7 @@ donner_cc_binary(
     name = "slug_all_probe",
     testonly = 1,
     srcs = ["SlugMaskAllProbe.cc"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = ["-fconstexpr-steps=4194304"],
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:slug_mask_source"],
 )

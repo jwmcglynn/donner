@@ -177,7 +177,8 @@ metadata retention can hide or exaggerate a change in payload bytes. Cross-linke
 proves byte retention; native driver execution remains a separate validation step.
 
 The numeric/control profile also covers the Slug mask's scalar abstract arithmetic, module constants,
-`break`, `continue`, `discard`, bitwise AND, vector math and derivatives. `fwidth` and implicit-LOD `textureSample` require uniform fragment control, including through helper
+`break`, `continue`, `discard`, bitwise AND, vector math and derivatives. Its per-fragment ray-event
+sorting adds function-address-space pointers, `loop`/`while` and compound assignment, described below. `fwidth` and implicit-LOD `textureSample` require uniform fragment control, including through helper
 calls. A bounded dependency graph follows parameters, mutable values, branches, switches,
 short-circuit operands and loop-carried state. Complete branch reconvergence restores uniform
 control; divergent early returns and loop exits retain their dependencies. Partial aggregate
@@ -225,6 +226,68 @@ blend modes with existing CPU references through the strict bitmap comparator. S
 change entry names and binding numbers and exercise explicit-LOD sampling under varying control.
 Platform-only linked probes verify that unused WGSL/MSL/SPIR-V payloads remain excluded.
 
+## Function pointers, unbounded loops and compound assignment
+
+A helper parameter may be declared `ptr<function, T>` where `T` is a scalar, vector or structure.
+`&localVar` produces such a pointer and `(*p)` reads or writes the pointee, including
+`(*p).member`, `(*p).member[index]` and compound assignment through either. The restriction is
+deliberate and narrow: only a whole function-scope `var` has an address, so `&resource`,
+`&immutable`, `&value.member` and `&array[index]` are rejected. Pointers cannot be declared as
+locals, stored in a `let`, returned, placed in a structure member or taken by an entry point. A
+pointer argument matches only a pointer parameter of the same pointee type, so a value and a
+pointer are never substituted for one another. Two pointer arguments of one call may not address
+the same variable. Together these confine every pointer to a call argument or a dereference, with
+no aliasing of a resource and no pointer outliving its pointee.
+
+MSL lowers a pointer parameter to `thread T&`, so both operators disappear at the call site and at
+the dereference. SPIR-V declares an `OpTypePointer Function` parameter; a whole-pointee read or
+write is an `OpLoad` or `OpStore` on that parameter, and only member and index accesses go through
+an `OpAccessChain`. A helper that returns no value is called as a statement, which is the only
+expression statement the profile accepts.
+
+`loop { ... }` and `while (condition) { ... }` join the existing incrementing `for`. A `loop` must
+contain a `break` that exits it, so the statement after the loop is always reachable and an
+unconditional infinite loop is rejected before emission. `continuing` blocks are outside this
+profile. `break` and `continue` keep their existing meaning; `continue` in a `while` re-evaluates
+the condition. Loop nesting is bounded at eight levels by `ModuleLimits::kMaxLoopDepth`, and an
+exceeded bound fails with a structured diagnostic rather than a truncated artifact. The same bound
+now applies to `for`, whose nesting was previously limited only by the general sixteen-level
+nesting bound. Neither form is
+a termination proof: only `for` retains the finite-increment restriction, so a `loop` or `while`
+whose exit depends on runtime data terminates only because the authored algorithm does.
+
+`target += value` and `target -= value` are parsed as an assignment of the sum or difference, so
+integer wrapping, division guards and both lowerings match the spelled-out form byte for byte. The
+right-hand side is materialized against the target's type and the operator is grouped with it, so
+the compound form is slightly stricter than writing the assignment out: an abstract scalar against
+a vector target is a type mismatch, and an ungrouped mixed operator on the right-hand side is an
+unsupported construct. Both fail closed. The target is read and written, so it may not contain a
+call.
+
+`var` declarations without a declared type concretize an abstract initializer by the WGSL rules:
+`var x = 0;` is `i32`, `var x = 0u;` is `u32` and `var x = 0.5;` is `f32`; an already-concrete
+initializer keeps its own type.
+
+A `bool` member is accepted in a function-scope value structure, including as a constructor
+argument and in a zero-initialized `var` whose structure also has a fixed array member. Because
+`bool` has no defined buffer representation, a structure that reaches one is not host-shareable:
+using it as a uniform or storage binding root, or as the element of a runtime storage array, is
+rejected, and SPIR-V emits it without explicit layout decorations. Reflection is unchanged for
+every structure that can appear in a buffer.
+
+The uniformity analysis carries writes through a pointer across the call boundary. Each helper
+records, for every pointer parameter, what its pointee depends on when the function returns,
+including non-uniform sources the callee read itself such as texel loads, sampling and read-only
+storage. The caller substitutes that mask into the variable whose address it passed, so a pointer
+write taints the caller exactly as the same write would if it were inlined. A call with no pointer
+argument allocates no dependency edges. `loop` and `while` reuse the existing loop analysis, and a
+pointer parameter takes part in it: its pointee gets a loop-carried value, so a write in one
+iteration reaches the next iteration's read. Loop-carried values keep their dependencies, a
+data-dependent `break` still reconverges at the merge, and a data-dependent early `return` retains
+its dependencies exactly as it does for `for`. A derivative or implicit-LOD sample therefore stays legal before the loops and
+is rejected when it follows a divergent early exit or branches on a value written through a
+pointer.
+
 ## Slug fill
 
 `SlugFillSource.h` is authoritative for the ordinary and batched entry-point pairs. The live
@@ -241,8 +304,8 @@ per-vertex values and nonzero vertex/instance bases, plus differently translated
 The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures,
 256 members, 1,024 symbols/statements, 4,096 expressions and 64 functions. A fixed type may occupy
 at most 1 MiB; layout growth is checked before recording member offsets. Text emission is bounded
-at 128 KiB. Slug fill uses a local 4,194,304-step Clang evaluator cap; existing smaller family caps
-remain independently checked.
+at 128 KiB. Slug fill, the Slug mask and the dedicated gradients each use a local 4,194,304-step Clang
+evaluator cap; existing smaller family caps remain independently checked.
 
 Native tests cover ordinary and batched fills, fractional/binary coverage, clipping, patterns,
 linear/radial gradients, painter ordering and reads limited to a declared record range. Duplicate

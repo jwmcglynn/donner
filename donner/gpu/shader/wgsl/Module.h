@@ -53,6 +53,7 @@ enum class TypeKind : uint8_t {
   Sampler,           //!< Filtering sampler resource.
   SampledTexture2d,  //!< `texture_2d<f32>`.
   StorageTexture2d,  //!< `texture_storage_2d<rgba32float, write>`.
+  Pointer,           //!< `ptr<function, T>`; the pointee is stored in the array element fields.
 };
 
 /// A resolved scalar, vector, structure, or resource type.
@@ -61,14 +62,17 @@ struct Type {
   uint8_t lanes = 1;                   //!< Vector lane count (1 through 4).
   ArenaId structId = kInvalidArenaId;  //!< Structure for TypeKind::Struct.
   StorageTextureFormat storageFormat = StorageTextureFormat::Rgba32Float;  //!< Storage format.
-  TypeKind elementKind = TypeKind::Void;  //!< Array element category.
-  uint8_t elementLanes = 1;               //!< Array element vector lane count.
+  TypeKind elementKind = TypeKind::Void;  //!< Array element or pointee category.
+  uint8_t elementLanes = 1;               //!< Array element or pointee vector lane count.
   uint16_t arrayCount = 0;                //!< Fixed array element count.
   uint8_t columns = 1;                    //!< Matrix columns; one for non-matrices.
   uint8_t rows = 1;                       //!< Matrix rows; one for non-matrices.
 
-  /// Returns the scalar/vector/structure element type of an array.
+  /// Returns the scalar/vector/structure element type of an array, or a pointer's pointee.
   constexpr Type elementType() const { return Type{elementKind, elementLanes, structId}; }
+
+  /// Returns whether this is a function-address-space pointer.
+  constexpr bool isPointer() const { return kind == TypeKind::Pointer; }
 
   /// Returns whether a storage texture's format belongs to this compiler profile.
   constexpr bool hasSupportedStorageFormat() const {
@@ -131,6 +135,7 @@ struct Struct {
   uint16_t memberCount = 0;               //!< Number of members.
   uint32_t alignment = 1;                 //!< Uniform-buffer byte alignment.
   uint32_t size = 0;                      //!< Uniform-buffer byte size.
+  bool hostShareable = true;  //!< False when a `bool` member makes buffer placement undefined.
 };
 
 /// Module-scope resource binding kind.
@@ -158,7 +163,7 @@ struct Binding {
 enum class SymbolKind : uint8_t {
   Constant,   //!< A module-scope constant value.
   Binding,    //!< A module-scope resource binding.
-  Parameter,  //!< An immutable function parameter.
+  Parameter,  //!< A function parameter; a `ptr<function, T>` pointee is writable through it.
   Let,        //!< An immutable local binding.
   Var,        //!< A mutable local variable.
 };
@@ -247,6 +252,8 @@ enum class ExpressionKind : uint8_t {
   BuiltinCall,   //!< A Builtin call.
   FunctionCall,  //!< A declared Function call; payload is its arena identifier.
   Index,         //!< Fixed-array access with base and index operands.
+  AddressOf,     //!< `&localVar`; yields a function-address-space pointer.
+  Deref,         //!< `*pointer`; yields the pointee as an assignable value.
 };
 
 /// One typed expression node. Operands are in source order.
@@ -275,6 +282,9 @@ enum class StatementKind : uint8_t {
   Discard,       //!< Discard the current fragment invocation.
   Switch,        //!< An integer selection with case clauses.
   Case,          //!< One constant case or default clause.
+  Call,          //!< A call to a helper that returns no value.
+  Loop,          //!< A `loop` whose only exit is a `break`.
+  While,         //!< A `while` loop with a bool condition.
 };
 
 /// One typed statement node. The next link preserves lexical statement order.
@@ -344,6 +354,7 @@ struct ModuleLimits {
   static constexpr uint16_t kMaxStatements = 1024;
   static constexpr uint16_t kMaxFunctions = 64;
   static constexpr uint16_t kMaxNesting = 16;
+  static constexpr uint16_t kMaxLoopDepth = 8;
   static constexpr uint16_t kMaxInterfaceVariables = 64;
 };
 
@@ -364,7 +375,8 @@ struct Module {
 
   /// Returns natural host-shareable alignment, or zero for an unsupported type.
   constexpr uint32_t typeAlignment(Type type) const {
-    if (type.isNumeric()) return type.lanes == 1 ? 4 : type.lanes == 2 ? 8 : 16;
+    if (type.isNumeric() || type.kind == TypeKind::Bool)
+      return type.lanes == 1 ? 4 : type.lanes == 2 ? 8 : 16;
     if (type.kind == TypeKind::Matrix) return type.rows == 2 ? 8 : 16;
     if (type.kind == TypeKind::Struct)
       return type.structId < structCount ? structs[type.structId].alignment : 0;
@@ -374,7 +386,7 @@ struct Module {
 
   /// Returns fixed byte size; runtime arrays and unsupported types have size zero.
   constexpr uint32_t typeSize(Type type) const {
-    if (type.isNumeric()) return 4u * type.lanes;
+    if (type.isNumeric() || type.kind == TypeKind::Bool) return 4u * type.lanes;
     if (type.kind == TypeKind::Matrix) return typeAlignment(type) * type.columns;
     if (type.kind == TypeKind::Struct)
       return type.structId < structCount ? structs[type.structId].size : 0;

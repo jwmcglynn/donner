@@ -239,6 +239,7 @@ private:
       case TypeKind::Struct: emitStructType(value); return;
       case TypeKind::Matrix: emitMatrixType(value); return;
       case TypeKind::Array: emitArrayType(value); return;
+      case TypeKind::Pointer: emitPointerType(value); return;
       case TypeKind::Sampler: text("sampler"); return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d:
@@ -247,6 +248,12 @@ private:
         return;
       default: emitScalarType(value); return;
     }
+  }
+
+  constexpr void emitPointerType(const Type& value) {
+    text("thread ");
+    type(value.elementType());
+    character('&');
   }
 
   constexpr void emitArrayType(const Type& value) {
@@ -294,7 +301,7 @@ private:
     if (value.kind == TypeKind::Struct) return module_.typeAlignment(value);
     if (value.kind == TypeKind::Matrix) return value.rows == 2 ? 8 : 16;
     if (value.kind == TypeKind::Array) return typeAlignment(value.elementType());
-    if (!value.isNumeric()) {
+    if (!value.isNumeric() && value.kind != TypeKind::Bool) {
       return 0;
     }
     return value.lanes == 1 ? 4 : value.lanes == 2 ? 8 : 16;
@@ -304,7 +311,7 @@ private:
     if (value.kind == TypeKind::Struct) return module_.typeSize(value);
     if (value.kind == TypeKind::Matrix) return typeAlignment(value) * value.columns;
     if (value.kind == TypeKind::Array) return module_.arrayStride(value) * value.arrayCount;
-    if (!value.isNumeric()) {
+    if (!value.isNumeric() && value.kind != TypeKind::Bool) {
       return 0;
     }
     return value.lanes == 1 ? 4 : value.lanes == 2 ? 8 : 16;
@@ -661,6 +668,9 @@ private:
 
   constexpr void emitCallExpression(const Expression& node) {
     switch (node.kind) {
+      // Pointer parameters lower to `thread T&`, so both operators emit the referenced value.
+      case ExpressionKind::AddressOf:
+      case ExpressionKind::Deref: emitChild(node, 0); return;
       case ExpressionKind::Convert: emitConversion(node); return;
       case ExpressionKind::BuiltinCall: emitBuiltin(node); return;
       case ExpressionKind::FunctionCall: emitFunctionCall(node); return;
@@ -1148,6 +1158,12 @@ private:
       case StatementKind::Assign: emitAssignment(node, inlineStatement); break;
       case StatementKind::If: emitIf(node); break;
       case StatementKind::For: emitFor(node); break;
+      case StatementKind::Call:
+        expression(node.expression);
+        if (!inlineStatement) character(';');
+        break;
+      case StatementKind::While: emitWhile(node); break;
+      case StatementKind::Loop: emitLoop(node); break;
       case StatementKind::Switch: emitSwitch(node); break;
       case StatementKind::Return: emitReturn(node, inlineStatement); break;
       case StatementKind::TextureStore: emitTextureStore(node, inlineStatement); break;
@@ -1254,6 +1270,26 @@ private:
     text("; ");
     statement(node.continuing, true);
     text(") {\n");
+    ++indent_;
+    block(node.firstBody);
+    --indent_;
+    indentation();
+    character('}');
+  }
+
+  constexpr void emitWhile(const Statement& node) {
+    text("while (");
+    expression(node.expression);
+    text(") {\n");
+    ++indent_;
+    block(node.firstBody);
+    --indent_;
+    indentation();
+    character('}');
+  }
+
+  constexpr void emitLoop(const Statement& node) {
+    text("for (;;) {\n");
     ++indent_;
     block(node.firstBody);
     --indent_;

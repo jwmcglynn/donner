@@ -129,6 +129,8 @@ struct Requirement {
 struct Summary {
   Mask result = 0;
   Mask required = 0;
+  /// What each pointer parameter's pointee depends on when the function returns.
+  std::array<Mask, Expression::kMaxOperands> pointerEscape{};
   uint8_t stages = kAllStages;
   bool collective = false;
   bool discard = false;
@@ -270,7 +272,41 @@ private:
     if (callee.collective) require(substitute(callee.required, node, arguments), node.span);
     state_.possibleDiscard |= callee.discard;
     summary_.discard |= callee.discard;
+    escapePointers(callee, node, arguments);
     return substitute(callee.result, node, arguments);
+  }
+
+  /// Taints every variable whose address reaches a call with all of that call's dependencies.
+  ///
+  /// Writes through a pointer parameter are invisible in the callee summary, so the whole pointee
+  /// conservatively depends on the arguments and the control that reached the call.
+  constexpr bool pointerOperand(ArenaId id) const {
+    return id < module_.expressionCount && module_.expressions[id].type.kind == TypeKind::Pointer;
+  }
+
+  /// Applies each pointer parameter's recorded escape mask to the variable the caller passed.
+  ///
+  /// The mask carries what the callee left in the pointee, including non-uniform sources it read
+  /// itself, so a write through a pointer taints the caller exactly as the inlined write would.
+  /// The scan runs before any graph edge so a call without pointer arguments allocates nothing.
+  constexpr void escapePointers(const Summary& callee, const Expression& node,
+                                const std::array<NodeId, Expression::kMaxOperands>& arguments) {
+    bool escapes = false;
+    for (uint8_t i = 0; i < node.operandCount && !escapes; ++i)
+      escapes = pointerOperand(node.operands[i]);
+    if (!escapes) return;
+    for (uint8_t i = 0; i < node.operandCount; ++i) {
+      if (!pointerOperand(node.operands[i])) continue;
+      NodeId indices = 0;
+      const ArenaId target = rootSymbol(node.operands[i], indices);
+      if (target < firstSymbol_ || target >= endSymbol_) {
+        fail(UniformityError::InvalidModule, node.span);
+        return;
+      }
+      const NodeId escaped = substitute(callee.pointerEscape[i], node, arguments);
+      state_.values[target] = graph_.join(
+          state_.values[target], graph_.join(escaped, graph_.join(indices, state_.control)));
+    }
   }
 
   constexpr ArenaId rootSymbol(ArenaId id, NodeId& indexDependencies) {
@@ -313,10 +349,14 @@ private:
       case StatementKind::Assign: return assignment(node);
       case StatementKind::If: return selection(node, context);
       case StatementKind::Switch: return switchStatement(node, context);
-      case StatementKind::For: return loop(node, context);
+      case StatementKind::For:
+      case StatementKind::While:
+      case StatementKind::Loop: return loop(node, context);
+      case StatementKind::Call: expression(node.expression); return kNext;
       case StatementKind::Return:
         returned_ =
             graph_.join(returned_, graph_.join(expression(node.expression), state_.control));
+        recordPointerExits();
         return kReturn;
       default: return controlStatement(node, context);
     }
@@ -429,11 +469,20 @@ private:
     return (behaviors & (kReturn | kContinue)) | (normal.reached ? kNext : 0);
   }
 
+  /// Returns whether a declaration can change across loop iterations.
+  ///
+  /// A pointer parameter is written through `*p`, so its pointee is loop-carried even though the
+  /// pointer itself is immutable.
+  static constexpr bool loopCarried(const Symbol& symbol) {
+    return symbol.kind == SymbolKind::Var ||
+           (symbol.kind == SymbolKind::Parameter && symbol.type.kind == TypeKind::Pointer);
+  }
+
   constexpr std::array<NodeId, ModuleLimits::kMaxSymbols> loopValues() {
     std::array<NodeId, ModuleLimits::kMaxSymbols> phis{};
     for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) {
       phis[i] = kNone;
-      if (module_.symbols[i].kind == SymbolKind::Var && state_.values[i] != kNone) {
+      if (loopCarried(module_.symbols[i]) && state_.values[i] != kNone) {
         phis[i] = graph_.make(0, state_.values[i]);
         state_.values[i] = phis[i];
       }
@@ -453,30 +502,35 @@ private:
   }
 
   constexpr uint8_t loop(const Statement& node, Context context) {
-    if (node.init >= module_.statementCount || node.continuing >= module_.statementCount) {
+    const bool counted = node.kind == StatementKind::For;
+    // Only `loop` lacks a condition, so it is the one form that cannot skip its body.
+    const bool conditional = node.kind != StatementKind::Loop;
+    if (counted &&
+        (node.init >= module_.statementCount || node.continuing >= module_.statementCount)) {
       fail(UniformityError::InvalidModule, node.span);
       return 0;
     }
-    statement(module_.statements[node.init], context);
+    if (counted) statement(module_.statements[node.init], context);
     State incoming;
     copy(incoming, state_);
     const auto phis = loopValues();
     const NodeId header = graph_.make(0, incoming.control);
     state_.control = header;
     const uint16_t firstRequirement = requirementCount_;
-    const NodeId condition = expression(node.expression);
+    const NodeId condition = conditional ? expression(node.expression) : 0;
     state_.control = graph_.join(header, condition);
     const NodeId bodyControl = state_.control;
     Join exits, continuing;
-    merge(exits, state_);
+    if (conditional) merge(exits, state_);
     const uint8_t body = block(node.firstBody, Context{&exits, &continuing});
     if (body & kNext) merge(continuing, state_);
     if (continuing.reached) {
       copy(state_, continuing.state);
       if (!(body & (kReturn | kBreak))) state_.control = bodyControl;
-      statement(module_.statements[node.continuing], context);
+      if (counted) statement(module_.statements[node.continuing], context);
       loopBackedge(header, phis, firstRequirement, exits);
     }
+    if (!exits.reached) return body & kReturn;
     copy(state_, exits.state);
     if (!(body & kReturn)) state_.control = incoming.control;
     return kNext | (body & kReturn);
@@ -494,12 +548,21 @@ private:
     }
     initializeFunction(function);
     block(function.firstStatement, {});
+    recordPointerExits();
     if (!ok()) return;
     if (!graph_.solve(work_, workLimit_)) {
       fail(UniformityError::Limit, function.nameSpan);
       return;
     }
     finishFunction(function);
+  }
+
+  /// Joins each pointer parameter's current pointee into the value seen by the caller on exit.
+  constexpr void recordPointerExits() {
+    for (uint16_t i = 0; i < pointerParameters_; ++i) {
+      if (!pointerParameter_[i]) continue;
+      pointerExit_[i] = graph_.join(pointerExit_[i], state_.values[firstSymbol_ + i]);
+    }
   }
 
   constexpr void initializeFunction(const Function& function) {
@@ -510,13 +573,23 @@ private:
     state_.possibleDiscard = false;
     state_.control = graph_.make(function.stage == Stage::None ? kControl : 0);
     for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) state_.values[i] = kNone;
-    for (uint16_t i = 0; i < function.parameterCount; ++i)
+    pointerParameters_ = function.parameterCount < Expression::kMaxOperands
+                             ? function.parameterCount
+                             : Expression::kMaxOperands;
+    for (uint16_t i = 0; i < function.parameterCount; ++i) {
       state_.values[firstSymbol_ + i] =
           graph_.make(function.stage == Stage::None ? 1u << i : kNonUniform);
+      if (i < pointerParameters_) {
+        pointerParameter_[i] = module_.symbols[firstSymbol_ + i].type.kind == TypeKind::Pointer;
+        pointerExit_[i] = kNone;
+      }
+    }
   }
 
   constexpr void finishFunction(const Function& function) {
     summary_.result = graph_.value(returned_);
+    for (uint16_t i = 0; i < pointerParameters_; ++i)
+      if (pointerParameter_[i]) summary_.pointerEscape[i] = graph_.value(pointerExit_[i]);
     for (uint16_t i = 0; i < requirementCount_; ++i) {
       const Mask mask = graph_.value(requirements_[i].dependencies);
       if (mask & kNonUniform) fail(UniformityError::NonUniformControl, requirements_[i].span);
@@ -540,6 +613,9 @@ private:
   uint16_t requirementCount_ = 0;
   ArenaId function_ = 0;
   ArenaId firstSymbol_ = 0, endSymbol_ = 0;
+  std::array<bool, Expression::kMaxOperands> pointerParameter_{};
+  std::array<NodeId, Expression::kMaxOperands> pointerExit_{};
+  uint16_t pointerParameters_ = 0;
   NodeId returned_ = kNone;
   uint32_t work_ = 0;
   uint16_t blockDepth_ = 0;

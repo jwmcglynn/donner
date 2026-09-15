@@ -91,6 +91,7 @@ donner_cc_test(
         "tests/ImageFeatures_tests.cc",
         "tests/Language_tests.cc",
         "tests/Parser_tests.cc",
+        "tests/PointerLoop_tests.cc",
         "tests/SlugFeatures_tests.cc",
         "tests/TextEmitter_tests.cc",
         "tests/Uniformity_tests.cc",
