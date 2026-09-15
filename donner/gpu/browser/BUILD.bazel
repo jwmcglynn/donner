@@ -1,3 +1,5 @@
+load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
@@ -55,6 +57,46 @@ donner_cc_library(
 )
 
 exports_files(["library_donner_gpu.js"])
+
+# Proves the two halves of the bridge still name the same set of functions.
+#
+# The C++ half declares its entry points and the JavaScript half defines them; nothing but a link
+# checks that those two lists match, and neither language's compiler can see the other side. This
+# module links the bridge with its library, so a function added, renamed or dropped on one side
+# without the other fails the build instead of failing in a browser.
+cc_binary(
+    name = "_browser_bridge_link_probe",
+    srcs = ["tests/browser_bridge_link_probe.cc"],
+    additional_linker_inputs = ["library_donner_gpu.js"],
+    linkopts = [
+        "-sENVIRONMENT=web",
+        "-sEXIT_RUNTIME=0",
+        "--js-library=$(execpath library_donner_gpu.js)",
+    ],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":browser_device",
+        ":emscripten_browser_bridge",
+    ],
+)
+
+wasm_cc_binary(
+    name = "browser_bridge_link_probe",
+    cc_target = ":_browser_bridge_link_probe",
+    outputs = [
+        "_browser_bridge_link_probe.js",
+        "_browser_bridge_link_probe.wasm",
+    ],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
 
 # A bridge that behaves like the browser side without being one: it keeps its own object registry
 # and applies the same identifier, kind and ownership checks, so a test that drives the backend
