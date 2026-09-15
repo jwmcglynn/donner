@@ -377,7 +377,7 @@
   <g id="background">
     <title>Background glow</title>
     <desc>A radial violet atmosphere. Hide this group to export the artwork on transparency.</desc>
-    <rect width="1536" height="1024" fill="url(#background-glow)" transform="translate(-3.1680788834438545, 0.6336157766887709)" />
+    <rect width="1536" height="1024" fill="url(#background-glow)" transform="translate(-3.1680788834438545, 0.6336157766887709)" data-donner-locked="true"/>
   </g>
   <g id="ground-shadow">
     <title>Ground shadow</title>
@@ -943,7 +943,7 @@
           <polygon id="cavity-facet-208" points="514 572 503 575 502 570" fill="#2d087e" stroke="#2d087e" />
           <polygon id="cavity-facet-211" points="527 560 533 578 514 572" fill="#28066e" stroke="#28066e" />
           <polygon id="cavity-facet-212" points="527 560 541 555 533 560" fill="#220268" stroke="#220268" />
-          <polygon id="cavity-facet-213" points="545 551 541 555 546 544" fill="#260476" stroke="#260476" />
+          
           <polygon id="cavity-facet-214" points="533 560 541 555 533 578" fill="#3c089d" stroke="#3c089d" />
           <polygon id="cavity-facet-216" points="533 590 514 572 533 578" fill="#28066e" stroke="#28066e" />
           <polygon id="cavity-facet-217" points="533 578 541 555 533 590" fill="#34098e" stroke="#34098e" />
@@ -963,7 +963,7 @@
           <polygon id="cavity-facet-231" points="538 608 546.87 617.45 530.51 616.67" fill="#1c025c" stroke="#1c025c" />
           <polygon id="cavity-facet-232" points="525 617 510 621 532 607" fill="#32068a" stroke="#32068a" />
           <polygon id="cavity-facet-233" points="533 590 544 597 532 607" fill="#220364" stroke="#220364" />
-          <polygon id="cavity-facet-234" points="541 555 545 551 561 551" fill="#865fc4" stroke="#865fc4" />
+          
           <polygon id="cavity-facet-235" points="502 570 503 575 498 577" fill="#572c8c" stroke="#572c8c" />
           <polygon id="cavity-facet-236" points="546 544 560 538 561 551" fill="#0e0034" stroke="#0e0034" />
           <polygon id="cavity-facet-237" points="575 573 573 582 576 568" fill="#340a8d" stroke="#340a8d" />
@@ -996,7 +996,7 @@
           <polygon id="cavity-facet-264" points="574.46 593.94 570 600 568 588" fill="#16024a" stroke="#16024a" />
           <polygon id="cavity-facet-265" points="570 600 558 596 568 588" fill="#100137" stroke="#100137" />
           <polygon id="cavity-facet-266" points="568 588 553 598 573 582" fill="#270670" stroke="#270670" />
-          <polygon id="cavity-facet-267" points="545 551 546 544 561 551" fill="#0d0230" stroke="#0d0230" />
+          <polygon id="cavity-facet-267" points="541 555 546 544 561 551" fill="#0d0230" stroke="#0d0230" />
           <polygon id="cavity-facet-268" points="511 443 497 449 500 434" fill="#7536e0" stroke="#7536e0" />
         </g>
         <path id="cavity-light" d="M592.91 576.59 L588.69 583.17 L574.46 593.94 L564.25 610.76 L554.04 616.45 L530.51 616.67 L504.82 626.98 L486.03 615.14 L458.46 607.74 L442.31 579.43 L421.88 566.48 L417.19 541.03 L402.64 518.41 L403.56 511.29 L416.98 489.71 L419.46 478.32 L418.66 460.78 L423.36 446.91 L438.26 434.8 L451.33 434.53 L467.01 423.27 L475.56 407.58 L490.78 401.07 L499.26 403.51 L514.78 421.87 L533.78 427.97 L538.91 433.93 C541.4 441.5 540.2 450.3 546.93 457.46 C554.2 464.1 568.9 470.5 574.15 478.65 L577.91 503.86 L592.27 528.29 L587.78 551.78 Z" fill="url(#cavity-illumination)" display="inline" />
