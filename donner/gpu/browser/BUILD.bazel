@@ -129,6 +129,7 @@ donner_cc_test(
     srcs = [
         "tests/BrowserDevice_tests.cc",
         "tests/BrowserObjectTable_tests.cc",
+        "tests/BrowserSubRectangleUpload_tests.cc",
         "tests/BrowserWireCodes_tests.cc",
     ],
     # The library's own text, so the protocol table can be compared against the one the JavaScript
@@ -140,6 +141,7 @@ donner_cc_test(
         "//donner/base:runfiles",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:sub_rectangle_upload_scene",
         "@com_google_gtest//:gtest_main",
     ],
 )

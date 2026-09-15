@@ -179,8 +179,8 @@ protected:
   Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                        std::span<const uint8_t> data) override;
   Status onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
-                        const TexelCopyBufferLayout& dataLayout,
-                        const Extent2d& writeSize) override;
+                        const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
+                        const Origin2d& destinationOrigin) override;
   Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                   std::span<const Command> commands) override;
 
