@@ -30,11 +30,13 @@ impossible: exactly one classifier call, exactly one cquery, both after every
 narrowing step.
 """
 
+import faulthandler
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -110,6 +112,9 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             stub = bin_dir / "bazelisk"
             stub.write_text(_STUB_BAZELISK, encoding="utf-8")
             stub.chmod(0o755)
+            python = bin_dir / "python3"
+            python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+            python.chmod(0o755)
 
             scratch = root / "scratch"
             scratch.mkdir()
@@ -141,11 +146,13 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = "%s:%s" % (bin_dir, env["PATH"])
             env["STUB_CQUERY_OUTPUT"] = str(compat_file)
+            env["FIXTURE_PYTHON"] = sys.executable
             if cquery_fails:
                 env["STUB_CQUERY_FAIL"] = "1"
 
             result = subprocess.run(
                 [
+                    "/bin/bash",
                     str(fixture),
                     str(final_file),
                     str(kinds_file),
@@ -421,4 +428,8 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    faulthandler.dump_traceback_later(20, repeat=True)
+    try:
+        unittest.main(verbosity=2)
+    finally:
+        faulthandler.cancel_dump_traceback_later()

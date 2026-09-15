@@ -1,5 +1,6 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import faulthandler
 import gzip
 import hashlib
 import json
@@ -71,12 +72,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             script = Path(temp_dir) / "fixture.sh"
             script.write_text(text)
             script.chmod(0o755)
+            python = Path(temp_dir) / "python3"
+            python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+            python.chmod(0o755)
+            fixture_env = dict(os.environ if env is None else env)
+            fixture_env["FIXTURE_PYTHON"] = sys.executable
+            fixture_env["PATH"] = temp_dir + os.pathsep + fixture_env.get("PATH", os.defpath)
             return subprocess.run(
-                [str(script), *args],
+                ["/bin/bash", str(script), *args],
                 check=False,
                 capture_output=True,
                 text=True,
-                env=env,
+                env=fixture_env,
                 timeout=timeout,
                 cwd=cwd,
             )
@@ -587,4 +594,8 @@ run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
 
 
 if __name__ == "__main__":
-    unittest.main()
+    faulthandler.dump_traceback_later(20, repeat=True)
+    try:
+        unittest.main(verbosity=2)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
