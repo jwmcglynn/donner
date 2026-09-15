@@ -274,8 +274,12 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(const EntityHandle& dataHandl
 /// for text collapses objectBoundingBox filter regions to zero and clips the entire filter output.
 std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
 #ifdef DONNER_TEXT_ENABLED
-  if (handle.all_of<components::TextComponent>()) {
-    if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+  // Not `TextComponent`: `<a>` carries one unconditionally so that it can act as a text content
+  // element when nested in text, but outside text it is an ordinary group whose box comes from its
+  // children's shapes. Asking the text engine for that element's box would trip its assertion that
+  // a text root exists.
+  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+    if (textEngine->textRootEntity(handle) != entt::null) {
       return textEngine->computedObjectBoundingBox(handle);
     }
   }
@@ -400,10 +404,15 @@ Entity SpanEffectOwner(Registry& registry, Entity textRootEntity, Entity spanSou
 /// when a span's fill or stroke computes to `context-fill` / `context-stroke` - the render-tree
 /// instantiation resolved the context paints (including any \ref components::PaintContextRemap)
 /// on the instance, and spans share the text element's coordinate space.
+///
+/// `spansHaveOwnEffectInstances` says whether the copy being drawn has the per-span rendering
+/// instances that carry span-level `clip-path` / `mask` / `filter`. When it does not, every span is
+/// left for this draw to paint, without those effects.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
-                          const components::ResolvedPaintServer& contextStroke) {
+                          const components::ResolvedPaintServer& contextStroke,
+                          bool spansHaveOwnEffectInstances) {
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
   }
@@ -423,7 +432,9 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       continue;
     }
 
-    span.effectOwner = SpanEffectOwner(registry, textRootHandle.entity(), span.sourceEntity);
+    span.effectOwner = spansHaveOwnEffectInstances
+                           ? SpanEffectOwner(registry, textRootHandle.entity(), span.sourceEntity)
+                           : entt::null;
 
     const Box2d viewBox =
         textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
@@ -1286,7 +1297,14 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   const auto* textComp = textRootHandle.try_get<components::TextComponent>();
   const TextParams textParams =
       toTextParams(registry, instance, *textRootStyle, textComp, textRootHandle);
-  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke);
+
+  // A shadow instance (from `<use>`) paints the light tree's text, but the span instances that
+  // carry `clip-path` / `mask` / `filter` were only created for the light tree, so this draw is the
+  // only one that paints the copy. Claiming spans for instances that do not exist in this copy
+  // would drop them entirely, so the copy paints every span, without the span-level effects.
+  const bool spansHaveOwnEffectInstances = !instance.isShadow(registry);
+  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
+                       spansHaveOwnEffectInstances);
   renderer.drawText(registry, *text, textParams);
 }
 

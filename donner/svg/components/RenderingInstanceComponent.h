@@ -207,7 +207,8 @@ struct RenderingInstanceComponent {
    * `objectBoundingBox` effect regions resolve against the span's own box. The text root's instance
    * paints every span that no such instance claims. A span nested inside a claimed span is painted
    * by the outer instance, so its own effects are not applied yet, and a claimed span paints after
-   * the text root's remaining spans rather than in document order.
+   * the text root's remaining spans rather than in document order. A `<use>` copy has no span
+   * instances of its own, so it paints every span without the span-level effects.
    */
   Entity textSpanRoot = entt::null;
 

@@ -2445,6 +2445,10 @@ Box2d TextEngine::computedInkBounds(EntityHandle handle) const {
   return result;
 }
 
+Entity TextEngine::textRootEntity(EntityHandle handle) const {
+  return findTextRootEntity(handle);
+}
+
 Box2d TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
   const Entity rootEntity = findTextRootEntity(handle);
   const auto& cache = ensureComputedTextGeometryComponent(handle);
