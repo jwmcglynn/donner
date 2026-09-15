@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <ostream>
@@ -108,7 +109,7 @@ public:
     for (size_t i = 0; i < free_.size(); ++i) {
       if (Matches(free_[i].desc, descriptor)) {
         gpu::Texture texture = std::move(free_[i].texture);
-        free_.erase(free_.begin() + static_cast<ptrdiff_t>(i));
+        free_.erase(free_.begin() + static_cast<std::ptrdiff_t>(i));
         reissued.push_back(IdentityOf(texture));
         issued.push_back(IdentityOf(texture));
         return texture;
@@ -846,7 +847,7 @@ TEST_F(GeodeFilterEngineTest, OverlappingExecutionsDoNotReuseAnUnsubmittedInterm
   ASSERT_THAT(issuedByFirst, testing::Gt(0u));
   ASSERT_THAT(pool.issued, testing::SizeIs(testing::Gt(issuedByFirst)));
   const std::vector<TextureIdentity> firstIssued(
-      pool.issued.begin(), pool.issued.begin() + static_cast<ptrdiff_t>(issuedByFirst));
+      pool.issued.begin(), pool.issued.begin() + static_cast<std::ptrdiff_t>(issuedByFirst));
   for (size_t i = issuedByFirst; i < pool.issued.size(); ++i) {
     EXPECT_THAT(firstIssued, testing::Not(testing::Contains(pool.issued[i])));
   }
