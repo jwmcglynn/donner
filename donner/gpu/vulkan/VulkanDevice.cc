@@ -487,6 +487,7 @@ bool CollectDeviceExtensions(const VulkanApi& api, bool instanceOffersPresentati
                              VkPhysicalDevice physicalDevice, bool enableTimelineSemaphoreForTest,
                              bool enablePresentation, std::vector<const char*>& deviceExtensions,
                              VkPhysicalDeviceTimelineSemaphoreFeaturesKHR& timelineFeatures,
+                             VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT& maintenanceFeatures,
                              VkDeviceCreateInfo& deviceInfo) {
   timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
   timelineFeatures.timelineSemaphore = VK_TRUE;
@@ -497,10 +498,24 @@ bool CollectDeviceExtensions(const VulkanApi& api, bool instanceOffersPresentati
   }
   if (enablePresentation) {
     if (!instanceOffersPresentation ||
-        !DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+        !DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ||
+        !DeviceOffersExtension(api, physicalDevice,
+                               VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
       return false;
     }
     deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    deviceExtensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    maintenanceFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+    VkPhysicalDeviceFeatures2 queried = {};
+    queried.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    queried.pNext = &maintenanceFeatures;
+    api.vkGetPhysicalDeviceFeatures2(physicalDevice, &queried);
+    if (maintenanceFeatures.swapchainMaintenance1 != VK_TRUE) {
+      return false;
+    }
+    maintenanceFeatures.pNext = const_cast<void*>(deviceInfo.pNext);
+    deviceInfo.pNext = &maintenanceFeatures;
   }
 
   deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -1841,9 +1856,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
 
   std::vector<const char*> deviceExtensions;
   VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatures = {};
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenanceFeatures = {};
   if (!CollectDeviceExtensions(api, setup.presentationAvailable, selectedDevice,
                                enableTimelineSemaphoreForTest, enablePresentation, deviceExtensions,
-                               timelineFeatures, deviceInfo)) {
+                               timelineFeatures, maintenanceFeatures, deviceInfo)) {
     api.vkDestroyInstance(instance, nullptr);
     return nullptr;
   }

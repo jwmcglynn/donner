@@ -429,10 +429,7 @@ VulkanSwapchain::VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceK
     : context_(context), surface_(surface), ownsSurface_(ownsSurface) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
-  const VkResult idle = context_.api->vkDeviceWaitIdle(context_.device);
-  if (!CompletionProvesIdle(idle)) {
-    return;
-  }
+  if (drainPresentFences().hasError()) return;
   if (drainPendingSubmissions().hasError()) {
     return;
   }
@@ -531,9 +528,7 @@ Status VulkanSwapchain::createSwapchainUnguarded() {
   if (swapchain_ != VK_NULL_HANDLE) {
     // The semaphores and images about to be released may still be named by submitted work, and a
     // discarded frame certainly is, so nothing is destroyed while the device could be reading it.
-    if (const VkResult result = api.vkDeviceWaitIdle(context_.device); result != VK_SUCCESS) {
-      return VkError("vkDeviceWaitIdle", result);
-    }
+    if (Status presented = drainPresentFences(); presented.hasError()) return presented;
     if (Status drained = drainPendingSubmissions(); drained.hasError()) {
       return drained;
     }
@@ -621,6 +616,8 @@ Status VulkanSwapchain::createSyncObjects() {
   // around, and an acquisition ring one longer than the image count, so the slot being reused is
   // always one whose frame has already been presented or discarded.
   handoverSemaphores_.assign(images_.size(), VK_NULL_HANDLE);
+  presentFences_.assign(images_.size(), VK_NULL_HANDLE);
+  presentFencePending_.assign(images_.size(), false);
   acquireSemaphores_.assign(images_.size() + 1, VK_NULL_HANDLE);
   for (std::vector<VkSemaphore>* group : {&handoverSemaphores_, &acquireSemaphores_}) {
     for (VkSemaphore& semaphore : *group) {
@@ -631,8 +628,45 @@ Status VulkanSwapchain::createSyncObjects() {
       }
     }
   }
+  VkFenceCreateInfo fenceInfo = {};
+  fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  for (VkFence& fence : presentFences_) {
+    if (const VkResult result = api.vkCreateFence(context_.device, &fenceInfo, nullptr, &fence);
+        result != VK_SUCCESS) {
+      return VkError("vkCreateFence (present completion)", result);
+    }
+  }
   acquireRingFences_.assign(acquireSemaphores_.size(), VK_NULL_HANDLE);
   acquireCount_ = 0;
+  return OkStatus();
+}
+
+Status VulkanSwapchain::waitForPresentFence(uint32_t imageIndex) {
+  if (imageIndex >= presentFences_.size() || !presentFencePending_[imageIndex]) {
+    return OkStatus();
+  }
+  VkFence fence = presentFences_[imageIndex];
+  const VkResult waited =
+      context_.api->vkWaitForFences(context_.device, 1, &fence, VK_TRUE, kDrainTimeoutNanoseconds);
+  if (!CompletionProvesIdle(waited)) {
+    return VkError("vkWaitForFences (present completion)", waited);
+  }
+  if (waited == VK_SUCCESS) {
+    if (const VkResult reset = context_.api->vkResetFences(context_.device, 1, &fence);
+        reset != VK_SUCCESS) {
+      return VkError("vkResetFences (present completion)", reset);
+    }
+  }
+  presentFencePending_[imageIndex] = false;
+  return OkStatus();
+}
+
+Status VulkanSwapchain::drainPresentFences() {
+  for (uint32_t image = 0; image < presentFences_.size(); ++image) {
+    if (Status status = waitForPresentFence(image); status.hasError()) {
+      return status;
+    }
+  }
   return OkStatus();
 }
 
@@ -872,6 +906,9 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
   }
 
   const VkSemaphore handover = handoverSemaphores_[imageIndex_];
+  if (Status status = waitForPresentFence(imageIndex_); status.hasError()) {
+    return std::move(status).error();
+  }
   if (Status status = submitFrameHandover(state, handover); status.hasError()) {
     // The frame is still the swapchain's to reclaim, and only a new swapchain does that.
     hasFrame_ = false;
@@ -887,8 +924,16 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
   presentInfo.swapchainCount = 1;
   presentInfo.pSwapchains = &swapchain_;
   presentInfo.pImageIndices = &imageIndex_;
+  VkSwapchainPresentFenceInfoEXT fenceInfo = {};
+  fenceInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT;
+  fenceInfo.swapchainCount = 1;
+  fenceInfo.pFences = &presentFences_[imageIndex_];
+  presentInfo.pNext = &fenceInfo;
 
   const VkResult result = context_.api->vkQueuePresentKHR(context_.queue, &presentInfo);
+  if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) {
+    presentFencePending_[imageIndex_] = true;
+  }
   hasFrame_ = false;
   frameTextureSlot_.reset();
 
@@ -966,6 +1011,13 @@ void VulkanSwapchain::destroySwapchain() {
     }
   }
   handoverSemaphores_.clear();
+  for (VkFence fence : presentFences_) {
+    if (fence != VK_NULL_HANDLE) {
+      api.vkDestroyFence(context_.device, fence, nullptr);
+    }
+  }
+  presentFences_.clear();
+  presentFencePending_.clear();
   for (VkSemaphore semaphore : acquireSemaphores_) {
     if (semaphore != VK_NULL_HANDLE) {
       api.vkDestroySemaphore(context_.device, semaphore, nullptr);

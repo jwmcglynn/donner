@@ -170,6 +170,8 @@ Status VulkanLoader::loadInstance(VkInstance instance, bool debugUtilsEnabled) {
                 resolve("vkGetPhysicalDeviceProperties"));
   missing.store(api_.vkGetPhysicalDeviceFeatures, "vkGetPhysicalDeviceFeatures",
                 resolve("vkGetPhysicalDeviceFeatures"));
+  missing.store(api_.vkGetPhysicalDeviceFeatures2, "vkGetPhysicalDeviceFeatures2",
+                resolve("vkGetPhysicalDeviceFeatures2"));
   missing.store(api_.vkGetPhysicalDeviceMemoryProperties, "vkGetPhysicalDeviceMemoryProperties",
                 resolve("vkGetPhysicalDeviceMemoryProperties"));
   missing.store(api_.vkGetPhysicalDeviceQueueFamilyProperties,
@@ -309,6 +311,7 @@ Status VulkanLoader::loadDevice(VkDevice device) {
   missing.store(api_.vkDestroyFence, "vkDestroyFence", resolve("vkDestroyFence"));
   missing.store(api_.vkGetFenceStatus, "vkGetFenceStatus", resolve("vkGetFenceStatus"));
   missing.store(api_.vkWaitForFences, "vkWaitForFences", resolve("vkWaitForFences"));
+  missing.store(api_.vkResetFences, "vkResetFences", resolve("vkResetFences"));
   missing.store(api_.vkCmdBeginRenderPass, "vkCmdBeginRenderPass", resolve("vkCmdBeginRenderPass"));
   missing.store(api_.vkCmdEndRenderPass, "vkCmdEndRenderPass", resolve("vkCmdEndRenderPass"));
   missing.store(api_.vkCmdBindPipeline, "vkCmdBindPipeline", resolve("vkCmdBindPipeline"));

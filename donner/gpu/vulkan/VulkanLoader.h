@@ -46,6 +46,7 @@ struct VulkanApi {
   PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices = nullptr;
   PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties = nullptr;
   PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures = nullptr;
+  PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2 = nullptr;
   PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties = nullptr;
   PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties = nullptr;
   PFN_vkCreateDevice vkCreateDevice = nullptr;
@@ -104,6 +105,7 @@ struct VulkanApi {
   PFN_vkDestroyFence vkDestroyFence = nullptr;
   PFN_vkGetFenceStatus vkGetFenceStatus = nullptr;
   PFN_vkWaitForFences vkWaitForFences = nullptr;
+  PFN_vkResetFences vkResetFences = nullptr;
   PFN_vkCmdBeginRenderPass vkCmdBeginRenderPass = nullptr;
   PFN_vkCmdEndRenderPass vkCmdEndRenderPass = nullptr;
   PFN_vkCmdBindPipeline vkCmdBindPipeline = nullptr;

@@ -243,6 +243,12 @@ private:
   /// Creates the per-image handover semaphores and the acquisition ring.
   Status createSyncObjects();
 
+  /// Waits and resets the presentation fence for an image before that fence is reused.
+  Status waitForPresentFence(uint32_t imageIndex);
+
+  /// Waits every fence associated with an accepted presentation operation.
+  Status drainPresentFences();
+
   /// Refuses an acquisition the surface is not in a state to serve, and rebuilds the swapchain
   /// when a discarded frame or an outdated presentation engine left one owed.
   Status prepareForAcquire();
@@ -290,6 +296,8 @@ private:
   /// and waited on by the present. Indexed by image index, so it is free to reuse exactly when
   /// that image comes back around.
   std::vector<VkSemaphore> handoverSemaphores_;
+  std::vector<VkFence> presentFences_;     //!< Completion fence for each image's latest present.
+  std::vector<bool> presentFencePending_;  //!< Whether the corresponding fence was enqueued.
   /// Ring of acquisition semaphores, one longer than the image count so the slot being reused is
   /// always one whose frame has already been presented or discarded.
   std::vector<VkSemaphore> acquireSemaphores_;
