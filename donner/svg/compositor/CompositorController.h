@@ -1005,14 +1005,10 @@ public:
   /// `config().tightBoundedSegments` for convenience.
   [[nodiscard]] bool tightBoundedSegmentsEnabled() const { return config_.tightBoundedSegments; }
 
-  /// When true, `renderFrame()` skips the main-renderer compose step while
-  /// the split-static-layers cache (`bg`/`drag`/`fg` triple) is populated.
-  /// The editor's drag overlay reads those bitmaps directly via GL, so the
-  /// per-frame `drawImage` calls into the main renderer are wasted work
-  /// - on a 892×512 Skia backend with a few filter layers the skip saves
-  /// ~100 ms per drag frame. The flat snapshot the editor uploads stays
-  /// stale during drag but is only drawn after drag ends, by which point
-  /// the caller must disable the skip for a settle render that refreshes it.
+  /// Allow `renderFrame()` to skip main-frame composition when split tiles provide presentation.
+  /// The first complete main frame and pixel-identity verification still require composition.
+  /// Callers must disable this before requesting a current CPU or texture snapshot; the retained
+  /// main frame may otherwise describe an earlier document state or viewport.
   void setSkipMainComposeDuringSplit(bool skip) { skipMainComposeDuringSplit_ = skip; }
 
   /// Enumerate every cacheable unit (static segments + promoted layer
@@ -1383,13 +1379,8 @@ private:
 
   void renderFrameImpl(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
-  /// True after `composeLayers` has completed a full (non-skipped)
-  /// main-renderer compose. Used to gate the skip-compose fast path:
-  /// on the first renderFrame of a session the main renderer still
-  /// has an empty pixmap, and callers that read `takeSnapshot()` expect a
-  /// real render at least once. We flip this to true after the first full
-  /// compose and only skip on subsequent drag frames, preserving the cached
-  /// non-split frame without ever producing a transparent bitmap.
+  /// A complete main frame has been rendered since the last reset. Viewport changes retain it
+  /// while tile-only callers re-rasterize their own payloads; snapshot callers disable the skip.
   bool mainRendererHasCachedFrame_ = false;
 
   FastPathCounters fastPathCounters_;
