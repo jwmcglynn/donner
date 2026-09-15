@@ -27,6 +27,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/Color.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/GlTextureCache.h"
@@ -1694,6 +1695,74 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "A premultiplied red texture should not be multiplied by alpha again during ImGui "
          "presentation.";
+}
+
+TEST(EditorWindowTest, CompositorDebugPanelReusesAnUnchangedSnapshotRegistration) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor Debug Panel Registration Reuse Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid() || window.geodeDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+  svg::RendererGeode source(window.geodeDevice());
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(32.0, 32.0);
+  viewport.devicePixelRatio = 1.0;
+  source.beginFrame(viewport);
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid{css::Color(css::RGBA(0, 255, 0, 255))};
+  source.setPaint(paint);
+  source.drawRect(Box2d({0.0, 0.0}, {32.0, 32.0}), svg::StrokeParams{});
+  source.endFrame();
+
+  const std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot =
+      source.takeTextureSnapshot();
+  ASSERT_TRUE(textureSnapshot != nullptr);
+
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  ASSERT_TRUE(registry != nullptr);
+
+  using CompositeTileSnapshot = svg::compositor::CompositorController::CompositeTileSnapshot;
+  CompositeTileSnapshot tile;
+  tile.kind = CompositeTileSnapshot::Kind::Segment;
+  tile.id = "seg:reuse";
+  tile.label = "segment reuse";
+  tile.generation = 1;
+  tile.bitmapDims = Vector2i(32, 32);
+  tile.textureSnapshot = textureSnapshot;
+  const std::vector<CompositeTileSnapshot> tiles{tile};
+
+  CompositorDebugPanel panel(window.geodeDevice());
+  const auto renderPanelFrame = [&]() {
+    window.beginFrame();
+    ImGui::Begin("##registration_reuse_host");
+    panel.render(tiles, svg::compositor::CompositorController::StateSnapshot{}, entt::null,
+                 /*viewportZoom=*/1.0, /*viewportDpr=*/1.0, Vector2i(96, 96), Vector2i(96, 96),
+                 PresentationCoverageDiagnostics{},
+                 svg::compositor::CompositorController::FastPathCounters{},
+                 svg::compositor::CompositorController::RenderFrameStats{});
+    ImGui::End();
+    window.endFrame();
+  };
+
+  renderPanelFrame();
+  const size_t afterFirstFrame = registry->liveCount();
+  EXPECT_GT(afterFirstFrame, 0u) << "the tile's snapshot should have been registered once";
+
+  renderPanelFrame();
+
+  // Deriving the identifier used to be an address cast, so calling it every frame cost nothing.
+  // Resolving through the registry allocates, and the unchanged-snapshot branch keeps the
+  // identifier the entry already published, so a second registration would be attached to no
+  // entry and retired by nobody: one leaked slot and backing per visible tile per frame.
+  EXPECT_EQ(registry->liveCount(), afterFirstFrame)
+      << "a tile whose snapshot did not change must reuse its registration";
 }
 
 TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend) {

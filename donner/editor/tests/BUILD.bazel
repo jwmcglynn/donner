@@ -225,6 +225,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/base:base_test_utils",
             "//donner/editor:async_renderer",
+            "//donner/editor:compositor_debug_panel",
             "//donner/editor:document_sync_controller",
             "//donner/editor:editor_app",
             "//donner/editor:gl_texture_cache",
