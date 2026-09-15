@@ -49,6 +49,9 @@ extern "C" {
 #ifdef DONNER_EDITOR_WGPU
 #ifndef __EMSCRIPTEN__
 #include "donner/editor/gui/EditorWgpuSurface.h"
+#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
+#include "donner/editor/gui/UiTextureRegistry.h"
+#include "donner/gpu/CommandEncoder.h"
 #endif
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -1352,6 +1355,122 @@ private:
 #endif  // DONNER_EDITOR_WGPU
 
 #ifdef DONNER_EDITOR_WGPU
+/// The runtime format matching \p format, or nothing when the surface uses one the runtime does
+/// not describe. Only the formats a surface is configured with are mapped.
+/// @param format Surface format the window was configured with.
+std::optional<gpu::TextureFormat> RuntimeFormatOf(wgpu::TextureFormat format) {
+  switch (format) {
+    case wgpu::TextureFormat::BGRA8Unorm: return gpu::TextureFormat::BGRA8Unorm;
+    case wgpu::TextureFormat::RGBA8Unorm: return gpu::TextureFormat::RGBA8Unorm;
+    default: return std::nullopt;
+  }
+}
+
+/// Creates the UI renderer for \p device and uploads \p fonts into it, or returns null after
+/// reporting why. Kept out of the window's constructor so the constructor's shape is unchanged.
+/// @param device Device the renderer draws through.
+/// @param registry Registry the renderer resolves draw commands against.
+/// @param surfaceFormat Surface format the pipelines must target.
+/// @param fonts Font atlas uploaded and registered as the UI's font texture.
+std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(gpu::Device& device,
+                                                       UiTextureRegistry& registry,
+                                                       wgpu::TextureFormat surfaceFormat,
+                                                       ImFontAtlas& fonts) {
+  const std::optional<gpu::TextureFormat> targetFormat = RuntimeFormatOf(surfaceFormat);
+  if (!targetFormat.has_value()) {
+    std::fprintf(stderr, "EditorWindow: surface format has no runtime representation\n");
+    return nullptr;
+  }
+  gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> renderer =
+      ImGuiRuntimeRenderer::Create(device, registry, *targetFormat);
+  if (renderer.hasError()) {
+    std::fprintf(stderr, "EditorWindow: UI renderer creation failed: %s\n",
+                 renderer.error().toString().c_str());
+    return nullptr;
+  }
+  std::unique_ptr<ImGuiRuntimeRenderer> created = std::move(renderer).result();
+  created->install();
+  if (const gpu::Status uploaded = created->buildFontAtlas(fonts); uploaded.hasError()) {
+    std::fprintf(stderr, "EditorWindow: UI font atlas upload failed: %s\n",
+                 uploaded.error().toString().c_str());
+    return nullptr;
+  }
+  return created;
+}
+
+/// Starts one UI frame: releases the registrations whose retirement frames have passed, and
+/// rebuilds the font atlas when the UI layer invalidated it, which is the point the renderer
+/// backend previously rebuilt its font texture.
+/// @param registry Registry whose frame is advanced, or null before one exists.
+/// @param renderer Renderer owning the font atlas, or null before one exists.
+void BeginUiFrame(UiTextureRegistry* registry, ImGuiRuntimeRenderer* renderer) {
+  if (registry != nullptr) {
+    registry->advanceFrame();
+  }
+  if (renderer == nullptr || ImGui::GetIO().Fonts->IsBuilt()) {
+    return;
+  }
+  if (const gpu::Status rebuilt = renderer->buildFontAtlas(*ImGui::GetIO().Fonts);
+      rebuilt.hasError()) {
+    std::fprintf(stderr, "EditorWindow: UI font atlas rebuild failed: %s\n",
+                 rebuilt.error().toString().c_str());
+  }
+}
+
+/// Records and submits one frame of UI draw data into \p target through the runtime. The surface
+/// still belongs to the presentation path, so the target enters the runtime as an imported
+/// texture whose backing it does not own.
+/// @param device Device the frame is recorded on.
+/// @param renderer Renderer recording the draw data.
+/// @param target Frame's color target.
+/// @param targetSize Target extent in device pixels.
+/// @param surfaceFormat Format \p target was configured with.
+/// @param loadExisting Whether the target already holds content that must be preserved.
+/// @param clearColor Color the target is cleared to when it does not.
+bool RenderUiDrawData(geode::GeodeWgpuAdapterDevice& device, ImGuiRuntimeRenderer& renderer,
+                      wgpu::Texture& target, const gpu::Extent2d& targetSize,
+                      wgpu::TextureFormat surfaceFormat, bool loadExisting,
+                      const std::array<double, 4>& clearColor) {
+  const std::optional<gpu::TextureFormat> targetFormat = RuntimeFormatOf(surfaceFormat);
+  if (!targetFormat.has_value()) {
+    return false;
+  }
+  gpu::Result<gpu::Texture> runtimeTarget = device.importExternalTexture(
+      target, targetSize, *targetFormat, gpu::TextureUsage::RenderAttachment);
+  if (runtimeTarget.hasError()) {
+    return false;
+  }
+  gpu::Result<gpu::TextureView> runtimeView =
+      device.createTextureView(runtimeTarget.result(), gpu::TextureViewDescriptor{"editorFrame"});
+  if (runtimeView.hasError()) {
+    return false;
+  }
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = device.createCommandEncoder();
+  if (encoder.hasError()) {
+    return false;
+  }
+  gpu::Result<gpu::RenderPassEncoder*> pass =
+      encoder.result()->beginRenderPass(gpu::RenderPassDescriptor{
+          "editorUi",
+          {{runtimeView.result(), loadExisting ? gpu::LoadOp::Load : gpu::LoadOp::Clear,
+            gpu::StoreOp::Store, clearColor}}});
+  if (pass.hasError()) {
+    return false;
+  }
+  const gpu::Status drawn = renderer.render(*ImGui::GetDrawData(), *pass.result(), targetSize);
+  if (drawn.hasError()) {
+    std::fprintf(stderr, "EditorWindow: UI draw failed: %s\n", drawn.error().toString().c_str());
+  }
+  if (pass.result()->end().hasError()) {
+    return false;
+  }
+  gpu::Result<gpu::CommandBuffer> commands = encoder.result()->finish();
+  if (commands.hasError()) {
+    return false;
+  }
+  return device.submit(std::move(commands).result()).hasResult();
+}
+
 struct EditorWindow::WgpuState {
   wgpu::Instance instance;
   wgpu::Adapter adapter;
@@ -1365,6 +1484,10 @@ struct EditorWindow::WgpuState {
   wgpu::TextureUsage surfaceUsage = wgpu::TextureUsage::RenderAttachment;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
+  /// Registrations of the textures UI draw data may sample, and the renderer that resolves them.
+  /// Both are created once the device exists and torn down before it.
+  std::unique_ptr<UiTextureRegistry> uiTextureRegistry;
+  std::unique_ptr<ImGuiRuntimeRenderer> uiRenderer;
   /// Shared device-lost flag observed by both Geode wrappers above. On
   /// native builds the WebGPU device-lost callback sets it, and bounded GPU
   /// waits inside Geode set it on timeout, so both loss paths surface as one
@@ -1795,11 +1918,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOther failed\n");
     return;
   }
-  ImGui_ImplWGPU_InitInfo initInfo;
-  initInfo.Device = wgpuState_->device;
-  initInfo.RenderTargetFormat = static_cast<WGPUTextureFormat>(wgpuState_->surfaceFormat);
-  if (!ImGui_ImplWGPU_Init(&initInfo)) {
-    std::fprintf(stderr, "EditorWindow: ImGui_ImplWGPU_Init failed\n");
+  gpu::Device& runtimeDevice = wgpuState_->framebufferGeodeDevice->adapterDevice();
+  wgpuState_->uiTextureRegistry = std::make_unique<UiTextureRegistry>(runtimeDevice);
+  wgpuState_->uiRenderer = CreateUiRenderer(runtimeDevice, *wgpuState_->uiTextureRegistry,
+                                            wgpuState_->surfaceFormat, *io.Fonts);
+  if (wgpuState_->uiRenderer == nullptr) {
     return;
   }
 #else
@@ -1828,7 +1951,11 @@ EditorWindow::~EditorWindow() {
 #endif
   if (imguiInitialized_) {
 #ifdef DONNER_EDITOR_WGPU
-    ImGui_ImplWGPU_Shutdown();
+    if (wgpuState_ != nullptr && wgpuState_->uiRenderer != nullptr) {
+      wgpuState_->uiRenderer->uninstall();
+      wgpuState_->uiRenderer.reset();
+      wgpuState_->uiTextureRegistry.reset();
+    }
 #else
     ImGui_ImplOpenGL3_Shutdown();
 #endif
@@ -2008,7 +2135,7 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
   ZoneScopedN("EditorWindow::beginFrame");
   const auto beginFrameStart = std::chrono::steady_clock::now();
 #ifdef DONNER_EDITOR_WGPU
-  ImGui_ImplWGPU_NewFrame();
+  BeginUiFrame(wgpuState_->uiTextureRegistry.get(), wgpuState_->uiRenderer.get());
 #else
   ImGui_ImplOpenGL3_NewFrame();
 #endif
@@ -2355,48 +2482,24 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 
   {
     const auto imguiDrawStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::TextureView> view(target.createView());
-    if (!view) {
-      return;
-    }
-    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-        wgpuState_->device.createCommandEncoder());
-    if (!encoder) {
-      return;
-    }
-    wgpu::RenderPassColorAttachment color = {};
-    color.view = view.get();
-    color.loadOp = hasPreImGuiFramebufferContent ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
-    color.storeOp = wgpu::StoreOp::Store;
-    color.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                        options_.clearColor[3]};
-    color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-    wgpu::RenderPassDescriptor passDesc = {};
-    passDesc.colorAttachmentCount = 1;
-    passDesc.colorAttachments = &color;
-    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(
-        encoder.get().beginRenderPass(passDesc));
-    if (!pass) {
+    if (wgpuState_->uiRenderer == nullptr) {
       return;
     }
     {
-      ZoneScopedN("ImGui_ImplWGPU_RenderDrawData");
-      // The WGPU backend keeps one host-side `ImDrawVert` staging array per
-      // frame in flight and only ever grows them, so a single busy frame sets
-      // the size of three arrays for the rest of the session. Tagged so the
-      // large-block table names them instead of listing three anonymous
-      // eighteen-megabyte blocks.
+      ZoneScopedN("EditorWindow::renderUiDrawData");
+      // The host-side staging arrays the frame's geometry is packed into only ever grow, so one
+      // busy frame sets their size for the rest of the session. Tagged so the large-block table
+      // names them instead of listing anonymous multi-megabyte blocks.
       const ScopedAllocTag imguiUploadTag(AllocTag::PresentationUpload);
-      ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass.get());
+      if (!RenderUiDrawData(wgpuState_->framebufferGeodeDevice->adapterDevice(),
+                            *wgpuState_->uiRenderer, target,
+                            {static_cast<uint32_t>(displayW), static_cast<uint32_t>(displayH)},
+                            wgpuState_->surfaceFormat, hasPreImGuiFramebufferContent,
+                            {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                             options_.clearColor[3]})) {
+        return;
+      }
     }
-    pass.get().end();
-    pass.reset();
-    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-    if (!commands) {
-      return;
-    }
-    wgpuState_->queue.submit(1, &commands.get());
     timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
   }
   if (readbackBuffer) {

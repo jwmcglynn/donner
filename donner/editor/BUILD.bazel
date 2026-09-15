@@ -586,13 +586,13 @@ donner_cc_library(
         "//donner/svg",
     ] + select({
         ":wasm_geode_enabled": [
+            "//donner/editor/gui:ui_texture_registration",
             "//donner/svg/renderer:renderer_geode",
             "//third_party/emscripten-glfw",
-            "@imgui//:imgui_wgpu_backend",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/editor/gui:ui_texture_registration",
             "//donner/svg/renderer:renderer_geode",
-            "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [
             "//third_party/glad",
@@ -850,17 +850,22 @@ donner_cc_library(
         ":imgui_headers",
         ":layer_inspector_diagnostics",
         "//donner/base",
+        "//donner/gpu",
         "//donner/svg/compositor",
         "@imgui",
     ] + select({
         ":wasm_geode_enabled": [
+            "//donner/editor/gui:imgui_runtime_renderer",
+            "//donner/editor/gui:ui_texture_registration",
+            "//donner/editor/gui:ui_texture_registry",
             "//donner/svg/renderer:renderer_geode",
             "//third_party/emscripten-glfw",
-            "@imgui//:imgui_wgpu_backend",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/editor/gui:imgui_runtime_renderer",
+            "//donner/editor/gui:ui_texture_registration",
+            "//donner/editor/gui:ui_texture_registry",
             "//donner/svg/renderer:renderer_geode",
-            "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [
             "//third_party/glad",

@@ -18,9 +18,12 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #ifdef DONNER_EDITOR_WGPU
-#include "backends/imgui_impl_wgpu.h"
+#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
+#include "donner/editor/gui/UiTextureRegistration.h"
+#include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
@@ -38,10 +41,6 @@ uint32_t AlignWgpuBytesPerRow(uint32_t value) {
   return (value + kWgpuBytesPerRowAlignment - 1u) & ~(kWgpuBytesPerRowAlignment - 1u);
 }
 
-ImTextureID TextureViewToImTextureId(const wgpu::TextureView& textureView) {
-  const WGPUTextureView rawTextureView = textureView;
-  return static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(rawTextureView));
-}
 #endif
 
 const char* KindLabel(svg::compositor::CompositorController::CompositeTileSnapshot::Kind kind) {
@@ -159,14 +158,14 @@ CompositorDebugPanel::CompositorDebugPanel(
 CompositorDebugPanel::~CompositorDebugPanel() {
 #ifdef DONNER_EDITOR_WGPU
   for (const auto& [_, entry] : textures_) {
-    ReleaseImGuiTexture(entry.texture);
+    releaseImGuiTexture(entry.texture);
   }
   for (const RetiredSnapshot& retired : pendingRetiredSnapshots_) {
-    ReleaseImGuiTexture(retired.texture);
+    releaseImGuiTexture(retired.texture);
   }
   for (const RetiredSnapshotBatch& batch : retiredSnapshotFrames_) {
     for (const RetiredSnapshot& retired : batch) {
-      ReleaseImGuiTexture(retired.texture);
+      releaseImGuiTexture(retired.texture);
     }
   }
 #else
@@ -240,7 +239,7 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
   RetiredSnapshotBatch retiredSnapshots;
 
   if (hasTextureSnapshot) {
-    const ThumbnailTextureHandle texture = ToImTextureId(tile.textureSnapshot.get());
+    const ThumbnailTextureHandle texture = registerSnapshotTexture(tile.textureSnapshot.get());
     if (texture == 0) {
       if (entry.texture != 0) {
         retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
@@ -258,7 +257,6 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
         retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
                                                   std::move(entry.uploadedTexture)));
       }
-      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(texture);
       entry.texture = texture;
       entry.textureSnapshot = tile.textureSnapshot;
       entry.uploadedTexture.reset();
@@ -282,7 +280,8 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
   std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
       uploadThumbnailPixelsToWgpu(tile.thumbnailPixels, tile.thumbnailDims);
   const ThumbnailTextureHandle texture =
-      uploadedTexture != nullptr ? TextureViewToImTextureId(uploadedTexture->view.get()) : 0;
+      uploadedTexture != nullptr ? registerUploadedTexture(*uploadedTexture, tile.thumbnailDims)
+                                 : 0;
   if (texture == 0) {
     if (entry.texture != 0) {
       retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
@@ -384,7 +383,7 @@ void CompositorDebugPanel::advancePresentationFrame() {
 
   while (retiredSnapshotFrames_.size() > kRetiredSnapshotFrameLimit) {
     for (const RetiredSnapshot& retired : retiredSnapshotFrames_.front()) {
-      ReleaseImGuiTexture(retired.texture);
+      releaseImGuiTexture(retired.texture);
     }
     retiredSnapshotFrames_.pop_front();
   }
@@ -424,12 +423,13 @@ void CompositorDebugPanel::render(
       ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, state.canvasSize);
   const bool commitStalled = canvasFreshness == CanvasFreshness::CommitStalled;
   const bool rasterizeBehind = canvasFreshness == CanvasFreshness::CompositorBehind;
-  ImGui::TextColored(
-      commitStalled ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
-                    : ImGui::GetStyle().Colors[ImGuiCol_Text],
-      "  viewport: zoom=%.3f  dpr=%.3f  → desired %d×%d", viewportZoom, viewportDpr,
-      viewportDesiredCanvas.x, viewportDesiredCanvas.y);
-  ImGui::TextColored(commitStalled ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
+  ImGui::TextColored(commitStalled
+                         ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
+                         : ImGui::GetStyle().Colors[ImGuiCol_Text],
+                     "  viewport: zoom=%.3f  dpr=%.3f  → desired %d×%d", viewportZoom, viewportDpr,
+                     viewportDesiredCanvas.x, viewportDesiredCanvas.y);
+  ImGui::TextColored(commitStalled
+                         ? ImGui::ColorConvertU32ToFloat4(EditorTheme::Active().destructive)
                      : rasterizeBehind ? ImVec4(1.0f, 0.7f, 0.4f, 1.0f)
                                        : ImGui::GetStyle().Colors[ImGuiCol_Text],
                      "  document canvas: %d×%d%s", documentCanvas.x, documentCanvas.y,
@@ -645,16 +645,30 @@ void CompositorDebugPanel::render(
 }
 
 #ifdef DONNER_EDITOR_WGPU
-CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::ToImTextureId(
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::registerSnapshotTexture(
     const svg::RendererTextureSnapshot* textureSnapshot) {
-  if (textureSnapshot == nullptr ||
-      textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
+  if (textureSnapshot == nullptr) {
     return 0;
   }
+  UiTextureBacking backing;
+  const ThumbnailTextureHandle handle = RegisterUiSnapshotTexture(*textureSnapshot, &backing);
+  if (handle != 0) {
+    registeredBackings_[handle] = std::move(backing);
+  }
+  return handle;
+}
 
-  const auto* geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot*>(textureSnapshot);
-  const WGPUTextureView textureView = geodeTexture->textureView();
-  return static_cast<ThumbnailTextureHandle>(reinterpret_cast<std::uintptr_t>(textureView));
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::registerUploadedTexture(
+    const WgpuUploadedTexture& uploaded, const Vector2i& dimensions) {
+  UiTextureBacking backing;
+  // A thumbnail this panel uploaded holds straight-alpha bitmap pixels.
+  const ThumbnailTextureHandle handle =
+      RegisterUiImportedTexture(uploaded.texture.get(), dimensions, gpu::TextureFormat::RGBA8Unorm,
+                                UiTextureAlphaMode::Straight, &backing);
+  if (handle != 0) {
+    registeredBackings_[handle] = std::move(backing);
+  }
+  return handle;
 }
 
 std::shared_ptr<CompositorDebugPanel::WgpuUploadedTexture>
@@ -733,13 +747,11 @@ CompositorDebugPanel::RetiredSnapshot CompositorDebugPanel::RetireSnapshot(
   };
 }
 
-void CompositorDebugPanel::ReleaseImGuiTexture(ThumbnailTextureHandle texture) {
-  if (texture == 0) {
-    return;
-  }
-
-  ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(texture);
-  ImGui_ImplWGPU_RemoveTexture(texture);
+void CompositorDebugPanel::releaseImGuiTexture(ThumbnailTextureHandle texture) {
+  // Retiring refuses new draw data at once and releases the slot after the frames a recorded draw
+  // can still be in flight, which is the window this panel already held its snapshots for.
+  RetireUiTexture(texture);
+  registeredBackings_.erase(texture);
 }
 
 void CompositorDebugPanel::retireSnapshots(RetiredSnapshotBatch snapshots) {

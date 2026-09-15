@@ -21,6 +21,9 @@
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/ImGuiIncludes.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/gui/UiTextureRegistration.h"
+#endif
 
 namespace donner::geode {
 class GeodeDevice;
@@ -277,7 +280,19 @@ private:
 
   static ImTextureID ToImTextureId(NativeTextureHandle texture);
 #ifdef DONNER_EDITOR_WGPU
-  static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+  /// Registers \p snapshot as a UI texture and retains the handles backing it until the
+  /// registration is retired. Returns zero when it cannot be registered.
+  /// @param snapshot Snapshot to register.
+  NativeTextureHandle registerSnapshotTexture(const svg::RendererTextureSnapshot& snapshot);
+
+  /// Returns the identifier an upload should publish: \p existing when the upload reused the
+  /// texture behind it, since re-registering would strand the live registration, and a fresh
+  /// registration of \p snapshot otherwise.
+  /// @param snapshot Snapshot the upload produced.
+  /// @param reusedTexture Whether the upload reused the entry's previous texture.
+  /// @param existing Identifier the entry already published.
+  NativeTextureHandle textureIdForUpload(const svg::RendererTextureSnapshot& snapshot,
+                                         bool reusedTexture, NativeTextureHandle existing);
   /// Upload a CPU bitmap into a WGPU texture owned by the returned snapshot. Reuses
   /// @p reusableSnapshot's texture when its allocation still fits the payload, so the
   /// snapshot handed back may be the one passed in.
@@ -320,11 +335,15 @@ private:
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
 
-  static void releaseImGuiTexture(NativeTextureHandle texture);
+  /// Retires \p texture's registration and drops the handles that backed it.
+  /// @param texture Identifier to retire.
+  void releaseImGuiTexture(NativeTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
 
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
+  /// Handles backing each live registration, dropped when that registration is retired.
+  std::unordered_map<ImTextureID, UiTextureBacking> registeredBackings_;
 #endif
 
   /// Tile texture cache keyed on `CompositedTile::id`. Entries

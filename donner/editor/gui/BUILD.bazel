@@ -94,6 +94,8 @@ donner_cc_library(
         "@imgui",
     ] + select({
         "//donner/editor:wasm_geode_enabled": [
+            ":imgui_runtime_renderer",
+            ":ui_texture_registry",
             "//donner/gpu",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",
@@ -104,6 +106,8 @@ donner_cc_library(
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
             ":editor_wgpu_surface",
+            ":imgui_runtime_renderer",
+            ":ui_texture_registry",
             "//donner/gpu",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",
@@ -119,4 +123,39 @@ donner_cc_library(
     }),
 )
 
+donner_cc_library(
+    name = "ui_texture_registration",
+    srcs = ["UiTextureRegistration.cc"],
+    hdrs = ["UiTextureRegistration.h"],
+    deps = [
+        ":imgui_runtime_renderer",
+        ":ui_texture_registry",
+        "//donner/base",
+        "//donner/editor:imgui_headers",
+        "//donner/gpu",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+        "@imgui",
+    ],
+)
+
 donner_package()
+
+donner_cc_library(
+    name = "imgui_runtime_renderer",
+    srcs = ["ImGuiRuntimeRenderer.cc"],
+    hdrs = ["ImGuiRuntimeRenderer.h"],
+    deps = [
+        ":ui_texture_registry",
+        "//donner/editor:imgui_headers",
+        "//donner/gpu",
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:ui_draw_api",
+        "//donner/gpu/shader:ui_draw_artifact",
+        "@imgui",
+    ] + select({
+        "@platforms//os:macos": ["//donner/gpu/shader:ui_draw_native_artifact"],
+        "@platforms//os:linux": ["//donner/gpu/shader:ui_draw_native_artifact"],
+        "//conditions:default": [],
+    }),
+)
