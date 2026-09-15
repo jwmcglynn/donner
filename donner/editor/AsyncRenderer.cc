@@ -299,6 +299,13 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
   return result;
 }
 
+/// Complete preview tiles are sufficient unless the request also consumes the main frame.
+bool CanSkipPreviewMainCompose(bool hasPreview, bool promotionComplete, bool hasDesiredEntities,
+                               bool captureCpuSnapshot, bool overviewInfillOnly) {
+  return hasPreview && promotionComplete && hasDesiredEntities && !captureCpuSnapshot &&
+         !overviewInfillOnly;
+}
+
 class ScopedFrameResourceScope {
 public:
   explicit ScopedFrameResourceScope(svg::RendererInterface& renderer) : renderer_(renderer) {
@@ -1319,13 +1326,10 @@ void AsyncRenderer::workerLoop() {
     const bool activeDragRequest =
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-    const bool splitPreviewSafe = !desiredPromotionIncomplete;
     if (compositor_ != nullptr) {
-      // Selection and drag previews present tiles; snapshots and overview infill need the main
-      // frame.
-      compositor_->setSkipMainComposeDuringSplit(
-          request.dragPreview.has_value() && splitPreviewSafe && !desiredEntities.empty() &&
-          !request.captureCpuSnapshot && !request.overviewInfillOnly);
+      compositor_->setSkipMainComposeDuringSplit(CanSkipPreviewMainCompose(
+          request.dragPreview.has_value(), !desiredPromotionIncomplete, !desiredEntities.empty(),
+          request.captureCpuSnapshot, request.overviewInfillOnly));
     }
     workerTiming.setupMs = elapsedSince(workerStart);
 
