@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
-#include <format>
 #include <optional>
 #include <span>
 #include <utility>
@@ -186,17 +185,13 @@ gpu::Result<DrawRange> DrawRangeFor(const ImDrawCmd& command, int32_t listBaseVe
                          "UI draw command's base vertex overflows the frame vertex range"};
   }
   if (*baseVertex >= frameVertexCount) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::OutOfBounds,
-        std::format("UI draw command's base vertex {} is outside the frame's {} vertices",
-                    *baseVertex, frameVertexCount)};
+    return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
+                         "UI draw command's base vertex is outside the frame"};
   }
   const std::optional<uint64_t> lastIndex = gpu::CheckedAdd(*firstIndex, command.ElemCount);
   if (!lastIndex.has_value() || *lastIndex > frameIndexCount) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::OutOfBounds,
-        std::format("UI draw command's index range ends past the frame's {} indices",
-                    frameIndexCount)};
+    return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
+                         "UI draw command's index range ends past the frame"};
   }
   return DrawRange{static_cast<uint32_t>(*firstIndex), static_cast<int32_t>(*baseVertex)};
 }
@@ -333,8 +328,7 @@ gpu::Status ImGuiRuntimeRenderer::uploadFontTexture(ImFontAtlas& atlas, gpu::Tex
   int height = 0;
   atlas.GetTexDataAsRGBA32(&pixels, &width, &height);
   if (pixels == nullptr || width <= 0 || height <= 0) {
-    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
-                         std::format("font atlas has no pixels, was {}x{}", width, height)};
+    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor, "font atlas has no pixels"};
   }
 
   size = gpu::Extent2d{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
@@ -347,9 +341,7 @@ gpu::Status ImGuiRuntimeRenderer::uploadFontTexture(ImFontAtlas& atlas, gpu::Tex
   const std::optional<uint64_t> totalBytes =
       bytesPerRow.has_value() ? gpu::CheckedMul(*bytesPerRow, size.height) : std::nullopt;
   if (!totalBytes.has_value() || *bytesPerRow > UINT32_MAX) {
-    return gpu::GpuError{gpu::GpuErrorType::LimitExceeded,
-                         std::format("font atlas of {}x{} texels overflows its upload size",
-                                     size.width, size.height)};
+    return gpu::GpuError{gpu::GpuErrorType::LimitExceeded, "font atlas upload size overflows"};
   }
 
   std::vector<uint8_t> staging(static_cast<size_t>(*totalBytes), 0);
@@ -486,10 +478,8 @@ gpu::Status ImGuiRuntimeRenderer::ensureCapacity(gpu::Buffer& buffer, uint64_t& 
                                                  uint64_t requiredBytes, uint64_t maxBytes,
                                                  gpu::BufferUsage usage, const char* label) {
   if (requiredBytes > maxBytes) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::LimitExceeded,
-        std::format("UI frame needs {} bytes of {}, above the {} byte bound for one frame",
-                    requiredBytes, label, maxBytes)};
+    return gpu::GpuError{gpu::GpuErrorType::LimitExceeded,
+                         "UI frame geometry exceeds its byte bound"};
   }
   if (capacityBytes >= requiredBytes && buffer.isValid()) {
     return gpu::OkStatus();

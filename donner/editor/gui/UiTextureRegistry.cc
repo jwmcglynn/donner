@@ -1,25 +1,10 @@
 #include "donner/editor/gui/UiTextureRegistry.h"
 
-#include <format>
-#include <string>
 #include <utility>
 
 #include "donner/gpu/Device.h"
 
 namespace donner::editor {
-
-namespace {
-
-/// Formats an identifier the way \ref PrintTo does, for use inside error messages.
-/// @param id Identifier to format.
-std::string DescribeId(UiTextureId id) {
-  if (!id.isValid()) {
-    return "uiTexture(null)";
-  }
-  return std::format("uiTexture#{}@{}", id.slotIndex(), id.generation());
-}
-
-}  // namespace
 
 std::ostream& operator<<(std::ostream& os, UiTextureAlphaMode value) {
   switch (value) {
@@ -31,7 +16,11 @@ std::ostream& operator<<(std::ostream& os, UiTextureAlphaMode value) {
 }
 
 void PrintTo(const UiTextureId& id, std::ostream* os) {
-  *os << DescribeId(id);
+  if (!id.isValid()) {
+    *os << "uiTexture(null)";
+  } else {
+    *os << "uiTexture#" << id.slotIndex() << "@" << id.generation();
+  }
 }
 
 void PrintTo(const UiTextureBinding& binding, std::ostream* os) {
@@ -52,15 +41,11 @@ gpu::Result<UiTextureId> UiTextureRegistry::registerTexture(const UiTextureDescr
                          "UI texture view is null (default-constructed or moved-from)"};
   }
   if (descriptor.view.deviceId() != device_->deviceId()) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::DeviceMismatch,
-        std::format("UI texture view belongs to device {} but was registered with device {}",
-                    descriptor.view.deviceId(), device_->deviceId())};
+    return gpu::GpuError{gpu::GpuErrorType::DeviceMismatch,
+                         "UI texture view belongs to device other than the registry device"};
   }
   if (descriptor.size.width == 0 || descriptor.size.height == 0) {
-    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
-                         std::format("UI texture size must be nonzero, was {}x{}",
-                                     descriptor.size.width, descriptor.size.height)};
+    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor, "UI texture size must be nonzero"};
   }
 
   const UiTextureBinding binding{descriptor.view, descriptor.size, descriptor.alphaMode};
@@ -91,37 +76,26 @@ gpu::Result<UiTextureId> UiTextureRegistry::registerTexture(const UiTextureDescr
 }
 
 gpu::Result<const UiTextureRegistry::Slot*> UiTextureRegistry::resolveSlot(
-    UiTextureId id, std::string_view operation) const {
+    UiTextureId id, std::string_view /*operation*/) const {
   if (!id.isValid()) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::InvalidHandle,
-        std::format("UI texture id is null (default-constructed) in {}", operation)};
+    return gpu::GpuError{gpu::GpuErrorType::InvalidHandle,
+                         "UI texture id is null (default-constructed)"};
   }
   if (id.slotIndex() >= slots_.size()) {
     return gpu::GpuError{gpu::GpuErrorType::InvalidHandle,
-                         std::format("UI texture id {} names a slot this registry never handed "
-                                     "out (registry holds {} slots) in {}",
-                                     DescribeId(id), slots_.size(), operation)};
+                         "UI texture id names a slot this registry never handed out"};
   }
 
   const Slot& slot = slots_[id.slotIndex()];
   if (!slot.alive || slot.generation != id.generation()) {
-    return gpu::GpuError{gpu::GpuErrorType::InvalidHandle,
-                         std::format("UI texture id {} is stale; its slot now holds generation "
-                                     "{} in {}",
-                                     DescribeId(id), slot.generation, operation)};
+    return gpu::GpuError{gpu::GpuErrorType::InvalidHandle, "UI texture id is stale"};
   }
   if (slot.retired) {
-    return gpu::GpuError{gpu::GpuErrorType::InvalidState,
-                         std::format("UI texture id {} was retired {} frames ago in {}",
-                                     DescribeId(id), slot.framesSinceRetired, operation)};
+    return gpu::GpuError{gpu::GpuErrorType::InvalidState, "UI texture id was retired"};
   }
   if (slot.binding.view.deviceId() != device_->deviceId()) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::DeviceMismatch,
-        std::format("UI texture id {} references device {} but this registry serves device {} "
-                    "in {}",
-                    DescribeId(id), slot.binding.view.deviceId(), device_->deviceId(), operation)};
+    return gpu::GpuError{gpu::GpuErrorType::DeviceMismatch,
+                         "UI texture id references a different device"};
   }
   return &slot;
 }
