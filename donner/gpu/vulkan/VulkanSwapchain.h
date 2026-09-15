@@ -29,6 +29,27 @@ struct VulkanSurfaceContext {
   VkCommandPool commandPool = VK_NULL_HANDLE;        //!< Pool the present barrier is recorded in.
 };
 
+/// The stage an acquisition wait applies to, and therefore the earliest stage at which a frame
+/// may be written.
+///
+/// Shared by the wait itself and by the synchronization state a freshly acquired frame starts in,
+/// so the two cannot drift: a frame whose first barrier claimed an earlier source stage would be
+/// writing the image outside what the wait covers.
+inline constexpr VkPipelineStageFlags kAcquireWaitStage =
+    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+/// The synchronization state a frame is in the moment it is acquired.
+///
+/// Its contents are undefined, and the last thing to have touched it is the presentation engine's
+/// read, which the acquisition semaphore orders against \ref kAcquireWaitStage. Recording that
+/// stage rather than the top of the pipe is what places the frame's first layout transition after
+/// the wait; a transition from the top of the pipe is a write the wait does not cover, which
+/// synchronization validation reports as a write-after-read hazard against the presentation
+/// engine.
+inline TextureSyncState AcquiredFrameSyncState() {
+  return TextureSyncState{VK_IMAGE_LAYOUT_UNDEFINED, kAcquireWaitStage, 0};
+}
+
 /// Semaphores a submission must wait on, with the stages that wait applies to.
 ///
 /// A frame comes back from the presentation engine before the engine has necessarily finished
