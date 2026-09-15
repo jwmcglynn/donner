@@ -225,6 +225,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/base:base_test_utils",
             "//donner/editor:async_renderer",
+            "//donner/editor:compositor_debug_panel",
             "//donner/editor:document_sync_controller",
             "//donner/editor:editor_app",
             "//donner/editor:gl_texture_cache",
@@ -232,13 +233,16 @@ donner_cc_test(
             "//donner/editor:pen_tool",
             "//donner/editor:select_tool",
             "//donner/editor:text_editor",
+            "//donner/editor/gui:imgui_runtime_renderer",
+            "//donner/editor/gui:ui_texture_registry",
+            "//donner/gpu",
             "//donner/svg/parser",
             "//donner/svg/renderer",
             "//donner/svg/renderer:renderer_geode",
             "//donner/svg/renderer:renderer_image_io",
+            "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/tests:renderer_image_test_utils",
             "//donner/svg/renderer/tests:rgba_test_matchers",
-            "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [],
     }),
@@ -622,6 +626,8 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/editor/gui:imgui_runtime_renderer",
+            "//donner/editor/gui:ui_texture_registry",
             "//donner/svg/renderer:renderer_geode",
             "//donner/svg/renderer/geode:geode_device",
         ],
@@ -1132,6 +1138,56 @@ donner_cc_test(
         "//donner/base",
         "//donner/editor:compositor_debug_panel",
         "//donner/editor:imgui_headers",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "ui_draw_scene",
+    testonly = 1,
+    hdrs = ["UiDrawScene.h"],
+    # //donner/gpu: the Metal and Vulkan execution tests render this same scene through their
+    # own backend and compare it with the one blessed pixelmatch comparator.
+    visibility = [
+        "//donner/gpu:__subpackages__",
+    ],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:imgui_headers",
+        "//donner/editor/gui:imgui_runtime_renderer",
+        "//donner/editor/gui:ui_texture_registry",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "@com_google_gtest//:gtest",
+        "@imgui",
+    ],
+)
+
+# UI draw recording: the indexed range each draw list is reached through, the device-pixel
+# scissor a logical clip rectangle becomes, per-command alpha selection, the bounded growth and
+# refusal of the frame's geometry, and what a renderer-state reset rebinds.
+donner_cc_test(
+    name = "imgui_runtime_renderer_tests",
+    srcs = ["ImGuiRuntimeRenderer_tests.cc"],
+    deps = [
+        ":ui_draw_scene",
+        "//donner/editor/gui:imgui_runtime_renderer",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# UI texture registrations: the opaque identifier UI draw data carries, the
+# device/extent/alpha contract it resolves to, and the deferred frame lifetime
+# a retired registration keeps before its producer may release the backing.
+donner_cc_test(
+    name = "ui_texture_registry_tests",
+    srcs = ["UiTextureRegistry_tests.cc"],
+    deps = [
+        "//donner/editor/gui:ui_texture_registry",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
     ],
 )

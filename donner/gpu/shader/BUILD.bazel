@@ -2246,8 +2246,6 @@ donner_cc_library(
     ],
 )
 
-donner_package()
-
 donner_cc_test(
     name = "filter_compositing_parity_tests_impl",
     srcs = ["tests/FilterCompositingParity_tests.cc"],
@@ -2274,3 +2272,56 @@ donner_multi_transitioned_test(
     opens_gpu_device = True,
     renderer_backend = "geode",
 )
+
+donner_cc_library(
+    name = "ui_draw_api",
+    hdrs = ["programs/UiDraw.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "ui_draw_source",
+    hdrs = ["programs/UiDrawSource.h"],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/gpu/shader/wgsl:compiler"],
+)
+
+donner_cc_library(
+    name = "ui_draw_validation",
+    hdrs = ["programs/UiDrawArtifactValidation.h"],
+    deps = [
+        ":ui_draw_api",
+    ],
+)
+
+donner_cc_library(
+    name = "ui_draw_artifact",
+    srcs = ["programs/UiDraw.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":ui_draw_api",
+        ":ui_draw_source",
+        ":ui_draw_validation",
+    ],
+)
+
+donner_cc_library(
+    name = "ui_draw_native_artifact",
+    srcs = ["programs/UiDrawNative.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":ui_draw_api",
+        ":ui_draw_source",
+        ":ui_draw_validation",
+    ],
+)
+
+donner_package()

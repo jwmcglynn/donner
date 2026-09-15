@@ -5,8 +5,11 @@
 
 #include "donner/svg/renderer/RendererInterface.h"
 #ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
+#include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "gtest/gtest.h"
 
@@ -291,6 +294,20 @@ std::shared_ptr<geode::GeodeDevice> SharedGeodeDevice() {
   return device;
 }
 
+std::unique_ptr<ImGuiRuntimeRenderer> InstallTestUiRenderer(
+    geode::GeodeWgpuAdapterDevice& device, std::unique_ptr<UiTextureRegistry>* registry) {
+  *registry = std::make_unique<UiTextureRegistry>(device);
+  gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> created =
+      ImGuiRuntimeRenderer::Create(device, **registry, gpu::TextureFormat::RGBA8Unorm);
+  if (created.hasError()) {
+    return nullptr;
+  }
+  std::unique_ptr<ImGuiRuntimeRenderer> renderer = std::move(created).result();
+  renderer->install();
+  renderer->setImportDevice(&device);
+  return renderer;
+}
+
 std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSnapshot(
     const std::shared_ptr<geode::GeodeDevice>& device, int* destructionCount,
     const Vector2i& dimensions = Vector2i(1, 1)) {
@@ -346,6 +363,11 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   {
     std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
     ASSERT_NE(device, nullptr);
+    ImGuiContext* context = ImGui::CreateContext();
+    std::unique_ptr<UiTextureRegistry> registry;
+    std::unique_ptr<ImGuiRuntimeRenderer> renderer =
+        InstallTestUiRenderer(device->adapterDevice(), &registry);
+    ASSERT_NE(renderer, nullptr);
 
     GlTextureCache cache(device);
     std::shared_ptr<const svg::RendererTextureSnapshot> firstSnapshot =
@@ -382,6 +404,8 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
     EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
               backingDestroysBefore + 1u)
         << "The aged-out owned snapshot must explicitly destroy its GPU backing";
+    renderer->uninstall();
+    ImGui::DestroyContext(context);
   }
 
   EXPECT_EQ(firstDestructionCount, 1);
@@ -391,9 +415,73 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
       << "Cache teardown must explicitly destroy the remaining active snapshot backing";
 }
 
+TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsReleased) {
+  ImGuiContext* context = ImGui::CreateContext();
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  geode::GeodeWgpuAdapterDevice& runtimeDevice = device->adapterDevice();
+  UiTextureRegistry registry(runtimeDevice);
+  gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> created =
+      ImGuiRuntimeRenderer::Create(runtimeDevice, registry, gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_FALSE(created.hasError());
+  std::unique_ptr<ImGuiRuntimeRenderer> renderer = std::move(created).result();
+  renderer->install();
+  renderer->setImportDevice(&runtimeDevice);
+
+  GlTextureCache cache(device);
+  int firstDestructionCount = 0;
+  int secondDestructionCount = 0;
+  cache.uploadComposited(SingleSnapshotTilePreview(
+      "layer:retirement", 1, CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount)));
+  cache.uploadComposited(SingleSnapshotTilePreview(
+      "layer:retirement", 2, CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount)));
+
+  for (uint32_t frame = 0; frame <= UiTextureRegistry::kDefaultRetirementFrames; ++frame) {
+    renderer->advanceFrame();
+    cache.advancePresentationFrame();
+  }
+  EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 1u)
+      << "cache retirement must transfer the backing into the renderer";
+  for (uint32_t frame = 1; frame < registry.retirementFrames(); ++frame) {
+    renderer->advanceFrame();
+    EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 1u);
+  }
+  EXPECT_FALSE(renderer->advanceFrame().empty());
+  EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 0u);
+
+  renderer->uninstall();
+  ImGui::DestroyContext(context);
+}
+
+TEST(GlTextureCacheTest, RegisteredBackingIsDestroyedIfRendererUninstallsBeforeCache) {
+  ImGuiContext* context = ImGui::CreateContext();
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  std::unique_ptr<UiTextureRegistry> registry;
+  std::unique_ptr<ImGuiRuntimeRenderer> renderer =
+      InstallTestUiRenderer(device->adapterDevice(), &registry);
+  ASSERT_NE(renderer, nullptr);
+  int destructionCount = 0;
+  {
+    GlTextureCache cache(device);
+    cache.uploadComposited(SingleSnapshotTilePreview(
+        "layer:uninstalled", 1, CreateCountingGeodeTextureSnapshot(device, &destructionCount)));
+    renderer->uninstall();
+  }
+  EXPECT_EQ(destructionCount, 1);
+  EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 0u)
+      << "a cache cannot publish backing into a renderer after it uninstalls";
+  ImGui::DestroyContext(context);
+}
+
 TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  ImGuiContext* context = ImGui::CreateContext();
+  std::unique_ptr<UiTextureRegistry> registry;
+  std::unique_ptr<ImGuiRuntimeRenderer> renderer =
+      InstallTestUiRenderer(device->adapterDevice(), &registry);
+  ASSERT_NE(renderer, nullptr);
 
   int firstDestructionCount = 0;
   std::shared_ptr<const svg::RendererTextureSnapshot> firstSnapshot =
@@ -444,6 +532,8 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   EXPECT_GE(stats.peakTrackedBytes, 2u * 2u * 4u + 3u * 5u * 4u);
   EXPECT_EQ(firstDestructionCount, 1);
   EXPECT_EQ(secondDestructionCount, 0);
+  renderer->uninstall();
+  ImGui::DestroyContext(context);
 }
 
 TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUpload) {

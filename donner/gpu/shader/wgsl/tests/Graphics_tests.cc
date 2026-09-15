@@ -3,7 +3,9 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 
+#include "donner/gpu/shader/wgsl/Compiler.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsSource.h"
 #include "donner/gpu/shader/wgsl/tests/MatrixSource.h"
@@ -172,6 +174,59 @@ TEST(GraphicsCompiler, RejectsUnsupportedArrayUsesAndConstantNegativeIndices) {
                   .hasResult());
 }
 
+/// One vertex entry reading a float, an unsigned and a signed attribute, so a single artifact
+/// exercises every numeric vertex-input type through all three projections.
+inline constexpr SourceText kIntegerVertexAttributeSource{
+    R"wgsl(@vertex
+fn vs_attributes(@location(0) position: f32, @location(1) unsignedValue: u32, @location(2) signedValue: i32) -> @builtin(position) vec4<f32> {
+  return vec4<f32>(position, f32(unsignedValue), f32(signedValue), 1f);
+}
+)wgsl"};
+constexpr auto kIntegerVertexAttributeArtifact =
+    Compile<kIntegerVertexAttributeSource, Projection::All>();
+
+TEST(GraphicsCompiler, EmitsNumericVertexAttributesInEveryProjection) {
+  constexpr CompiledShaderView shader = kIntegerVertexAttributeArtifact.view();
+  static_assert(!shader.wgsl.empty());
+  static_assert(!shader.msl.empty());
+  static_assert(!shader.spirv.empty());
+  static_assert(shader.entryPoints.size() == 1);
+  static_assert(shader.entryPoints[0].stage == ShaderStage::Vertex);
+  static_assert(shader.entryPoints[0].inputCount == 3);
+
+  const auto& inputs = shader.interfaceVariables;
+  const uint32_t first = shader.entryPoints[0].firstInput;
+  EXPECT_EQ(inputs[first].scalarType, ShaderScalarType::F32);
+  EXPECT_EQ(inputs[first].location, 0u);
+  EXPECT_FALSE(inputs[first].flat);
+  EXPECT_EQ(inputs[first + 1].scalarType, ShaderScalarType::U32);
+  EXPECT_EQ(inputs[first + 1].location, 1u);
+  EXPECT_FALSE(inputs[first + 1].flat);
+  EXPECT_EQ(inputs[first + 2].scalarType, ShaderScalarType::I32);
+  EXPECT_EQ(inputs[first + 2].location, 2u);
+  EXPECT_FALSE(inputs[first + 2].flat);
+}
+
+/// Source drawing one vertex attribute of `type`, the narrowest module that exercises a vertex
+/// input's accepted numeric types.
+/// @param type WGSL scalar type of the attribute.
+std::string VertexAttributeSource(std::string_view type) {
+  return std::string("@vertex fn v(@location(0) value: ") + std::string(type) +
+         ") -> @builtin(position) vec4<f32> { return vec4<f32>(f32(value), 0f, 0f, 1f); }";
+}
+
+TEST(GraphicsCompiler, AcceptsNumericVertexAttributesWithoutAnInterpolationQualifier) {
+  // A vertex attribute is read from a buffer rather than interpolated across a primitive, so the
+  // integer types are accepted here even though an integer interstage value needs flat.
+  for (const std::string_view type : {"f32", "u32", "i32"}) {
+    SCOPED_TRACE(type);
+    const ParseResult parsed = Parse(VertexAttributeSource(type));
+    EXPECT_EQ(parsed.diagnostic.code, ErrorCode::None)
+        << "actual code " << unsigned(parsed.diagnostic.code);
+    EXPECT_TRUE(parsed.hasResult());
+  }
+}
+
 TEST(GraphicsCompiler, RejectsInvalidEntryInterfaces) {
   constexpr std::string_view cases[] = {
       "@vertex fn v() -> @location(0) vec4<f32> { return vec4<f32>(0f); }",
@@ -181,6 +236,16 @@ TEST(GraphicsCompiler, RejectsInvalidEntryInterfaces) {
       "@fragment fn f(@location(16) a: f32) {}",
       "@fragment fn f(@location(0) a: bool) {}",
       "@fragment fn f(@location(0) a: u32) {}",
+      // A vertex attribute is fetched, not interpolated, so an interpolation qualifier on one is
+      // not merely redundant: it names a rate that does not exist for this input.
+      "@vertex fn v(@location(0) @interpolate(flat) a: u32) -> @builtin(position) vec4<f32> "
+      "{ return vec4<f32>(0f); }",
+      "@vertex fn v(@location(0) @interpolate(flat) a: f32) -> @builtin(position) vec4<f32> "
+      "{ return vec4<f32>(0f); }",
+      // A fragment output goes to a color attachment, and every render target format this
+      // runtime accepts is float.
+      "@fragment fn f() -> @location(0) u32 { return 0u; }",
+      "@fragment fn f() -> @location(0) i32 { return 0i; }",
       "@fragment fn f(a: f32) {}",
       "@fragment fn f() -> @builtin(position) vec4<f32> { return vec4<f32>(0f); }",
       "@compute @workgroup_size(1) fn c(@location(0) a: f32) {}",
