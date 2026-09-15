@@ -147,17 +147,17 @@ class TestLocking:
         """Running the trigger should create a lock file."""
         result = run_trigger(tmp_path, args=["--dry-run"])
         assert result.returncode == 0
-        # Lock should be cleaned up after exit (trap)
-        assert not (tmp_path / "trigger.lock").exists()
+        # The inode stays stable; the kernel lock must be released after exit.
+        assert subprocess.run(["flock", "-n", str(tmp_path / "trigger.lock"), "true"]).returncode == 0
 
-    def test_stale_lock_is_cleaned(self, tmp_path):
+    def test_old_pid_content_does_not_hold_kernel_lock(self, tmp_path):
         """A lock file with a dead PID should be cleaned up."""
         lock_file = tmp_path / "trigger.lock"
         lock_file.write_text("999999999")  # Non-existent PID
 
         result = run_trigger(tmp_path, args=["--dry-run"])
         assert result.returncode == 0
-        assert "Stale lock" in result.stdout
+        assert subprocess.run(["flock", "-n", str(lock_file), "true"]).returncode == 0
 
 
 class TestQuietHours:

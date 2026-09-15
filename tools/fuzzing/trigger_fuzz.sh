@@ -46,6 +46,8 @@ FUZZ_FUZZER_TIME="${FUZZ_FUZZER_TIME:-900}"
 FUZZ_PLATEAU="${FUZZ_PLATEAU:-120}"
 FUZZ_MAX_TOTAL="${FUZZ_MAX_TOTAL:-3600}"
 FUZZ_LOG_DIR="${FUZZ_LOG_DIR:-$FUZZ_STATE_DIR/trigger-logs}"
+FUZZ_UPDATE="${FUZZ_UPDATE:-1}"
+export FUZZ_REPO_DIR FUZZ_STATE_DIR
 FUZZ_QUIET_MODE="${FUZZ_QUIET_MODE:-reduce}"
 FUZZ_QUIET_WORKERS="${FUZZ_QUIET_WORKERS:-2}"
 FUZZ_QUIET_MAX_TOTAL="${FUZZ_QUIET_MAX_TOTAL:-1800}"
@@ -89,24 +91,26 @@ die() {
 
 acquire_lock() {
     mkdir -p "$FUZZ_STATE_DIR"
-    if [ -f "$LOCK_FILE" ]; then
-        local lock_pid
-        lock_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
-        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-            log "Another trigger is running (PID $lock_pid). Exiting."
-            exit 0
-        fi
-        log "Stale lock file found (PID $lock_pid not running). Removing."
-        rm -f "$LOCK_FILE"
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        log "Another trigger is running. Exiting."
+        exit 0
     fi
-    echo $$ > "$LOCK_FILE"
 }
 
-release_lock() {
-    rm -f "$LOCK_FILE"
-}
-
+release_lock() { flock -u 9 || true; }
 trap release_lock EXIT
+
+verify_owned_checkout() {
+    local root branch
+    root=$(git -C "$FUZZ_REPO_DIR" rev-parse --show-toplevel)
+    [ "$root" = "$(cd "$FUZZ_REPO_DIR" && pwd -P)" ] || die "Unexpected repository root"
+    [ -z "$(git -C "$FUZZ_REPO_DIR" status --porcelain --untracked-files=all)" ] || die "Fuzz checkout is dirty; preserve it"
+    branch=$(git -C "$FUZZ_REPO_DIR" branch --show-current)
+    if [ "$FUZZ_UPDATE" = 1 ]; then
+        [ "$branch" = main ] || die "Refusing to repurpose a non-main checkout"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Eligibility checks
@@ -140,10 +144,11 @@ check_new_commits() {
     fi
 
     # Fetch latest main
-    log "Fetching origin/main..."
-    git -C "$FUZZ_REPO_DIR" fetch origin main --quiet 2>/dev/null || {
-        log "WARNING: git fetch failed, proceeding with local state"
-    }
+    if [ "$DRY_RUN" -eq 0 ] && [ "$FUZZ_UPDATE" = 1 ]; then
+        verify_owned_checkout
+        log "Fetching origin/main..."
+        git -C "$FUZZ_REPO_DIR" fetch origin main --quiet || die "Cannot fetch current main"
+    fi
 
     local current_head last_commit
     current_head=$(git -C "$FUZZ_REPO_DIR" rev-parse origin/main 2>/dev/null || \
@@ -295,12 +300,16 @@ run_fuzzing() {
     local now
     now=$(date +%s)
 
-    # Update checkout to latest main
-    log "Updating repo to ${current_head:0:12}..."
-    git -C "$FUZZ_REPO_DIR" checkout main --quiet 2>/dev/null || true
-    git -C "$FUZZ_REPO_DIR" pull --ff-only --quiet 2>/dev/null || {
-        log "WARNING: git pull failed, running on current state"
-    }
+    verify_owned_checkout
+    if [ "$FUZZ_UPDATE" = 1 ]; then
+        git -C "$FUZZ_REPO_DIR" merge --ff-only --quiet origin/main || die "Main update is not a fast-forward"
+    fi
+    current_head=$(git -C "$FUZZ_REPO_DIR" rev-parse HEAD)
+    local run_dir="$FUZZ_STATE_DIR/runs/$(date -u '+%Y%m%d-%H%M%S')"
+    test ! -e "$run_dir" || die "Run directory already exists"
+    mkdir -p "$run_dir"
+    # Failed attempts also observe the scheduling budget.
+    echo "$now" > "$TIMESTAMP_FILE"
 
     # Set up logging
     mkdir -p "$FUZZ_LOG_DIR"
@@ -314,23 +323,26 @@ run_fuzzing() {
     log "  Log file: $log_file"
 
     # Run the fuzzer with minimize
+    local fuzz_exit=0
     python3 "$SCRIPT_DIR/run_continuous_fuzz.py" \
+        --output-dir="$run_dir" \
         --workers="$FUZZ_WORKERS" \
         --fuzzer-time="$FUZZ_FUZZER_TIME" \
         --plateau-timeout="$FUZZ_PLATEAU" \
         --max-total-time="$FUZZ_MAX_TOTAL" \
         --minimize \
-        2>&1 | tee "$log_file"
-
-    local fuzz_exit=${PIPESTATUS[0]}
+        2>&1 | tee "$log_file" || fuzz_exit=${PIPESTATUS[0]}
 
     # Process crashes
     log "Processing crashes..."
-    python3 "$SCRIPT_DIR/crash_reporter.py" report --latest 2>&1 | tee -a "$log_file"
+    if [ -f "$run_dir/run_report.json" ]; then
+        python3 "$SCRIPT_DIR/crash_reporter.py" report --run-dir="$run_dir" 2>&1 | tee -a "$log_file"
+    fi
 
-    # Record successful run
-    echo "$now" > "$TIMESTAMP_FILE"
-    echo "$current_head" > "$COMMIT_FILE"
+    # Only a complete campaign advances the successfully tested revision.
+    if [ "$fuzz_exit" -eq 0 ]; then
+        echo "$current_head" > "$COMMIT_FILE"
+    fi
 
     log "Run complete (exit code: $fuzz_exit)"
     log "  Commit: ${current_head:0:12}"

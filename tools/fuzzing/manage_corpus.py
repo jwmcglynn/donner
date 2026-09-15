@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from execution import fuzzer_command
+
 # Re-use discovery from the runner
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_continuous_fuzz import (
@@ -122,6 +124,8 @@ def minimize_target(
         if target.corpus_dir and target.corpus_dir.is_dir():
             cmd.append(str(target.corpus_dir))
 
+        cmd = fuzzer_command(target.binary_path, cmd[1:],
+                             read_only=[Path(item) for item in cmd[3:]], writable=[merge_output])
         proc = subprocess.run(
             cmd,
             capture_output=True,
@@ -137,14 +141,24 @@ def minimize_target(
                     print(f"    {line}")
             return result
 
-        # Replace persistent corpus with merged result
-        if persistent_target_dir.exists():
-            shutil.rmtree(persistent_target_dir)
+        # Prepare every replacement before pruning any prior coverage. A full
+        # disk or interrupted copy must leave the accumulated corpus usable.
+        if persistent_target_dir.is_symlink():
+            raise ValueError("persistent corpus must not be a symlink")
         persistent_target_dir.mkdir(parents=True, exist_ok=True)
-
-        merged_files = [f for f in merge_output.iterdir() if f.is_file()]
-        for f in merged_files:
-            shutil.copy2(f, persistent_target_dir / f.name)
+        merged_files = [f for f in merge_output.iterdir() if f.is_file() and not f.is_symlink()]
+        if not merged_files and (result["before_run"] or result["before_persistent"]):
+            result["status"] = "error (empty merge result)"
+            return result
+        with tempfile.TemporaryDirectory(prefix=".corpus-", dir=persistent_dir) as staged:
+            for f in merged_files:
+                shutil.copy2(f, Path(staged) / f.name)
+            for f in merged_files:
+                os.replace(Path(staged) / f.name, persistent_target_dir / f.name)
+        names = {f.name for f in merged_files}
+        for old in persistent_target_dir.iterdir():
+            if old.is_file() and not old.is_symlink() and old.name not in names:
+                old.unlink()
 
         result["after"] = len(merged_files)
 

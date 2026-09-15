@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import concurrent.futures
 import json
 import os
@@ -43,6 +44,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from execution import fuzzer_command
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +93,8 @@ class FuzzerStats:
 # Constants
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-STATE_DIR = Path.home() / ".donner-fuzz"
+REPO_ROOT = Path(os.environ.get("FUZZ_REPO_DIR", Path(__file__).resolve().parent.parent.parent)).resolve()
+STATE_DIR = Path(os.environ.get("FUZZ_STATE_DIR", Path.home() / ".donner-fuzz")).expanduser()
 DEFAULT_FUZZER_TIME = 300  # 5 minutes per fuzzer
 DEFAULT_INPUT_TIMEOUT = 30  # Per-input timeout
 DEFAULT_RSS_LIMIT_MB = 4096
@@ -224,7 +227,7 @@ def build_targets(repo_root: Path, targets: list[FuzzerTarget]) -> bool:
         else:
             print(f"WARNING: binary not found at {binary}", file=sys.stderr)
 
-    return True
+    return all(target.binary_path is not None for target in targets)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +359,7 @@ def run_fuzzer(
         f"-artifact_prefix={crash_dir}/",
     ]
 
+    cmd = fuzzer_command(target.binary_path, cmd[1:], writable=[output_dir / target.name])
     start_time = time.monotonic()
 
     # Coverage plateau tracking
@@ -496,7 +500,10 @@ def print_summary(all_stats: list[FuzzerStats], total_duration: float) -> None:
 
 def write_run_report(all_stats: list[FuzzerStats], output_dir: Path, total_duration: float) -> None:
     """Write a JSON run report to the output directory."""
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
+                              capture_output=True, text=True, check=True).stdout.strip()
     report = {
+        "commit": revision,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_duration_secs": total_duration,
         "total_fuzzers": len(all_stats),
@@ -695,6 +702,14 @@ def main() -> None:
     # Summary
     print_summary(all_stats, total_duration)
     write_run_report(all_stats, output_dir, total_duration)
+    report_path = output_dir / "run_report.json"
+    report = json.loads(report_path.read_text())
+    by_name = {target.name: target for target in targets}
+    for item in report["fuzzers"]:
+        target = by_name[item["name"]]
+        item["label"] = target.label
+        item["binary_sha256"] = hashlib.sha256(target.binary_path.read_bytes()).hexdigest()
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
 
     # Post-run corpus minimization
     if args.minimize:
@@ -702,7 +717,10 @@ def main() -> None:
         from manage_corpus import minimize_target, _log_corpus_stats, PERSISTENT_CORPUS_DIR
         PERSISTENT_CORPUS_DIR.mkdir(parents=True, exist_ok=True)
         min_results = []
+        failed = {item.name for item in all_stats if item.exit_reason.startswith("error") or item.exit_reason == "no_binary"}
         for target in targets:
+            if target.name in failed:
+                continue
             run_corpus = output_dir / target.name / "corpus"
             print(f"  {target.name}...", end=" ", flush=True)
             result = minimize_target(target, run_corpus, PERSISTENT_CORPUS_DIR)
@@ -714,6 +732,9 @@ def main() -> None:
         _log_corpus_stats(min_results)
         total_after = sum(r["after"] for r in min_results)
         print(f"  Persistent corpus: {total_after} total minimized inputs")
+
+    if any(item.exit_reason.startswith("error") or item.exit_reason == "no_binary" for item in all_stats):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

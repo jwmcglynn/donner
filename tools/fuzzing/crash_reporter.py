@@ -19,6 +19,9 @@ Usage:
 """
 
 import argparse
+import base64
+import socket
+import tempfile
 import hashlib
 import json
 import os
@@ -30,6 +33,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from execution import fuzzer_command
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_continuous_fuzz import (
@@ -84,6 +89,10 @@ class CrashInfo:
         self.signature: str = ""
         self.commit: str = ""
         self.binary_path: Path = Path()
+        self.confirmed: bool = False
+        self.isolated: bool = False
+        self.input_bytes: bytes = b""
+        self.binary_sha256: str = ""
 
     @property
     def top_frame(self) -> str:
@@ -121,7 +130,7 @@ def parse_stack_trace(stderr: str) -> tuple[str, list[str], str]:
 
     for line in lines:
         # Detect start of stack trace
-        if "ERROR:" in line and ("AddressSanitizer" in line or "UndefinedBehaviorSanitizer" in line):
+        if "ERROR:" in line and (any(name in line for name in ("AddressSanitizer", "UndefinedBehaviorSanitizer", "LeakSanitizer", "libFuzzer"))):
             in_trace = True
             trace_lines.append(line)
             # Extract signal/error type
@@ -158,19 +167,22 @@ def compute_signature(frames: list[str], top_n: int = 5) -> str:
 # ---------------------------------------------------------------------------
 
 def reproduce_crash(binary_path: Path, crash_file: Path, timeout: int = 30) -> str:
-    """Run the fuzzer binary on a crash input to capture the stack trace."""
+    """Replay one input; successful exits and tool failures are never crash evidence."""
     try:
-        proc = subprocess.run(
-            [str(binary_path), str(crash_file)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return proc.stderr
+        with tempfile.TemporaryFile() as stderr:
+            proc = subprocess.run(
+                fuzzer_command(binary_path, ["-runs=1", "-timeout=10", "-rss_limit_mb=2048", str(crash_file)],
+                               read_only=[crash_file.parent]),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=stderr, timeout=timeout,
+            )
+            if proc.returncode == 0:
+                return ""
+            stderr.seek(0)
+            return stderr.read(262144).decode("utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         return "(reproduction timed out)"
-    except Exception as e:
-        return f"(reproduction failed: {e})"
+    except (OSError, ValueError, RuntimeError):
+        return "(reproduction failed)"
 
 
 # ---------------------------------------------------------------------------
@@ -186,72 +198,144 @@ def load_known_crashes() -> dict:
 
 
 def save_known_crashes(crashes: dict) -> None:
-    """Save the known crashes ledger."""
+    """Atomically persist the ledger before and after an outward submission."""
     KNOWN_CRASHES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(KNOWN_CRASHES_FILE, "w") as f:
+    with tempfile.NamedTemporaryFile(mode="w", dir=KNOWN_CRASHES_FILE.parent,
+                                     prefix=".crashes-", delete=False) as f:
+        temporary = Path(f.name)
         json.dump(crashes, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary, KNOWN_CRASHES_FILE)
 
 
 # ---------------------------------------------------------------------------
 # GitHub Issue filing
 # ---------------------------------------------------------------------------
 
-def file_github_issue(crash: CrashInfo, repo: str = "jwmcglynn/donner") -> Optional[str]:
-    """File a GitHub Issue for a crash via `gh` CLI. Returns the issue URL or None."""
-    title = f"Fuzzing crash: {crash.fuzzer_name} — {crash.crash_type} in {crash.top_frame}"
-    if len(title) > 120:
-        title = title[:117] + "..."
+MAX_REPRO_BYTES = 24 * 1024
+REPO = "jwmcglynn/donner"
+LABEL_RE = re.compile(r"//donner/[A-Za-z0-9_./-]+:[A-Za-z0-9_]+_bin")
+SECRET_RE = re.compile(rb"PRIVATE KEY|github_pat_|gh[pousr]_[A-Za-z0-9]{20}|(?:api[_-]?key|token|password)\s*[=:]|Authorization:|/home/|/Users/", re.I)
 
-    body = f"""## Fuzzing Crash Report
 
-**Fuzzer:** `{crash.fuzzer_label}`
-**Crash type:** {crash.crash_type}
-**Signal:** {crash.signal or "N/A"}
-**Commit:** {crash.commit}
-**Date:** {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-**Signature:** `{crash.signature}`
+def publication_input(data: bytes) -> bool:
+    """Only bounded generated inputs without credential/host-path patterns can leave the host."""
+    private_terms = [str(Path.home()).encode(), str(REPO_ROOT).encode(), socket.gethostname().encode()]
+    return (len(data) <= MAX_REPRO_BYTES and not SECRET_RE.search(data)
+            and not any(term and term in data for term in private_terms))
 
-### Stack Trace
+
+def safe_frames(frames: list[str]) -> list[str]:
+    # Function identities are sufficient for deduplication. Omit paths, addresses,
+    # argument values, raw input excerpts and arbitrary sanitizer diagnostics.
+    return [frame.split("(", 1)[0][:180] for frame in frames[:5]
+            if re.fullmatch(r"[A-Za-z0-9_:<>,~* &().+-]+", frame)]
+
+
+def crash_signal(text: str) -> str:
+    match = re.search(r"(?:AddressSanitizer|UndefinedBehaviorSanitizer|LeakSanitizer|libFuzzer): ([a-z][a-z-]+)", text)
+    return match.group(1) if match else ""
+
+
+def render_issue(crash: CrashInfo) -> tuple[str, str]:
+    if not (crash.confirmed and crash.isolated and LABEL_RE.fullmatch(crash.fuzzer_label)
+            and crash.fuzzer_label.split(":")[-1].removesuffix("_bin") == crash.fuzzer_name
+            and re.fullmatch(r"[0-9a-f]{40}", crash.commit)
+            and re.fullmatch(r"[0-9a-f]{16}", crash.signature)
+            and re.fullmatch(r"[0-9a-f]{64}", crash.binary_sha256)
+            and publication_input(crash.input_bytes)):
+        raise ValueError("report lacks verified, publishable evidence")
+    frames = safe_frames(crash.stack_frames)
+    signal = crash_signal(crash.signal)
+    if not frames or not signal:
+        raise ValueError("report lacks a recognized sanitizer failure")
+    title = f"Fuzzing crash: {crash.fuzzer_name} - {signal}"[:120]
+    marker = f"<!-- donner-fuzz:v2:{crash.signature} -->"
+    encoded = base64.b64encode(crash.input_bytes).decode("ascii")
+    digest = hashlib.sha256(crash.input_bytes).hexdigest()
+    package, name = crash.fuzzer_label[2:].split(":")
+    body = f"""A sanitizer failure reproduced twice with the same binary and input.
+
+{marker}
+
+- Source: `{crash.commit}`
+- Fuzzer: `{crash.fuzzer_label}`
+- Finding: `{signal}`
+- Binary SHA-256: `{crash.binary_sha256}`
+- Input SHA-256: `{digest}` ({len(crash.input_bytes)} bytes)
+
+### Stack signature
+```text
+{chr(10).join(frames)}
 ```
-{crash.stack_trace}
-```
 
-### Reproduction
+### Reproduce
+Check out the source revision above, then:
 ```sh
+python3 -c 'import base64; open("repro.bin", "wb").write(base64.b64decode("{encoded}"))'
 bazel build --config=asan-fuzzer {crash.fuzzer_label}
-{crash.binary_path} <crash_input_file>
+./bazel-bin/{package}/{name} -runs=1 -timeout=10 -rss_limit_mb=2048 repro.bin
 ```
 
-The crash input ({crash.crash_file.stat().st_size} bytes) should be added to the
-fuzzer's corpus directory as a regression test after the fix.
+Keep the reproducer as a corpus regression when fixing the bug. Source paths,
+host details, raw process output and environment values are omitted.
 """
+    return title, body
 
-    if not shutil.which("gh"):
-        print("    WARNING: `gh` CLI not found, cannot file issue", file=sys.stderr)
-        return None
 
+def find_existing_issue(signature: str) -> Optional[str]:
+    """Check GitHub as well as the local ledger; an unavailable lookup fails closed."""
+    marker = f"donner-fuzz:v2:{signature}"
+    proc = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "all", "--limit", "100",
+         "--search", f'"{marker}" in:body', "--json", "url,body"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if proc.returncode != 0 or len(proc.stdout) > 2 * 1024 * 1024:
+        raise RuntimeError("GitHub duplicate lookup unavailable")
+    items = json.loads(proc.stdout)
+    for issue in items:
+        if f"<!-- {marker} -->" in issue.get("body", ""):
+            url = issue.get("url", "")
+            if re.fullmatch(r"https://github.com/jwmcglynn/donner/issues/[0-9]+", url):
+                return url
+    return None
+
+
+def file_github_issue(crash: CrashInfo, repo: str = REPO) -> Optional[str]:
+    """Publish one verified report, with a durable marker against ambiguous retries."""
     try:
-        proc = subprocess.run(
-            [
-                "gh", "issue", "create",
-                "--repo", repo,
-                "--title", title,
-                "--label", "fuzzing,crash,automated",
-                "--body", body,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            url = proc.stdout.strip()
-            return url
-        else:
-            print(f"    WARNING: gh issue create failed: {proc.stderr.strip()}", file=sys.stderr)
-            return None
-    except Exception as e:
-        print(f"    WARNING: gh issue create failed: {e}", file=sys.stderr)
+        title, body = render_issue(crash)
+    except ValueError:
         return None
+    if repo != REPO or not shutil.which("gh"):
+        return None
+    try:
+        existing = find_existing_issue(crash.signature)
+        if existing:
+            return existing
+        ledger = load_known_crashes()
+        if ledger.get(crash.signature, {}).get("pending"):
+            print("    Publication outcome uncertain; awaiting reconciliation", file=sys.stderr)
+            return None
+        ledger[crash.signature] = {"pending": True, "commit": crash.commit}
+        save_known_crashes(ledger)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as f:
+            f.write(body)
+            f.flush()
+            proc = subprocess.run(
+                ["gh", "issue", "create", "--repo", REPO, "--title", title,
+                 "--label", "bug", "--body-file", f.name],
+                capture_output=True, text=True, timeout=30,
+            )
+        url = proc.stdout.strip()
+        if proc.returncode == 0 and re.fullmatch(r"https://github.com/jwmcglynn/donner/issues/[0-9]+", url):
+            return url
+        print("    Issue creation unconfirmed; receipt retained for reconciliation", file=sys.stderr)
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+        print("    Issue lookup/publication unavailable; no blind retry", file=sys.stderr)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +397,7 @@ def get_current_commit() -> str:
             capture_output=True,
             text=True,
         )
-        return result.stdout.strip()[:12] if result.returncode == 0 else "unknown"
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
     except Exception:
         return "unknown"
 
@@ -325,104 +409,107 @@ def find_crashes_in_run(run_dir: Path) -> list[tuple[str, Path]]:
     """
     crashes = []
     for fuzzer_dir in sorted(run_dir.iterdir()):
-        if not fuzzer_dir.is_dir():
+        if fuzzer_dir.is_symlink() or not fuzzer_dir.is_dir():
             continue
         crash_dir = fuzzer_dir / "crashes"
-        if not crash_dir.is_dir():
+        if crash_dir.is_symlink() or not crash_dir.is_dir():
             continue
         for f in sorted(crash_dir.iterdir()):
-            if f.is_file() and any(
+            if not f.is_symlink() and f.is_file() and any(
                 f.name.startswith(p) for p in ("crash-", "timeout-", "oom-", "leak-")
             ):
                 crashes.append((fuzzer_dir.name, f))
     return crashes
 
 
-def process_crashes(
-    run_dir: Path,
-    targets: list[FuzzerTarget],
-    dry_run: bool = False,
-) -> list[CrashInfo]:
-    """Process all crashes from a run: reproduce, dedup, report."""
+def process_crashes(run_dir: Path, targets: list[FuzzerTarget], dry_run: bool = False) -> list[CrashInfo]:
+    """Replay twice; publish only source/binary-bound sanitizer evidence."""
     target_map = {t.name: t for t in targets}
     known = load_known_crashes()
-    config = load_config()
-    webhook_url = config.get("webhook_url")
     commit = get_current_commit()
-
-    raw_crashes = find_crashes_in_run(run_dir)
-    if not raw_crashes:
-        print("No crash artifacts found.")
+    manifest = run_dir / "run_report.json"
+    try:
+        if manifest.is_symlink() or manifest.stat().st_size > 1024 * 1024:
+            return []
+        report = json.loads(manifest.read_text())
+    except (OSError, ValueError):
+        print("Run lacks a provenance report; publication withheld")
         return []
-
-    print(f"Found {len(raw_crashes)} crash artifact(s). Processing...\n")
-
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or report.get("commit") != commit:
+        print("Run revision differs from current source; publication withheld")
+        return []
+    recorded = {item.get("name"): item for item in report.get("fuzzers", [])}
     processed = []
-    new_count = 0
-    dup_count = 0
-
-    for fuzzer_name, crash_file in raw_crashes:
+    submitted = 0
+    for fuzzer_name, crash_file in find_crashes_in_run(run_dir)[:100]:
         target = target_map.get(fuzzer_name)
-        if target is None or target.binary_path is None:
-            print(f"  {fuzzer_name}/{crash_file.name}: SKIP (no binary)")
+        if target is None or target.binary_path is None or not LABEL_RE.fullmatch(target.label):
             continue
-
+        if classify_crash_type(crash_file.name) not in {"crash", "leak"}:
+            continue
+        if crash_file.stat().st_size > MAX_REPRO_BYTES:
+            continue
+        data = crash_file.read_bytes()
+        if not publication_input(data):
+            print("Input exceeds publication boundary; retained locally")
+            continue
+        binary_digest = hashlib.sha256(target.binary_path.read_bytes()).hexdigest()
+        saved = recorded.get(fuzzer_name, {})
+        if saved.get("label") != target.label or saved.get("binary_sha256") != binary_digest:
+            print("Binary differs from recorded run; publication withheld")
+            continue
+        first = reproduce_crash(target.binary_path, crash_file)
+        trace, frames, signal = parse_stack_trace(first)
+        normalized = safe_frames(frames)
+        kind = crash_signal(signal)
+        if not normalized or not kind:
+            print("No reproducible sanitizer finding; retained locally")
+            continue
+        second = reproduce_crash(target.binary_path, crash_file)
+        _, second_frames, second_signal = parse_stack_trace(second)
+        if safe_frames(second_frames) != normalized or crash_signal(second_signal) != kind:
+            print("Second replay did not confirm the finding; retained locally")
+            continue
         crash = CrashInfo()
         crash.fuzzer_name = fuzzer_name
         crash.fuzzer_label = target.label
         crash.crash_file = crash_file
         crash.crash_type = classify_crash_type(crash_file.name)
         crash.binary_path = target.binary_path
+        crash.binary_sha256 = binary_digest
         crash.commit = commit
-
-        # Reproduce to get stack trace
-        print(f"  Reproducing {fuzzer_name}/{crash_file.name}...", end=" ", flush=True)
-        stderr = reproduce_crash(target.binary_path, crash_file)
-        crash.stack_trace, crash.stack_frames, crash.signal = parse_stack_trace(stderr)
-
-        if not crash.stack_frames:
-            crash.signature = f"no-trace-{hashlib.sha256(crash_file.read_bytes()).hexdigest()[:16]}"
-        else:
-            crash.signature = compute_signature(crash.stack_frames)
-
-        # Check deduplication
-        if crash.signature in known:
-            existing = known[crash.signature]
-            print(f"DUPLICATE (sig={crash.signature}, issue={existing.get('issue_url', 'N/A')})")
-            dup_count += 1
-            processed.append(crash)
-            continue
-
-        print(f"NEW (sig={crash.signature}, top={crash.top_frame})")
-        new_count += 1
-
-        if dry_run:
-            print(f"    [dry-run] Would file issue for {crash.crash_type} in {crash.top_frame}")
-        else:
-            issue_url = file_github_issue(crash)
-            if issue_url:
-                known[crash.signature] = {
-                    "fuzzer": fuzzer_name,
-                    "crash_type": crash.crash_type,
-                    "top_frame": crash.top_frame,
-                    "issue_url": issue_url,
-                    "commit": commit,
-                    "date": datetime.now(timezone.utc).isoformat(),
-                    "crash_file": str(crash_file),
-                }
-                print(f"    Filed: {issue_url}")
-            else:
-                print(f"    WARNING: Issue creation failed, crash will be retried next run")
-
-            if webhook_url:
-                send_webhook(crash, webhook_url)
-
+        crash.stack_frames = frames
+        crash.stack_trace = "\n".join(normalized)
+        crash.signal = signal
+        crash.input_bytes = data
+        crash.confirmed = True
+        crash.isolated = os.environ.get("FUZZ_SANDBOX") == "1"
+        crash.signature = compute_signature([target.label, kind, *normalized], top_n=7)
         processed.append(crash)
-
-    if not dry_run:
-        save_known_crashes(known)
-
-    print(f"\nSummary: {new_count} new, {dup_count} duplicates, {len(processed)} total")
+        existing = known.get(crash.signature, {})
+        if existing.get("issue_url"):
+            print(f"Duplicate: {existing['issue_url']}")
+            continue
+        if dry_run:
+            render_issue(crash)
+            print(f"Verified report ready: {crash.signature}")
+            continue
+        if submitted >= 5:
+            print("Per-run issue budget reached; remaining reports retained")
+            break
+        issue_url = file_github_issue(crash)
+        # Reload so a pending receipt from an uncertain response is never lost.
+        known = load_known_crashes()
+        if issue_url:
+            known[crash.signature] = {
+                "fuzzer": fuzzer_name, "crash_type": crash.crash_type,
+                "top_frame": normalized[0], "issue_url": issue_url,
+                "commit": commit, "date": datetime.now(timezone.utc).isoformat(),
+                "crash_file": str(crash_file),
+            }
+            save_known_crashes(known)
+            submitted += 1
+            print(f"Filed or reconciled: {issue_url}")
     return processed
 
 

@@ -688,7 +688,7 @@ class TestBuildTargets:
         target = FuzzerTarget(label="//test:fuzzer_bin", name="fuzzer")
         with mock.patch("run_continuous_fuzz.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            build_targets(tmp_path, [target])
+            assert build_targets(tmp_path, [target]) is False
         assert target.binary_path is None
         captured = capsys.readouterr()
         assert "WARNING" in captured.err

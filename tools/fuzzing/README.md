@@ -5,6 +5,37 @@ targets, files GitHub Issues for crashes, and maintains a growing corpus.
 
 No repo clone needed on the host — Docker pulls everything from GitHub.
 
+## Automatic crash reports
+
+Unattended publication is limited to sanitizer crashes or leaks that reproduce
+with matching stack signatures twice. Reports require a recorded source revision
+and binary digest; inputs over 24 KiB, symlinks, stale builds, successful replays,
+unrecognized tool failures, and credential/path-like payloads stay local.
+Reports contain a portable base64 reproducer and source revision, without host
+paths or raw process output. The existing `bug` label is sufficient.
+
+Use `FUZZ_SANDBOX=1` on Linux with bubblewrap for mutation, minimization, and
+replay. Publishing requires this isolation: fuzzer processes receive no network,
+home directory, SSH agent, or reporter credentials. The host reporter uses its
+existing `gh` authentication. First verify a bounded run and
+`crash_reporter.py report --run-dir=<verified-run> --dry-run`.
+
+A local atomic ledger and GitHub body marker deduplicate findings, including
+closed issues. An uncertain create response is reconciled through GitHub before
+any repeat submission. At most five reports are filed per invocation; withheld
+inputs and pending receipts remain local for inspection. Closed findings are
+not automatically reopened. Corpus merge/minimization runs after each campaign; replacement inputs are
+copied successfully before older inputs are pruned, preserving the previous
+corpus on a write failure.
+`manage_corpus.py update-intree --no-prune` prepares a separately reviewed corpus
+change, and does not commit or open a pull request.
+
+Use a dedicated clean checkout on `main`: the trigger refuses dirty trees and
+other branches, updates only by fast-forward, and locks the campaign with `flock`.
+`FUZZ_REPO_DIR` separates reviewed harness code from the source being fuzzed;
+`FUZZ_STATE_DIR` selects the persistent state. CI's `fuzz-harness` artifact binds
+the exact scripts to the tested source revision and tar digest.
+
 ## Setup
 
 ### Prerequisites

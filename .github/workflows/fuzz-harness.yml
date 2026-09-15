@@ -1,0 +1,42 @@
+name: Fuzz harness
+
+on:
+  push:
+    paths:
+      - tools/fuzzing/**
+      - .github/workflows/fuzz-harness.yml
+  pull_request:
+    paths:
+      - tools/fuzzing/**
+      - .github/workflows/fuzz-harness.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install test dependencies
+        run: python3 -m pip install pytest==9.0.2
+      - name: Verify fuzz orchestration and reporting
+        run: |
+          bash -n tools/fuzzing/trigger_fuzz.sh
+          python3 -m pytest -q tools/fuzzing/tests
+      - name: Package exact verified harness
+        run: |
+          mkdir artifact
+          git archive HEAD tools/fuzzing > artifact/fuzz-harness.tar
+          sha256sum artifact/fuzz-harness.tar > artifact/fuzz-harness.tar.sha256
+          git rev-parse HEAD > artifact/source-revision.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-harness
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,12 +1,13 @@
 [Unit]
 Description=Donner continuous fuzzing trigger
 # Only run if the repo exists
-ConditionPathIsDirectory=/home/jwm/Projects/donner/.git
+ConditionPathIsDirectory=%h/Projects/donner/.git
 
 [Service]
 Type=oneshot
-ExecStart=/home/jwm/Projects/donner/tools/fuzzing/trigger_fuzz.sh
-WorkingDirectory=/home/jwm/Projects/donner
+Environment=FUZZ_SANDBOX=1
+ExecStart=%h/Projects/donner/tools/fuzzing/trigger_fuzz.sh
+WorkingDirectory=%h/Projects/donner
 
 # Resource limits
 TimeoutStartSec=7200
@@ -17,8 +18,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=donner-fuzz
 
-# Run as the owning user
-User=jwm
+# A user unit already runs as its owner; User= attempts a forbidden group reset.
 
 [Install]
 WantedBy=default.target

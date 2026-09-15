@@ -1,6 +1,7 @@
 """Tests for crash_reporter.py."""
 
 import json
+import hashlib
 import textwrap
 from pathlib import Path
 from unittest import mock
@@ -294,13 +295,24 @@ class TestReproduceCrash:
 # ============================================================================
 
 class TestProcessCrashes:
+    @pytest.fixture(autouse=True)
+    def revision(self, monkeypatch):
+        monkeypatch.setattr("crash_reporter.get_current_commit", lambda: "a" * 40)
+        monkeypatch.setenv("FUZZ_SANDBOX", "1")
+        monkeypatch.setattr("crash_reporter.fuzzer_command", lambda binary, args, **kw: [str(binary), *map(str, args)])
+
     @pytest.fixture
-    def run_with_crash(self, tmp_path):
+    def run_with_crash(self, tmp_path, fake_target):
         """Set up a run directory with one crash artifact."""
         run_dir = tmp_path / "run"
         crash_dir = run_dir / "test_fuzzer" / "crashes"
         crash_dir.mkdir(parents=True)
         (crash_dir / "crash-abc123").write_bytes(b"crash input data")
+        (run_dir / "run_report.json").write_text(json.dumps({
+            "commit": "a" * 40,
+            "fuzzers": [{"name": fake_target.name, "label": fake_target.label,
+                         "binary_sha256": hashlib.sha256(fake_target.binary_path.read_bytes()).hexdigest()}],
+        }))
         return run_dir
 
     @pytest.fixture
