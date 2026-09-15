@@ -5,7 +5,7 @@ const sharedUse = {
   ignoreHTTPSErrors: true,
   viewport: { width: 1280, height: 900 },
   deviceScaleFactor: 2,
-  screenshot: "off",
+  screenshot: "only-on-failure",
   trace: "off",
   video: "off",
 };
