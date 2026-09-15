@@ -68,6 +68,14 @@ struct VulkanApi;
  * Barrier elision - dropping a barrier the model says is needed - is still not attempted; that
  * would need counter and timing evidence naming the bottleneck it removes.
  *
+ * Presentation is opt in through \ref CreateWithPresentationSupport, because a swapchain has to
+ * be requested before any surface exists. Frames come from a VK_KHR_swapchain swapchain over a
+ * surface the embedder's platform object names, or over a headless surface where there is no
+ * window; a frame is acquired with a semaphore the first submission writing it waits on, and is
+ * handed to the presentation engine by a barrier submitted after that work. A frame that is
+ * discarded rather than presented cannot be given back, so the swapchain is recreated to reclaim
+ * it. Everything above is inert on a device created by \ref Create, which refuses every surface.
+ *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no
  * cross-thread callbacks.
@@ -102,6 +110,39 @@ public:
   /// Creates a device with VK_KHR_timeline_semaphore enabled solely for test-owned host gates.
   /// Returns nullptr if the test extension/feature is unavailable; ordinary Create needs neither.
   static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest();
+
+  /**
+   * Creates a device that can present: an instance with the surface extensions the loader offers
+   * and a device with VK_KHR_swapchain enabled. Returns nullptr when the loader offers no surface
+   * extension or the device no swapchain support.
+   *
+   * Presentation is opt in because a swapchain has to be asked for before any surface exists:
+   * the device has to already carry swapchain support by the time `createSurface` is called, and
+   * a device created by \ref Create refuses every surface rather than appearing to support one.
+   * Whether the queue can present to a particular surface is checked when that surface is
+   * created, since that is the first point at which the question can be asked.
+   */
+  static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport();
+
+  /// Whether this device was created with presentation support. Test accessor, so a suite can
+  /// say which device it is looking at rather than inferring it from a refusal.
+  [[nodiscard]] bool supportsPresentation() const;
+
+  /**
+   * The Vulkan instance this device was created on, for an embedder that creates its own surface.
+   *
+   * A window-system surface is scoped to the instance it was created against, so an embedder
+   * whose windowing library already knows how to make one (GLFW and SDL both do) needs this
+   * instance to make it against; that is what keeps this build free of Xlib and Wayland headers.
+   * Pass the resulting handle back as \ref donner::gpu::NativeSurfaceKind::EmbedderSurface.
+   *
+   * Returned as an opaque pointer so this header stays free of Vulkan types; it is a `VkInstance`.
+   * This device owns it and it stays valid for the device's lifetime. Ownership of a surface made
+   * against it stays with the embedder: destroy the runtime's surface first, then the embedder's,
+   * then this device. Null when the device was created without presentation support, since
+   * without the surface extensions there is nothing an embedder could create against it.
+   */
+  [[nodiscard]] void* nativeInstance() const;
 
   /// Destructor; waits for in-flight submissions (vkDeviceWaitIdle), drains deferred
   /// destructions, then destroys all remaining Vulkan objects in dependency-safe order.
@@ -210,6 +251,7 @@ public:
   /// finish their native work before destroying any of these objects or the device.
   struct NativeContextForTest {
     const VulkanApi* api;       //!< Device entry points, owned by this device.
+    void* instance;             //!< Borrowed VkInstance, for a test that stands in for an embedder.
     void* device;               //!< Borrowed VkDevice.
     void* queue;                //!< Borrowed VkQueue.
     uint32_t queueFamilyIndex;  //!< Family of the borrowed queue.
@@ -271,6 +313,14 @@ protected:
                         const Origin2d& destinationOrigin) override;
   Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                   std::span<const Command> commands) override;
+  Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) override;
+  Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
+  Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration) override;
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
+                                                uint32_t textureSlotIndex) override;
+  Result<SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
+  void onAbandonCurrentTexture(uint32_t slotIndex) override;
+  void onDestroySurface(uint32_t slotIndex) override;
 
   // Host buffer mapping. Every buffer this backend allocates is already host-visible, coherent,
   // and persistently mapped, so a mapping is the wait for the work that fills it plus a
@@ -288,8 +338,12 @@ private:
   /// @param operation Operation name included in a timeout diagnostic.
   Status waitForBufferAccess(uint64_t serial, std::string_view operation);
 
-  /// Creates the common backend, optionally enabling the extension used by native test gates.
-  static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest);
+  /// Creates the common backend, optionally enabling the extension used by native test gates and
+  /// the surface/swapchain extensions presentation needs.
+  /// @param enableTimelineSemaphoreForTest Whether to request VK_KHR_timeline_semaphore.
+  /// @param enablePresentation Whether to request the surface and swapchain extensions.
+  static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest,
+                                                  bool enablePresentation);
 
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();
