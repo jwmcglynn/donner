@@ -75,6 +75,10 @@ cc_binary(
     linkopts = [
         "-sENVIRONMENT=web",
         "-sEXIT_RUNTIME=0",
+        # The bridge hands the thread back to the browser while a mapping is pending, which unwinds
+        # and rewinds through Asyncify; both production WebAssembly configurations enable it, and
+        # linking without it here would leave the yield unresolved.
+        "-sASYNCIFY=1",
         "--js-library=$(execpath library_donner_gpu.js)",
     ],
     tags = ["manual"],
