@@ -163,6 +163,20 @@ public:
     }
   }
 
+  /**
+   * Read-only \ref forEachLive, for callers that only inspect the live records.
+   *
+   * @param callback Invoked as `callback(const Record&)` for each live slot, in slot order.
+   */
+  template <typename Callback>
+  void forEachLive(Callback&& callback) const {
+    for (const Slot& slot : slots_) {
+      if (slot.alive) {
+        callback(slot.record.value());
+      }
+    }
+  }
+
 private:
   /// One slot: generation counter plus the stored record while alive.
   struct Slot {
@@ -485,6 +499,11 @@ public:
    * immediately: the mapping can never complete afterwards, and reporting it as a timeout would
    * describe a permanent failure as a slow one.
    *
+   * Destroying the mapped buffer is reported by where the wait was when it happened: a buffer
+   * already gone when the wait starts fails the call with \ref GpuErrorType::InvalidHandle, while
+   * one destroyed during the wait ends it with \ref MapWaitOutcome::Failed, because by then the
+   * call has a wait to report the outcome of rather than a handle to reject.
+   *
    * @param mapping Live mapping of this device.
    * @param params Slice length and total budget; both must be greater than zero.
    * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
@@ -707,15 +726,6 @@ protected:
   Status validateBufferMappingHandleForBackend(const BufferMapping& mapping) const;
 
   /**
-   * Records what a completed wait observed, so \ref mappedBytes knows whether a wait has seen
-   * this mapping complete.
-   *
-   * @param mapping Mapping the wait was for.
-   * @param outcome What the wait reported.
-   */
-  void noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome outcome);
-
-  /**
    * Backend hook: begin mapping a buffer range. Defaults to reporting the capability as
    * unsupported, so a backend without host mapping needs no implementation and callers get a
    * clean unsupported result rather than a missing symbol.
@@ -809,6 +819,16 @@ protected:
 
 private:
   friend class CommandEncoder;
+
+  /**
+   * Records what a completed wait observed, so \ref mappedBytes knows whether a wait has seen
+   * this mapping complete. Private because readiness is the runtime's own observation: a backend
+   * that could set it would be able to declare a mapping readable without one.
+   *
+   * @param mapping Mapping the wait was for.
+   * @param outcome What the wait reported.
+   */
+  void noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome outcome);
 
   /// Validated per-buffer state.
   struct BufferRecord {

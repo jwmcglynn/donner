@@ -110,7 +110,8 @@ public:
    */
   void invalidateBuffer(uint32_t bufferSlotIndex);
 
-  /// How many mappings are currently open. Test accessor for leak checks.
+  /// How many mappings are currently open, counting ones whose buffer was retired: those are
+  /// still open handles that have to be released. Test accessor for leak checks.
   [[nodiscard]] size_t liveMappingCountForTest() const;
 
 private:

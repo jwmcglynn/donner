@@ -1405,9 +1405,12 @@ Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
                     record.result()->descriptor.byteSize)};
   }
 
+  // A mapping whose buffer was destroyed still names that buffer's slot, and the slot is handed
+  // to the next buffer created, so a retired mapping must not speak for the slot's new occupant.
   bool alreadyMapped = false;
-  bufferMappings_.forEachLive([&](const MappingRecord& existing) {
-    alreadyMapped = alreadyMapped || existing.bufferSlotIndex == buffer.slotIndex();
+  std::as_const(bufferMappings_).forEachLive([&](const MappingRecord& existing) {
+    alreadyMapped = alreadyMapped ||
+                    (!existing.bufferRetired && existing.bufferSlotIndex == buffer.slotIndex());
   });
   if (alreadyMapped) {
     return GpuError{GpuErrorType::InvalidState,
