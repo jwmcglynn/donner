@@ -100,8 +100,40 @@ void removeTrailingSpace(RcString& text) {
   }
 }
 
+/// Returns true when the element declares somewhere for its glyphs to be placed, either inline
+/// geometry from `path` or a reference through `href`. An element declaring neither renders
+/// nothing.
+bool hasTextPathGeometrySource(const TextPathComponent& textPath) {
+  return (textPath.inlinePath && !textPath.inlinePath->empty()) || !textPath.href.empty();
+}
+
+/// Resolves `startOffset` against the span's already-resolved path, where a percentage is a
+/// fraction of that path's total length.
+void applyStartOffset(const TextPathComponent& textPath, ComputedTextComponent::TextSpan& span) {
+  if (!textPath.startOffset) {
+    return;
+  }
+
+  if (textPath.startOffset->unit == Lengthd::Unit::Percent) {
+    span.pathStartOffset = textPath.startOffset->value * span.pathSpline->pathLength() / 100.0;
+  } else {
+    span.pathStartOffset =
+        textPath.startOffset->toPixels(Box2d({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
+  }
+}
+
+/// Resolves the geometry and start offset a \ref xml_textPath places glyphs on, leaving \p span
+/// unchanged when the element names no usable geometry.
 void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
                      ComputedTextComponent::TextSpan& span) {
+  // The `path` attribute wins over `href` when it parsed to geometry; its coordinates are already
+  // in the textPath element's user space, so no referenced-element transform applies.
+  if (textPath.inlinePath && !textPath.inlinePath->empty()) {
+    span.pathSpline = *textPath.inlinePath;
+    applyStartOffset(textPath, span);
+    return;
+  }
+
   if (textPath.href.empty()) {
     return;
   }
@@ -168,15 +200,8 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   } else {
     span.pathSpline = computedPath->spline;
   }
-  if (textPath.startOffset) {
-    const double pathLen = span.pathSpline->pathLength();
-    if (textPath.startOffset->unit == Lengthd::Unit::Percent) {
-      span.pathStartOffset = textPath.startOffset->value * pathLen / 100.0;
-    } else {
-      span.pathStartOffset =
-          textPath.startOffset->toPixels(Box2d({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
-    }
-  }
+
+  applyStartOffset(textPath, span);
 }
 
 /// Find the textPath entity that applies to the given entity.
@@ -393,7 +418,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     if (!isHidden) {
       const auto* textPathComp = handle.try_get<TextPathComponent>();
       if (textPathComp) {
-        if (textPathComp->href.empty()) {
+        if (!hasTextPathGeometrySource(*textPathComp)) {
           isHidden = true;
         } else {
           const auto* tree = handle.try_get<donner::components::TreeComponent>();

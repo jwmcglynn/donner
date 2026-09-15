@@ -1521,7 +1521,6 @@ INSTANTIATE_TEST_SUITE_P(
                      .withMaxPixelsDifferent(1100)
                      .withReason(
                          "resvg 0.47.0 reference; full-text small-font placement residual")},
-                {"link-to-rect.svg", Params::Skip("Not impl: link to rect (SVG 2)")},
                 {"m-A-path.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
@@ -1592,9 +1591,12 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Minor char")},
                 {"with-filter.svg", Params::Skip("Not impl: filter on textPath")},
                 {"with-invalid-path-and-xlink-href.svg",
-                 Params::Skip("Not impl: invalid path + href")},
-                {"with-path-and-xlink-href.svg", Params::Skip("Not impl: path + xlink:href")},
-                {"with-path.svg", Params::Skip("Not impl: path attr (SVG 2)")},
+                 Params::Skip("Reference disagrees with the corpus: after the invalid `path` is "
+                              "ignored, the remaining `xlink:href=\"path1\"` has no fragment, so "
+                              "it names a document rather than an element. The corpus' own "
+                              "paint-servers/radialGradient/invalid-xlink-href.svg pins that as "
+                              "unresolvable, and results.csv records every engine failing this "
+                              "reference")},
                 {"with-rotate.svg", Params::WithGoldenOverride(
                                         "donner/svg/renderer/testdata/golden/resvg-with-rotate.png")
                                         .withReason("Minor char")},

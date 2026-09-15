@@ -42,6 +42,7 @@
 #include "donner/svg/parser/ClockValueParser.h"
 #include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/Number2dParser.h"
+#include "donner/svg/parser/PathParser.h"
 #include "donner/svg/parser/PointsListParser.h"  // IWYU pragma: keep, used by PointsListParser
 #include "donner/svg/parser/PreserveAspectRatioParser.h"
 #include "donner/svg/parser/ViewBoxParser.h"
@@ -2449,6 +2450,18 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTextPathElement>(SVGParserConte
                                                                   std::string_view value) {
   if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(RcStringOrRef(value));
+  } else if (name == XMLQualifiedNameRef("path")) {
+    auto& comp = element.entityHandle().get_or_emplace<components::TextPathComponent>();
+    comp.inlinePath.reset();
+    // A `path` that yields no geometry is ignored so that `href` still applies, per SVG 2
+    // textPath: the referenced path is the fallback when `path` is absent or in error.
+    ParseResult<Path> maybePath = PathParser::Parse(value);
+    if (maybePath.hasResult() && !maybePath.result().empty()) {
+      comp.inlinePath = std::move(maybePath.result());
+    }
+    if (maybePath.hasError()) {
+      context.addSubparserWarning(std::move(maybePath.error()), context.parserOriginFrom(value));
+    }
   } else if (name == XMLQualifiedNameRef("startOffset")) {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setStartOffset(*length);

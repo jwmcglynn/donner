@@ -7,12 +7,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -66,9 +69,39 @@ protected:
     auto& registry = document.registry();
     ParseWarningSink warningSink;
     StyleSystem().computeAllStyles(registry, warningSink);
+    // Mirrors the render pipeline, which computes shape geometry before text so that a
+    // <textPath> referencing a basic shape sees that shape's equivalent path.
+    ShapeSystem().instantiateAllComputedPaths(registry, warningSink);
     TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
     return document;
+  }
+
+  /// Returns the single \ref xml_textPath span of the text root matched by \p textSelector.
+  static const ComputedTextComponent::TextSpan& TextPathSpanOf(SVGDocument& document,
+                                                               std::string_view textSelector) {
+    static const ComputedTextComponent::TextSpan kEmptySpan{};
+    auto textElement = document.querySelector(textSelector);
+    EXPECT_TRUE(textElement.has_value()) << "no element matched " << textSelector;
+    if (!textElement) {
+      return kEmptySpan;
+    }
+
+    Registry& registry = document.registry();
+    const auto* computed =
+        registry.try_get<ComputedTextComponent>(textElement->unsafeEntityHandle().entity());
+    EXPECT_NE(computed, nullptr);
+    if (!computed) {
+      return kEmptySpan;
+    }
+
+    // Span 0 is the <text> root itself; span 1 is its <textPath> child.
+    EXPECT_THAT(computed->spans, SizeIs(2));
+    if (computed->spans.size() < 2) {
+      return kEmptySpan;
+    }
+
+    return computed->spans[1];
   }
 };
 
@@ -495,6 +528,139 @@ TEST_F(TextSystemTest, TextPathWithEmptyReferencedPathMarksFailure) {
   ASSERT_THAT(computed->spans, SizeIs(2));
   EXPECT_FALSE(computed->spans[1].pathSpline.has_value());
   EXPECT_TRUE(computed->spans[1].textPathFailed);
+}
+
+// --- textPath geometry sources: inline `path`, precedence, and shape references ---
+
+TEST_F(TextSystemTest, TextPathInlinePathAttributeSuppliesGeometry) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath path="M 10 20 L 110 20">Inline</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_FALSE(span.textPathFailed);
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(10.0, 20.0), Vector2Near(110.0, 20.0)));
+}
+
+TEST_F(TextSystemTest, TextPathInlinePathTakesPrecedenceOverHref) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 5 0"/></defs>
+      <text id="t"><textPath path="M 10 20 L 110 20" href="#p">Inline wins</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(10.0, 20.0), Vector2Near(110.0, 20.0)));
+}
+
+TEST_F(TextSystemTest, TextPathInvalidInlinePathFallsBackToHref) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 40 0"/></defs>
+      <text id="t"><textPath path="q" href="#p">Fallback</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_FALSE(span.textPathFailed);
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(0.0, 0.0), Vector2Near(40.0, 0.0)));
+}
+
+TEST_F(TextSystemTest, TextPathInvalidInlinePathWithoutHrefFails) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath path="q">No geometry</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  EXPECT_FALSE(span.pathSpline.has_value());
+  // An element with no usable geometry source is treated as absent, matching an empty `href`.
+  EXPECT_TRUE(span.hidden);
+}
+
+TEST_F(TextSystemTest, TextPathHrefToRectUsesShapeEquivalentPath) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect id="r" x="40" y="50" width="120" height="60"/>
+      <text id="t"><textPath href="#r">On a rect</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_FALSE(span.textPathFailed);
+  EXPECT_THAT(span.pathSpline->points(),
+              testing::ElementsAre(Vector2Near(40.0, 50.0), Vector2Near(160.0, 50.0),
+                                   Vector2Near(160.0, 110.0), Vector2Near(40.0, 110.0)));
+  EXPECT_THAT(span.pathSpline->commands(),
+              testing::ElementsAre(
+                  PathCommandVerbIs(Path::Verb::MoveTo), PathCommandVerbIs(Path::Verb::LineTo),
+                  PathCommandVerbIs(Path::Verb::LineTo), PathCommandVerbIs(Path::Verb::LineTo),
+                  PathCommandVerbIs(Path::Verb::ClosePath)));
+}
+
+TEST_F(TextSystemTest, TextPathHrefToCircleUsesShapeEquivalentPath) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <circle id="c" cx="100" cy="100" r="50"/>
+      <text id="t"><textPath href="#c">On a circle</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathSpline->bounds(), BoxEq(Vector2Near(50.0, 50.0), Vector2Near(150.0, 150.0)));
+}
+
+TEST_F(TextSystemTest, TextPathSelfReferencingHrefFails) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath id="tp" href="#tp">Self reference</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  EXPECT_FALSE(span.pathSpline.has_value());
+  EXPECT_TRUE(span.textPathFailed);
+}
+
+TEST_F(TextSystemTest, TextPathInlinePathWithModerateCoordinatesResolvesPercentOffset) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath path="M 0 0 L 1000000 0" startOffset="25%">Long</textPath></text>
+    </svg>
+  )svg");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathStartOffset, testing::DoubleEq(250000.0));
+}
+
+TEST_F(TextSystemTest, TextPathInlinePathWithHugeCoordinatesResolvesWithoutNaN) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath path="M 0 0 C 1e12 1e12 -1e12 1e12 1e12 0"
+                             startOffset="50%">Huge</textPath></text>
+    </svg>
+  )svg");
+
+  // Arc-length measurement refuses a curve it cannot sample within its work budget and reports an
+  // infinite length, so the offset stays ordered against every finite distance instead of
+  // becoming NaN, and path sampling later rejects it.
+  const auto& span = TextPathSpanOf(document, "#t");
+  ASSERT_TRUE(span.pathSpline.has_value());
+  EXPECT_THAT(span.pathStartOffset, testing::Not(testing::IsNan()));
+  EXPECT_THAT(span.pathStartOffset, testing::Gt(0.0));
 }
 
 TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {

@@ -1797,9 +1797,11 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
 
   LayoutSystem().instantiateAllComputedComponents(registry_, warningSink);
 
-  TextSystem().instantiateAllComputedComponents(registry_, warningSink);
-
+  // Shapes are computed before text so that a <textPath> referencing a basic shape, such as a
+  // <rect>, finds that shape's equivalent path already attached.
   ShapeSystem().instantiateAllComputedPaths(registry_, warningSink);
+
+  TextSystem().instantiateAllComputedComponents(registry_, warningSink);
 
   PaintSystem().instantiateAllComputedComponents(registry_, warningSink);
 
