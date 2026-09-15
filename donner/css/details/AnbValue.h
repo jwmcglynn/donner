@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <ostream>
 
 namespace donner::css {
@@ -17,25 +18,26 @@ struct AnbValue {
   int b = 0;  //!< The 'b' value in the An+B microsyntax.
 
   /**
-   * Evaluate whether the given child index matches this An+B value.
+   * Evaluate whether the given child index equals A*n+B for a non-negative integer n.
    *
    * For example, if this AnbValue represents `4n+2`, then `evaluate(2)` would return true, but
    * `evaluate(3)` would return false.
    *
-   * @param index A 1-based child index; `evaluate(1)` is the first child. If index is negative,
+   * @param index A 1-based child index; `evaluate(1)` is the first child. If index is non-positive,
    * evaluate returns false.
    */
   int evaluate(int index) const noexcept {
-    if (index < 0) {
+    if (index <= 0) {
       return false;
     }
 
-    // Return true if index matches any combination of a*n+b
     if (a == 0) {
       return index == b;
-    } else {
-      return (index - b) % a == 0;
     }
+
+    // Widen before subtracting so extreme coefficients cannot overflow.
+    const int64_t delta = int64_t(index) - b;
+    return delta % a == 0 && delta / a >= 0;
   }
 
   /// Equality operator.
