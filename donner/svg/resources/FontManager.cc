@@ -471,8 +471,9 @@ void FontManager::addFontFace(const css::FontFace& face) {
   registry_.emplace<FontFaceComponent>(entity, face, nextFaceSequence_++);
   faceEntities_.emplace(std::move(key), entity);
   // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
-  // have to be recomputed.
+  // have to be recomputed, and the new family becomes available to a font-family list walk.
   cache_.clear();
+  registeredFamiliesIndexValid_ = false;
 }
 
 size_t FontManager::numFaces() const {
@@ -504,19 +505,39 @@ void FontManager::setGenericFamilyMapping(std::string_view genericName,
 
 bool FontManager::hasFamily(std::string_view family) const {
   const std::string familyLower = ToLowerAscii(family);
-  if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
-    family = it->second;
-  }
+  const auto generic = genericFamilyMap_.find(familyLower);
+  const bool isGeneric = generic != genericFamilyMap_.end();
+  const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
+  const std::string resolvedLower = isGeneric ? ToLowerAscii(resolved) : familyLower;
 
-  auto view = registry_.view<FontFaceComponent>();
-  for (const Entity entity : view) {
-    if (StringUtils::Equals<StringComparison::IgnoreCase>(
-            view.get<FontFaceComponent>(entity).face.familyName, family)) {
-      return true;
+  if (!registeredFamiliesIndexValid_) {
+    registeredFamiliesLower_.clear();
+    auto view = registry_.view<FontFaceComponent>();
+    for (const Entity entity : view) {
+      registeredFamiliesLower_.insert(
+          ToLowerAscii(view.get<FontFaceComponent>(entity).face.familyName));
     }
+    registeredFamiliesIndexValid_ = true;
   }
 
-  return provider_ != nullptr && provider_->hasFamily(family);
+  if (registeredFamiliesLower_.count(resolvedLower) != 0) {
+    return true;
+  }
+
+  if (provider_ == nullptr) {
+    return false;
+  }
+
+  if (const auto memo = providerFamilyAvailability_.find(resolvedLower);
+      memo != providerFamilyAvailability_.end()) {
+    return memo->second;
+  }
+
+  // Enumerating a system provider's families is the expensive half of this query, so the answer is
+  // kept until the provider itself changes.
+  const bool available = provider_->hasFamily(resolved);
+  providerFamilyAvailability_.emplace(resolvedLower, available);
+  return available;
 }
 
 FontHandle FontManager::findFont(std::string_view family) {

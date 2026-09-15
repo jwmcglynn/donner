@@ -78,6 +78,7 @@ public:
   }
 
   bool hasFamily(std::string_view family) const override {
+    ++hasFamilyCalls;
     for (const std::string& name : families_) {
       if (name == family) {
         return true;
@@ -98,6 +99,7 @@ public:
   }
 
   mutable int loadCalls = 0;
+  mutable int hasFamilyCalls = 0;
   mutable FontFaceRequest lastRequest;
 
 private:
@@ -185,6 +187,19 @@ std::vector<uint8_t> WithFamilyInitial(std::span<const uint8_t> source, uint16_t
   }
   EXPECT_GT(changed, 0u);
   return data;
+}
+
+/// Builds a `@font-face` rule for @p familyName backed by the embedded Public Sans bytes.
+css::FontFace MakeEmbeddedFace(std::string_view familyName) {
+  css::FontFace face;
+  face.familyName = RcString(familyName);
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  source.trusted = true;
+  face.sources.push_back(std::move(source));
+  return face;
 }
 
 }  // namespace
@@ -1242,5 +1257,65 @@ TEST(FontManagerTest, LoadWoff2Data) {
   EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 #endif
+
+TEST(FontManagerTest, FamilyAvailabilityAsksTheProviderOncePerFamily) {
+  Registry registry;
+  FontManager manager(registry);
+  FakeFontProvider provider({"Provided Family"});
+  manager.setFontProvider(&provider);
+
+  EXPECT_THAT(provider.hasFamilyCalls, Eq(0));
+
+  EXPECT_TRUE(manager.hasFamily("Provided Family"));
+  EXPECT_FALSE(manager.hasFamily("Absent Family"));
+  EXPECT_THAT(provider.hasFamilyCalls, Eq(2));
+
+  // Layout asks once per family per span, so repeats must be served from the memo. Without it this
+  // re-enumerates the provider's families every time.
+  for (int i = 0; i < 32; ++i) {
+    EXPECT_TRUE(manager.hasFamily("Provided Family"));
+    EXPECT_FALSE(manager.hasFamily("Absent Family"));
+  }
+  EXPECT_THAT(provider.hasFamilyCalls, Eq(2));
+}
+
+TEST(FontManagerTest, ChangingTheProviderReopensFamilyAvailability) {
+  Registry registry;
+  FontManager manager(registry);
+  FakeFontProvider first({"Provided Family"});
+  FakeFontProvider second({"Other Family"});
+
+  manager.setFontProvider(&first);
+  EXPECT_TRUE(manager.hasFamily("Provided Family"));
+  EXPECT_FALSE(manager.hasFamily("Other Family"));
+
+  manager.setFontProvider(&second);
+  EXPECT_FALSE(manager.hasFamily("Provided Family"));
+  EXPECT_TRUE(manager.hasFamily("Other Family"));
+}
+
+TEST(FontManagerTest, RegisteringAFaceMakesItsFamilyAvailableImmediately) {
+  Registry registry;
+  FontManager manager(registry);
+
+  EXPECT_FALSE(manager.hasFamily("Late Family"));
+
+  manager.addFontFace(MakeEmbeddedFace("Late Family"));
+
+  // The availability index is rebuilt on registration, not left stale from the query above.
+  EXPECT_TRUE(manager.hasFamily("Late Family"));
+  EXPECT_TRUE(manager.hasFamily("late family"));
+}
+
+TEST(FontManagerTest, FamilyAvailabilityResolvesGenericNames) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Mapped Family"));
+  manager.setGenericFamilyMapping("sans-serif", "Mapped Family");
+
+  EXPECT_TRUE(manager.hasFamily("sans-serif"));
+  EXPECT_TRUE(manager.hasFamily("SANS-SERIF"));
+  EXPECT_FALSE(manager.hasFamily("cursive"));
+}
 
 }  // namespace donner::svg
