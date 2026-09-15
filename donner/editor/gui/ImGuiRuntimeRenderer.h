@@ -108,7 +108,7 @@ public:
                                          gpu::TextureView view);
 
   /// Number of retired texture backings still held. Test accessor.
-  size_t retainedTextureBackingCountForTest() const { return 0; }
+  size_t retainedTextureBackingCountForTest() const { return retiredTextureBackings_.size(); }
 
   /**
    * Drops the cached per-texture bind groups and the recorded pipeline selection, so the next
@@ -169,6 +169,11 @@ public:
   uint64_t indexCapacityBytes() const { return indexCapacityBytes_; }
 
 private:
+  struct RetiredTextureBacking {
+    UiTextureId id;         //!< Exact registration generation whose frames retain this backing.
+    gpu::Texture texture;   //!< Imported texture, null for a device-owned source texture.
+    gpu::TextureView view;  //!< View sampled by already-recorded UI draws.
+  };
   /// One cached bind group and the registration it was built for.
   struct TextureBinding {
     UiTextureId id;            //!< Registration the group samples.
@@ -281,6 +286,7 @@ private:
   UiTextureId fontAtlasTexture_;
 
   std::vector<TextureBinding> textureBindings_;
+  std::vector<RetiredTextureBacking> retiredTextureBackings_;
   std::vector<uint8_t> vertexStaging_;
   std::vector<uint8_t> indexStaging_;
 };

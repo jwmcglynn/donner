@@ -77,6 +77,13 @@ gpu::Result<UiTextureId> UiTextureRegistry::registerTexture(const UiTextureDescr
     return UiTextureId::CreateForRegistry(slotIndex, slot.generation);
   }
 
+  if (slots_.size() >= kMaxRegistrations) {
+    return gpu::GpuError{
+        gpu::GpuErrorType::LimitExceeded,
+        std::format("UI texture registry holds {} registrations, at its {} registration bound",
+                    slots_.size(), kMaxRegistrations)};
+  }
+
   slots_.push_back(Slot{.generation = 1,
                         .alive = true,
                         .retired = false,

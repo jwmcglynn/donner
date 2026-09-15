@@ -759,8 +759,21 @@ void CompositorDebugPanel::releaseImGuiTexture(ThumbnailTextureHandle texture) {
   // Retiring refuses new draw data at once and releases the slot after the frames a recorded draw
   // can still be in flight, which is the window this panel already held its snapshots for.
   // RetireUiTexture reports a double release rather than swallowing it.
-  RetireUiTexture(texture);
-  registeredBackings_.erase(texture);
+  ImGuiRuntimeRenderer* renderer = CurrentImGuiRuntimeRenderer();
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  const auto backing = registeredBackings_.find(texture);
+  if (renderer == nullptr || registry == nullptr || backing == registeredBackings_.end()) {
+    return;
+  }
+  const UiTextureId id = UiTextureId::FromImTextureId(texture);
+  const gpu::Status retired = registry->retire(id);
+  if (retired.hasError()) {
+    std::fprintf(stderr, "UI texture retire failed: %s\n", retired.error().toString().c_str());
+    return;
+  }
+  renderer->retainTextureBackingUntilReleased(id, std::move(backing->second.texture),
+                                              std::move(backing->second.view));
+  registeredBackings_.erase(backing);
 }
 
 void CompositorDebugPanel::retireSnapshots(RetiredSnapshotBatch snapshots) {

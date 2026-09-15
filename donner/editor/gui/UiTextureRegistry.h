@@ -161,6 +161,8 @@ void PrintTo(const UiTextureBinding& binding, std::ostream* os);
  */
 class UiTextureRegistry {
 public:
+  /// Maximum simultaneously live or retiring registrations.
+  static constexpr size_t kMaxRegistrations = 16384;
   /// Presentation frames a retired registration occupies its slot for, covering the frames a
   /// recorded draw can still be in flight.
   static constexpr uint32_t kDefaultRetirementFrames = 3;

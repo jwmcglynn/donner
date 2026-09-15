@@ -368,7 +368,7 @@ TEST_F(ImGuiRuntimeRendererTest, ARetiredRegistrationsBindingIsDroppedAfterItsFr
 TEST_F(ImGuiRuntimeRendererTest, RetiredBackingLivesUntilItsExactRegistrationIsReleased) {
   ASSERT_THAT(registry_.retire(premultiplied_), gpu::IsOk());
   renderer_->retainTextureBackingUntilReleased(premultiplied_, std::move(texture_),
-                                                std::move(view_));
+                                               std::move(view_));
   EXPECT_THAT(renderer_->retainedTextureBackingCountForTest(), Eq(1u));
   for (uint32_t frame = 1; frame < registry_.retirementFrames(); ++frame) {
     EXPECT_THAT(renderer_->advanceFrame(), testing::IsEmpty());
@@ -379,28 +379,24 @@ TEST_F(ImGuiRuntimeRendererTest, RetiredBackingLivesUntilItsExactRegistrationIsR
 }
 
 TEST_F(ImGuiRuntimeRendererTest, AnIndexAtTheOwningListsVertexBoundaryIsRefused) {
-  std::unique_ptr<tests::UiSceneDrawLists> scene =
-      tests::BuildUiScene(premultiplied_, straight_);
+  std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(premultiplied_, straight_);
   scene->lists[0]->IdxBuffer[2] = 4;
   EXPECT_THAT(recordFrame(scene->drawData),
               gpu::IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("index value")));
 }
 
 TEST_F(ImGuiRuntimeRendererTest, AnIndexCannotReachIntoTheNextDrawListsVertices) {
-  std::unique_ptr<tests::UiSceneDrawLists> scene =
-      tests::BuildUiScene(premultiplied_, straight_);
+  std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(premultiplied_, straight_);
   scene->lists[0]->IdxBuffer[2] = 5;
   EXPECT_THAT(recordFrame(scene->drawData),
               gpu::IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("owning draw list")));
 }
 
 TEST_F(ImGuiRuntimeRendererTest, AReusedLargerBufferDoesNotExposePriorFrameVertices) {
-  std::unique_ptr<tests::UiSceneDrawLists> large =
-      tests::BuildUiScene(premultiplied_, straight_);
+  std::unique_ptr<tests::UiSceneDrawLists> large = tests::BuildUiScene(premultiplied_, straight_);
   ASSERT_THAT(recordFrame(large->drawData), gpu::IsOk());
 
-  std::unique_ptr<tests::UiSceneDrawLists> smaller =
-      tests::BuildUiScene(premultiplied_, straight_);
+  std::unique_ptr<tests::UiSceneDrawLists> smaller = tests::BuildUiScene(premultiplied_, straight_);
   smaller->lists[0]->VtxBuffer.resize(3);
   smaller->lists[0]->IdxBuffer[2] = 3;
   smaller->drawData.TotalVtxCount = 7;

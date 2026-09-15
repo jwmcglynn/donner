@@ -201,6 +201,27 @@ gpu::Result<DrawRange> DrawRangeFor(const ImDrawCmd& command, int32_t listBaseVe
   return DrawRange{static_cast<uint32_t>(*firstIndex), static_cast<int32_t>(*baseVertex)};
 }
 
+/// Validates the actual index values a command reads against its owning draw list.
+gpu::Status ValidateCommandIndices(const ImDrawCmd& command, const ImDrawList& list) {
+  const std::optional<uint64_t> indexEnd = gpu::CheckedAdd(command.IdxOffset, command.ElemCount);
+  if (!indexEnd.has_value() || *indexEnd > static_cast<uint64_t>(list.IdxBuffer.Size)) {
+    return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
+                         "UI draw command's index range leaves its owning draw list"};
+  }
+  for (uint64_t indexOffset = command.IdxOffset; indexOffset < *indexEnd; ++indexOffset) {
+    const ImDrawIdx index = list.IdxBuffer[static_cast<int>(indexOffset)];
+    const std::optional<uint64_t> vertex = gpu::CheckedAdd(command.VtxOffset, index);
+    if (!vertex.has_value() || *vertex >= static_cast<uint64_t>(list.VtxBuffer.Size)) {
+      return gpu::GpuError{
+          gpu::GpuErrorType::OutOfBounds,
+          std::format("UI draw command index value {} with base vertex offset {} leaves its owning "
+                      "draw list of {} vertices",
+                      index, command.VtxOffset, list.VtxBuffer.Size)};
+    }
+  }
+  return gpu::OkStatus();
+}
+
 }  // namespace
 
 ImGuiRuntimeRenderer::ImGuiRuntimeRenderer(gpu::Device& device, UiTextureRegistry& registry)
@@ -448,11 +469,16 @@ std::vector<UiTextureId> ImGuiRuntimeRenderer::advanceFrame() {
   for (const UiTextureId id : released) {
     std::erase_if(textureBindings_, [id](const TextureBinding& cached) { return cached.id == id; });
   }
+  std::erase_if(retiredTextureBackings_, [&released](const RetiredTextureBacking& backing) {
+    return std::ranges::find(released, backing.id) != released.end();
+  });
   return released;
 }
 
-void ImGuiRuntimeRenderer::retainTextureBackingUntilReleased(UiTextureId, gpu::Texture,
-                                                              gpu::TextureView) {}
+void ImGuiRuntimeRenderer::retainTextureBackingUntilReleased(UiTextureId id, gpu::Texture texture,
+                                                             gpu::TextureView view) {
+  retiredTextureBackings_.push_back(RetiredTextureBacking{id, std::move(texture), std::move(view)});
+}
 
 void ImGuiRuntimeRenderer::resetRendererState() {
   textureBindings_.clear();
@@ -566,6 +592,13 @@ gpu::Status ImGuiRuntimeRenderer::uploadGeometry(const ImDrawData& drawData,
   geometry.firstIndex.assign(static_cast<size_t>(drawData.CmdListsCount), 0);
   for (int listIndex = 0; listIndex < drawData.CmdListsCount; ++listIndex) {
     const ImDrawList* list = drawData.CmdLists[listIndex];
+    for (const ImDrawCmd& command : list->CmdBuffer) {
+      if (command.UserCallback == nullptr && command.ElemCount != 0) {
+        if (gpu::Status valid = ValidateCommandIndices(command, *list); valid.hasError()) {
+          return valid;
+        }
+      }
+    }
     geometry.baseVertex[static_cast<size_t>(listIndex)] =
         static_cast<int32_t>(vertexStaging_.size() / sizeof(ImDrawVert));
     geometry.firstIndex[static_cast<size_t>(listIndex)] =
