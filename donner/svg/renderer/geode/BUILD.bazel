@@ -852,8 +852,8 @@ donner_multi_transitioned_test(
 donner_cc_test(
     name = "geode_filter_engine_tests_impl",
     # Filter graphs built and executed on a real device: 54 s uninstrumented on a
-    # software-rasterizer lane, and 117 s under the sanitizers, against the 60 s the
-    # implicit "small" allows. The uninstrumented number passes today only by a tenth
+    # software-rasterizer lane, and 113 to 117 s under the sanitizers, against the 60 s
+    # the implicit "small" allows. The uninstrumented number passes today only by a tenth
     # of its budget; the instrumented one does not pass at all without a timeout
     # override on the command line, which is not a declaration.
     #
@@ -875,9 +875,9 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "geode_filter_engine_tests",
     # Moderate rather than short, for the reason on the implementation target above: the
-    # suite this wraps needs more than 60 s on the slower lanes before a sanitizer is
-    # involved, and roughly twice that with one. Moderate still kills a hung driver in
-    # five minutes rather than letting it run to the hour-long default.
+    # suite this wraps uses most of its 60 s budget uninstrumented and roughly twice it
+    # under a sanitizer. Moderate still kills a hung driver in five minutes rather than
+    # the 900 s that large would allow.
     timeout = "moderate",
     testonly = 1,
     dep = ":geode_filter_engine_tests_impl",
