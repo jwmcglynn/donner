@@ -1,5 +1,5 @@
 /// @file
-/// The Metal writeTexture destination-origin slice: uploads a sub-rectangle at a nonzero origin
+/// Metal writeTexture destination-origin conformance: uploads a sub-rectangle at a nonzero origin
 /// through donner::gpu::metal::MetalDevice and compares the whole destination byte-for-byte
 /// against the shared expected image, so both the written texels and the untouched ones around
 /// them are checked.
@@ -73,7 +73,7 @@ class MetalSubRectangleUploadTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal writeTexture destination-origin slice");
+    DONNER_REQUIRE_METAL_DEVICE(device_, "Metal writeTexture destination-origin conformance");
   }
 
   void TearDown() override {
@@ -82,7 +82,7 @@ protected:
     }
   }
 
-  /// Creates the sentinel-filled destination the slice uploads into.
+  /// Creates the sentinel-filled destination each case uploads into.
   Texture createFilledDestination() {
     Texture destination = GetResultOrFail(device_->createTexture(
         TextureDescriptor{"destination", kDestinationExtent, TextureFormat::RGBA8Unorm,

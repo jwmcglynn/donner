@@ -272,7 +272,7 @@ donner_cc_test(
     ],
 )
 
-# The Vulkan writeTexture destination-origin slice: one rectangle uploaded at a nonzero origin,
+# Vulkan writeTexture destination-origin conformance: one rectangle uploaded at a nonzero origin,
 # compared against the shared expected image so the untouched texels around it are checked too.
 donner_cc_test(
     name = "vulkan_sub_rectangle_upload_tests",

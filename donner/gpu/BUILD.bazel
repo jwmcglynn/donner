@@ -150,7 +150,7 @@ donner_cc_library(
 )
 
 # The destination-origin upload scene: one sentinel-filled destination, one rectangle uploaded at
-# a nonzero origin, and one expected image, shared by every backend's writeTexture slice.
+# a nonzero origin, and one expected image, shared by every backend's writeTexture test.
 donner_cc_library(
     name = "sub_rectangle_upload_scene",
     testonly = 1,

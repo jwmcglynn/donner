@@ -1,8 +1,8 @@
 #pragma once
 /// @file
-/// Shared scene for the `Device::writeTexture` destination-origin slices.
+/// Shared scene for the `Device::writeTexture` destination-origin tests.
 ///
-/// Every backend slice fills the same destination with the same sentinel, uploads the same
+/// Every backend test fills the same destination with the same sentinel, uploads the same
 /// rectangle at the same nonzero origin, and checks the same expected bytes, so a backend that
 /// ignores the origin, transposes it, or clamps it to the texture edge shows up as a byte
 /// difference rather than as a test that agrees with itself.

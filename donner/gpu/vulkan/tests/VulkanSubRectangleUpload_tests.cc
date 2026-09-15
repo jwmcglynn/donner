@@ -1,5 +1,5 @@
 /// @file
-/// The Vulkan writeTexture destination-origin slice: uploads a sub-rectangle at a nonzero origin
+/// Vulkan writeTexture destination-origin conformance: uploads a sub-rectangle at a nonzero origin
 /// through donner::gpu::vulkan::VulkanDevice and compares the whole destination byte-for-byte
 /// against the shared expected image, so both the written texels and the untouched ones around
 /// them are checked.
@@ -51,8 +51,8 @@ protected:
       // instead of a silent skip; local runs without a Vulkan runtime still skip.
       const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
       if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1") {
-        FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; the "
-                  "vertical-slice gate must not be skipped on this runner";
+        FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; this "
+                  "upload gate must not be skipped on this runner";
       }
       GTEST_SKIP() << "No Vulkan 1.1 device available";
     }
