@@ -1549,6 +1549,17 @@ Status ValidateSurfaceConfiguration(const SurfaceConfiguration& configuration) {
                std::format("SurfaceConfiguration.size {}x{} has a zero dimension",
                            configuration.size.width, configuration.size.height));
   }
+  // Bounded by the same limit as any other texture, because the frames a surface hands out are
+  // textures the rest of the runtime validates against this configuration: a platform that
+  // clamped an oversized request to what it can allocate would leave every later range check
+  // measuring a frame against an extent nothing ever allocated.
+  if (configuration.size.width > kMaxTextureDimension ||
+      configuration.size.height > kMaxTextureDimension) {
+    return Err(
+        GpuErrorType::LimitExceeded,
+        std::format("SurfaceConfiguration.size {}x{} exceeds kMaxTextureDimension {}",
+                    configuration.size.width, configuration.size.height, kMaxTextureDimension));
+  }
   return OkStatus();
 }
 

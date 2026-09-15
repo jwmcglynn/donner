@@ -156,10 +156,30 @@ Result<SurfaceStatus> MetalSurface::acquire() {
       hasOutgrownItsConfiguration() ? SurfaceStatus::Outdated : SurfaceStatus::Success;
 
   id<CAMetalDrawable> drawable = [layer_ nextDrawable];
-  if (drawable == nil || drawable.texture == nil) {
+  if (drawable == nil) {
     // A layer hands out a small fixed number of drawables and waits for one to come back rather
     // than blocking a frame loop indefinitely; the caller retries on the next frame.
     return SurfaceStatus::Timeout;
+  }
+  if (drawable.texture == nil) {
+    // A frame with nothing to draw into is not a frame that has not arrived yet, and retrying
+    // would not produce one.
+    return GpuError{GpuErrorType::InvalidState,
+                    "acquireCurrentTexture: the layer handed out a frame with no texture"};
+  }
+
+  // The runtime describes this frame to every later range check using the configured extent, so
+  // a layer whose drawable extent moved behind the configuration must not yield a frame that is
+  // a different size from the one the runtime is about to claim it is.
+  const NSUInteger width = drawable.texture.width;
+  const NSUInteger height = drawable.texture.height;
+  if (width != configuration_->size.width || height != configuration_->size.height) {
+    return GpuError{
+        GpuErrorType::InvalidState,
+        std::format("acquireCurrentTexture: the layer handed out a {}x{} frame under a {}x{} "
+                    "configuration",
+                    static_cast<uint64_t>(width), static_cast<uint64_t>(height),
+                    configuration_->size.width, configuration_->size.height)};
   }
 
   drawable_ = drawable;
