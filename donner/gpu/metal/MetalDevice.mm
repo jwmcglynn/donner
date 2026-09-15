@@ -1989,24 +1989,29 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
                     std::format("surface slot {} has no Metal layer", slotIndex)};
   }
 
+  // Read before anything below can release the drawable: every path from here has to clear the
+  // texture slot this frame occupies, and a released drawable no longer names its texture.
+  id<MTLTexture> frameTexture = surface->currentTexture();
+
   // Handing a drawable to the layer shows it as it is at that moment, so the frame's own work
   // has to have finished first. Metal offers no way to order that from here once the frame has
   // been submitted - scheduling the present on a later command buffer would not do it, because a
   // present fires when its command buffer is scheduled rather than when it completes - so the
-  // wait is explicit. Every submission is the owning thread's, and presenting follows the
-  // frame's submission, so the last serial submitted is the frame's work.
-  const uint64_t frameSerial = lastSubmittedSerial();
+  // wait is explicit. It waits on the work that named this frame rather than on whatever the
+  // device submitted most recently, which stop being the same thing the moment a caller submits
+  // anything else between drawing the frame and presenting it.
+  const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
+  const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
   if (frameSerial > completedSerial() &&
       !waitForSerial(frameSerial, kPresentCompletionTimeoutSeconds)) {
     // The frame is the layer's either way; the caller is told the frame it drew is not showing.
     surface->abandon();
-    impl_->releaseFrameTextureSlot(slotIndex, surface->currentTexture());
+    impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
     return GpuError{GpuErrorType::InvalidState,
                     std::format("presentSurface: the frame's work did not complete: {}",
                                 lastErrorForTest().empty() ? "timed out" : lastErrorForTest())};
   }
 
-  id<MTLTexture> frameTexture = surface->currentTexture();
   Result<SurfaceStatus> status = surface->present();
   impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
   return status;

@@ -1591,6 +1591,10 @@ void Device::onAbandonCurrentTexture(uint32_t /*slotIndex*/) {}
 
 void Device::onDestroySurface(uint32_t /*slotIndex*/) {}
 
+uint64_t Device::lastTextureUseSerial(uint32_t textureSlotIndex) const {
+  return textures_.lastUseOf(textureSlotIndex);
+}
+
 Result<Surface> Device::createSurface(const SurfaceDescriptor& descriptor) {
   if (Status status = ValidateNativeSurfaceHandle(descriptor.native); status.hasError()) {
     return std::move(status).error();

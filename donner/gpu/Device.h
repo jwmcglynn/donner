@@ -139,11 +139,14 @@ public:
 
   /**
    * Serial of the last submission referencing \p slotIndex (0 if never submitted). Valid for
-   * retired slots too: retiring preserves the last use so deferred destruction can key on it.
+   * retired slots too: retiring preserves the last use so deferred destruction can key on it,
+   * and for an index the table has never covered, which reads as never submitted.
    *
-   * @param slotIndex Slot index; must be in range.
+   * @param slotIndex Slot index.
    */
-  uint64_t lastUseOf(uint32_t slotIndex) const { return slots_[slotIndex].lastUseSerial; }
+  uint64_t lastUseOf(uint32_t slotIndex) const {
+    return slotIndex < slots_.size() ? slots_[slotIndex].lastUseSerial : 0;
+  }
 
 private:
   /// One slot: generation counter plus the stored record while alive.
@@ -726,6 +729,18 @@ protected:
   /// Backend hook: drop the acquired texture without presenting.
   /// @param slotIndex Slot of the surface.
   virtual void onAbandonCurrentTexture(uint32_t slotIndex);
+
+  /**
+   * Serial of the last submission that referenced the texture at \p textureSlotIndex, or 0 when
+   * nothing has submitted work naming it.
+   *
+   * For a backend that has to order something against one texture's own work rather than against
+   * whatever the device submitted most recently, which is not the same thing as soon as a caller
+   * submits anything else between the two.
+   *
+   * @param textureSlotIndex Slot of the texture.
+   */
+  uint64_t lastTextureUseSerial(uint32_t textureSlotIndex) const;
 
   /**
    * Backend hook: release the platform state of a surface that is going away.
