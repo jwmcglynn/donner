@@ -327,9 +327,7 @@ public:
       const auto now = std::chrono::steady_clock::now();
       checkDeadlines(now);
       if (stopping_ && replies_.empty()) return exitCode_;
-      if (inputEnded_ && input_.empty() && pending_.empty() && notificationDeadlines_.empty() &&
-          commands_.empty() && replies_.empty())
-        return exitCode_;
+      if (inputDrained() && replies_.empty()) return exitCode_;
       if (replies_.stalled(now)) {
         errors_ << "MCP output stopped accepting replies\n";
         return 1;
@@ -345,6 +343,10 @@ private:
     SocketDeadline deadline;
     bool heartbeat;
   };
+  bool inputDrained() const {
+    return inputEnded_ && input_.empty() && pending_.empty() && notificationDeadlines_.empty() &&
+           commands_.empty();
+  }
   bool canAccept() const {
     return !stopping_ && pending_.size() + notificationDeadlines_.size() < 8;
   }
@@ -544,6 +546,10 @@ private:
         read(connection_->fd, bytes.data(),
              std::min(bytes.size(), kMaximumResponseBytes + 1 - response_.size()));
     if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) return;
+    if (count == 0 && inputDrained() && response_.empty()) {
+      connection_.reset();
+      return;
+    }
     if (count <= 0) {
       stop("Editor connection ended; reread state before retrying edits");
       return;
