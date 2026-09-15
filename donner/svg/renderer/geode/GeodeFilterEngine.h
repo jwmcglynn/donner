@@ -15,6 +15,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -99,6 +100,75 @@ public:
                                               const gpu::TextureDescriptor& desc) = 0;
 };
 
+/**
+ * A texture flowing between filter primitives: the runtime handle holding it and the descriptor
+ * it was allocated with.
+ *
+ * Both pointers name storage the executing graph's arena owns for the whole execution, so a copy
+ * of this value stays usable across further allocations. Two values name the same texture exactly
+ * when they compare equal, because the arena gives every texture one handle: identity here is
+ * what decides intermediate reuse and color-space caching.
+ *
+ * A default-constructed value is empty, which is how a refused allocation or a primitive that
+ * could not record is reported to its caller.
+ */
+struct FilterTexture {
+  const gpu::Texture* texture = nullptr;         //!< Arena-owned runtime handle.
+  const gpu::TextureDescriptor* desc = nullptr;  //!< Descriptor \ref texture was allocated with.
+
+  /// Returns true when this value names a texture.
+  explicit operator bool() const { return texture != nullptr; }
+
+  /// Equality operator. @param other Value to compare against.
+  bool operator==(const FilterTexture& other) const = default;
+
+  /// Width in texels. Requires a non-empty value.
+  uint32_t width() const { return desc->size.width; }
+
+  /// Height in texels. Requires a non-empty value.
+  uint32_t height() const { return desc->size.height; }
+
+  /// Texel format. Requires a non-empty value.
+  gpu::TextureFormat format() const { return desc->format; }
+
+  /// Allocated usage flags. Requires a non-empty value.
+  gpu::TextureUsage usage() const { return desc->usage; }
+};
+
+/**
+ * Outcome of running a filter graph, and the ownership that comes with it.
+ *
+ * The three kinds are distinct outcomes for the caller: a failure composites nothing, a declined
+ * graph composites the caller's own unmodified source, and an output hands the caller a texture
+ * it must release through the allocator it passed in.
+ */
+struct FilterExecutionResult {
+  /// What the caller composites, and what it owns.
+  enum class Kind : uint8_t {
+    Failed,         //!< Nothing usable was produced; there is no result to composite.
+    SourceGraphic,  //!< The graph was declined; the caller composites its own source unchanged.
+    Output,         //!< \ref texture holds the result and the caller owns it.
+  };
+
+  Kind kind = Kind::Failed;     //!< Which outcome this is.
+  gpu::Texture texture;         //!< Result texture; valid only for \ref Kind::Output.
+  gpu::TextureDescriptor desc;  //!< Descriptor \ref texture must be released with.
+};
+
+/**
+ * Streams \p kind for diagnostics.
+ *
+ * @param os Output stream. @param kind Value to print.
+ */
+inline std::ostream& operator<<(std::ostream& os, FilterExecutionResult::Kind kind) {
+  switch (kind) {
+    case FilterExecutionResult::Kind::Failed: return os << "Failed";
+    case FilterExecutionResult::Kind::SourceGraphic: return os << "SourceGraphic";
+    case FilterExecutionResult::Kind::Output: return os << "Output";
+  }
+  return os << "Kind(" << static_cast<int>(kind) << ")";
+}
+
 /// Exact-resolution tile layout with overlapping sampling halos.
 struct FilterTilePlan {
   uint32_t width = 0;       //!< Full source/output width.
@@ -118,14 +188,13 @@ struct FilterTilePlan {
 /// GPU allocation bytes retained by an execution, excluding the caller's source/capture.
 struct FilterExecutionMemory {
   uint64_t textures = 0;           //!< Texture descriptors, including dead reusable scratch.
-  uint64_t standaloneBuffers = 0;  //!< Per-execution buffers retained until submission.
   uint64_t persistentBuffers = 0;  //!< Parameter arenas and immutable transfer tables.
 
   uint64_t workUnits = 0;       //!< Work charged for the chosen execution plan.
   uint64_t tileExecutions = 0;  //!< Complete graph evaluations, including sampling halos.
 
   /// Total retained allocation bytes.
-  uint64_t total() const { return textures + standaloneBuffers + persistentBuffers; }
+  uint64_t total() const { return textures + persistentBuffers; }
 };
 
 /**
@@ -173,13 +242,16 @@ public:
   /**
    * Execute a filter graph against the source-graphic texture.
    *
-   * The source texture must be RGBA8Unorm with `TextureBinding` usage.
-   * The returned texture is an RGBA8Unorm texture sized to the filter region
-   * (or the source dimensions if no region is given). Its lifetime is retained
-   * by @p textureAllocator until the frame command buffer has submitted.
+   * The source texture must be sampled-capable. A \ref FilterExecutionResult::Kind::Output
+   * result owns an RGBA8Unorm texture sized to the filter region (or the source dimensions if no
+   * region is given), which the caller releases through @p textureAllocator once the frame
+   * command buffer has submitted. Every intermediate the execution allocated is released back to
+   * @p textureAllocator before this call returns.
    *
    * @param graph The filter graph to execute.
-   * @param sourceGraphic The input texture (layer snapshot).
+   * @param sourceGraphic The input texture (layer snapshot), borrowed for the call.
+   * @param sourceGraphicDesc Descriptor \p sourceGraphic was allocated with; its extent, format
+   *   and usage decide the working resolution and whether tiling can copy from the source.
    * @param filterRegion The filter region in user-space coordinates.
    * @param deviceFromFilter The combined transform from filter/user-space to
    *   device-pixel coordinates, captured at `pushFilterLayer` time. Used to
@@ -196,16 +268,17 @@ public:
    *   only the graph-local limit.
    * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
    *   this layout even if shared scratch state or planning preferences change. Invalid plans or
-   *   failed execution-time budgets return an empty texture instead of bypassing the filter.
-   * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
+   *   failed execution-time budgets fail the execution instead of bypassing the filter.
+   * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
-  wgpu::Texture execute(const svg::components::FilterGraph& graph,
-                        const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
-                        const Transform2d& deviceFromFilter,
-                        FilterTextureAllocator& textureAllocator,
-                        ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                        svg::components::FilterExecutionBudget* executionBudget = nullptr,
-                        std::optional<FilterTilePlan> admittedPlan = std::nullopt);
+  FilterExecutionResult execute(const svg::components::FilterGraph& graph,
+                                const gpu::Texture& sourceGraphic,
+                                const gpu::TextureDescriptor& sourceGraphicDesc,
+                                const Box2d& filterRegion, const Transform2d& deviceFromFilter,
+                                FilterTextureAllocator& textureAllocator,
+                                ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
+                                svg::components::FilterExecutionBudget* executionBudget = nullptr,
+                                std::optional<FilterTilePlan> admittedPlan = std::nullopt);
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass
@@ -250,7 +323,7 @@ private:
   /// @param stdDeviationY Standard deviation in Y (pixels).
   /// @param edgeMode Edge handling mode (0=None, 1=Duplicate, 2=Wrap).
   /// @return The blurred texture.
-  wgpu::Texture applyGaussianBlur(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyGaussianBlur(FilterResourceArena& arena, FilterTexture input,
                                   double stdDeviationX, double stdDeviationY, uint32_t edgeMode,
                                   const Box2d* outputClip = nullptr);
 
@@ -262,10 +335,9 @@ private:
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
-  wgpu::Texture runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
-                            const wgpu::Texture& output, uint32_t width, uint32_t height,
-                            float stdDeviation, uint32_t axis, uint32_t edgeMode,
-                            const Box2d* clip = nullptr);
+  FilterTexture runBlurPass(FilterResourceArena& arena, FilterTexture input, FilterTexture output,
+                            uint32_t width, uint32_t height, float stdDeviation, uint32_t axis,
+                            uint32_t edgeMode, const Box2d* clip = nullptr);
 
   /// One pass of a 3-pass box blur (used to approximate a Gaussian for sigma
   /// >= 2.0, matching tiny-skia's behaviour).
@@ -277,8 +349,8 @@ private:
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
-  wgpu::Texture runBoxBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
-                               const wgpu::Texture& output, uint32_t width, uint32_t height,
+  FilterTexture runBoxBlurPass(FilterResourceArena& arena, FilterTexture input,
+                               FilterTexture output, uint32_t width, uint32_t height,
                                int32_t boxLeft, int32_t boxRight, uint32_t axis, uint32_t edgeMode,
                                const Box2d* clip = nullptr);
 
@@ -286,27 +358,27 @@ private:
   /// @param input The input texture.
   /// @param primitive The feOffset parameters.
   /// @return The offset texture.
-  wgpu::Texture applyOffset(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyOffset(FilterResourceArena& arena, FilterTexture input,
                             const svg::components::filter_primitive::Offset& primitive);
 
   /// Apply a 4x5 color matrix to each pixel via compute shader.
   /// @param input The input texture.
   /// @param primitive The feColorMatrix parameters.
   /// @return The transformed texture.
-  wgpu::Texture applyColorMatrix(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyColorMatrix(FilterResourceArena& arena, FilterTexture input,
                                  const svg::components::filter_primitive::ColorMatrix& primitive);
 
   /// Extract SourceAlpha (0,0,0,A) from a SourceGraphic texture.
   /// @param input The source-graphic texture.
   /// @return A texture whose RGB are zero and alpha matches the input alpha.
-  wgpu::Texture applySourceAlpha(FilterResourceArena& arena, const wgpu::Texture& input);
+  FilterTexture applySourceAlpha(FilterResourceArena& arena, FilterTexture input);
 
   /// Fill the output with a constant flood color via compute shader.
   /// @param width Output texture width.
   /// @param height Output texture height.
   /// @param primitive The feFlood parameters.
   /// @return The flood-filled texture.
-  wgpu::Texture applyFlood(FilterResourceArena& arena, uint32_t width, uint32_t height,
+  FilterTexture applyFlood(FilterResourceArena& arena, uint32_t width, uint32_t height,
                            const svg::components::filter_primitive::Flood& primitive);
 
   /// Alpha-over composite of N input textures via sequential compute dispatches.
@@ -318,10 +390,10 @@ private:
   ///   sRGB→linear before the alpha-over passes and convert the result
   ///   linear→sRGB (matches tiny-skia's `color-interpolation-filters` handling).
   /// @return The composited texture.
-  wgpu::Texture applyMerge(FilterResourceArena& arena, const svg::components::FilterNode& node,
-                           const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
-                           const wgpu::Texture* sourceAlpha, bool linearRGB);
+  FilterTexture applyMerge(FilterResourceArena& arena, const svg::components::FilterNode& node,
+                           const std::unordered_map<std::string, FilterTexture>& namedBuffers,
+                           FilterTexture currentBuffer, FilterTexture sourceGraphic,
+                           const FilterTexture* sourceAlpha, bool linearRGB);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.
@@ -329,16 +401,15 @@ private:
   /// @param width Output texture width.
   /// @param height Output texture height.
   /// @return The composited texture.
-  wgpu::Texture runMergePass(FilterResourceArena& arena, const wgpu::Texture& src,
-                             const wgpu::Texture& dst, uint32_t width, uint32_t height);
+  FilterTexture runMergePass(FilterResourceArena& arena, FilterTexture src, FilterTexture dst,
+                             uint32_t width, uint32_t height);
 
   /// Porter-Duff compositing of two inputs via compute shader.
   /// @param in1 First input texture (source).
   /// @param in2 Second input texture (destination/backdrop).
   /// @param primitive The feComposite parameters (operator + k1..k4).
   /// @return The composited texture.
-  wgpu::Texture applyComposite(FilterResourceArena& arena, const wgpu::Texture& in1,
-                               const wgpu::Texture& in2,
+  FilterTexture applyComposite(FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
                                const svg::components::filter_primitive::Composite& primitive);
 
   /// W3C Compositing 1 blend of two inputs via compute shader.
@@ -346,8 +417,7 @@ private:
   /// @param in2 Second input texture (backdrop).
   /// @param primitive The feBlend parameters (blend mode).
   /// @return The blended texture.
-  wgpu::Texture applyBlend(FilterResourceArena& arena, const wgpu::Texture& in1,
-                           const wgpu::Texture& in2,
+  FilterTexture applyBlend(FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
                            const svg::components::filter_primitive::Blend& primitive);
 
   /// Morphological erode / dilate via min / max rectangular kernel.
@@ -356,7 +426,7 @@ private:
   /// @param pixelRadiusX Horizontal radius in pixels.
   /// @param pixelRadiusY Vertical radius in pixels.
   /// @return The morphed texture.
-  wgpu::Texture applyMorphology(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyMorphology(FilterResourceArena& arena, FilterTexture input,
                                 const svg::components::filter_primitive::Morphology& primitive,
                                 int pixelRadiusX, int pixelRadiusY);
 
@@ -364,16 +434,16 @@ private:
   /// @param input The input texture.
   /// @param primitive The feComponentTransfer parameters (4 channel functions).
   /// @return The transformed texture.
-  wgpu::Texture applyComponentTransfer(
-      FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyComponentTransfer(
+      FilterResourceArena& arena, FilterTexture input,
       const svg::components::filter_primitive::ComponentTransfer& primitive);
 
   /// NxM kernel convolution (feConvolveMatrix).
   /// @param input The input texture.
   /// @param primitive The feConvolveMatrix parameters.
   /// @return The convolved texture.
-  wgpu::Texture applyConvolveMatrix(
-      FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyConvolveMatrix(
+      FilterResourceArena& arena, FilterTexture input,
       const svg::components::filter_primitive::ConvolveMatrix& primitive);
 
   /// Perlin noise / fractal noise generator (feTurbulence).
@@ -382,7 +452,7 @@ private:
   /// @param primitive The feTurbulence parameters.
   /// @param deviceFromFilter Transform from filter/user space into device space.
   /// @return The noise texture.
-  wgpu::Texture applyTurbulence(FilterResourceArena& arena, uint32_t width, uint32_t height,
+  FilterTexture applyTurbulence(FilterResourceArena& arena, uint32_t width, uint32_t height,
                                 const svg::components::filter_primitive::Turbulence& primitive,
                                 const Transform2d& deviceFromFilter);
 
@@ -392,8 +462,8 @@ private:
   /// @param primitive The feDisplacementMap parameters.
   /// @param pixelScale Displacement scale in pixels.
   /// @return The displaced texture.
-  wgpu::Texture applyDisplacementMap(
-      FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
+  FilterTexture applyDisplacementMap(
+      FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
       const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale);
 
   /// Lambertian diffuse lighting (feDiffuseLighting).
@@ -404,8 +474,8 @@ private:
   /// @param linearRGB If true, convert the lighting color sRGB→linear and the
   ///   output linear→sRGB (matches tiny-skia's linearRGB color-interpolation).
   /// @return The lit texture.
-  wgpu::Texture applyDiffuseLighting(
-      FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyDiffuseLighting(
+      FilterResourceArena& arena, FilterTexture input,
       const svg::components::filter_primitive::DiffuseLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
       const Box2d& sampleSubregion, bool linearRGB);
@@ -418,8 +488,8 @@ private:
   /// @param linearRGB If true, convert the lighting color sRGB→linear and the
   ///   output linear→sRGB (matches tiny-skia's linearRGB color-interpolation).
   /// @return The lit texture.
-  wgpu::Texture applySpecularLighting(
-      FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applySpecularLighting(
+      FilterResourceArena& arena, FilterTexture input,
       const svg::components::filter_primitive::SpecularLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
       const Box2d& sampleSubregion, bool linearRGB);
@@ -432,7 +502,7 @@ private:
   /// @param pixelDx Offset in pixel units (X).
   /// @param pixelDy Offset in pixel units (Y).
   /// @return The drop-shadowed texture.
-  wgpu::Texture applyDropShadow(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyDropShadow(FilterResourceArena& arena, FilterTexture input,
                                 const svg::components::filter_primitive::DropShadow& primitive,
                                 double pixelStdDevX, double pixelStdDevY, double pixelDx,
                                 double pixelDy);
@@ -450,7 +520,7 @@ private:
   ///   defaulted to the filter region. The image is fit into this rect per
   ///   preserveAspectRatio.
   /// @return The placed-image texture.
-  wgpu::Texture applyImage(FilterResourceArena& arena,
+  FilterTexture applyImage(FilterResourceArena& arena,
                            const svg::components::filter_primitive::Image& primitive,
                            uint32_t width, uint32_t height,
                            const svg::components::FilterGraph& graph,
@@ -460,7 +530,7 @@ private:
   /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
   /// @param arena Frame resources. @param output Existing image destination.
   /// @param destinationExtent Dimensions to fill.
-  wgpu::Texture renderTransparentImage(FilterResourceArena& arena, const gpu::Texture& output,
+  FilterTexture renderTransparentImage(FilterResourceArena& arena, FilterTexture output,
                                        gpu::Extent2d destinationExtent);
 
   /// Wraparound tile of an input subregion across the full output (feTile).
@@ -470,7 +540,7 @@ private:
   /// @param srcW Source rectangle width in pixels.
   /// @param srcH Source rectangle height in pixels.
   /// @return The tiled texture.
-  wgpu::Texture applyTile(FilterResourceArena& arena, const wgpu::Texture& input, int32_t srcX,
+  FilterTexture applyTile(FilterResourceArena& arena, FilterTexture input, int32_t srcX,
                           int32_t srcY, int32_t srcW, int32_t srcH);
 
   /// Clip a primitive's output to its user-space subregion via the inverse CTM.
@@ -483,7 +553,7 @@ private:
   /// @param usrY1 User-space subregion bottom edge.
   /// @param resolve True for the final RGBA8 clip and half-up quantization.
   /// @return A new texture with out-of-subregion pixels cleared.
-  wgpu::Texture applySubregionClip(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applySubregionClip(FilterResourceArena& arena, FilterTexture input,
                                    const Transform2d& filterFromDevice, double usrX0, double usrY0,
                                    double usrX1, double usrY1, bool resolve = false);
 
@@ -492,7 +562,7 @@ private:
   /// @param input The input texture in premultiplied sRGB (or linear, for the reverse).
   /// @param srgbToLinear True to convert sRGB→linear, false for linear→sRGB.
   /// @return A new texture in the target color space.
-  wgpu::Texture applyColorSpaceConversion(FilterResourceArena& arena, const wgpu::Texture& input,
+  FilterTexture applyColorSpaceConversion(FilterResourceArena& arena, FilterTexture input,
                                           bool srgbToLinear);
 
   GeodeDevice& device_;
