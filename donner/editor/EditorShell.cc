@@ -1282,6 +1282,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
 #ifdef __EMSCRIPTEN__
+  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
   gBrowserOverlayControlEnabled.store(BrowserOverlayControlEnabledForTesting(),
                                       std::memory_order_release);
   renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
@@ -1466,6 +1467,10 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#ifdef __EMSCRIPTEN__
+  gBrowserOverlayControlEnabled.store(false, std::memory_order_release);
+  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+#endif
   if (catalogFontWakeTarget_) {
     std::lock_guard lock(catalogFontWakeTarget_->mutex);
     catalogFontWakeTarget_->window = nullptr;
