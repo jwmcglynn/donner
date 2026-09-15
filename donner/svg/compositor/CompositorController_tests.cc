@@ -403,6 +403,51 @@ TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
          "to run every fast-path drag frame.";
 }
 
+TEST_F(CompositorControllerTest, TileOnlySelectionSkipsMainComposeAfterViewportChange) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="64" height="64" fill="white" />
+    <rect id="selected" x="20" y="20" width="24" height="24" fill="red" />
+  )svg",
+                                      Vector2i(64, 64));
+  configureMockForCaching();
+  auto selected = document.querySelector("#selected");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  const Entity entity = selected->unsafeEntityHandle().entity();
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  compositor.setSkipMainComposeDuringSplit(true);
+  EXPECT_CALL(renderer_, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer_, endFrame()).Times(1);
+  compositor.renderFrame(RenderViewport{Vector2d(64.0, 64.0)});
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&renderer_));
+  ASSERT_TRUE(compositor.hasSplitStaticLayers());
+
+  EXPECT_CALL(renderer_, beginFrame(_)).Times(0);
+  EXPECT_CALL(renderer_, endFrame()).Times(0);
+  compositor.renderFrame(RenderViewport{Vector2d(96.0, 96.0)});
+  EXPECT_EQ(compositor.lastRenderFrameStats().mainComposeCount, 0);
+}
+
+TEST_F(CompositorControllerTest, PixelIdentityVerificationRequiresMainComposeForTileOnlySelection) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="64" height="64" fill="white" />
+    <rect id="selected" x="20" y="20" width="24" height="24" fill="red" />
+  )svg",
+                                      Vector2i(64, 64));
+  configureMockForCaching();
+  auto selected = document.querySelector("#selected");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  CompositorConfig config;
+  config.verifyPixelIdentity = true;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(selected->unsafeEntityHandle().entity(),
+                                       InteractionHint::Selection));
+  compositor.setSkipMainComposeDuringSplit(true);
+  compositor.renderFrame(RenderViewport{Vector2d(64.0, 64.0)});
+  compositor.renderFrame(RenderViewport{Vector2d(96.0, 96.0)});
+  EXPECT_EQ(compositor.lastRenderFrameStats().mainComposeCount, 1);
+}
+
 TEST_F(CompositorControllerTest,
        TextureBackedFlatComposeTranslatesReusedImmediateDragLayer) {
   SVGDocument document = makeDocument(R"svg(
