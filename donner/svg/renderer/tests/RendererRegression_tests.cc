@@ -47,6 +47,19 @@ ImageComparisonParams GoldenParams() {
   return params;
 }
 
+/// Uses the existing pixelmatch assertion to require that two renders are NOT identical, so an
+/// equivalence test cannot pass by having neither side render the thing under test.
+void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& expected,
+                         std::string_view label) {
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    ExpectBitmapsIdentical(actual, expected, label);
+  }
+  EXPECT_THAT(differences.size(), testing::Eq(1)) << label << ": expected the renders to differ";
+}
+
 /// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result.
 void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label) {
   RendererBitmap empty = bitmap;
@@ -557,6 +570,60 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
       << "a group whose only children are <text> must still report an object bounding box";
   EXPECT_THAT(*actual, BoxEq(Vector2Near(expected.topLeft.x, expected.topLeft.y),
                              Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
+}
+
+// SVG 2 makes `clip-path`, `mask`, and `filter` apply to text content elements, so a `tspan` that
+// covers the whole text must render the same as the effect applied to a group wrapping that text.
+// The effect region is driven by the span's own geometry, which for a full-coverage span is the
+// text element's, so the two forms are pixel-identical and neither needs a golden image.
+// SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
+// covers all of its text element's content must render exactly as the same effect on the text
+// element. Both forms resolve objectBoundingBox effect regions through the same glyph-cell box, so
+// the two renders are pixel-identical and neither needs a golden image.
+TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElement) {
+  struct Effect {
+    const char* name;
+    const char* defs;
+    const char* attribute;
+  };
+  const Effect kEffects[] = {
+      {"clip_path",
+       R"svg(<clipPath id="e"><rect x="0" y="0" width="200" height="80"/></clipPath>)svg",
+       R"svg(clip-path="url(#e)")svg"},
+      {"mask",
+       R"svg(<mask id="e"><rect x="20" y="20" width="160" height="160" fill="gray"/></mask>)svg",
+       R"svg(mask="url(#e)")svg"},
+      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="4"/></filter>)svg",
+       R"svg(filter="url(#e)")svg"},
+  };
+
+  for (const Effect& effect : kEffects) {
+    SCOPED_TRACE(effect.name);
+
+    const std::string prefix =
+        std::string(effect.defs) + R"svg(<g font-family="Noto Sans" font-size="64">)svg";
+    const std::string onSpanMarkup = prefix + R"svg(<text x="33" y="100"><tspan )svg" +
+                                     effect.attribute + R"svg(>Text</tspan></text></g>)svg";
+    const std::string onTextMarkup =
+        prefix + R"svg(<text x="33" y="100" )svg" + effect.attribute + R"svg(>Text</text></g>)svg";
+    const std::string plainMarkup = prefix + R"svg(<text x="33" y="100">Text</text></g>)svg";
+
+    SVGDocument onSpan = instantiateSubtree(onSpanMarkup, {}, Vector2i(200, 200));
+    SVGDocument onText = instantiateSubtree(onTextMarkup, {}, Vector2i(200, 200));
+    SVGDocument plain = instantiateSubtree(plainMarkup, {}, Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(onSpan, ResvgResourceRoot() / "fonts");
+    RegisterFontsFromDirectoryForTesting(onText, ResvgResourceRoot() / "fonts");
+    RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
+
+    const RendererBitmap actual = RenderDocumentWithBackend(onSpan, ActiveRendererBackend());
+    const RendererBitmap expected = RenderDocumentWithBackend(onText, ActiveRendererBackend());
+    const RendererBitmap unaffected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    ASSERT_THAT(expected.empty(), testing::IsFalse());
+    ExpectVisibleBitmap(unaffected, std::string("plain_text_visible_") + effect.name);
+    ExpectBitmapsDiffer(expected, unaffected, std::string("effect_on_text_changes_") + effect.name);
+    ExpectBitmapsIdentical(actual, expected, std::string("effect_on_tspan_") + effect.name);
+  }
 }
 
 }  // namespace
