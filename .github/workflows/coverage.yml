@@ -859,6 +859,12 @@ jobs:
             echo "report_written=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Upload coverage test failure artifacts
+        if: failure() && steps.coverage.outcome == 'failure'
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: coverage-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
       - name: Upload coverage diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -1061,6 +1067,12 @@ jobs:
           path: coverage-report/filtered_report.dat
           if-no-files-found: error
           retention-days: 1
+
+      - name: Upload coverage test failure artifacts
+        if: failure() && steps.coverage.outcome == 'failure'
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: coverage-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Upload coverage diagnostics
         if: always()
