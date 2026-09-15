@@ -428,6 +428,7 @@ void ImGuiRuntimeRenderer::uninstall() {
   }
   gInstalledContext = nullptr;
   gInstalledRenderer = nullptr;
+  importDevice_ = nullptr;
 }
 
 ImGuiRuntimeRenderer* CurrentImGuiRuntimeRenderer() {
@@ -637,6 +638,8 @@ gpu::Status ImGuiRuntimeRenderer::recordCommand(const ImDrawCmd& command,
     return pipeline;
   }
 
+  // Reached only after the lookup above accepted the registration, which is what lets a cached
+  // binding be dropped with its registration: a retired one never gets this far.
   gpu::Result<const gpu::BindGroup*> group = bindGroupFor(textureId, binding.result());
   if (group.hasError()) {
     return std::move(group).error();

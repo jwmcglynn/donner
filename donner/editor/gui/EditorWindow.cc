@@ -1394,13 +1394,12 @@ std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(geode::GeodeWgpuAdapterDe
   }
   std::unique_ptr<ImGuiRuntimeRenderer> created = std::move(renderer).result();
   created->install();
-  SetUiTextureImportDevice(&device);
+  created->setImportDevice(&device);
   if (const gpu::Status uploaded = created->buildFontAtlas(fonts); uploaded.hasError()) {
     std::fprintf(stderr, "EditorWindow: UI font atlas upload failed: %s\n",
                  uploaded.error().toString().c_str());
     // Abandoning it while still published would leave both texture producers resolving
     // registrations through a destroyed renderer.
-    SetUiTextureImportDevice(nullptr);
     created->uninstall();
     return nullptr;
   }
@@ -1972,7 +1971,6 @@ EditorWindow::~EditorWindow() {
   if (imguiInitialized_) {
 #ifdef DONNER_EDITOR_WGPU
     if (wgpuState_ != nullptr && wgpuState_->uiRenderer != nullptr) {
-      SetUiTextureImportDevice(nullptr);
       wgpuState_->uiRenderer->uninstall();
       wgpuState_->uiRenderer.reset();
       wgpuState_->uiTextureRegistry.reset();

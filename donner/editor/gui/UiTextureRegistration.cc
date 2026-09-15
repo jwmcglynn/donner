@@ -11,18 +11,16 @@ namespace donner::editor {
 
 namespace {
 
-/// Device published by \ref SetUiTextureImportDevice, or null while none is.
-geode::GeodeWgpuAdapterDevice* gImportDevice = nullptr;
-
-/// The published import device when it is the one \p renderer draws on, or null. A device that
-/// cannot import is not an error to have: it means a backend texture cannot reach the interface
-/// on this device, which the caller reports as a refused registration.
+/// \p renderer's import device when it is the one \p renderer draws on, or null. A renderer with
+/// no import path is not an error: it means a backend texture cannot reach the interface on that
+/// device, which the caller reports as a refused registration.
 /// @param renderer Installed UI renderer.
 geode::GeodeWgpuAdapterDevice* ImportDeviceFor(ImGuiRuntimeRenderer& renderer) {
-  if (gImportDevice == nullptr || gImportDevice->deviceId() != renderer.device().deviceId()) {
+  geode::GeodeWgpuAdapterDevice* device = renderer.importDevice();
+  if (device == nullptr || device->deviceId() != renderer.device().deviceId()) {
     return nullptr;
   }
-  return gImportDevice;
+  return device;
 }
 
 /// The UI alpha interpretation matching \p alphaType.
@@ -55,10 +53,6 @@ ImTextureID Register(ImGuiRuntimeRenderer& renderer, gpu::Result<gpu::TextureVie
 }
 
 }  // namespace
-
-void SetUiTextureImportDevice(geode::GeodeWgpuAdapterDevice* device) {
-  gImportDevice = device;
-}
 
 bool HasUiTextureRegistry() {
   return CurrentUiTextureRegistry() != nullptr;

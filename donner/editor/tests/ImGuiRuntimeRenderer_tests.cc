@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -27,6 +29,47 @@ namespace donner::editor {
 namespace {
 
 using gpu::GpuErrorType;
+
+/// Parses the unsigned value following \p key at or after \p from in \p recording.
+/// @param recording Serialized recording. @param key Field name including its '='.
+/// @param from Offset to search from.
+std::optional<uint64_t> FieldAfter(const std::string& recording, std::string_view key,
+                                   size_t from) {
+  const size_t at = recording.find(key, from);
+  if (at == std::string::npos) {
+    return std::nullopt;
+  }
+  return std::stoull(recording.substr(at + key.size()));
+}
+
+/// Byte count of the write to the buffer that was created with \p label.
+///
+/// The recording names buffers by slot, so the slot is read from the labelled creation line and
+/// then matched against the write; this keeps the assertion tied to the index buffer rather than
+/// to whichever write happens to come second.
+/// @param recording Serialized recording. @param label Buffer's creation label.
+std::optional<uint64_t> WriteByteCountForBuffer(const std::string& recording,
+                                                std::string_view label) {
+  const std::string labelField = std::string("label=\"") + std::string(label) + "\"";
+  const size_t labelAt = recording.find(labelField);
+  if (labelAt == std::string::npos) {
+    return std::nullopt;
+  }
+  const size_t lineStart = recording.rfind("createBuffer buffer#", labelAt);
+  if (lineStart == std::string::npos) {
+    return std::nullopt;
+  }
+  const std::optional<uint64_t> slot = FieldAfter(recording, "buffer#", lineStart);
+  if (!slot.has_value()) {
+    return std::nullopt;
+  }
+  const std::string writePrefix = std::string("writeBuffer buffer#") + std::to_string(*slot) + " ";
+  const size_t writeAt = recording.rfind(writePrefix);
+  if (writeAt == std::string::npos) {
+    return std::nullopt;
+  }
+  return FieldAfter(recording, "byteCount=", writeAt);
+}
 
 /// A recording device with a registry, a renderer and one sampled 1x1 texture.
 class ImGuiRuntimeRendererTest : public testing::Test {
@@ -359,15 +402,22 @@ TEST_F(ImGuiRuntimeRendererTest, ABaseVertexOutsideTheFrameIsRefused) {
 
 TEST_F(ImGuiRuntimeRendererTest, AnOddIndexCountIsPaddedToTheUploadAlignment) {
   std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(straight_, straight_);
-  // One extra index makes the payload an odd number of 2-byte indices, which is two bytes short
-  // of the four a buffer upload must be a multiple of.
+  // One extra index makes the payload an odd number of 2-byte indices: 13 indices are 26 bytes,
+  // two short of the four a buffer upload must be a multiple of.
   ImDrawList& list = *scene->lists[1];
   list.IdxBuffer.resize(list.IdxBuffer.Size + 1);
   list.IdxBuffer.Data[list.IdxBuffer.Size - 1] = 0;
   scene->drawData.TotalIdxCount += 1;
+  ASSERT_THAT(scene->drawData.TotalIdxCount, Eq(13));
 
   ASSERT_THAT(recordFrame(scene->drawData), gpu::IsOk());
-  EXPECT_THAT(renderer_->indexCapacityBytes() % 4u, Eq(0u));
+
+  // The uploaded payload, not the buffer capacity: capacity is a power-of-two growth step and is
+  // a multiple of four whether or not the payload was padded.
+  const std::optional<uint64_t> indexBytes =
+      WriteByteCountForBuffer(device_.serialize(), "uiDrawIndices");
+  ASSERT_THAT(indexBytes.has_value(), Eq(true));
+  EXPECT_THAT(*indexBytes, Eq(28u)) << "13 indices are 26 bytes; the upload must be padded to 28";
 }
 
 TEST_F(ImGuiRuntimeRendererTest, TheFontAtlasIsUploadedWithAnAlignedRowStride) {
@@ -375,20 +425,26 @@ TEST_F(ImGuiRuntimeRendererTest, TheFontAtlasIsUploadedWithAnAlignedRowStride) {
   ImGui::SetCurrentContext(context);
   ImFontAtlas atlas;
   atlas.AddFontDefault();
+  // Left to itself the atlas picks a power-of-two width, whose natural row stride is already
+  // 256-aligned and would satisfy the assertion without any repacking. This one is wide enough to
+  // pack the default font but is not a multiple of 64, so its row stride is not aligned.
+  atlas.TexDesiredWidth = 520;
 
   ASSERT_THAT(renderer_->buildFontAtlas(atlas), gpu::IsOk());
   EXPECT_THAT(renderer_->fontAtlasTexture().isValid(), Eq(true));
 
-  // An atlas width is not guaranteed to make width*4 a multiple of 256, so the rows are repacked;
-  // the recorded stride is what the upload contract requires.
+  const uint64_t naturalRowBytes = static_cast<uint64_t>(atlas.TexWidth) * 4u;
+  ASSERT_THAT(naturalRowBytes % 256u, Not(Eq(0u)))
+      << "atlas width " << atlas.TexWidth << " would not exercise the repack";
+
   const std::string recording = device_.serialize();
   const size_t writeAt = recording.find("writeTexture");
   ASSERT_THAT(writeAt, Not(Eq(std::string::npos)));
-  const size_t strideAt = recording.find("bytesPerRow=", writeAt);
-  ASSERT_THAT(strideAt, Not(Eq(std::string::npos)));
-  const uint32_t stride = static_cast<uint32_t>(
-      std::stoul(recording.substr(strideAt + std::string("bytesPerRow=").size())));
-  EXPECT_THAT(stride % 256u, Eq(0u));
+  const std::optional<uint64_t> stride = FieldAfter(recording, "bytesPerRow=", writeAt);
+  ASSERT_THAT(stride.has_value(), Eq(true));
+  EXPECT_THAT(*stride % 256u, Eq(0u));
+  EXPECT_THAT(*stride, Eq(((naturalRowBytes + 255u) / 256u) * 256u))
+      << "the rows must be repacked to the next aligned stride, not uploaded tightly";
   ImGui::DestroyContext(context);
 }
 
