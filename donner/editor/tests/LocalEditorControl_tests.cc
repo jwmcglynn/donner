@@ -479,6 +479,40 @@ TEST_F(LocalEditorControlTest, NativeStdioForwardsRequestsAndSuppressesNotificat
   EXPECT_THAT(response["result"], Eq("live editor"));
 }
 
+TEST_F(LocalEditorControlTest, NativeStdioReadsCommandsWhileFeedbackIsWaiting) {
+  start();
+  std::istringstream input(
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"wait\"}\n"
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n");
+  std::ostringstream output, errors;
+  auto client = std::async(
+      std::launch::async, [&]() { return RunEditorControlStdio(endpoint, input, output, errors); });
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  bool commandSeen = false;
+  auto handle = [&](const Json& request) -> std::optional<Json> {
+    if (request["method"] == "wait") return std::nullopt;
+    commandSeen = true;
+    return Json{{"jsonrpc", "2.0"}, {"id", request["id"]}, {"result", "responsive"}};
+  };
+  control.process(handle);
+  if (!commandSeen && awaitRequest(2)) control.process(handle);
+  if (!commandSeen) {
+    control.stop();
+    client.get();
+    FAIL() << "A feedback wait prevented the adapter from forwarding another command";
+  }
+  control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"jsonrpc", "2.0"}, {"id", request["id"]}, {"result", "feedback"}};
+  });
+  EXPECT_THAT(client.get(), Eq(0));
+  std::istringstream replies(output.str());
+  std::string line;
+  ASSERT_THAT(static_cast<bool>(std::getline(replies, line)), Eq(true));
+  EXPECT_THAT(Json::parse(line)["id"], Eq(2));
+  ASSERT_THAT(static_cast<bool>(std::getline(replies, line)), Eq(true));
+  EXPECT_THAT(Json::parse(line)["id"], Eq(1));
+}
+
 TEST_F(LocalEditorControlTest, NativeStdioReportsMismatchedIdsWithoutReplayingRequests) {
   start();
   std::istringstream input("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
