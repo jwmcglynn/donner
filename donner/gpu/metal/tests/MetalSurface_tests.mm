@@ -251,6 +251,39 @@ TEST_F(MetalSurfaceTest, PresentsMoreFramesThanTheLayerHoldsDrawables) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(MetalSurfaceTest, PresentsOnceThisFramesWorkIsDoneRatherThanTheDevicesNewest) {
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(frame.texture.isValid());
+
+  const uint64_t frameSerial =
+      renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_TRUE(device_->waitForSerial(frameSerial, /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
+
+  // Whatever the caller queues between drawing a frame and showing it is not the frame's work,
+  // and presenting must not wait on it. Held open so that waiting on it would be visible: a
+  // present that took the device's newest submission for this frame's would block until it gave
+  // up, and report a frame that is finished and ready as one that never completed.
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  std::unique_ptr<CommandEncoder> unrelated =
+      unwrap(device_->createCommandEncoder(), "createCommandEncoder");
+  CommandBuffer unrelatedCommands = unwrap(unrelated->finish(), "finish");
+  const uint64_t unrelatedSerial = unwrap(device_->submit(std::move(unrelatedCommands)), "submit");
+  EXPECT_GT(unrelatedSerial, frameSerial);
+
+  const Result<SurfaceStatus> presented = device_->presentSurface(surface);
+  device_->resumeSubmissionsForTest();
+
+  EXPECT_THAT(presented, IsOk())
+      << "This frame's work completed before the present, so there was nothing to wait for";
+  // Guarded rather than unwrapped: reading the value of a failed result aborts, which would end
+  // the whole binary on the very failure this case exists to report.
+  if (!presented.hasError()) {
+    EXPECT_EQ(presented.result(), SurfaceStatus::Success);
+  }
+}
+
 TEST_F(MetalSurfaceTest, AbandonsMoreFramesThanTheLayerHoldsDrawables) {
   const Surface surface = configuredSurface();
 
