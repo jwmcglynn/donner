@@ -64,6 +64,17 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "ui_texture_registry",
+    srcs = ["UiTextureRegistry.cc"],
+    hdrs = ["UiTextureRegistry.h"],
+    deps = [
+        "//donner/editor:imgui_headers",
+        "//donner/gpu",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "editor_window",
     srcs = ["EditorWindow.cc"],
     hdrs = ["EditorWindow.h"],

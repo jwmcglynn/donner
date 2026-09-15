@@ -1136,6 +1136,20 @@ donner_cc_test(
     ],
 )
 
+# UI texture registrations: the opaque identifier UI draw data carries, the
+# device/extent/alpha contract it resolves to, and the deferred frame lifetime
+# a retired registration keeps before its producer may release the backing.
+donner_cc_test(
+    name = "ui_texture_registry_tests",
+    srcs = ["UiTextureRegistry_tests.cc"],
+    deps = [
+        "//donner/editor/gui:ui_texture_registry",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Embedded-SVG icon rasterizer: alpha-mask output plus (geode builds) the
 # shared-renderer guarantee — a fresh renderer per icon would create a full
 # WebGPU instance/adapter/device per icon.
