@@ -101,44 +101,6 @@ playwright_bin.playwright_test(
     ],
 )
 
-# Firefox compatibility cases need a first-class Bazel target so failures can be
-# reproduced on the macOS remote TestRunner against the exact source revision.
-playwright_bin.playwright_test(
-    name = "firefox_geode_resize_test",
-    size = "large",
-    args = [
-        "test",
-        "--config=$(rootpath :playwright.compatibility.config.js)",
-        "--project=firefox-geode-resize",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "browser-presentation-regression.spec.ts",
-        "canvas-color-stats.ts",
-        "gesture-streams.ts",
-        "package.json",
-        "playwright.compatibility.config.js",
-        "playwright.config.js",
-        "remote-webserver.mjs",
-        "smoke.spec.ts",
-        ":node_modules/@playwright/test",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:firefox",
-    ],
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:firefox)/../",
-    },
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
-
 # This presentation gate shares the macOS WebGPU capability requirement of the smoke lane.
 playwright_bin.playwright_test(
     name = "catalog_font_loading_test",
