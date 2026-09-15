@@ -123,13 +123,13 @@ bool ShouldRequestSaveShortcut(bool allowed, bool anyPopupOpen, bool command, bo
 #ifdef __EMSCRIPTEN__
 namespace {
 
-// Negative disables the opt-in browser test control; zero means enabled with no request.
-std::atomic<int> gBrowserOverlayStateRequest{-1};
+std::atomic<int> gBrowserOverlayStateRequest{0};
+std::atomic<bool> gBrowserOverlayControlEnabled{false};
 
 }  // namespace
 
 extern "C" EMSCRIPTEN_KEEPALIVE int donner_set_overlay_state(int key, int enabled) {
-  if (gBrowserOverlayStateRequest.load(std::memory_order_acquire) < 0 || (key != 0 && key != 1) ||
+  if (!gBrowserOverlayControlEnabled.load(std::memory_order_acquire) || (key != 0 && key != 1) ||
       (enabled != 0 && enabled != 1)) {
     return 0;
   }
@@ -1266,8 +1266,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
 #ifdef __EMSCRIPTEN__
-  gBrowserOverlayStateRequest.store(BrowserOverlayControlEnabledForTesting() ? 0 : -1,
-                                    std::memory_order_release);
+  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+  gBrowserOverlayControlEnabled.store(BrowserOverlayControlEnabledForTesting(),
+                                      std::memory_order_release);
   renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
       SampleThumbnailRendererCreationRequestForTesting(),
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
@@ -1451,7 +1452,8 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 
 EditorShell::~EditorShell() {
 #ifdef __EMSCRIPTEN__
-  gBrowserOverlayStateRequest.store(-1, std::memory_order_release);
+  gBrowserOverlayControlEnabled.store(false, std::memory_order_release);
+  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
 #endif
   if (catalogFontWakeTarget_) {
     std::lock_guard lock(catalogFontWakeTarget_->mutex);
@@ -2683,6 +2685,10 @@ void EditorShell::applyOverlayStateChanges(bool compositorTileOverlayBefore,
 
 #ifdef __EMSCRIPTEN__
 void EditorShell::applyBrowserOverlayStateRequest() {
+  if (!gBrowserOverlayControlEnabled.load(std::memory_order_acquire)) {
+    gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+    return;
+  }
   const int request = gBrowserOverlayStateRequest.exchange(0, std::memory_order_acq_rel);
   if (request == 0) {
     return;
