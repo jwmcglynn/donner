@@ -626,6 +626,8 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/editor/gui:imgui_runtime_renderer",
+            "//donner/editor/gui:ui_texture_registry",
             "//donner/svg/renderer:renderer_geode",
             "//donner/svg/renderer/geode:geode_device",
         ],
