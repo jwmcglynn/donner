@@ -1216,9 +1216,17 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/font",
                 {
+                    // All 388 mismatches sit on the vertical gray hairline and none on the text,
+                    // so the `font` shorthand itself round-trips exactly. That hairline is 1.25
+                    // device px wide centered on device x=250: Donner splits its coverage 160/160
+                    // across the two pixels, the exact area split, where the reference uses
+                    // 128/192. Donner emits that same 128/192 split for the geometrically
+                    // identical horizontal hairline, so Donner's two axes disagree with each other
+                    // and this is stroke rasterization, not font handling.
                     {"font-shorthand.svg",
-                     Params::Skip(
-                         "Vertical gray crosshair stroke comparison remains unresolved (#1173)")},
+                     Params::Skip("Vertical hairline coverage splits 160/160 against the "
+                                  "reference's 128/192, while the horizontal hairline matches; "
+                                  "the text under the shorthand is pixel-exact")},
                     {"simple-case.svg", Params::Skip("Canvas size mismatch (400 vs 500)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
@@ -1319,7 +1327,11 @@ INSTANTIATE_TEST_SUITE_P(
             "text/font-size-adjust",
             {{"simple-case.svg",
               Params::Skip(
-                  "Legacy font-size-adjust reference placement remains unqualified (#1173)")}})),
+                  "Reference places the adjusted text about 4 device px left of center. Both "
+                  "renderings use the same adjusted size, 64 * 0.3 / (536/1000) = 35.8, and the "
+                  "same glyph advances; only the anchor origin differs, and Donner's text-anchor "
+                  "placement for this string and face is exact where font-size-adjust is "
+                  "absent")}})),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
