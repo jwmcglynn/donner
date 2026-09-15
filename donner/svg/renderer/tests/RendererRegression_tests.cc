@@ -544,10 +544,12 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
   ASSERT_THAT(hidden.has_value(), testing::IsTrue());
   ASSERT_THAT(shown.has_value(), testing::IsTrue());
 
-  const Box2d expected = Box2d::Union(hidden->cast<SVGTextElement>().objectBoundingBox(),
-                                      shown->cast<SVGTextElement>().objectBoundingBox());
-  ASSERT_THAT(expected.isEmpty(), testing::IsFalse())
-      << "text object bounding boxes must be non-empty for this test to be meaningful";
+  const Box2d hiddenBox = hidden->cast<SVGTextElement>().objectBoundingBox();
+  const Box2d shownBox = shown->cast<SVGTextElement>().objectBoundingBox();
+  ASSERT_THAT(hiddenBox.isEmpty(), testing::IsFalse())
+      << "a `visibility: hidden` text element still has an object bounding box";
+  ASSERT_THAT(shownBox.isEmpty(), testing::IsFalse());
+  const Box2d expected = Box2d::Union(hiddenBox, shownBox);
 
   const std::optional<Box2d> actual =
       components::ShapeSystem().getShapeBounds(group->entityHandle());
