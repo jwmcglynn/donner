@@ -73,6 +73,7 @@ var LibraryDonnerGpu = {
     lostReason: '',
     completedSerial: 0,
     encoder: null,
+    recordingSerial: 0,
     pass: null,
     attachments: null,
     pending: null,  // Descriptor being built by a sequence of item calls.
@@ -908,6 +909,7 @@ var LibraryDonnerGpu = {
       // than continued, so nothing recorded before the refusal can reach the queue.
       DonnerGpu.pass = null;
       DonnerGpu.attachments = null;
+      DonnerGpu.recordingSerial = submissionSerial;
       DonnerGpu.encoder = DonnerGpu.device.createCommandEncoder();
     });
   },
@@ -1155,7 +1157,9 @@ var LibraryDonnerGpu = {
 
   donner_gpu_end_command_buffer__deps: ['$DonnerGpu'],
   donner_gpu_end_command_buffer: function(submissionSerial) {
-    if (DonnerGpu.encoder === null) {
+    // The serial that opened the recording is the one that must close it. A mismatch means the two
+    // halves disagree about which submission this encoder belongs to, so nothing is submitted.
+    if (DonnerGpu.encoder === null || DonnerGpu.recordingSerial !== submissionSerial) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(function() {

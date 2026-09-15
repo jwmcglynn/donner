@@ -277,6 +277,7 @@ public:
       // than continued, so nothing recorded before the refusal can reach the queue.
       encoderOpen_ = true;
       passOpen_ = false;
+      recordingSerial_ = submissionSerial;
     }
     return status;
   }
@@ -435,7 +436,8 @@ public:
     if (const BridgeStatus status = requireEncoder(line); status != BridgeStatus::Success) {
       return status;
     }
-    if (passOpen_) {
+    // The serial that opened the recording is the one that must close it, as on the browser side.
+    if (passOpen_ || recordingSerial_ != submissionSerial) {
       return BridgeStatus::Failed;
     }
     calls->push_back(line);
@@ -699,6 +701,7 @@ private:
   std::map<BrowserObjectId, BrowserObjectId> frames_;
   bool encoderOpen_ = false;
   bool passOpen_ = false;
+  uint64_t recordingSerial_ = 0;
 };
 
 }  // namespace donner::gpu::browser

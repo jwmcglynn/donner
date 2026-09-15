@@ -329,6 +329,29 @@ TEST(BrowserDevice, DiscardsARecordingLeftOpenByARefusedSubmission) {
                                     "endRenderPass", "endCommandBuffer serial=1"));
 }
 
+TEST(BrowserDevice, ClosesARecordingWithTheSerialThatOpenedIt) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> target =
+      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // Two submissions in a row: each has to open and close under its own serial, which is what tells
+  // the browser side the encoder it is finishing is the one it was given.
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
+  const size_t beforeSecond = fixture.bridge->calls->size();
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
+
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSecond,
+                                          fixture.bridge->calls->end());
+  EXPECT_THAT(replayed.front(), "beginCommandBuffer serial=2");
+  EXPECT_THAT(replayed.back(), "endCommandBuffer serial=2");
+}
+
 TEST(BrowserDevice, MapsBuffersForHostReadsOnly) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

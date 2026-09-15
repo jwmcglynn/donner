@@ -346,10 +346,12 @@ void AppendDecoded(std::optional<Enum> (*decode)(uint32_t), std::vector<uint32_t
   }
 }
 
-/// Builds the protocol table from the translations above, so it describes what is actually sent.
-std::vector<uint32_t> BuildProtocolCodeTable() {
-  std::vector<uint32_t> table;
+// The table is built in the sections `library_donner_gpu.js` comments its own copy with, one
+// function each, so the two files can be read side by side and a section added to one without the
+// other shows up as a length mismatch rather than as a silent shift of everything after it.
 
+/// Appends the texel format and the four usage masks. @param table Table being built.
+void AppendFormatAndUsageCodes(std::vector<uint32_t>& table) {
   for (const TextureFormat value : {TextureFormat::RGBA8Unorm, TextureFormat::BGRA8Unorm,
                                     TextureFormat::R8Unorm, TextureFormat::RGBA32Float}) {
     AppendCode(WireTextureFormat(value), table);
@@ -372,6 +374,10 @@ std::vector<uint32_t> BuildProtocolCodeTable() {
        {ColorWriteMask::Red, ColorWriteMask::Green, ColorWriteMask::Blue, ColorWriteMask::Alpha}) {
     AppendCode(WireColorWriteMask(value), table);
   }
+}
+
+/// Appends the sampler and vertex-input enumerations. @param table Table being built.
+void AppendSamplerAndVertexCodes(std::vector<uint32_t>& table) {
   for (const FilterMode value : {FilterMode::Nearest, FilterMode::Linear}) {
     AppendCode(WireFilterMode(value), table);
   }
@@ -388,6 +394,10 @@ std::vector<uint32_t> BuildProtocolCodeTable() {
   for (const IndexFormat value : {IndexFormat::Uint16, IndexFormat::Uint32}) {
     AppendCode(WireIndexFormat(value), table);
   }
+}
+
+/// Appends the pipeline-state enumerations. @param table Table being built.
+void AppendPipelineCodes(std::vector<uint32_t>& table) {
   for (const PrimitiveTopology value :
        {PrimitiveTopology::TriangleList, PrimitiveTopology::TriangleStrip}) {
     AppendCode(WirePrimitiveTopology(value), table);
@@ -408,6 +418,10 @@ std::vector<uint32_t> BuildProtocolCodeTable() {
         BindingType::WriteOnlyStorageTexture2d, BindingType::SampledTexture2dUnfilterableFloat}) {
     AppendCode(WireBindingType(value), table);
   }
+}
+
+/// Appends the render-pass and presentation enumerations. @param table Table being built.
+void AppendPassAndSurfaceCodes(std::vector<uint32_t>& table) {
   for (const LoadOp value : {LoadOp::Clear, LoadOp::Load}) {
     AppendCode(WireLoadOp(value), table);
   }
@@ -422,18 +436,33 @@ std::vector<uint32_t> BuildProtocolCodeTable() {
        {SurfaceAlphaMode::Opaque, SurfaceAlphaMode::Premultiplied, SurfaceAlphaMode::Inherit}) {
     AppendCode(WireSurfaceAlphaMode(value), table);
   }
+}
+
+/// Appends the object kinds. @param table Table being built.
+void AppendObjectKindCodes(std::vector<uint32_t>& table) {
   for (size_t kindIndex = 0; kindIndex < kBrowserObjectKindCount; ++kindIndex) {
     AppendCode(WireBrowserObjectKind(static_cast<BrowserObjectKind>(kindIndex)), table);
   }
+}
 
-  // The four decoded enumerations are covered by what each code decodes TO, not by whether it
-  // decodes at all: an entry derived from presence alone would be byte-identical if two cases were
-  // transposed, and transposing Lost with DeviceLost would send a caller down the wrong recovery.
+/// Appends what each status and outcome code decodes to, covering the other direction of the
+/// boundary. @param table Table being built.
+void AppendDecodedCodes(std::vector<uint32_t>& table) {
   AppendDecoded<BridgeStatus, kBridgeStatusCodeCount>(&BridgeStatusFromWire, table);
   AppendDecoded<BrowserDeviceRequestState, kRequestStateCodeCount>(&RequestStateFromWire, table);
   AppendDecoded<MapSliceState, kMapSliceStateCodeCount>(&MapSliceStateFromWire, table);
   AppendDecoded<SurfaceStatus, kSurfaceStatusCodeCount>(&SurfaceStatusFromWire, table);
+}
 
+/// Builds the protocol table from the translations above, so it describes what is actually sent.
+std::vector<uint32_t> BuildProtocolCodeTable() {
+  std::vector<uint32_t> table;
+  AppendFormatAndUsageCodes(table);
+  AppendSamplerAndVertexCodes(table);
+  AppendPipelineCodes(table);
+  AppendPassAndSurfaceCodes(table);
+  AppendObjectKindCodes(table);
+  AppendDecodedCodes(table);
   return table;
 }
 
