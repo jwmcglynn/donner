@@ -1,0 +1,147 @@
+load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+# donner::gpu::browser - the browser backend of the Donner GPU runtime.
+#
+# The backend and the contract it speaks to the browser through are ordinary C++ with no
+# Emscripten dependency, so they compile and are tested on every host the repo builds on. Only the
+# implementation that actually calls the browser is WebAssembly-only, which keeps the identifier,
+# ownership, mapping and device-loss behavior under the normal test gate instead of reachable only
+# from a browser.
+
+donner_cc_library(
+    name = "browser_device",
+    srcs = [
+        "BrowserBridge.cc",
+        "BrowserDevice.cc",
+        "BrowserObjectTable.cc",
+        "BrowserWireCodes.cc",
+    ],
+    hdrs = [
+        "BrowserBridge.h",
+        "BrowserDevice.h",
+        "BrowserObjectTable.h",
+        "BrowserWireCodes.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
+# The browser side of the bridge: the JavaScript that owns the real objects, and the C++ that
+# calls into it. WebAssembly-only, because both halves exist to talk to a browser.
+#
+# The JavaScript is linked with `--js-library`; a consumer lists `library_donner_gpu.js` in
+# `additional_linker_inputs` and passes
+# `--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)`.
+donner_cc_library(
+    name = "emscripten_browser_bridge",
+    srcs = ["EmscriptenBrowserBridge.cc"],
+    hdrs = ["EmscriptenBrowserBridge.h"],
+    target_compatible_with = select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":browser_device",
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
+exports_files(["library_donner_gpu.js"])
+
+# Links the bridge against its JavaScript library.
+#
+# What this catches: a function the C++ half references that the JavaScript half does not define.
+# Emscripten resolves every declared entry point against the library at link time, so a rename or
+# deletion on either side fails the build rather than a browser call.
+#
+# What it does NOT catch: parameter drift. A JavaScript function ignores extra arguments and reads
+# missing ones as undefined, so a changed parameter list links clean. The values that cross are
+# kept in agreement instead by the protocol table in BrowserWireCodes.h, which both halves compare
+# element by element before a device is requested.
+cc_binary(
+    name = "_browser_bridge_link_probe",
+    srcs = ["tests/browser_bridge_link_probe.cc"],
+    additional_linker_inputs = ["library_donner_gpu.js"],
+    linkopts = [
+        "-sENVIRONMENT=web",
+        "-sEXIT_RUNTIME=0",
+        # The bridge hands the thread back to the browser while a mapping is pending, which unwinds
+        # and rewinds through Asyncify; both production WebAssembly configurations enable it, and
+        # linking without it here would leave the yield unresolved.
+        "-sASYNCIFY=1",
+        "--js-library=$(execpath library_donner_gpu.js)",
+    ],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":browser_device",
+        ":emscripten_browser_bridge",
+    ],
+)
+
+wasm_cc_binary(
+    name = "browser_bridge_link_probe",
+    cc_target = ":_browser_bridge_link_probe",
+    outputs = [
+        "_browser_bridge_link_probe.js",
+        "_browser_bridge_link_probe.wasm",
+    ],
+    # Deliberately not `manual`: a link gate that no lane builds is not a gate. This is reached by
+    # a wildcard build under the WebAssembly Geode configuration, the same way the renderer module
+    # beside it is, and carries that lane's tag.
+    tags = ["codeql_wasm_geode"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+# A bridge that behaves like the browser side without being one: it keeps its own object registry
+# and applies the same identifier, kind and ownership checks, so a test that drives the backend
+# through it exercises both ends of the contract rather than only the near one.
+donner_cc_library(
+    name = "fake_browser_bridge",
+    testonly = 1,
+    hdrs = ["tests/FakeBrowserBridge.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":browser_device",
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
+donner_cc_test(
+    name = "browser_tests",
+    srcs = [
+        "tests/BrowserDevice_tests.cc",
+        "tests/BrowserObjectTable_tests.cc",
+        "tests/BrowserWireCodes_tests.cc",
+    ],
+    # The library's own text, so the protocol table can be compared against the one the JavaScript
+    # half holds here rather than only by the two halves at runtime in a browser.
+    data = ["library_donner_gpu.js"],
+    deps = [
+        ":browser_device",
+        ":fake_browser_bridge",
+        "//donner/base:runfiles",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_package()
