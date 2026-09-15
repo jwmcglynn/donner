@@ -780,6 +780,9 @@ async function setViewOverlayState(
     { k: key, want: enabled },
   );
   expect(accepted, `the browser overlay control rejected ${key}=${enabled}`).toBe(true);
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
   await page.waitForFunction(
     ({ k, want }) => window.__donnerOverlayStats?.[k] === want,
     { k: key, want: enabled },
