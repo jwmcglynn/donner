@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/BufferMappingTable.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/MetalSurface.h"
@@ -250,6 +251,11 @@ struct MetalDevice::Impl {
 
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
+
+  /// Open host mappings and the Metal facts they are judged against. Created on the first
+  /// mapping; the concrete host is defined with the mapping hooks at the end of this file.
+  std::unique_ptr<BufferMappingHost> mappingHost;
+  std::unique_ptr<BufferMappingTable> mappingTable;
 
   /// A host write waiting for the queue, retaining its exact native destination.
   struct PendingWrite {
@@ -1070,6 +1076,9 @@ Status MetalDevice::onCreateComputePipeline(uint32_t slotIndex,
 
 void MetalDevice::onRetireBuffer(uint32_t slotIndex) {
   impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
+  if (impl_->mappingTable) {
+    impl_->mappingTable->invalidateBuffer(slotIndex);
+  }
 }
 
 void MetalDevice::onRetireTexture(uint32_t slotIndex) {
@@ -2034,6 +2043,91 @@ void MetalDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
 void MetalDevice::onDestroySurface(uint32_t slotIndex) {
   SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
   SetSlot(impl_->surfaces, slotIndex, std::unique_ptr<MetalSurface>());
+}
+
+// ---------------------------------------------------------------------------
+// Host buffer mapping
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// The Metal answers behind a mapping: where a buffer's bytes are, how far submission has got,
+/// and whether anything is still worth waiting for.
+class MetalMappingHost final : public BufferMappingHost {
+public:
+  /// @param device Device whose submissions decide readiness; must outlive this host.
+  /// @param buffers Buffer slot table of \p device.
+  /// @param completionState Completion counters shared with Metal's completion handlers.
+  MetalMappingHost(MetalDevice& device, const std::vector<id<MTLBuffer>>& buffers,
+                   std::shared_ptr<CompletionState> completionState)
+      : device_(device), buffers_(buffers), completionState_(std::move(completionState)) {}
+
+  std::span<const uint8_t> mappableBytes(uint32_t bufferSlotIndex) const override {
+    id<MTLBuffer> buffer = GetSlot(buffers_, bufferSlotIndex);
+    if (buffer == nil) {
+      return {};
+    }
+    // Shared and managed buffers both expose a CPU-addressable copy, and a submission that wrote
+    // a buffer synchronizes that copy before it reports completion, so waiting for the serial is
+    // what makes these bytes the finished contents rather than a stale mirror.
+    return std::span<const uint8_t>(static_cast<const uint8_t*>(buffer.contents),
+                                    static_cast<size_t>(buffer.length));
+  }
+
+  uint64_t completedSubmissionSerial() const override { return device_.completedSerial(); }
+
+  bool waitForSubmission(uint64_t serial, double sliceSeconds) override {
+    return device_.waitForSerial(serial, sliceSeconds);
+  }
+
+  bool deviceLost() const override {
+    // A failed command buffer still runs its completion handler and still advances the completed
+    // serial, so this flag is the only thing separating "the work finished" from "the work
+    // stopped"; the bytes it was supposed to produce cannot be trusted either way.
+    return completionState_->hadError.load(std::memory_order_acquire);
+  }
+
+private:
+  MetalDevice& device_;                        //!< Device whose submissions decide readiness.
+  const std::vector<id<MTLBuffer>>& buffers_;  //!< Buffer slot table.
+  std::shared_ptr<CompletionState> completionState_;  //!< Completion counters and error flag.
+};
+
+}  // namespace
+
+Status MetalDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
+                                     MapMode /*mode*/, uint64_t offsetBytes, uint64_t byteCount) {
+  if (!impl_->mappingTable) {
+    impl_->mappingHost =
+        std::make_unique<MetalMappingHost>(*this, impl_->buffers, impl_->completionState);
+    impl_->mappingTable = std::make_unique<BufferMappingTable>(*impl_->mappingHost);
+  }
+  // A mapping observes work that was already submitted, so the serial is taken now rather than
+  // when the wait starts: a submission issued after this call belongs to a later mapping.
+  const uint64_t readySerial = std::max(bufferLastUseSerial(bufferSlotIndex),
+                                        GetSlot(impl_->bufferUploadSerials, bufferSlotIndex));
+  return impl_->mappingTable->begin(mappingSlotIndex, bufferSlotIndex, offsetBytes, byteCount,
+                                    readySerial);
+}
+
+MapSliceState MetalDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+  if (!impl_->mappingTable) {
+    return MapSliceState::Failed;
+  }
+  return impl_->mappingTable->waitSlice(mappingSlotIndex, sliceSeconds);
+}
+
+Result<std::span<const uint8_t>> MetalDevice::onMappedBytes(uint32_t mappingSlotIndex) const {
+  if (!impl_->mappingTable) {
+    return GpuError{GpuErrorType::InvalidHandle, "mappedBytes: this device has no open mappings"};
+  }
+  return impl_->mappingTable->bytes(mappingSlotIndex);
+}
+
+void MetalDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
+  if (impl_->mappingTable) {
+    impl_->mappingTable->release(mappingSlotIndex);
+  }
 }
 
 }  // namespace donner::gpu::metal

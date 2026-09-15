@@ -4,11 +4,12 @@ load("//build_defs:package.bzl", "donner_package")
 # donner::gpu::metal - the Metal backend of the Donner GPU runtime.
 #
 # Shared-storage resources, MSL shader modules, the solid-fill render pipeline
-# family, render pass replay, texture-to-buffer readback, and presentation to a
-# Core Animation Metal layer. macOS-only; Objective-C++ compiled with ARC
-# (objc_library `srcs` default). The MetalDevice header is pure C++ behind a
-# pimpl so C++ tests can include it; MetalSurface.h is Objective-C++ and stays
-# in `srcs` because only this target's implementation files include it.
+# family, render pass replay, host buffer mapping, texture-to-buffer readback,
+# and presentation to a Core Animation Metal layer. macOS-only; Objective-C++
+# compiled with ARC (objc_library `srcs` default). The MetalDevice header is
+# pure C++ behind a pimpl so C++ tests can include it; MetalSurface.h is
+# Objective-C++ and stays in `srcs` because only this target's implementation
+# files include it.
 
 objc_library(
     name = "metal_device",

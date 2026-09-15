@@ -236,6 +236,15 @@ protected:
   void onAbandonCurrentTexture(uint32_t slotIndex) override;
   void onDestroySurface(uint32_t slotIndex) override;
 
+  // Host buffer mapping. Every buffer is already host-visible, so a mapping is the wait for the
+  // work that fills it plus a bounds-checked view of its contents; the shared mapping table owns
+  // that bookkeeping and this backend answers only the Metal-specific facts.
+  Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
+                          uint64_t offsetBytes, uint64_t byteCount) override;
+  MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
+  void onUnmapBuffer(uint32_t mappingSlotIndex) override;
+
 private:
   /// Constructs an empty device; \ref Create attaches the Metal device.
   MetalDevice();

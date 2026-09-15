@@ -263,6 +263,25 @@ donner_cc_test(
 # Deliberately carries no executor-routing properties, for the reason spelled out
 # on the solid-fill wrapper above: a property naming a worker class the execution
 # pool does not offer queues the action forever instead of failing.
+# Host buffer mapping on Vulkan: readiness against the submission serial, range bounds, and the
+# fail-closed paths for a released mapping and a destroyed buffer.
+donner_cc_test(
+    name = "vulkan_buffer_mapping_tests",
+    srcs = ["VulkanBufferMapping_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:buffer_mapping_scene",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "vulkan_sub_rectangle_copy_tests",
     srcs = ["VulkanSubRectangleCopy_tests.cc"],

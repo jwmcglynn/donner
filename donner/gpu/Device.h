@@ -148,6 +148,21 @@ public:
     return slotIndex < slots_.size() ? slots_[slotIndex].lastUseSerial : 0;
   }
 
+  /**
+   * Calls \p callback with the record of every live slot, for the few operations that act on a
+   * resource's dependents rather than on the handle a caller named.
+   *
+   * @param callback Invoked as `callback(Record&)` for each live slot, in slot order.
+   */
+  template <typename Callback>
+  void forEachLive(Callback&& callback) {
+    for (Slot& slot : slots_) {
+      if (slot.alive) {
+        callback(slot.record.value());
+      }
+    }
+  }
+
 private:
   /// One slot: generation counter plus the stored record while alive.
   struct Slot {
@@ -444,6 +459,15 @@ public:
    * goes stale at that moment, so a read through a handle whose mapping has been released is a
    * reported validation failure rather than a read of memory that is no longer there.
    *
+   * A buffer carries at most one mapping at a time: a second request while one is open is
+   * refused with \ref GpuErrorType::InvalidState. Two mappings of one buffer would each be
+   * released by the other's \ref unmapBuffer, so one handle would decide when another handle's
+   * bytes went away.
+   *
+   * Holding a mapping is not ownership of the buffer. Destroying the buffer is allowed while a
+   * mapping is open, and invalidates it: the handle stays resolvable and reads through it are
+   * refused, rather than the buffer being kept alive by a reader that has not finished.
+   *
    * @param buffer Buffer to map; needs \ref BufferUsage::MapRead.
    * @param mode How the host will access the range.
    * @param offsetBytes Byte offset of the mapped range.
@@ -481,8 +505,11 @@ public:
   /**
    * Returns the mapped bytes of a completed mapping.
    *
-   * Fails closed when the mapping is stale, belongs to another device, or has not completed: the
-   * span is only valid while the handle names a live, ready mapping.
+   * Fails closed when the mapping is stale, belongs to another device, has not completed, or
+   * named a buffer that has since been destroyed: the span is only valid while the handle names
+   * a live, ready mapping. Completion means a \ref waitForMapping on this mapping reported
+   * \ref MapWaitOutcome::Ready; until one has, reading is refused rather than racing whatever
+   * the GPU is still writing.
    *
    * @param mapping Live, completed mapping of this device.
    */
@@ -679,6 +706,15 @@ protected:
   Status validateBufferMappingHandleForBackend(const BufferMapping& mapping) const;
 
   /**
+   * Records what a completed wait observed, so \ref mappedBytes knows whether a wait has seen
+   * this mapping complete.
+   *
+   * @param mapping Mapping the wait was for.
+   * @param outcome What the wait reported.
+   */
+  void noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome outcome);
+
+  /**
    * Backend hook: begin mapping a buffer range. Defaults to reporting the capability as
    * unsupported, so a backend without host mapping needs no implementation and callers get a
    * clean unsupported result rather than a missing symbol.
@@ -792,6 +828,12 @@ private:
     MapMode mode = MapMode::Read;  //!< How the host accesses the range.
     uint64_t offsetBytes = 0;      //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;        //!< Length of the mapped range.
+    /// Whether a wait has observed this mapping complete. Reading is refused until it has, so a
+    /// caller cannot read a range the GPU may still be writing.
+    bool ready = false;
+    /// Whether the mapped buffer was destroyed while this mapping was still open. The mapping
+    /// outlives the buffer as a handle, but the bytes it named are gone.
+    bool bufferRetired = false;
   };
   /// Validated per-texture state.
   struct TextureRecord {

@@ -272,6 +272,16 @@ protected:
   Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                   std::span<const Command> commands) override;
 
+  // Host buffer mapping. Every buffer this backend allocates is already host-visible, coherent,
+  // and persistently mapped, so a mapping is the wait for the work that fills it plus a
+  // bounds-checked view of that existing pointer; no second vkMapMemory is taken, because a
+  // memory object may only be mapped once at a time.
+  Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
+                          uint64_t offsetBytes, uint64_t byteCount) override;
+  MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
+  void onUnmapBuffer(uint32_t mappingSlotIndex) override;
+
 private:
   /// Waits for a buffer's last use and reports timeout or device error before host access.
   /// @param serial Last submitted use of this buffer.
