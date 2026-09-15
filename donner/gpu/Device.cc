@@ -1474,6 +1474,8 @@ NativeSurfacePayload PayloadForKind(NativeSurfaceKind kind) {
     case NativeSurfaceKind::XlibWindow:
     case NativeSurfaceKind::WaylandSurface: return NativeSurfacePayload{true, true, false};
     case NativeSurfaceKind::CanvasSelector: return NativeSurfacePayload{false, false, true};
+    case NativeSurfaceKind::EmbedderSurface: return NativeSurfacePayload{false, true, false};
+    case NativeSurfaceKind::Headless: return NativeSurfacePayload{false, false, false};
   }
   return NativeSurfacePayload{};
 }

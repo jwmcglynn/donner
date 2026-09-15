@@ -124,6 +124,14 @@ public:
   /// @param textureSlot Texture slot to query.
   [[nodiscard]] TextureSyncState stateOf(uint32_t textureSlot) const;
 
+  /// The state \p textureSlot is committed to, ignoring anything staged.
+  ///
+  /// For work recorded outside an encode, which is ordered against what the GPU has already been
+  /// told to do rather than against a transition some submission may yet discard.
+  ///
+  /// @param textureSlot Texture slot to query.
+  [[nodiscard]] TextureSyncState committedStateOf(uint32_t textureSlot) const;
+
   /// Records that a transition to \p state was encoded, pending submission.
   /// @param textureSlot Texture slot the transition applies to. @param state Resulting state.
   void stage(uint32_t textureSlot, const TextureSyncState& state);
@@ -137,6 +145,15 @@ public:
   /// Forgets a slot entirely, for a texture that no longer exists.
   /// @param textureSlot Texture slot to drop.
   void forget(uint32_t textureSlot);
+
+  /// Replaces everything known about \p textureSlot with \p state, committed.
+  ///
+  /// For an image that arrived from outside the recorded command streams, which is to say a frame
+  /// handed over by a presentation engine: nothing this table recorded about the slot applies to
+  /// it, and what does apply is not something any recorded transition produced.
+  ///
+  /// @param textureSlot Texture slot to reset. @param state State the image is known to be in.
+  void reset(uint32_t textureSlot, const TextureSyncState& state);
 
   /// Whether any transition is staged and not yet committed.
   [[nodiscard]] bool hasStagedChanges() const;
