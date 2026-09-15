@@ -177,6 +177,17 @@ private:
   RendererInterface& renderer_;
 };
 
+// A mask can consume its shadow tree while the owning group's children remain pending.
+bool HasPendingSubtree(const RenderingInstanceView& view, const Registry& registry,
+                       const components::RenderingInstanceComponent& instance) {
+  if (!instance.subtreeInfo || view.done()) {
+    return false;
+  }
+  const auto& last = registry.get<components::RenderingInstanceComponent>(
+      instance.subtreeInfo->lastRenderedEntity);
+  return view.get().drawOrder <= last.drawOrder;
+}
+
 Vector2i CheckedRenderingSize(const RenderViewport& viewport) {
   constexpr double kMaximumDimension = static_cast<double>(std::numeric_limits<int>::max());
   if (!std::isfinite(viewport.size.x) || !std::isfinite(viewport.size.y) || viewport.size.x < 0.0 ||
@@ -1634,11 +1645,9 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
-    bool subtreeConsumedBySubRendering = false;
 
     if (instance.mask.has_value() && instance.mask->valid()) {
       maskDepth = renderMask(view, registry, instance, *instance.mask);
-      subtreeConsumedBySubRendering = true;
     }
 
     ResolvedClip entityClip =
@@ -1659,7 +1668,6 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       if (fillRef->subtreeInfo &&
           fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
         renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
-        subtreeConsumedBySubRendering = true;
       }
     }
     if (const auto* strokeRef =
@@ -1667,7 +1675,6 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       if (strokeRef->subtreeInfo &&
           strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
         renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
-        subtreeConsumedBySubRendering = true;
       }
     }
 
@@ -1699,9 +1706,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       }
     }
 
-    const bool subtreeConsumed = instance.subtreeInfo && subtreeConsumedBySubRendering;
-    const bool shouldDefer = instance.subtreeInfo && !subtreeConsumed;
-    if (shouldDefer) {
+    if (HasPendingSubtree(view, registry, instance)) {
       DeferredPop deferred;
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
@@ -2198,12 +2203,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
-    // Track whether mask/pattern rendering consumed the element's subtree entities.
-    bool subtreeConsumedBySubRendering = false;
 
     if (instance.mask.has_value() && instance.mask->valid()) {
       maskDepth = renderMask(view, registry, instance, *instance.mask);
-      subtreeConsumedBySubRendering = true;
     }
 
     // Clip paths are in entity-local coordinates.
@@ -2228,7 +2230,6 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       if (fillRef->subtreeInfo &&
           fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
         renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
-        subtreeConsumedBySubRendering = true;
       }
     }
     if (const auto* strokeRef =
@@ -2236,7 +2237,6 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       if (strokeRef->subtreeInfo &&
           strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
         renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
-        subtreeConsumedBySubRendering = true;
       }
     }
 
@@ -2373,19 +2373,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       }
     }
 
-    // If this element starts a subtree (e.g., a group with isolation layers), defer cleanup
-    // until the last child of the subtree is processed.
-    // Elements with subtreeInfo always have layerDepth > 0 (viewport clip, opacity, clip-path,
-    // etc.), so defer cleanup until the last child is processed. Leaf elements (no subtreeInfo)
-    // have no clips or layers to pop. The entity transform uses setTransform (absolute, no
-    // save/restore), so it never needs push/pop.
-    //
-    // However, if the subtree was already fully consumed by mask/pattern/marker rendering
-    // (traverseRange/skipUntil advanced the view past lastRenderedEntity), the main loop will
-    // never encounter lastRenderedEntity. In that case, pop immediately.
-    const bool subtreeConsumed = instance.subtreeInfo && subtreeConsumedBySubRendering;
-    const bool shouldDefer = instance.subtreeInfo && !subtreeConsumed;
-    if (shouldDefer) {
+    if (HasPendingSubtree(view, registry, instance)) {
       DeferredPop deferred;
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
