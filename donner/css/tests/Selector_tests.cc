@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <map>
 
 #include "donner/base/RcString.h"
@@ -10,6 +11,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/Specificity.h"
+#include "donner/css/details/AnbValue.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/css/tests/SelectorTestUtils.h"
 
@@ -424,6 +426,86 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(doesNotMatch(":only-of-type", children["child1"]));
   EXPECT_TRUE(doesNotMatch(":only-of-type", children["child2"]));
   EXPECT_TRUE(matches(":only-of-type", mid1));
+}
+
+TEST(AnbValueTests, RequiresNonNegativeN) {
+  const struct {
+    AnbValue value;
+    std::vector<int> expected;
+  } cases[] = {
+      {{-1, 3}, {1, 2, 3}}, {{2, 4}, {4, 6, 8}}, {{-2, 5}, {1, 3, 5}}, {{2, -3}, {1, 3, 5, 7}},
+      {{-1, -3}, {}},       {{-1, 0}, {}},       {{0, 3}, {3}},        {{0, 0}, {}},
+  };
+
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.value);
+    std::vector<int> actual;
+    for (int index = 1; index <= 8; ++index) {
+      if (test.value.evaluate(index)) {
+        actual.push_back(index);
+      }
+    }
+    EXPECT_THAT(actual, ElementsAreArray(test.expected));
+  }
+}
+
+TEST(AnbValueTests, RequiresPositiveChildIndex) {
+  for (const AnbValue value : {AnbValue{1, 0}, AnbValue{-1, 3}, AnbValue{0, 0}}) {
+    SCOPED_TRACE(value);
+    EXPECT_EQ(value.evaluate(-1), 0);
+    EXPECT_EQ(value.evaluate(0), 0);
+  }
+}
+
+TEST(AnbValueTests, ExtremeCoefficients) {
+  constexpr int kMin = std::numeric_limits<int>::min();
+  constexpr int kMax = std::numeric_limits<int>::max();
+  EXPECT_EQ((AnbValue{1, kMin}).evaluate(kMax), 1);
+  EXPECT_EQ((AnbValue{2, kMin}).evaluate(2), 1);
+  EXPECT_EQ((AnbValue{2, kMin}).evaluate(1), 0);
+  EXPECT_EQ((AnbValue{kMin, kMax}).evaluate(kMax), 1);
+  EXPECT_EQ((AnbValue{kMin, kMax}).evaluate(1), 0);
+  EXPECT_EQ((AnbValue{-1, kMin}).evaluate(1), 0);
+  EXPECT_EQ((AnbValue{kMax, kMin}).evaluate(kMax - 1), 1);
+  EXPECT_EQ((AnbValue{kMax, kMin}).evaluate(kMax), 0);
+}
+
+TEST_F(SelectorTests, NthSelectorsRequireNonNegativeN) {
+  FakeElement parent("div");
+  std::vector<FakeElement> children;
+  for (int index = 1; index <= 8; ++index) {
+    children.emplace_back(index % 2 == 0 ? "p" : "span");
+    parent.appendChild(children.back());
+  }
+
+  const struct {
+    const char* selector;
+    std::vector<int> expected;
+  } cases[] = {
+      {":nth-child(-n+3)", {1, 2, 3}},
+      {":nth-child(2n+4)", {4, 6, 8}},
+      {":nth-last-child(-n+3)", {6, 7, 8}},
+      {":nth-last-child(2n+4)", {1, 3, 5}},
+      {":nth-of-type(-n+3)", {1, 2, 3, 4, 5, 6}},
+      {":nth-of-type(2n+4)", {7, 8}},
+      {":nth-last-of-type(-n+3)", {3, 4, 5, 6, 7, 8}},
+      {":nth-last-of-type(2n+4)", {1, 2}},
+      {":nth-child(-n+3 of span)", {1, 3, 5}},
+      {":nth-child(2n+4 of span)", {7}},
+      {":nth-last-child(-n+3 of span)", {3, 5, 7}},
+      {":nth-last-child(2n+4 of span)", {1}},
+  };
+
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.selector);
+    std::vector<int> actual;
+    for (int index = 1; index <= 8; ++index) {
+      if (matches(test.selector, children[index - 1])) {
+        actual.push_back(index);
+      }
+    }
+    EXPECT_THAT(actual, ElementsAreArray(test.expected));
+  }
 }
 
 TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
