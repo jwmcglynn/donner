@@ -726,10 +726,16 @@ TEST_F(RendererRegressionTests, ObjectBoundingBoxEffectOnAnchorGroupingShapes) {
 
 // A span that owns an effect paints after the spans the text root still paints, rather than in
 // document order. That is a known limitation of giving a span its own rendering instance, and this
-// pins it: a span declaring an effect draws over a later sibling that does not.
+// pins it so a change to it is deliberate.
+//
+// The first span's filter floods a region wide enough to reach over the first glyph of the later
+// span, and only that glyph. Sampling inside its stem discriminates the two orders: the flood wins
+// there only because the span that owns it paints last. The later span's second glyph sits outside
+// the flood region and stays its own color, which proves the sampled pixel is glyph ink the flood
+// covered rather than a gap between the spans.
 TEST_F(RendererRegressionTests, EffectSpanPaintsAfterTheTextRootsRemainingSpans) {
   const std::string markup =
-      R"svg(<filter id="e" x="-5%" y="-5%" width="110%" height="110%">)svg"
+      R"svg(<filter id="e" x="-5%" y="-5%" width="160%" height="110%">)svg"
       R"svg(<feFlood flood-color="blue"/></filter>)svg"
       R"svg(<g font-family="Noto Sans" font-size="64"><text x="20" y="100">)svg"
       R"svg(<tspan filter="url(#e)">AA</tspan><tspan fill="red">BB</tspan>)svg"
@@ -740,11 +746,13 @@ TEST_F(RendererRegressionTests, EffectSpanPaintsAfterTheTextRootsRemainingSpans)
   ASSERT_THAT(bitmap.empty(), testing::IsFalse());
   ASSERT_THAT(bitmap.dimensions, testing::Eq(Vector2i(200, 200)));
 
-  // The filtered span floods its own region, which covers the first span's glyph cells. In
-  // document order the later red span would paint on top; because the filtered span paints last,
-  // the flood wins wherever the two regions overlap.
-  EXPECT_THAT(PixelAt(bitmap, 100, 60), test::RgbaEq(0, 0, 255, 255))
+  // Noto Sans at 64 px: the filtered span's glyph cells run x 20 to 101.8, so a 160% region ends
+  // at x 146.8. The later span's glyphs ink x 108.0 to 139.9 and x 149.6 to 181.5, putting the
+  // first inside the flood and the second outside it.
+  EXPECT_THAT(PixelAt(bitmap, 111, 75), test::RgbaEq(0, 0, 255, 255))
       << "the span that owns the filter must paint after the text root's remaining spans";
+  EXPECT_THAT(PixelAt(bitmap, 152, 75), test::RgbaEq(255, 0, 0, 255))
+      << "the sampled glyph must be ink the flood covered, not a gap between the spans";
 }
 
 }  // namespace
