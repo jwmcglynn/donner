@@ -2102,6 +2102,16 @@ Status MetalDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferS
         std::make_unique<MetalMappingHost>(*this, impl_->buffers, impl_->completionState);
     impl_->mappingTable = std::make_unique<BufferMappingTable>(*impl_->mappingHost);
   }
+  // A queued write has no serial yet: it is applied at the start of whichever submission happens
+  // next, which can be unrelated work, so it would change the mapped bytes after the mapping had
+  // already reported itself ready. Readiness cannot express that, so the mapping is refused until
+  // the queue drains.
+  if (impl_->hasPendingWrite(GetSlot(impl_->buffers, bufferSlotIndex), nil)) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("mapBufferAsync: buffer (slot {}) has a queued write that has not "
+                                "been applied yet; submit before mapping",
+                                bufferSlotIndex)};
+  }
   // A mapping observes work that was already submitted, so the serial is taken now rather than
   // when the wait starts: a submission issued after this call belongs to a later mapping.
   const uint64_t readySerial = std::max(bufferLastUseSerial(bufferSlotIndex),

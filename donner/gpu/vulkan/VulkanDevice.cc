@@ -3440,6 +3440,16 @@ Status VulkanDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t buffer
     impl_->mappingHost.emplace(*this, *impl_);
     impl_->mappingTable.emplace(*impl_->mappingHost);
   }
+  // A queued write has no serial yet: it is applied at the start of whichever submission happens
+  // next, which can be unrelated work, so it would change the mapped bytes after the mapping had
+  // already reported itself ready. Readiness cannot express that, so the mapping is refused until
+  // the queue drains.
+  if (impl_->hasPendingBufferWrite(bufferSlotIndex)) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("mapBufferAsync: buffer (slot {}) has a queued write that has not "
+                                "been applied yet; submit before mapping",
+                                bufferSlotIndex)};
+  }
   const Impl::BufferRecord* record = FindRecord(impl_->buffers, bufferSlotIndex);
   // A mapping observes work that was already submitted, so the serial is taken now rather than
   // when the wait starts: a submission issued after this call belongs to a later mapping.
