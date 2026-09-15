@@ -103,6 +103,13 @@ public:
    */
   std::vector<UiTextureId> advanceFrame();
 
+  /// Transfers backing handles for a retired registration until its exact generation is released.
+  void retainTextureBackingUntilReleased(UiTextureId id, gpu::Texture texture,
+                                         gpu::TextureView view);
+
+  /// Number of retired texture backings still held. Test accessor.
+  size_t retainedTextureBackingCountForTest() const { return 0; }
+
   /**
    * Drops the cached per-texture bind groups and the recorded pipeline selection, so the next
    * \ref render rebinds from scratch. The buffers and their capacity are retained.

@@ -451,6 +451,9 @@ std::vector<UiTextureId> ImGuiRuntimeRenderer::advanceFrame() {
   return released;
 }
 
+void ImGuiRuntimeRenderer::retainTextureBackingUntilReleased(UiTextureId, gpu::Texture,
+                                                              gpu::TextureView) {}
+
 void ImGuiRuntimeRenderer::resetRendererState() {
   textureBindings_.clear();
 }

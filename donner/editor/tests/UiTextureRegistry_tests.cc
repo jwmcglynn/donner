@@ -242,5 +242,19 @@ TEST_F(UiTextureRegistryTest, AdvanceFrameLeavesLiveRegistrationsAlone) {
   EXPECT_THAT(registry_.liveCount(), Eq(1u));
 }
 
+TEST_F(UiTextureRegistryTest, RegistrationCountIsBoundedBeforeAllocatingAnotherSlot) {
+  const gpu::TextureView view = makeView(device_, "bounded");
+  std::vector<UiTextureId> registrations;
+  registrations.reserve(16384);
+  for (size_t i = 0; i < 16384; ++i) {
+    const gpu::Result<UiTextureId> registered =
+        registerView(view, UiTextureAlphaMode::Premultiplied);
+    ASSERT_THAT(registered, gpu::HasResult()) << "registration " << i;
+    registrations.push_back(registered.result());
+  }
+  EXPECT_THAT(registerView(view, UiTextureAlphaMode::Premultiplied),
+              gpu::IsGpuErrorWithMessage(GpuErrorType::LimitExceeded, HasSubstr("registrations")));
+}
+
 }  // namespace
 }  // namespace donner::editor
