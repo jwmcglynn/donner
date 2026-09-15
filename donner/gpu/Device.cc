@@ -662,9 +662,10 @@ DONNER_GPU_DEFINE_RAII_RELEASE(ComputePipelineTag, computePipelines_, ComputePip
 
 #undef DONNER_GPU_DEFINE_RAII_RELEASE
 
-/// A dropped surface hands its frame back, releases whatever texture it had acquired, and then
-/// releases its own slot. There is no backend object to defer against a submission: a surface's
-/// platform object outlives the runtime's handle to it.
+/// A dropped surface hands its frame back, releases whatever texture it had acquired, tells the
+/// backend to let go of the platform object, and then releases its own slot. There is no backend
+/// object to defer against a submission: a surface's platform object outlives the runtime's
+/// handle to it.
 template <>
 void ReleaseHandleFromRaii<SurfaceTag>(Device& device, uint32_t slotIndex, uint32_t generation) {
   const Device::SurfaceRecord* record = device.surfaces_.find(slotIndex, generation);
@@ -677,6 +678,7 @@ void ReleaseHandleFromRaii<SurfaceTag>(Device& device, uint32_t slotIndex, uint3
     device.onAbandonCurrentTexture(slotIndex);
   }
   device.releaseAcquiredSurfaceTextureBySlot(slotIndex, generation);
+  device.onDestroySurface(slotIndex);
   device.surfaces_.release(slotIndex);
 }
 
@@ -1576,6 +1578,8 @@ Result<SurfaceStatus> Device::onPresentSurface(uint32_t /*slotIndex*/) {
 
 void Device::onAbandonCurrentTexture(uint32_t /*slotIndex*/) {}
 
+void Device::onDestroySurface(uint32_t /*slotIndex*/) {}
+
 Result<Surface> Device::createSurface(const SurfaceDescriptor& descriptor) {
   if (Status status = ValidateNativeSurfaceHandle(descriptor.native); status.hasError()) {
     return std::move(status).error();
@@ -1707,9 +1711,9 @@ Status Device::destroySurface(Surface&& surface) {
   if (record.hasError()) {
     return std::move(record).error();
   }
-  // Destroying takes the same teardown a dropped handle does, so it is left to the handle this
-  // consumed the caller's into: one sequence hands the frame back, releases the texture, and
-  // retires the slot.
+  // Destroying is the same teardown a dropped handle takes, so it is left to the handle this
+  // consumed the caller's into: one sequence hands the frame back, releases the texture, tells
+  // the backend to let the platform object go, and retires the slot.
   return OkStatus();
 }
 

@@ -727,6 +727,18 @@ protected:
   /// @param slotIndex Slot of the surface.
   virtual void onAbandonCurrentTexture(uint32_t slotIndex);
 
+  /**
+   * Backend hook: release the platform state of a surface that is going away.
+   *
+   * Runs once per surface, when it is destroyed or when its last handle is dropped, after any
+   * frame it still held has been handed back through \ref onAbandonCurrentTexture. The slot is
+   * reused by the next surface, so a backend that keeps per-surface state clears it here rather
+   * than leaving the next surface to find its predecessor's.
+   *
+   * @param slotIndex Slot of the surface.
+   */
+  virtual void onDestroySurface(uint32_t slotIndex);
+
   /// Backend hook: a validated command buffer was submitted.
   /// @param submissionSerial Serial assigned to this submission.
   /// @param commandBufferSlotIndex Slot the command buffer occupied before being consumed.

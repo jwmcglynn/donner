@@ -799,6 +799,8 @@ public:
   SurfaceStatus presentStatus = SurfaceStatus::Success;
   /// Number of times the runtime abandoned an acquired texture.
   int abandonCalls = 0;
+  /// Number of times the runtime released a surface's platform state.
+  int destroySurfaceCalls = 0;
   /// Inject failures after entering the backend, without granting ownership of a frame.
   bool failAcquire = false;
   /// Present consumes backend ownership even when it reports an error.
@@ -881,6 +883,8 @@ protected:
     ++abandonCalls;
     backendHasFrame = false;
   }
+
+  void onDestroySurface(uint32_t) override { ++destroySurfaceCalls; }
 
   Status onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
                           MapMode /*mode*/, uint64_t /*offsetBytes*/,
@@ -1251,6 +1255,23 @@ TEST_F(SurfaceTests, ReconfiguringInvalidatesTheAcquiredTexture) {
       << "A reconfigured surface hands out frames again without being recreated";
 }
 
+TEST_F(SurfaceTests, ReconfiguringHandsBackAFrameWhoseHandleTheCallerAlreadyDisposedOf) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  {
+    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+    ASSERT_TRUE(frame.texture.isValid());
+    // Dropping the handle destroys the texture, but the platform still holds the frame itself.
+  }
+
+  ASSERT_THAT(device_.configureSurface(surface, configuration(800, 600)), IsOk());
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "Reconfiguring forgets the runtime's reference to the frame, so it is the last chance to "
+         "hand the frame itself back";
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
+      << "A backend still holding the previous frame refuses to hand out another";
+}
+
 TEST_F(SurfaceTests, PresentingWithoutAcquiringIsReported) {
   const Surface surface = metalSurface();
   ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
@@ -1304,23 +1325,6 @@ TEST_F(SurfaceTests, FloatFormatDoesNotBecomeAPresentationFormat) {
   EXPECT_THAT(device_.configureSurface(surface, config), IsGpuError(GpuErrorType::Unsupported));
 }
 
-TEST_F(SurfaceTests, ReconfiguringHandsBackAFrameWhoseHandleTheCallerAlreadyDisposedOf) {
-  const Surface surface = metalSurface();
-  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
-  {
-    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
-    ASSERT_TRUE(frame.texture.isValid());
-    // Dropping the handle destroys the texture, but the platform still holds the frame itself.
-  }
-
-  ASSERT_THAT(device_.configureSurface(surface, configuration(800, 600)), IsOk());
-  EXPECT_EQ(device_.abandonCalls, 1)
-      << "Reconfiguring forgets the runtime's reference to the frame, so it is the last chance to "
-         "hand the frame itself back";
-  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
-      << "A backend still holding the previous frame refuses to hand out another";
-}
-
 TEST_F(SurfaceTests, DestroyingASurfaceHandsBackTheFrameItHeld) {
   Surface surface = metalSurface();
   ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
@@ -1331,6 +1335,7 @@ TEST_F(SurfaceTests, DestroyingASurfaceHandsBackTheFrameItHeld) {
   EXPECT_EQ(device_.abandonCalls, 1)
       << "The platform is still holding the frame, so it has to be given back before the "
          "surface's own state goes away";
+  EXPECT_EQ(device_.destroySurfaceCalls, 1);
   EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
               IsGpuError(GpuErrorType::InvalidHandle))
       << "A destroyed surface's frame is no longer anyone's to draw into";
@@ -1347,8 +1352,25 @@ TEST_F(SurfaceTests, DroppingASurfaceHandleHandsBackTheFrameItHeld) {
 
   EXPECT_EQ(device_.abandonCalls, 1)
       << "A dropped handle takes the same teardown as an explicit destroy";
+  EXPECT_EQ(device_.destroySurfaceCalls, 1);
   EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
               IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(SurfaceTests, DestroyingASurfaceWithNoFrameOutstandingAbandonsNothing) {
+  Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+
+  EXPECT_THAT(device_.destroySurface(std::move(surface)), IsOk());
+  EXPECT_EQ(device_.abandonCalls, 0);
+  EXPECT_EQ(device_.destroySurfaceCalls, 1);
+}
+
+TEST_F(SurfaceTests, DestroyingASurfaceTwiceIsReported) {
+  Surface surface = metalSurface();
+  ASSERT_THAT(device_.destroySurface(std::move(surface)), IsOk());
+  EXPECT_THAT(device_.destroySurface(std::move(surface)), IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_EQ(device_.destroySurfaceCalls, 1);
 }
 
 TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {
