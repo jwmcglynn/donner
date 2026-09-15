@@ -124,6 +124,14 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       );
       assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
       assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+      assert.doesNotMatch(
+        lane,
+        /"@playwright\/\/:(?:chromium|firefox)"/,
+        "macOS application symlinks must not travel inside Bazel tree artifacts",
+      );
+      assert.match(lane, /"DONNER_CHROMIUM_ARCHIVE":/);
+      assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
+      assert.ok(lane.includes("\"prepare-browser-archives.js\""));
     } else if (laneName === "firefox_composited_invariants_test") {
       assert.deepEqual(
         tags.sort(),
