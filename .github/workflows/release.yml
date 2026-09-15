@@ -88,7 +88,11 @@ jobs:
       - name: Build Binaries
         run: |
           mkdir release
-          bazelisk build --lockfile_mode=off -c opt //donner/svg/tool:donner-svg
+          bazelisk build --lockfile_mode=off -c opt \
+            --workspace_status_command=tools/editor_workspace_status.sh \
+            //donner/svg/tool:donner-svg //donner/editor:macos_app
+          cp 'bazel-bin/donner/editor/Donner SVG Editor.app.zip' release/
+          cp 'bazel-bin/donner/editor/Donner SVG Editor.app.zip.sha256' release/
           cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_darwin_arm64
           (cd release && shasum -a 256 donner-svg_darwin_arm64 > donner-svg_darwin_arm64.sha256)
           {
@@ -146,6 +150,7 @@ jobs:
         run: |
           (cd release/linux && sha256sum --check --strict donner-svg_linux_x86_64.sha256)
           (cd release/macos && sha256sum --check --strict donner-svg_darwin_arm64.sha256)
+          (cd release/macos && sha256sum --check --strict 'Donner SVG Editor.app.zip.sha256')
           {
             echo "source_commit=${GITHUB_SHA}"
             echo "release_tag=${RELEASE_TAG}"
@@ -160,6 +165,7 @@ jobs:
           subject-path: |
             release/linux/donner-svg_linux_x86_64
             release/macos/donner-svg_darwin_arm64
+            release/macos/Donner SVG Editor.app.zip
 
       - name: Upload verified release artifacts without replacement
         env:
@@ -171,4 +177,6 @@ jobs:
             release/linux/donner-svg_linux_x86_64.provenance \
             release/macos/donner-svg_darwin_arm64 \
             release/macos/donner-svg_darwin_arm64.sha256 \
-            release/macos/donner-svg_darwin_arm64.provenance
+            release/macos/donner-svg_darwin_arm64.provenance \
+            'release/macos/Donner SVG Editor.app.zip' \
+            'release/macos/Donner SVG Editor.app.zip.sha256'

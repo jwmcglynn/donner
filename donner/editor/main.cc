@@ -359,10 +359,20 @@ int main(int argc, char** argv) {
   showWelcome = true;
 #else
   constexpr std::string_view kUsage =
-      "Usage: donner-editor [--experimental] [--save-repro <path>] [--control-socket <path>] "
-      "[filename]\n";
+      "Usage: DonnerSVGEditor [--help] [--version] [--experimental] "
+      "[--save-repro <path>] [--control-socket <path>] [filename]\n"
+      "  --control-socket <path>  Enable local agent collaboration on a private socket.\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
+    if (arg == "--help" || arg == "-h") {
+      std::cout << kUsage;
+      return 0;
+    }
+    if (arg == "--version") {
+      std::cout << "Donner SVG Editor\n"
+                << EmbeddedBytesToString(donner::embedded::kEditorBuildInfo);
+      return 0;
+    }
     if (arg == "--experimental") {
       // Developer CLI contract: keep accepting this flag even when it is a
       // no-op. Old repro scripts and launch aliases pass it, and removing it

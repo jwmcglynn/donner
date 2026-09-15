@@ -292,3 +292,18 @@ py_test(
         "check_design_doc_provenance_tests.py",
     ],
 )
+
+py_binary(
+    name = "package_macos_editor",
+    srcs = ["package_macos_editor.py"],
+    visibility = ["//donner/editor:__pkg__"],
+)
+
+py_test(
+    name = "package_macos_editor_tests",
+    size = "small",
+    srcs = [
+        "package_macos_editor.py",
+        "package_macos_editor_tests.py",
+    ],
+)

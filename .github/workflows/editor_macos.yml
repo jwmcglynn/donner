@@ -1,0 +1,41 @@
+name: macOS Editor App
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  package:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build and verify application archive
+        run: |
+          bazelisk test --lockfile_mode=off //tools:package_macos_editor_tests
+          bazelisk build --lockfile_mode=off -c opt \
+            --workspace_status_command=tools/editor_workspace_status.sh \
+            //donner/editor:macos_app
+          cd bazel-bin/donner/editor
+          shasum -a 256 --check 'Donner SVG Editor.app.zip.sha256'
+
+      - name: Upload application archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-svg-editor-darwin-arm64-${{ github.sha }}
+          path: |
+            bazel-bin/donner/editor/Donner SVG Editor.app.zip
+            bazel-bin/donner/editor/Donner SVG Editor.app.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

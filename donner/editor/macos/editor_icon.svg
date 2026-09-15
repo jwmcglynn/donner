@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Donner SVG Editor</title>
+  <desc>A gold lightning bolt over a cyan Bezier curve on a midnight-blue app tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#123f67"/><stop offset="1" stop-color="#071b32"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".35" cy=".22" r=".9">
+      <stop stop-color="#287eb0" stop-opacity=".7"/><stop offset="1" stop-color="#071b32" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bolt-light" x1="0" y1="0" x2=".7" y2="1">
+      <stop stop-color="#fff5bb"/><stop offset=".45" stop-color="#ffda46"/><stop offset="1" stop-color="#ed991e"/>
+    </linearGradient>
+    <clipPath id="tile-clip"><rect x="48" y="48" width="928" height="928" rx="208"/></clipPath>
+  </defs>
+  <rect x="48" y="57" width="928" height="928" rx="208" fill="#03101f" opacity=".3"/>
+  <g clip-path="url(#tile-clip)">
+    <rect x="48" y="48" width="928" height="928" rx="208" fill="url(#tile)"/>
+    <rect x="48" y="48" width="928" height="928" fill="url(#glow)"/>
+    <g id="bezier-handles" fill="none" stroke="#59bed2" stroke-width="8" opacity=".5">
+      <path d="M231 698L268 288M793 324L742 746"/>
+      <circle cx="268" cy="288" r="15"/><circle cx="742" cy="746" r="15"/>
+    </g>
+    <path id="editable-curve" d="M231 698C268 288 742 746 793 324" fill="none" stroke="#87eff2" stroke-width="19" stroke-linecap="round"/>
+    <g fill="#d9ffff" stroke="#1e6e98" stroke-width="7">
+      <rect x="213" y="680" width="36" height="36" rx="6"/>
+      <rect x="775" y="306" width="36" height="36" rx="6"/>
+    </g>
+    <path d="M584 216L288 567H445L345 844L727 419H548L638 216Z" fill="#020e1e" opacity=".36"/>
+    <path id="lightning" d="M584 206L288 557H445L345 834L727 409H548L638 206Z" fill="url(#bolt-light)"/>
+    <path d="M584 206L340 532H466L445 557H288Z" fill="#fff7cc" opacity=".8"/>
+    <path d="M727 409L483 506H539L345 834Z" fill="#e89916" opacity=".28"/>
+  </g>
+  <rect x="53" y="53" width="918" height="918" rx="203" fill="none" stroke="#b4e6f2" stroke-opacity=".15" stroke-width="4"/>
+</svg>

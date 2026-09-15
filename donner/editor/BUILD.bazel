@@ -17,6 +17,7 @@ load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL")
+load(":macos_app.bzl", "macos_editor_app")
 
 #Editor libraries are public so the  // examples:svg_viewer target (in the
 #separate examples Bazel module) can depend on `: text_editor`.BCR
@@ -1691,4 +1692,19 @@ donner_cc_library(
         ":viewport_state",
         "@imgui",
     ],
+)
+
+macos_editor_app(
+    name = "macos_app",
+    adapter = "//tools/mcp-servers/editor-control:editor_control_wrapper.py",
+    agents = "agent/AGENTS.md",
+    editor = ":editor",
+    icon = "macos/editor_icon.svg",
+    module = "//:MODULE.bazel",
+    packager = "//tools:package_macos_editor",
+    renderer = "//donner/svg/tool:donner-svg",
+    skill = "agent/skills/donner-editor/SKILL.md",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:macos"],
+    vectorization = "agent/skills/donner-editor/references/vectorization.md",
 )
