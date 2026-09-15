@@ -38,6 +38,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 from python.runfiles import runfiles
 
@@ -161,6 +162,22 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             )
             self.assertEqual(0, result.returncode, result.stderr)
             return result.stdout.strip()
+
+    def test_classifier_uses_the_test_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / "python3"
+            python.write_text("#!/bin/sh\necho ambient-python-was-used >&2\nexit 97\n")
+            python.chmod(0o755)
+            with mock.patch.dict(os.environ, {
+                "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            }):
+                verdict = self._decide(
+                    label_kinds=["py_test rule //example:test"],
+                    final_targets=["//example:test"],
+                    host_compat=["@@//example:test HOST_COMPATIBLE"],
+                )
+            self.assertEqual("skip", verdict)
 
     # ---- the three incidents -------------------------------------------
 

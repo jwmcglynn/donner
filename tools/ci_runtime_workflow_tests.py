@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -79,6 +80,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 timeout=timeout,
                 cwd=cwd,
             )
+
+    def test_shell_fixture_uses_the_test_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / "python3"
+            python.write_text("#!/bin/sh\necho ambient-python-was-used >&2\nexit 97\n")
+            python.chmod(0o755)
+            result = self._run_script(
+                "#!/bin/bash\npython3 -c 'import sys; print(sys.executable)'\n",
+                [],
+                env={"PATH": str(root) + os.pathsep + os.environ["PATH"]},
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(sys.executable, result.stdout.strip())
 
     def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
         hosted = self._job_body("macos")
