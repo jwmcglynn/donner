@@ -8,18 +8,18 @@
 namespace donner::gpu::shader::programs {
 
 /**
- * Builds the complete solid-fill IR module: a faithful semantic re-expression of the Donner-owned
- * `donner/svg/renderer/geode/shaders/slug_fill.wgsl` (the analytic dual-ray coverage algorithm).
+ * Builds the native solid-fill IR module with the analytic dual-ray coverage rules used by
+ * `donner/svg/renderer/geode/shaders/slug_fill.wgsl`.
  *
- * Contents mirror the WGSL shader function by function: the 352-byte `Uniforms` struct, `Band`
- * (32 bytes) and `InstanceTransform` (32 bytes) storage layouts, all 12 bindings at group 0 with
- * identical binding numbers, the `kNoBand` sentinel constant, the `vs_main` vertex stage
- * (per-instance matrix construction, the convex bounding fan expanded from `vertex_index`, and
- * its per-edge half-pixel dilation with both AABB fallbacks), and the `fs_main` fragment
- * stage (dense band-grid lookup, `accumulateHoriz`/`accumulateVert` analytic ray coverage with
- * `owns_axis_sample` and the Citardauq-form `solve_quadratic`, `calc_coverage` blending,
- * non-zero and even-odd fill rules, convex clip-polygon planes, clip-mask coverage, and the
- * solid premultiplied color and repeat-tiled pattern paint paths).
+ * Native adapter contracts define the 352-byte `Uniforms` struct, `Band` (32 bytes),
+ * `InstanceTransform` (32 bytes), and 12 bindings at group 0. The module includes the `kNoBand`
+ * sentinel constant, the `vs_main` vertex stage (per-instance matrix construction, the convex
+ * bounding fan expanded from `vertex_index`, and its per-edge half-pixel dilation with both AABB
+ * fallbacks), and the `fs_main` fragment stage (dense band-grid lookup,
+ * `accumulateHoriz`/`accumulateVert` analytic ray coverage with `owns_axis_sample` and the
+ * Citardauq-form `solve_quadratic`, `calc_coverage` blending, bounded NonZero interval integration
+ * with exact-tie grouping and paired legacy fallback, EvenOdd folding, convex clip-polygon planes,
+ * clip-mask coverage, and the solid premultiplied color and repeat-tiled pattern paint paths).
  *
  * Entry points are named `vs_main` / `fs_main`; struct-typed WGSL stage IO is flattened to
  * annotated parameters/outputs with identical locations and builtins, and `.rgba` swizzles are

@@ -6,7 +6,7 @@ in SVG 2 and are intentionally not implemented.
 ## Filter Inputs: BackgroundImage and BackgroundAlpha
 
 **SVG 1.1 behavior:** The `enable-background` attribute on a container element captured a snapshot
-of the canvas behind it. Filter primitives could reference this snapshot via `in="BackgroundImage"`
+of the canvas behind it. Filter primitives could reference this snapshot with `in="BackgroundImage"`
 or `in="BackgroundAlpha"`.
 
 **SVG 2 status:** Removed. The SVG 2 spec no longer defines `enable-background`,
@@ -15,8 +15,8 @@ or `in="BackgroundAlpha"`.
 **Donner behavior:** These input names are parsed as unresolved named references, producing
 transparent black (the SVG spec behavior for unresolved filter inputs). No warning is emitted.
 
-**Modern alternative:** CSS compositing via `mix-blend-mode` and `isolation` properties provides
-equivalent functionality for blending with backdrop content.
+**Modern alternative:** CSS compositing with the `mix-blend-mode` and `isolation` properties covers
+blending with backdrop content.
 
 **Affected resvg tests:** `a-enable-background-*` (category disabled), `e-filter-032` (skipped),
 `e-filter-033` (skipped).
@@ -27,14 +27,15 @@ equivalent functionality for blending with backdrop content.
 
 **SVG 2 status:** Removed entirely. WOFF/WOFF2 and system fonts are the standard mechanisms.
 
-**Donner behavior:** These elements are not recognized. Donner supports TrueType/OpenType fonts
-via stb_truetype, WOFF2 via Brotli decompression, and optionally HarfBuzz for complex text shaping.
+**Donner behavior:** These elements are not recognized. Donner supports TrueType and OpenType fonts
+through stb_truetype, WOFF2 through Brotli decompression, and optionally HarfBuzz for complex text
+shaping.
 
 ## &lt;cursor&gt; Element
 
 **SVG 1.1 behavior:** Defined a custom cursor image inline in SVG.
 
-**SVG 2 status:** Removed. CSS `cursor` property is the standard mechanism.
+**SVG 2 status:** Removed. The CSS `cursor` property is the standard mechanism.
 
 **Donner behavior:** Not implemented.
 
@@ -42,8 +43,8 @@ via stb_truetype, WOFF2 via Brotli decompression, and optionally HarfBuzz for co
 
 **SVG 1.1 behavior:** Allowed substituting alternate glyph representations.
 
-**SVG 2 status:** Removed. OpenType font features (accessed via `font-feature-settings`) provide
-this functionality.
+**SVG 2 status:** Removed. OpenType font features, selected with `font-feature-settings`, cover the
+same cases.
 
 **Donner behavior:** Not implemented.
 
@@ -64,7 +65,7 @@ per-glyph rotation in horizontal and vertical text.
 obsoleted and replaced by `text-orientation`; SVG 2 retains only a narrow compatibility alias for
 `auto`, `0`, and `90` values.
 
-**Donner behavior:** The legacy property names are recognized but do not have independent layout
+**Donner behavior:** The legacy property names are recognized but have no independent layout
 behavior. The narrow `glyph-orientation-vertical` compatibility alias is not yet applied. Modern
 vertical text should use `writing-mode: vertical-rl` or `vertical-lr` together with
 `text-orientation`.

@@ -4,11 +4,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -20,10 +22,24 @@ namespace donner::geode {
 
 namespace {
 
-/// Path-local flattening tolerance. This case asserts on exact path-local point
-/// counts, so it pins the local-space tolerance rather than a device-derived
-/// one (`strokeToFill` has no default; every caller states its intent).
+/// Geometry assertions use path-local units rather than a device-derived tolerance.
 constexpr double kFlattenTolerance = Path::kLocalFlattenTolerance;
+
+/// Match either direction of a straight line's endpoint/midpoint encoding.
+bool HasEncodedLine(const std::vector<EncodedPath::Curve>& curves, const Vector2d& start,
+                    const Vector2d& end) {
+  const Vector2d middle = (start + end) * 0.5;
+  const std::array<float, 6> forward = {static_cast<float>(start.x),  static_cast<float>(start.y),
+                                        static_cast<float>(middle.x), static_cast<float>(middle.y),
+                                        static_cast<float>(end.x),    static_cast<float>(end.y)};
+  const std::array<float, 6> reverse = {forward[4], forward[5], forward[2],
+                                        forward[3], forward[0], forward[1]};
+  return std::any_of(curves.begin(), curves.end(), [&](const EncodedPath::Curve& curve) {
+    const std::array<float, 6> fields = {curve.p0x, curve.p0y, curve.p1x,
+                                         curve.p1y, curve.p2x, curve.p2y};
+    return fields == forward || fields == reverse;
+  });
+}
 
 MATCHER(IsFiniteFloat, "is finite") {
   return std::isfinite(arg);
@@ -81,6 +97,88 @@ TEST(GeodePathEncoder, EmptyPath) {
   EXPECT_TRUE(encoded.empty());
   EXPECT_TRUE(encoded.curves.empty());
   EXPECT_TRUE(encoded.bands.empty());
+}
+
+TEST(GeodePathEncoder, ExactReverseContoursCancelWithoutChangingBounds) {
+  const Path path = PathBuilder()
+                        .addRect(Box2d({0, 0}, {10, 10}))
+                        .moveTo({0, 0})
+                        .lineTo({0, 10})
+                        .lineTo({10, 10})
+                        .lineTo({10, 0})
+                        .closePath()
+                        .build();
+  for (FillRule rule : {FillRule::NonZero, FillRule::EvenOdd}) {
+    const EncodedPath encoded = GeodePathEncoder::encode(path, rule);
+    EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty);
+    EXPECT_THAT(encoded.bands, testing::IsEmpty());
+    EXPECT_THAT(encoded.vBands, testing::IsEmpty());
+    EXPECT_THAT(encoded.curveIndices, testing::IsEmpty());
+    EXPECT_THAT(encoded.vCurveIndices, testing::IsEmpty());
+    EXPECT_EQ(encoded.pathBounds, path.bounds());
+  }
+}
+
+TEST(GeodePathEncoder, ExactCancellationRetainsNetMultiplicityAndDirection) {
+  const Path forward = PathBuilder().addRect(Box2d({0, 0}, {10, 10})).build();
+  const Path reverse = PathBuilder()
+                           .moveTo({0, 0})
+                           .lineTo({0, 10})
+                           .lineTo({10, 10})
+                           .lineTo({10, 0})
+                           .closePath()
+                           .build();
+  const Path mixed = PathBuilder().addPath(forward).addPath(forward).addPath(reverse).build();
+  const Path duplicate = PathBuilder().addPath(forward).addPath(forward).build();
+  const auto fields = [](const EncodedPath::Curve& curve) {
+    return std::tuple(curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y);
+  };
+  for (FillRule rule : {FillRule::NonZero, FillRule::EvenOdd}) {
+    const EncodedPath expected = GeodePathEncoder::encode(forward, rule);
+    const EncodedPath actual = GeodePathEncoder::encode(mixed, rule);
+    const EncodedPath twice = GeodePathEncoder::encode(duplicate, rule);
+    ASSERT_THAT(actual.curves, testing::SizeIs(expected.curves.size()));
+    ASSERT_THAT(actual.vCurves, testing::SizeIs(expected.vCurves.size()));
+    for (size_t i = 0; i < actual.curves.size(); ++i) {
+      EXPECT_THAT(fields(actual.curves[i]), testing::Eq(fields(expected.curves[i])));
+    }
+    for (size_t i = 0; i < actual.vCurves.size(); ++i) {
+      EXPECT_THAT(fields(actual.vCurves[i]), testing::Eq(fields(expected.vCurves[i])));
+    }
+    EXPECT_THAT(twice.curves, testing::SizeIs(expected.curves.size() * 2));
+    EXPECT_THAT(twice.vCurves, testing::SizeIs(expected.vCurves.size() * 2));
+  }
+}
+
+TEST(GeodePathEncoder, CancellationRetainsOneUlpControlDifferences) {
+  const float distinctControl = std::nextafter(0.5f, 1.0f);
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .quadTo({0.5, 0.25}, {1, 1})
+                        .closePath()
+                        .moveTo({1, 1})
+                        .quadTo({distinctControl, 0.25}, {0, 0})
+                        .closePath()
+                        .build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+  EXPECT_THAT(encoded.curves, testing::SizeIs(2));
+  EXPECT_THAT(encoded.vCurves, testing::SizeIs(2));
+}
+
+TEST(GeodePathEncoder, CancellationDoesNotAdmitOversizedRawInput) {
+  const Path path = PathBuilder()
+                        .addRect(Box2d({0, 0}, {10, 10}))
+                        .moveTo({0, 0})
+                        .lineTo({0, 10})
+                        .lineTo({10, 10})
+                        .lineTo({10, 0})
+                        .closePath()
+                        .build();
+  GeodePathEncoder::Limits limits;
+  limits.maximumConvertedCommands = 2;
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero, 0.1, limits);
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Rejected);
 }
 
 TEST(GeodePathEncoder, SimpleTriangle) {
@@ -466,6 +564,12 @@ TEST(GeodePathEncoder, BoundingPolygonIsSmallAndCounterClockwise) {
 
 namespace {
 
+/// Own the lower coordinate endpoint so adjacent monotonic curves count shared vertices once.
+bool IsOwnedWindingRoot(float start, float end, double coordinate, double parameter) {
+  return parameter >= 0.0 && parameter <= 1.0 && coordinate >= std::min(start, end) &&
+         coordinate < std::max(start, end);
+}
+
 // Winding number of a horizontal +x ray from (px,py) across all Y-monotonic curves.
 int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, double py) {
   int winding = 0;
@@ -487,7 +591,7 @@ int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, 
     }
     for (int i = 0; i < n; ++i) {
       const double t = ts[i];
-      if (t < 0.0 || t > 1.0) continue;
+      if (!IsOwnedWindingRoot(c.p0y, c.p2y, py, t)) continue;
       const double omt = 1.0 - t;
       const double x = omt * omt * c.p0x + 2 * omt * t * c.p1x + t * t * c.p2x;
       if (x < px) continue;
@@ -519,7 +623,7 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
     }
     for (int i = 0; i < n; ++i) {
       const double t = ts[i];
-      if (t < 0.0 || t > 1.0) continue;
+      if (!IsOwnedWindingRoot(c.p0x, c.p2x, px, t)) continue;
       const double omt = 1.0 - t;
       const double y = omt * omt * c.p0y + 2 * omt * t * c.p1y + t * t * c.p2y;
       if (y < py) continue;
@@ -530,11 +634,165 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
   return winding;
 }
 
+/// Orient an independent polygon fixture for either ray and source direction.
+std::vector<EncodedPath::Curve> OrientWindingCurves(std::vector<EncodedPath::Curve> curves,
+                                                    bool transpose, bool reverse) {
+  for (auto& curve : curves) {
+    if (transpose) {
+      std::swap(curve.p0x, curve.p0y);
+      std::swap(curve.p1x, curve.p1y);
+      std::swap(curve.p2x, curve.p2y);
+    }
+    if (reverse) {
+      std::swap(curve.p0x, curve.p2x);
+      std::swap(curve.p0y, curve.p2y);
+    }
+  }
+  return curves;
+}
+
+/// Format the actual six-float records when a winding assertion fails.
+std::string DescribeWindingCurves(const std::vector<EncodedPath::Curve>& curves) {
+  std::vector<std::array<float, 6>> fields;
+  for (const auto& curve : curves) {
+    fields.push_back({curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y});
+  }
+  return testing::PrintToString(fields);
+}
+
 }  // namespace
 
 // The vertical (X-monotonic) band set must be populated and produce winding
 // numbers consistent with the horizontal set - winding is ray-direction-independent,
 // so a point is inside per the horizontal ray iff it is inside per the vertical ray.
+TEST(GeodePathEncoder, WindingHelpersCountSharedVerticesOnce) {
+  const std::vector<EncodedPath::Curve> rectangle = {{-2, -2, 0, -2, 2, -2},
+                                                     {2, -2, 2, -1, 2, 0},
+                                                     {2, 0, 2, 1, 2, 2},
+                                                     {2, 2, 0, 2, -2, 2},
+                                                     {-2, 2, -2, 0, -2, -2}};
+  for (bool transpose : {false, true}) {
+    for (bool reverse : {false, true}) {
+      SCOPED_TRACE(transpose);
+      SCOPED_TRACE(reverse);
+      const auto curves = OrientWindingCurves(rectangle, transpose, reverse);
+      const int outside =
+          transpose ? VerticalWinding(curves, 0, -3) : HorizontalWinding(curves, -3, 0);
+      const int inside =
+          transpose ? VerticalWinding(curves, 0, 0) : HorizontalWinding(curves, 0, 0);
+      EXPECT_EQ(outside, 0);
+      EXPECT_EQ(std::abs(inside), 1);
+    }
+  }
+}
+
+TEST(GeodePathEncoder, WindingHelpersCancelAtCoordinateExtrema) {
+  const std::vector<EncodedPath::Curve> diamond = {
+      {0, -2, 1, -1, 2, 0}, {2, 0, 1, 1, 0, 2}, {0, 2, -1, 1, -2, 0}, {-2, 0, -1, -1, 0, -2}};
+  for (bool transpose : {false, true}) {
+    for (bool reverse : {false, true}) {
+      SCOPED_TRACE(transpose);
+      SCOPED_TRACE(reverse);
+      const auto curves = OrientWindingCurves(diamond, transpose, reverse);
+      for (double extremum : {-2.0, 2.0}) {
+        SCOPED_TRACE(extremum);
+        const int winding = transpose ? VerticalWinding(curves, extremum, -3)
+                                      : HorizontalWinding(curves, -3, extremum);
+        EXPECT_EQ(winding, 0);
+      }
+    }
+  }
+}
+
+TEST(GeodePathEncoder, CapSeamsCancelButGenuineCapBoundariesRemain) {
+  const Path line = PathBuilder().moveTo({0, 0}).lineTo({20, 0}).build();
+  for (LineCap cap : {LineCap::Butt, LineCap::Square, LineCap::Round}) {
+    SCOPED_TRACE(static_cast<int>(cap));
+    const Path stroke = line.strokeToFill({.width = 6.0, .cap = cap}, kFlattenTolerance);
+    const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::NonZero);
+    ASSERT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+    const auto hasVerticalEdge = [&](float x) {
+      return std::any_of(encoded.curves.begin(), encoded.curves.end(), [x](const auto& curve) {
+        return curve.p0x == x && curve.p1x == x && curve.p2x == x;
+      });
+    };
+    EXPECT_THAT(hasVerticalEdge(0), testing::Eq(cap == LineCap::Butt));
+    EXPECT_THAT(hasVerticalEdge(20), testing::Eq(cap == LineCap::Butt));
+    EXPECT_THAT(HorizontalWinding(encoded.curves, -2, 0) != 0, testing::Eq(cap != LineCap::Butt));
+    EXPECT_THAT(HorizontalWinding(encoded.curves, -4, 0), testing::Eq(0))
+        << "Horizontal curves (p0x, p0y, p1x, p1y, p2x, p2y): "
+        << DescribeWindingCurves(encoded.curves);
+    EXPECT_THAT(VerticalWinding(encoded.vCurves, 10, 0) != 0, testing::IsTrue());
+  }
+}
+
+TEST(GeodePathEncoder, SquareCapsRemoveActualSlopedCurveEndSeams) {
+  const Path curve = PathBuilder().moveTo({0, 0}).curveTo({0, 20}, {20, 20}, {20, 0}).build();
+  const Path flattened = curve.flatten(kFlattenTolerance);
+  const auto points = flattened.points();
+  ASSERT_GE(points.size(), 3u);
+  const Path buttStroke =
+      curve.strokeToFill({.width = 6.0, .cap = LineCap::Butt}, kFlattenTolerance);
+  const Path squareStroke =
+      curve.strokeToFill({.width = 6.0, .cap = LineCap::Square}, kFlattenTolerance);
+  const EncodedPath butt = GeodePathEncoder::encode(buttStroke, FillRule::NonZero);
+  const EncodedPath square = GeodePathEncoder::encode(squareStroke, FillRule::NonZero);
+  ASSERT_EQ(butt.outcome, EncodedPath::Outcome::Ready);
+  ASSERT_EQ(square.outcome, EncodedPath::Outcome::Ready);
+
+  // This single curve has no interior command junction, so its end normals come from the chords.
+  for (bool atStart : {true, false}) {
+    SCOPED_TRACE(atStart);
+    const Vector2d origin = atStart ? points.front() : points.back();
+    const Vector2d chord =
+        atStart ? points[1] - points[0] : points.back() - points[points.size() - 2];
+    const Vector2d offset = Vector2d(-chord.y, chord.x).normalize() * 3.0;
+    ASSERT_NE(offset.x, 0.0);
+    ASSERT_NE(offset.y, 0.0);
+    for (bool verticalRay : {false, true}) {
+      SCOPED_TRACE(verticalRay);
+      const auto& buttCurves = verticalRay ? butt.vCurves : butt.curves;
+      const auto& squareCurves = verticalRay ? square.vCurves : square.curves;
+      for (const Vector2d endpoint : {origin - offset, origin + offset}) {
+        // A butt end retains these genuine boundaries; a square cap must absorb them.
+        EXPECT_THAT(HasEncodedLine(buttCurves, origin, endpoint), testing::IsTrue());
+        EXPECT_THAT(HasEncodedLine(squareCurves, origin, endpoint), testing::IsFalse());
+      }
+      EXPECT_THAT(HasEncodedLine(squareCurves, origin - offset, origin + offset),
+                  testing::IsFalse())
+          << "An unsplit cap base must not survive opposite the two strip half-edges";
+    }
+  }
+}
+
+TEST(GeodePathEncoder, RoundJoinSeamsUseInteriorCurveBoundaryNormals) {
+  const Path path =
+      PathBuilder().moveTo({0, 0}).curveTo({0, 20}, {20, 20}, {20, 0}).lineTo({40, 0}).build();
+  const Path flattened = path.flatten(kFlattenTolerance);
+  const auto points = flattened.points();
+  ASSERT_GE(points.size(), 4u);
+  EXPECT_DOUBLE_EQ(points[points.size() - 2].x, 20.0);
+  EXPECT_DOUBLE_EQ(points[points.size() - 2].y, 0.0);
+  const Vector2d arrival = points[points.size() - 2] - points[points.size() - 3];
+  ASSERT_GT(arrival.x, 0.0);
+  ASSERT_LT(arrival.y, 0.0);
+
+  const StrokeStyle style{.width = 6.0, .join = LineJoin::Round};
+  const EncodedPath encoded =
+      GeodePathEncoder::encode(path.strokeToFill(style, kFlattenTolerance), FillRule::NonZero);
+  const EncodedPath chordControl =
+      GeodePathEncoder::encode(flattened.strokeToFill(style, kFlattenTolerance), FillRule::NonZero);
+  ASSERT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+  ASSERT_EQ(chordControl.outcome, EncodedPath::Outcome::Ready);
+
+  // The cubic exits vertically at the interior junction, so its exact incoming normal is +x.
+  // Flattening first deliberately removes the curve-command provenance and this override.
+  EXPECT_THAT(HasEncodedLine(chordControl.vCurves, {20, 0}, {23, 0}), testing::IsFalse());
+  EXPECT_THAT(HasEncodedLine(encoded.vCurves, {20, 0}, {23, 0}), testing::IsTrue());
+  EXPECT_THAT(HasEncodedLine(encoded.vCurves, {17, 0}, {20, 0}), testing::IsFalse())
+      << "The round join must cancel its exact radial seam with the overridden strip";
+}
+
 TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   // A triangle plus an interior hole exercises non-trivial winding both ways.
   Path path = PathBuilder()
@@ -570,10 +828,9 @@ TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   }
 }
 
-TEST(GeodePathEncoder, ClosedStrokeRightContourUsesInsideJoins) {
-  // Exact path from filters/filter/path-bbox.svg. The closed stroke's right contour must
-  // truncate inside joins at their miter intersections instead of retaining both offset
-  // endpoints. The latter produces a self-intersecting wedge at (65, 135).
+TEST(GeodePathEncoder, ClosedStrokeUnionDoesNotExtendAboveSharedVertex) {
+  // Exact path from filters/filter/path-bbox.svg. The stroke must not introduce
+  // a filled wedge extending vertically above the shared vertex at (65, 135).
   const Path path = PathBuilder()
                         .moveTo({50, 85})
                         .lineTo({65, 135})
@@ -584,11 +841,11 @@ TEST(GeodePathEncoder, ClosedStrokeRightContourUsesInsideJoins) {
                         .build();
   const Path stroke = path.strokeToFill({.width = 1.0}, kFlattenTolerance);
   ASSERT_FALSE(stroke.empty());
-  EXPECT_EQ(stroke.points().size(), 95u)
-      << "Pre-fix right-contour misclassification emitted 117 outline points";
-  EXPECT_EQ(stroke.commands().size(), 97u);
-
-  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::EvenOdd);
+  for (const double y : {90.0, 100.0, 110.0, 120.0}) {
+    EXPECT_FALSE(stroke.isInside({65, y}, FillRule::NonZero)) << "y=" << y;
+  }
+  EXPECT_TRUE(stroke.isInside({100, 135}, FillRule::NonZero));
+  const EncodedPath encoded = GeodePathEncoder::encode(stroke, FillRule::NonZero);
   ASSERT_FALSE(encoded.empty());
 }
 
@@ -668,17 +925,11 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
   EXPECT_EQ(openEncoded.curveIndices.size(), closedEncoded.curveIndices.size());
   EXPECT_EQ(openEncoded.bands.size(), closedEncoded.bands.size());
 
-  // A straight line (the geometry resvg's `a-stroke-linecap-001` feeds to
-  // the fill path before the stroke ribbon is generated) must produce
-  // non-empty output with the implicit close. Pre-fix it would have been
-  // a single forward curve with no return edge, producing spill fill.
+  // The implicit return of a line cancels its forward edge, leaving no filled area.
   Path openLine = PathBuilder().moveTo(Vector2d(40, 40)).lineTo(Vector2d(160, 160)).build();
   EncodedPath encoded = GeodePathEncoder::encode(openLine, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
-  // There must be an even number of forward+return segments per band
-  // (one LineTo forward, one implicit close back). `curves.size()` is
-  // stored canonically, so the forward and return segments form a pair.
-  EXPECT_EQ(encoded.curves.size() % 2u, 0u);
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty);
+  EXPECT_THAT(encoded.curves, testing::IsEmpty());
 }
 
 // Multi-subpath regression: a MoveTo in the middle of a path starts a new
@@ -736,7 +987,7 @@ TEST(GeodePathEncoder, RecordsOutputNeutralEncodingStatistics) {
   EXPECT_LE(encoded.stats.boundingGeometryArea, encoded.stats.aabbArea);
 }
 
-TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
+TEST(GeodePathEncoder, CanceledLinesLeaveFiniteEmptyBandMetadata) {
   const Path path = PathBuilder()
                         .moveTo(Vector2d(0, 0))
                         .lineTo(Vector2d(0, 10))
@@ -745,7 +996,9 @@ TEST(GeodePathEncoder, RayParallelAxisLeavesFiniteEmptyBandMetadata) {
                         .build();
 
   const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  ASSERT_FALSE(encoded.empty());
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty);
+  EXPECT_THAT(encoded.bands, testing::IsEmpty());
+  EXPECT_EQ(encoded.hBandCount, 0u);
   EXPECT_TRUE(encoded.vBands.empty());
   EXPECT_TRUE(encoded.vCurves.empty());
   EXPECT_EQ(encoded.vBandCount, 0u);

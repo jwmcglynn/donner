@@ -74,9 +74,9 @@ struct GeodePathCacheComponent {
     /// `GeodePathEncoder::encode(strokedPath, strokeFillRule)`.
     EncodedPath strokedEncode;
 
-    /// Fill rule the stroke was encoded with. `strokeToFill` picks
-    /// NonZero vs EvenOdd based on subpath topology, so this is
-    /// derived and cached alongside the encode.
+    /// Fill rule used for the cached stroke geometry.
+    /// `strokeToFill` produces consistently wound pieces whose
+    /// union is encoded with NonZero.
     FillRule strokeFillRule = FillRule::NonZero;
 
     /// Exact dynamic capacity retained by this cached stroke entry.

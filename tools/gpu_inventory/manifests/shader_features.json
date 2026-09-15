@@ -1115,6 +1115,7 @@
         "if",
         "length",
         "let",
+        "loop",
         "mat2x2f",
         "mat4x4f",
         "max",
@@ -1129,7 +1130,8 @@
         "textureDimensions",
         "textureLoad",
         "textureSampleLevel",
-        "var"
+        "var",
+        "while"
       ],
       "structs": [
         "Band",
@@ -1139,6 +1141,7 @@
         "PaintParams",
         "Quadratic",
         "RayCoverage",
+        "RayEvents",
         "ShapeParams",
         "Uniforms",
         "VertexOutput"
@@ -1247,6 +1250,7 @@
         "if",
         "length",
         "let",
+        "loop",
         "mat2x2f",
         "mat4x4f",
         "max",
@@ -1260,7 +1264,8 @@
         "sqrt",
         "textureDimensions",
         "textureLoad",
-        "var"
+        "var",
+        "while"
       ],
       "structs": [
         "Band",
@@ -1268,6 +1273,7 @@
         "GradientUniforms",
         "Quadratic",
         "RayCoverage",
+        "RayEvents",
         "VertexOutput"
       ]
     },
@@ -1373,6 +1379,7 @@
         "if",
         "length",
         "let",
+        "loop",
         "mat2x2f",
         "mat4x4f",
         "max",
@@ -1385,13 +1392,15 @@
         "sqrt",
         "textureDimensions",
         "textureLoad",
-        "var"
+        "var",
+        "while"
       ],
       "structs": [
         "Band",
         "FragOutput",
         "Quadratic",
         "RayCoverage",
+        "RayEvents",
         "Uniforms",
         "VertexOutput"
       ]

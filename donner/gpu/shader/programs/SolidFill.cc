@@ -63,6 +63,187 @@ void BuildCurveLoader(ErrorLatch& e, ModuleBuilder& builder, const IrType& quadr
   e.ok(fn.finish());
 }
 
+/// Function-local state for the bounded NonZero integration.
+struct RayEventState {
+  IrExpr values;
+  IrExpr count;
+  IrExpr farWinding;
+  IrExpr complete;
+};
+
+RayEventState CreateRayEventState(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& sample,
+                                  const IrExpr& ppem, const IrExpr& collectNonzero) {
+  const IrExpr finiteSample = e(CallBuiltin(
+      BuiltinFn::All,
+      {e(Le(e(CallBuiltin(BuiltinFn::Abs, {sample})),
+            e(ConstructVector(IrType::Vec2f(), {F(std::numeric_limits<float>::max())}))))}));
+  const IrExpr finiteScale =
+      e(And(e(Gt(ppem, F(0.0f))), e(Le(ppem, F(std::numeric_limits<float>::max())))));
+  const IrType eventType =
+      e(IrType::Struct("RayEvents", {{"values", e(IrType::SizedArray(IrType::Vec2f(), 32))},
+                                     {"count", IrType::U32()},
+                                     {"farWinding", IrType::I32()},
+                                     {"complete", IrType::Bool()}}));
+  const IrExpr state = e(fn.addVar("rayEvents", eventType));
+  RayEventState result{e(Member(state, "values")), e(Member(state, "count")),
+                       e(Member(state, "farWinding")), e(Member(state, "complete"))};
+  e.ok(fn.assign(result.count, U(0)));
+  e.ok(fn.assign(result.farWinding, I(0)));
+  e.ok(fn.assign(result.complete, e(And(collectNonzero, e(And(finiteSample, finiteScale))))));
+  return result;
+}
+
+/// Insert one crossing without truncating the separate legacy winding scan.
+void RecordRayEvent(ErrorLatch& e, FunctionBuilder& fn, const RayEventState& state,
+                    const IrExpr& distance, const IrExpr& direction) {
+  e.ok(fn.beginIf(state.complete));
+  e.ok(fn.beginIf(e(Not(
+      e(Le(e(CallBuiltin(BuiltinFn::Abs, {distance})), F(std::numeric_limits<float>::max())))))));
+  e.ok(fn.assign(state.complete, LiteralBool(false)));
+  e.ok(fn.elseBranch());
+  e.ok(fn.beginIf(e(Ge(distance, F(0.5f)))));
+  e.ok(fn.assign(state.farWinding, e(Add(state.farWinding, e(Convert(IrType::I32(), direction))))));
+  e.ok(fn.elseBranch());
+  e.ok(fn.beginIf(e(Gt(distance, F(-0.5f)))));
+  e.ok(fn.beginIf(e(Eq(state.count, U(32)))));
+  e.ok(fn.assign(state.complete, LiteralBool(false)));
+  e.ok(fn.elseBranch());
+  const IrExpr position = e(fn.addVar("insertPosition", IrType::U32(), state.count));
+  const IrExpr j = e(fn.beginFor("insertIndex", state.count));
+  e.ok(fn.forCondition(e(Gt(j, U(0)))));
+  e.ok(fn.forContinuing(j, e(Sub(j, U(1)))));
+  const IrExpr previous = e(Index(state.values, e(Sub(j, U(1)))));
+  e.ok(fn.beginIf(e(Ge(e(Swizzle(previous, "x")), distance))));
+  e.ok(fn.breakStmt());
+  e.ok(fn.endIf());
+  e.ok(fn.assign(e(Index(state.values, j)), previous));
+  e.ok(fn.assign(position, e(Sub(j, U(1)))));
+  e.ok(fn.endFor());
+  e.ok(fn.assign(e(Index(state.values, position)),
+                 e(ConstructVector(IrType::Vec2f(), {distance, direction}))));
+  e.ok(fn.assign(state.count, e(Add(state.count, U(1)))));
+  e.ok(fn.endIf());
+  e.ok(fn.endIf());
+  e.ok(fn.endIf());
+  e.ok(fn.endIf());
+  e.ok(fn.endIf());
+}
+
+/// Resolve exact-tie winding changes before accumulating visible intervals and edge weights.
+void FinishRayEvents(ErrorLatch& e, FunctionBuilder& fn, const IrExpr& result,
+                     const RayEventState& state) {
+  e.ok(fn.assign(e(Member(result, "legacyCov")), e(Member(result, "cov"))));
+  e.ok(fn.assign(e(Member(result, "legacyWgt")), e(Member(result, "wgt"))));
+  e.ok(fn.assign(e(Member(result, "complete")), state.complete));
+  e.ok(fn.beginIf(state.complete));
+  e.ok(fn.assign(e(Member(result, "cov")), F(0.0f)));
+  e.ok(fn.assign(e(Member(result, "wgt")), F(0.0f)));
+  const IrExpr cursor = e(fn.addVar("cursor", IrType::F32(), F(0.5f)));
+  const IrExpr winding = e(fn.addVar("intervalWinding", IrType::I32(), state.farWinding));
+  const IrExpr i = e(fn.beginFor("eventIndex", U(0)));
+  e.ok(fn.forCondition(e(Lt(i, state.count))));
+  e.ok(fn.forContinuing(i, e(Add(i, U(1)))));
+  const IrExpr event = e(Index(state.values, i));
+  const IrExpr r = e(fn.addLet("eventDistance", e(Swizzle(event, "x"))));
+  const IrExpr wasInside = e(fn.addLet("wasInside", e(Ne(winding, I(0)))));
+  e.ok(fn.assign(e(Member(result, "cov")),
+                 e(Add(e(Member(result, "cov")),
+                       e(Mul(e(Sub(cursor, r)),
+                             e(CallBuiltin(BuiltinFn::Select, {F(0.0f), F(1.0f), wasInside}))))))));
+  const IrExpr delta =
+      e(fn.addVar("eventDelta", IrType::I32(), e(Convert(IrType::I32(), e(Swizzle(event, "y"))))));
+  const IrExpr j = e(fn.beginFor("tieIndex", e(Add(i, U(1)))));
+  e.ok(fn.forCondition(e(Lt(j, state.count))));
+  e.ok(fn.forContinuing(j, e(Add(j, U(1)))));
+  const IrExpr tied = e(Index(state.values, j));
+  e.ok(fn.beginIf(e(Ne(e(Swizzle(tied, "x")), r))));
+  e.ok(fn.breakStmt());
+  e.ok(fn.endIf());
+  e.ok(fn.assign(delta, e(Add(delta, e(Convert(IrType::I32(), e(Swizzle(tied, "y"))))))));
+  e.ok(fn.assign(i, j));
+  e.ok(fn.endFor());
+  e.ok(fn.assign(winding, e(Add(winding, delta))));
+  e.ok(fn.beginIf(e(Ne(wasInside, e(Ne(winding, I(0)))))));
+  const IrExpr weight =
+      e(CallBuiltin(BuiltinFn::Saturate,
+                    {e(Sub(F(1.0f), e(Mul(e(CallBuiltin(BuiltinFn::Abs, {r})), F(2.0f)))))}));
+  e.ok(fn.assign(e(Member(result, "wgt")),
+                 e(CallBuiltin(BuiltinFn::Max, {e(Member(result, "wgt")), weight}))));
+  e.ok(fn.endIf());
+  e.ok(fn.assign(cursor, r));
+  e.ok(fn.endFor());
+  e.ok(fn.assign(
+      e(Member(result, "cov")),
+      e(Add(e(Member(result, "cov")),
+            e(Mul(e(Add(cursor, F(0.5f))),
+                  e(CallBuiltin(BuiltinFn::Select, {F(0.0f), F(1.0f), e(Ne(winding, I(0)))}))))))));
+  e.ok(fn.endIf());
+}
+
+void BuildEmptyRay(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayType) {
+  auto created = builder.createFunction("empty_ray", {}, rayType);
+  if (created.hasError()) {
+    e.ok(ShaderStatus(std::move(created).error()));
+    return;
+  }
+  FunctionBuilder fn = std::move(created).result();
+  const IrExpr result = e(fn.addVar("result", rayType));
+  for (const char* field : {"cov", "wgt", "winding", "legacyCov", "legacyWgt"}) {
+    e.ok(fn.assign(e(Member(result, field)), F(0.0f)));
+  }
+  e.ok(fn.assign(e(Member(result, "complete")), LiteralBool(true)));
+  e.ok(fn.returnValue(result));
+  e.ok(fn.finish());
+}
+
+void BuildFillCoverage(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayType) {
+  auto created = builder.createFunction(
+      "fill_coverage",
+      {IrParam{"horizontal", rayType}, IrParam{"vertical", rayType},
+       IrParam{"fillRule", IrType::U32()}, IrParam{"antialias", IrType::U32()}},
+      IrType::F32());
+  if (created.hasError()) {
+    e.ok(ShaderStatus(std::move(created).error()));
+    return;
+  }
+  FunctionBuilder fn = std::move(created).result();
+  const IrExpr horizontal = e(fn.ref("horizontal"));
+  const IrExpr vertical = e(fn.ref("vertical"));
+  const IrExpr rule = e(fn.ref("fillRule"));
+  e.ok(fn.beginIf(e(Eq(e(fn.ref("antialias")), U(0)))));
+  const IrExpr winding =
+      e(fn.addLet("centerWinding",
+                  e(Convert(IrType::U32(),
+                            e(CallBuiltin(BuiltinFn::Abs, {e(Member(horizontal, "winding"))}))))));
+  e.ok(fn.beginIf(e(Eq(rule, U(0)))));
+  e.ok(fn.returnValue(e(CallBuiltin(BuiltinFn::Select, {F(0.0f), F(1.0f), e(Ne(winding, U(0)))}))));
+  e.ok(fn.endIf());
+  e.ok(fn.returnValue(e(Convert(IrType::F32(), e(Mod(winding, U(2)))))));
+  e.ok(fn.endIf());
+  const IrExpr h = e(fn.addVar("h", rayType, horizontal));
+  const IrExpr v = e(fn.addVar("v", rayType, vertical));
+  const IrExpr fallback =
+      e(Or(e(Ne(rule, U(0))),
+           e(Or(e(Not(e(Member(h, "complete")))), e(Not(e(Member(v, "complete"))))))));
+  e.ok(fn.beginIf(fallback));
+  for (const auto& ray : {h, v}) {
+    e.ok(fn.assign(e(Member(ray, "cov")), e(Member(ray, "legacyCov"))));
+    e.ok(fn.assign(e(Member(ray, "wgt")), e(Member(ray, "legacyWgt"))));
+  }
+  e.ok(fn.endIf());
+  const IrExpr coverage = e(fn.addLet("coverage", e(fn.callFunction("calc_coverage", {h, v}))));
+  e.ok(fn.beginIf(e(Eq(rule, U(0)))));
+  e.ok(fn.returnValue(e(CallBuiltin(BuiltinFn::Saturate, {coverage}))));
+  e.ok(fn.endIf());
+  e.ok(fn.returnValue(
+      e(Sub(F(1.0f),
+            e(CallBuiltin(
+                BuiltinFn::Abs,
+                {e(Sub(F(1.0f), e(Mul(e(CallBuiltin(BuiltinFn::Fract, {e(Mul(coverage, F(0.5f)))})),
+                                      F(2.0f)))))}))))));
+  e.ok(fn.finish());
+}
+
 /// Builds accumulateHoriz or accumulateVert: casts one axis-aligned ray through the pixel's
 /// band and accumulates signed analytic coverage per crossing.
 ///
@@ -73,11 +254,11 @@ void BuildCurveLoader(ErrorLatch& e, ModuleBuilder& builder, const IrType& quadr
 /// its crossing direction even when the tangent at the root is flat.
 void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCoverageType,
                      const RayConfig& config) {
-  auto result =
-      builder.createFunction(config.functionName,
-                             {IrParam{"slot", IrType::U32()}, IrParam{"sample", IrType::Vec2f()},
-                              IrParam{config.ppemParamName, IrType::F32()}},
-                             rayCoverageType);
+  auto result = builder.createFunction(
+      config.functionName,
+      {IrParam{"slot", IrType::U32()}, IrParam{"sample", IrType::Vec2f()},
+       IrParam{config.ppemParamName, IrType::F32()}, IrParam{"collectNonzero", IrType::Bool()}},
+      rayCoverageType);
   if (result.hasError()) {
     e.ok(ShaderStatus(std::move(result).error()));
     return;
@@ -88,9 +269,10 @@ void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCov
   const IrExpr sample = e(fn.ref("sample"));
   const IrExpr ppem = e(fn.ref(config.ppemParamName));
 
-  const IrExpr resultVar = e(fn.addVar("result", rayCoverageType));
-  e.ok(fn.assign(e(Member(resultVar, "cov")), F(0.0f)));
-  e.ok(fn.assign(e(Member(resultVar, "wgt")), F(0.0f)));
+  const IrExpr resultVar =
+      e(fn.addVar("result", rayCoverageType, e(fn.callFunction("empty_ray", {}))));
+  const RayEventState events =
+      CreateRayEventState(e, fn, sample, ppem, e(fn.ref("collectNonzero")));
 
   e.ok(fn.beginIf(e(Eq(slot, e(fn.ref("kNoBand"))))));
   e.ok(fn.returnValue(resultVar));
@@ -110,6 +292,18 @@ void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCov
       return e(Swizzle(e(Member(curve, pointName)), axis));
     };
     const IrExpr sampleOnSolveAxis = e(Swizzle(sample, config.solveAxis));
+    const IrExpr finiteCurve = e(And(
+        e(CallBuiltin(
+            BuiltinFn::All,
+            {e(Le(e(CallBuiltin(BuiltinFn::Abs,
+                                {e(ConstructVector(IrType::Vec4f(), {e(Member(curve, "p0")),
+                                                                     e(Member(curve, "p1"))}))})),
+                  e(ConstructVector(IrType::Vec4f(), {F(std::numeric_limits<float>::max())}))))})),
+        e(CallBuiltin(BuiltinFn::All,
+                      {e(Le(e(CallBuiltin(BuiltinFn::Abs, {e(Member(curve, "p2"))})),
+                            e(ConstructVector(IrType::Vec2f(),
+                                              {F(std::numeric_limits<float>::max())}))))}))));
+    e.ok(fn.assign(events.complete, e(And(events.complete, finiteCurve))));
 
     e.ok(fn.beginIf(e(Not(e(fn.callFunction(
         "owns_axis_sample", {curvePoint("p0", config.solveAxis), curvePoint("p2", config.solveAxis),
@@ -152,6 +346,22 @@ void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCov
           "s", e(CallBuiltin(BuiltinFn::Select, {F(config.signWhenNegative),
                                                  F(config.signWhenPositive), increasing}))));
 
+      const IrExpr constantCoordinate =
+          e(And(e(Eq(curvePoint("p0", config.evalAxis), curvePoint("p1", config.evalAxis))),
+                e(Eq(curvePoint("p1", config.evalAxis), curvePoint("p2", config.evalAxis)))));
+      const IrExpr eventCoordinate =
+          e(fn.addLet("eventCoordinate",
+                      e(CallBuiltin(BuiltinFn::Select, {crossing, curvePoint("p0", config.evalAxis),
+                                                        constantCoordinate}))));
+      const IrExpr eventDistance =
+          e(fn.addLet("recordedDistance",
+                      e(Mul(e(Sub(eventCoordinate, e(Swizzle(sample, config.evalAxis)))), ppem))));
+      RecordRayEvent(e, fn, events, eventDistance, sign);
+      e.ok(fn.assign(e(Member(resultVar, "winding")),
+                     e(Add(e(Member(resultVar, "winding")),
+                           e(Mul(sign, e(CallBuiltin(BuiltinFn::Select,
+                                                     {F(0.0f), F(1.0f), e(Ge(r, F(0.0f)))}))))))));
+
       e.ok(fn.assign(
           e(Member(resultVar, "cov")),
           e(Add(e(Member(resultVar, "cov")),
@@ -168,6 +378,7 @@ void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCov
   }
   e.ok(fn.endFor());
 
+  FinishRayEvents(e, fn, resultVar, events);
   e.ok(fn.returnValue(resultVar));
   e.ok(fn.finish());
 }
@@ -224,7 +435,12 @@ ShaderResult<IrModule> BuildSolidFillModule() {
       e(IrType::Struct("InstanceTransform", {{"row0", vec4f}, {"row1", vec4f}}));
   const IrType quadraticType =
       e(IrType::Struct("Quadratic", {{"p0", vec2f}, {"p1", vec2f}, {"p2", vec2f}}));
-  const IrType rayCoverageType = e(IrType::Struct("RayCoverage", {{"cov", f32}, {"wgt", f32}}));
+  const IrType rayCoverageType = e(IrType::Struct("RayCoverage", {{"cov", f32},
+                                                                  {"wgt", f32},
+                                                                  {"winding", f32},
+                                                                  {"legacyCov", f32},
+                                                                  {"legacyWgt", f32},
+                                                                  {"complete", IrType::Bool()}}));
 
   const IrType bandArray = e(IrType::RuntimeArray(bandType));
   const IrType floatArray = e(IrType::RuntimeArray(f32));
@@ -409,6 +625,8 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     e.ok(fn.finish());
   }
 
+  BuildEmptyRay(e, builder, rayCoverageType);
+
   // ----- accumulateHoriz / accumulateVert -----
   // Horizontal ray: +X at y = sample.y; downward (increasing-Y) crossings wind +1.
   BuildAccumulate(e, builder, rayCoverageType,
@@ -445,6 +663,8 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     e.ok(fn.returnValue(e(CallBuiltin(BuiltinFn::Max, {blended, floorCov}))));
     e.ok(fn.finish());
   }
+
+  BuildFillCoverage(e, builder, rayCoverageType);
 
   // ----- sample_in_clip_polygon(pixel_pos) -> bool -----
   {
@@ -1040,9 +1260,7 @@ ShaderResult<IrModule> BuildSolidFillModule() {
         e(fn.addLet("ppem", e(Div(F(1.0f), e(CallBuiltin(BuiltinFn::Fwidth, {samplePos}))))));
 
     // Horizontal band lookup + ray.
-    const IrExpr hCov = e(fn.addVar("hCov", rayCoverageType));
-    e.ok(fn.assign(e(Member(hCov, "cov")), F(0.0f)));
-    e.ok(fn.assign(e(Member(hCov, "wgt")), F(0.0f)));
+    const IrExpr hCov = e(fn.addVar("hCov", rayCoverageType, e(fn.callFunction("empty_ray", {}))));
     e.ok(fn.beginIf(e(Gt(e(Member(uniforms, "hBandCount")), U(0)))));
     {
       const IrExpr hi = e(fn.addLet(
@@ -1055,15 +1273,14 @@ ShaderResult<IrModule> BuildSolidFillModule() {
                I(0),
                e(Sub(e(Convert(IrType::I32(), e(Member(uniforms, "hBandCount")))), I(1)))}))));
       const IrExpr slot = e(fn.addLet("slot", e(Index(e(fn.ref("hBandGrid")), hi))));
-      e.ok(fn.assign(
-          hCov, e(fn.callFunction("accumulateHoriz", {slot, samplePos, e(Swizzle(ppem, "x"))}))));
+      e.ok(fn.assign(hCov, e(fn.callFunction("accumulateHoriz",
+                                             {slot, samplePos, e(Swizzle(ppem, "x")),
+                                              e(Eq(e(Member(uniforms, "fillRule")), U(0)))}))));
     }
     e.ok(fn.endIf());
 
     // Vertical band lookup + ray.
-    const IrExpr vCov = e(fn.addVar("vCov", rayCoverageType));
-    e.ok(fn.assign(e(Member(vCov, "cov")), F(0.0f)));
-    e.ok(fn.assign(e(Member(vCov, "wgt")), F(0.0f)));
+    const IrExpr vCov = e(fn.addVar("vCov", rayCoverageType, e(fn.callFunction("empty_ray", {}))));
     e.ok(fn.beginIf(e(Gt(e(Member(uniforms, "vBandCount")), U(0)))));
     {
       const IrExpr vj = e(fn.addLet(
@@ -1076,28 +1293,15 @@ ShaderResult<IrModule> BuildSolidFillModule() {
                I(0),
                e(Sub(e(Convert(IrType::I32(), e(Member(uniforms, "vBandCount")))), I(1)))}))));
       const IrExpr slot = e(fn.addLet("slot", e(Index(e(fn.ref("vBandGrid")), vj))));
-      e.ok(fn.assign(
-          vCov, e(fn.callFunction("accumulateVert", {slot, samplePos, e(Swizzle(ppem, "y"))}))));
+      e.ok(fn.assign(vCov, e(fn.callFunction("accumulateVert",
+                                             {slot, samplePos, e(Swizzle(ppem, "y")),
+                                              e(Eq(e(Member(uniforms, "fillRule")), U(0)))}))));
     }
     e.ok(fn.endIf());
 
-    const IrExpr coverage =
-        e(fn.addVar("coverage", f32, e(fn.callFunction("calc_coverage", {hCov, vCov}))));
-
-    // Fill rule: non-zero clamps the signed winding coverage; even-odd folds the RAW coverage
-    // via a triangle wave (a hole has combined coverage of about 2, which the wave maps to 0).
-    e.ok(fn.beginIf(e(Eq(e(Member(uniforms, "fillRule")), U(0)))));
-    e.ok(fn.assign(coverage, e(CallBuiltin(BuiltinFn::Saturate, {coverage}))));
-    e.ok(fn.elseBranch());
-    e.ok(fn.assign(
-        coverage,
-        e(Sub(
-            F(1.0f),
-            e(CallBuiltin(
-                BuiltinFn::Abs,
-                {e(Sub(F(1.0f), e(Mul(e(CallBuiltin(BuiltinFn::Fract, {e(Mul(coverage, F(0.5f)))})),
-                                      F(2.0f)))))}))))));
-    e.ok(fn.endIf());
+    const IrExpr coverage = e(fn.addVar(
+        "coverage", f32,
+        e(fn.callFunction("fill_coverage", {hCov, vCov, e(Member(uniforms, "fillRule")), U(1)}))));
 
     // Convex clip-polygon test, in viewport-pixel space.
     e.ok(fn.beginIf(e(Not(e(fn.callFunction("sample_in_clip_polygon", {pixelCenter}))))));

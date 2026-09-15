@@ -12,7 +12,7 @@ The default pattern is:
 EXPECT_THAT(actual, MatcherThatNamesTheContract(expected));
 ```
 
-Use `EXPECT_EQ` for scalar values where the expected and actual output is already
+Use `EXPECT_EQ` for scalar values where the expected and actual output are already
 complete and clear. Do not use `EXPECT_EQ` to validate arrays, byte buffers,
 record sequences, or a cluster of related fields.
 
@@ -77,8 +77,8 @@ auto ActiveFlashIs(std::size_t start, std::size_t end,
 
 ## Domain Helpers
 
-Use small domain helpers when the test reads in domain terms. Box helpers are a
-good example:
+Use small domain helpers when the test reads in domain terms. Box helpers are one
+example:
 
 ```cpp
 auto BoxFromXYWHIs(double x, double y, double width, double height) {
@@ -135,8 +135,8 @@ void PrintTo(const SourceByteRange& range, std::ostream* os) {
 ```
 
 For enums, prefer an `operator<<` in production when the type is part of the
-debugging surface. Use test-local `PrintTo` only when the printer is only useful
-for test diagnostics.
+debugging surface. Use a test-local `PrintTo` only when the printer is useful
+solely for test diagnostics.
 
 ## Pixel And Byte Data
 

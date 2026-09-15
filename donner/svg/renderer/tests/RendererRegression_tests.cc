@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
@@ -200,6 +201,140 @@ TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
   ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(500, 500)));
   ExpectVisibleBitmap(actual, "font_shorthand_visible");
   ExpectBitmapsIdentical(actual, expected, "font_shorthand_expansion");
+}
+
+TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
+  const Path path = PathBuilder()
+                        .moveTo({30, 10})
+                        .lineTo({34, 10})
+                        .lineTo({34, 24})
+                        .lineTo({46, 24})
+                        .lineTo({46, 28})
+                        .lineTo({34, 28})
+                        .lineTo({34, 55})
+                        .lineTo({30, 55})
+                        .lineTo({30, 28})
+                        .lineTo({22, 28})
+                        .lineTo({22, 24})
+                        .lineTo({30, 24})
+                        .closePath()
+                        .build();
+  const std::string header = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\">";
+  const std::string source = header + "<path d=\"" + std::string(path.toSVGPathData()) +
+                             "\" fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"6\"/></svg>";
+  const Path expanded = path.strokeToFill({.width = 6.0}, 0.1);
+  const std::string outlineSource = header + "<path d=\"" + std::string(expanded.toSVGPathData()) +
+                                    "\" fill=\"#ff00ff\" fill-rule=\"nonzero\"/></svg>";
+  SVGDocument expectedDocument = instantiateSubtree(source, {}, {80, 80});
+  SVGDocument actualDocument = instantiateSubtree(outlineSource, {}, {80, 80});
+  const RendererBitmap expected =
+      RenderDocumentWithBackend(expectedDocument, RendererBackend::TinySkia);
+  const RendererBitmap actual =
+      RenderDocumentWithBackend(actualDocument, RendererBackend::TinySkia);
+  ExpectBitmapsIdentical(actual, expected, "expanded_thin_crossbar");
+  if (IsRendererBackendAvailable(RendererBackend::Geode)) {
+    const RendererBitmap geode =
+        RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode);
+    ExpectBitmapsIdentical(geode, expected, "geode_thin_crossbar");
+  }
+}
+
+TEST_F(RendererRegressionTests, ThickCrossbarStrokeMatchesItsUnionAtFractionalOffsets) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  constexpr std::string_view kCrossbar = "M30 10H34V24H46V28H34V55H30V28H22V24H30Z";
+  // A six-unit miter stroke completely covers the four-unit-wide stem and crossbar.
+  // Its boundary is the union of the two expanded axis-aligned rectangles.
+  constexpr std::string_view kStrokeUnion = "M27 7H37V21H49V31H37V58H27V31H19V21H27Z";
+  for (const std::string_view offset : {"0", "0.25", "-0.25"}) {
+    for (const std::string_view opacity : {"1", "0.5"}) {
+      SCOPED_TRACE(std::string(offset) + "/" + std::string(opacity));
+      const std::string header =
+          "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\"><g "
+          "transform=\"translate(" +
+          std::string(offset) + " " + std::string(offset) + ")\">";
+      const std::string strokeSource =
+          header + "<path d=\"" + std::string(kCrossbar) +
+          "\" fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"6\" stroke-opacity=\"" +
+          std::string(opacity) + "\"/></g></svg>";
+      const std::string unionSource = header + "<path d=\"" + std::string(kStrokeUnion) +
+                                      "\" fill=\"#ff00ff\" fill-opacity=\"" + std::string(opacity) +
+                                      "\"/></g></svg>";
+      SVGDocument strokeDocument = instantiateSubtree(strokeSource, {}, {80, 80});
+      SVGDocument unionDocument = instantiateSubtree(unionSource, {}, {80, 80});
+      const RendererBitmap actual =
+          RenderDocumentWithBackend(strokeDocument, RendererBackend::Geode);
+      const RendererBitmap expected =
+          RenderDocumentWithBackend(unionDocument, RendererBackend::Geode);
+      const std::string label =
+          "crossbar_union_" + std::string(offset) + "_" + std::string(opacity);
+      ExpectBitmapsIdentical(actual, expected, label);
+    }
+  }
+}
+
+TEST_F(RendererRegressionTests, FractionalStrokeUnionPreservesGradientCoverage) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  for (const std::string_view offset : {"0.25", "-0.25"}) {
+    const std::string header =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\">"
+        "<defs><linearGradient id=\"paint\" gradientUnits=\"userSpaceOnUse\" x2=\"80\">"
+        "<stop stop-color=\"red\"/><stop offset=\"1\" stop-color=\"blue\" stop-opacity=\"0.5\"/>"
+        "</linearGradient></defs><g transform=\"translate(" +
+        std::string(offset) + " " + std::string(offset) + ")\">";
+    const std::string stroke =
+        header +
+        "<path d=\"M30 10H34V24H46V28H34V55H30V28H22V24H30Z\" "
+        "fill=\"none\" stroke=\"url(#paint)\" stroke-width=\"6\"/></g></svg>";
+    const std::string boundary = header +
+                                 "<path d=\"M27 7H37V21H49V31H37V58H27V31H19V21H27Z\" "
+                                 "fill=\"url(#paint)\"/></g></svg>";
+    SVGDocument actualDocument = instantiateSubtree(stroke, {}, {80, 80});
+    SVGDocument expectedDocument = instantiateSubtree(boundary, {}, {80, 80});
+    ExpectBitmapsIdentical(RenderDocumentWithBackend(actualDocument, RendererBackend::Geode),
+                           RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode),
+                           "gradient_stroke_union_" + std::string(offset));
+  }
+}
+
+TEST_F(RendererRegressionTests, FractionalStrokeUnionPreservesClipMaskCoverage) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  const Path centerline = PathBuilder()
+                              .moveTo({30, 10})
+                              .lineTo({34, 10})
+                              .lineTo({34, 24})
+                              .lineTo({46, 24})
+                              .lineTo({46, 28})
+                              .lineTo({34, 28})
+                              .lineTo({34, 55})
+                              .lineTo({30, 55})
+                              .lineTo({30, 28})
+                              .lineTo({22, 28})
+                              .lineTo({22, 24})
+                              .lineTo({30, 24})
+                              .closePath()
+                              .build();
+  const Path pieces = centerline.strokeToFill({.width = 6.0}, 0.1);
+  for (const std::string_view offset : {"0.25", "-0.25"}) {
+    const auto source = [&](std::string_view path) {
+      return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\">"
+             "<defs><clipPath id=\"clip\"><path transform=\"translate(" +
+             std::string(offset) + " " + std::string(offset) + ")\" d=\"" + std::string(path) +
+             "\"/></clipPath></defs><rect width=\"80\" height=\"80\" fill=\"#ff00ff\" "
+             "fill-opacity=\"0.5\" clip-path=\"url(#clip)\"/></svg>";
+    };
+    SVGDocument actualDocument = instantiateSubtree(source(pieces.toSVGPathData()), {}, {80, 80});
+    SVGDocument expectedDocument =
+        instantiateSubtree(source("M27 7H37V21H49V31H37V58H27V31H19V21H27Z"), {}, {80, 80});
+    ExpectBitmapsIdentical(RenderDocumentWithBackend(actualDocument, RendererBackend::Geode),
+                           RenderDocumentWithBackend(expectedDocument, RendererBackend::Geode),
+                           "clip_stroke_union_" + std::string(offset));
+  }
 }
 
 TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport) {

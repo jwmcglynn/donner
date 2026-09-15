@@ -15,7 +15,7 @@ The filter container element:
 # Filter Primitives
 
 All 17 SVG filter primitives have parser-backed DOM wrappers and renderer support. Most primitives
-are composed into a graph via the `in`, `in2`, and `result` attributes defined on
+are composed into a graph through the `in`, `in2`, and `result` attributes defined on
 \ref donner::svg::SVGFilterPrimitiveStandardAttributes "SVGFilterPrimitiveStandardAttributes".
 Source primitives such as \ref xml_feFlood, \ref xml_feTurbulence, and \ref xml_feImage generate
 their own output; their source comes from attributes such as `flood-color`, procedural noise

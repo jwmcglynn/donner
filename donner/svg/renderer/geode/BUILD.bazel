@@ -153,11 +153,16 @@ donner_cc_library(
 
 donner_cc_test(
     name = "geode_stroke_tolerance_tests",
+    # The six device-scale cases each sample the exact union-boundary oracle
+    # over about 41,000 reference edges: 25 to 35 s on the remote lane and 40
+    # to 65 s on a hosted runner, past the default short-test timeout.
+    size = "medium",
     srcs = ["tests/GeodeStrokeTolerance_tests.cc"],
     deps = [
         ":geode_stroke_tolerance",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
+        "@@abseil-cpp+//absl/numeric:int128",
     ],
 )
 

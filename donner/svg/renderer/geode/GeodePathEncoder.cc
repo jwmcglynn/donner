@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -319,6 +320,113 @@ std::vector<CurveWithRange> omitRayParallelCurves(std::vector<CurveWithRange> cu
                                                   BandAxis axis) {
   std::erase_if(curves, [axis](const CurveWithRange& curve) { return isRayParallel(curve, axis); });
   return curves;
+}
+
+struct CanonicalCurveKey {
+  enum class Direction { Forward, Reverse, Palindromic };
+  std::array<uint32_t, 6> components;
+  Direction direction;
+};
+
+CanonicalCurveKey MakeCanonicalCurveKey(const EncodedPath::Curve& curve) {
+  const std::array<uint32_t, 6> forward = {
+      std::bit_cast<uint32_t>(curve.p0x), std::bit_cast<uint32_t>(curve.p0y),
+      std::bit_cast<uint32_t>(curve.p1x), std::bit_cast<uint32_t>(curve.p1y),
+      std::bit_cast<uint32_t>(curve.p2x), std::bit_cast<uint32_t>(curve.p2y)};
+  const std::array<uint32_t, 6> reverse = {forward[4], forward[5], forward[2],
+                                           forward[3], forward[0], forward[1]};
+  if (reverse < forward) {
+    return {reverse, CanonicalCurveKey::Direction::Reverse};
+  }
+  return {forward, reverse == forward ? CanonicalCurveKey::Direction::Palindromic
+                                      : CanonicalCurveKey::Direction::Forward};
+}
+
+/// Admit the same bounded finite curve set before allocating cancellation scratch.
+bool CurveCancellationInputFits(std::span<const CurveWithRange> curves, std::size_t maximumItems) {
+  constexpr std::size_t kScratchBytesPerCurve = sizeof(std::size_t) + sizeof(uint8_t);
+  if (curves.size() > maximumItems ||
+      curves.size() > std::numeric_limits<std::size_t>::max() / kScratchBytesPerCurve) {
+    return false;
+  }
+  for (const CurveWithRange& item : curves) {
+    const EncodedPath::Curve& curve = item.curve;
+    for (float coordinate : {curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y}) {
+      if (!std::isfinite(coordinate)) return false;
+    }
+  }
+  return true;
+}
+
+/// Mark balanced pairs in one non-palindromic key group, preserving excess multiplicity.
+void MarkOppositeCurveGroup(std::span<const CurveWithRange> curves,
+                            std::span<const std::size_t> indexes, std::size_t begin,
+                            std::size_t end, std::span<uint8_t> canceled) {
+  std::size_t forwardCount = 0;
+  for (std::size_t i = begin; i < end; ++i) {
+    forwardCount += MakeCanonicalCurveKey(curves[indexes[i]].curve).direction ==
+                    CanonicalCurveKey::Direction::Forward;
+  }
+  const std::size_t pairs = std::min(forwardCount, end - begin - forwardCount);
+  std::size_t forwardRemaining = pairs;
+  std::size_t reverseRemaining = pairs;
+  for (std::size_t i = begin; i < end; ++i) {
+    const bool forward = MakeCanonicalCurveKey(curves[indexes[i]].curve).direction ==
+                         CanonicalCurveKey::Direction::Forward;
+    std::size_t& remaining = forward ? forwardRemaining : reverseRemaining;
+    if (remaining > 0) {
+      canceled[indexes[i]] = 1;
+      --remaining;
+    }
+  }
+}
+
+/// Compact surviving records in their original order without reorienting them.
+void CompactUncanceledCurves(std::vector<CurveWithRange>& curves,
+                             std::span<const uint8_t> canceled) {
+  std::size_t output = 0;
+  for (std::size_t i = 0; i < curves.size(); ++i) {
+    if (canceled[i] == 0) {
+      if (output != i) curves[output] = curves[i];
+      ++output;
+    }
+  }
+  curves.resize(output);
+}
+
+/// Remove opposite copies within this path without changing survivor order or winding.
+bool CancelOppositeCurves(std::vector<CurveWithRange>& curves, std::size_t maximumItems) {
+  if (!CurveCancellationInputFits(curves, maximumItems)) {
+    return false;
+  }
+  if (curves.size() < 2) {
+    return true;
+  }
+
+  // Sort indexes, not geometry: surviving records keep their original accumulation order.
+  std::vector<std::size_t> indexes(curves.size());
+  std::iota(indexes.begin(), indexes.end(), 0u);
+  std::sort(indexes.begin(), indexes.end(), [&](std::size_t lhs, std::size_t rhs) {
+    const CanonicalCurveKey left = MakeCanonicalCurveKey(curves[lhs].curve);
+    const CanonicalCurveKey right = MakeCanonicalCurveKey(curves[rhs].curve);
+    return left.components != right.components ? left.components < right.components : lhs < rhs;
+  });
+  std::vector<uint8_t> canceled(curves.size(), 0);
+  for (std::size_t begin = 0; begin < indexes.size();) {
+    const CanonicalCurveKey key = MakeCanonicalCurveKey(curves[indexes[begin]].curve);
+    std::size_t end = begin + 1;
+    while (end < indexes.size() &&
+           MakeCanonicalCurveKey(curves[indexes[end]].curve).components == key.components) {
+      ++end;
+    }
+    if (key.direction != CanonicalCurveKey::Direction::Palindromic) {
+      MarkOppositeCurveGroup(curves, indexes, begin, end, canceled);
+    }
+    begin = end;
+  }
+
+  CompactUncanceledCurves(curves, canceled);
+  return true;
 }
 
 double polygonArea(const std::vector<Vector2d>& polygon) {
@@ -926,9 +1034,12 @@ EncodedPath EncodeBoundedPath(const Path& path, double tolerance, GeodePathEncod
   if (result.boundingVertexCount < 3u) {
     return result;
   }
-  const std::vector<CurveWithRange> hCurves = omitRayParallelCurves(hAll, BandAxis::Y);
+  std::vector<CurveWithRange> hCurves = omitRayParallelCurves(hAll, BandAxis::Y);
   result.stats.horizontal.omittedParallelCurves =
       static_cast<uint32_t>(hAll.size() - hCurves.size());
+  if (!CancelOppositeCurves(hCurves, limits.maximumEncodedGeometryItems)) {
+    return RejectedEncode();
+  }
   if (hCurves.empty()) {
     return result;
   }
@@ -955,9 +1066,12 @@ EncodedPath EncodeBoundedPath(const Path& path, double tolerance, GeodePathEncod
     }
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
     const std::vector<CurveWithRange> vExtracted = extractCurves(monoPathX);
-    const std::vector<CurveWithRange> vAll = omitRayParallelCurves(vExtracted, BandAxis::X);
+    std::vector<CurveWithRange> vAll = omitRayParallelCurves(vExtracted, BandAxis::X);
     result.stats.vertical.omittedParallelCurves =
         static_cast<uint32_t>(vExtracted.size() - vAll.size());
+    if (!CancelOppositeCurves(vAll, limits.maximumEncodedGeometryItems)) {
+      return RejectedEncode();
+    }
     if (!vAll.empty()) {
       const uint16_t vBandCount = chooseBandCount(vAll, bounds, BandAxis::X);
       if (!bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves,

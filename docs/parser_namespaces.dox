@@ -13,8 +13,8 @@
  * donner::css::parser::SelectorParser "SelectorParser", as well as internal details such as \ref
  * donner::css::parser::ColorParser "ColorParser".
  *
- * These are wrapped in the \ref donner::css::CSS convenience API. Using these lower-level APIs
- * allows for finer-grained control and error propagation.
+ * These are wrapped by the \ref donner::css::CSS convenience API. The lower-level parsers give
+ * finer-grained control and error propagation.
  */
 
 /**
@@ -28,6 +28,6 @@
 /**
  * @namespace donner::xml
  *
- * XML parsing and document model support, top-level objects are \ref donner::xml::XMLParser and
- * \ref donner::xml::XMLDocument.
+ * XML parsing and document model support. The top-level objects are \ref donner::xml::XMLParser
+ * and \ref donner::xml::XMLDocument.
  */
