@@ -307,8 +307,8 @@ class RealTreeParityReportTests(unittest.TestCase):
         # budget source.
         self.assertEqual(summary["skip_cases"], 125)
         self.assertEqual(summary["render_only_cases"], 78)
-        self.assertEqual(summary["pixel_budget_sources"], 101)
-        self.assertEqual(summary["effective_pixel_budget_cases"], 123)
+        self.assertEqual(summary["pixel_budget_sources"], 99)
+        self.assertEqual(summary["effective_pixel_budget_cases"], 121)
         # Two text/font-family cases carry a simple-text-only budget: Source Sans Pro kerns through
         # GPOS, which the stb_truetype backend does not read, so only that tier needs an allowance.
         self.assertEqual(summary["simple_text_pixel_budget_cases"], 4)

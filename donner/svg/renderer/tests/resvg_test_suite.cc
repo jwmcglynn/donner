@@ -664,9 +664,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "painting/fill",
                 {
                     {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
-                    {"linear-gradient-on-text.svg", Params::WithThreshold(kDefaultThreshold, 500)},
                     {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
-                    {"radial-gradient-on-text.svg", Params::WithThreshold(kDefaultThreshold, 500)},
                     {"rgb-int-int-int.svg", Params::RenderOnly("UB: rgb(int int int)")},
                     {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
                      Params::Skip("Not impl: Fallback with icc-color")},
@@ -792,12 +790,25 @@ INSTANTIATE_TEST_SUITE_P(
                     {"control-points-clamping-1.svg",
                      WithMaxPixels(150, "Stroke control-point clamping edge coverage")
                          .withGeodeMaxPixelsDifferent(500)},
+                    // Both references map a stroke paint server's objectBoundingBox units through
+                    // the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..110.40
+                    // user units at font-size 60) instead of the glyph cells that SVG 1.1 and
+                    // SVG 2 define: advance width by the font's full ascent and descent (42.20..
+                    // 157.40 x 45.66..127.38). The sibling painting/fill references for the same
+                    // text pin the glyph-cell box, so the corpus disagrees with itself and only
+                    // one of the two can be matched. Donner follows the specification.
+                    //
+                    // A default linear gradient runs along x only, where the two boxes differ by
+                    // under 2 user units, so it stays inside a loosened per-pixel tolerance. The
+                    // radial gradient sees the full 1.9x height difference and cannot.
                     {"linear-gradient-on-text.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")
+                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
+                                           "Reference uses text ink extents for stroke paint")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"pattern-on-text.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
-                    {"radial-gradient-on-text.svg", Params::Skip("Bug: Gradient stroke on text")},
+                    {"radial-gradient-on-text.svg",
+                     Params::Skip("Reference uses text ink extents for stroke paint")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -865,8 +876,16 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/visibility",
                 {
+                    // The reference maps the objectBoundingBox clip through the union of the two
+                    // text elements' glyph *ink* extents (measured 50.5..144.4 x 69.3..105.5 user
+                    // units), not their glyph cells. SVG 1.1 and SVG 2 both define the object
+                    // bounding box of text as the union of full glyph cells: advance width by the
+                    // font's full ascent and descent. Donner follows the specification, which the
+                    // same corpus pins in painting/fill/{linear,radial}-gradient-on-text.svg, so
+                    // the two references disagree with each other and this one cannot be matched
+                    // without also breaking those.
                     {"bbox-impact-3.svg",
-                     Params::Skip("Not impl: <text> contributing to bbox handling")},
+                     Params::Skip("Reference uses text ink extents for objectBoundingBox")},
                     {"collapse-on-tspan.svg",
                      Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"hidden-on-tspan.svg",
