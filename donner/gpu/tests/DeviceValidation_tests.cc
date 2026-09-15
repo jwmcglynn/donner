@@ -1262,6 +1262,25 @@ TEST_F(BufferMappingTests, DestroyingTheBufferInvalidatesAnOpenMapping) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("can never complete")));
 }
 
+TEST_F(BufferMappingTests, ANewBufferInARecycledSlotCanStillBeMapped) {
+  // Destroying a buffer while its mapping is held is supported, and the slot it frees is handed
+  // to the next buffer created. The mapping left behind still names that slot number, so a
+  // one-mapping-per-buffer rule that compared slot numbers alone would refuse to map the new
+  // buffer because of a mapping that belongs to a buffer that no longer exists.
+  Buffer first = readableBuffer();
+  device_.trailingState = MapSliceState::Ready;
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(first, MapMode::Read, 0, 64));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+  ASSERT_THAT(device_.destroyBuffer(std::move(first)), IsOk());
+
+  const Buffer second = readableBuffer();
+
+  EXPECT_THAT(device_.mapBufferAsync(second, MapMode::Read, 0, 64), HasResult())
+      << "A mapping of a destroyed buffer must not block the buffer that reuses its slot";
+}
+
 TEST_F(BufferMappingTests, UnmappingAMappingTwiceIsReportedOnTheSecondCall) {
   const Buffer buffer = readableBuffer();
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
