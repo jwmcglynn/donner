@@ -644,8 +644,10 @@ Result<SurfaceStatus> VulkanSwapchain::acquire() {
 
   uint32_t imageIndex = 0;
   VkResult result =
-      api.vkAcquireNextImageKHR(context_.device, swapchain_, kAcquireTimeoutNanoseconds,
-                                acquireSemaphores_[ringSlot], VK_NULL_HANDLE, &imageIndex);
+      std::exchange(forceNextAcquireOutOfDate_, false)
+          ? VK_ERROR_OUT_OF_DATE_KHR
+          : api.vkAcquireNextImageKHR(context_.device, swapchain_, kAcquireTimeoutNanoseconds,
+                                      acquireSemaphores_[ringSlot], VK_NULL_HANDLE, &imageIndex);
 
   bool outgrown = result == VK_SUBOPTIMAL_KHR;
   if (result == VK_ERROR_OUT_OF_DATE_KHR) {

@@ -3606,6 +3606,12 @@ bool VulkanDevice::supportsPresentation() const {
   return impl_->presentationEnabled;
 }
 
+void VulkanDevice::forceNextAcquireOutOfDateForTest(uint32_t surfaceSlotIndex) {
+  if (VulkanSwapchain* surface = impl_->surfaceAt(surfaceSlotIndex); surface != nullptr) {
+    surface->forceNextAcquireOutOfDateForTest();
+  }
+}
+
 void* VulkanDevice::nativeInstance() const {
   return impl_->presentationEnabled ? impl_->instance : nullptr;
 }

@@ -282,6 +282,12 @@ public:
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
 
+  /// Makes the next acquisition on the surface at \p surfaceSlotIndex report the swapchain as
+  /// out of date, so its rebuild-and-retry path runs. Test seam; see the swapchain's own note for
+  /// why a headless surface needs one.
+  /// @param surfaceSlotIndex Slot of a live surface of this device.
+  void forceNextAcquireOutOfDateForTest(uint32_t surfaceSlotIndex);
+
   /// First latched Vulkan failure observed during submission, polling, or waiting on fences
   /// (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.
