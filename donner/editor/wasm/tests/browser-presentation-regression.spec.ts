@@ -827,8 +827,7 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
-test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
-  test.skip(browserName !== "firefox", "Firefox Geode regression");
+test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
   const failures = await openEditor(page);
   const { canvasBounds, documentClip } = await openBasicShapes(page);
   const baseline = await page.screenshot({ clip: documentClip });
