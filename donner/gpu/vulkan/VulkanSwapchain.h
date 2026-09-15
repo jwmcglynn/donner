@@ -167,10 +167,13 @@ public:
   /// an out-of-date acquisition does.
   void forceNextAcquireOutOfDateForTest() { forceNextAcquireOutOfDate_ = true; }
 
-  /// Makes the next swapchain creation ask for the fewest images this surface allows, so a
-  /// rebuild produces a smaller acquisition ring than the one it replaces. Test seam: a headless
-  /// surface otherwise rebuilds to the same size every time, which is the one shape in which
-  /// reusing a slot computed against the old ring cannot go out of bounds.
+  /// Makes the next swapchain creation ask for the fewest images this surface allows, so that a
+  /// rebuild may produce a smaller acquisition ring than the one it replaces.
+  ///
+  /// Test seam, and only ever an ask: the count handed to a swapchain is a minimum, so an
+  /// implementation is free to return more, and one that always returns the same number gives the
+  /// same ring back. Measured on a software rasterizer it does exactly that, which is why the
+  /// case using this asserts the bounds invariant rather than claiming to have shrunk anything.
   void forceMinimumImageCountOnceForTest() { forceMinimumImageCount_ = true; }
 
   /// Whether this surface still owes the acquisition wait for the frame it holds.

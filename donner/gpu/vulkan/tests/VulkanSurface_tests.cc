@@ -461,8 +461,12 @@ TEST_F(VulkanSurfaceTest, StaysInBoundsWhenARebuildShrinksTheAcquisitionRing) {
   const Surface surface = configuredSurface();
 
   // Land on the ring's last slot before rebuilding, because that is the slot a smaller new ring
-  // no longer has. A headless surface rebuilds to the same size on its own, so the smaller ring
-  // is asked for explicitly.
+  // would no longer have, and ask the rebuild for the fewest images the surface allows.
+  //
+  // Whether the ring actually shrinks is the driver's choice: that count is a minimum, and an
+  // implementation may return more. On a software rasterizer it returns the same number every
+  // time, so this case does not reproduce the out-of-bounds read on that lane - it asserts the
+  // invariant that would catch it, on any driver that does hand back a smaller ring.
   const size_t ringSize = device_->surfaceAcquisitionForTest(surface.slotIndex()).ringSize;
   ASSERT_GT(ringSize, 1u);
   for (size_t frameIndex = 0; frameIndex < ringSize + 1; ++frameIndex) {
