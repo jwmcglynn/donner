@@ -932,7 +932,7 @@ Status BrowserDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 
 Status BrowserDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                      const TexelCopyBufferLayout& dataLayout,
-                                     const Extent2d& writeSize) {
+                                     const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   static constexpr std::string_view kOperation = "writeTexture";
   if (Status status = checkUsable(kOperation); status.hasError()) {
     return status;
@@ -945,6 +945,8 @@ Status BrowserDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t
   const BrowserTexelLayout layout{dataLayout.offsetBytes, dataLayout.bytesPerRow,
                                   dataLayout.rowsPerImage};
   BrowserCopyRegion region;
+  region.destinationX = destinationOrigin.x;
+  region.destinationY = destinationOrigin.y;
   region.width = writeSize.width;
   region.height = writeSize.height;
   return StatusForBridge(bridge_->writeTexture(textureId.result(), data, layout, region),

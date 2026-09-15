@@ -2,6 +2,8 @@
 /// @file
 /// \c donner::gpu::browser::FakeBrowserBridge - a browser side without a browser, for tests.
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <format>
 #include <functional>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include "donner/gpu/browser/BrowserBridge.h"
+#include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
 
@@ -99,6 +102,20 @@ public:
   /// Number of objects this bridge currently holds.
   size_t objectCount() const { return objects->size(); }
 
+  /// The texels the texture \p textureId currently holds, tightly packed row by row with no row
+  /// padding, or an empty vector for a texture this bridge holds no image for.
+  ///
+  /// The image is what the accepted writes put there, so a test reads back the placement the
+  /// backend asked for rather than only the line it recorded.
+  /// @param textureId Texture to read.
+  std::vector<uint8_t> textureTexels(BrowserObjectId textureId) const {
+    const auto it = textureImages_.find(textureId);
+    if (it == textureImages_.end()) {
+      return {};
+    }
+    return it->second.texels;
+  }
+
   BridgeStatus beginDeviceRequest() override {
     if (beginStatus != BridgeStatus::Success) {
       return beginStatus;
@@ -126,9 +143,18 @@ public:
 
   BridgeStatus createTexture(BrowserObjectId id, uint32_t width, uint32_t height,
                              uint32_t formatCode, uint32_t usageBits) override {
-    return create(BrowserObjectKind::Texture, id,
-                  std::format("createTexture id={} size={}x{} format={} usage={}", id, width,
-                              height, formatCode, usageBits));
+    const BridgeStatus status =
+        create(BrowserObjectKind::Texture, id,
+               std::format("createTexture id={} size={}x{} format={} usage={}", id, width, height,
+                           formatCode, usageBits));
+    if (status == BridgeStatus::Success) {
+      if (const uint32_t texelBytes = BytesPerTexel(formatCode); texelBytes != 0) {
+        textureImages_[id] =
+            TextureImage{width, height, texelBytes,
+                         std::vector<uint8_t>(size_t{width} * height * texelBytes, 0)};
+      }
+    }
+    return status;
   }
 
   BridgeStatus createTextureView(BrowserObjectId id, BrowserObjectId textureId) override {
@@ -247,6 +273,7 @@ public:
     }
     objects->erase(id);
     mappings_.erase(id);
+    textureImages_.erase(id);
     calls->push_back(std::format("destroyObject kind={} id={}", BrowserObjectKindName(kind), id));
     return BridgeStatus::Success;
   }
@@ -261,13 +288,17 @@ public:
   BridgeStatus writeTexture(BrowserObjectId textureId, std::span<const uint8_t> data,
                             const BrowserTexelLayout& layout,
                             const BrowserCopyRegion& region) override {
-    return operate(
+    const BridgeStatus status = operate(
         std::format("writeTexture texture={} bytes={} offset={} bytesPerRow={} rowsPerImage={} "
                     "destination=({},{}) size={}x{}",
                     textureId, data.size(), layout.offsetBytes, layout.bytesPerRow,
                     layout.rowsPerImage, region.destinationX, region.destinationY, region.width,
                     region.height),
         BrowserObjectKind::Texture, textureId);
+    if (status == BridgeStatus::Success) {
+      applyTextureWrite(textureId, data, layout, region);
+    }
+    return status;
   }
 
   BridgeStatus beginCommandBuffer(uint64_t submissionSerial) override {
@@ -718,7 +749,69 @@ private:
     return BridgeStatus::Success;
   }
 
+  /// A texture's contents, as this bridge models them.
+  struct TextureImage {
+    uint32_t width = 0;           //!< Width in texels.
+    uint32_t height = 0;          //!< Height in texels.
+    uint32_t bytesPerTexel = 0;   //!< Bytes one texel occupies.
+    std::vector<uint8_t> texels;  //!< Tightly packed texels, row by row.
+  };
+
+  /// Bytes one texel of the wire format \p formatCode occupies, or zero for a code that names no
+  /// format, in which case no image is modelled for the texture.
+  /// @param formatCode Encoded \ref TextureFormat from the creation call.
+  static uint32_t BytesPerTexel(uint32_t formatCode) {
+    static constexpr std::pair<TextureFormat, uint32_t> kFormatSizes[] = {
+        {TextureFormat::RGBA8Unorm, 4},
+        {TextureFormat::BGRA8Unorm, 4},
+        {TextureFormat::R8Unorm, 1},
+        {TextureFormat::RGBA32Float, 16}};
+    for (const auto& [format, bytes] : kFormatSizes) {
+      if (WireTextureFormat(format) == formatCode) {
+        return bytes;
+      }
+    }
+    return 0;
+  }
+
+  /// Copies the rectangle \p region of \p data into the image of \p textureId, reading rows
+  /// through \p layout.
+  ///
+  /// The runtime validated the rectangle against the destination before the backend was called,
+  /// so a texel that lands outside the image means the backend misplaced the rectangle; it is
+  /// dropped here, which leaves that destination texel at whatever it held and shows up as a
+  /// difference rather than as an out-of-bounds write.
+  /// @param textureId Destination texture. @param data Payload bytes.
+  /// @param layout Row layout of \p data. @param region Rectangle being written.
+  void applyTextureWrite(BrowserObjectId textureId, std::span<const uint8_t> data,
+                         const BrowserTexelLayout& layout, const BrowserCopyRegion& region) {
+    const auto it = textureImages_.find(textureId);
+    if (it == textureImages_.end()) {
+      return;
+    }
+    TextureImage& image = it->second;
+    const size_t texelBytes = image.bytesPerTexel;
+    for (uint32_t row = 0; row < region.height; ++row) {
+      for (uint32_t column = 0; column < region.width; ++column) {
+        const uint32_t x = region.destinationX + column;
+        const uint32_t y = region.destinationY + row;
+        if (x >= image.width || y >= image.height) {
+          continue;
+        }
+        const size_t source = static_cast<size_t>(layout.offsetBytes) +
+                              size_t{row} * layout.bytesPerRow + size_t{column} * texelBytes;
+        if (source + texelBytes > data.size()) {
+          return;
+        }
+        const size_t destination = (size_t{y} * image.width + x) * texelBytes;
+        std::copy_n(data.begin() + static_cast<ptrdiff_t>(source), texelBytes,
+                    image.texels.begin() + static_cast<ptrdiff_t>(destination));
+      }
+    }
+  }
+
   std::map<BrowserObjectId, Mapping> mappings_;
+  std::map<BrowserObjectId, TextureImage> textureImages_;
   std::map<BrowserObjectId, BrowserObjectId> frames_;
   bool encoderOpen_ = false;
   bool passOpen_ = false;
