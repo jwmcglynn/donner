@@ -186,6 +186,11 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
 
 /// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
 /// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
+/// How long presenting waits for the frame's own work before reporting that it is not showing.
+/// Long enough that a heavy frame is never cut off, short enough that a wedged GPU does not stall
+/// the caller indefinitely.
+constexpr double kPresentCompletionTimeoutSeconds = 5.0;
+
 struct CompletionState {
   std::atomic<uint64_t> completedSerial{0};       //!< Highest completed submission serial.
   std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
@@ -545,9 +550,6 @@ struct MetalDevice::Impl {
 
   /// Records upload-only resource uses and consumes a successfully submitted upload batch.
   void didSubmitWrites(uint64_t submissionSerial);
-
-  /// Creates \ref commandQueue on first use, reporting why if Metal refuses.
-  Status ensureCommandQueue();
 
   std::vector<std::unique_ptr<MetalSurface>> surfaces;  //!< Surface slots.
   /// Texture slot each surface's acquired frame occupies, empty while it holds none.
@@ -1836,8 +1838,11 @@ Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
 }
 
 Status MetalDevice::Impl::beginSubmission(EncodingState& state) {
-  if (Status status = ensureCommandQueue(); status.hasError()) {
-    return status;
+  if (commandQueue == nil) {
+    commandQueue = [device newCommandQueue];
+    if (commandQueue == nil) {
+      return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
+    }
   }
 
   state.commandBuffer = [commandQueue commandBuffer];
@@ -1914,17 +1919,6 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
   return OkStatus();
 }
 
-Status MetalDevice::Impl::ensureCommandQueue() {
-  if (commandQueue != nil) {
-    return OkStatus();
-  }
-  commandQueue = [device newCommandQueue];
-  if (commandQueue == nil) {
-    return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
-  }
-  return OkStatus();
-}
-
 void MetalDevice::Impl::releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTexture> frameTexture) {
   const std::optional<uint32_t> textureSlot = GetSlot(surfaceTextureSlots, slotIndex);
   if (textureSlot.has_value() && frameTexture != nil &&
@@ -1994,12 +1988,26 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
     return GpuError{GpuErrorType::InvalidHandle,
                     std::format("surface slot {} has no Metal layer", slotIndex)};
   }
-  if (Status status = impl_->ensureCommandQueue(); status.hasError()) {
-    return std::move(status).error();
+
+  // Handing a drawable to the layer shows it as it is at that moment, so the frame's own work
+  // has to have finished first. Metal offers no way to order that from here once the frame has
+  // been submitted - scheduling the present on a later command buffer would not do it, because a
+  // present fires when its command buffer is scheduled rather than when it completes - so the
+  // wait is explicit. Every submission is the owning thread's, and presenting follows the
+  // frame's submission, so the last serial submitted is the frame's work.
+  const uint64_t frameSerial = lastSubmittedSerial();
+  if (frameSerial > completedSerial() &&
+      !waitForSerial(frameSerial, kPresentCompletionTimeoutSeconds)) {
+    // The frame is the layer's either way; the caller is told the frame it drew is not showing.
+    surface->abandon();
+    impl_->releaseFrameTextureSlot(slotIndex, surface->currentTexture());
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("presentSurface: the frame's work did not complete: {}",
+                                lastErrorForTest().empty() ? "timed out" : lastErrorForTest())};
   }
 
   id<MTLTexture> frameTexture = surface->currentTexture();
-  Result<SurfaceStatus> status = surface->present(impl_->commandQueue);
+  Result<SurfaceStatus> status = surface->present();
   impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
   return status;
 }

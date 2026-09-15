@@ -7,6 +7,7 @@
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <QuartzCore/CATransaction.h>
 
 #include <memory>
 #include <optional>
@@ -21,13 +22,19 @@ namespace donner::gpu::metal {
  * it presents under, and the drawable the current frame is holding.
  *
  * A layer hands out a small, fixed number of drawables and takes one back only when it is
- * presented or released, so exactly one frame is held at a time and \ref acquire refuses while
- * one is outstanding. Holding the drawable rather than only its texture is what makes
- * \ref abandon possible: a frame the caller decided not to show is handed straight back to the
- * layer instead of being presented to the screen.
+ * presented or released. Exactly one frame is held at a time, which the runtime enforces before
+ * a second acquisition reaches the layer; the check in \ref acquire is a backstop for a caller
+ * that reached this type directly. Holding the drawable rather than only its texture is what
+ * makes \ref abandon possible: a frame the caller decided not to show is handed straight back
+ * to the layer instead of being presented to the screen.
  *
  * Nothing here owns a window. The layer belongs to whoever created the surface, and outlives it;
  * this type only configures the layer, takes drawables from it, and puts them back.
+ *
+ * Threading: used from the one thread that owns the device, like the rest of the runtime. Core
+ * Animation layers are not thread safe, and a layer property set outside an explicit transaction
+ * is only published when the setting thread's run loop commits one, so \ref configure wraps its
+ * writes in a transaction of its own rather than relying on the caller having a run loop.
  */
 class MetalSurface {
 public:
@@ -40,7 +47,8 @@ public:
   static Result<std::unique_ptr<MetalSurface>> Create(id<MTLDevice> device,
                                                       const SurfaceDescriptor& descriptor);
 
-  /// Destructor; hands back an outstanding drawable and releases the layer reference.
+  /// Destructor; hands back an outstanding drawable and releases this surface's retain on the
+  /// layer, which the embedder still owns and which outlives the release.
   ~MetalSurface();
 
   MetalSurface(const MetalSurface&) = delete;
@@ -75,16 +83,16 @@ public:
   id<MTLTexture> currentTexture() const;
 
   /**
-   * Schedules the held frame for presentation and releases it.
+   * Hands the held frame to the layer and releases it.
    *
-   * Metal executes the command buffers of one queue in the order they were committed, and a
-   * drawable scheduled on a command buffer appears when that buffer completes, so a
-   * present-only command buffer committed after the frame's rendering shows the frame only once
-   * that rendering has finished.
-   *
-   * @param commandQueue Queue the frame's work was submitted on.
+   * Presents immediately, so the frame's own work must already have finished: a drawable handed
+   * over while the GPU is still writing it is shown half drawn. Ordering that is the caller's
+   * job - \ref donner::gpu::metal::MetalDevice waits for the frame's submission before calling
+   * this - because the layer's own scheduling gives no such guarantee. Scheduling the present on
+   * a command buffer would not help: `presentDrawable:` fires when that buffer is *scheduled*,
+   * not when it completes, so a present-only buffer committed afterwards can still run first.
    */
-  Result<SurfaceStatus> present(id<MTLCommandQueue> commandQueue);
+  Result<SurfaceStatus> present();
 
   /// Hands the held frame back to the layer without showing it. Does nothing when none is held.
   void abandon();
@@ -97,9 +105,9 @@ private:
   /// is what makes a configuration outdated.
   bool hasOutgrownItsConfiguration() const;
 
-  id<MTLDevice> device_ = nil;          //!< Device the layer renders with.
-  CAMetalLayer* layer_ = nil;           //!< Layer this surface presents to; not owned.
-  id<CAMetalDrawable> drawable_ = nil;  //!< Frame currently held, or nil.
+  id<MTLDevice> device_ = nil;                         //!< Device the layer renders with.
+  CAMetalLayer* layer_ = nil;                          //!< Layer presented to; retained, not owned.
+  id<CAMetalDrawable> drawable_ = nil;                 //!< Frame currently held, or nil.
   std::optional<SurfaceConfiguration> configuration_;  //!< Applied configuration, if any.
 };
 

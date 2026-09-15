@@ -42,10 +42,12 @@ namespace donner::gpu::metal {
  *
  * Presentation goes through a Core Animation Metal layer the embedder supplies and continues to
  * own: configuring sets the layer's pixel format, drawable extent, pacing and alpha compositing,
- * each acquired frame is one of that layer's drawables, and presenting schedules the drawable on
- * a command buffer committed after the frame's own work. The layer hands out a small fixed number
- * of drawables, so a frame that is neither presented nor abandoned stalls the next acquisition
- * until the layer gives up waiting.
+ * and each acquired frame is one of that layer's drawables, handed out only while it matches the
+ * configured extent. Presenting waits for the frame's own submission to complete and then hands
+ * the drawable over, because a drawable presented from a command buffer is shown when that
+ * buffer is scheduled rather than when it completes, which would show a frame the GPU is still
+ * drawing. The layer hands out a small fixed number of drawables, so a frame that is neither
+ * presented nor abandoned stalls the next acquisition until the layer gives up waiting.
  *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary

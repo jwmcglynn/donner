@@ -51,8 +51,9 @@ Result<std::unique_ptr<MetalSurface>> MetalSurface::Create(id<MTLDevice> device,
                                 Describe(descriptor.native.kind))};
   }
 
-  // The trusted embedding boundary: the caller hands over a platform object, and the class check
-  // is what keeps a pointer to something else from reaching Core Animation as a layer.
+  // The embedding boundary is trusted to hand over an Objective-C object: sending isKindOfClass:
+  // to a pointer that is not one is undefined, so this check catches an object of the wrong
+  // class, not an arbitrary pointer. Nothing below is a defence against a hostile embedder.
   NSObject* object = (__bridge NSObject*)descriptor.native.display;
   if (![object isKindOfClass:[CAMetalLayer class]]) {
     return GpuError{GpuErrorType::InvalidDescriptor,
@@ -123,6 +124,12 @@ Status MetalSurface::configure(const SurfaceConfiguration& configuration) {
   // will not exist a line from now, so it goes back before the layer changes shape.
   abandon();
 
+  // Setting a layer property opens an implicit transaction that is committed by the run loop of
+  // the thread that opened it. A renderer thread has no run loop, so an implicit transaction is
+  // never committed and the layer keeps its old drawable extent; an explicit transaction is what
+  // makes a reconfiguration take effect wherever this runs.
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
   layer_.device = device_;
   layer_.pixelFormat = *pixelFormat;
   layer_.drawableSize = CGSizeMake(static_cast<CGFloat>(configuration.size.width),
@@ -132,6 +139,7 @@ Status MetalSurface::configure(const SurfaceConfiguration& configuration) {
   layer_.framebufferOnly = configuration.usage == TextureUsage::RenderAttachment;
   layer_.opaque = configuration.alphaMode == SurfaceAlphaMode::Opaque;
   layer_.displaySyncEnabled = configuration.presentMode != PresentMode::Immediate;
+  [CATransaction commit];
 
   configuration_ = configuration;
   return OkStatus();
@@ -190,35 +198,25 @@ id<MTLTexture> MetalSurface::currentTexture() const {
   return drawable_ == nil ? nil : drawable_.texture;
 }
 
-Result<SurfaceStatus> MetalSurface::present(id<MTLCommandQueue> commandQueue) {
+Result<SurfaceStatus> MetalSurface::present() {
   if (drawable_ == nil) {
     return GpuError{GpuErrorType::InvalidState, "presentSurface: no frame is being held"};
   }
-  if (commandQueue == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    "presentSurface: the Metal command queue is not available"};
-  }
 
   id<CAMetalDrawable> drawable = drawable_;
-  // The layer owns the frame from here whether or not scheduling it succeeds, matching the
-  // runtime's rule that presenting ends the frame either way.
+  // The layer owns the frame from here, matching the runtime's rule that presenting ends the
+  // frame whatever it reports.
   drawable_ = nil;
-
-  id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
-  if (commandBuffer == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    "presentSurface: Metal command buffer creation failed"};
-  }
-  commandBuffer.label = @"donner surface present";
-  [commandBuffer presentDrawable:drawable];
-  [commandBuffer commit];
+  [drawable present];
 
   return layer_.device == device_ ? SurfaceStatus::Success : SurfaceStatus::Lost;
 }
 
 void MetalSurface::abandon() {
   // Releasing the drawable is what returns it: a layer reclaims a frame that was never shown as
-  // soon as nothing holds it.
+  // soon as nothing holds it. That makes the release have to be the last one, so no caller may
+  // hold this surface's frames alive in an autorelease pool it has not drained; the runtime
+  // hands the drawable to nobody, which is what keeps that true here.
   drawable_ = nil;
 }
 
