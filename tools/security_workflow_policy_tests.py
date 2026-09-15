@@ -1,7 +1,11 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 from python.runfiles import runfiles
@@ -69,6 +73,57 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cls.fuzz = _read(".github/workflows/fuzz.yml")
         cls.sanitizers = _read(".github/workflows/sanitizers.yml")
         cls.supply_chain_files = _read_supply_chain_files()
+
+    def test_artifact_collection_omits_nested_symlinks(self):
+        action = self.supply_chain_files[
+            ".github/actions/upload-bazel-test-artifacts/action.yml"
+        ]
+        scripts = _run_bodies(action)
+        self.assertEqual(1, len(scripts))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            logs = root / "logs"
+            target = logs / "package" / "test"
+            outputs = target / "test.outputs"
+            outputs.mkdir(parents=True)
+            (target / "test.log").write_text("failure details", encoding="utf-8")
+            (target / "test.xml").write_text("<testsuite/>", encoding="utf-8")
+            (outputs / "actual.png").write_bytes(b"fixture image")
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "test.log").write_text("outside sentinel", encoding="utf-8")
+            (outputs / "linked.log").symlink_to(outside / "test.log")
+            (outputs / "linked_directory").symlink_to(outside, target_is_directory=True)
+            (logs / "linked_target").symlink_to(outside, target_is_directory=True)
+            (workspace / "bazel-testlogs").symlink_to(logs, target_is_directory=True)
+            runner = root / "runner"
+            runner.mkdir()
+
+            result = subprocess.run(
+                ["bash", "-c", textwrap.dedent(scripts[0])],
+                cwd=workspace,
+                env={**os.environ, "RUNNER_TEMP": str(runner)},
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            artifacts = runner / "bazel-test-artifacts"
+            collected = {
+                path.relative_to(artifacts).as_posix(): path.read_bytes()
+                for path in artifacts.rglob("*") if path.is_file()
+            }
+            self.assertEqual(
+                {
+                    "package/test/test.log": b"failure details",
+                    "package/test/test.xml": b"<testsuite/>",
+                    "package/test/test.outputs/actual.png": b"fixture image",
+                },
+                collected,
+            )
 
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
