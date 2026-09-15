@@ -5,10 +5,11 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
-#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <initializer_list>
 #include <istream>
 #include <mutex>
 #include <optional>
@@ -82,6 +83,13 @@ bool SameUserPeer(int fd) {
 #endif
 }
 
+bool ConfigureNonblocking(std::initializer_list<int> descriptors) {
+  for (int fd : descriptors) {
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) != 0 || fcntl(fd, F_SETFL, O_NONBLOCK) != 0) return false;
+  }
+  return true;
+}
+
 int BindPrivateSocket(const std::string& path, struct stat* identity, std::string* error) {
   const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
@@ -96,7 +104,7 @@ int BindPrivateSocket(const std::string& path, struct stat* identity, std::strin
     close(fd);
     return -1;
   }
-  if (chmod(path.c_str(), 0600) != 0 || listen(fd, 4) != 0 || lstat(path.c_str(), identity) != 0) {
+  if (chmod(path.c_str(), 0600) != 0 || listen(fd, 8) != 0 || lstat(path.c_str(), identity) != 0) {
     *error = "Cannot secure or listen on control socket";
     close(fd);
     unlink(path.c_str());
@@ -262,32 +270,55 @@ std::optional<Json> RequestEditor(const std::string& path, const Json& request,
 struct LocalEditorControl::Impl {
   struct Pending {
     Json request;
-    Json response;
+    std::string response;
+    std::chrono::steady_clock::time_point deadline;
     bool complete = false;
     bool cancelled = false;
+    bool overloaded = false;
   };
   std::string path;
   std::function<void()> wake;
   std::thread worker;
-  std::mutex mutex;
-  std::condition_variable condition;
-  std::shared_ptr<Pending> pending;
+  mutable std::mutex mutex;
+  std::deque<std::shared_ptr<Pending>> pending;
+  std::size_t outstandingRequests = 0;
+  std::size_t responseBytes = 0;
   bool stopping = false;
   int listener = -1;
-  int client = -1;
   std::array<int, 2> stopPipe{-1, -1};
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+  static constexpr std::size_t kMaximumClients = 8;
+  static constexpr std::size_t kMaximumClientMessages = 8;
+  static constexpr std::size_t kMaximumPendingRequests = 32;
+  static constexpr std::size_t kMaximumQueuedResponseBytes = 32 * 1024 * 1024;
+  static constexpr auto kIoTimeout = std::chrono::seconds(10);
+  static constexpr auto kIdleTimeout = std::chrono::seconds(60);
+  struct Client {
+    int fd;
+    std::string input;
+    std::deque<std::shared_ptr<Pending>> requests;
+    std::deque<std::string> output;
+    std::size_t sent = 0;
+    SocketDeadline inputSince = std::chrono::steady_clock::now();
+    SocketDeadline outputProgress = inputSince;
+    SocketDeadline activity = inputSince;
+    bool closeAfterOutput = false;
+  };
+  std::vector<Client> clients;
   dev_t device = 0;
   ino_t inode = 0;
 
-  void interrupt() {
-    std::lock_guard lock(mutex);
-    stopping = true;
-    if (client >= 0) shutdown(client, SHUT_RDWR);
+  // Called under mutex; a full nonblocking pipe already carries a wakeup.
+  void wakeIo() {
     if (stopPipe[1] >= 0) {
       const char signal = 1;
       (void)write(stopPipe[1], &signal, 1);
     }
+  }
+  void interrupt() {
+    std::lock_guard lock(mutex);
+    stopping = true;
+    wakeIo();
   }
   void closeDescriptors() {
     if (listener >= 0) {
@@ -305,114 +336,199 @@ struct LocalEditorControl::Impl {
         current.st_ino == inode && S_ISSOCK(current.st_mode))
       unlink(path.c_str());
   }
-
-  static bool sendReply(int fd, const Json& response) {
-    std::string bytes = response.dump();
+  void closeClient(std::size_t index) {
+    Client& client = clients[index];
+    for (auto& item : client.requests) {
+      item->cancelled = true;
+      responseBytes -= item->response.size();
+      item->response.clear();
+      --outstandingRequests;
+    }
+    for (const auto& bytes : client.output) responseBytes -= bytes.size();
+    close(client.fd);
+    clients.erase(clients.begin() + static_cast<std::ptrdiff_t>(index));
+    std::erase_if(pending, [](const auto& item) { return item->cancelled; });
+  }
+  void complete(const std::shared_ptr<Pending>& item, const Json& response) {
+    std::string bytes = response.dump(-1, ' ', false, Json::error_handler_t::replace);
     if (bytes.size() > kMaximumResponseBytes)
-      bytes = RpcError(nullptr, "Response exceeds 16 MiB").dump();
+      bytes = RpcError(item->request.value("id", Json(nullptr)), "Response exceeds 16 MiB").dump();
     bytes += '\n';
-    std::size_t sent = 0;
-    while (sent < bytes.size()) {
+    if (bytes.size() > kMaximumQueuedResponseBytes - responseBytes) {
+      item->overloaded = true;
+      item->cancelled = true;
+      return;
+    }
+    responseBytes += bytes.size();
+    item->response = std::move(bytes);
+    item->complete = true;
+  }
+  bool canRead(const Client& client) const {
+    return !client.closeAfterOutput &&
+           client.requests.size() + client.output.size() < kMaximumClientMessages &&
+           outstandingRequests < kMaximumPendingRequests;
+  }
+  bool parseBuffered(Client& client) {
+    bool queued = false;
+    while (canRead(client)) {
+      const auto newline = client.input.find('\n');
+      if (newline == std::string::npos && client.input.size() <= kMaximumRequestBytes) break;
+      auto item = std::make_shared<Pending>();
+      item->deadline = std::chrono::steady_clock::now() + kRequestTimeout;
+      std::string reason;
+      if (newline == std::string::npos || newline > kMaximumRequestBytes) {
+        reason = "Request exceeds 1 MiB";
+      } else {
+        const std::string_view frame(client.input.data(), newline);
+        if (!BoundedJsonDepth(frame))
+          reason = "JSON nesting exceeds 64 levels";
+        else {
+          item->request = Json::parse(frame, nullptr, false);
+          if (item->request.is_discarded() || !item->request.is_object())
+            reason = "Invalid JSON object";
+        }
+      }
+      ++outstandingRequests;
+      client.requests.push_back(item);
+      if (!reason.empty()) {
+        item->request = Json::object();
+        complete(item, RpcError(nullptr, std::move(reason)));
+        client.input.clear();
+        client.closeAfterOutput = true;
+        break;
+      }
+      client.input.erase(0, newline + 1);
+      client.inputSince = std::chrono::steady_clock::now();
+      pending.push_back(item);
+      queued = true;
+    }
+    return queued;
+  }
+  bool receive(Client& client, bool* queued) {
+    std::array<char, 8192> buffer{};
+    const std::size_t capacity = kMaximumRequestBytes + 1 - client.input.size();
+    const ssize_t count = recv(client.fd, buffer.data(), std::min(buffer.size(), capacity), 0);
+    if (count < 0) return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK;
+    if (count == 0) return false;
+    if (client.input.empty()) client.inputSince = std::chrono::steady_clock::now();
+    client.activity = std::chrono::steady_clock::now();
+    client.input.append(buffer.data(), static_cast<std::size_t>(count));
+    *queued = parseBuffered(client) || *queued;
+    return true;
+  }
+  bool sendOutput(Client& client) {
+    if (client.output.empty()) return true;
+    const std::string& bytes = client.output.front();
 #ifdef MSG_NOSIGNAL
-      constexpr int flags = MSG_NOSIGNAL;
+    constexpr int flags = MSG_NOSIGNAL;
 #else
-      constexpr int flags = 0;
+    constexpr int flags = 0;
 #endif
-      const ssize_t count = send(fd, bytes.data() + sent, bytes.size() - sent, flags);
-      if (count < 0 && errno == EINTR) continue;
-      if (count <= 0) return false;
-      sent += static_cast<std::size_t>(count);
+    const ssize_t count =
+        send(client.fd, bytes.data() + client.sent, bytes.size() - client.sent, flags);
+    if (count < 0) return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK;
+    if (count == 0) return false;
+    client.sent += static_cast<std::size_t>(count);
+    client.activity = client.outputProgress = std::chrono::steady_clock::now();
+    if (client.sent == bytes.size()) {
+      responseBytes -= bytes.size();
+      client.output.pop_front();
+      client.sent = 0;
     }
     return true;
   }
-
-  void serveClient(int fd) {
-    if (!SameUserPeer(fd)) return;
-    timeval timeout{.tv_sec = 10, .tv_usec = 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-#ifdef SO_NOSIGPIPE
-    int noSignal = 1;
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, sizeof(noSignal));
-#endif
-    std::string bytes;
-    std::array<char, 4096> buffer{};
-    while (bytes.size() <= kMaximumRequestBytes) {
-      const ssize_t count = recv(fd, buffer.data(), buffer.size(), 0);
-      if (count < 0 && errno == EINTR) continue;
-      if (count <= 0) return;
-      bytes.append(buffer.data(), static_cast<std::size_t>(count));
-      const auto newline = bytes.find('\n');
-      if (newline == std::string::npos) continue;
-      if (newline > kMaximumRequestBytes || newline + 1 != bytes.size()) {
-        sendReply(fd, RpcError(nullptr, "Expected one bounded JSON request"));
-        return;
-      }
-      if (!BoundedJsonDepth(bytes)) {
-        sendReply(fd, RpcError(nullptr, "JSON nesting exceeds 64 levels"));
-        return;
-      }
-      Json request = Json::parse(
-          bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(newline), nullptr, false);
-      if (request.is_discarded() || !request.is_object()) {
-        sendReply(fd, RpcError(nullptr, "Invalid JSON object"));
-        return;
-      }
-      auto item = std::make_shared<Pending>();
-      item->request = std::move(request);
-      {
-        std::lock_guard lock(mutex);
-        if (stopping) return;
-        pending = item;
-      }
-      wake();
-      std::unique_lock lock(mutex);
-      condition.wait_for(lock, kRequestTimeout, [&]() { return stopping || item->complete; });
-      if (!item->complete) {
+  bool collectResponses(Client& client) {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = client.requests.begin(); it != client.requests.end();) {
+      const auto& item = *it;
+      if (item->overloaded) return false;
+      if (!item->complete && now >= item->deadline) {
         item->cancelled = true;
-        if (pending == item) pending.reset();
-        lock.unlock();
-        sendReply(fd, RpcError(item->request.value("id", Json(nullptr)),
-                               "Timed out waiting for an idle editor or changed feedback; reread "
-                               "state before retrying"));
-        return;
+        complete(item, RpcError(item->request.value("id", Json(nullptr)),
+                                "Timed out waiting for an idle editor or changed feedback; "
+                                "reread state before retrying"));
+        if (item->overloaded) return false;
       }
-      Json response = std::move(item->response);
-      lock.unlock();
-      sendReply(fd, response);
+      if (item->complete) {
+        if (client.output.empty()) client.outputProgress = now;
+        client.output.push_back(std::move(item->response));
+        item->response.clear();
+        --outstandingRequests;
+        it = client.requests.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    std::erase_if(pending, [](const auto& item) { return item->cancelled || item->complete; });
+    return (!client.closeAfterOutput || !client.requests.empty() || !client.output.empty()) &&
+           (client.input.empty() || client.input.find('\n') != std::string::npos ||
+            now - client.inputSince < kIoTimeout) &&
+           (client.output.empty() || now - client.outputProgress < kIoTimeout) &&
+           (now - client.activity < kIdleTimeout);
+  }
+  void acceptClient() {
+    const int fd = accept(listener, nullptr, nullptr);
+    if (fd < 0) return;
+    if (clients.size() >= kMaximumClients || !SameUserPeer(fd) || !ConfigureNonblocking({fd})) {
+      close(fd);
       return;
     }
-    sendReply(fd, RpcError(nullptr, "Request exceeds 1 MiB"));
+#ifdef SO_NOSIGPIPE
+    int noSignal = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, sizeof(noSignal)) != 0) {
+      close(fd);
+      return;
+    }
+#endif
+    clients.push_back(Client{.fd = fd});
   }
-
   void run() {
     while (true) {
-      std::array<pollfd, 2> descriptors{{{listener, POLLIN, 0}, {stopPipe[0], POLLIN, 0}}};
-      const int ready = poll(descriptors.data(), descriptors.size(), -1);
-      if (ready < 0 && errno == EINTR) continue;
-      if (ready <= 0 || descriptors[1].revents != 0) return;
-      const int fd = accept(listener, nullptr, nullptr);
-      if (fd < 0) {
-        if (errno == EINTR) continue;
-        return;
-      }
+      std::vector<pollfd> descriptors{{listener, POLLIN, 0}, {stopPipe[0], POLLIN, 0}};
+      bool queued = false;
       {
         std::lock_guard lock(mutex);
-        if (stopping) {
-          close(fd);
-          return;
+        if (stopping) break;
+        for (std::size_t i = 0; i < clients.size();) {
+          if (!collectResponses(clients[i])) {
+            closeClient(i);
+            continue;
+          }
+          queued = parseBuffered(clients[i]) || queued;
+          short events = canRead(clients[i]) ? POLLIN : 0;
+          if (!clients[i].output.empty()) events |= POLLOUT;
+          descriptors.push_back({clients[i].fd, events, 0});
+          ++i;
         }
-        client = fd;
       }
-      fcntl(fd, F_SETFD, FD_CLOEXEC);
-      serveClient(fd);
+      if (queued) wake();
+      const int ready = poll(descriptors.data(), descriptors.size(), 1000);
+      if (ready < 0 && errno == EINTR) continue;
+      if (ready < 0) break;
+      queued = false;
       {
         std::lock_guard lock(mutex);
-        client = -1;
-        close(fd);
-        if (stopping) return;
+        if (stopping) break;
+        if (descriptors[1].revents & POLLIN) {
+          std::array<char, 64> signals{};
+          while (read(stopPipe[0], signals.data(), signals.size()) > 0) {}
+        }
+        // Iterate in reverse so closing a client preserves earlier poll indexes.
+        for (std::size_t i = clients.size(); i > 0; --i) {
+          Client& client = clients[i - 1];
+          const short events = descriptors[i + 1].revents;
+          bool valid = (events & (POLLERR | POLLNVAL)) == 0;
+          if (valid && (events & (POLLIN | POLLHUP))) valid = receive(client, &queued);
+          if (valid && (events & POLLOUT)) valid = sendOutput(client);
+          if (!valid) closeClient(i - 1);
+        }
+        if (descriptors[0].revents & POLLIN) acceptClient();
       }
+      if (queued) wake();
     }
+    std::lock_guard lock(mutex);
+    while (!clients.empty()) closeClient(clients.size() - 1);
+    pending.clear();
   }
 #endif
 };
@@ -450,9 +566,13 @@ bool LocalEditorControl::start(std::string socketPath, std::function<void()> wak
     unlink(socketPath.c_str());
     return false;
   }
-  fcntl(listener, F_SETFD, FD_CLOEXEC);
-  fcntl(impl_->stopPipe[0], F_SETFD, FD_CLOEXEC);
-  fcntl(impl_->stopPipe[1], F_SETFD, FD_CLOEXEC);
+  if (!ConfigureNonblocking({listener, impl_->stopPipe[0], impl_->stopPipe[1]})) {
+    *error = "Cannot configure nonblocking collaboration descriptors";
+    close(listener);
+    impl_->closeDescriptors();
+    unlink(socketPath.c_str());
+    return false;
+  }
   impl_->path = std::move(socketPath);
   impl_->wake = std::move(wake);
   impl_->stopping = false;
@@ -470,36 +590,44 @@ bool LocalEditorControl::start(std::string socketPath, std::function<void()> wak
 }
 
 bool LocalEditorControl::process(const std::function<std::optional<Json>(const Json&)>& handler) {
-  std::shared_ptr<Impl::Pending> item;
+  std::deque<std::shared_ptr<Impl::Pending>> batch;
   {
     std::lock_guard lock(impl_->mutex);
-    if (impl_->stopping || !impl_->pending || impl_->pending->cancelled) return false;
-    item = std::move(impl_->pending);
+    if (impl_->stopping) return false;
+    batch.swap(impl_->pending);
   }
-  std::optional<Json> response = handler(item->request);
-  if (!response) {
+  bool completed = false;
+  for (const auto& item : batch) {
+    {
+      std::lock_guard lock(impl_->mutex);
+      if (impl_->stopping) break;
+      if (item->cancelled || item->complete) continue;
+    }
+    std::optional<Json> response = handler(item->request);
     std::lock_guard lock(impl_->mutex);
-    if (!item->cancelled && !impl_->stopping) impl_->pending = item;
-    return false;
+    if (item->cancelled || impl_->stopping) continue;
+    if (!response) {
+      impl_->pending.push_back(item);
+    } else {
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+      impl_->complete(item, *response);
+      impl_->wakeIo();
+#endif
+      completed = true;
+    }
   }
-  {
-    std::lock_guard lock(impl_->mutex);
-    item->response = std::move(*response);
-    item->complete = true;
-  }
-  impl_->condition.notify_all();
-  return true;
+  return completed;
 }
 
 bool LocalEditorControl::hasPending() const {
   std::lock_guard lock(impl_->mutex);
-  return impl_->pending && !impl_->pending->cancelled && !impl_->stopping;
+  return !impl_->stopping && std::any_of(impl_->pending.begin(), impl_->pending.end(),
+                                         [](const auto& item) { return !item->cancelled; });
 }
 
 void LocalEditorControl::stop() {
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
   impl_->interrupt();
-  impl_->condition.notify_all();
   if (impl_->worker.joinable()) impl_->worker.join();
   impl_->closeDescriptors();
   impl_->removeOwnedSocket();

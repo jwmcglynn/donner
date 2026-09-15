@@ -93,6 +93,23 @@ values when `attributes_truncated` is true. Selection inspection includes at mos
 
 ### Connection and safety
 
+The socket serves up to eight same-user connections with nonblocking reads and writes. A
+partial frame, slow reader or deferred feedback wait does not occupy the listener. Each
+connection holds at most eight queued request/response messages, with at most 32 pending
+requests and 32 MiB of serialized responses across all connections. Excess connections are
+closed; input is backpressured at the queue limit. If a response would exceed the aggregate
+budget, its connection closes and the client must read fresh state before retrying an edit.
+
+Socket clients can send multiple newline-delimited requests on one connection. A deferred
+reply may follow a later command's reply, so clients must match response IDs. Incomplete
+input and stalled output expire after ten seconds; connections idle for sixty seconds close.
+The current stdio and Python adapters still use one socket request per call. Named agent
+presence and subscription notifications are not implemented by this transport change.
+
+Disconnect or shutdown cancels requests that have not started UI dispatch. An operation
+already running on the UI thread may finish after disconnect; losing its reply does not
+mean the edit was rolled back. Reconcile against fresh document state instead of replaying it.
+
 The transport uses a same-user Unix socket, with no TCP listener. Requests are bounded to 1 MiB
 and 64 JSON nesting levels, with a 30-second dispatch deadline. Source reads are bounded to 4 MiB;
 comments are limited to 4096 bytes each and 512 retained comments. The checkpoint is written

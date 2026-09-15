@@ -3,12 +3,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -28,6 +30,67 @@ using testing::Eq;
 using testing::HasSubstr;
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+class SocketPeer {
+public:
+  explicit SocketPeer(const std::string& endpoint) {
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    timeval timeout{.tv_sec = 3, .tv_usec = 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#ifdef SO_NOSIGPIPE
+    int noSignal = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, sizeof(noSignal));
+#endif
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::memcpy(address.sun_path, endpoint.c_str(), endpoint.size() + 1);
+    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) disconnect();
+  }
+  ~SocketPeer() { disconnect(); }
+  SocketPeer(const SocketPeer&) = delete;
+  SocketPeer& operator=(const SocketPeer&) = delete;
+  void disconnect() {
+    if (fd >= 0) close(fd);
+    fd = -1;
+  }
+  bool writeFrames(std::string_view bytes) {
+    std::size_t sent = 0;
+    while (sent < bytes.size()) {
+#ifdef MSG_NOSIGNAL
+      constexpr int flags = MSG_NOSIGNAL;
+#else
+      constexpr int flags = 0;
+#endif
+      const ssize_t count = ::send(fd, bytes.data() + sent, bytes.size() - sent, flags);
+      if (count < 0 && errno == EINTR) continue;
+      if (count <= 0) return false;
+      sent += static_cast<std::size_t>(count);
+    }
+    return true;
+  }
+  Json readFrame() {
+    while (buffered_.size() < 1024 * 1024) {
+      const auto newline = buffered_.find('\n');
+      if (newline != std::string::npos) {
+        const Json result = Json::parse(buffered_.substr(0, newline), nullptr, false);
+        buffered_.erase(0, newline + 1);
+        return result;
+      }
+      char bytes[4096];
+      const ssize_t count = recv(fd, bytes, sizeof(bytes), 0);
+      if (count < 0 && errno == EINTR) continue;
+      if (count <= 0) return Json(nullptr);
+      buffered_.append(bytes, static_cast<std::size_t>(count));
+    }
+    return Json(nullptr);
+  }
+  int fd = -1;
+
+private:
+  std::string buffered_;
+};
+
 class LocalEditorControlTest : public testing::Test {
 protected:
   std::filesystem::path directory;
@@ -176,6 +239,162 @@ TEST_F(LocalEditorControlTest, PartialInputDoesNotBlockAnotherClient) {
   }),
               Eq(true));
   EXPECT_THAT(command.get()["result"], Eq("responsive"));
+}
+
+TEST_F(LocalEditorControlTest, PersistentClientCanReceiveACommandBeforeItsDeferredWait) {
+  start();
+  SocketPeer peer(endpoint);
+  ASSERT_THAT(peer.writeFrames("{\"id\":1,\"method\":\"wait\"}\n"
+                               "{\"id\":2,\"method\":\"ping\"}\n"),
+              Eq(true));
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    if (request["method"] == "wait") return std::nullopt;
+    return Json{{"id", request["id"]}, {"result", "command"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", 2}, {"result", "command"}})));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "feedback"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", 1}, {"result", "feedback"}})));
+  ASSERT_THAT(peer.writeFrames("{\"id\":3,\"method\":\"ping\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(2), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "still connected"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", 3}, {"result", "still connected"}})));
+}
+
+TEST_F(LocalEditorControlTest, DisconnectCancelsUndispatchedWorkWithoutAffectingPeers) {
+  start();
+  SocketPeer disconnected(endpoint);
+  ASSERT_THAT(disconnected.writeFrames("{\"id\":1,\"method\":\"ping\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  disconnected.disconnect();
+  SocketPeer peer(endpoint);
+  ASSERT_THAT(peer.writeFrames("{\"id\":2,\"method\":\"ping\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(2), Eq(true));
+  std::vector<int> dispatched;
+  EXPECT_THAT(control.process([&](const Json& request) -> std::optional<Json> {
+    dispatched.push_back(request["id"].get<int>());
+    return Json{{"id", request["id"]}, {"result", "live"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(dispatched, testing::ElementsAre(2));
+  EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", 2}, {"result", "live"}})));
+}
+
+TEST_F(LocalEditorControlTest, ClientQueueBackpressureRetainsFramesUntilRepliesDrain) {
+  start();
+  SocketPeer peer(endpoint);
+  std::string frames;
+  for (int id = 1; id <= 9; ++id) frames += Json({{"id", id}, {"method", "ping"}}).dump() + "\n";
+  ASSERT_THAT(peer.writeFrames(frames), Eq(true));
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  std::vector<int> dispatched;
+  auto handle = [&](const Json& request) -> std::optional<Json> {
+    dispatched.push_back(request["id"].get<int>());
+    return Json{{"id", request["id"]}, {"result", "ok"}};
+  };
+  EXPECT_THAT(control.process(handle), Eq(true));
+  EXPECT_THAT(dispatched, testing::ElementsAre(1, 2, 3, 4, 5, 6, 7, 8));
+  for (int id = 1; id <= 8; ++id)
+    EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", id}, {"result", "ok"}})));
+  ASSERT_THAT(awaitRequest(2), Eq(true));
+  EXPECT_THAT(control.process(handle), Eq(true));
+  EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", 9}, {"result", "ok"}})));
+  EXPECT_THAT(dispatched, testing::ElementsAre(1, 2, 3, 4, 5, 6, 7, 8, 9));
+}
+
+TEST_F(LocalEditorControlTest, SlowReaderDoesNotBlockAnotherClientsCommand) {
+  start();
+  SocketPeer slow(endpoint);
+  int receiveBytes = 4096;
+  ASSERT_THAT(setsockopt(slow.fd, SOL_SOCKET, SO_RCVBUF, &receiveBytes, sizeof(receiveBytes)),
+              Eq(0));
+  ASSERT_THAT(slow.writeFrames("{\"id\":1,\"method\":\"large\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", std::string(8 * 1024 * 1024, 'x')}};
+  }),
+              Eq(true));
+  SocketPeer peer(endpoint);
+  ASSERT_THAT(peer.writeFrames("{\"id\":2,\"method\":\"ping\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(2), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "responsive"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(peer.readFrame(), Eq(Json({{"id", 2}, {"result", "responsive"}})));
+}
+
+TEST_F(LocalEditorControlTest, ConnectionLimitRefusesAdditionalPeersAndStopResetsIt) {
+  start();
+  std::vector<std::unique_ptr<SocketPeer>> peers;
+  for (int id = 1; id <= 8; ++id) {
+    peers.push_back(std::make_unique<SocketPeer>(endpoint));
+    ASSERT_THAT(peers.back()->writeFrames(Json({{"id", id}, {"method", "ping"}}).dump() + "\n"),
+                Eq(true));
+    ASSERT_THAT(awaitRequest(id), Eq(true));
+  }
+  SocketPeer excess(endpoint);
+  EXPECT_THAT(excess.readFrame().is_null(), Eq(true));
+  control.stop();
+  peers.clear();
+  start();
+  SocketPeer restarted(endpoint);
+  ASSERT_THAT(restarted.writeFrames("{\"id\":9,\"method\":\"ping\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(9), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "new listener"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(restarted.readFrame(), Eq(Json({{"id", 9}, {"result", "new listener"}})));
+}
+
+TEST_F(LocalEditorControlTest, OversizedResponsePreservesTheRequestId) {
+  start();
+  SocketPeer peer(endpoint);
+  ASSERT_THAT(peer.writeFrames("{\"id\":7,\"method\":\"large\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", std::string(16 * 1024 * 1024, 'x')}};
+  });
+  const Json response = peer.readFrame();
+  ASSERT_THAT(response.is_object(), Eq(true));
+  EXPECT_THAT(response["id"], Eq(7));
+  EXPECT_THAT(response["error"]["message"].get<std::string>(), HasSubstr("16 MiB"));
+}
+
+TEST_F(LocalEditorControlTest, AggregateResponseBudgetDisconnectsOnlyTheOverloadedPeer) {
+  start();
+  std::vector<std::unique_ptr<SocketPeer>> peers;
+  for (int id = 1; id <= 3; ++id) {
+    peers.push_back(std::make_unique<SocketPeer>(endpoint));
+    int receiveBytes = 4096;
+    ASSERT_THAT(
+        setsockopt(peers.back()->fd, SOL_SOCKET, SO_RCVBUF, &receiveBytes, sizeof(receiveBytes)),
+        Eq(0));
+    ASSERT_THAT(peers.back()->writeFrames(Json({{"id", id}, {"method", "large"}}).dump() + "\n"),
+                Eq(true));
+    ASSERT_THAT(awaitRequest(id), Eq(true));
+  }
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", std::string(12 * 1024 * 1024, 'x')}};
+  }),
+              Eq(true));
+  EXPECT_THAT(peers.back()->readFrame().is_null(), Eq(true));
+  SocketPeer command(endpoint);
+  ASSERT_THAT(command.writeFrames("{\"id\":4,\"method\":\"ping\"}\n"), Eq(true));
+  ASSERT_THAT(awaitRequest(4), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "bounded"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(command.readFrame(), Eq(Json({{"id", 4}, {"result", "bounded"}})));
 }
 
 TEST_F(LocalEditorControlTest, ShutdownCancelsPendingWorkAndRemovesOnlyOwnedSocket) {

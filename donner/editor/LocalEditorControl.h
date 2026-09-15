@@ -21,9 +21,11 @@ public:
 
   /// Bind a new socket in an existing private directory and wake the editor on incoming work.
   bool start(std::string socketPath, std::function<void()> wake, std::string* error);
-  /// Dispatch pending work on the UI thread. Call only at an idle renderer frame boundary.
+  /// Dispatch each queued request once on the UI thread. Deferred requests do not block peers.
+  /// Call only at an idle renderer frame boundary.
   bool process(const std::function<std::optional<nlohmann::json>(const nlohmann::json&)>& handler);
-  /// Stop receiving commands and join the I/O worker. Pending requests are cancelled.
+  /// Stop receiving commands and join the I/O worker. Undispatched requests are cancelled.
+  /// Disconnect cannot undo an operation already executing on the UI thread.
   void stop();
   /// True when the I/O worker has a request waiting for the UI thread.
   bool hasPending() const;
