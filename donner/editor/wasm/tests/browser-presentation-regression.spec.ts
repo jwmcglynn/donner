@@ -510,7 +510,7 @@ async function readPressSelectionState(
   }));
 }
 
-async function openEditor(page: Page): Promise<string[]> {
+async function openEditor(page: Page, enableOverlayControl = false): Promise<string[]> {
   const failures: string[] = [];
   page.on("console", (message) => {
     if (
@@ -524,7 +524,11 @@ async function openEditor(page: Page): Promise<string[]> {
   });
   page.on("pageerror", (error) => failures.push(`[pageerror] ${error.message}`));
 
-  await page.goto(kBaseUrl, { waitUntil: "domcontentloaded" });
+  const editorUrl = new URL(kBaseUrl);
+  if (enableOverlayControl) {
+    editorUrl.searchParams.set("testControl", "overlay");
+  }
+  await page.goto(editorUrl.toString(), { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__donnerCanStartWasm)).toBe(true);
   // Playwright's bundled WebKit ships no WebGPU, so the Geode-only package
   // cannot boot there; real-Safari validation covers that engine. Skip
@@ -828,8 +832,16 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
 test.use({ viewport: { width: 1600, height: 900 } });
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
-  const failures = await openEditor(page);
+  const failures = await openEditor(page, true);
   const { canvasBounds, documentClip } = await openBasicShapes(page);
+  const rejectedControlInputs = await page.evaluate(() => {
+    const control = window.__donnerSetOverlayState;
+    return [
+      control?.("unknownOverlay" as "compositorTileOverlay", true),
+      control?.("compositorTileOverlay", 1 as unknown as boolean),
+    ];
+  });
+  expect(rejectedControlInputs).toEqual([false, false]);
   const baseline = await page.screenshot({ clip: documentClip });
   await test.info().attach("overlay-baseline", { body: baseline, contentType: "image/png" });
   // Since the single-canvas architecture the document has no element of its own to measure, so the

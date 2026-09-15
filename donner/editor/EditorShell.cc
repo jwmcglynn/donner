@@ -124,11 +124,13 @@ bool ShouldRequestSaveShortcut(bool allowed, bool anyPopupOpen, bool command, bo
 namespace {
 
 std::atomic<int> gBrowserOverlayStateRequest{0};
+std::atomic<bool> gBrowserOverlayControlEnabled{false};
 
 }  // namespace
 
 extern "C" EMSCRIPTEN_KEEPALIVE int donner_set_overlay_state(int key, int enabled) {
-  if ((key != 0 && key != 1) || (enabled != 0 && enabled != 1)) {
+  if (!gBrowserOverlayControlEnabled.load(std::memory_order_acquire) || (key != 0 && key != 1) ||
+      (enabled != 0 && enabled != 1)) {
     return 0;
   }
 
@@ -153,6 +155,12 @@ int SampleThumbnailRendererCreationDelayMsForTesting() {
     const value = Number(raw || 0);
     return Number.isFinite(value) ? Math.max(0, Math.min(5000, Math.floor(value))) : 0;
   });
+}
+
+bool BrowserOverlayControlEnabledForTesting() {
+  return MAIN_THREAD_EM_ASM_INT({
+           return new URLSearchParams(window.location.search).get('testControl') == 'overlay';
+         }) != 0;
 }
 
 // The app runs on a pthread in the browser build, where `window` and
@@ -278,7 +286,9 @@ void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
                          double displayedDocVersion, double overlayVersionGateSuppressions) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        if (typeof window['__donnerSetOverlayState'] != 'function') {
+        const overlayControlEnabled =
+            new URLSearchParams(window.location.search).get('testControl') == 'overlay';
+        if (overlayControlEnabled && typeof window['__donnerSetOverlayState'] != 'function') {
           window['__donnerSetOverlayState'] = function(key, enabled) {
             if ((key != 'compositorTileOverlay' && key != 'geometryDebugOverlay') ||
                 typeof enabled != 'boolean') {
@@ -1272,6 +1282,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
 #ifdef __EMSCRIPTEN__
+  gBrowserOverlayControlEnabled.store(BrowserOverlayControlEnabledForTesting(),
+                                      std::memory_order_release);
   renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
       SampleThumbnailRendererCreationRequestForTesting(),
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
