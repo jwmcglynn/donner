@@ -846,11 +846,6 @@ Vector2d placeTextPath(Registry& registry, const components::ComputedTextCompone
   const Path::MeasuredPath path = firstSpan.pathSpline->measure();
   const std::optional<Vector2d> lastPosition =
       PlaceTextPathClusters(path, firstSpan.pathStartOffset, runs, clusters);
-  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
-    if (text.spans[ri].visibility != Visibility::Visible) {
-      runs[ri].glyphs.clear();
-    }
-  }
   if (lastPosition) {
     return *lastPosition;
   }
@@ -1519,6 +1514,24 @@ void TextEngine::addFontFaces(std::span<const css::FontFace> faces) {
 
 namespace {
 
+/**
+ * @brief The glyphs of \p run whose painted geometry belongs in the text geometry cache.
+ *
+ * `visibility: hidden` and `visibility: collapse` suppress painting only. The span is still laid
+ * out and keeps its positioned glyphs so it contributes to the element's object bounding box, per
+ * the SVG object-bounding-box definition, but it produces no ink geometry and no per-character
+ * paint records. Returns an empty span for such a run.
+ *
+ * @param span The span that produced \p run.
+ * @param run The positioned layout run.
+ * @return The glyphs to record as painted, which is empty when the span is not painted.
+ */
+std::span<const TextGlyph> PaintedSpanGlyphs(
+    const components::ComputedTextComponent::TextSpan& span, const TextRun& run) {
+  return span.visibility == Visibility::Visible ? std::span<const TextGlyph>(run.glyphs)
+                                                : std::span<const TextGlyph>();
+}
+
 /// Resolves a span's inherited font family and face attributes.
 FontHandle ResolveSpanFace(FontManager& fontManager,
                            const components::ComputedTextComponent::TextSpan& span,
@@ -2143,12 +2156,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     prevSpanFontKerning = spanFontKerning;
     prevSpanFontVariant = span.fontVariant;
 
-    // Hidden/collapsed spans participate in layout (pen advances above) but their glyphs
-    // are not rendered. Clear the glyph list so the renderer skips this run.
-    if (span.visibility != Visibility::Visible) {
-      run.glyphs.clear();
-    }
-
     runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
     runs.push_back(std::move(run));
   }
@@ -2346,7 +2353,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
     }
 
-    for (const auto& glyph : run.glyphs) {
+    for (const auto& glyph : PaintedSpanGlyphs(span, run)) {
       const size_t localCharIndex =
           glyph.cluster < byteToApiCharIdx.size() ? byteToApiCharIdx[glyph.cluster] : 0;
       if (localCharIndex >= localCharCount) {

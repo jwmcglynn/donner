@@ -9,6 +9,7 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextEngine.h"
 #endif
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -315,25 +316,58 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
     return std::nullopt;
   }
 
+  const auto accumulate = [&overallBounds](const Box2d& bounds) {
+    overallBounds = overallBounds ? Box2d::Union(overallBounds.value(), bounds) : bounds;
+  };
+
+  // Text geometry is produced by the text engine rather than a ComputedPathComponent, so it has to
+  // be accumulated separately. The box is taken at the text root and its subtree is not descended
+  // into, because the root's box already spans every span it contains. `visibility: hidden` is not
+  // consulted: it suppresses painting only, and hidden text still contributes to the box.
+  const auto accumulateTextBounds = [&](EntityHandle entity) {
+#ifdef DONNER_TEXT_ENABLED
+    if (!entity.all_of<TextRootComponent>()) {
+      return;
+    }
+
+    auto* textEngine = entity.registry()->ctx().find<TextEngine>();
+    if (!textEngine) {
+      return;
+    }
+
+    const Box2d textBounds = textEngine->computedObjectBoundingBox(entity);
+    if (textBounds.isEmpty()) {
+      return;
+    }
+
+    accumulate((LayoutSystem().getEntityFromWorldTransform(entity) * worldFromTarget)
+                   .transformBox(textBounds));
+#else
+    (void)entity;
+#endif
+  };
+
   if (ComputedPathComponent* computedPath =
           createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     overallBounds = computedPath->transformedBounds(
         LayoutSystem().getEntityFromWorldTransform(handle) * worldFromTarget);
   }
+  accumulateTextBounds(handle);
 
   // Iterate over all children and accumulate their bounds.
   donner::components::ForAllChildrenRecursive(
-      handle, [this, &disabledSink, &overallBounds, &worldFromTarget](EntityHandle child) {
+      handle, [this, &disabledSink, &accumulate, &accumulateTextBounds,
+               &worldFromTarget](EntityHandle child) {
         if (IsDisplayNone(child, disabledSink)) {
           return;
         }
 
         if (ComputedPathComponent* computedPath =
                 createComputedPathIfShape(child, FontMetrics(), disabledSink)) {
-          const Box2d bounds = computedPath->transformedBounds(
-              LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget);
-          overallBounds = overallBounds ? Box2d::Union(overallBounds.value(), bounds) : bounds;
+          accumulate(computedPath->transformedBounds(
+              LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget));
         }
+        accumulateTextBounds(child);
       });
 
   return overallBounds;

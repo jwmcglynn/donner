@@ -562,12 +562,14 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
   EXPECT_THAT(
-      runs, ElementsAre(AllOf(RunOnPathIs(Eq(true)),
-                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(4.5, 0.001)),
-                                                       GlyphXPositionIs(DoubleNear(15.5, 0.001))))),
-                        AllOf(RunOnPathIs(Eq(true)),
-                              RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(25.5, 0.001))))),
-                        AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(IsEmpty()))));
+      runs,
+      ElementsAre(AllOf(RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(4.5, 0.001)),
+                                                 GlyphXPositionIs(DoubleNear(15.5, 0.001))))),
+                  AllOf(RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(25.5, 0.001))))),
+                  AllOf(RunOnPathIs(Eq(true)),
+                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(100.0, 0.001)))))));
 }
 
 std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true,
@@ -707,10 +709,13 @@ TEST(TextEngineScriptedTest, TextPathLengthHandlesEmptySingleZeroNegativeAndLarg
 TEST(TextEngineScriptedTest, TextPathLengthRetainsHiddenAdvancesAndIgnoresDisplayNone) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="90" lengthAdjust="spacingAndGlyphs">A<tspan visibility="hidden">B</tspan><tspan display="none">ignored</tspan>C</textPath>)");
+  // `visibility: hidden` keeps the span in layout (it is skipped at paint time instead), while
+  // `display: none` removes it entirely and contributes no advance.
   EXPECT_THAT(
       glyphs,
       ElementsAre(
           AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
+          AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
           AllOf(GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0)))));
 }
 

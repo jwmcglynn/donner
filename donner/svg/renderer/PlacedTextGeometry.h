@@ -144,4 +144,20 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
  */
 Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs);
 
+/**
+ * @brief Drop the glyphs of runs whose span is laid out but not painted.
+ *
+ * `visibility: hidden` and `visibility: collapse` suppress painting only, so such a span is still
+ * laid out, still advances the pen for the spans that follow it, and still contributes to the
+ * element's object bounding box. Backends call this on their local copy of the layout runs after
+ * \ref ComputeTextBounds, so the bounding box sees the hidden span and the draw does not.
+ *
+ * Runs are index-aligned with \p text.spans; a run past the end of the span list is left alone.
+ *
+ * @param text The computed text component supplying per-span visibility.
+ * @param runs Layout runs to filter in place.
+ */
+void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
+                              std::vector<TextRun>& runs);
+
 }  // namespace donner::svg

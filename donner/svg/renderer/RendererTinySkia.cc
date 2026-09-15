@@ -2851,6 +2851,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // not the raw font size.
   const Box2d textBounds = ComputeTextBounds(textEngine, runs);
 
+  // Hidden spans are part of the bounding box above but are not drawn below.
+  ClearUnpaintedSpanGlyphs(text, runs);
+
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
   std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
