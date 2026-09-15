@@ -662,13 +662,19 @@ DONNER_GPU_DEFINE_RAII_RELEASE(ComputePipelineTag, computePipelines_, ComputePip
 
 #undef DONNER_GPU_DEFINE_RAII_RELEASE
 
-/// A dropped surface releases whatever texture it had acquired and then its own slot. There is
-/// no backend object to defer against a submission: a surface's platform object outlives the
-/// runtime's handle to it.
+/// A dropped surface hands its frame back, releases whatever texture it had acquired, and then
+/// releases its own slot. There is no backend object to defer against a submission: a surface's
+/// platform object outlives the runtime's handle to it.
 template <>
 void ReleaseHandleFromRaii<SurfaceTag>(Device& device, uint32_t slotIndex, uint32_t generation) {
-  if (device.surfaces_.find(slotIndex, generation) == nullptr) {
+  const Device::SurfaceRecord* record = device.surfaces_.find(slotIndex, generation);
+  if (record == nullptr) {
     return;  // Already destroyed (consumed); nothing to release.
+  }
+  // The platform holds the frame it handed out until it is presented or given back, and holds
+  // exactly one, so a surface that still names one returns it before its state goes away.
+  if (record->acquired.isValid()) {
+    device.onAbandonCurrentTexture(slotIndex);
   }
   device.releaseAcquiredSurfaceTextureBySlot(slotIndex, generation);
   device.surfaces_.release(slotIndex);
@@ -1603,8 +1609,10 @@ Status Device::configureSurface(const Surface& surface, const SurfaceConfigurati
   // A texture acquired under the previous configuration describes a surface that no longer
   // exists in that shape, so reconfiguring invalidates it rather than leaving it usable. The
   // platform is holding that frame as well, and holds exactly one, so it is handed back rather
-  // than merely forgotten - otherwise the next acquire is refused by the backend.
-  if (hasOutstandingFrame(*record.result())) {
+  // than merely forgotten - otherwise the next acquire is refused by the backend. What decides
+  // that is the reference itself, not whether its texture is still live: the caller disposing of
+  // the handle does not take the frame back off the platform.
+  if (record.result()->acquired.isValid()) {
     onAbandonCurrentTexture(surface.slotIndex());
   }
   releaseAcquiredSurfaceTexture(surface);
@@ -1699,7 +1707,9 @@ Status Device::destroySurface(Surface&& surface) {
   if (record.hasError()) {
     return std::move(record).error();
   }
-  releaseAcquiredSurfaceTexture(consumed);
+  // Destroying takes the same teardown a dropped handle does, so it is left to the handle this
+  // consumed the caller's into: one sequence hands the frame back, releases the texture, and
+  // retires the slot.
   return OkStatus();
 }
 
