@@ -79,6 +79,6 @@ ImTextureID RegisterUiImportedTexture(const wgpu::Texture& texture, const Vector
  * @param texture Identifier to retire.
  * @param backing Backing handles to retain through the registration's retirement window.
  */
-bool RetireUiTexture(ImTextureID texture, UiTextureBacking* backing);
+[[gnu::noinline]] bool RetireUiTexture(ImTextureID texture, UiTextureBacking* backing);
 
 }  // namespace donner::editor

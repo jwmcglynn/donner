@@ -92,8 +92,8 @@ public:
    * @param pass Open render pass whose attachment matches the renderer's target format.
    * @param targetSizePx Attachment extent in device pixels; scissor rectangles are clamped to it.
    */
-  gpu::Status render(const ImDrawData& drawData, gpu::RenderPassEncoder& pass,
-                     const gpu::Extent2d& targetSizePx);
+  [[gnu::noinline]] gpu::Status render(const ImDrawData& drawData, gpu::RenderPassEncoder& pass,
+                                       const gpu::Extent2d& targetSizePx);
 
   /**
    * Advances one presentation frame: releases the registrations whose retirement frames have

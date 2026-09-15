@@ -337,7 +337,7 @@ private:
 
   /// Retires \p texture's registration and drops the handles that backed it.
   /// @param texture Identifier to retire.
-  void releaseImGuiTexture(NativeTextureHandle texture);
+  [[gnu::noinline]] void releaseImGuiTexture(NativeTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
 

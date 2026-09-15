@@ -158,7 +158,7 @@ private:
   /// Retires \p texture's registration and drops the runtime handles that backed it. Runs at the
   /// same frame boundary the panel already released a retired snapshot at.
   /// @param texture Identifier to retire.
-  void releaseImGuiTexture(ThumbnailTextureHandle texture);
+  [[gnu::noinline]] void releaseImGuiTexture(ThumbnailTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
 
