@@ -148,11 +148,25 @@ commits and their fixes together in a focused reviewable change.
 ### Native mapping and completion
 
 - [ ] Implement native Metal and Vulkan hooks for `mapBufferAsync`, mapping readiness, `mappedBytes`,
-      and unmap/invalidation using the existing public runtime contract.
+      and unmap/invalidation using the existing public runtime contract. Implemented: both backends
+      map through a shared mapping table that ties readiness to the submission serial filling the
+      buffer and owns bounds, invalidation and error reporting, and the runtime now enforces no
+      read before a wait reports ready, one open mapping per buffer, and invalidation of a
+      destroyed buffer's mappings. Executed on Metal and on Vulkan, including the Khronos
+      synchronization-validation layer.
 - [ ] Route renderer readback and completion through those hooks, with the relevant submission
-      serial, bounded waits, cancellation, and device-loss outcomes.
+      serial, bounded waits, cancellation, and device-loss outcomes. `RendererGeode` already
+      expresses its readback entirely in runtime mapping calls, with a caller-owned deadline, one
+      slice per wait, a cancellation predicate and distinct device-loss handling, and those hooks
+      now have native implementations. The renderer still binds the transitional adapter type
+      statically for four operations with no runtime equivalent (`destroyBufferBacking`,
+      `mappingUsedTimedWaitAny`, `importExternalTexture`, `submitStandalone`), so a native device
+      does not yet serve production readback; replacing that reference belongs with device
+      ownership below.
 - [ ] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
-      and that unmap, retirement, and loss invalidate access at the documented boundary.
+      and that unmap, retirement, and loss invalidate access at the documented boundary. Covered by
+      renderer regression tests for an abandoned capture, a capture whose device is lost while its
+      mapping is open, and reuse of a pooled buffer by the following capture.
 
 ### UI rendering
 
