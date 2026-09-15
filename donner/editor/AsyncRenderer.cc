@@ -299,6 +299,13 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
   return result;
 }
 
+/// Complete preview tiles are sufficient unless the request also consumes the main frame.
+bool CanSkipPreviewMainCompose(bool hasPreview, bool promotionComplete, bool hasDesiredEntities,
+                               bool captureCpuSnapshot, bool overviewInfillOnly) {
+  return hasPreview && promotionComplete && hasDesiredEntities && !captureCpuSnapshot &&
+         !overviewInfillOnly;
+}
+
 class ScopedFrameResourceScope {
 public:
   explicit ScopedFrameResourceScope(svg::RendererInterface& renderer) : renderer_(renderer) {
@@ -1316,23 +1323,13 @@ void AsyncRenderer::workerLoop() {
           tightBoundedSegments_.load(std::memory_order_acquire));
     }
 
-    // Keep the compositor hint in ActiveDrag across mouse-up so the
-    // layer/segment caches survive quick release->drag-again cycles, but
-    // only skip the main-renderer compose while an actual drag request is
-    // in flight. Post-release and Selection-prewarm renders must refresh
-    // the final CPU snapshot so the full-canvas composited tile, when
-    // needed, matches the DOM and tile metadata.
     const bool activeDragRequest =
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-    const bool splitPreviewSafe = !desiredPromotionIncomplete;
     if (compositor_ != nullptr) {
-      // `!desiredEntities.empty()` protects requests without editor selection/drag promotion:
-      // `desiredPromotionIncomplete` is vacuously false when nothing is requested, but skipping the
-      // main compose would leave diagnostic snapshots stale.
-      compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
-                                                 !desiredEntities.empty() &&
-                                                 !request.captureCpuSnapshot);
+      compositor_->setSkipMainComposeDuringSplit(CanSkipPreviewMainCompose(
+          request.dragPreview.has_value(), !desiredPromotionIncomplete, !desiredEntities.empty(),
+          request.captureCpuSnapshot, request.overviewInfillOnly));
     }
     workerTiming.setupMs = elapsedSince(workerStart);
 

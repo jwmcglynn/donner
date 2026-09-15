@@ -30,6 +30,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -1086,6 +1087,84 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
   };
   EXPECT_NE(dragTileFor(r1Entity), result->compositedPreview->tiles.end());
   EXPECT_NE(dragTileFor(r2Entity), result->compositedPreview->tiles.end());
+}
+
+TEST(AsyncRendererTest, SelectedZoomOnlyComposesRequestedSnapshots) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect width="64" height="64" fill="white"/>
+      <rect id="selected" x="20" y="20" width="24" height="24" fill="red"/>
+    </svg>
+  )svg");
+  auto selected = document.querySelector("#selected");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  const Entity entity = selected->unsafeEntityHandle().entity();
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(64.0, 64.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 1.0;
+  viewport.panDocPoint = Vector2d(32.0, 32.0);
+  viewport.panScreenPoint = Vector2d(32.0, 32.0);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  std::uint64_t version = 0;
+  const auto renderAtZoom = [&](double zoom, bool capture) {
+    viewport.zoomAround(zoom, viewport.paneCenter());
+    const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+    document.setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
+                           rasterViewport.semanticCanvasSizePx.y);
+    RenderRequest request(renderer, document);
+    request.version = ++version;
+    request.documentGeneration = 1;
+    request.rasterViewport = rasterViewport;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    request.captureCpuSnapshot = capture;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+  ASSERT_THAT(renderAtZoom(1.0, false), testing::Optional(testing::_));
+
+  const auto tiled = renderAtZoom(1.5, false);
+  ASSERT_THAT(tiled, testing::Optional(testing::_));
+  ASSERT_THAT(tiled->compositedPreview, testing::Optional(testing::_));
+  EXPECT_THAT(tiled->compositedPreview->tiles, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(FindLayerTile(*tiled, entity), testing::NotNull());
+  EXPECT_THAT(tiled->bitmap.pixels, testing::IsEmpty());
+  EXPECT_EQ(asyncRenderer.compositorRenderFrameStats().mainComposeCount, 0)
+      << "tile presentation must not also compose an unused main frame after zoom";
+
+  const auto captured = renderAtZoom(2.0, true);
+  ASSERT_THAT(captured, testing::Optional(testing::_));
+  EXPECT_EQ(asyncRenderer.compositorRenderFrameStats().mainComposeCount, 1);
+  ASSERT_THAT(captured->bitmap.pixels, testing::Not(testing::IsEmpty()));
+
+  svg::Renderer referenceRenderer;
+  AsyncRenderer referenceAsyncRenderer;
+  referenceAsyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  RenderRequest referenceRequest(referenceRenderer, document);
+  referenceRequest.version = 1;
+  referenceRequest.documentGeneration = 1;
+  referenceRequest.rasterViewport = viewport.rasterViewport();
+  referenceRequest.captureCpuSnapshot = true;
+  referenceAsyncRenderer.requestRender(referenceRequest);
+  const auto reference = WaitForRenderResult(referenceAsyncRenderer);
+  ASSERT_THAT(reference, testing::Optional(testing::_));
+  tests::CompareBitmapToBitmap(captured->bitmap, reference->bitmap, "selected_zoom_capture",
+                               tests::PixelmatchIdentityParams());
+
+  const auto tiledAgain = renderAtZoom(2.5, false);
+  ASSERT_THAT(tiledAgain, testing::Optional(testing::_));
+  ASSERT_THAT(tiledAgain->compositedPreview, testing::Optional(testing::_));
+  EXPECT_THAT(tiledAgain->compositedPreview->tiles, testing::Not(testing::IsEmpty()));
+  EXPECT_EQ(asyncRenderer.compositorRenderFrameStats().mainComposeCount, 0)
+      << "a prior snapshot request must not make tile-only frames compose again";
 }
 
 TEST(AsyncRendererTest, NestedMultiSelectionNeverPublishesOverlappingLayers) {
@@ -4653,6 +4732,8 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
   double diagnosticsTotalMs = 0.0;
   double immediateTotalMs = 0.0;
   double cachedTotalMs = 0.0;
+  double mainComposeTotalMs = 0.0;
+  int mainComposeCount = 0;
   std::size_t payloadBytes = 0;
   int immediateTiles = 0;
   int cachedTiles = 0;
@@ -4678,6 +4759,8 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
     const auto renderStats = asyncRenderer.compositorRenderFrameStats();
     immediateTotalMs += renderStats.immediateRasterizeMs;
     cachedTotalMs += renderStats.cachedRasterizeMs;
+    mainComposeTotalMs += renderStats.mainComposeMs;
+    mainComposeCount += renderStats.mainComposeCount;
     immediateTiles = renderStats.immediateTileCount;
     cachedTiles = renderStats.cachedTileCount;
     if (result->compositedPreview.has_value()) {
@@ -4695,6 +4778,8 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
             << "  immediate rasterize avg=" << (immediateTotalMs / kZoomFrames)
             << " ms, cached rasterize avg=" << (cachedTotalMs / kZoomFrames)
             << " ms, immediate tiles=" << immediateTiles << ", cached tiles=" << cachedTiles << "\n"
+            << "  main compose avg=" << (mainComposeTotalMs / kZoomFrames)
+            << " ms, passes=" << mainComposeCount << "\n"
             << "  payload bytes/frame=" << payloadBytes << " (~"
             << (payloadBytes / (1024.0 * 1024.0)) << " MB)\n";
 

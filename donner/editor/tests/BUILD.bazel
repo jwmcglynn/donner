@@ -544,6 +544,7 @@ donner_cc_test(
     shard_count = 4,
     variants = ["geode"],
     deps = [
+        ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
@@ -591,6 +592,7 @@ donner_cc_test(
         "perf",
     ],
     deps = [
+        ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",

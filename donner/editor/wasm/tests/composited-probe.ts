@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-export { stopCompositedProbe } from "./composited-probe-evidence.mjs";
+export { attachCompositedReadbacks, stopCompositedProbe } from "./composited-probe-evidence.mjs";
 
 /**
  * Per-frame probe over the editor's COMPOSITED output.
@@ -131,9 +131,15 @@ export interface CompositedProbeResult {
   drawFailures: number;
   /** Animation frames observed while the probe was running. */
   frames: number;
+  /** Bytes retained for exact post-sampling frame diagnostics. */
+  rawReadbackBytes: number;
+  /** True when exact frame retention exhausted its memory budget. */
+  rawReadbackOverflow: boolean;
 }
 
 export interface CompositedProbeOptions {
+  /** Retain exact readback bytes for post-sampling diagnostics, capped at 64 MiB. */
+  captureReadbacks?: boolean;
   /** Read-back width in pixels. Small on purpose; see the file comment. */
   sampleWidth?: number;
   /** Read-back height in pixels. */
@@ -246,6 +252,7 @@ export async function installCompositedProbe(
     minColorAlpha: options.minColorAlpha ?? 16,
     minColorSpread: options.minColorSpread ?? 12,
     sampleRegionCss: options.sampleRegionCss ?? null,
+    captureReadbacks: options.captureReadbacks ?? false,
   };
 
   await page.evaluate((config) => {
@@ -265,7 +272,11 @@ export async function installCompositedProbe(
       __donnerViewportStats?: { documentWidth?: number };
     };
 
-    const sampleOnce = (): CompositedSample => {
+    type CapturedSample = CompositedSample & {
+      attempts: number;
+      rawReadback?: Uint8ClampedArray;
+    };
+    const sampleOnce = (): CapturedSample => {
       const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
       const completedResults = diagnostics.__donnerWorkerStats?.completedResults || 0;
       const presentedDocumentWidth = diagnostics.__donnerViewportStats?.documentWidth || 0;
@@ -424,7 +435,7 @@ export async function installCompositedProbe(
         }
       }
 
-      return {
+      const sample: CapturedSample = {
         ...base,
         meanAlpha: alphaSum / count,
         meanLuma: lumaSum / count,
@@ -437,11 +448,19 @@ export async function installCompositedProbe(
         drawOk: true,
         attempts: 1,
       };
+      if (config.captureReadbacks) sample.rawReadback = pixels;
+      return sample;
     };
 
     const probe = {
       running: false,
       samples: [] as CompositedSample[],
+      captureReadbacks: config.captureReadbacks,
+      rawReadbacks: [] as Array<Uint8ClampedArray | null>,
+      rawReadbackWidth: readback.width,
+      rawReadbackHeight: readback.height,
+      rawReadbackBytes: 0,
+      rawReadbackOverflow: false,
       drawFailures: 0,
       frames: 0,
       readbackRetries: 0,
@@ -449,6 +468,9 @@ export async function installCompositedProbe(
       seenContent: false,
       start(): void {
         probe.samples.length = 0;
+        probe.rawReadbacks.length = 0;
+        probe.rawReadbackBytes = 0;
+        probe.rawReadbackOverflow = false;
         probe.drawFailures = 0;
         probe.frames = 0;
         probe.readbackRetries = 0;
@@ -484,6 +506,19 @@ export async function installCompositedProbe(
           }
           if (sample.drawOk && sample.coloredPixels > 0) {
             probe.seenContent = true;
+          }
+          if (config.captureReadbacks) {
+            const pixels = sample.rawReadback;
+            if (pixels === undefined) {
+              probe.rawReadbacks.push(null);
+            } else if (pixels.byteLength > 64 * 1024 * 1024 - probe.rawReadbackBytes) {
+              probe.rawReadbacks.push(null);
+              probe.rawReadbackOverflow = true;
+            } else {
+              probe.rawReadbacks.push(pixels.slice());
+              probe.rawReadbackBytes += pixels.byteLength;
+            }
+            delete sample.rawReadback;
           }
           probe.samples.push(sample);
           requestAnimationFrame(tick);
@@ -611,6 +646,8 @@ export function backingSizeTransitions(
 export interface DragRegression {
   /** Index of the sample whose content position regressed. */
   sampleIndex: number;
+  /** Actual preceding usable sample, which need not be adjacent. */
+  predecessorIndex: number;
   /** Presented centroid movement between the two samples, read-back px. */
   presentedDx: number;
   presentedDy: number;
@@ -622,7 +659,8 @@ export interface DragRegression {
 /**
  * Find frames in which the presented content moved AGAINST the drag.
  *
- * This is the decidable form of "the shape pops back to a previous position".
+ * These are candidates for image inspection, not proof of an older frame. A mixed-color
+ * population can move its centroid without the selected object moving backward.
  *
  * A pop-back cannot be tested as "the centroid decreased", because a real drag
  * reverses direction and the content is supposed to follow it. It also cannot
@@ -681,6 +719,7 @@ export function dragRegressions(
 
   const regressions: DragRegression[] = [];
   let previous: CompositedSample | undefined;
+  let previousIndex = -1;
   for (const [index, sample] of samples.entries()) {
     if (sample.coloredCentroidX < 0 || !sample.drawOk) {
       continue;
@@ -713,6 +752,7 @@ export function dragRegressions(
             if (!excusedByLatency) {
               regressions.push({
                 sampleIndex: index,
+                predecessorIndex: previousIndex,
                 presentedDx,
                 presentedDy,
                 pointerDx,
@@ -724,6 +764,7 @@ export function dragRegressions(
       }
     }
     previous = sample;
+    previousIndex = index;
   }
   return regressions;
 }
