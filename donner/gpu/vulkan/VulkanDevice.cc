@@ -3675,8 +3675,9 @@ Result<SurfaceStatus> VulkanDevice::onAcquireCurrentTexture(uint32_t slotIndex,
   record.ownsImage = false;
   SetSlot(impl_->textures, textureSlotIndex, std::optional<Impl::TextureRecord>(record));
   // A frame comes out of the presentation engine with undefined contents, whatever the slot's
-  // previous occupant was tracked in, so its synchronization state starts over.
-  impl_->syncStates.forget(textureSlotIndex);
+  // previous occupant was tracked in, and with the engine's own read as the last thing to have
+  // touched it; the acquisition wait is what the first barrier has to be ordered after.
+  impl_->syncStates.reset(textureSlotIndex, AcquiredFrameSyncState());
   SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>(textureSlotIndex));
   return status;
 }

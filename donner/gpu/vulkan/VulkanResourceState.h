@@ -138,6 +138,15 @@ public:
   /// @param textureSlot Texture slot to drop.
   void forget(uint32_t textureSlot);
 
+  /// Replaces everything known about \p textureSlot with \p state, committed.
+  ///
+  /// For an image that arrived from outside the recorded command streams, which is to say a frame
+  /// handed over by a presentation engine: nothing this table recorded about the slot applies to
+  /// it, and what does apply is not something any recorded transition produced.
+  ///
+  /// @param textureSlot Texture slot to reset. @param state State the image is known to be in.
+  void reset(uint32_t textureSlot, const TextureSyncState& state);
+
   /// Whether any transition is staged and not yet committed.
   [[nodiscard]] bool hasStagedChanges() const;
 

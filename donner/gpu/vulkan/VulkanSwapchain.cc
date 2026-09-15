@@ -688,9 +688,7 @@ SurfaceWaitSync VulkanSwapchain::takeAcquireWait() {
     return sync;
   }
   sync.semaphores.push_back(pendingAcquireWait_);
-  // The presentation engine's read finishes before anything writes color, so that is the only
-  // stage that has to wait; earlier stages of the frame's work run while it drains.
-  sync.stages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+  sync.stages.push_back(kAcquireWaitStage);
   pendingAcquireWait_ = VK_NULL_HANDLE;
   return sync;
 }
