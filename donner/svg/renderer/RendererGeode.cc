@@ -6462,17 +6462,19 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     runs = textEngine.layout(text, layoutParams);
   }
 
-  impl_->admitTextRuns(runs);
-
   // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
   // has no bbox, so span gradient/pattern paint maps through this element-level
   // box - same computation as `RendererTinySkia::drawText` (shared helper). The
   // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
-  // while the glyph outline is the *draw* path.
+  // while the glyph outline is the *draw* path. Every draw of this element sees the same box, so
+  // it is taken across all spans, before the ones this draw does not paint are dropped.
   const Box2d textBounds = ComputeTextBounds(textEngine, runs);
 
-  // Hidden spans are part of the bounding box above but are not drawn below.
+  // Drop the spans this draw is not responsible for before charging the glyph budget, so a text
+  // whose spans own effects is not charged once per draw for the glyphs it does not paint.
   ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
+
+  impl_->admitTextRuns(runs);
 
   const Path textBoundsPath =
       textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();

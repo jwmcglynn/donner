@@ -1198,8 +1198,10 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
     return false;
   }
 
-  // A flat, document-order view of every rendered glyph, tagged with whether it is a soft-wrap
-  // opportunity (whitespace). Runs with no glyphs (hidden/empty spans) contribute nothing.
+  // A flat, document-order view of every laid-out glyph, tagged with whether it is a soft-wrap
+  // opportunity (whitespace). Runs with no glyphs (empty spans, or a textPath that failed to
+  // resolve) contribute nothing. A `visibility: hidden` or `collapse` span keeps its glyphs here:
+  // visibility suppresses painting, not layout, so its words still occupy line width.
   struct FlatGlyph {
     size_t run;
     size_t glyph;

@@ -2836,6 +2836,18 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     runs = textEngine.layout(text, layoutParams);
   }
 
+  // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
+  // shared computation RendererGeode::drawText uses, so the two backends can't
+  // drift on the bbox. Per the SVG spec it uses
+  // em-box cells from font v-metrics (ascent above baseline, |descent| below),
+  // not the raw font size. Every draw of this element sees the same box, so it is taken across all
+  // spans, before the ones this draw does not paint are dropped.
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
+
+  // Drop the spans this draw is not responsible for before charging the glyph budget, so a text
+  // whose spans own effects is not charged once per draw for the glyphs it does not paint.
+  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
+
   (void)admitTextGlyphBatch(runs);
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
@@ -2843,16 +2855,6 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
   float scale = 0.0f;
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
-
-  // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
-  // shared computation RendererGeode::drawText uses, so the two backends can't
-  // drift on the bbox. Per the SVG spec it uses
-  // em-box cells from font v-metrics (ascent above baseline, |descent| below),
-  // not the raw font size.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
-
-  // Hidden spans are part of the bounding box above but are not drawn below.
-  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.

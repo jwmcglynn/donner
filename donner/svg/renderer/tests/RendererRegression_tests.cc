@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -18,6 +19,7 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -41,6 +43,17 @@ constexpr std::string_view kBlueImageDataUri =
     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYPgPRmAKABf2A/1+6zfzAAAAAElFTkSu"
     "QmCC";
 
+/// RGBA pixel at (x, y) in a tightly packed snapshot bitmap. Returns transparent for a pixel
+/// outside the bitmap so an assertion fails cleanly instead of reading out of bounds.
+std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
+  const size_t offset = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
+  if (offset + 4 > bitmap.pixels.size()) {
+    return {0, 0, 0, 0};
+  }
+  return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
+          bitmap.pixels[offset + 3]};
+}
+
 ImageComparisonParams GoldenParams() {
   Params params;
   params.enableGoldenUpdateFromEnv();
@@ -57,7 +70,7 @@ void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& exp
         testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
     ExpectBitmapsIdentical(actual, expected, label);
   }
-  EXPECT_THAT(differences.size(), testing::Eq(1)) << label << ": expected the renders to differ";
+  EXPECT_THAT(differences.size(), testing::Ge(1)) << label << ": expected the renders to differ";
 }
 
 /// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result.
@@ -572,10 +585,6 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
                              Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
 }
 
-// SVG 2 makes `clip-path`, `mask`, and `filter` apply to text content elements, so a `tspan` that
-// covers the whole text must render the same as the effect applied to a group wrapping that text.
-// The effect region is driven by the span's own geometry, which for a full-coverage span is the
-// text element's, so the two forms are pixel-identical and neither needs a golden image.
 // SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
 // covers all of its text element's content must render exactly as the same effect on the text
 // element. Both forms resolve objectBoundingBox effect regions through the same glyph-cell box, so
@@ -713,6 +722,29 @@ TEST_F(RendererRegressionTests, ObjectBoundingBoxEffectOnAnchorGroupingShapes) {
     }
     ExpectBitmapsIdentical(actual, expected, std::string("anchor_effect_") + effect.name);
   }
+}
+
+// A span that owns an effect paints after the spans the text root still paints, rather than in
+// document order. That is a known limitation of giving a span its own rendering instance, and this
+// pins it: a span declaring an effect draws over a later sibling that does not.
+TEST_F(RendererRegressionTests, EffectSpanPaintsAfterTheTextRootsRemainingSpans) {
+  const std::string markup =
+      R"svg(<filter id="e" x="-5%" y="-5%" width="110%" height="110%">)svg"
+      R"svg(<feFlood flood-color="blue"/></filter>)svg"
+      R"svg(<g font-family="Noto Sans" font-size="64"><text x="20" y="100">)svg"
+      R"svg(<tspan filter="url(#e)">AA</tspan><tspan fill="red">BB</tspan>)svg"
+      R"svg(</text></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  const RendererBitmap bitmap = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ASSERT_THAT(bitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(bitmap.dimensions, testing::Eq(Vector2i(200, 200)));
+
+  // The filtered span floods its own region, which covers the first span's glyph cells. In
+  // document order the later red span would paint on top; because the filtered span paints last,
+  // the flood wins wherever the two regions overlap.
+  EXPECT_THAT(PixelAt(bitmap, 100, 60), test::RgbaEq(0, 0, 255, 255))
+      << "the span that owns the filter must paint after the text root's remaining spans";
 }
 
 }  // namespace

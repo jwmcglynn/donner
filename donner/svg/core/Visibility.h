@@ -17,12 +17,15 @@ namespace donner::svg {
  * The parsed result of the 'visibility' property, see:
  * https://www.w3.org/TR/CSS2/visufx.html#propdef-visibility
  *
- * This determines whether the element is visible or hidden, and whether it affects layout.
+ * This determines whether the element is painted. In SVG both non-visible values suppress painting
+ * only: `collapse` has its CSS table-row meaning nowhere in SVG, so for text content it behaves as
+ * `hidden`, and a span with either value is still laid out, still advances the pen for the spans
+ * that follow it, and still contributes to the element's object bounding box.
  */
 enum class Visibility : uint8_t {
   Visible,   ///< [DEFAULT] Visible is the default value.
-  Hidden,    ///< Hidden elements are invisible, but still affect layout.
-  Collapse,  ///< Collapsed elements are invisible, and do not affect layout.
+  Hidden,    ///< Hidden elements are not painted, but are still laid out.
+  Collapse,  ///< Behaves as \ref Visibility::Hidden for SVG content.
 };
 
 /**

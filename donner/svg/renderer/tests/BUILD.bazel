@@ -308,6 +308,7 @@ donner_cc_test(
         "//donner/svg/components",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
     ],
 )
