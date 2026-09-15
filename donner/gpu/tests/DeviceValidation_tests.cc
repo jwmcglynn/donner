@@ -1373,6 +1373,22 @@ TEST_F(SurfaceTests, DroppingASurfaceHandleHandsBackTheFrameItHeld) {
               IsGpuError(GpuErrorType::InvalidHandle));
 }
 
+TEST_F(SurfaceTests, DestroyingASurfaceHandsBackAFrameWhoseHandleTheCallerDisposedOf) {
+  Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  {
+    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+    ASSERT_TRUE(frame.texture.isValid());
+    // Dropping the handle destroys the texture; the platform still holds the frame itself.
+  }
+
+  EXPECT_THAT(device_.destroySurface(std::move(surface)), IsOk());
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "Teardown is the last chance to hand the frame back, whether or not the caller still "
+         "had a handle to it";
+  EXPECT_EQ(device_.destroySurfaceCalls, 1);
+}
+
 TEST_F(SurfaceTests, DestroyingASurfaceWithNoFrameOutstandingAbandonsNothing) {
   Surface surface = metalSurface();
   ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
