@@ -130,6 +130,23 @@ public:
   /// or when no frame is held.
   SurfaceWaitSync takeAcquireWait();
 
+  /// Gives a taken wait back, for a submission that was never handed to the queue.
+  ///
+  /// A semaphore that was claimed for a submission the driver refused is neither waited on nor
+  /// pending: it stays signalled, and the next acquisition to reuse it signals a semaphore that
+  /// is already signalled. Returning it keeps it owed instead.
+  ///
+  /// @param semaphore Semaphore this surface handed out.
+  void restoreAcquireWait(VkSemaphore semaphore);
+
+  /// The texture slot the runtime gave this surface's frame, for deciding which submissions are
+  /// writing it. Empty while no frame is held.
+  const std::optional<uint32_t>& frameTextureSlot() const { return frameTextureSlot_; }
+
+  /// Records the texture slot the runtime gave the current frame.
+  /// @param textureSlot Slot the frame occupies.
+  void setFrameTextureSlot(uint32_t textureSlot) { frameTextureSlot_ = textureSlot; }
+
   /**
    * Presents the frame currently held and releases it.
    *
@@ -168,8 +185,16 @@ private:
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;  //!< Command buffer to free afterwards.
   };
 
-  /// Creates or replaces the swapchain from \ref configuration_.
+  /// Creates or replaces the swapchain from \ref configuration_, leaving the surface
+  /// unconfigured if anything fails once the previous swapchain has been let go.
   Status createSwapchain();
+
+  /// The body of \ref createSwapchain, whose failures it turns into an unconfigured surface.
+  Status createSwapchainUnguarded();
+
+  /// Whether a frame is held and its index addresses this swapchain's images and semaphores.
+  /// Every index of either is guarded by this, so no path assumes what another checks.
+  bool hasAddressableFrame() const;
 
   /// Reads back the images of the newly created swapchain.
   Status fetchSwapchainImages();
@@ -188,6 +213,13 @@ private:
   /// Recreates the swapchain, reclaiming any stranded frame. Waits for the device to go idle
   /// first, because the images being released may still be named by submitted work.
   Status recreateSwapchain();
+
+  /// Records the barrier into the layout the presentation engine reads, for a frame being handed
+  /// over. Records nothing for a frame being discarded, which the engine never reads.
+  /// @param commandBuffer Command buffer to record into. @param state Source synchronization
+  ///   state, or nothing for a discard.
+  void recordHandoverBarrier(VkCommandBuffer commandBuffer,
+                             const std::optional<TextureSyncState>& state);
 
   /// Records and submits the barrier into the presentation engine's layout, plus whatever wait
   /// this frame still owes. @param state Source synchronization state, or nothing for a discard.
@@ -224,6 +256,14 @@ private:
   /// before that slot is reused.
   std::vector<VkFence> acquireRingFences_;
   uint64_t acquireCount_ = 0;  //!< Total acquisitions, which selects the ring slot.
+  /// Ring slot the current frame was acquired on. Carried with the frame rather than recomputed
+  /// from \ref acquireCount_ when the frame ends: a rebuild restarts that counter, so recomputing
+  /// would file this frame's fence under a slot whose semaphore was never signalled for it.
+  size_t frameRingSlot_ = 0;
+
+  /// Texture slot the runtime gave the current frame, so a submission can be matched to the
+  /// surface whose frame it writes rather than to every surface at once.
+  std::optional<uint32_t> frameTextureSlot_;
 
   uint32_t imageIndex_ = 0;                          //!< Index of the frame currently held.
   bool hasFrame_ = false;                            //!< Whether a frame is currently held.

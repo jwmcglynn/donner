@@ -124,6 +124,14 @@ public:
   /// @param textureSlot Texture slot to query.
   [[nodiscard]] TextureSyncState stateOf(uint32_t textureSlot) const;
 
+  /// The state \p textureSlot is committed to, ignoring anything staged.
+  ///
+  /// For work recorded outside an encode, which is ordered against what the GPU has already been
+  /// told to do rather than against a transition some submission may yet discard.
+  ///
+  /// @param textureSlot Texture slot to query.
+  [[nodiscard]] TextureSyncState committedStateOf(uint32_t textureSlot) const;
+
   /// Records that a transition to \p state was encoded, pending submission.
   /// @param textureSlot Texture slot the transition applies to. @param state Resulting state.
   void stage(uint32_t textureSlot, const TextureSyncState& state);
