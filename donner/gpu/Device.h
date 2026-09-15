@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/GpuLimits.h"
@@ -146,6 +147,35 @@ public:
    */
   uint64_t lastUseOf(uint32_t slotIndex) const {
     return slotIndex < slots_.size() ? slots_[slotIndex].lastUseSerial : 0;
+  }
+
+  /**
+   * Calls \p callback with the record of every live slot, for the few operations that act on a
+   * resource's dependents rather than on the handle a caller named.
+   *
+   * @param callback Invoked as `callback(Record&)` for each live slot, in slot order.
+   */
+  template <typename Callback>
+  void forEachLive(Callback&& callback) {
+    for (Slot& slot : slots_) {
+      if (slot.alive) {
+        callback(slot.record.value());
+      }
+    }
+  }
+
+  /**
+   * Read-only \ref forEachLive, for callers that only inspect the live records.
+   *
+   * @param callback Invoked as `callback(const Record&)` for each live slot, in slot order.
+   */
+  template <typename Callback>
+  void forEachLive(Callback&& callback) const {
+    for (const Slot& slot : slots_) {
+      if (slot.alive) {
+        callback(slot.record.value());
+      }
+    }
   }
 
 private:
@@ -444,6 +474,15 @@ public:
    * goes stale at that moment, so a read through a handle whose mapping has been released is a
    * reported validation failure rather than a read of memory that is no longer there.
    *
+   * A buffer carries at most one mapping at a time: a second request while one is open is
+   * refused with \ref GpuErrorType::InvalidState. Two mappings of one buffer would each be
+   * released by the other's \ref unmapBuffer, so one handle would decide when another handle's
+   * bytes went away.
+   *
+   * Holding a mapping is not ownership of the buffer. Destroying the buffer is allowed while a
+   * mapping is open, and invalidates it: the handle stays resolvable and reads through it are
+   * refused, rather than the buffer being kept alive by a reader that has not finished.
+   *
    * @param buffer Buffer to map; needs \ref BufferUsage::MapRead.
    * @param mode How the host will access the range.
    * @param offsetBytes Byte offset of the mapped range.
@@ -460,6 +499,11 @@ public:
    * within one slice rather than at the end of the budget. Device loss ends the wait
    * immediately: the mapping can never complete afterwards, and reporting it as a timeout would
    * describe a permanent failure as a slow one.
+   *
+   * Destroying the mapped buffer is reported by where the wait was when it happened: a buffer
+   * already gone when the wait starts fails the call with \ref GpuErrorType::InvalidHandle, while
+   * one destroyed during the wait ends it with \ref MapWaitOutcome::Failed, because by then the
+   * call has a wait to report the outcome of rather than a handle to reject.
    *
    * @param mapping Live mapping of this device.
    * @param params Slice length and total budget; both must be greater than zero.
@@ -481,12 +525,24 @@ public:
   /**
    * Returns the mapped bytes of a completed mapping.
    *
-   * Fails closed when the mapping is stale, belongs to another device, or has not completed: the
-   * span is only valid while the handle names a live, ready mapping.
+   * Fails closed when the mapping is stale, belongs to another device, has not completed, named
+   * a buffer that has since been destroyed, or belongs to a device that has been lost
+   * (\ref GpuErrorType::DeviceLost): the span is only valid while the handle names a live, ready
+   * mapping. Completion means a \ref waitForMapping on this mapping reported
+   * \ref MapWaitOutcome::Ready; until one has, reading is refused rather than racing whatever
+   * the GPU is still writing.
+   *
+   * The span aliases the backend's allocation rather than a copy of it, so it lives only as long
+   * as the mapping does: \ref unmapBuffer, destroying the buffer, or losing the device all end
+   * it. A caller that keeps the bytes past any of those copies them out first. The
+   * \c UTILS_LIFETIME_BOUND annotation states that contract to the compiler; it is not relied on
+   * to catch every misuse, because the span is returned inside a \ref Result and the dangling
+   * diagnostic does not see through an unannotated class template.
    *
    * @param mapping Live, completed mapping of this device.
    */
-  Result<std::span<const uint8_t>> mappedBytes(const BufferMapping& mapping) const;
+  Result<std::span<const uint8_t>> mappedBytes(const BufferMapping& mapping) const
+      UTILS_LIFETIME_BOUND;
 
   /**
    * Releases a mapping, invalidating the handle and every copy of it.
@@ -499,7 +555,11 @@ public:
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
-   * A write never changes bytes an already submitted command still reads. MetalDevice and
+   * A write never changes bytes an already submitted command still reads, and for the same reason
+   * never changes bytes the host is reading: a buffer with an open mapping is refused with
+   * \ref GpuErrorType::InvalidState until \ref unmapBuffer releases it.
+   *
+   * MetalDevice and
    * VulkanDevice copy busy-buffer writes with four-byte-aligned offsets and sizes into a bounded
    * queue, flushed before the next ordinary submission, including an empty command stream.
    * Unaligned writes wait for that buffer's outstanding work and return
@@ -544,6 +604,13 @@ public:
    * closed with \ref GpuErrorType::InvalidHandle instead of reaching a backend. On success those
    * resources are marked in-use by the new serial, which defers their backend destruction until
    * the submission completes.
+   *
+   * A buffer with an open mapping is refused with \ref GpuErrorType::InvalidState, and the
+   * command buffer is consumed either way, so the work is recorded again after
+   * \ref unmapBuffer. This covers uses that only read the buffer as well: the mapped range
+   * aliases the buffer's own storage, and a reader cannot tell which parts of it a submission
+   * will touch, so the buffer belongs either to the host or to the device and not to both at
+   * once.
    *
    * @param commandBuffer Command buffer to submit; consumed even on failure.
    */
@@ -773,6 +840,24 @@ protected:
 private:
   friend class CommandEncoder;
 
+  /**
+   * Whether \p bufferSlotIndex currently has a mapping that can still be read. Mappings whose
+   * buffer was retired do not count: they name a slot whose occupant is gone.
+   *
+   * @param bufferSlotIndex Slot of the buffer.
+   */
+  [[nodiscard]] bool bufferHasOpenMapping(uint32_t bufferSlotIndex) const;
+
+  /**
+   * Records what a completed wait observed, so \ref mappedBytes knows whether a wait has seen
+   * this mapping complete. Private because readiness is the runtime's own observation: a backend
+   * that could set it would be able to declare a mapping readable without one.
+   *
+   * @param mapping Mapping the wait was for.
+   * @param outcome What the wait reported.
+   */
+  void noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome outcome);
+
   /// Validated per-buffer state.
   struct BufferRecord {
     BufferDescriptor descriptor;  //!< Creation descriptor.
@@ -792,6 +877,12 @@ private:
     MapMode mode = MapMode::Read;  //!< How the host accesses the range.
     uint64_t offsetBytes = 0;      //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;        //!< Length of the mapped range.
+    /// Whether a wait has observed this mapping complete. Reading is refused until it has, so a
+    /// caller cannot read a range the GPU may still be writing.
+    bool ready = false;
+    /// Whether the mapped buffer was destroyed while this mapping was still open. The mapping
+    /// outlives the buffer as a handle, but the bytes it named are gone.
+    bool bufferRetired = false;
   };
   /// Validated per-texture state.
   struct TextureRecord {

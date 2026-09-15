@@ -24,11 +24,13 @@ donner_cc_library(
 donner_cc_library(
     name = "gpu",
     srcs = [
+        "BufferMappingTable.cc",
         "CommandEncoder.cc",
         "Device.cc",
         "GpuError.cc",
     ],
     hdrs = [
+        "BufferMappingTable.h",
         "CheckedArithmetic.h",
         "CommandEncoder.h",
         "Commands.h",
@@ -160,6 +162,20 @@ donner_cc_library(
         "//donner/base",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# The host-mapping contract written once and executed by both native backend suites, so Metal and
+# Vulkan cannot answer the same mapping question two different ways.
+donner_cc_library(
+    name = "buffer_mapping_scene",
+    testonly = 1,
+    hdrs = ["tests/BufferMappingScene.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -355,6 +371,7 @@ donner_cc_test(
     name = "gpu_tests",
     srcs = [
         "tests/BufferBindingBounds_tests.cc",
+        "tests/BufferMappingTable_tests.cc",
         "tests/CommandEncoder_tests.cc",
         "tests/ComputePass_tests.cc",
         "tests/DeviceValidation_tests.cc",
