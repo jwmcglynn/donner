@@ -751,6 +751,17 @@ test.describe("dragRegressions classifier (pure)", () => {
     expect(violations.map((v) => v.sampleIndex)).toEqual([6]);
   });
 
+  test("evidence names the prior usable sample across an unreadable frame", () => {
+    const samples = [
+      sampleAt(0, 100),
+      { ...sampleAt(30, 105), drawOk: false },
+      sampleAt(60, 80),
+    ];
+    const violations = dragRegressions(samples, [[0, 100, 200], [60, 120, 200]]);
+    expect(violations.map((violation) => [violation.predecessorIndex, violation.sampleIndex]))
+      .toEqual([[0, 2]]);
+  });
+
   test("one sample of lag at a pointer reversal is latency, not a violation", () => {
     // The CI flake's shape: pointer reverses at t=300; the presented centroid
     // lags 60 ms, so for two samples after the reversal it still moves in the
@@ -831,4 +842,83 @@ test.describe("dragRegressions classifier (pure)", () => {
     const violations = dragRegressions(samples, trace, 1.0, 2.0, 600);
     expect(violations.map((v) => v.sampleIndex)).toEqual([29]);
   });
+});
+
+test("composited readback capture keeps exact slots and bounds retained memory", async () => {
+  const pending: Array<() => void> = [];
+  const pixels = new Uint8ClampedArray([255, 0, 0, 255]);
+  const context = {
+    clearRect() {},
+    drawImage() {},
+    getImageData: () => ({ data: pixels }),
+  };
+  const readback = {
+    width: 1,
+    height: 1,
+    getContext: () => context,
+    toDataURL() {
+      throw new Error("PNG encoding must wait until sampling stops");
+    },
+  };
+  const surface = {
+    width: 1,
+    height: 1,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1, height: 1 }),
+  };
+  const globals = {
+    window: {},
+    document: { createElement: () => readback, querySelector: () => surface },
+    requestAnimationFrame: (callback: () => void) => pending.push(callback),
+  };
+  const previous = new Map(
+    Object.keys(globals).map((name) =>
+      [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+    ),
+  );
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+  }
+  try {
+    const fakePage = {
+      evaluate: async (callback: (argument: unknown) => unknown, argument: unknown) =>
+        callback(argument),
+    };
+    await installCompositedProbe(fakePage as unknown as Page, {
+      sampleWidth: 1,
+      sampleHeight: 1,
+      captureReadbacks: true,
+    });
+    await startCompositedProbe(fakePage as unknown as Page);
+    const probe = (globals.window as unknown as {
+      __donnerCompositedProbe: {
+        samples: CompositedSample[];
+        rawReadbacks: Array<Uint8ClampedArray | null>;
+        rawReadbackBytes: number;
+        rawReadbackOverflow: boolean;
+        stop(): void;
+      };
+    }).__donnerCompositedProbe;
+    pending.shift()!();
+    expect(probe.rawReadbacks).toEqual([new Uint8ClampedArray([255, 0, 0, 255])]);
+    pixels[0] = 0;
+    pixels[1] = 255;
+    pending.shift()!();
+    expect(probe.rawReadbacks).toEqual([
+      new Uint8ClampedArray([255, 0, 0, 255]),
+      new Uint8ClampedArray([0, 255, 0, 255]),
+    ]);
+    expect(probe.rawReadbackBytes).toBe(8);
+    probe.rawReadbackBytes = 64 * 1024 * 1024 - 3;
+    pending.shift()!();
+    expect(probe.rawReadbacks[2]).toBeNull();
+    expect(probe.rawReadbackBytes).toBe(64 * 1024 * 1024 - 3);
+    expect(probe.rawReadbackOverflow).toBe(true);
+    expect(probe.rawReadbacks.length).toBe(probe.samples.length);
+    probe.stop();
+  } finally {
+    for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  }
 });
