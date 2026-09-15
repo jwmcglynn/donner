@@ -505,9 +505,10 @@ public:
   /**
    * Returns the mapped bytes of a completed mapping.
    *
-   * Fails closed when the mapping is stale, belongs to another device, has not completed, or
-   * named a buffer that has since been destroyed: the span is only valid while the handle names
-   * a live, ready mapping. Completion means a \ref waitForMapping on this mapping reported
+   * Fails closed when the mapping is stale, belongs to another device, has not completed, named
+   * a buffer that has since been destroyed, or belongs to a device that has been lost
+   * (\ref GpuErrorType::DeviceLost): the span is only valid while the handle names a live, ready
+   * mapping. Completion means a \ref waitForMapping on this mapping reported
    * \ref MapWaitOutcome::Ready; until one has, reading is refused rather than racing whatever
    * the GPU is still writing.
    *

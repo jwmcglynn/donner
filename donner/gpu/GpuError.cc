@@ -12,6 +12,7 @@ std::string_view GpuError::TypeToString(GpuErrorType type) {
     case GpuErrorType::LimitExceeded: return "LimitExceeded";
     case GpuErrorType::InvalidState: return "InvalidState";
     case GpuErrorType::Unsupported: return "Unsupported";
+    case GpuErrorType::DeviceLost: return "DeviceLost";
   }
 
   return "Unknown";

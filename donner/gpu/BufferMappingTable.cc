@@ -87,7 +87,7 @@ Result<std::span<const uint8_t>> BufferMappingTable::bytes(uint32_t mappingSlotI
                                   "the mapping was still open",
                                   mappingSlotIndex)};
     case MapSliceState::DeviceLost:
-      return GpuError{GpuErrorType::InvalidState,
+      return GpuError{GpuErrorType::DeviceLost,
                       std::format("mappedBytes: mapping slot {} cannot be read because the device "
                                   "was lost",
                                   mappingSlotIndex)};

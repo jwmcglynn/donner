@@ -111,7 +111,7 @@ TEST_F(BufferMappingTableTests, ALostDeviceEndsAPendingMapping) {
 
   EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::DeviceLost);
   EXPECT_THAT(table_.bytes(0),
-              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("device was lost")));
+              IsGpuErrorWithMessage(GpuErrorType::DeviceLost, HasSubstr("device was lost")));
 }
 
 TEST_F(BufferMappingTableTests, ALostDeviceOutranksASerialThatLooksComplete) {
@@ -122,7 +122,7 @@ TEST_F(BufferMappingTableTests, ALostDeviceOutranksASerialThatLooksComplete) {
   ASSERT_THAT(mapWholeBuffer(5), IsOk());
 
   EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::DeviceLost);
-  EXPECT_THAT(table_.bytes(0), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(table_.bytes(0), IsGpuError(GpuErrorType::DeviceLost));
 }
 
 TEST_F(BufferMappingTableTests, RetiringTheBufferInvalidatesItsMapping) {
