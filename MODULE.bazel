@@ -208,7 +208,7 @@ override_repo(
     }
 )
 
-use_repo(playwright, "playwright")
+use_repo(playwright, "playwright", "playwright-firefox-mac14-arm64")
 
 npm = use_extension(
     "@aspect_rules_js//npm:extensions.bzl",
