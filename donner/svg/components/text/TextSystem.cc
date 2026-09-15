@@ -100,16 +100,45 @@ void removeTrailingSpace(RcString& text) {
   }
 }
 
-void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
-                     ComputedTextComponent::TextSpan& span) {
-  if (textPath.href.empty()) {
+/// Returns true when the element declares somewhere for its glyphs to be placed, either inline
+/// geometry from `path` or a reference through `href`. An element declaring neither renders
+/// nothing.
+bool hasTextPathGeometrySource(const TextPathComponent& textPath) {
+  return (textPath.inlinePath && !textPath.inlinePath->empty()) || !textPath.href.empty();
+}
+
+/// Resolves `startOffset` against the span's already-resolved path, where a percentage is a
+/// fraction of that path's total length.
+void applyStartOffset(const TextPathComponent& textPath, ComputedTextComponent::TextSpan& span) {
+  if (!textPath.startOffset) {
     return;
+  }
+
+  if (textPath.startOffset->unit == Lengthd::Unit::Percent) {
+    span.pathStartOffset = textPath.startOffset->value * span.pathSpline->pathLength() / 100.0;
+  } else {
+    span.pathStartOffset =
+        textPath.startOffset->toPixels(Box2d({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
+  }
+}
+
+/// Resolves the geometry a \ref xml_textPath places glyphs on, in the textPath element's own user
+/// space, or an empty result when the element names no usable geometry.
+std::optional<Path> resolveTextPathGeometry(Registry& registry, const TextPathComponent& textPath) {
+  // The `path` attribute wins over `href` when it parsed to geometry; its coordinates are already
+  // in the textPath element's user space, so no referenced-element transform applies.
+  if (textPath.inlinePath && !textPath.inlinePath->empty()) {
+    return *textPath.inlinePath;
+  }
+
+  if (textPath.href.empty()) {
+    return std::nullopt;
   }
 
   const Reference ref(textPath.href);
   const auto resolved = ref.resolve(registry);
   if (!resolved || !resolved->handle) {
-    return;
+    return std::nullopt;
   }
 
   // TODO(jwm): Resolve dependency cycle with ShapeSystem so that we don't need to re-parse the path
@@ -133,7 +162,7 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   }
 
   if (!computedPath || computedPath->spline.empty()) {
-    return;
+    return std::nullopt;
   }
 
   // The referenced path is treated as if it were defined in the textPath user space. Its own
@@ -164,19 +193,26 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
         case Path::Verb::ClosePath: builder.closePath(); break;
       }
     }
-    span.pathSpline = builder.build();
-  } else {
-    span.pathSpline = computedPath->spline;
+    return builder.build();
   }
-  if (textPath.startOffset) {
-    const double pathLen = span.pathSpline->pathLength();
-    if (textPath.startOffset->unit == Lengthd::Unit::Percent) {
-      span.pathStartOffset = textPath.startOffset->value * pathLen / 100.0;
-    } else {
-      span.pathStartOffset =
-          textPath.startOffset->toPixels(Box2d({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
-    }
+
+  return computedPath->spline;
+}
+
+/// Resolves the geometry and start offset a \ref xml_textPath places glyphs on, leaving \p span
+/// unchanged when no usable geometry exists.
+void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
+                     ComputedTextComponent::TextSpan& span) {
+  std::optional<Path> geometry = resolveTextPathGeometry(registry, textPath);
+  if (!geometry) {
+    return;
   }
+
+  // `side="right"` puts glyphs on the other side of the path, which is the same as travelling the
+  // path backwards: glyphs face the opposite way and `startOffset` counts from what was the end.
+  span.pathSpline =
+      textPath.side == TextPathSide::Right ? geometry->reversed() : std::move(*geometry);
+  applyStartOffset(textPath, span);
 }
 
 /// Find the textPath entity that applies to the given entity.
@@ -393,7 +429,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     if (!isHidden) {
       const auto* textPathComp = handle.try_get<TextPathComponent>();
       if (textPathComp) {
-        if (textPathComp->href.empty()) {
+        if (!hasTextPathGeometrySource(*textPathComp)) {
           isHidden = true;
         } else {
           const auto* tree = handle.try_get<donner::components::TreeComponent>();

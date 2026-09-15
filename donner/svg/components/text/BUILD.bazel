@@ -94,8 +94,7 @@ donner_cc_test(
     srcs = [
         "tests/TextSystem_tests.cc",
     ],
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
+    # The tiny / text_full / geode wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
@@ -104,6 +103,7 @@ donner_cc_test(
     deps = [
         ":text_system",
         "//donner/base:base_test_utils",
+        "//donner/svg/components/shape:shape_system",
         "//donner/svg/components/style:style_system",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",

@@ -1655,6 +1655,113 @@ bool flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, 
 
 }  // namespace
 
+namespace {
+
+/// One drawing command of a subpath, paired with the point it starts from.
+struct ReversibleSegment {
+  Path::Verb verb;      ///< The command's verb. Never MoveTo or ClosePath.
+  uint32_t pointIndex;  ///< Index of the command's first point in the owning path.
+  Vector2d start;       ///< Point the command starts from, which its reverse ends at.
+};
+
+/// Returns the point a drawing command ends at.
+Vector2d CommandEndPoint(const ReversibleSegment& segment, std::span<const Vector2d> points) {
+  switch (segment.verb) {
+    case Path::Verb::QuadTo: return points[segment.pointIndex + 1];
+    case Path::Verb::CurveTo: return points[segment.pointIndex + 2];
+    default: return points[segment.pointIndex];
+  }
+}
+
+/// Collects the drawing commands of one subpath into \p outSegments and its start point into
+/// \p outStart, returning whether the subpath is closed. ClosePath is left out of the segments:
+/// its implicit line back to the subpath start is retraced separately, because a reversed closed
+/// subpath both begins and ends at that same point.
+bool CollectSubpathSegments(std::span<const Path::Command> commands,
+                            std::span<const Vector2d> points, size_t begin, size_t end,
+                            std::vector<ReversibleSegment>& outSegments, Vector2d& outStart) {
+  outStart = points[commands[begin].pointIndex];
+  bool closed = false;
+  Vector2d current = outStart;
+  for (size_t i = begin; i < end; ++i) {
+    const auto& cmd = commands[i];
+    if (cmd.verb == Path::Verb::MoveTo) {
+      outStart = points[cmd.pointIndex];
+      current = outStart;
+    } else if (cmd.verb == Path::Verb::ClosePath) {
+      closed = true;
+      current = outStart;
+    } else {
+      outSegments.push_back({cmd.verb, cmd.pointIndex, current});
+      current = CommandEndPoint(outSegments.back(), points);
+    }
+  }
+
+  return closed;
+}
+
+/// Appends a segment traversed backwards, ending at the point it originally started from.
+void AppendReversedSegment(PathBuilder& builder, const ReversibleSegment& segment,
+                           std::span<const Vector2d> points) {
+  switch (segment.verb) {
+    case Path::Verb::QuadTo: builder.quadTo(points[segment.pointIndex], segment.start); break;
+    case Path::Verb::CurveTo:
+      builder.curveTo(points[segment.pointIndex + 1], points[segment.pointIndex], segment.start);
+      break;
+    default: builder.lineTo(segment.start); break;
+  }
+}
+
+/// Appends the subpath spanning commands `[begin, end)` to \p builder, traversed backwards.
+void AppendReversedSubpath(PathBuilder& builder, std::span<const Path::Command> commands,
+                           std::span<const Vector2d> points, size_t begin, size_t end) {
+  std::vector<ReversibleSegment> segments;
+  Vector2d subpathStart;
+  const bool closed = CollectSubpathSegments(commands, points, begin, end, segments, subpathStart);
+  const Vector2d lastPoint =
+      segments.empty() ? subpathStart : CommandEndPoint(segments.back(), points);
+
+  // Forward travel of a closed subpath ends back where it started.
+  builder.moveTo(closed ? subpathStart : lastPoint);
+  if (closed && lastPoint != subpathStart) {
+    builder.lineTo(lastPoint);
+  }
+
+  for (size_t i = segments.size(); i-- > 0;) {
+    // In a closed subpath the reverse of the first segment lands back on the subpath start, which
+    // the trailing ClosePath already draws when that segment is a straight line.
+    const bool drawnByClosePath = closed && i == 0 && segments[i].verb == Path::Verb::LineTo;
+    if (!drawnByClosePath) {
+      AppendReversedSegment(builder, segments[i], points);
+    }
+  }
+
+  if (closed) {
+    builder.closePath();
+  }
+}
+
+}  // namespace
+
+Path Path::reversed() const {
+  // Subpath command ranges in document order. A subpath starts at each MoveTo.
+  std::vector<std::pair<size_t, size_t>> subpaths;
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    if (subpaths.empty() || commands_[i].verb == Verb::MoveTo) {
+      subpaths.emplace_back(i, i + 1);
+    } else {
+      subpaths.back().second = i + 1;
+    }
+  }
+
+  PathBuilder builder;
+  for (auto subpath = subpaths.rbegin(); subpath != subpaths.rend(); ++subpath) {
+    AppendReversedSubpath(builder, commands_, points_, subpath->first, subpath->second);
+  }
+
+  return builder.build();
+}
+
 Path Path::flatten(double tolerance) const {
   if (!std::isfinite(tolerance) || tolerance <= 0.0) {
     return Path();

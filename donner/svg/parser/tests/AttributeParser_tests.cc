@@ -1910,6 +1910,40 @@ TEST(AttributeParserTest, TextAnchorAndPathAttributes) {
                   testing::Field(&ParseDiagnostic::reason, testing::HasSubstr("Invalid angle"))));
 }
 
+TEST(AttributeParserTest, TextPathInlinePathAttribute) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <defs><path id="path" d="M0,0 H100"/></defs>
+      <text><textPath id="inline-path" path="M 1 2 L 3 4">a</textPath></text>
+      <text><textPath id="invalid-inline-path" path="q" xlink:href="#path">b</textPath></text>
+      <text><textPath id="partial-inline-path" path="M 1 2 L 3 4 q">c</textPath></text>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  const auto& inlinePath = QueryComponent<components::TextPathComponent>(document, "#inline-path");
+  ASSERT_TRUE(inlinePath.inlinePath.has_value());
+  EXPECT_THAT(inlinePath.inlinePath->points(),
+              testing::ElementsAre(Vector2Near(1.0, 2.0), Vector2Near(3.0, 4.0)));
+
+  // An unparsable `path` stores no geometry, so `href` still supplies the path.
+  const auto& invalidInlinePath =
+      QueryComponent<components::TextPathComponent>(document, "#invalid-inline-path");
+  EXPECT_THAT(invalidInlinePath.inlinePath, testing::Eq(std::nullopt));
+  EXPECT_EQ(invalidInlinePath.href, "#path");
+
+  // Path data is kept up to but not including the command holding the first error, per SVG 2
+  // error handling, so a partially valid value still stores its prefix.
+  const auto& partialInlinePath =
+      QueryComponent<components::TextPathComponent>(document, "#partial-inline-path");
+  ASSERT_TRUE(partialInlinePath.inlinePath.has_value());
+  EXPECT_THAT(partialInlinePath.inlinePath->points(),
+              testing::ElementsAre(Vector2Near(1.0, 2.0), Vector2Near(3.0, 4.0)));
+}
+
 // --- Length parsing edge cases ---
 
 TEST(AttributeParserTest, LengthTrailingDataWarnsAndKeepsDefault) {

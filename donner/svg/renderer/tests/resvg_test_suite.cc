@@ -1521,13 +1521,16 @@ INSTANTIATE_TEST_SUITE_P(
                      .withMaxPixelsDifferent(1100)
                      .withReason(
                          "resvg 0.47.0 reference; full-text small-font placement residual")},
-                {"link-to-rect.svg", Params::Skip("Not impl: link to rect (SVG 2)")},
                 {"m-A-path.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
-                {"method=stretch.svg", Params::Skip("Not impl: method=stretch")},
+                {"method=stretch.svg",
+                 Params::Skip("Not impl: method=stretch outline warping; the vendored reference is "
+                              "byte-identical to simple-case.png (align placement, which resvg "
+                              "also fails), so a passing comparison would pin align behaviour that "
+                              "a correct stretch implementation must change")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
@@ -1540,11 +1543,20 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-path-with-ClosePath.png")
                      .withReason("Minor char")},
-                {"side=right.svg", Params::Skip("Not impl: side=right (SVG 2)")},
+                {"side=right.svg",
+                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
+                                       "Half-turned glyph edges: 3427 of 3430 raw differences are "
+                                       "boundary texels, centroid within 0.1px, ink within 0.03%")},
                 {"simple-case.svg", Params::WithGoldenOverride(
                                         "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
                                         .withReason("Minor char")},
-                {"spacing=auto.svg", Params::Skip("Not impl: spacing=auto")},
+                {"spacing=auto.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
+                     .withReason("spacing=auto lets the user agent choose, and Donner chooses the "
+                                 "same spacing as exact, so this draws the same picture as "
+                                 "simple-case.svg and shares its reference; its own vendored PNG "
+                                 "is byte-identical to the stale simple-case.png")},
                 {"startOffset=-100.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-startOffset=-100.png")
@@ -1592,9 +1604,12 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Minor char")},
                 {"with-filter.svg", Params::Skip("Not impl: filter on textPath")},
                 {"with-invalid-path-and-xlink-href.svg",
-                 Params::Skip("Not impl: invalid path + href")},
-                {"with-path-and-xlink-href.svg", Params::Skip("Not impl: path + xlink:href")},
-                {"with-path.svg", Params::Skip("Not impl: path attr (SVG 2)")},
+                 Params::Skip("Reference disagrees with the corpus: after the invalid `path` is "
+                              "ignored, the remaining `xlink:href=\"path1\"` has no fragment, so "
+                              "it names a document rather than an element. The corpus' own "
+                              "paint-servers/radialGradient/invalid-xlink-href.svg pins that as "
+                              "unresolvable, and results.csv records every engine failing this "
+                              "reference")},
                 {"with-rotate.svg", Params::WithGoldenOverride(
                                         "donner/svg/renderer/testdata/golden/resvg-with-rotate.png")
                                         .withReason("Minor char")},

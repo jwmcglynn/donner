@@ -11,18 +11,20 @@ namespace donner::svg {
 /**
  * @page xml_textPath &lt;textPath&gt;
  *
- * The `<textPath>` element renders text along an arbitrary path referenced by the `href`
- * attribute. It must be a child of a \ref xml_text element.
+ * The `<textPath>` element renders text along an arbitrary path, given either inline with the
+ * SVG 2 `path` attribute or by reference with `href`. It must be a child of a \ref xml_text
+ * element.
  *
  * - DOM object: SVGTextPathElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TextPathElement
  *
  * A `<textPath>` lets text flow along the curve of any \ref xml_path instead of in a straight
  * horizontal line - think of a label hugging the edge of a circle, a headline bent along a
- * wave, or caption text tracking the outline of a shape. You reference the target path by its
- * `id` via the `href` attribute, and SVG lays out each glyph along the path's geometry,
- * automatically rotating it to follow the local tangent. The `startOffset` attribute controls
- * where along the path the text begins, allowing fine adjustment or animation.
+ * wave, or caption text tracking the outline of a shape. Write the geometry directly in the
+ * `path` attribute, or reference a shape by its `id` with `href`, and SVG lays out each glyph
+ * along that geometry, automatically rotating it to follow the local tangent. The `startOffset`
+ * attribute controls where along the path the text begins, allowing fine adjustment or
+ * animation.
  *
  * `<textPath>` must always live inside a \ref xml_text element; it cannot be used on its own.
  *
@@ -49,11 +51,12 @@ namespace donner::svg {
  *
  * | Attribute     | Default   | Description                                              |
  * | ------------: | :-------: | :------------------------------------------------------- |
- * | `href`        | (none)    | Reference to a `<path>` element                         |
+ * | `path`        | (none)    | Path data laid out in this element's own user space. Takes precedence over `href`. |
+ * | `href`        | (none)    | Reference to a `<path>` or any basic shape, whose equivalent path is used. Supplies the geometry when `path` is absent or yields none. |
  * | `startOffset` | `0`       | Offset along the path where text begins                  |
- * | `method`      | `align`   | Parsed: `align` or `stretch`; rendering implements `align` only. |
- * | `side`        | `left`    | Parsed: `left` or `right`; rendering implements `left` only. |
- * | `spacing`     | `exact`   | Parsed: `auto` or `exact`; rendering implements `exact` only. |
+ * | `method`      | `align`   | `align` places each glyph rigidly on the tangent. `stretch` asks for warped glyph outlines, which is parsed but rendered as `align`. |
+ * | `side`        | `left`    | `left` or `right`. `right` places text on the other side by reversing the direction of travel. |
+ * | `spacing`     | `exact`   | `exact` advances glyphs by their shaped widths. `auto` leaves the choice to the user agent, and Donner chooses the same spacing as `exact`. |
  *
  * \note The parser accepts `x`, `y`, `dx`, `dy`, and `rotate` on `<textPath>` for DOM fidelity,
  *       but text layout intentionally ignores those attributes on the `<textPath>` element itself,
@@ -66,10 +69,13 @@ namespace donner::svg {
  * DOM object for a \ref xml_textPath element.
  *
  * The `<textPath>` element places text along an arbitrary SVG path, allowing text to follow
- * curves and complex shapes. It references a `<path>` element via the `href` attribute and
- * supports positioning along the path via `startOffset`. The accepted SVG2 `method`, `side`, and
- * `spacing` attributes are stored on the DOM object; rendering currently implements the default
- * `align`, `left`, and `exact` behavior.
+ * curves and complex shapes. The geometry comes from the SVG 2 `path` attribute when it parses
+ * to at least one subpath, and otherwise from the `href` attribute, which may name a `<path>` or
+ * any basic shape. `startOffset` positions the text along that geometry, and `side="right"`
+ * places it on the other side by reversing the direction of travel. `spacing="auto"` leaves the
+ * inter-glyph spacing to the user agent, and Donner chooses the same spacing as `exact`.
+ * `method="stretch"` asks for glyph outlines warped along the path; it is parsed and stored, but
+ * those glyphs are rendered with `align` placement.
  *
  * \see https://www.w3.org/TR/SVG2/text.html#TextPathElement
  */
@@ -110,7 +116,8 @@ public:
   }
 
   /**
-   * Set the `href` attribute, which references the path element.
+   * Set the `href` attribute, which references the shape supplying the path geometry. It is used
+   * only when the `path` attribute is absent or parses to no subpath.
    *
    * @param href IRI reference (e.g., "#myPath").
    */

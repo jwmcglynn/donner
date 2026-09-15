@@ -67,6 +67,7 @@ donner_cc_library(
     srcs = ["AttributeParser.cc"],
     hdrs = ["AttributeParser.h"],
     deps = [
+        ":parser_core",
         ":parser_details",
         "//donner/svg:svg_core",
         "//donner/svg/components:components_core",
