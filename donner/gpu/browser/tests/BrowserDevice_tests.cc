@@ -383,7 +383,7 @@ TEST(BrowserDevice, MirrorsARecordedComputePassOntoTheBridgeInRecordingOrder) {
   EXPECT_THAT(
       replayed,
       ElementsAre("beginCommandBuffer serial=1", "beginComputePass",
-                  "setComputePipeline pipeline=5", "setBindGroup index=0 bindGroup=3",
+                  "setComputePipeline pipeline=6", "setBindGroup index=0 bindGroup=3",
                   "dispatchWorkgroups count=2x3x1", "endComputePass", "endCommandBuffer serial=1"));
 }
 
