@@ -1,5 +1,6 @@
 #include "donner/editor/LocalEditorControl.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -8,8 +9,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <istream>
 #include <mutex>
 #include <optional>
+#include <ostream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -29,10 +32,9 @@ namespace {
 constexpr std::size_t kMaximumRequestBytes = 1024 * 1024;
 constexpr std::size_t kMaximumResponseBytes = 16 * 1024 * 1024;
 constexpr auto kRequestTimeout = std::chrono::seconds(30);
-Json RpcError(const Json& id, std::string message) {
-  return {{"jsonrpc", "2.0"},
-          {"id", id},
-          {"error", {{"code", -32000}, {"message", std::move(message)}}}};
+Json RpcError(const Json& id, std::string message, int code = -32000) {
+  return {
+      {"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", std::move(message)}}}};
 }
 bool BoundedJsonDepth(std::string_view bytes) {
   int depth = 0;
@@ -65,6 +67,21 @@ bool PrivateSocketDirectory(const std::string& path) {
   return lstat(parent.c_str(), &directory) == 0 && S_ISDIR(directory.st_mode) &&
          directory.st_uid == geteuid() && (directory.st_mode & 0077) == 0;
 }
+bool SameUserPeer(int fd) {
+#if defined(__APPLE__)
+  uid_t uid = 0;
+  gid_t gid = 0;
+  return getpeereid(fd, &uid, &gid) == 0 && uid == geteuid();
+#elif defined(__linux__)
+  ucred credentials{};
+  socklen_t length = sizeof(credentials);
+  return getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0 &&
+         credentials.uid == geteuid();
+#else
+  return false;
+#endif
+}
+
 int BindPrivateSocket(const std::string& path, struct stat* identity, std::string* error) {
   const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
@@ -122,6 +139,123 @@ bool WriteFeedbackBytes(int fd, const std::string& bytes) {
   }
   return fsync(fd) == 0;
 }
+
+struct ClientSocket {
+  int fd = -1;
+  ~ClientSocket() {
+    if (fd >= 0) close(fd);
+  }
+};
+
+using SocketDeadline = std::chrono::steady_clock::time_point;
+
+bool WaitSocket(int fd, short events, SocketDeadline deadline) {
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    pollfd descriptor{fd, events, 0};
+    const int ready = poll(&descriptor, 1, std::max(1, static_cast<int>(remaining.count())));
+    if (ready < 0 && errno == EINTR) continue;
+    return ready > 0 && (descriptor.revents & events) != 0;
+  }
+  return false;
+}
+
+bool SendClientRequest(int fd, const std::string& bytes, SocketDeadline deadline) {
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    if (!WaitSocket(fd, POLLOUT, deadline)) return false;
+#ifdef MSG_NOSIGNAL
+    constexpr int flags = MSG_NOSIGNAL;
+#else
+    constexpr int flags = 0;
+#endif
+    const ssize_t count = send(fd, bytes.data() + offset, bytes.size() - offset, flags);
+    if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+    if (count <= 0) return false;
+    offset += static_cast<std::size_t>(count);
+  }
+  return true;
+}
+
+std::optional<Json> ReadClientResponse(int fd, SocketDeadline deadline, std::string* error) {
+  std::string bytes;
+  std::array<char, 8192> buffer{};
+  while (WaitSocket(fd, POLLIN, deadline)) {
+    const ssize_t count = recv(fd, buffer.data(), buffer.size(), 0);
+    if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+    if (count <= 0) break;
+    if (bytes.size() + static_cast<std::size_t>(count) > kMaximumResponseBytes + 1) {
+      *error = "Editor response exceeds 16 MiB";
+      return std::nullopt;
+    }
+    bytes.append(buffer.data(), static_cast<std::size_t>(count));
+    const auto newline = bytes.find('\n');
+    if (newline == std::string::npos) continue;
+    if (newline + 1 != bytes.size() || !BoundedJsonDepth(bytes)) {
+      *error = "Invalid editor response framing or nesting";
+      return std::nullopt;
+    }
+    Json response = Json::parse(bytes, nullptr, false);
+    if (response.is_discarded() || (!response.is_object() && !response.is_null())) {
+      *error = "Editor response must be a JSON object";
+      return std::nullopt;
+    }
+    return response;
+  }
+  *error = "Editor connection ended or timed out; reread state before retrying edits";
+  return std::nullopt;
+}
+
+std::optional<Json> RequestEditor(const std::string& path, const Json& request,
+                                  std::string* error) {
+  struct stat endpoint{};
+  if (!ValidSocketAddress(path) || !PrivateSocketDirectory(path) ||
+      lstat(path.c_str(), &endpoint) != 0 || !S_ISSOCK(endpoint.st_mode) ||
+      endpoint.st_uid != geteuid() || (endpoint.st_mode & 0077) != 0) {
+    *error = "Editor endpoint and directory must be private and owned by the current user";
+    return std::nullopt;
+  }
+  ClientSocket connection{socket(AF_UNIX, SOCK_STREAM, 0)};
+  if (connection.fd < 0 || fcntl(connection.fd, F_SETFD, FD_CLOEXEC) != 0 ||
+      fcntl(connection.fd, F_SETFL, O_NONBLOCK) != 0) {
+    *error = "Cannot create editor connection";
+    return std::nullopt;
+  }
+#ifdef SO_NOSIGPIPE
+  int noSignal = 1;
+  setsockopt(connection.fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, sizeof(noSignal));
+#endif
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(35);
+  const int connected =
+      connect(connection.fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  int socketError = 0;
+  socklen_t length = sizeof(socketError);
+  if ((connected != 0 && errno != EINPROGRESS && errno != EINTR) ||
+      !WaitSocket(connection.fd, POLLOUT, deadline) ||
+      getsockopt(connection.fd, SOL_SOCKET, SO_ERROR, &socketError, &length) != 0 ||
+      socketError != 0 || !SameUserPeer(connection.fd)) {
+    *error = "Cannot connect to the private editor endpoint";
+    return std::nullopt;
+  }
+  const std::string payload = request.dump() + "\n";
+  if (payload.size() > kMaximumRequestBytes + 1 ||
+      !SendClientRequest(connection.fd, payload, deadline)) {
+    *error = "Cannot send the bounded editor request";
+    return std::nullopt;
+  }
+  auto response = ReadClientResponse(connection.fd, deadline, error);
+  if (request.contains("id") && response &&
+      (!response->is_object() || !response->contains("id") || (*response)["id"] != request["id"])) {
+    *error = "Editor response ID does not match the request";
+    return std::nullopt;
+  }
+  return response;
+}
+
 #endif
 }  // namespace
 
@@ -172,21 +306,6 @@ struct LocalEditorControl::Impl {
       unlink(path.c_str());
   }
 
-  bool sameUser(int fd) {
-#if defined(__APPLE__)
-    uid_t uid = 0;
-    gid_t gid = 0;
-    return getpeereid(fd, &uid, &gid) == 0 && uid == geteuid();
-#elif defined(__linux__)
-    ucred credentials{};
-    socklen_t length = sizeof(credentials);
-    return getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0 &&
-           credentials.uid == geteuid();
-#else
-    return false;
-#endif
-  }
-
   static bool sendReply(int fd, const Json& response) {
     std::string bytes = response.dump();
     if (bytes.size() > kMaximumResponseBytes)
@@ -208,7 +327,7 @@ struct LocalEditorControl::Impl {
   }
 
   void serveClient(int fd) {
-    if (!sameUser(fd)) return;
+    if (!SameUserPeer(fd)) return;
     timeval timeout{.tv_sec = 10, .tv_usec = 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
@@ -437,4 +556,65 @@ bool LocalEditorControl::writeFeedback(const Json& data, std::string* error) con
   return false;
 #endif
 }
+int RunEditorControlStdio(const std::string& socketPath, std::istream& input, std::ostream& output,
+                          std::ostream& errors) {
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+  if (!ValidSocketAddress(socketPath)) {
+    errors << "MCP requires an absolute private socket path within the platform limit\n";
+    return 2;
+  }
+  while (true) {
+    std::string line;
+    char byte = 0;
+    bool terminated = false;
+    while (line.size() <= kMaximumRequestBytes && input.get(byte)) {
+      if (byte == '\n') {
+        terminated = true;
+        break;
+      }
+      line.push_back(byte);
+    }
+    if (line.empty() && input.eof()) return 0;
+    if (!terminated || line.size() > kMaximumRequestBytes || !BoundedJsonDepth(line)) {
+      output << RpcError(nullptr, "MCP input must be bounded newline-delimited JSON", -32700).dump()
+             << '\n'
+             << std::flush;
+      return 2;
+    }
+    Json request = Json::parse(line, nullptr, false);
+    if (request.is_discarded() || !request.is_object()) {
+      output << RpcError(nullptr, "MCP input must be a JSON object", -32700).dump() << '\n'
+             << std::flush;
+      return 2;
+    }
+    const auto version = request.find("jsonrpc");
+    const bool validId =
+        !request.contains("id") || request["id"].is_string() || request["id"].is_number_integer();
+    if (version == request.end() || !version->is_string() || *version != "2.0" || !validId) {
+      output << RpcError(nullptr, "Invalid MCP JSON-RPC version or request ID", -32600).dump()
+             << '\n'
+             << std::flush;
+      return 2;
+    }
+    std::string error;
+    std::optional<Json> response = RequestEditor(socketPath, request, &error);
+    if (!error.empty()) {
+      errors << error << '\n';
+      if (request.contains("id")) response = RpcError(request["id"], std::move(error));
+    }
+    if (request.contains("id") && response) {
+      output << response->dump(-1, ' ', false, Json::error_handler_t::replace) << '\n'
+             << std::flush;
+      if (!output) return 1;
+    }
+  }
+#else
+  (void)socketPath;
+  (void)input;
+  (void)output;
+  errors << "Native editor MCP is supported on macOS and Linux\n";
+  return 2;
+#endif
+}
+
 }  // namespace donner::editor

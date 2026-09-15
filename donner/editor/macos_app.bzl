@@ -32,7 +32,6 @@ def _macos_editor_app_impl(ctx):
     args.add("--agents", ctx.file.agents)
     args.add("--skill", ctx.file.skill)
     args.add("--vectorization", ctx.file.vectorization)
-    args.add("--adapter", ctx.file.adapter)
     args.add("--output", archive)
     args.add("--checksum", checksum)
     args.add("--status-file", ctx.info_file)
@@ -41,7 +40,7 @@ def _macos_editor_app_impl(ctx):
     for file in files:
         if file.basename.endswith(".dylib"):
             args.add("--runtime", file)
-    inputs = depset([binary, ctx.file.icon, ctx.file.agents, ctx.file.skill, ctx.file.vectorization, ctx.file.adapter, ctx.file.module, ctx.info_file], transitive = [info.default_runfiles.files])
+    inputs = depset([binary, ctx.file.icon, ctx.file.agents, ctx.file.skill, ctx.file.vectorization, ctx.file.module, ctx.info_file], transitive = [info.default_runfiles.files])
     ctx.actions.run(
         executable = ctx.attr.packager[DefaultInfo].files_to_run,
         arguments = [args],
@@ -66,7 +65,6 @@ macos_editor_app = rule(
         "agents": attr.label(allow_single_file = True, mandatory = True),
         "skill": attr.label(allow_single_file = True, mandatory = True),
         "vectorization": attr.label(allow_single_file = True, mandatory = True),
-        "adapter": attr.label(allow_single_file = True, mandatory = True),
         "module": attr.label(allow_single_file = True, mandatory = True),
     },
 )

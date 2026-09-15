@@ -29,9 +29,9 @@ Instructions live inside `Contents/Resources` because macOS signing rejects extr
 at the app bundle root. All links are relative, so the app can be installed elsewhere.
 
 Use the editor's `--help` to discover launch options. Collaboration is opt-in through
-`--control-socket`; the bundled `agent/editor_control_wrapper.py` bridges that private
-socket to MCP over stdio. The adapter currently requires an available Python 3 runtime.
-The editor itself does not depend on Python.
+`--control-socket`. For an MCP client, run the same executable with `--mcp-stdio` and
+`--control-socket <endpoint>` to connect to the running editor without opening another
+window. The app and its MCP adapter do not require Python.
 
 The app owns the live document. Agent edits use the editor's DOM tools and shared undo
 history; agents should not overwrite the SVG file behind an active editing session.

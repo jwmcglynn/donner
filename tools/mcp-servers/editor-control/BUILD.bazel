@@ -3,8 +3,6 @@ load("//build_defs:rules.bzl", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["editor_control_wrapper.py"])
-
 EDITOR_CONTROL_COMPATIBLE_WITH = select({
     "@platforms//os:macos": [],
     "@platforms//os:linux": [],

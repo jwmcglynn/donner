@@ -1482,6 +1482,7 @@ donner_cc_binary(
         ":editor_build_info",
         ":editor_shell",
         ":editor_splash",
+        ":local_editor_control",
         ":notice",
         ":pinch_zoom_policy",
         ":tracy_wrapper",
@@ -1696,7 +1697,6 @@ donner_cc_library(
 
 macos_editor_app(
     name = "macos_app",
-    adapter = "//tools/mcp-servers/editor-control:editor_control_wrapper.py",
     agents = "agent/AGENTS.md",
     editor = ":editor",
     icon = "macos/editor_icon.svg",

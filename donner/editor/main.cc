@@ -160,6 +160,7 @@ EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
 
 #include "donner/editor/EditorBuildInfo.h"
 #include "donner/editor/EditorShell.h"
+#include "donner/editor/LocalEditorControl.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/PinchZoomPolicy.h"
 #include "donner/editor/TracyWrapper.h"
@@ -358,10 +359,12 @@ int main(int argc, char** argv) {
   initialSource = kWelcomePlaceholderSvg;
   showWelcome = true;
 #else
+  bool mcpStdio = false;
   constexpr std::string_view kUsage =
       "Usage: DonnerSVGEditor [--help] [--version] [--experimental] "
-      "[--save-repro <path>] [--control-socket <path>] [filename]\n"
-      "  --control-socket <path>  Enable local agent collaboration on a private socket.\n";
+      "[--save-repro <path>] [--control-socket <path>] [--mcp-stdio] [filename]\n"
+      "  --control-socket <path>  Enable local agent collaboration on a private socket.\n"
+      "  --mcp-stdio  Connect MCP stdio to --control-socket without opening a window.\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--help" || arg == "-h") {
@@ -372,6 +375,10 @@ int main(int argc, char** argv) {
       std::cout << "Donner SVG Editor\n"
                 << EmbeddedBytesToString(donner::embedded::kEditorBuildInfo);
       return 0;
+    }
+    if (arg == "--mcp-stdio") {
+      mcpStdio = true;
+      continue;
     }
     if (arg == "--experimental") {
       // Developer CLI contract: keep accepting this flag even when it is a
@@ -409,6 +416,16 @@ int main(int argc, char** argv) {
     }
 
     svgPath = std::string(arg);
+  }
+
+  if (mcpStdio) {
+    if (!controlSocketPath || svgPath || reproOutputPath) {
+      std::cerr << "--mcp-stdio requires --control-socket and no document/repro argument\n"
+                << kUsage;
+      return 2;
+    }
+    return donner::editor::RunEditorControlStdio(*controlSocketPath, std::cin, std::cout,
+                                                 std::cerr);
   }
 
   if (!svgPath.has_value()) {

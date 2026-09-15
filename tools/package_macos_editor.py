@@ -104,7 +104,7 @@ def build(args: argparse.Namespace) -> None:
         raise ValueError("MODULE.bazel must declare the package version")
     version = version_match[1]
     input_files = {name: getattr(args, name) for name in
-                   ("editor", "icon", "agents", "skill", "vectorization", "adapter", "module")}
+                   ("editor", "icon", "agents", "skill", "vectorization", "module")}
     runtimes = {}
     for value in args.runtime:
         path = value.resolve()
@@ -134,7 +134,6 @@ def build(args: argparse.Namespace) -> None:
         shutil.copy2(args.agents, resources / "AGENTS.md")
         shutil.copy2(args.skill, skill / "SKILL.md")
         shutil.copy2(args.vectorization, skill / "references/vectorization.md")
-        shutil.copy2(args.adapter, resources / "agent/editor_control_wrapper.py")
         iconset = Path(temp) / "DonnerSVGEditor.iconset"
         iconset.mkdir()
         for size in (16, 32, 128, 256, 512):
@@ -182,7 +181,7 @@ def build(args: argparse.Namespace) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("editor", "renderer", "icon", "agents", "skill", "vectorization", "adapter", "module", "output", "checksum"):
+    for name in ("editor", "renderer", "icon", "agents", "skill", "vectorization", "module", "output", "checksum"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--runtime", type=Path, action="append", default=[])
     parser.add_argument("--build-number", default="1")

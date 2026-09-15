@@ -6,9 +6,10 @@ Read [the Donner editor skill](agent/skills/donner-editor/SKILL.md).
 For raster-to-vector work, the skill links to a focused vectorization guide.
 
 Start by checking the installed editor's `--help` and the tools advertised by its MCP
-connection. The executable is `../MacOS/DonnerSVGEditor`; the bundled stdio adapter is
-`agent/editor_control_wrapper.py`. Resolve these paths relative to this AGENTS.md,
-including when it is installed somewhere other than `/Applications`.
+connection. The executable is `../MacOS/DonnerSVGEditor`. It also provides MCP over
+stdio: launch it with `--mcp-stdio --control-socket <endpoint>` to connect to the running
+editor without another window or a Python runtime. Resolve the executable path relative
+to this AGENTS.md, including when the app is installed outside `/Applications`.
 
 Agent collaboration must be enabled in the app or through its documented launch option.
 Connect to the endpoint the app reports, then read `get_editor_state` before making edits.

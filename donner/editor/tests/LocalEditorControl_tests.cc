@@ -10,6 +10,7 @@
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -34,7 +35,7 @@ protected:
   LocalEditorControl control;
   std::mutex mutex;
   std::condition_variable condition;
-  bool wake = false;
+  std::size_t wakeCount = 0;
 
   void SetUp() override {
     char pattern[] = "/tmp/donner-control-test-XXXXXX";
@@ -54,16 +55,17 @@ protected:
                     endpoint,
                     [this]() {
                       std::lock_guard lock(mutex);
-                      wake = true;
+                      ++wakeCount;
                       condition.notify_all();
                     },
                     &error),
                 Eq(true))
         << error;
   }
-  bool awaitRequest() {
+  bool awaitRequest(std::size_t count = 1) {
     std::unique_lock lock(mutex);
-    return condition.wait_for(lock, std::chrono::seconds(2), [this]() { return wake; });
+    return condition.wait_for(lock, std::chrono::seconds(2),
+                              [this, count]() { return wakeCount >= count; });
   }
   Json send(std::string bytes) {
     const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -184,6 +186,79 @@ TEST_F(LocalEditorControlTest, FeedbackIsPrivateAtomicAndDoesNotFollowSymlinks) 
   original >> value;
   EXPECT_THAT(value, Eq("unchanged"));
 }
+TEST_F(LocalEditorControlTest, NativeStdioForwardsRequestsAndSuppressesNotificationReplies) {
+  start();
+  std::istringstream input(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+      "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
+  std::ostringstream output, errors;
+  auto client = std::async(
+      std::launch::async, [&]() { return RunEditorControlStdio(endpoint, input, output, errors); });
+  ASSERT_THAT(awaitRequest(1), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    EXPECT_THAT(request["method"], Eq("notifications/initialized"));
+    return Json(nullptr);
+  }),
+              Eq(true));
+  ASSERT_THAT(awaitRequest(2), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"jsonrpc", "2.0"}, {"id", request["id"]}, {"result", "live editor"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(client.get(), Eq(0));
+  EXPECT_THAT(errors.str(), Eq(""));
+  const Json response = Json::parse(output.str());
+  EXPECT_THAT(response["id"], Eq(7));
+  EXPECT_THAT(response["result"], Eq("live editor"));
+}
+
+TEST_F(LocalEditorControlTest, NativeStdioReportsMismatchedIdsWithoutReplayingRequests) {
+  start();
+  std::istringstream input("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
+  std::ostringstream output, errors;
+  auto client = std::async(
+      std::launch::async, [&]() { return RunEditorControlStdio(endpoint, input, output, errors); });
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  control.process([](const Json&) -> std::optional<Json> {
+    return Json{{"jsonrpc", "2.0"}, {"id", 8}, {"result", "wrong request"}};
+  });
+  EXPECT_THAT(client.get(), Eq(0));
+  const Json response = Json::parse(output.str());
+  EXPECT_THAT(response["id"], Eq(7));
+  EXPECT_THAT(response["error"]["message"].get<std::string>(), HasSubstr("ID"));
+  EXPECT_THAT(control.hasPending(), Eq(false));
+}
+
+TEST_F(LocalEditorControlTest, NativeStdioRejectsUnboundedMalformedAndInvalidProtocolInput) {
+  const std::vector<std::string> inputs{
+      "{\"jsonrpc\":\"2.0\",\"nested\":" + std::string(65, '[') + "0" + std::string(65, ']') +
+          "}\n",
+      "{\"value\":\"" + std::string(1024 * 1024, 'x') + "\"}\n",
+      "{\"jsonrpc\":\"2.0\",\"id\":7}",
+      "[]\n",
+      "{\"jsonrpc\":\"2.0\",\"id\":[]}\n",
+      "{\"jsonrpc\":\"1.0\",\"id\":7}\n",
+  };
+  for (const auto& bytes : inputs) {
+    std::istringstream input(bytes);
+    std::ostringstream output, errors;
+    EXPECT_THAT(RunEditorControlStdio(endpoint, input, output, errors), Eq(2));
+    EXPECT_THAT(Json::parse(output.str()).contains("error"), Eq(true));
+  }
+}
+
+TEST_F(LocalEditorControlTest, NativeStdioRequiresPrivateEndpointPermissions) {
+  start();
+  ASSERT_THAT(chmod(directory.c_str(), 0755), Eq(0));
+  std::istringstream input("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
+  std::ostringstream output, errors;
+  EXPECT_THAT(RunEditorControlStdio(endpoint, input, output, errors), Eq(0));
+  EXPECT_THAT(Json::parse(output.str())["error"]["message"].get<std::string>(),
+              HasSubstr("private"));
+  EXPECT_THAT(control.hasPending(), Eq(false));
+  ASSERT_THAT(chmod(directory.c_str(), 0700), Eq(0));
+}
+
 #endif
 }  // namespace
 }  // namespace donner::editor

@@ -2,6 +2,7 @@
 /// @file
 
 #include <functional>
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,4 +38,13 @@ private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+/// Run the stdio MCP adapter for an already-running native editor.
+/// @param socketPath Private local endpoint selected by the user.
+/// @param input Newline-delimited MCP input.
+/// @param output Newline-delimited MCP responses, without diagnostic text.
+/// @param errors Diagnostic output.
+/// @return Zero on clean input EOF, or nonzero for malformed input.
+int RunEditorControlStdio(const std::string& socketPath, std::istream& input, std::ostream& output,
+                          std::ostream& errors);
+
 }  // namespace donner::editor

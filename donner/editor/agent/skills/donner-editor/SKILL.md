@@ -10,11 +10,11 @@ undo history are one editing session.
 
 ## Connect and inspect
 
-Read the bundle's `AGENTS.md` for executable and adapter locations. Discover the installed
-version's launch options and MCP tools instead of assuming that a newer feature exists.
-For the stdio adapter, use the user's available Python 3 runtime and pass `--socket` with the
-endpoint reported by the app. The connection uses a private local socket; it does not require
-a hosted account or an external service.
+Read the bundle's `AGENTS.md` for the executable location. Discover the installed version's
+launch options and MCP tools instead of assuming that a newer feature exists. Configure the
+MCP client to run that executable with `--mcp-stdio --control-socket <endpoint>`, using the
+endpoint selected for the running editor. The adapter opens no window and needs no Python
+runtime. The private local connection needs no hosted account or external service.
 
 Read `get_editor_state` and identify the document before mutation. Read `get_svg_source` when
 geometry, paint, references, or layering need inspection. Confirm the advertised capabilities
