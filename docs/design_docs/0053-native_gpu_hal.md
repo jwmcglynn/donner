@@ -168,10 +168,20 @@ commits and their fixes together in a focused reviewable change.
 
 ### Browser bridge
 
-- [ ] Replace the C WebGPU wrapper with the Donner-owned C++/JavaScript descriptor and command bridge
-      to `navigator.gpu`; the compiled WGSL projections remain trusted build input.
-- [ ] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
+- [x] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
       configuration, completion, mapping, and device-loss propagation behind the runtime contract.
+      `donner/gpu/browser` supplies a `gpu::Device` whose hooks express validated operations to
+      `navigator.gpu` through `library_donner_gpu.js`. Browser objects are named by identifiers
+      drawn from a space that is never reused, and both sides check the identifier and its object
+      kind; a device request settles asynchronously; presentation follows the browser's own frame
+      loop, so an explicit present is refused and a frame ends by abandoning its acquired texture.
+      The backend and its bridge contract carry no Emscripten dependency, so `browser_tests` covers
+      identifier reuse, ownership, request outcomes, mapping, device loss and command-stream
+      mirroring on every host.
+- [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
+      renderer and editor Wasm targets reach WebGPU through `GeodeDevice` and the transitional
+      adapter, so selecting the browser backend is part of making the selected `gpu::Device` the
+      backend owner below. The compiled WGSL projections remain trusted build input.
 - [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and remaining
       generated C-ABI glue when no consumer needs them.
 
@@ -341,7 +351,7 @@ operation and shader manifests must use the complete repository input set, with
 | Snapshot/target lifetime, alpha, cropping, refusal | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates. |
 | Filter resource ordering, scratch and working sets | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites. |
 | Upload reuse, UI texture lifetime and thumbnails | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources. |
-| Mapping, loss, cancellation and native surfaces | Shared `gpu_tests` plus new owning native-hook tests and actual editor surface execution; current default unsupported hooks do not qualify a backend. |
+| Mapping, loss, cancellation and native surfaces | Shared `gpu_tests` plus new owning native-hook tests and actual editor surface execution; current default unsupported hooks do not qualify a backend. `//donner/gpu/browser:browser_tests` owns the browser backend's identifier, ownership, mapping and device-loss behavior; browser execution of that backend joins the browser lanes with the production cutover. |
 | Editor ordering and presentation | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge. |
 | Structural counters, memory, timing and size | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates. |
 | Dependency closure | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking verifier invocation, generated CMake validation, and analyzed/source-archive/artifact evidence. |

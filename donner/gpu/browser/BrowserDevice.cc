@@ -1233,29 +1233,32 @@ Result<SurfaceStatus> BrowserDevice::onAcquireCurrentTexture(uint32_t slotIndex,
 
 Result<SurfaceStatus> BrowserDevice::onPresentSurface(uint32_t slotIndex) {
   // The runtime invalidates the acquired texture whether or not presenting was performed, so the
-  // browser object behind it is released here too rather than waiting for the slot to be reused.
-  const uint32_t textureSlotIndex = acquiredTexture(slotIndex);
-  if (textureSlotIndex != kNoAcquiredTexture) {
-    releaseObject(BrowserObjectKind::Texture, textureSlotIndex);
-    setAcquiredTexture(slotIndex, kNoAcquiredTexture);
-  }
+  // frame is handed back here too rather than left named until the slot is reused.
+  releaseAcquiredFrame(slotIndex);
   return GpuError{GpuErrorType::Unsupported,
                   "presentSurface: a browser shows a canvas on its own frame loop, so a frame "
                   "ends by abandoning its acquired texture rather than by presenting it"};
 }
 
-void BrowserDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
-  const uint32_t textureSlotIndex = acquiredTexture(slotIndex);
-  if (textureSlotIndex != kNoAcquiredTexture) {
-    releaseObject(BrowserObjectKind::Texture, textureSlotIndex);
-    setAcquiredTexture(slotIndex, kNoAcquiredTexture);
-  }
-
+void BrowserDevice::releaseAcquiredFrame(uint32_t surfaceSlotIndex) {
   const std::optional<BrowserObjectId> surfaceId =
-      objects_.find(BrowserObjectKind::Surface, slotIndex);
+      objects_.find(BrowserObjectKind::Surface, surfaceSlotIndex);
   if (surfaceId.has_value()) {
     bridge_->abandonCurrentTexture(*surfaceId);
   }
+
+  // Only the identifier is dropped here. A frame texture belongs to the surface that handed it
+  // over, so destroying it would take away the canvas's own texture rather than release something
+  // this device owns; the surface let go of it in the call above.
+  const uint32_t textureSlotIndex = acquiredTexture(surfaceSlotIndex);
+  if (textureSlotIndex != kNoAcquiredTexture) {
+    objects_.remove(BrowserObjectKind::Texture, textureSlotIndex);
+    setAcquiredTexture(surfaceSlotIndex, kNoAcquiredTexture);
+  }
+}
+
+void BrowserDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
+  releaseAcquiredFrame(slotIndex);
 }
 
 }  // namespace donner::gpu::browser

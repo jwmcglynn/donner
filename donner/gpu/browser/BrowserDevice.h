@@ -231,6 +231,10 @@ private:
   /// @param surfaceSlotIndex Surface slot.
   uint32_t acquiredTexture(uint32_t surfaceSlotIndex) const;
 
+  /// Hands the frame \p surfaceSlotIndex has acquired back to its surface and stops naming it.
+  /// @param surfaceSlotIndex Surface slot holding the frame.
+  void releaseAcquiredFrame(uint32_t surfaceSlotIndex);
+
   /// Replays one validated command onto the bridge, dispatching to the \ref replay overload for
   /// its type.
   /// @param command Recorded command. @param operation Operation name for the error message.
