@@ -453,16 +453,25 @@ TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsRelea
   ImGui::DestroyContext(context);
 }
 
-TEST(GlTextureCacheTest, CacheDestructionWithNoInstalledRendererDoesNotPublishBacking) {
+TEST(GlTextureCacheTest, RegisteredBackingIsDestroyedIfRendererUninstallsBeforeCache) {
+  ImGuiContext* context = ImGui::CreateContext();
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  std::unique_ptr<UiTextureRegistry> registry;
+  std::unique_ptr<ImGuiRuntimeRenderer> renderer =
+      InstallTestUiRenderer(device->adapterDevice(), &registry);
+  ASSERT_NE(renderer, nullptr);
   int destructionCount = 0;
   {
     GlTextureCache cache(device);
     cache.uploadComposited(SingleSnapshotTilePreview(
         "layer:uninstalled", 1, CreateCountingGeodeTextureSnapshot(device, &destructionCount)));
+    renderer->uninstall();
   }
   EXPECT_EQ(destructionCount, 1);
+  EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 0u)
+      << "a cache cannot publish backing into a renderer after it uninstalls";
+  ImGui::DestroyContext(context);
 }
 
 TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures) {
