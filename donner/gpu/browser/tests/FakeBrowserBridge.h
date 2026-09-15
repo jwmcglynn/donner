@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <format>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -65,6 +66,13 @@ public:
   /// Every accepted call, one deterministic line each, in order.
   std::vector<std::string> calls;
 
+  /// The objects this bridge holds, by identifier.
+  ///
+  /// Shared rather than owned outright because the device owns the bridge: a test that watches
+  /// what device teardown released needs the registry to outlive the bridge that kept it.
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects =
+      std::make_shared<std::map<BrowserObjectId, BrowserObjectKind>>();
+
   /// Marks the mapping \p mappingId as holding \p bytes and ready to read.
   /// @param mappingId Mapping to complete. @param bytes Bytes the host will see.
   void completeMapping(BrowserObjectId mappingId, std::vector<uint8_t> bytes) {
@@ -80,12 +88,12 @@ public:
   /// Whether \p id names a live object of \p kind in this bridge's registry.
   /// @param kind Expected kind. @param id Identifier to check.
   bool hasObject(BrowserObjectKind kind, BrowserObjectId id) const {
-    const auto it = objects_.find(id);
-    return it != objects_.end() && it->second == kind;
+    const auto it = objects->find(id);
+    return it != objects->end() && it->second == kind;
   }
 
   /// Number of objects this bridge currently holds.
-  size_t objectCount() const { return objects_.size(); }
+  size_t objectCount() const { return objects->size(); }
 
   BridgeStatus beginDeviceRequest() override {
     if (beginStatus != BridgeStatus::Success) {
@@ -229,7 +237,7 @@ public:
     if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
       return status;
     }
-    objects_.erase(id);
+    objects->erase(id);
     mappings_.erase(id);
     calls.push_back(std::format("destroyObject kind={} id={}", BrowserObjectKindName(kind), id));
     return BridgeStatus::Success;
@@ -399,8 +407,8 @@ public:
 
   BridgeStatus mappedBytes(BrowserObjectId mappingId,
                            std::span<const uint8_t>& bytes) const override {
-    const auto registered = objects_.find(mappingId);
-    if (registered == objects_.end()) {
+    const auto registered = objects->find(mappingId);
+    if (registered == objects->end()) {
       return BridgeStatus::UnknownObject;
     }
     if (registered->second != BrowserObjectKind::BufferMapping) {
@@ -419,7 +427,7 @@ public:
         status != BridgeStatus::Success) {
       return status;
     }
-    objects_.erase(mappingId);
+    objects->erase(mappingId);
     mappings_.erase(mappingId);
     calls.push_back(std::format("unmapBuffer mapping={}", mappingId));
     return BridgeStatus::Success;
@@ -432,8 +440,8 @@ public:
 
   BridgeStatus surfaceCapabilities(BrowserObjectId surfaceId,
                                    BrowserSurfaceCapabilities& reported) const override {
-    const auto it = objects_.find(surfaceId);
-    if (it == objects_.end()) {
+    const auto it = objects->find(surfaceId);
+    if (it == objects->end()) {
       return BridgeStatus::UnknownObject;
     }
     if (it->second != BrowserObjectKind::Surface) {
@@ -464,13 +472,28 @@ public:
       calls.push_back(std::format("acquireCurrentTexture surface={} status=no-frame", surfaceId));
       return BridgeStatus::Success;
     }
-    return create(BrowserObjectKind::Texture, textureId,
-                  std::format("acquireCurrentTexture surface={} texture={}", surfaceId, textureId));
+    const BridgeStatus created =
+        create(BrowserObjectKind::Texture, textureId,
+               std::format("acquireCurrentTexture surface={} texture={}", surfaceId, textureId));
+    if (created == BridgeStatus::Success) {
+      frames_[surfaceId] = textureId;
+    }
+    return created;
   }
 
   BridgeStatus abandonCurrentTexture(BrowserObjectId surfaceId) override {
-    return operate(std::format("abandonCurrentTexture surface={}", surfaceId),
-                   BrowserObjectKind::Surface, surfaceId);
+    const BridgeStatus status = operate(std::format("abandonCurrentTexture surface={}", surfaceId),
+                                        BrowserObjectKind::Surface, surfaceId);
+    if (status != BridgeStatus::Success) {
+      return status;
+    }
+    // The canvas owns the frame texture, so taking it back is a matter of no longer naming it.
+    const auto frame = frames_.find(surfaceId);
+    if (frame != frames_.end()) {
+      objects->erase(frame->second);
+      frames_.erase(frame);
+    }
+    return BridgeStatus::Success;
   }
 
 private:
@@ -509,8 +532,8 @@ private:
   /// Refuses \p id unless it names a live object of \p kind. @param kind Expected kind.
   /// @param id Identifier to check.
   BridgeStatus require(BrowserObjectKind kind, BrowserObjectId id) const {
-    const auto it = objects_.find(id);
-    if (it == objects_.end()) {
+    const auto it = objects->find(id);
+    if (it == objects->end()) {
       return BridgeStatus::UnknownObject;
     }
     if (it->second != kind) {
@@ -526,10 +549,10 @@ private:
     if (const BridgeStatus status = guard(line); status != BridgeStatus::Success) {
       return status;
     }
-    if (id == kNoBrowserObject || objects_.contains(id)) {
+    if (id == kNoBrowserObject || objects->contains(id)) {
       return BridgeStatus::Failed;
     }
-    objects_[id] = kind;
+    (*objects)[id] = kind;
     calls.push_back(line);
     return BridgeStatus::Success;
   }
@@ -556,8 +579,8 @@ private:
     return BridgeStatus::Success;
   }
 
-  std::map<BrowserObjectId, BrowserObjectKind> objects_;
   std::map<BrowserObjectId, Mapping> mappings_;
+  std::map<BrowserObjectId, BrowserObjectId> frames_;
 };
 
 }  // namespace donner::gpu::browser

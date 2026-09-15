@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -166,20 +167,23 @@ TEST(BrowserDevice, AReusedSlotGetsAFreshIdentifierRatherThanTheRetiredOne) {
 }
 
 TEST(BrowserDevice, ReleasesEveryBrowserObjectWhenTheDeviceIsDestroyed) {
-  auto bridge = std::make_unique<FakeBrowserBridge>();
-  FakeBrowserBridge* raw = bridge.get();
-  BrowserDeviceRequest request = BrowserDeviceRequest::Begin(std::move(bridge));
-  Result<std::unique_ptr<BrowserDevice>> device = std::move(request).take();
-  ASSERT_THAT(device, HasResult());
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
 
-  {
-    std::unique_ptr<BrowserDevice> owned = std::move(device).result();
-    ASSERT_THAT(owned->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
-    ASSERT_THAT(owned->createTexture(SimpleTexture(TextureUsage::Sampled)), HasResult());
-    EXPECT_THAT(raw->objectCount(), 2u);
-  }
+  // The registry outlives the bridge, which the device owns: what teardown released has to stay
+  // observable after the device that did the releasing is gone.
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
 
-  EXPECT_THAT(raw->objectCount(), 0u);
+  // These handles deliberately outlive the device. A handle that does releases nothing, so this
+  // measures the device's own teardown rather than the handles unwinding first.
+  Result<Buffer> buffer = fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex));
+  ASSERT_THAT(buffer, HasResult());
+  Result<Texture> texture = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
+  ASSERT_THAT(texture, HasResult());
+  EXPECT_THAT(objects->size(), 2u);
+
+  fixture.device.reset();
+  EXPECT_THAT(objects->size(), 0u);
 }
 
 TEST(BrowserDevice, RefusesEveryOperationFromAContextThatDoesNotOwnTheDevice) {
