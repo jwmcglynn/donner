@@ -317,6 +317,119 @@ TEST(BrowserDevice, MirrorsARecordedRenderPassOntoTheBridgeInRecordingOrder) {
                           "endRenderPass", "endCommandBuffer serial=1"));
 }
 
+TEST(BrowserDevice, MirrorsARecordedComputePassOntoTheBridgeInRecordingOrder) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> storage = fixture.device->createBuffer(SimpleBuffer(BufferUsage::Storage));
+  ASSERT_THAT(storage, HasResult());
+
+  BindGroupLayoutDescriptor layoutDescriptor;
+  layoutDescriptor.label = RcString("computeLayout");
+  layoutDescriptor.entries.push_back(BindGroupLayoutEntry{
+      0, ShaderStage::Compute, BindingType::ReadOnlyStorageBuffer, TextureFormat::RGBA8Unorm});
+  Result<BindGroupLayout> bindGroupLayout = fixture.device->createBindGroupLayout(layoutDescriptor);
+  ASSERT_THAT(bindGroupLayout, HasResult());
+
+  BindGroupDescriptor groupDescriptor;
+  groupDescriptor.label = RcString("computeGroup");
+  groupDescriptor.layout = BindGroupLayoutRef(bindGroupLayout.result());
+  groupDescriptor.entries.push_back(
+      BindGroupEntry{0, BufferBinding{BufferRef(storage.result()), 0, 256}});
+  Result<BindGroup> bindGroup = fixture.device->createBindGroup(groupDescriptor);
+  ASSERT_THAT(bindGroup, HasResult());
+
+  PipelineLayoutDescriptor pipelineLayoutDescriptor;
+  pipelineLayoutDescriptor.label = RcString("computePipelineLayout");
+  pipelineLayoutDescriptor.bindGroupLayouts.push_back(BindGroupLayoutRef(bindGroupLayout.result()));
+  Result<PipelineLayout> pipelineLayout =
+      fixture.device->createPipelineLayout(pipelineLayoutDescriptor);
+  ASSERT_THAT(pipelineLayout, HasResult());
+
+  ShaderModuleDescriptor moduleDescriptor = SimpleShaderModule("compute");
+  moduleDescriptor.computeEntryPoints.push_back(
+      ComputeEntryPointInfo{RcString("computeMain"), WorkgroupSize{8, 8, 1}});
+  Result<ShaderModule> computeModule = fixture.device->createShaderModule(moduleDescriptor);
+  ASSERT_THAT(computeModule, HasResult());
+
+  ComputePipelineDescriptor pipelineDescriptor;
+  pipelineDescriptor.label = RcString("computePipeline");
+  pipelineDescriptor.layout = PipelineLayoutRef(pipelineLayout.result());
+  pipelineDescriptor.compute.module = ShaderModuleRef(computeModule.result());
+  pipelineDescriptor.compute.entryPoint = RcString("computeMain");
+  pipelineDescriptor.workgroupSize = WorkgroupSize{8, 8, 1};
+  Result<ComputePipeline> pipeline = fixture.device->createComputePipeline(pipelineDescriptor);
+  ASSERT_THAT(pipeline, HasResult());
+
+  Result<std::unique_ptr<CommandEncoder>> encoder = fixture.device->createCommandEncoder();
+  ASSERT_THAT(encoder, HasResult());
+  std::unique_ptr<CommandEncoder> commands = std::move(encoder).result();
+
+  Result<ComputePassEncoder*> pass = commands->beginComputePass(ComputePassDescriptor{});
+  ASSERT_THAT(pass, HasResult());
+  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setBindGroup(0, bindGroup.result()), IsOk());
+  ASSERT_THAT(pass.result()->dispatchWorkgroups(2, 3, 1), IsOk());
+  ASSERT_THAT(pass.result()->end(), IsOk());
+
+  Result<CommandBuffer> commandBuffer = commands->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+
+  const size_t beforeSubmit = fixture.bridge->calls.size();
+  ASSERT_THAT(fixture.device->submit(std::move(commandBuffer).result()), HasResult());
+
+  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
+                                          fixture.bridge->calls.end());
+  EXPECT_THAT(
+      replayed,
+      ElementsAre("beginCommandBuffer serial=1", "beginComputePass",
+                  "setComputePipeline pipeline=5", "setBindGroup index=0 bindGroup=3",
+                  "dispatchWorkgroups count=2x3x1", "endComputePass", "endCommandBuffer serial=1"));
+}
+
+TEST(BrowserDevice, MirrorsRecordedCopiesOntoTheBridge) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> source = fixture.device->createTexture(SimpleTexture(TextureUsage::CopySrc));
+  ASSERT_THAT(source, HasResult());
+  Result<Texture> destination = fixture.device->createTexture(SimpleTexture(TextureUsage::CopyDst));
+  ASSERT_THAT(destination, HasResult());
+
+  BufferDescriptor readbackDescriptor = SimpleBuffer(BufferUsage::CopyDst);
+  readbackDescriptor.byteSize = 1024;
+  Result<Buffer> readback = fixture.device->createBuffer(readbackDescriptor);
+  ASSERT_THAT(readback, HasResult());
+
+  Result<std::unique_ptr<CommandEncoder>> encoder = fixture.device->createCommandEncoder();
+  ASSERT_THAT(encoder, HasResult());
+  std::unique_ptr<CommandEncoder> commands = std::move(encoder).result();
+
+  ASSERT_THAT(commands->copyTextureToBuffer(TexelCopyTextureInfo{TextureRef(source.result())},
+                                            readback.result(), TexelCopyBufferLayout{0, 256, 4},
+                                            Extent2d{4, 4}),
+              IsOk());
+  ASSERT_THAT(commands->copyTextureToTexture(source.result(), destination.result(), Extent2d{2, 2},
+                                             Origin2d{1, 1}, Origin2d{0, 2}),
+              IsOk());
+
+  Result<CommandBuffer> commandBuffer = commands->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+
+  const size_t beforeSubmit = fixture.bridge->calls.size();
+  ASSERT_THAT(fixture.device->submit(std::move(commandBuffer).result()), HasResult());
+
+  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
+                                          fixture.bridge->calls.end());
+  EXPECT_THAT(replayed,
+              ElementsAre("beginCommandBuffer serial=1",
+                          "copyTextureToBuffer texture=1 buffer=3 offset=0 bytesPerRow=256 "
+                          "rowsPerImage=4 size=4x4",
+                          "copyTextureToTexture source=1 destination=2 sourceOrigin=(1,1) "
+                          "destinationOrigin=(0,2) size=2x2",
+                          "endCommandBuffer serial=1"));
+}
+
 TEST(BrowserDevice, ReportsTheSerialTheBrowserHasFinished) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
