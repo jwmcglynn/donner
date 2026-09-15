@@ -1919,6 +1919,25 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
 
 VulkanDevice::VulkanDevice() : impl_(std::make_unique<Impl>()) {}
 
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateForTeardownTest(const VulkanApi* api,
+                                                                  uint64_t instanceHandle,
+                                                                  uint64_t deviceHandle,
+                                                                  uint64_t commandPoolHandle) {
+  std::unique_ptr<VulkanDevice> result(new VulkanDevice());
+  result->impl_->api = api;
+  static_assert(sizeof(result->impl_->instance) == sizeof(instanceHandle));
+  static_assert(sizeof(result->impl_->device) == sizeof(deviceHandle));
+  static_assert(sizeof(result->impl_->commandPool) == sizeof(commandPoolHandle));
+  std::memcpy(&result->impl_->instance, &instanceHandle, sizeof(instanceHandle));
+  std::memcpy(&result->impl_->device, &deviceHandle, sizeof(deviceHandle));
+  std::memcpy(&result->impl_->commandPool, &commandPoolHandle, sizeof(commandPoolHandle));
+  return result;
+}
+
+void VulkanDevice::attachSurfaceForTeardownTest(std::unique_ptr<VulkanSwapchain> surface) {
+  impl_->surfaces.push_back(std::move(surface));
+}
+
 VulkanDevice::~VulkanDevice() {
   if (impl_->device != VK_NULL_HANDLE) {
     // Wait for in-flight submissions so deferred destructions drain before teardown. On timeout

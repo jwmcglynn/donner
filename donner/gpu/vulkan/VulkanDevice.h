@@ -14,6 +14,7 @@
 namespace donner::gpu::vulkan {
 
 struct VulkanApi;
+class VulkanSwapchain;
 
 /// Selects presentation instance extensions from the names a loader offers.
 /// Exposed for deterministic platform-companion extension tests.
@@ -275,6 +276,15 @@ public:
 
   /// Returns borrowed native objects solely for deterministic backend synchronization tests.
   NativeContextForTest nativeContextForTest() const;
+
+  /// Builds an otherwise-empty device owner around fake native handles for teardown tests.
+  static std::unique_ptr<VulkanDevice> CreateForTeardownTest(const VulkanApi* api,
+                                                             uint64_t instanceHandle,
+                                                             uint64_t deviceHandle,
+                                                             uint64_t commandPoolHandle);
+
+  /// Attaches a real swapchain owner to the fake device teardown graph.
+  void attachSurfaceForTeardownTest(std::unique_ptr<VulkanSwapchain> surface);
 
   /// Snapshot of queued buffer-write ownership, without polling the queue.
   struct BufferWriteStats {

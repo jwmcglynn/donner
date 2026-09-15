@@ -83,6 +83,19 @@ VKAPI_ATTR void VKAPI_CALL RecordDestroySurface(VkInstance, VkSurfaceKHR,
   gTeardownRecorder->calls.push_back("destroy-surface");
 }
 
+VKAPI_ATTR void VKAPI_CALL RecordDestroyCommandPool(VkDevice, VkCommandPool,
+                                                    const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-command-pool");
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordDestroyDevice(VkDevice, const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-device");
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordDestroyInstance(VkInstance, const VkAllocationCallbacks*) {
+  gTeardownRecorder->calls.push_back("destroy-instance");
+}
+
 template <typename T>
 T FakeHandle(uint64_t value) {
   T result{};
@@ -95,7 +108,7 @@ T FakeHandle(uint64_t value) {
 
 class VulkanSwapchainTestAccess {
 public:
-  static void RunTeardown(TeardownRecorder& recorder) {
+  static VulkanApi MakeApi() {
     VulkanApi api;
     api.vkDeviceWaitIdle = RecordDeviceWaitIdle;
     api.vkWaitForFences = RecordWaitForFences;
@@ -105,14 +118,18 @@ public:
     api.vkDestroySemaphore = RecordDestroySemaphore;
     api.vkDestroySwapchainKHR = RecordDestroySwapchain;
     api.vkDestroySurfaceKHR = RecordDestroySurface;
+    api.vkDestroyCommandPool = RecordDestroyCommandPool;
+    api.vkDestroyDevice = RecordDestroyDevice;
+    api.vkDestroyInstance = RecordDestroyInstance;
+    return api;
+  }
 
+  static std::unique_ptr<VulkanSwapchain> MakeSurface(const VulkanApi* api) {
     VulkanSurfaceContext context;
-    context.api = &api;
+    context.api = api;
     context.instance = FakeHandle<VkInstance>(1);
     context.device = FakeHandle<VkDevice>(2);
     context.commandPool = FakeHandle<VkCommandPool>(3);
-
-    gTeardownRecorder = &recorder;
     auto swapchain = std::unique_ptr<VulkanSwapchain>(
         new VulkanSwapchain(context, FakeHandle<VkSurfaceKHR>(4), true));
     swapchain->swapchain_ = FakeHandle<VkSwapchainKHR>(5);
@@ -122,7 +139,25 @@ public:
     swapchain->acquireSemaphores_.push_back(FakeHandle<VkSemaphore>(7));
     swapchain->pending_.push_back(
         VulkanSwapchain::PendingSubmission{FakeHandle<VkFence>(8), FakeHandle<VkCommandBuffer>(9)});
+    return swapchain;
+  }
+
+  static void RunTeardown(TeardownRecorder& recorder) {
+    VulkanApi api = MakeApi();
+    gTeardownRecorder = &recorder;
+    std::unique_ptr<VulkanSwapchain> swapchain = MakeSurface(&api);
     swapchain.reset();
+    gTeardownRecorder = nullptr;
+  }
+
+  static void RunOwnerTeardown(TeardownRecorder& recorder, size_t surfaceCount = 1) {
+    VulkanApi api = MakeApi();
+    gTeardownRecorder = &recorder;
+    std::unique_ptr<VulkanDevice> device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+    for (size_t i = 0; i < surfaceCount; ++i) {
+      device->attachSurfaceForTeardownTest(MakeSurface(&api));
+    }
+    device.reset();
     gTeardownRecorder = nullptr;
   }
 };
@@ -323,6 +358,22 @@ TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhenFenceCompletio
   recorder.fenceResults = {VK_SUCCESS, VK_TIMEOUT};
   VulkanSwapchainTestAccess::RunTeardown(recorder);
   EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences", "reset-fences", "wait-fences"));
+}
+
+TEST(VulkanPresentationCreationTest, OwnerRetainsEveryNativePrerequisiteAfterPresentTimeout) {
+  TeardownRecorder recorder;
+  recorder.fenceResults = {VK_TIMEOUT};
+  VulkanSwapchainTestAccess::RunOwnerTeardown(recorder);
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+}
+
+TEST(VulkanPresentationCreationTest, LaterSurfaceFailureRetainsAnAlreadyPreparedSibling) {
+  TeardownRecorder recorder;
+  recorder.fenceResults = {VK_SUCCESS, VK_SUCCESS, VK_TIMEOUT};
+  VulkanSwapchainTestAccess::RunOwnerTeardown(recorder, 2);
+  EXPECT_THAT(recorder.calls,
+              testing::ElementsAre("wait-fences", "reset-fences", "wait-fences",
+                                   "free-command-buffer", "destroy-fence", "wait-fences"));
 }
 
 TEST_F(VulkanSurfaceTest, PointsAWindowSystemKindAtTheEmbedderPath) {
