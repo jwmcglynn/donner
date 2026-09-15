@@ -336,8 +336,7 @@ TEST_F(TextToolTest, CommitUndoRemovesTheWholeSessionAtOnce) {
   type("Hi");
   tool.toggleBold(app);
   ASSERT_TRUE(tool.commit(app));
-  // The tool flushes each keystroke, so this flush has no pending mutations;
-  // it must still record the deferred session undo entry.
+  // An extra no-op frame must not duplicate the completed session undo entry.
   app.flushFrame();
 
   ASSERT_TRUE(app.canUndo());

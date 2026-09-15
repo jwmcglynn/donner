@@ -983,6 +983,7 @@ bool TextTool::commit(EditorApp& editor) {
     // clicked into existing text and clicked away without typing).
     editor.recordDocumentSourceUndoOnNextFlush(createdBySession_ ? "Insert text" : "Edit text",
                                                *sessionText_, *sessionBeforeSource_);
+    editor.flushFrame();
   }
 
   cancel();
