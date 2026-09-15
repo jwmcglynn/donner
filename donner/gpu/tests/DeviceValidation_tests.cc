@@ -7,9 +7,11 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -1289,6 +1291,53 @@ TEST_F(BufferMappingTests, UnmappingAMappingTwiceIsReportedOnTheSecondCall) {
 
   EXPECT_THAT(device_.unmapBuffer(std::move(mapping)), IsGpuError(GpuErrorType::InvalidHandle));
   EXPECT_EQ(device_.unmapCalls, 1) << "A second release must not reach the backend again";
+}
+
+TEST_F(BufferMappingTests, SubmittingWorkThatWritesAMappedBufferIsRefused) {
+  // The mapped range aliases the buffer's own storage, not a snapshot of it, and the mapping's
+  // readiness is fixed at the submission it was taken against. Letting later work write that
+  // buffer would leave the host reading bytes the GPU is concurrently producing while the mapping
+  // still reports itself readable.
+  const Buffer buffer = readableBuffer(1024);
+  const Texture target = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 1024));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, buffer,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("open mapping")));
+}
+
+TEST_F(BufferMappingTests, WorkUsingTheBufferSubmitsOnceTheMappingIsReleased) {
+  Buffer buffer = readableBuffer(1024);
+  const Texture target = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 1024));
+  ASSERT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, buffer,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())), HasResult())
+      << "Releasing the mapping must hand the buffer back to the GPU";
+}
+
+TEST_F(BufferMappingTests, WritingAMappedBufferIsRefused) {
+  const Buffer buffer = readableBuffer();
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  const std::vector<uint8_t> payload(16, 0x5A);
+
+  EXPECT_THAT(device_.writeBuffer(buffer, 0, payload),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("open mapping")))
+      << "A queue write would change bytes the host is holding a view of";
 }
 
 TEST_F(BufferMappingTests, ABackendWithoutMappingReportsItUnsupported) {
