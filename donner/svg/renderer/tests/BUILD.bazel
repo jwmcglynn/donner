@@ -528,6 +528,12 @@ donner_cc_test(
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    # The full-text variant runs the same face-selection contract through FreeType and HarfBuzz,
+    # which matters most for the codepoint-coverage fallback: the two text backends answer glyph
+    # coverage independently, so a face that covers a codepoint under one must under the other.
+    variants = [
+        "text_full",
+    ],
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
