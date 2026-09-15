@@ -2102,10 +2102,13 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   if (!output) {
     return {};
   }
+  // The tile buffer is filled by copying from the source, and a texture-to-texture copy requires
+  // both sides to have one format, so it takes the source's rather than the intermediate one: an
+  // embedder surface can be BGRA.
   const FilterTexture tileInput =
       arena.createRuntimeTexture({"FilterTileInput",
                                   {plan.tileWidth, plan.tileHeight},
-                                  gpu::TextureFormat::RGBA8Unorm,
+                                  fullSource.format(),
                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   if (!tileInput) {
     return {};
