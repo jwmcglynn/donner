@@ -1,0 +1,90 @@
+load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+# donner::gpu::browser - the browser backend of the Donner GPU runtime.
+#
+# The backend and the contract it speaks to the browser through are ordinary C++ with no
+# Emscripten dependency, so they compile and are tested on every host the repo builds on. Only the
+# implementation that actually calls the browser is WebAssembly-only, which keeps the identifier,
+# ownership, mapping and device-loss behavior under the normal test gate instead of reachable only
+# from a browser.
+
+donner_cc_library(
+    name = "browser_device",
+    srcs = [
+        "BrowserBridge.cc",
+        "BrowserDevice.cc",
+        "BrowserObjectTable.cc",
+        "BrowserWireCodes.cc",
+    ],
+    hdrs = [
+        "BrowserBridge.h",
+        "BrowserDevice.h",
+        "BrowserObjectTable.h",
+        "BrowserWireCodes.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
+# The browser side of the bridge: the JavaScript that owns the real objects, and the C++ that
+# calls into it. WebAssembly-only, because both halves exist to talk to a browser.
+#
+# The JavaScript is linked with `--js-library`; a consumer lists `library_donner_gpu.js` in
+# `additional_linker_inputs` and passes
+# `--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)`.
+donner_cc_library(
+    name = "emscripten_browser_bridge",
+    srcs = ["EmscriptenBrowserBridge.cc"],
+    hdrs = ["EmscriptenBrowserBridge.h"],
+    target_compatible_with = select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":browser_device",
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
+exports_files(["library_donner_gpu.js"])
+
+# A bridge that behaves like the browser side without being one: it keeps its own object registry
+# and applies the same identifier, kind and ownership checks, so a test that drives the backend
+# through it exercises both ends of the contract rather than only the near one.
+donner_cc_library(
+    name = "fake_browser_bridge",
+    testonly = 1,
+    hdrs = ["tests/FakeBrowserBridge.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":browser_device",
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
+donner_cc_test(
+    name = "browser_tests",
+    srcs = [
+        "tests/BrowserDevice_tests.cc",
+        "tests/BrowserObjectTable_tests.cc",
+        "tests/BrowserWireCodes_tests.cc",
+    ],
+    deps = [
+        ":browser_device",
+        ":fake_browser_bridge",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_package()
