@@ -1230,14 +1230,14 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/font-family",
             {
-                // The generic-family goldens (cursive, fantasy, monospace, sans-serif, serif) also
-                // differ from Donner on 4 pixels of the plain frame <rect>, which no font choice
-                // can affect, so they were produced from a different rasterizer and font set than
-                // the ones checked in here. Donner reproduces every golden in this directory that
-                // was rendered from the vendored faces (noto-sans, double-quoted, fallback-2, and
-                // - with full shaping - font-list and source-sans-pro) exactly. Which face each
-                // family resolves to is asserted directly in FontSelection_tests.cc, so these
-                // allowances no longer stand in for selection coverage.
+                // The five generic-family goldens (cursive, fantasy, monospace, sans-serif,
+                // serif) disagree with the rest of this directory on the same four pixels of the
+                // plain frame <rect>, at (3,3), (496,3), (3,496) and (496,496), which no font
+                // choice can affect. They come from a different rendering than the goldens Donner
+                // matches exactly: noto-sans, double-quoted and fallback-2, plus font-list and
+                // source-sans-pro under full shaping. Which face each family resolves to is
+                // asserted directly in FontSelection_tests.cc, so these allowances no longer stand
+                // in for selection coverage.
                 {"bold-sans-serif.svg",
                  Params::WithThreshold(
                      kDefaultThreshold, 5150,
@@ -1245,32 +1245,37 @@ INSTANTIATE_TEST_SUITE_P(
                      "Bold, whose ink box is 205x73 px against the golden's 181x67 px")},
                 {"cursive.svg",
                  Params::WithThreshold(kDefaultThreshold, 4700,
-                                       "Larger threshold: golden predates the vendored Yellowtail "
-                                       "and disagrees on the frame <rect> corners")},
+                                       "Larger threshold: no checked-in face reproduces "
+                                       "this golden, which also disagrees on the frame <rect> "
+                                       "corners")},
                 {"fallback-1.svg",
                  Params::Skip("Golden is byte-identical to sans-serif.png, which is a centered "
                               "different-family rendering, so it cannot match this left-anchored "
                               "x=70 text")},
                 {"fantasy.svg",
                  Params::WithThreshold(kDefaultThreshold, 5050,
-                                       "Larger threshold: golden predates the vendored Sedgwick "
-                                       "Ave Display and disagrees on the frame <rect> corners")},
+                                       "Larger threshold: no checked-in face reproduces "
+                                       "this golden, which also disagrees on the frame <rect> "
+                                       "corners")},
                 {"font-list.svg",
                  Params().withSimpleTextMaxPixels(1300).withReason(
                      "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
                      "does not read; full shaping matches the golden exactly")},
                 {"monospace.svg",
                  Params::WithThreshold(kDefaultThreshold, 600,
-                                       "Larger threshold: golden predates the vendored Noto Mono "
-                                       "and disagrees on the frame <rect> corners")},
+                                       "Larger threshold: the golden matches the checked-in "
+                                       "Noto Mono advances exactly but draws a 3 px shorter cap "
+                                       "height, and disagrees on the frame <rect> corners")},
                 {"sans-serif.svg",
                  Params::WithThreshold(kDefaultThreshold, 1900,
-                                       "Larger threshold: golden predates the vendored Noto Sans "
-                                       "and disagrees on the frame <rect> corners")},
+                                       "Larger threshold: no checked-in face reproduces "
+                                       "this golden, which also disagrees on the frame <rect> "
+                                       "corners")},
                 {"serif.svg",
                  Params::WithThreshold(kDefaultThreshold, 4200,
-                                       "Larger threshold: golden predates the vendored Noto Serif "
-                                       "and disagrees on the frame <rect> corners")},
+                                       "Larger threshold: no checked-in face reproduces "
+                                       "this golden, which also disagrees on the frame <rect> "
+                                       "corners")},
                 {"source-sans-pro.svg",
                  Params().withSimpleTextMaxPixels(1300).withReason(
                      "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
