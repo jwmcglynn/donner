@@ -77,6 +77,10 @@ declare global {
       displayedDocVersion: number;
       overlayVersionGateSuppressions: number;
     };
+    __donnerSetOverlayState?: (
+      key: "compositorTileOverlay" | "geometryDebugOverlay",
+      enabled: boolean,
+    ) => boolean;
     __donnerViewportStats?: ViewportStats;
     __donnerEditorFrameRequested?: boolean;
   }
@@ -756,49 +760,23 @@ async function openBasicShapes(page: Page): Promise<{
   return { canvasBounds, documentClip };
 }
 
-async function toggleViewMenuItem(page: Page, canvasX: number, itemY: number): Promise<void> {
-  await page.mouse.click(canvasX + 260, 11);
-  await page.mouse.click(canvasX + 330, itemY);
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
-}
-
-// Drive a View-menu overlay toggle to a WANTED state and verify it took effect
-// against the app's published `__donnerOverlayStats`. The menu rows can only be
-// reached by fixed pixel offsets, and a click that lands between rows silently
-// does nothing while leaving the menu open - which is exactly how a runner with
-// slightly different row metrics kept an overlay enabled that the test believed
-// it had disabled. Escape closes any left-open menu before each retry.
+// Drive the same overlay state transition as the View menu without making the
+// rendering assertion depend on platform-specific ImGui row metrics.
 async function setViewOverlayState(
   page: Page,
-  canvasX: number,
-  itemY: number,
   key: "compositorTileOverlay" | "geometryDebugOverlay",
   enabled: boolean,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 4; ++attempt) {
-    const current = await page.evaluate(
-      (k) => window.__donnerOverlayStats?.[k],
-      key,
-    );
-    if (current === enabled) {
-      return;
-    }
-    await toggleViewMenuItem(page, canvasX, itemY);
-    const flipped = await page
-      .waitForFunction(
-        ({ k, want }) => window.__donnerOverlayStats?.[k] === want,
-        { k: key, want: enabled },
-        { timeout: scaledMs(2_000) },
-      )
-      .then(() => true)
-      .catch(() => false);
-    if (flipped) {
-      return;
-    }
-    await page.keyboard.press("Escape");
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
-  }
-  throw new Error(`the ${key} menu toggle never reached ${enabled} after 4 attempts`);
+  const accepted = await page.evaluate(
+    ({ k, want }) => window.__donnerSetOverlayState?.(k, want) ?? false,
+    { k: key, want: enabled },
+  );
+  expect(accepted, `the browser overlay control rejected ${key}=${enabled}`).toBe(true);
+  await page.waitForFunction(
+    ({ k, want }) => window.__donnerOverlayStats?.[k] === want,
+    { k: key, want: enabled },
+    { timeout: scaledMs(2_000) },
+  );
 }
 
 async function waitForBrowserComposite(page: Page): Promise<void> {
@@ -896,7 +874,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   const beforeCompositorResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await setViewOverlayState(page, canvasBounds.x, 155, "compositorTileOverlay", true);
+  await setViewOverlayState(page, "compositorTileOverlay", true);
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeCompositorResults,
@@ -924,7 +902,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
 
   // Disable the independent compositor overlay before checking renderer
   // geometry pixels, so tile labels cannot masquerade as Slug edges.
-  await setViewOverlayState(page, canvasBounds.x, 155, "compositorTileOverlay", false);
+  await setViewOverlayState(page, "compositorTileOverlay", false);
   await waitForBrowserComposite(page);
   // Toggling an overlay drops the uploaded composited textures (the same
   // document version renders different pixels, so the cache cannot reuse
@@ -979,7 +957,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   const beforeGeometryResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await setViewOverlayState(page, canvasBounds.x, 176, "geometryDebugOverlay", true);
+  await setViewOverlayState(page, "geometryDebugOverlay", true);
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeGeometryResults,
