@@ -97,6 +97,61 @@ private:
   size_t matchingRequests_ = 0;
 };
 
+/// Texture pool with the renderer's deferral: a release only becomes available for reuse once
+/// the frame it was recorded into has ended.
+class PoolingTextureAllocator final : public FilterTextureAllocator {
+public:
+  /// @param device Device the pool creates textures on.
+  explicit PoolingTextureAllocator(GeodeWgpuAdapterDevice& device) : device_(device) {}
+
+  gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& descriptor) override {
+    for (size_t i = 0; i < free_.size(); ++i) {
+      if (Matches(free_[i].desc, descriptor)) {
+        gpu::Texture texture = std::move(free_[i].texture);
+        free_.erase(free_.begin() + static_cast<ptrdiff_t>(i));
+        reissued.push_back(IdentityOf(texture));
+        issued.push_back(IdentityOf(texture));
+        return texture;
+      }
+    }
+    gpu::Texture texture = gpu::GetResultOrFail(device_.createTexture(descriptor));
+    issued.push_back(IdentityOf(texture));
+    return texture;
+  }
+
+  void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
+                                      const gpu::TextureDescriptor& desc) override {
+    pending_.push_back({std::move(texture), desc});
+  }
+
+  /// Makes everything released during the frame available again, as the renderer does once the
+  /// frame's command buffer has submitted.
+  void endFrame() {
+    for (Entry& entry : pending_) {
+      free_.push_back(std::move(entry));
+    }
+    pending_.clear();
+  }
+
+  std::vector<TextureIdentity> issued;    //!< Every texture handed out, in order.
+  std::vector<TextureIdentity> reissued;  //!< The subset that came back out of the free list.
+
+private:
+  struct Entry {
+    gpu::Texture texture;
+    gpu::TextureDescriptor desc;
+  };
+
+  static bool Matches(const gpu::TextureDescriptor& lhs, const gpu::TextureDescriptor& rhs) {
+    return lhs.size == rhs.size && lhs.format == rhs.format && lhs.usage == rhs.usage &&
+           lhs.sampleCount == rhs.sampleCount;
+  }
+
+  GeodeWgpuAdapterDevice& device_;
+  std::vector<Entry> pending_;
+  std::vector<Entry> free_;
+};
+
 svg::components::FilterGraph MakeGraph(bool composite) {
   using namespace svg::components;
   FilterGraph graph;
@@ -177,7 +232,7 @@ protected:
   /// renderer does, so the allocator observes every intermediate and the output retired exactly
   /// once.
   ExecutedFilter execute(const svg::components::FilterGraph& graph,
-                         RefusingTextureAllocator& allocator,
+                         FilterTextureAllocator& allocator,
                          svg::components::FilterExecutionBudget* budget = nullptr,
                          std::optional<FilterTilePlan> plan = std::nullopt) {
     FilterExecutionResult result =
@@ -760,32 +815,51 @@ TEST_F(GeodeFilterEngineTest, RepeatedResizesReallocateAndRetireEverythingTheyTa
   }
 }
 
-TEST_F(GeodeFilterEngineTest, OverlappingExecutionsNeverShareAnIntermediate) {
-  // Both executions record into the same frame command encoder, so the first one's intermediates
-  // are still referenced by unsubmitted work while the second one allocates. Reusing one would
-  // overwrite pixels the recorded passes have not read yet.
-  RefusingTextureAllocator first(device_->adapterDevice(), "");
-  RefusingTextureAllocator second(device_->adapterDevice(), "");
-  const ExecutedFilter firstResult = execute(MakeGraph(false), first);
-  const ExecutedFilter secondResult = execute(MakeGraph(true), second);
+TEST_F(GeodeFilterEngineTest, OverlappingExecutionsDoNotReuseAnUnsubmittedIntermediate) {
+  // Two graphs in one frame record into the same command encoder, so the first execution's
+  // intermediates are still referenced by unsubmitted work while the second one runs. They come
+  // back to the pool as frame-end releases, and nothing may hand them out again until the frame
+  // ends.
+  PoolingTextureAllocator pool(device_->adapterDevice());
+  const ExecutedFilter first = execute(MakeGraph(false), pool);
+  const size_t issuedByFirst = pool.issued.size();
+  const ExecutedFilter second = execute(MakeGraph(false), pool);
 
-  ASSERT_THAT(firstResult.kind, testing::Eq(FilterExecutionResult::Kind::Output));
-  ASSERT_THAT(secondResult.kind, testing::Eq(FilterExecutionResult::Kind::Output));
-  EXPECT_THAT(second.requests, testing::Gt(0u));
-  for (const TextureIdentity& identity : second.issued) {
-    EXPECT_THAT(first.issued, testing::Not(testing::Contains(identity)));
+  ASSERT_THAT(first.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  ASSERT_THAT(second.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  ASSERT_THAT(issuedByFirst, testing::Gt(0u));
+  ASSERT_THAT(pool.issued, testing::SizeIs(testing::Gt(issuedByFirst)));
+  const std::vector<TextureIdentity> firstIssued(
+      pool.issued.begin(), pool.issued.begin() + static_cast<ptrdiff_t>(issuedByFirst));
+  for (size_t i = issuedByFirst; i < pool.issued.size(); ++i) {
+    EXPECT_THAT(firstIssued, testing::Not(testing::Contains(pool.issued[i])));
   }
-  EXPECT_THAT(firstResult.identity, testing::Not(testing::Eq(secondResult.identity)));
+  EXPECT_THAT(pool.reissued, testing::IsEmpty());
+
+  // The same pool does recycle once the frame ends, so the disjointness above is a real deferral
+  // and not a pool that never reuses anything.
+  pool.endFrame();
+  const ExecutedFilter third = execute(MakeGraph(false), pool);
+  ASSERT_THAT(third.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  EXPECT_THAT(pool.reissued, testing::Not(testing::IsEmpty()));
 }
 
-TEST_F(GeodeFilterEngineTest, RefusedAllocationRetiresEveryTextureItAlreadyTook) {
+TEST_F(GeodeFilterEngineTest, RefusalDetachesNothingAndRetiresEachTextureExactlyOnce) {
   RefusingTextureAllocator allocator(device_->adapterDevice(), "FilterSubregionClipOutput");
   const ExecutedFilter result = execute(MakeGraph(false), allocator);
 
   EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
-  EXPECT_THAT(allocator.refusals, testing::Eq(1u));
-  EXPECT_THAT(allocator.requestsAfterRefusal, testing::Eq(0u));
-  EXPECT_THAT(allocator.retired, testing::SizeIs(allocator.allocations));
+  // A failure hands the caller nothing, so every texture the execution took comes back through
+  // the pool exactly once. A detach that also left its record in the arena, or one that removed a
+  // record the arena still had to release, shows up here as a duplicate or a missing identity
+  // rather than as a count that happens to match.
+  EXPECT_THAT(result.identity, testing::Eq(TextureIdentity{}));
+  std::vector<TextureIdentity> retired;
+  retired.reserve(allocator.retired.size());
+  for (const gpu::Texture& texture : allocator.retired) {
+    retired.push_back(IdentityOf(texture));
+  }
+  EXPECT_THAT(retired, testing::UnorderedElementsAreArray(allocator.issued));
 }
 
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,

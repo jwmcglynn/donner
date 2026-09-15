@@ -170,6 +170,7 @@ struct FilterResourceArena {
   /// Makes dead intermediates available after a whole node has finished recording.
   /// Both color representations of every retained logical value stay live.
   void retainValues(std::span<const FilterTexture> values) {
+    UTILS_RELEASE_ASSERT_MSG(!detached_, "filter arena retained values after detaching its output");
     const auto live = [&](FilterTexture texture) {
       return texture && std::find(values.begin(), values.end(), texture) != values.end();
     };
@@ -193,6 +194,8 @@ struct FilterResourceArena {
   /// hold it across further allocations.
   /// @param desc Descriptor the intermediate is allocated with.
   FilterTexture createRuntimeTexture(const gpu::TextureDescriptor& desc) {
+    UTILS_RELEASE_ASSERT_MSG(!detached_,
+                             "filter arena allocated a texture after detaching its output");
     for (OwnedTexture& owned : textures_) {
       if (owned.available && owned.desc.size == desc.size && owned.desc.format == desc.format &&
           owned.desc.usage == desc.usage && owned.desc.sampleCount == desc.sampleCount) {
@@ -220,9 +223,13 @@ struct FilterResourceArena {
   ///
   /// The record stays in place holding a null handle rather than being erased, because every
   /// other value of this execution points into the same storage.
+  /// Nothing may allocate or retain through this arena afterwards: the moved-from record is
+  /// still in the table, and marking it available would hand the caller's own output out again.
+  /// \ref createRuntimeTexture and \ref retainValues assert that.
   /// @param value Arena-allocated value to hand over; must not be a borrowed texture.
   /// @param outDesc Receives the descriptor the texture must be released with.
   gpu::Texture detachTexture(FilterTexture value, gpu::TextureDescriptor* outDesc) {
+    detached_ = true;
     for (OwnedTexture& owned : textures_) {
       if (&owned.texture == value.texture) {
         *outDesc = owned.desc;
@@ -238,6 +245,8 @@ struct FilterResourceArena {
   /// @param texture Live runtime texture. @param label Debug label for the view.
   const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
     // One view per named texture per frame, for the same reason the names themselves are reused.
+    // A hit keeps the label the view was opened with: the views are otherwise identical, and the
+    // label only names the pass in diagnostics.
     for (const auto& [named, view] : viewByTexture_) {
       if (named == &texture) {
         return view;
@@ -504,6 +513,8 @@ private:
   /// both smaller and faster than a hash table over that many entries.
   std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
   uint64_t textureBytes = 0;
+  /// Set once the output has been handed to the caller; see \ref detachTexture.
+  bool detached_ = false;
   struct ColorValue {
     FilterTexture srgb;
     FilterTexture linear;
