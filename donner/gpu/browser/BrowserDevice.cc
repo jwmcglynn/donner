@@ -343,6 +343,11 @@ Result<BrowserObjectId> BrowserDevice::registerObject(BrowserObjectKind kind, ui
   // while orphaning the frame.
   if (kind == BrowserObjectKind::Texture) {
     releaseFramesNaming(slotIndex);
+  } else if (kind == BrowserObjectKind::Surface) {
+    // The mirror of the texture case: a surface slot can be reused while this device still records
+    // a frame against it, and the frame has to go back to the surface that supplied it before that
+    // surface is displaced, or the record would outlive the surface it names.
+    releaseAcquiredFrame(slotIndex);
   }
 
   const BrowserObjectInsertion insertion = objects_.insert(kind, slotIndex);
@@ -1149,11 +1154,7 @@ Status BrowserDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t buffe
   return OkStatus();
 }
 
-MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
-                                                double /*sliceSeconds*/) {
-  // Nothing is slept away here: the browser settles a mapping on its own event loop, so a wait
-  // that blocked this thread would prevent the very progress it is waiting for. The runtime's
-  // wait loop rests between slices, which is what lets the browser run.
+MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
   if (bridge_->isDeviceLost()) {
     return MapSliceState::DeviceLost;
   }
@@ -1162,6 +1163,17 @@ MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
   if (!mappingId.has_value()) {
     return MapSliceState::Failed;
   }
+
+  if (const MapSliceState state = bridge_->mappingState(*mappingId);
+      state != MapSliceState::Pending) {
+    return state;
+  }
+
+  // Still pending, so spend the slice giving the browser the thread rather than returning at once.
+  // What settles a mapping is a promise callback, and that cannot run while this thread holds the
+  // event loop; a slice spent resting instead of yielding would let the whole budget elapse with
+  // the browser never getting the chance to finish the mapping it was asked for.
+  bridge_->yieldToBrowser(sliceSeconds);
   return bridge_->mappingState(*mappingId);
 }
 

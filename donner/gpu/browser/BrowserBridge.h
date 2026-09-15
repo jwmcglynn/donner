@@ -390,6 +390,18 @@ public:
   /// State of a mapping the browser has been asked for. @param mappingId Mapping to query.
   virtual MapSliceState mappingState(BrowserObjectId mappingId) const = 0;
 
+  /**
+   * Gives the browser up to \p seconds of this thread to make progress.
+   *
+   * A browser settles a mapping on its own event loop, so a caller that waits by blocking prevents
+   * the very progress it is waiting for: the promise that would mark the mapping ready cannot run
+   * until this thread yields. Resting between slices is not enough, because resting is still not
+   * yielding. This is the call that hands the loop back.
+   *
+   * @param seconds Longest this call may yield for.
+   */
+  virtual void yieldToBrowser(double seconds) = 0;
+
   /// Bytes of a completed mapping, valid until the mapping is released. Returns an empty span
   /// with a non-success status when the mapping is not readable. @param mappingId Mapping to
   /// read. @param bytes Receives the mapped bytes on success.

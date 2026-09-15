@@ -69,6 +69,7 @@ var LibraryDonnerGpu = {
     queue: null,
     requestState: 1,  // Pending.
     requestError: '',
+    requested: false,
     lost: false,
     lostReason: '',
     completedSerial: 0,
@@ -122,6 +123,46 @@ var LibraryDonnerGpu = {
         DonnerGpu.objects = new Map();
         DonnerGpu.mappings = new Map();
       }
+    },
+
+    // Everything below belongs to one browser device. This state is per context - each Emscripten
+    // worker has its own copy of this library - so a second device obtained here would share one
+    // object map with the first while each C++ side numbers its identifiers from one. Handing the
+    // device back clears all of it, so a later bridge starts from nothing rather than inheriting a
+    // lost flag, a completed serial ahead of its own submissions, or another device's objects.
+    resetDeviceState: function() {
+      DonnerGpu.device = null;
+      DonnerGpu.queue = null;
+      DonnerGpu.requestState = DonnerGpu.kRequestPending;
+      DonnerGpu.requestError = '';
+      DonnerGpu.requested = false;
+      DonnerGpu.lost = false;
+      DonnerGpu.lostReason = '';
+      DonnerGpu.completedSerial = 0;
+      DonnerGpu.encoder = null;
+      DonnerGpu.recordingSerial = 0;
+      DonnerGpu.pass = null;
+      DonnerGpu.attachments = null;
+      DonnerGpu.pending = null;
+      DonnerGpu.objects = null;
+      DonnerGpu.mappings = null;
+    },
+
+    // Resolves the canvas a selector names, from whichever context is asking.
+    //
+    // A worker has no document. A canvas reaches one by being transferred, and Emscripten records
+    // transferred canvases under the bare id, so that registry is what a worker looks in. The
+    // document lookup stays for the main thread.
+    resolveCanvas: function(selector) {
+      var id = selector.charAt(0) === '#' ? selector.substring(1) : selector;
+      if (typeof GL !== 'undefined' && GL.offscreenCanvases && GL.offscreenCanvases[id]) {
+        var registered = GL.offscreenCanvases[id];
+        return registered.offscreenCanvas || registered;
+      }
+      if (typeof document !== 'undefined' && document.querySelector) {
+        return document.querySelector(selector);
+      }
+      return null;
     },
 
     // Refuses anything once the device is gone or was never this context's to use. Every entry
@@ -437,6 +478,15 @@ var LibraryDonnerGpu = {
 
   donner_gpu_begin_device_request__deps: ['$DonnerGpu'],
   donner_gpu_begin_device_request: function() {
+    // One device per context. A second one would share this context's object map with the first
+    // while each C++ side numbers identifiers from one, so the two would collide or operate on
+    // each other's objects; refusing is the only answer that keeps either of them coherent.
+    if (DonnerGpu.requested) {
+      DonnerGpu.requestError = 'this context already holds a GPU bridge device';
+      DonnerGpu.requestState = DonnerGpu.kRequestFailed;
+      return DonnerGpu.kFailed;
+    }
+    DonnerGpu.requested = true;
     DonnerGpu.ensureTables();
     if (typeof navigator === 'undefined' || !navigator.gpu) {
       DonnerGpu.requestState = DonnerGpu.kRequestUnavailable;
@@ -466,6 +516,11 @@ var LibraryDonnerGpu = {
         DonnerGpu.requestState = DonnerGpu.kRequestFailed;
       });
     return DonnerGpu.kSuccess;
+  },
+
+  donner_gpu_release_device__deps: ['$DonnerGpu'],
+  donner_gpu_release_device: function() {
+    DonnerGpu.resetDeviceState();
   },
 
   donner_gpu_device_request_state__deps: ['$DonnerGpu'],
@@ -1273,7 +1328,7 @@ var LibraryDonnerGpu = {
   donner_gpu_create_surface: function(id, canvasSelector, selectorBytes) {
     var selector = UTF8ToString(canvasSelector, selectorBytes);
     return DonnerGpu.create(DonnerGpu.kSurface, id, function() {
-      var canvas = typeof document !== 'undefined' ? document.querySelector(selector) : null;
+      var canvas = DonnerGpu.resolveCanvas(selector);
       if (!canvas) {
         return null;
       }

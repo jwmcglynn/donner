@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -460,6 +461,26 @@ public:
     }
     return status;
   }
+
+  /// How many times the device was given the browser's thread, and for how long in total. A test
+  /// asserts a pending wait yields rather than spinning, which is the difference between a mapping
+  /// that can complete and one that cannot.
+  mutable uint64_t yieldCount = 0;
+  /// Total seconds handed over through \ref yieldToBrowser.
+  mutable double yieldedSeconds = 0.0;
+
+  void yieldToBrowser(double seconds) override {
+    ++yieldCount;
+    yieldedSeconds += seconds;
+    // A browser would settle promises here. The fake stands in for that by letting a test arrange
+    // what the next state is before the wait looks again.
+    if (onYield) {
+      onYield();
+    }
+  }
+
+  /// Run when the device yields, so a test can complete a mapping the way a browser would.
+  std::function<void()> onYield;
 
   MapSliceState mappingState(BrowserObjectId mappingId) const override {
     const auto it = mappings_.find(mappingId);

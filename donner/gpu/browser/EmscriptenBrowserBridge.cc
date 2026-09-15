@@ -1,5 +1,7 @@
 #include "donner/gpu/browser/EmscriptenBrowserBridge.h"
 
+#include <emscripten/emscripten.h>
+
 #include <array>
 #include <cstddef>
 #include <limits>
@@ -22,6 +24,7 @@ namespace donner::gpu::browser {
 extern "C" {
 
 int donner_gpu_check_protocol(const unsigned int* codes, int count);
+void donner_gpu_release_device();
 int donner_gpu_begin_device_request();
 int donner_gpu_device_request_state();
 int donner_gpu_read_request_error(char* destination, int capacity);
@@ -195,7 +198,11 @@ RcString ReadMessage(int (*reader)(char*, int)) {
 
 EmscriptenBrowserBridge::EmscriptenBrowserBridge() = default;
 
-EmscriptenBrowserBridge::~EmscriptenBrowserBridge() = default;
+EmscriptenBrowserBridge::~EmscriptenBrowserBridge() {
+  // Hand the browser device back, so a later bridge in this same context starts from nothing
+  // rather than inheriting this one's objects, its completed serial, or the fact that it was lost.
+  donner_gpu_release_device();
+}
 
 BridgeStatus EmscriptenBrowserBridge::beginDeviceRequest() {
   // The two halves agree on what their numbers mean before anything is built on them. Checking
@@ -509,6 +516,15 @@ BridgeStatus EmscriptenBrowserBridge::mapBufferAsync(BrowserObjectId mappingId,
 
 MapSliceState EmscriptenBrowserBridge::mappingState(BrowserObjectId mappingId) const {
   return MappingStateFromBrowser(donner_gpu_mapping_state(mappingId));
+}
+
+void EmscriptenBrowserBridge::yieldToBrowser(double seconds) {
+  // emscripten_sleep unwinds and rewinds this thread through Asyncify, which is what lets the
+  // browser run the promise callbacks that settle a mapping. Both WebAssembly configurations that
+  // reach this code enable Asyncify. A negative or absent budget still yields once, because the
+  // point is to hand the loop back at all, not to wait a particular length of time.
+  const double milliseconds = seconds > 0.0 ? seconds * 1000.0 : 0.0;
+  emscripten_sleep(static_cast<unsigned int>(milliseconds));
 }
 
 BridgeStatus EmscriptenBrowserBridge::mappedBytes(BrowserObjectId mappingId,

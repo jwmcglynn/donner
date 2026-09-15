@@ -633,6 +633,78 @@ TEST(BrowserDevice, MappingIsUnreadableUntilTheBrowserCompletesIt) {
               ElementsAre(1, 2, 3, 4));
 }
 
+TEST(BrowserDevice, GivesTheBrowserTheThreadWhileAMappingIsPending) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+
+  // A browser settles a mapping from its event loop, so the wait has to hand the thread over. The
+  // bridge stands in for that: the mapping completes only while the device is yielding, which is
+  // exactly the progress a wait that merely rested would never allow.
+  fixture.bridge->onYield = [&] { fixture.bridge->completeMapping(2, std::vector<uint8_t>{7}); };
+
+  Result<MapWaitOutcome> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(fixture.bridge->yieldCount, 1u);
+}
+
+TEST(BrowserDevice, DoesNotYieldOnceAMappingHasSettled) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  fixture.bridge->completeMapping(2, std::vector<uint8_t>{7});
+
+  // Already readable, so there is nothing to wait for and no reason to give up the thread.
+  Result<MapWaitOutcome> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(fixture.bridge->yieldCount, 0u);
+}
+
+TEST(BrowserDevice, ReusingTheSlotOfASurfaceHandsBackTheFrameItHeld) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  SurfaceDescriptor surfaceDescriptor;
+  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
+  surfaceDescriptor.native.selector = RcString("#canvas");
+  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  ASSERT_THAT(surface, HasResult());
+
+  SurfaceConfiguration configuration;
+  configuration.size = Extent2d{8, 8};
+  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  // Destroying the surface with a frame outstanding tells this backend nothing, so the frame is
+  // still recorded against that surface slot when the next surface takes it.
+  ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
+  Result<Surface> replacement = fixture.device->createSurface(surfaceDescriptor);
+  ASSERT_THAT(replacement, HasResult());
+
+  // The frame went back to the surface that supplied it rather than being left named by a slot
+  // that now belongs to a different surface.
+  EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), false);
+}
+
 TEST(BrowserDevice, LosingTheDeviceEndsAPendingMappingImmediately) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
