@@ -62,7 +62,7 @@ void EditorCommentsPresenter::drawPendingAnchor(EditorCollaboration& collaborati
 }
 
 void EditorCommentsPresenter::drawPanel(EditorCollaboration& collaboration, bool rendererIdle,
-                                        const Box2d& initialBounds) {
+                                        const Box2d& initialBounds, std::string_view agentSummary) {
   if (!visible_) return;
   ImGui::SetNextWindowPos(ImVec2(static_cast<float>(initialBounds.topLeft.x),
                                  static_cast<float>(initialBounds.topLeft.y)),
@@ -76,6 +76,8 @@ void EditorCommentsPresenter::drawPanel(EditorCollaboration& collaboration, bool
   }
   ImGui::TextWrapped("Right-click the artwork and choose Add Comment Here.");
   if (!persistenceError_.empty()) ImGui::TextWrapped("%s", persistenceError_.c_str());
+  if (!agentSummary.empty())
+    ImGui::TextUnformatted(agentSummary.data(), agentSummary.data() + agentSummary.size());
   drawComposer(collaboration, rendererIdle);
   drawCommentList(collaboration);
   ImGui::End();

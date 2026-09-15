@@ -16,6 +16,15 @@ MCP client to run that executable with `--mcp-stdio --control-socket <endpoint>`
 endpoint selected for the running editor. The adapter opens no window and needs no Python
 runtime. The private local connection needs no hosted account or external service.
 
+Keep the native adapter running for the session. The MCP host performs `initialize` with its
+client name/version and capabilities, followed by `notifications/initialized`. Listening is not an
+agent connection: comment controls become available only after the handshake and hide on disconnect,
+while drafts and feedback remain preserved. Agent labels are self-reported; they grant no authority.
+
+The adapter can forward another command while a feedback wait is pending. It maintains liveness with
+internal pings, matches replies to the original request IDs, and never replays an uncertain edit after
+connection failure. Reconnect deliberately and read fresh document guards before continuing.
+
 Read `get_editor_state` and identify the document before mutation. Read `get_svg_source` when
 geometry, paint, references, or layering need inspection. Confirm the advertised capabilities
 for replies, events, atomic batches, reference views, and agent activity; older versions may

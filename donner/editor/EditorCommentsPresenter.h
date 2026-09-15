@@ -4,6 +4,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,7 +26,8 @@ public:
   /// Draw comment pins using the same viewport as the presented artwork.
   void drawPins(EditorCollaboration& collaboration, const ViewportState& viewport);
   /// Draw the non-modal comment composer and feedback list.
-  void drawPanel(EditorCollaboration& collaboration, bool rendererIdle, const Box2d& initialBounds);
+  void drawPanel(EditorCollaboration& collaboration, bool rendererIdle, const Box2d& initialBounds,
+                 std::string_view agentSummary);
   /// Show or hide the feedback panel.
   void setVisible(bool visible) { visible_ = visible; }
   /// Whether the feedback panel is visible.

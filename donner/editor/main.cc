@@ -424,8 +424,7 @@ int main(int argc, char** argv) {
                 << kUsage;
       return 2;
     }
-    return donner::editor::RunEditorControlStdio(*controlSocketPath, std::cin, std::cout,
-                                                 std::cerr);
+    return donner::editor::RunEditorControlStdio(*controlSocketPath, 0, 1, std::cerr);
   }
 
   if (!svgPath.has_value()) {

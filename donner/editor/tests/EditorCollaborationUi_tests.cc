@@ -53,6 +53,7 @@ public:
             {"displayed", shell.renderCoordinator_.displayedDocVersionForDiagnostics()},
             {"current", shell.app_.document().currentFrameVersion()}};
   }
+  static bool Connected(EditorShell& shell) { return shell.collaborationConnected(); }
   static void LimitSurfaceBytes(EditorShell& shell, std::uint64_t bytes) {
     ASSERT_THAT(shell.renderCoordinator_.asyncRenderer().isBusy(), ::testing::Eq(false));
     shell.renderCoordinator_.renderer().setSurfaceBudgetForTesting(256, bytes);
@@ -64,7 +65,7 @@ public:
     return shell.renderCoordinator_.previewRenderingBlocked();
   }
   static bool PinCaptures(EditorShell& shell, Vector2d point) {
-    return shell.commentsPresenter_.capturesInput(point);
+    return shell.collaborationCanvasControlHovered(point);
   }
 };
 
@@ -80,6 +81,7 @@ protected:
   std::unique_ptr<gui::EditorWindow> window;
   std::unique_ptr<EditorShell> shell;
   std::uint64_t nextId = 1;
+  int agentFd = -1;
 
   virtual gui::EditorWindowOptions windowOptions() {
     return {.title = "Collaboration UI test",
@@ -108,8 +110,10 @@ protected:
                                     .allowHostClipboardAccess = false,
                                     .controlSocketPath = endpoint});
     ASSERT_THAT(shell->valid(), Eq(true));
+    connectAgent();
   }
   void TearDown() override {
+    disconnectAgent();
     shell.reset();
     window.reset();
     std::error_code error;
@@ -122,21 +126,36 @@ protected:
     shell->runFrame();
     window->endFrame();
   }
-  Json exchange(Json request) {
-    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return Json::object();
+  void disconnectAgent() {
+    if (agentFd >= 0) close(agentFd);
+    agentFd = -1;
+  }
+  void connectAgent() {
+    ASSERT_THAT(agentFd, Eq(-1));
+    agentFd = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_THAT(agentFd >= 0, Eq(true));
     timeval timeout{.tv_sec = 3, .tv_usec = 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(agentFd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     std::memcpy(address.sun_path, endpoint.c_str(), endpoint.size() + 1);
-    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-      close(fd);
-      return Json::object();
-    }
+    ASSERT_THAT(connect(agentFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)), Eq(0));
+    const Json request{{"jsonrpc", "2.0"},
+                       {"id", "ui-initialize"},
+                       {"method", "initialize"},
+                       {"params",
+                        {{"protocolVersion", "2025-06-18"},
+                         {"capabilities", Json::object()},
+                         {"clientInfo", {{"name", "ui-test-agent"}, {"version", "1"}}}}}};
+    ASSERT_THAT(exchange(request).contains("result"), Eq(true));
+    EXPECT_THAT(exchange({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}}).is_null(),
+                Eq(true));
+  }
+  Json exchange(Json request) {
+    const int fd = agentFd;
+    if (fd < 0) return Json::object();
     const std::string data = request.dump() + "\n";
     if (send(fd, data.data(), data.size(), 0) != static_cast<ssize_t>(data.size())) {
-      close(fd);
       return Json::object();
     }
     std::string bytes;
@@ -146,9 +165,8 @@ protected:
       if (count <= 0) break;
       bytes.append(buffer, static_cast<std::size_t>(count));
     }
-    close(fd);
     Json parsed = Json::parse(bytes, nullptr, false);
-    return parsed.is_object() ? parsed : Json::object();
+    return parsed.is_discarded() ? Json::object() : parsed;
   }
   Json call(std::string_view name, Json args = Json::object()) {
     const Json request{{"jsonrpc", "2.0"},
@@ -221,6 +239,68 @@ protected:
             {"source_revision", result["source_revision"]}};
   }
 };
+
+TEST_F(EditorCollaborationUiTest, DisconnectionHidesCommentsAndPreservesThemForReconnect) {
+  frame();
+  addComment(Vector2d(40, 40), "Keep this feedback through reconnect");
+  const auto feedback = call("get_comments");
+  ASSERT_THAT(feedback["comments"].size(), Eq(1u));
+  const auto screen = shell->viewportForReadback().documentToScreen(Vector2d(40, 40));
+  frame();
+  EXPECT_THAT(EditorCollaborationUiTestAccess::PinCaptures(*shell, screen), Eq(true));
+  disconnectAgent();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (EditorCollaborationUiTestAccess::Connected(*shell) &&
+         std::chrono::steady_clock::now() < deadline) {
+    window->waitEventsTimeout(0.01);
+    frame();
+  }
+  EXPECT_THAT(EditorCollaborationUiTestAccess::Connected(*shell), Eq(false));
+  EXPECT_THAT(EditorCollaborationUiTestAccess::PinCaptures(*shell, screen), Eq(false));
+  ImGuiWindow* comments = ImGui::FindWindowByName("Comments");
+  ASSERT_THAT(comments != nullptr, Eq(true));
+  EXPECT_THAT(comments->Active, Eq(false));
+  connectAgent();
+  const auto restored = call("get_comments");
+  EXPECT_THAT(restored["comments"], Eq(feedback["comments"]));
+  frame();
+  EXPECT_THAT(EditorCollaborationUiTestAccess::Connected(*shell), Eq(true));
+  EXPECT_THAT(EditorCollaborationUiTestAccess::PinCaptures(*shell, screen), Eq(true));
+  EXPECT_THAT(comments->Active, Eq(true));
+}
+
+TEST_F(EditorCollaborationUiTest, DraftTextSurvivesDisconnectWithoutRemainingInteractive) {
+  frame();
+  EditorCollaborationUiTestAccess::OpenContextMenu(*shell, Vector2d(40, 40));
+  frame();
+  ASSERT_THAT(GImGui->OpenPopupStack.empty(), Eq(false));
+  ImGuiWindow* menu = GImGui->OpenPopupStack.back().Window;
+  ASSERT_THAT(menu != nullptr, Eq(true));
+  ImGui::ActivateItemByID(menu->GetID("Add Comment Here"));
+  frame();
+  frame();
+  ImGui::GetIO().AddInputCharactersUTF8("Preserve my unfinished note");
+  frame();
+  disconnectAgent();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (EditorCollaborationUiTestAccess::Connected(*shell) &&
+         std::chrono::steady_clock::now() < deadline) {
+    window->waitEventsTimeout(0.01);
+    frame();
+  }
+  EXPECT_THAT(EditorCollaborationUiTestAccess::Connected(*shell), Eq(false));
+  ImGuiWindow* comments = ImGui::FindWindowByName("Comments");
+  ASSERT_THAT(comments != nullptr, Eq(true));
+  EXPECT_THAT(comments->Active, Eq(false));
+  connectAgent();
+  frame();
+  frame();
+  ImGui::ActivateItemByID(comments->GetID("Add Comment"));
+  frame();
+  const auto feedback = call("get_comments");
+  ASSERT_THAT(feedback["comments"].size(), Eq(1u));
+  EXPECT_THAT(feedback["comments"][0]["text"], Eq("Preserve my unfinished note"));
+}
 
 TEST_F(EditorCollaborationUiTest, PendingCommentMarkerTracksViewportAndClearsOnCancel) {
   const Vector2d point(80, 60);

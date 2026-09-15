@@ -58,16 +58,24 @@ bool EditorShell::collaborationFrameReady() {
   return true;
 }
 
+bool EditorShell::collaborationConnected() const {
+  return !connectedAgents_.empty();
+}
+
 void EditorShell::processCollaboration() {
-  if (!editorControl_ || !editorControl_->hasPending()) return;
-  editorControl_->process([this](const nlohmann::json& request) -> std::optional<nlohmann::json> {
-    if (EditorCollaboration::requiresIdleDocument(request)) {
-      if (!collaborationFrameReady()) return std::nullopt;
-      collaboration_->refreshCommentAnchors();
-    }
-    if (collaboration_->shouldWaitForFeedback(request)) return std::nullopt;
-    return collaboration_->handleRequest(request);
-  });
+  if (!editorControl_) return;
+  connectedAgents_ = editorControl_->connectedAgents();
+  if (!editorControl_->hasPending()) return;
+  editorControl_->process(
+      [this](const nlohmann::json& request,
+             const LocalEditorControl::AgentSession&) -> std::optional<nlohmann::json> {
+        if (EditorCollaboration::requiresIdleDocument(request)) {
+          if (!collaborationFrameReady()) return std::nullopt;
+          collaboration_->refreshCommentAnchors();
+        }
+        if (collaboration_->shouldWaitForFeedback(request)) return std::nullopt;
+        return collaboration_->handleRequest(request);
+      });
   persistCollaborationFeedback();
 }
 
@@ -82,26 +90,33 @@ void EditorShell::persistCollaborationFeedback() {
 }
 
 void EditorShell::renderCollaborationPanel() {
-  if (!collaboration_) return;
+  if (!collaboration_ || !collaborationConnected()) return;
   const auto previousRevision = collaboration_->feedbackRevision();
   const auto windowSize = window_.windowSize();
   const Box2d bounds =
       Box2d::FromXYWH(std::max(8.0f, static_cast<float>(windowSize.x) - rightPaneWidth_ + 8.0f),
                       42.0, std::max(200.0f, rightPaneWidth_ - 16.0f),
                       std::clamp(static_cast<double>(windowSize.y) - 52.0, 200.0, 430.0));
+  std::string agents = "Connected agents: ";
+  bool firstAgent = true;
+  for (const auto& agent : connectedAgents_) {
+    if (!firstAgent) agents += ", ";
+    agents += agent.name;
+    firstAgent = false;
+  }
   commentsPresenter_.drawPanel(*collaboration_, !renderCoordinator_.asyncRenderer().isBusy(),
-                               bounds);
+                               bounds, agents);
   if (collaboration_->feedbackRevision() != previousRevision) window_.wakeEventLoop();
   persistCollaborationFeedback();
 }
 bool EditorShell::collaborationCanvasControlHovered(Vector2d point) const {
   return internal::CanvasScrollbarsCaptureInput(adaptiveUiLayout_.showCanvasScrollbars,
                                                 interactionController_.viewport(), point) ||
-         commentsPresenter_.capturesInput(point);
+         (collaborationConnected() && commentsPresenter_.capturesInput(point));
 }
 
 void EditorShell::renderCollaborationPins(const ViewportState& viewport, bool liveDrag) {
-  if (!collaboration_) return;
+  if (!collaboration_ || !collaborationConnected()) return;
   if (!renderCoordinator_.asyncRenderer().isBusy() &&
       (liveDrag || app_.document().currentFrameVersion() <=
                        renderCoordinator_.displayedDocVersionForDiagnostics())) {
@@ -112,7 +127,7 @@ void EditorShell::renderCollaborationPins(const ViewportState& viewport, bool li
 }
 
 void EditorShell::renderCollaborationContextMenu(bool rendererBusy) {
-  if (!collaboration_ || !renderContextMenuDocumentPoint_) return;
+  if (!collaboration_ || !collaborationConnected() || !renderContextMenuDocumentPoint_) return;
   ImGui::Separator();
   if (ImGui::MenuItem("Add Comment Here", nullptr, false, app_.hasDocument() && !rendererBusy)) {
     commentsPresenter_.beginComment(*collaboration_, *renderContextMenuDocumentPoint_,

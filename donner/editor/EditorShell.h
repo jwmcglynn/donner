@@ -339,6 +339,7 @@ private:
   bool initializeCollaboration();
   void processCollaboration();
   bool collaborationFrameReady();
+  bool collaborationConnected() const;
   bool collaborationCanvasControlHovered(Vector2d point) const;
   void renderCollaborationPins(const ViewportState& presentedViewport, bool liveDrag);
   void renderCollaborationContextMenu(bool rendererBusy);
@@ -582,6 +583,7 @@ private:
   EditorApp app_;
   std::unique_ptr<EditorCollaboration> collaboration_;
   std::unique_ptr<LocalEditorControl> editorControl_;
+  std::vector<LocalEditorControl::AgentSession> connectedAgents_;
   EditorCommentsPresenter commentsPresenter_;
   SelectTool selectTool_;
   PenTool penTool_;

@@ -765,11 +765,7 @@ Json EditorCollaboration::handleRequest(const Json& request) {
   if (!method) return error(-32600, "method must be a string");
   if (method->starts_with("notifications/")) return Json(nullptr);
   Json result;
-  if (*method == "initialize") {
-    result = {{"protocolVersion", "2024-11-05"},
-              {"capabilities", {{"tools", Json::object()}}},
-              {"serverInfo", {{"name", "donner-native-editor"}, {"version", "0.1.0"}}}};
-  } else if (*method == "ping")
+  if (*method == "ping")
     result = Json::object();
   else if (*method == "tools/list")
     result = {{"tools", toolList()}};
