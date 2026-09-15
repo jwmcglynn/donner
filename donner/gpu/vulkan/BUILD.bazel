@@ -6,7 +6,8 @@ load("//build_defs:package.bzl", "donner_package")
 #
 # Scope: host-visible buffers, device-local textures with staged uploads,
 # SPIR-V shader modules, render pipelines, render pass replay, compute
-# pipelines and compute passes, and texture-to-buffer readback. Compiles on
+# pipelines and compute passes, texture-to-buffer readback, and presentation
+# through a surface and swapchain. Compiles on
 # every platform against the hermetic Vulkan-Headers module and links
 # everywhere: the Vulkan loader is opened at runtime rather than linked, so a
 # build needs no Vulkan library present and a machine without one reports it
@@ -32,11 +33,13 @@ donner_cc_library(
         "VulkanBufferAllocator.cc",
         "VulkanDevice.cc",
         "VulkanLoader.cc",
+        "VulkanSwapchain.cc",
     ],
     hdrs = [
         "VulkanBufferAllocator.h",
         "VulkanDevice.h",
         "VulkanLoader.h",
+        "VulkanSwapchain.h",
     ],
     # The loader library is opened with dlopen at runtime; libdl provides that on the platforms
     # this backend executes on. There is no Vulkan library on the link line by design.

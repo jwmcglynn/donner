@@ -31,6 +31,7 @@
 #include "donner/gpu/vulkan/VulkanBufferAllocator.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
+#include "donner/gpu/vulkan/VulkanSwapchain.h"
 
 namespace donner::gpu::vulkan {
 
@@ -441,6 +442,83 @@ bool SelectGraphicsPhysicalDevice(const VulkanApi& api, VkInstance instance,
   return false;
 }
 
+/// Whether \p physicalDevice enumerates \p extensionName.
+/// @param api Resolved instance entry points. @param physicalDevice Device to query.
+/// @param extensionName Extension to look for.
+bool DeviceOffersExtension(const VulkanApi& api, VkPhysicalDevice physicalDevice,
+                           const char* extensionName) {
+  uint32_t extensionCount = 0;
+  if (api.vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr) !=
+          VK_SUCCESS ||
+      extensionCount == 0) {
+    return false;
+  }
+  std::vector<VkExtensionProperties> extensions(extensionCount);
+  if (api.vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount,
+                                               extensions.data()) != VK_SUCCESS) {
+    return false;
+  }
+  return std::ranges::any_of(extensions, [extensionName](const VkExtensionProperties& extension) {
+    return std::strcmp(extension.extensionName, extensionName) == 0;
+  });
+}
+
+/// Collects the device extensions to enable and chains the feature structs they need.
+///
+/// Accumulates rather than assigns, so enabling a second extension or chaining a second features
+/// struct cannot silently drop another one (or be dropped by it). Returns false when presentation
+/// was asked for and this device cannot provide it, which is the one request here that can fail:
+/// swapchain support has to be asked for before any surface exists to ask about, so a device
+/// without it would otherwise refuse every surface later with nothing to point at.
+///
+/// @param api Resolved instance entry points.
+/// @param instanceOffersPresentation Whether the instance was created with the surface
+///   extensions, without which a swapchain has nothing to present to.
+/// @param physicalDevice Device the extensions are checked against.
+/// @param enableTimelineSemaphoreForTest Whether to request VK_KHR_timeline_semaphore.
+/// @param enablePresentation Whether to request VK_KHR_swapchain.
+/// @param deviceExtensions Extension names to enable; appended to.
+/// @param timelineFeatures Feature struct chained when the timeline extension is requested; must
+///   outlive the device creation call.
+/// @param deviceInfo Creation info whose extension list and feature chain are filled in.
+bool CollectDeviceExtensions(const VulkanApi& api, bool instanceOffersPresentation,
+                             VkPhysicalDevice physicalDevice, bool enableTimelineSemaphoreForTest,
+                             bool enablePresentation, std::vector<const char*>& deviceExtensions,
+                             VkPhysicalDeviceTimelineSemaphoreFeaturesKHR& timelineFeatures,
+                             VkDeviceCreateInfo& deviceInfo) {
+  timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+  timelineFeatures.timelineSemaphore = VK_TRUE;
+  if (enableTimelineSemaphoreForTest) {
+    deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    timelineFeatures.pNext = const_cast<void*>(deviceInfo.pNext);
+    deviceInfo.pNext = &timelineFeatures;
+  }
+  if (enablePresentation) {
+    if (!instanceOffersPresentation ||
+        !DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+      return false;
+    }
+    deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+  }
+
+  deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+  deviceInfo.ppEnabledExtensionNames = deviceExtensions.empty() ? nullptr : deviceExtensions.data();
+  return true;
+}
+
+/// Resolves the device-level entry points, including the swapchain group when presentation was
+/// enabled. @param loader Loader to resolve into. @param device Device to resolve against.
+/// @param enablePresentation Whether the swapchain group is expected.
+Status LoadDeviceEntryPoints(VulkanLoader& loader, VkDevice device, bool enablePresentation) {
+  if (const Status status = loader.loadDevice(device); status.hasError()) {
+    return status;
+  }
+  if (!enablePresentation) {
+    return OkStatus();
+  }
+  return loader.loadPresentationDevice(device);
+}
+
 /// A debug-utils messenger plus the entry point that destroys it.
 struct DebugMessengerHandles {
   VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;      //!< Created messenger, or null.
@@ -602,15 +680,50 @@ void DestroyIfSet(VkDevice device, Handle& handle, DestroyFn destroyFn) {
 /// An empty setup (null loader) means instance creation failed; the reason has already been
 /// reported.
 struct InstanceSetup {
-  std::shared_ptr<VulkanLoader> loader;  //!< Loader kept open for the instance's lifetime.
-  VkInstance instance = VK_NULL_HANDLE;  //!< Created instance, or null on failure.
-  bool debugMessengerAvailable = false;  //!< True when debug-utils was enabled on it.
+  std::shared_ptr<VulkanLoader> loader;   //!< Loader kept open for the instance's lifetime.
+  VkInstance instance = VK_NULL_HANDLE;   //!< Created instance, or null on failure.
+  bool debugMessengerAvailable = false;   //!< True when debug-utils was enabled on it.
+  bool presentationAvailable = false;     //!< True when the surface extensions were enabled.
+  bool headlessSurfaceAvailable = false;  //!< True when headless surfaces were enabled with them.
 };
 
+/// Returns the surface extensions presentation needs, or an empty list when the loader does not
+/// enumerate VK_KHR_surface. VK_EXT_headless_surface is added when present: it is what lets the
+/// presentation contract be exercised on a machine with no display at all.
+/// @param api Resolved global entry points.
+std::vector<const char*> EnumeratePresentationExtensions(const VulkanApi& api) {
+  std::vector<const char*> enabledExtensions;
+  uint32_t extensionCount = 0;
+  if (api.vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) != VK_SUCCESS ||
+      extensionCount == 0) {
+    return enabledExtensions;
+  }
+  std::vector<VkExtensionProperties> extensions(extensionCount);
+  if (api.vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) !=
+      VK_SUCCESS) {
+    return enabledExtensions;
+  }
+
+  const auto offers = [&extensions](const char* name) {
+    return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
+      return std::strcmp(extension.extensionName, name) == 0;
+    });
+  };
+  if (!offers(VK_KHR_SURFACE_EXTENSION_NAME)) {
+    return enabledExtensions;  // Without the base extension nothing else is usable.
+  }
+  enabledExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+  if (offers(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
+    enabledExtensions.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+  }
+  return enabledExtensions;
+}
+
 /// Opens the Vulkan loader, checks that it offers the API version this backend targets, and
-/// creates the headless instance with the validation layer and debug-utils messenger extension
-/// when they are available.
-InstanceSetup CreateInstance() {
+/// creates the instance with the validation layer and debug-utils messenger extension when they
+/// are available, plus the surface extensions when presentation was asked for.
+/// @param withPresentation Whether to enable the surface extensions as well.
+InstanceSetup CreateInstance(bool withPresentation = false) {
   InstanceSetup setup;
   // Vulkan is reached entirely through the loader this opens: nothing in this backend is a
   // link-time symbol, so a machine without a Vulkan runtime reports it here instead of failing
@@ -636,8 +749,20 @@ InstanceSetup CreateInstance() {
   // messenger extension only alongside it: the messenger turns validation ERROR messages into
   // latched device errors (see ValidationMessengerCallback) instead of log lines.
   const std::vector<const char*> enabledLayers = EnumerateValidationLayer(api);
-  const std::vector<const char*> enabledExtensions =
+  std::vector<const char*> enabledExtensions =
       EnumerateDebugUtilsExtension(api, !enabledLayers.empty());
+  const bool debugUtilsEnabled = !enabledExtensions.empty();
+
+  // Presentation is opt in, so the default instance stays exactly as headless as it was.
+  std::vector<const char*> presentationExtensions;
+  if (withPresentation) {
+    presentationExtensions = EnumeratePresentationExtensions(api);
+    if (presentationExtensions.empty()) {
+      return {};  // Asked to present on a loader with no surface extension: fail closed.
+    }
+    enabledExtensions.insert(enabledExtensions.end(), presentationExtensions.begin(),
+                             presentationExtensions.end());
+  }
 
   VkApplicationInfo applicationInfo = {};
   applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -665,8 +790,7 @@ InstanceSetup CreateInstance() {
   // Instance-level entry points exist only once an instance does. Nothing below may be called
   // before this succeeds; on failure the instance is unreachable except through the one entry
   // point that destroys it, so release it only when that one resolved.
-  if (const Status status = loader->loadInstance(instance, !enabledExtensions.empty());
-      status.hasError()) {
+  if (const Status status = loader->loadInstance(instance, debugUtilsEnabled); status.hasError()) {
     std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
     if (api.vkDestroyInstance != nullptr) {
       api.vkDestroyInstance(instance, nullptr);
@@ -674,9 +798,24 @@ InstanceSetup CreateInstance() {
     return {};
   }
 
+  if (!presentationExtensions.empty()) {
+    const bool headlessSurfaceEnabled =
+        std::ranges::any_of(presentationExtensions, [](const char* name) {
+          return std::strcmp(name, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) == 0;
+        });
+    if (const Status status = loader->loadPresentationInstance(instance, headlessSurfaceEnabled);
+        status.hasError()) {
+      std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
+      api.vkDestroyInstance(instance, nullptr);
+      return {};
+    }
+    setup.headlessSurfaceAvailable = headlessSurfaceEnabled;
+    setup.presentationAvailable = true;
+  }
+
   setup.loader = loader;
   setup.instance = instance;
-  setup.debugMessengerAvailable = !enabledExtensions.empty();
+  setup.debugMessengerAvailable = debugUtilsEnabled;
   return setup;
 }
 
@@ -723,6 +862,9 @@ struct VulkanDevice::Impl {
     TextureFormat format = TextureFormat::RGBA8Unorm;  //!< RHI format (for copy texel math).
     Extent2d size;                                     //!< Extent in texels.
     TextureUsage usage = TextureUsage::None;           //!< RHI usage flags.
+    /// False for a frame acquired from a surface: the swapchain owns those images and destroys
+    /// them with itself, so destroying one here would destroy an image this device never made.
+    bool ownsImage = true;
   };
 
   /// A view of a texture slot; the VkImageView is created once at view creation.
@@ -955,11 +1097,18 @@ struct VulkanDevice::Impl {
   /// Submits one command buffer, with the shared one-shot native failure seam for tests.
   /// @param commandBuffer Command buffer to submit.
   /// @param fence Fence signaled by the submission.
-  VkResult submitToQueue(VkCommandBuffer commandBuffer, VkFence fence) {
+  /// @param wait Semaphores this submission must wait on, empty for internal work; a frame
+  ///   acquired from a surface comes back before the presentation engine has finished reading
+  ///   it, so the submission that writes it waits here.
+  VkResult submitToQueue(VkCommandBuffer commandBuffer, VkFence fence,
+                         const SurfaceWaitSync& wait = {}) {
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
+    submitInfo.waitSemaphoreCount = static_cast<uint32_t>(wait.semaphores.size());
+    submitInfo.pWaitSemaphores = wait.semaphores.empty() ? nullptr : wait.semaphores.data();
+    submitInfo.pWaitDstStageMask = wait.stages.empty() ? nullptr : wait.stages.data();
     const VkResult injectedFailure = std::exchange(nextSubmissionFailure, VK_SUCCESS);
     return injectedFailure != VK_SUCCESS ? injectedFailure
                                          : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
@@ -1093,6 +1242,10 @@ struct VulkanDevice::Impl {
 
   /// Destroys a texture record's Vulkan objects.
   void destroyTextureRecord(TextureRecord& record) {
+    if (!record.ownsImage) {
+      record.image = VK_NULL_HANDLE;
+      return;
+    }
     if (record.image != VK_NULL_HANDLE) {
       api->vkDestroyImage(device, record.image, nullptr);
       record.image = VK_NULL_HANDLE;
@@ -1123,6 +1276,9 @@ struct VulkanDevice::Impl {
       releaseUpload(upload);
     }
     pendingUploads.clear();
+    // Before the command pool, device and instance below: a swapchain frees command buffers and
+    // destroys its swapchain and surface out of all three.
+    surfaces.clear();
 
     for (std::optional<RenderPipelineRecord>& record : renderPipelines) {
       if (record.has_value()) {
@@ -1200,6 +1356,63 @@ struct VulkanDevice::Impl {
       api->vkDestroyInstance(instance, nullptr);
       instance = VK_NULL_HANDLE;
     }
+  }
+
+  // == Presentation ============================================================================
+
+  bool presentationEnabled = false;     //!< Whether swapchain support was requested at creation.
+  bool headlessSurfaceEnabled = false;  //!< Whether headless surfaces were enabled with it.
+
+  std::vector<std::unique_ptr<VulkanSwapchain>> surfaces;  //!< Surface slots.
+  /// Texture slot each surface's acquired frame occupies, empty while it holds none.
+  std::vector<std::optional<uint32_t>> surfaceTextureSlots;
+
+  /// The surface at \p slotIndex, or null when that slot holds none.
+  /// @param slotIndex Surface slot.
+  VulkanSwapchain* surfaceAt(uint32_t slotIndex) const {
+    return slotIndex < surfaces.size() ? surfaces[slotIndex].get() : nullptr;
+  }
+
+  /// Borrowed objects a swapchain works through.
+  VulkanSurfaceContext surfaceContext() const {
+    return VulkanSurfaceContext{api,   instance,         physicalDevice, device,
+                                queue, queueFamilyIndex, commandPool};
+  }
+
+  /// The waits every surface holding an unclaimed frame still owes, claimed by the caller.
+  ///
+  /// Called once per submission: whichever submission comes first after an acquisition is the
+  /// one that waits, and a surface whose wait has already been claimed contributes nothing.
+  SurfaceWaitSync claimSurfaceWaits() {
+    SurfaceWaitSync combined;
+    for (const std::unique_ptr<VulkanSwapchain>& surface : surfaces) {
+      if (surface == nullptr) {
+        continue;
+      }
+      SurfaceWaitSync wait = surface->takeAcquireWait();
+      combined.semaphores.insert(combined.semaphores.end(), wait.semaphores.begin(),
+                                 wait.semaphores.end());
+      combined.stages.insert(combined.stages.end(), wait.stages.begin(), wait.stages.end());
+    }
+    return combined;
+  }
+
+  /// Forgets the texture slot a surface's frame occupied, clearing the slot itself only while it
+  /// still names \p frameImage - the caller may have destroyed the frame's handle already, and
+  /// the runtime hands a released slot to the next texture.
+  /// @param slotIndex Surface slot. @param frameImage Image the frame handed out, or null.
+  void releaseFrameTextureSlot(uint32_t slotIndex, VkImage frameImage) {
+    const std::optional<uint32_t> textureSlot = slotIndex < surfaceTextureSlots.size()
+                                                    ? surfaceTextureSlots[slotIndex]
+                                                    : std::optional<uint32_t>();
+    if (textureSlot.has_value() && frameImage != VK_NULL_HANDLE) {
+      if (TextureRecord* record = FindRecord(textures, *textureSlot);
+          record != nullptr && record->image == frameImage) {
+        textures[*textureSlot].reset();
+        syncStates.forget(*textureSlot);
+      }
+    }
+    SetSlot(surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
   }
 
   /// Mutable state threaded through the encoding of one command stream.
@@ -1473,15 +1686,20 @@ struct VulkanDevice::Impl {
 };
 
 std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
-  return CreateImpl(false);
+  return CreateImpl(false, false);
 }
 
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithTimelineSemaphoreForTest() {
-  return CreateImpl(true);
+  return CreateImpl(true, false);
 }
 
-std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaphoreForTest) {
-  InstanceSetup setup = CreateInstance();
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithPresentationSupport() {
+  return CreateImpl(false, true);
+}
+
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaphoreForTest,
+                                                       bool enablePresentation) {
+  InstanceSetup setup = CreateInstance(enablePresentation);
   if (setup.loader == nullptr) {
     return nullptr;
   }
@@ -1534,19 +1752,14 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   deviceInfo.pQueueCreateInfos = &queueInfo;
   deviceInfo.pEnabledFeatures = &enabledFeatures;
 
-  // Accumulate rather than assign, so enabling a second extension or chaining a second features
-  // struct later cannot silently drop the test-only one (or be dropped by it).
   std::vector<const char*> deviceExtensions;
   VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatures = {};
-  timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
-  timelineFeatures.timelineSemaphore = VK_TRUE;
-  if (enableTimelineSemaphoreForTest) {
-    deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-    timelineFeatures.pNext = const_cast<void*>(deviceInfo.pNext);
-    deviceInfo.pNext = &timelineFeatures;
+  if (!CollectDeviceExtensions(api, setup.presentationAvailable, selectedDevice,
+                               enableTimelineSemaphoreForTest, enablePresentation, deviceExtensions,
+                               timelineFeatures, deviceInfo)) {
+    api.vkDestroyInstance(instance, nullptr);
+    return nullptr;
   }
-  deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-  deviceInfo.ppEnabledExtensionNames = deviceExtensions.empty() ? nullptr : deviceExtensions.data();
 
   VkDevice device = VK_NULL_HANDLE;
   if (api.vkCreateDevice(selectedDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
@@ -1556,7 +1769,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
 
   // Device-level entry points come from the device itself, so every call this backend records
   // per frame reaches the implementation directly instead of through the loader's dispatch.
-  if (const Status status = loader->loadDevice(device); status.hasError()) {
+  if (const Status status = LoadDeviceEntryPoints(*loader, device, enablePresentation);
+      status.hasError()) {
     std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
     if (api.vkDestroyDevice != nullptr) {
       api.vkDestroyDevice(device, nullptr);
@@ -1585,6 +1799,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaph
   impl.queueFamilyIndex = selectedQueueFamily;
   impl.commandPool = commandPool;
   impl.fullDrawIndexUint32 = fullDrawIndexUint32;
+  impl.presentationEnabled = enablePresentation;
+  impl.headlessSurfaceEnabled = setup.headlessSurfaceAvailable;
   api.vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
   api.vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
   impl.bufferAllocator = std::make_unique<DedicatedBufferAllocator>(impl.memoryProperties);
@@ -1637,7 +1853,7 @@ void VulkanDevice::failNextSubmissionForTest(bool deviceLost) {
 }
 
 VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
-  return {impl_->api, impl_->device, impl_->queue, impl_->queueFamilyIndex};
+  return {impl_->api, impl_->instance, impl_->device, impl_->queue, impl_->queueFamilyIndex};
 }
 
 uint64_t VulkanDevice::completedSerial() const {
@@ -3359,7 +3575,10 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     return failEncoding(VkError("vkCreateFence", result));
   }
 
-  const VkResult submitResult = impl.submitToQueue(state.commandBuffer, fence);
+  // A frame acquired from a surface comes back before the presentation engine has finished
+  // reading it, so the first submission after an acquisition carries that wait.
+  const VkResult submitResult =
+      impl.submitToQueue(state.commandBuffer, fence, impl.claimSurfaceWaits());
   if (submitResult != VK_SUCCESS) {
     impl.drainAfterDeviceLoss(submitResult, "vkQueueSubmit");
     impl_->api->vkDestroyFence(impl.device, fence, nullptr);
@@ -3379,6 +3598,127 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   impl.commitPendingBufferWrites(submissionSerial);
   impl.inFlight.push_back(std::move(submission));
   return OkStatus();
+}
+
+// == Presentation ==============================================================================
+
+bool VulkanDevice::supportsPresentation() const {
+  return impl_->presentationEnabled;
+}
+
+void* VulkanDevice::nativeInstance() const {
+  return impl_->presentationEnabled ? impl_->instance : nullptr;
+}
+
+Status VulkanDevice::onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) {
+  if (!impl_->presentationEnabled) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "createSurface: this device was created without presentation support"};
+  }
+
+  Result<std::unique_ptr<VulkanSwapchain>> surface =
+      VulkanSwapchain::Create(impl_->surfaceContext(), descriptor);
+  if (surface.hasError()) {
+    return std::move(surface).error();
+  }
+
+  SetSlot(impl_->surfaces, slotIndex, std::move(surface).result());
+  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+  return OkStatus();
+}
+
+Result<SurfaceCapabilities> VulkanDevice::onSurfaceCapabilities(uint32_t slotIndex) const {
+  const VulkanSwapchain* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Vulkan surface", slotIndex)};
+  }
+  return surface->capabilities();
+}
+
+Status VulkanDevice::onConfigureSurface(uint32_t slotIndex,
+                                        const SurfaceConfiguration& configuration) {
+  VulkanSwapchain* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Vulkan surface", slotIndex)};
+  }
+  return surface->configure(configuration);
+}
+
+Result<SurfaceStatus> VulkanDevice::onAcquireCurrentTexture(uint32_t slotIndex,
+                                                            uint32_t textureSlotIndex) {
+  VulkanSwapchain* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Vulkan surface", slotIndex)};
+  }
+
+  Result<SurfaceStatus> status = surface->acquire();
+  if (status.hasError()) {
+    return status;
+  }
+
+  const VkImage frameImage = surface->currentImage();
+  if (frameImage == VK_NULL_HANDLE) {
+    return status;  // No frame came back; the runtime releases the slot it proposed.
+  }
+
+  const SurfaceConfiguration& configuration = *surface->configuration();
+  Impl::TextureRecord record;
+  record.image = frameImage;
+  record.memory = VK_NULL_HANDLE;
+  record.format = configuration.format;
+  record.size = surface->extent();
+  record.usage = configuration.usage;
+  // The swapchain owns its images and releases them with itself, so this record borrows.
+  record.ownsImage = false;
+  SetSlot(impl_->textures, textureSlotIndex, std::optional<Impl::TextureRecord>(record));
+  // A frame comes out of the presentation engine with undefined contents, whatever the slot's
+  // previous occupant was tracked in, so its synchronization state starts over.
+  impl_->syncStates.forget(textureSlotIndex);
+  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>(textureSlotIndex));
+  return status;
+}
+
+Result<SurfaceStatus> VulkanDevice::onPresentSurface(uint32_t slotIndex) {
+  VulkanSwapchain* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("surface slot {} has no Vulkan surface", slotIndex)};
+  }
+
+  const VkImage frameImage = surface->currentImage();
+  const std::optional<uint32_t> textureSlot = slotIndex < impl_->surfaceTextureSlots.size()
+                                                  ? impl_->surfaceTextureSlots[slotIndex]
+                                                  : std::optional<uint32_t>();
+  // What last touched the frame is the source scope of the barrier into the layout the
+  // presentation engine reads; an untouched frame reports having touched nothing, which is
+  // exactly the barrier a frame nobody drew into needs.
+  const TextureSyncState state =
+      textureSlot.has_value() ? impl_->syncStates.stateOf(*textureSlot) : TextureSyncState{};
+
+  Result<SurfaceStatus> status = surface->present(state);
+  impl_->releaseFrameTextureSlot(slotIndex, frameImage);
+  return status;
+}
+
+void VulkanDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
+  VulkanSwapchain* surface = impl_->surfaceAt(slotIndex);
+  if (surface == nullptr) {
+    return;
+  }
+
+  const VkImage frameImage = surface->currentImage();
+  if (Status status = surface->abandon(); status.hasError()) {
+    impl_->recordError(status.error().message);
+  }
+  impl_->releaseFrameTextureSlot(slotIndex, frameImage);
+}
+
+void VulkanDevice::onDestroySurface(uint32_t slotIndex) {
+  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+  SetSlot(impl_->surfaces, slotIndex, std::unique_ptr<VulkanSwapchain>());
 }
 
 }  // namespace donner::gpu::vulkan
