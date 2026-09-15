@@ -156,6 +156,12 @@ donner_cc_library(
     testonly = 1,
     hdrs = ["tests/SubRectangleUploadScene.h"],
     visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
 )
 
 # gmock matchers and unwrap helpers shared by the model tests here and by backend/adapter

@@ -7,7 +7,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -23,6 +22,7 @@
 namespace donner::gpu::vulkan::tests {
 namespace {
 
+using gpu::tests::ExpectSubRectUploadImageMatches;
 using gpu::tests::kSubRectUploadBytesPerRow;
 using gpu::tests::kSubRectUploadExtent;
 using gpu::tests::kSubRectUploadHeight;
@@ -31,7 +31,7 @@ using gpu::tests::kSubRectUploadX;
 using gpu::tests::kSubRectUploadY;
 using gpu::tests::SubRectUploadBytes;
 using gpu::tests::SubRectUploadDestinationFillBytes;
-using gpu::tests::SubRectUploadExpectedTexel;
+using gpu::tests::SubRectUploadExpectedImageBytes;
 
 /// Extent of the destination texture.
 constexpr Extent2d kDestinationExtent{kSubRectUploadExtent, kSubRectUploadExtent};
@@ -85,18 +85,10 @@ TEST_F(VulkanSubRectangleUploadTest, WritesOnlyTheRectangleAtTheDestinationOrigi
   ASSERT_TRUE(device_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
       << "Command buffer did not complete cleanly";
 
-  const Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
+  Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_THAT(pixels, HasResult());
-  for (uint32_t y = 0; y < kSubRectUploadExtent; ++y) {
-    for (uint32_t x = 0; x < kSubRectUploadExtent; ++x) {
-      const size_t offset = size_t{y} * kSubRectUploadBytesPerRow + size_t{x} * 4u;
-      const std::array<uint8_t, 4> actual = {
-          pixels.result()[offset + 0], pixels.result()[offset + 1], pixels.result()[offset + 2],
-          pixels.result()[offset + 3]};
-      EXPECT_THAT(actual, testing::ElementsAreArray(SubRectUploadExpectedTexel(x, y)))
-          << "texel (" << x << ", " << y << ")";
-    }
-  }
+  ExpectSubRectUploadImageMatches(std::move(pixels).result(), SubRectUploadExpectedImageBytes(),
+                                  "vulkan_upload_origin");
 }
 
 }  // namespace

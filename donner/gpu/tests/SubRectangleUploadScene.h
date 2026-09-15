@@ -14,9 +14,19 @@
 /// texels encode their own destination coordinates, so a texel that arrives in the wrong place
 /// names where it was supposed to go.
 
+#include <gtest/gtest.h>
+
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
+
+#include "donner/base/Vector2.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::gpu::tests {
 
@@ -118,6 +128,81 @@ inline std::vector<uint8_t> SubRectUploadBytesAt(uint32_t originX, uint32_t orig
 /// \ref kSubRectUploadY).
 inline std::vector<uint8_t> SubRectUploadBytes() {
   return SubRectUploadBytesAt(kSubRectUploadX, kSubRectUploadY);
+}
+
+/// Builds a whole-texture image by asking \p expectedTexel for each texel, packed into rows of
+/// \ref kSubRectUploadBytesPerRow. The bytes between the last texel of a row and the next row
+/// start are left zero in every image built this way, and the comparison reads only the texels.
+/// @param expectedTexel Callable taking (x, y) and returning the RGBA texel expected there.
+template <typename ExpectedTexelFn>
+std::vector<uint8_t> SubRectUploadImageBytes(ExpectedTexelFn expectedTexel) {
+  std::vector<uint8_t> rows(size_t{kSubRectUploadBytesPerRow} * kSubRectUploadExtent, 0);
+  for (uint32_t y = 0; y < kSubRectUploadExtent; ++y) {
+    for (uint32_t x = 0; x < kSubRectUploadExtent; ++x) {
+      const std::array<uint8_t, 4> texel = expectedTexel(x, y);
+      const size_t offset = size_t{y} * kSubRectUploadBytesPerRow + size_t{x} * 4u;
+      rows[offset + 0] = texel[0];
+      rows[offset + 1] = texel[1];
+      rows[offset + 2] = texel[2];
+      rows[offset + 3] = texel[3];
+    }
+  }
+  return rows;
+}
+
+/// The whole expected image after an upload at the scene's own origin.
+inline std::vector<uint8_t> SubRectUploadExpectedImageBytes() {
+  return SubRectUploadImageBytes(SubRectUploadExpectedTexel);
+}
+
+/// Wraps whole-texture readback rows as a bitmap. Rows sit \ref kSubRectUploadBytesPerRow apart,
+/// which the comparison reads as a pixel stride, so the row padding is never compared.
+/// @param rows Readback rows, kSubRectUploadBytesPerRow * kSubRectUploadExtent bytes.
+inline svg::RendererBitmap SubRectUploadBitmap(std::vector<uint8_t> rows) {
+  svg::RendererBitmap bitmap;
+  bitmap.dimensions =
+      Vector2i(static_cast<int>(kSubRectUploadExtent), static_cast<int>(kSubRectUploadExtent));
+  bitmap.pixels = std::move(rows);
+  bitmap.rowBytes = kSubRectUploadBytesPerRow;
+  return bitmap;
+}
+
+/// Names the first texel where \p actual differs from \p expected, or an empty string when every
+/// texel matches. This decides nothing: pixelmatch makes the acceptance decision, and this only
+/// names a coordinate, which the comparison's mismatched-pixel count does not.
+/// @param actual Readback rows. @param expected Expected image rows.
+inline std::string SubRectUploadFirstDifference(const std::vector<uint8_t>& actual,
+                                                const std::vector<uint8_t>& expected) {
+  const size_t needed = size_t{kSubRectUploadBytesPerRow} * kSubRectUploadExtent;
+  if (actual.size() < needed || expected.size() < needed) {
+    return "readback is shorter than one whole texture";
+  }
+  for (uint32_t y = 0; y < kSubRectUploadExtent; ++y) {
+    for (uint32_t x = 0; x < kSubRectUploadExtent; ++x) {
+      const size_t offset = size_t{y} * kSubRectUploadBytesPerRow + size_t{x} * 4u;
+      if (!std::equal(actual.begin() + offset, actual.begin() + offset + 4,
+                      expected.begin() + offset)) {
+        return "first differing texel is (" + std::to_string(x) + ", " + std::to_string(y) + ")";
+      }
+    }
+  }
+  return "";
+}
+
+/// Compares a whole-texture readback against \p expected through the project's pixelmatch helper
+/// at identity: zero threshold, zero mismatched pixels allowed, and anti-aliased pixels counted,
+/// so a single misplaced texel fails rather than being written off as an edge artifact. On
+/// mismatch the helper writes inspectable actual, expected and diff images, and the trace names
+/// the first differing texel.
+/// @param actual Readback rows. @param expected Expected image rows.
+/// @param testLabel Label the comparison puts on the artifacts it writes.
+inline void ExpectSubRectUploadImageMatches(std::vector<uint8_t> actual,
+                                            std::vector<uint8_t> expected,
+                                            std::string_view testLabel) {
+  SCOPED_TRACE(SubRectUploadFirstDifference(actual, expected));
+  editor::tests::CompareBitmapToBitmap(SubRectUploadBitmap(std::move(actual)),
+                                       SubRectUploadBitmap(std::move(expected)), testLabel,
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace donner::gpu::tests

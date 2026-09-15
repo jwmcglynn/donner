@@ -618,17 +618,12 @@ TEST_F(GeodeWgpuAdapterDeviceTests, WriteTextureHonorsTheDestinationOrigin) {
                   gpu::Origin2d{gpu::tests::kSubRectUploadX, gpu::tests::kSubRectUploadY}),
               gpu::IsOk());
 
-  const std::vector<uint8_t> pixels = ReadbackTexturePixels(
+  std::vector<uint8_t> pixels = ReadbackTexturePixels(
       *geodeDevice_, adapter_->wgpuTextureOf(destination), gpu::tests::kSubRectUploadExtent);
   ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "destination readback failed";
-  for (uint32_t y = 0; y < gpu::tests::kSubRectUploadExtent; ++y) {
-    for (uint32_t x = 0; x < gpu::tests::kSubRectUploadExtent; ++x) {
-      const std::array<uint8_t, 4> expected = gpu::tests::SubRectUploadExpectedTexel(x, y);
-      EXPECT_THAT(PixelAt(pixels, x, y),
-                  ElementsAre(expected[0], expected[1], expected[2], expected[3]))
-          << "texel (" << x << ", " << y << ")";
-    }
-  }
+  gpu::tests::ExpectSubRectUploadImageMatches(std::move(pixels),
+                                              gpu::tests::SubRectUploadExpectedImageBytes(),
+                                              "geode_adapter_upload_origin");
 }
 
 /// The sub-rectangle copy scene on this adapter: a source holding the shared coordinate-encoding

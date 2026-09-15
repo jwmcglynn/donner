@@ -22,6 +22,7 @@
 namespace donner::gpu::metal::tests {
 namespace {
 
+using gpu::tests::ExpectSubRectUploadImageMatches;
 using gpu::tests::kSubRectUploadBytesPerRow;
 using gpu::tests::kSubRectUploadExtent;
 using gpu::tests::kSubRectUploadHeight;
@@ -33,7 +34,9 @@ using gpu::tests::SubRectUploadBytesAt;
 using gpu::tests::SubRectUploadCoversDestination;
 using gpu::tests::SubRectUploadDestinationFill;
 using gpu::tests::SubRectUploadDestinationFillBytes;
+using gpu::tests::SubRectUploadExpectedImageBytes;
 using gpu::tests::SubRectUploadExpectedTexel;
+using gpu::tests::SubRectUploadImageBytes;
 using gpu::tests::SubRectUploadTexel;
 
 /// Column of a second rectangle, disjoint from the scene's own and differing on both axes so a
@@ -107,18 +110,13 @@ protected:
     return readback;
   }
 
-  /// Compares every destination texel against the expected image.
+  /// Compares the whole destination against the expected image through the shared pixelmatch
+  /// comparison.
   /// @param pixels Readback bytes, one row per \ref kSubRectUploadBytesPerRow.
-  void expectExpectedImage(const std::vector<uint8_t>& pixels) {
-    for (uint32_t y = 0; y < kSubRectUploadExtent; ++y) {
-      for (uint32_t x = 0; x < kSubRectUploadExtent; ++x) {
-        const size_t offset = size_t{y} * kSubRectUploadBytesPerRow + size_t{x} * 4u;
-        const std::array<uint8_t, 4> actual = {pixels[offset + 0], pixels[offset + 1],
-                                               pixels[offset + 2], pixels[offset + 3]};
-        EXPECT_THAT(actual, testing::ElementsAreArray(SubRectUploadExpectedTexel(x, y)))
-            << "texel (" << x << ", " << y << ")";
-      }
-    }
+  /// @param testLabel Label for the artifacts the comparison writes on mismatch.
+  void expectExpectedImage(std::vector<uint8_t> pixels, std::string_view testLabel) {
+    ExpectSubRectUploadImageMatches(std::move(pixels), SubRectUploadExpectedImageBytes(),
+                                    testLabel);
   }
 
   std::unique_ptr<MetalDevice> device_;
@@ -138,9 +136,9 @@ TEST_F(MetalSubRectangleUploadTest, WritesOnlyTheRectangleAtTheDestinationOrigin
       << "Command buffer did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  const Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
+  Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_THAT(pixels, HasResult());
-  expectExpectedImage(pixels.result());
+  expectExpectedImage(std::move(pixels).result(), "metal_upload_origin_immediate");
 }
 
 // A texture the queue is still reading takes the staged upload path instead of an immediate
@@ -166,9 +164,9 @@ TEST_F(MetalSubRectangleUploadTest, StagedUploadLandsAtTheSameDestinationOrigin)
       << "Command buffer did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  const Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
+  Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_THAT(pixels, HasResult());
-  expectExpectedImage(pixels.result());
+  expectExpectedImage(std::move(pixels).result(), "metal_upload_origin_staged");
 }
 
 // Queued writes are coalesced by destination, and the destination now includes the origin. Two
@@ -211,18 +209,11 @@ TEST_F(MetalSubRectangleUploadTest, QueuedUploadsCoalesceByOriginAndNotBySizeAlo
       << "Command buffer did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  const Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
+  Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_THAT(pixels, HasResult());
-  for (uint32_t y = 0; y < kSubRectUploadExtent; ++y) {
-    for (uint32_t x = 0; x < kSubRectUploadExtent; ++x) {
-      const size_t offset = size_t{y} * kSubRectUploadBytesPerRow + size_t{x} * 4u;
-      const std::array<uint8_t, 4> actual = {
-          pixels.result()[offset + 0], pixels.result()[offset + 1], pixels.result()[offset + 2],
-          pixels.result()[offset + 3]};
-      EXPECT_THAT(actual, testing::ElementsAreArray(ExpectedTexelWithBothRectangles(x, y)))
-          << "texel (" << x << ", " << y << ")";
-    }
-  }
+  ExpectSubRectUploadImageMatches(std::move(pixels).result(),
+                                  SubRectUploadImageBytes(ExpectedTexelWithBothRectangles),
+                                  "metal_upload_origin_two_rectangles");
 }
 
 }  // namespace
