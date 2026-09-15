@@ -664,6 +664,131 @@ TEST_F(TextToolExistingTextTest, EditingExistingTextCommitRecordsEditUndo) {
   EXPECT_EQ(text().textContent(), "Hello");
 }
 
+TEST_F(TextToolExistingTextTest, NextBoxGestureKeepsTextSessionUndoAndRedoSeparate) {
+  const std::string before(app.document().document().source());
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  type("!");
+  const std::string afterEdit(app.document().document().source());
+
+  tool.onMouseDown(app, Vector2d(250.0, 250.0), MouseModifiers{});
+  EXPECT_EQ(app.canUndo(), true);
+  tool.onMouseMove(app, Vector2d(380.0, 350.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(380.0, 350.0));
+  type("Next");
+  ASSERT_EQ(tool.commit(app), true);
+  app.flushFrame();
+  const std::string afterBox(app.document().document().source());
+  EXPECT_EQ(textElementCount(), 2);
+
+  ASSERT_EQ(app.canUndo(), true);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterEdit);
+  ASSERT_EQ(app.canUndo(), true);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_EQ(app.canUndo(), false);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterEdit);
+  EXPECT_EQ(textElementCount(), 1);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterBox);
+  EXPECT_EQ(app.canRedo(), false);
+}
+
+TEST_F(TextToolExistingTextTest, CommitToEmptyCanvasFinalizesUndoImmediately) {
+  const std::string before(app.document().document().source());
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  type("!");
+  const std::string afterEdit(app.document().document().source());
+  clickAt(Vector2d(300.0, 300.0));
+  ASSERT_EQ(app.canUndo(), true);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_EQ(app.canUndo(), false);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterEdit);
+  EXPECT_EQ(app.canRedo(), false);
+}
+
+TEST_F(TextToolExistingTextTest, CanceledNextGestureDoesNotDelayOrDuplicatePriorUndo) {
+  const std::string before(app.document().document().source());
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  type("!");
+  const std::string afterEdit(app.document().document().source());
+  tool.onMouseDown(app, Vector2d(300.0, 300.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(360.0, 360.0), /*buttonHeld=*/true);
+  tool.cancel();
+  ASSERT_EQ(app.canUndo(), true);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_EQ(app.canUndo(), false);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterEdit);
+  EXPECT_EQ(textElementCount(), 1);
+}
+
+TEST_F(TextToolExistingTextTest, EmptyNextSessionDoesNotPollutePriorRedo) {
+  const std::string before(app.document().document().source());
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  type("!");
+  const std::string afterEdit(app.document().document().source());
+  doubleClickAt(Vector2d(300.0, 300.0));
+  ASSERT_EQ(tool.commit(app), true);
+  EXPECT_EQ(textElementCount(), 1);
+  ASSERT_EQ(app.canUndo(), true);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_EQ(app.canUndo(), false);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterEdit);
+  EXPECT_EQ(textElementCount(), 1);
+}
+
+TEST_F(TextToolExistingTextTest, CommitToExistingTextFinalizesPriorSessionBeforeEditing) {
+  ASSERT_EQ(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+      <text x="50" y="80" font-size="20">Hello</text>
+      <text id="second" x="50" y="200" font-size="20">World</text></svg>)"),
+            true);
+  const std::string before(app.document().document().source());
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  type("!");
+  const std::string afterFirst(app.document().document().source());
+  auto second = app.document().document().querySelector("#second")->cast<svg::SVGTextElement>();
+  const Box2d extent = second.withWriteAccess(
+      [&second](svg::DocumentWriteAccess&, EntityHandle) { return second.getExtentOfChar(0); });
+  clickAt((extent.topLeft + extent.bottomRight) * 0.5);
+  ASSERT_EQ(tool.isEditing(), true);
+  EXPECT_EQ(tool.sessionContent(), U"World");
+  EXPECT_EQ(app.canUndo(), true);
+  type("X");
+  ASSERT_EQ(tool.commit(app), true);
+  app.flushFrame();
+  const std::string afterSecond(app.document().document().source());
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterFirst);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_EQ(app.canUndo(), false);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterFirst);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), afterSecond);
+}
+
 TEST_F(TextToolExistingTextTest, ClickInAndAwayWithoutTypingRecordsNoUndo) {
   clickAt(pointInChar(0, /*rightHalf=*/false));
   ASSERT_TRUE(tool.isEditing());
