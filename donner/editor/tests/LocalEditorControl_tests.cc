@@ -818,6 +818,34 @@ TEST_F(LocalEditorControlTest, NativeStdioRejectsUnboundedMalformedAndInvalidPro
   }
 }
 
+TEST_F(LocalEditorControlTest, NativeStdioAcceptsPeerEofAfterAllInputAndRepliesAreComplete) {
+  SocketPeer listener(socket(AF_UNIX, SOCK_STREAM, 0));
+  ASSERT_THAT(listener.fd >= 0, Eq(true));
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::memcpy(address.sun_path, endpoint.c_str(), endpoint.size() + 1);
+  ASSERT_THAT(bind(listener.fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)), Eq(0));
+  ASSERT_THAT(chmod(endpoint.c_str(), 0600), Eq(0));
+  ASSERT_THAT(listen(listener.fd, 1), Eq(0));
+  auto server = std::async(std::launch::async, [&] {
+    pollfd incoming{listener.fd, POLLIN, 0};
+    if (poll(&incoming, 1, 2000) != 1) return false;
+    SocketPeer peer(accept(listener.fd, nullptr, nullptr));
+    if (peer.fd < 0) return false;
+    const Json request = peer.readFrame();
+    if (!request.is_object() || !request.contains("id")) return false;
+    return peer.writeFrames(
+        Json({{"jsonrpc", "2.0"}, {"id", request["id"]}, {"result", "complete"}}).dump() + "\n");
+  });
+  std::istringstream input("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
+  std::ostringstream output, errors;
+  EXPECT_THAT(runStdio(input, output, errors, false), Eq(0));
+  EXPECT_THAT(server.get(), Eq(true));
+  EXPECT_THAT(errors.str(), Eq(""));
+  EXPECT_THAT(Json::parse(output.str()),
+              Eq(Json({{"jsonrpc", "2.0"}, {"id", 7}, {"result", "complete"}})));
+}
+
 TEST_F(LocalEditorControlTest, NativeStdioRequiresPrivateEndpointPermissions) {
   start();
   ASSERT_THAT(chmod(directory.c_str(), 0755), Eq(0));
