@@ -1188,6 +1188,22 @@ TEST_F(SurfaceTests, AcceptsEveryPacingAndAlphaCompositingItDefines) {
   }
 }
 
+TEST_F(SurfaceTests, RejectsAConfigurationWiderThanATextureMayBe) {
+  const Surface surface = metalSurface();
+
+  SurfaceConfiguration tooWide = configuration(kMaxTextureDimension + 1, 480);
+  EXPECT_THAT(device_.configureSurface(surface, tooWide),
+              IsGpuErrorWithMessage(GpuErrorType::LimitExceeded, HasSubstr("kMaxTextureDimension")))
+      << "The frames a surface hands out are validated as textures of the configured extent, so "
+         "an extent no texture could have would describe every frame wrongly";
+
+  SurfaceConfiguration tooTall = configuration(640, kMaxTextureDimension + 1);
+  EXPECT_THAT(device_.configureSurface(surface, tooTall), IsGpuError(GpuErrorType::LimitExceeded));
+
+  EXPECT_THAT(device_.configureSurface(surface, configuration(kMaxTextureDimension, 4)), IsOk())
+      << "The limit itself is still presentable";
+}
+
 TEST_F(SurfaceTests, AcquiringBeforeConfiguringIsReported) {
   const Surface surface = metalSurface();
   EXPECT_THAT(device_.acquireCurrentTexture(surface),

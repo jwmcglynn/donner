@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -206,6 +207,27 @@ TEST_F(MetalSurfaceTest, AFrameIsARenderTargetTheRuntimeCanDrawIntoAndReadBack) 
   EXPECT_THAT(device_->createTextureView(frame.texture, TextureViewDescriptor{"after"}),
               IsGpuError(GpuErrorType::InvalidHandle))
       << "The layer owns the frame once it has been handed over";
+}
+
+TEST_F(MetalSurfaceTest, RefusesAFrameWhoseExtentDoesNotMatchTheConfiguration) {
+  const Surface surface = configuredSurface();
+
+  // Moving the layer's drawable extent behind the surface's back is what a second owner of the
+  // layer would do. The runtime would otherwise describe the next frame to every range check as
+  // the extent it configured, while the frame itself is a different size.
+  layer_.drawableSize = CGSizeMake(kSurfaceWidth / 2.0, kSurfaceHeight / 2.0);
+
+  EXPECT_THAT(device_->acquireCurrentTexture(surface),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("configuration")))
+      << "A frame that is not the configured size is refused rather than handed over mislabelled";
+}
+
+TEST_F(MetalSurfaceTest, RefusesAConfigurationWiderThanATextureMayBe) {
+  const Surface surface = unwrap(device_->createSurface(surfaceDescriptor()), "createSurface");
+  EXPECT_THAT(device_->configureSurface(surface, configuration(kMaxTextureDimension + 1, 64)),
+              IsGpuError(GpuErrorType::LimitExceeded))
+      << "Core Animation would clamp this to what it can allocate, leaving every later range "
+         "check measuring frames against an extent nothing allocated";
 }
 
 TEST_F(MetalSurfaceTest, PresentsMoreFramesThanTheLayerHoldsDrawables) {
