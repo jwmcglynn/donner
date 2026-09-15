@@ -339,8 +339,9 @@ per-vertex values and nonzero vertex/instance bases, plus differently translated
 The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures,
 256 members, 1,024 symbols/statements, 4,096 expressions and 64 functions. A fixed type may occupy
 at most 1 MiB; layout growth is checked before recording member offsets. Text emission is bounded
-at 128 KiB. Slug fill, the Slug mask and the dedicated gradients each use a local 4,194,304-step Clang
-evaluator cap; existing smaller family caps remain independently checked.
+at 128 KiB. The Slug mask and the dedicated gradients each use a local 4,194,304-step Clang
+evaluator cap, and Slug fill uses 8,388,608 (its ported source measures about 4.07M steps);
+existing smaller family caps remain independently checked.
 
 Native tests cover ordinary and batched fills, fractional/binary coverage, clipping, patterns,
 linear/radial gradients, painter ordering and reads limited to a declared record range. Duplicate
