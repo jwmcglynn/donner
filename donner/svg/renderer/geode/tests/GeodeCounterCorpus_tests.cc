@@ -140,7 +140,7 @@ constexpr Observed kSteadyState = {
 struct CounterField {
   uint32_t bit;
   const char* name;
-  uint64_t Observed::*member;
+  uint64_t Observed::* member;
   /// What the counter proves when it holds, used in failure messages.
   const char* rationale;
 };
@@ -223,7 +223,7 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   return out;
 }
 
-constexpr std::array<KnownViolation, 28> kKnownViolations = {{
+constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
@@ -245,6 +245,17 @@ constexpr std::array<KnownViolation, 28> kKnownViolations = {{
         /*tracking=*/
         "clears when filter and clip-mask layers cache their geometry and bind groups across "
         "frames",
+    },
+    {
+        /*scene=*/"geode_splash",
+        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{8, 0, 1329, 156},
+        /*reason=*/
+        "shared contours and layered clip/mask passes re-encode paths and use per-frame "
+        "geometry/uniform uploads and bind groups",
+        /*tracking=*/
+        "clears when clip/mask geometry and layered fill/composite bindings remain resident "
+        "across unchanged frames",
     },
     {
         /*scene=*/"Edzample_Anim3",
@@ -603,7 +614,7 @@ struct CorpusRoot {
 /// The repository root itself carries the checked-in logo SVGs, which ship in
 /// the same `testdata` filegroup as the renderer corpus.
 constexpr CorpusRoot kCorpusRoots[] = {
-    {".", 2},
+    {".", 3},
     {"donner/svg/renderer/testdata", 70},
     {"donner/svg/renderer/benchmarks/testdata", 1},
 };
