@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/tests/BufferMappingScene.h"
@@ -116,6 +117,53 @@ TEST_F(MetalBufferMappingTest, AManagedBufferIsSynchronizedBeforeItsMappingReads
   EXPECT_THAT(device_->deviceWritePublishCountForTest(), testing::Gt(publishesBefore))
       << "The mapped buffer's submission must publish its device writes back to the host copy, "
          "or the mapping would read a stale mirror";
+}
+
+TEST_F(MetalBufferMappingTest, AWriteStillWaitingForTheQueueBlocksMapping) {
+  // A write to a busy buffer is copied into the pending queue and applied at the beginning of the
+  // next ordinary submission. That submission can be unrelated work, so it would land after a
+  // mapping taken in between had already reported itself ready, changing bytes the host was
+  // reading. The mapping is refused until the queue is drained.
+  const Buffer buffer = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"queuedWrite", kMappingSceneByteSize,
+                       BufferUsage::CopyDst | BufferUsage::CopySrc | BufferUsage::MapRead}));
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*device_, scene));
+
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_->createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(
+                  TexelCopyTextureInfo{scene.texture}, buffer,
+                  TexelCopyBufferLayout{0, gpu::tests::kMappingSceneBytesPerRow,
+                                        gpu::tests::kMappingSceneExtent},
+                  Extent2d{gpu::tests::kMappingSceneExtent, gpu::tests::kMappingSceneExtent}),
+              IsOk());
+  const uint64_t busySerial = GetResultOrFail(device_->submit(GetResultOrFail(encoder->finish())));
+  const std::vector<uint8_t> payload(16, 0x7C);
+  ASSERT_THAT(device_->writeBuffer(buffer, 0, payload), IsOk());
+  ASSERT_GT(device_->writeStatsForTest().pendingWrites, 0u) << "the write must have queued";
+
+  EXPECT_THAT(device_->mapBufferAsync(buffer, MapMode::Read, 0, kMappingSceneByteSize),
+              IsGpuError(GpuErrorType::InvalidState))
+      << "A mapping must not be taken while a queued write for that buffer is still unapplied";
+
+  device_->resumeSubmissionsForTest();
+  ASSERT_THAT(device_->waitForSerial(busySerial, 30.0), testing::IsTrue())
+      << device_->lastErrorForTest();
+  // An ordinary submission, even an empty one, applies the queued writes first.
+  const uint64_t flushSerial = GetResultOrFail(
+      device_->submit(GetResultOrFail(GetResultOrFail(device_->createCommandEncoder())->finish())));
+  ASSERT_THAT(device_->waitForSerial(flushSerial, 30.0), testing::IsTrue())
+      << device_->lastErrorForTest();
+  ASSERT_EQ(device_->writeStatsForTest().pendingWrites, 0u) << "the queue must have drained";
+
+  BufferMapping mapping =
+      GetResultOrFail(device_->mapBufferAsync(buffer, MapMode::Read, 0, kMappingSceneByteSize));
+  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})),
+            MapWaitOutcome::Ready);
+  const std::span<const uint8_t> bytes = GetResultOrFail(device_->mappedBytes(mapping));
+  EXPECT_EQ(bytes[0], 0x7C) << "the drained write must be what the mapping reads";
+  EXPECT_THAT(device_->unmapBuffer(std::move(mapping)), IsOk());
 }
 
 TEST_F(MetalBufferMappingTest, AMappingReadsWhatTheReadbackAccessorReads) {

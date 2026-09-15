@@ -298,6 +298,21 @@ donner_cc_test(
     ],
 )
 
+# Holds the device queue busy from the test side. Submissions retire in microseconds on a
+# software rasterizer, so a test that needs a resource to still be in flight cannot get there by
+# submitting work and racing it; this waits on a timeline semaphore the test owns.
+donner_cc_library(
+    name = "native_queue_gate",
+    testonly = 1,
+    hdrs = ["NativeQueueGate.h"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_test(
     name = "vulkan_buffer_writes_tests",
     srcs = ["VulkanBufferWrites_tests.cc"],
@@ -307,6 +322,7 @@ donner_cc_test(
     },
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
+        ":native_queue_gate",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
@@ -367,6 +383,7 @@ donner_cc_test(
     },
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
+        ":native_queue_gate",
         "//donner/gpu",
         "//donner/gpu:buffer_mapping_scene",
         "//donner/gpu:gpu_test_utils",

@@ -15,6 +15,7 @@
 
 #include "donner/gpu/tests/BufferMappingScene.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/vulkan/tests/NativeQueueGate.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 
 namespace donner::gpu::vulkan {
@@ -87,6 +88,49 @@ TEST_F(VulkanBufferMappingTest, ARangePastTheEndIsRefused) {
 
 TEST_F(VulkanBufferMappingTest, MapReadUsageIsRequired) {
   ExpectMapReadUsageIsRequired(*device_);
+}
+
+TEST_F(VulkanBufferMappingTest, AWriteStillWaitingForTheQueueBlocksMapping) {
+  // A write to a busy buffer is copied into the pending queue and applied at the beginning of the
+  // next submission. That submission can be unrelated work, so it would land after a mapping
+  // taken in between had already reported itself ready, changing bytes the host was reading. The
+  // mapping is refused until the queue is drained.
+  std::unique_ptr<VulkanDevice> gated = VulkanDevice::CreateWithTimelineSemaphoreForTest();
+  if (!gated) {
+    GTEST_SKIP() << "Device lacks VK_KHR_timeline_semaphore; the queue gate needs it";
+  }
+  const Buffer buffer = GetResultOrFail(gated->createBuffer(
+      BufferDescriptor{"queuedWrite", kMappingSceneByteSize,
+                       BufferUsage::CopyDst | BufferUsage::CopySrc | BufferUsage::MapRead}));
+
+  tests::NativeQueueGate gate(gated->nativeContextForTest());
+  ASSERT_NO_FATAL_FAILURE(gate.start());
+
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*gated, scene));
+  const std::vector<uint8_t> payload(16, 0x7C);
+  ASSERT_THAT(gated->writeBuffer(buffer, 0, payload), IsOk());
+  ASSERT_GT(gated->bufferWriteStatsForTest().pendingBytes, 0u) << "the write must have queued";
+
+  EXPECT_THAT(gated->mapBufferAsync(buffer, MapMode::Read, 0, kMappingSceneByteSize),
+              IsGpuError(GpuErrorType::InvalidState))
+      << "A mapping must not be taken while a queued write for that buffer is still unapplied";
+
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  // An ordinary submission applies the queued writes first.
+  const uint64_t flushSerial = GetResultOrFail(
+      gated->submit(GetResultOrFail(GetResultOrFail(gated->createCommandEncoder())->finish())));
+  ASSERT_THAT(gated->waitForSerial(flushSerial, 30.0), testing::IsTrue())
+      << gated->lastErrorForTest();
+  ASSERT_EQ(gated->bufferWriteStatsForTest().pendingBytes, 0u) << "the queue must have drained";
+
+  BufferMapping mapping =
+      GetResultOrFail(gated->mapBufferAsync(buffer, MapMode::Read, 0, kMappingSceneByteSize));
+  ASSERT_EQ(GetResultOrFail(gated->waitForMapping(mapping, SceneWaitParams(), {})),
+            MapWaitOutcome::Ready);
+  const std::span<const uint8_t> bytes = GetResultOrFail(gated->mappedBytes(mapping));
+  EXPECT_EQ(bytes[0], 0x7C) << "the drained write must be what the mapping reads";
+  EXPECT_THAT(gated->unmapBuffer(std::move(mapping)), IsOk());
 }
 
 TEST_F(VulkanBufferMappingTest, AMappingReadsWhatTheReadbackAccessorReads) {
