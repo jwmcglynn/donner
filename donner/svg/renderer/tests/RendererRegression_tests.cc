@@ -10,8 +10,11 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/SVGImageElement.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -513,6 +516,45 @@ TEST_F(RendererRegressionTests, ImageHrefChangeInvalidatesTinySkiaPremultipliedI
       RenderDocumentWithBackend(freshFragment.document, RendererBackend::TinySkia);
   ASSERT_FALSE(fresh.empty());
   ExpectBitmapsIdentical(afterMutation, fresh, "tiny_skia_image_cache_invalidation");
+}
+
+// Per the SVG 2 object-bounding-box definition, a container's box is the union of its
+// children's boxes, and text contributes the union of its glyph cells: advance width by the
+// font's full ascent and descent. `visibility: hidden` suppresses painting only, so a hidden text
+// child still contributes.
+TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 200" font-family="Noto Sans" font-size="40">
+      <g id="group">
+        <text id="hidden" x="50" y="105" font-size="50" visibility="hidden">Text</text>
+        <text id="shown" x="60" y="100">Text</text>
+      </g>
+    </svg>
+  )",
+                                            {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  // Rendering prepares the text layout that the bounding box is derived from.
+  ASSERT_THAT(RenderDocumentWithBackend(document, RendererBackend::TinySkia).empty(),
+              testing::IsFalse());
+
+  auto group = document.querySelector("#group");
+  auto hidden = document.querySelector("#hidden");
+  auto shown = document.querySelector("#shown");
+  ASSERT_THAT(group.has_value(), testing::IsTrue());
+  ASSERT_THAT(hidden.has_value(), testing::IsTrue());
+  ASSERT_THAT(shown.has_value(), testing::IsTrue());
+
+  const Box2d expected = Box2d::Union(hidden->cast<SVGTextElement>().objectBoundingBox(),
+                                      shown->cast<SVGTextElement>().objectBoundingBox());
+  ASSERT_THAT(expected.isEmpty(), testing::IsFalse())
+      << "text object bounding boxes must be non-empty for this test to be meaningful";
+
+  const std::optional<Box2d> actual =
+      components::ShapeSystem().getShapeBounds(group->entityHandle());
+  ASSERT_THAT(actual.has_value(), testing::IsTrue())
+      << "a group whose only children are <text> must still report an object bounding box";
+  EXPECT_THAT(*actual, BoxEq(Vector2Near(expected.topLeft.x, expected.topLeft.y),
+                             Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
 }
 
 }  // namespace
