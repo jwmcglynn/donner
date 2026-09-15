@@ -498,6 +498,11 @@ donner_cc_library(
 
 donner_cc_test(
     name = "geode_shaders_tests_impl",
+    # 30 cases that each build and run a real shader pipeline, 66 s of test time measured on a
+    # software rasterizer, so the implicit "small" this used to take is wrong by construction:
+    # that budget is 60 s. See the wrapper below for why this one does not keep the tight
+    # hang-detecting timeout its neighbours use.
+    size = "medium",
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
@@ -522,8 +527,12 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_shaders_tests",
-    # See geode_device_tests for the rationale on the short timeout.
-    timeout = "short",
+    # Not the short timeout its neighbours use. That one is a hang detector for device creation,
+    # which should take seconds on a healthy driver; this suite legitimately runs 30 shader
+    # pipelines, and needs 66 s of them on a software rasterizer. Moderate keeps the intent -
+    # a hung driver is still killed, in five minutes rather than one - without failing a run
+    # where every case passes steadily.
+    timeout = "moderate",
     testonly = 1,
     dep = ":geode_shaders_tests_impl",
     opens_gpu_device = True,
