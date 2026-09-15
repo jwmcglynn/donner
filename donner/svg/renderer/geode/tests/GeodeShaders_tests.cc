@@ -15,17 +15,52 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/SlugFill.h"
+#include "donner/gpu/shader/programs/SlugGradient.h"
+#include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/tests/SlugFillSlice.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-#include "embed_resources/SlugFillWgsl.h"
-#include "embed_resources/SlugGradientWgsl.h"
-#include "embed_resources/SlugMaskWgsl.h"
 
 namespace donner::geode {
+namespace {
+gpu::Result<std::vector<uint8_t>> ReadSlugBuffer(gpu::Device& device, const gpu::Buffer& buffer) {
+  auto mapping = device.mapBufferAsync(buffer, gpu::MapMode::Read, 0, 2048);
+  if (mapping.hasError()) return mapping.error();
+  const auto waited = device.waitForMapping(mapping.result(), {0.01, 5.0}, {});
+  if (waited.hasError()) return waited.error();
+  if (waited.result() != gpu::MapWaitOutcome::Ready)
+    return gpu::GpuError{gpu::GpuErrorType::InvalidState, "Slug readback did not complete"};
+  const auto bytes = device.mappedBytes(mapping.result());
+  if (bytes.hasError()) return bytes.error();
+  std::vector<uint8_t> result(bytes.result().begin(), bytes.result().end());
+  const auto unmapped = device.unmapBuffer(std::move(mapping).result());
+  if (unmapped.hasError()) return unmapped.error();
+  return result;
+}
+}  // namespace
+TEST(GeodeShaders, SlugFillReferenceEvenOdd) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+  auto& adapter = device->adapterDevice();
+  gpu::tests::CheckSlugFill(
+      adapter, gpu::shader::programs::SlugFillShader(),
+      [&](const gpu::Buffer& b) { return ReadSlugBuffer(adapter, b); },
+      gpu::tests::slug_fill_slice::Case::EvenOdd);
+}
+TEST(GeodeShaders, SlugFillReferenceLinearGradient) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+  auto& adapter = device->adapterDevice();
+  gpu::tests::CheckSlugFill(
+      adapter, gpu::shader::programs::SlugFillShader(),
+      [&](const gpu::Buffer& b) { return ReadSlugBuffer(adapter, b); },
+      gpu::tests::slug_fill_slice::Case::LinearGradient);
+}
 
 /// Smoke test: the Slug fill shader compiles without errors.
 /// If the WGSL has a syntax error or undefined symbol, shader module creation
@@ -111,10 +146,12 @@ protected:
       EXPECT_THAT(emitted.hasResult(), testing::IsTrue());
       return emitted.hasResult() ? emitted.result() : std::string();
     }
-    const auto bytes = shader == EndpointShader::Fill       ? embedded::kSlugFillWgsl
-                       : shader == EndpointShader::Gradient ? embedded::kSlugGradientWgsl
-                                                            : embedded::kSlugMaskWgsl;
-    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (shader == EndpointShader::Mask) {
+      return std::string(gpu::shader::programs::SlugMaskShader().wgsl);
+    }
+    if (shader == EndpointShader::Fill)
+      return std::string(gpu::shader::programs::SlugFillShader().wgsl);
+    return std::string(gpu::shader::programs::SlugGradientShader().wgsl);
   }
 
   static std::vector<uint8_t> readback(const wgpu::Buffer& buffer) {

@@ -9,7 +9,7 @@ namespace donner::gpu::shader::programs {
 
 /**
  * Builds the native solid-fill IR module with the analytic dual-ray coverage rules used by
- * `donner/svg/renderer/geode/shaders/slug_fill.wgsl`.
+ * `donner/gpu/shader/programs/SlugFillSource.h`.
  *
  * Native adapter contracts define the 352-byte `Uniforms` struct, `Band` (32 bytes),
  * `InstanceTransform` (32 bytes), and 12 bindings at group 0. The module includes the `kNoBand`

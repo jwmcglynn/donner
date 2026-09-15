@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 
 namespace donner::geode {
@@ -22,35 +23,7 @@ constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
-/// Layout of the per-draw uniform buffer (must match shaders/image_blit.wgsl).
-///
-/// 176 bytes total. `vec4f` members in WGSL require 16-byte alignment, so
-/// `maskBounds` lands at offset 128 (not 120). The explicit 8-byte pad
-/// before `maskBounds` mirrors that alignment so `blendMode` /
-/// `hasClipMask` end up at the offsets the fragment shader reads from
-/// (verified via `spirv-dis` on the naga-emitted SPIR-V - see
-/// OpMemberDecorate offsets 128/144/148).
-struct alignas(16) Uniforms {
-  float mvp[16];                   //   0 ..  64
-  float destRect[4];               //  64 ..  80
-  float srcRect[4];                //  80 ..  96
-  float targetSize[2];             //  96 .. 104 - target size for clip-mask UVs
-  float opacity;                   // 104 .. 108
-  uint32_t sourceIsPremult;        // 108 .. 112
-  uint32_t maskMode;               // 112 .. 116 - <mask> coverage selector
-  uint32_t applyMaskBounds;        // 116 .. 120 - clip output to `maskBounds`
-  uint32_t _padBeforeMaskBounds0;  // 120 .. 124 - align maskBounds to vec4f (16B) boundary
-  uint32_t _padBeforeMaskBounds1;  // 124 .. 128
-  float maskBounds[4];             // 128 .. 144 - (x0, y0, x1, y1) in target-pixel space
-  uint32_t blendMode;              // 144 .. 148 - mix-blend-mode selector
-  uint32_t hasClipMask;            // 148 .. 152 - path-clip mask blit
-  uint32_t samplingMode;           // 152 .. 156 - GeodeTextureEncoder::Filter
-  uint32_t _pad1;                  // 156 .. 160
-  float pixelatedScale[2];         // 160 .. 168 - device pixels per source texel
-  uint32_t _pad2;                  // 168 .. 172
-  uint32_t _pad3;                  // 172 .. 176
-};
-static_assert(sizeof(Uniforms) == 176, "Image-blit Uniforms layout mismatch");
+using Uniforms = gpu::shader::programs::ImageBlitParams;
 
 }  // namespace
 
@@ -248,15 +221,16 @@ void GeodeTextureEncoder::drawTexturedQuad(
     return;
   }
 
+  const auto& shader = gpu::shader::programs::ImageBlitShader();
   gpu::Result<gpu::BindGroup> bindGroupResult = device.createBindGroup(gpu::BindGroupDescriptor{
       "GeodeImageBlitBindGroup",
       pipeline.bindGroupLayout(),
-      {gpu::BindGroupEntry{0, uniformBinding}, gpu::BindGroupEntry{1, gpu::SamplerBinding{sampler}},
-       gpu::BindGroupEntry{2, gpu::TextureViewBinding{views.source}},
-       gpu::BindGroupEntry{3, gpu::TextureViewBinding{views.mask}},
-       gpu::BindGroupEntry{4, gpu::TextureViewBinding{views.backdrop}},
-       gpu::BindGroupEntry{5, gpu::TextureViewBinding{views.clipMask}},
-       gpu::BindGroupEntry{6, gpu::SamplerBinding{pipeline.clipMaskSampler()}}}});
+      {{shader.resource("uniforms")->binding, uniformBinding},
+       {shader.resource("imageSampler")->binding, gpu::SamplerBinding{sampler}},
+       {shader.resource("imageTexture")->binding, gpu::TextureViewBinding{views.source}},
+       {shader.resource("maskTexture")->binding, gpu::TextureViewBinding{views.mask}},
+       {shader.resource("dstSnapshotTexture")->binding, gpu::TextureViewBinding{views.backdrop}},
+       {shader.resource("clipMaskTexture")->binding, gpu::TextureViewBinding{views.clipMask}}}});
   if (bindGroupResult.hasError()) {
     return;
   }

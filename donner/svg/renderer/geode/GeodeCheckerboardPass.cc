@@ -149,7 +149,8 @@ bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
       "GeodeCheckerboardBG",
       pipeline.bindGroupLayout(),
       {gpu::BindGroupEntry{
-          0, gpu::BufferBinding{uniformBuffer_, 0, sizeof(GeodeCheckerboardPipeline::Uniforms)}}}});
+          pipeline.uniformBinding(),
+          gpu::BufferBinding{uniformBuffer_, 0, sizeof(GeodeCheckerboardPipeline::Uniforms)}}}});
   if (bindGroup.hasError()) {
     return false;
   }

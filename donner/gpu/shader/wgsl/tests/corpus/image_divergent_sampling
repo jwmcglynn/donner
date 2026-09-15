@@ -1,0 +1,1 @@
+@group(0) @binding(0)var t:texture_2d<f32>;@group(0) @binding(1)var s:sampler;@fragment fn fs_main(@location(0)uv:vec2f)->@location(0)vec4f{var flag=false;for(var i:i32=0;i<2;i=i+1){if(flag){let v=textureSample(t,s,uv);}flag=uv.x>0.0;}return vec4f(0);}

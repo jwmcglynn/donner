@@ -26,7 +26,6 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -349,7 +348,7 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
 
 /// Hard cap on gradient stops baked into the uniform buffer. Must be
 /// <= `GeoEncoder`'s internal `kMaxGradientStops` (which mirrors the WGSL
-/// constant in `slug_gradient.wgsl`). Values beyond this cap are truncated
+/// constant in `SlugGradientSource.h`). Values beyond this cap are truncated
 /// with a one-shot warning; the follow-up is a texture-based stop lookup
 /// (a `GeodeGradientCacheComponent` holding a stop texture).
 constexpr size_t kMaxGradientStopsClient = 16;
@@ -2519,7 +2518,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Capture the exact post-vertex Slug triangles at the GPU submission
-  /// boundary. This reproduces `slug_fill.wgsl`'s half-pixel miter dilation
+  /// boundary. This reproduces `SlugFillSource.h`'s half-pixel miter dilation
   /// and its ill-conditioned-transform AABB fallbacks before mapping the
   /// vertices into root-target device pixels.
   void recordSlugDraw(const geode::EncodedPath& encoded, const Transform2d& targetFromPath,
@@ -3621,7 +3620,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Pack a 2D affine into the 8-float wire format the shader expects
   /// (two `vec4f` rows, `(a, c, e, 0)` / `(b, d, f, 0)` - see
-  /// `struct InstanceTransform` in `shaders/slug_fill.wgsl`).
+  /// `struct InstanceTransform` in `donner/gpu/shader/programs/SlugFillSource.h`).
   /// `Transform2d::data` is column-major `[a, b, c, d, e, f]`.
   static void packTransform(const Transform2d& xf, float out[8]) {
     out[0] = static_cast<float>(xf.data[0]);  // a
@@ -7333,13 +7332,11 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
   if (createdView.hasError()) return false;
   const gpu::TextureView inputView = std::move(createdView).result();
-  using Binding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
   auto bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
       "RendererGeodeReadbackBG",
       pipeline.bindGroupLayout(),
-      {gpu::BindGroupEntry{static_cast<uint32_t>(Binding::InputTexture),
-                           gpu::TextureViewBinding{inputView}},
-       gpu::BindGroupEntry{static_cast<uint32_t>(Binding::OutputTexture),
+      {gpu::BindGroupEntry{pipeline.inputBinding(), gpu::TextureViewBinding{inputView}},
+       gpu::BindGroupEntry{pipeline.outputBinding(),
                            gpu::TextureViewBinding{resources.stagingView}}}});
   if (bindGroup.hasError()) return false;
   auto createdEncoder = runtime.createCommandEncoder();
@@ -7349,12 +7346,11 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       encoder->beginComputePass(gpu::ComputePassDescriptor{"RendererGeodeReadbackPass"});
   if (createdPass.hasError()) return false;
   gpu::ComputePassEncoder* pass = createdPass.result();
-  constexpr uint32_t kWorkgroupX = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
-  constexpr uint32_t kWorkgroupY = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
+  const gpu::WorkgroupSize workgroup = pipeline.workgroupSize();
   if (pass->setPipeline(pipeline.pipeline()).hasError() ||
       pass->setBindGroup(0, bindGroup.result()).hasError() ||
-      pass->dispatchWorkgroups((width + kWorkgroupX - 1) / kWorkgroupX,
-                               (height + kWorkgroupY - 1) / kWorkgroupY, 1)
+      pass->dispatchWorkgroups((width + workgroup.x - 1) / workgroup.x,
+                               (height + workgroup.y - 1) / workgroup.y, 1)
           .hasError() ||
       pass->end().hasError())
     return false;

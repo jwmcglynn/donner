@@ -1,102 +1,64 @@
 /// @file
-/// Color-matrix filter program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and expose the expected program interfaces.
+/// FilterColorMatrix frozen-artifact metadata and projection tests.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <string>
-#include <vector>
+#include <array>
+#include <string_view>
 
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
-
-using testing::HasSubstr;
+#include "donner/gpu/shader/tests/CompiledFilterColorMatrix.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-std::string EmitFilterColorMatrixWgsl() {
-  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
+TEST(FilterColorMatrixProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
+  const CompiledShaderView& shader = tests::FilterColorMatrixAllProjections();
+
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(shader.msl, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.spirv, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().stage, ShaderStage::Compute);
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  ASSERT_THAT(shader.resources, testing::SizeIs(3));
+  ASSERT_NE(shader.resource("inputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("inputTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("inputTexture")->binding, 0u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 1u);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->group, 0u);
+  EXPECT_EQ(shader.resource("params")->binding, 2u);
+  EXPECT_EQ(shader.resource("params")->minSizeBytes, sizeof(programs::FilterColorMatrixParams));
+  EXPECT_NE(shader.wgsl.find("struct FilterColorMatrixParams"), std::string_view::npos);
+  EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }
 
-std::string EmitFilterColorMatrixMsl() {
-  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
+TEST(FilterColorMatrixProgramTests, AdapterArtifactRetainsOnlyWgsl) {
+  const CompiledShaderView& adapter = programs::FilterColorMatrixShader();
+  EXPECT_EQ(adapter.wgsl, tests::FilterColorMatrixAllProjections().wgsl);
+  EXPECT_TRUE(adapter.msl.empty());
+  EXPECT_TRUE(adapter.spirv.empty());
+  EXPECT_EQ(adapter.resources.size(), tests::FilterColorMatrixAllProjections().resources.size());
+  EXPECT_EQ(adapter.entryPoints.size(),
+            tests::FilterColorMatrixAllProjections().entryPoints.size());
 }
 
-std::vector<uint32_t> EmitFilterColorMatrixSpirv() {
-  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return {};
-  }
-  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
-}
-
-TEST(FilterColorMatrixProgramTests, ModuleBuildsCleanly) {
-  EXPECT_THAT(programs::BuildFilterColorMatrixModule(), HasShaderResult());
-}
-
-TEST(FilterColorMatrixProgramTests, EmitsDeterministically) {
-  EXPECT_THAT(EmitFilterColorMatrixWgsl(), testing::Eq(EmitFilterColorMatrixWgsl()));
-  EXPECT_THAT(EmitFilterColorMatrixMsl(), testing::Eq(EmitFilterColorMatrixMsl()));
-  EXPECT_THAT(EmitFilterColorMatrixSpirv(), testing::Eq(EmitFilterColorMatrixSpirv()));
-}
-
-TEST(FilterColorMatrixProgramTests, WgslDeclaresTheComputeSurface) {
-  const std::string wgsl = EmitFilterColorMatrixWgsl();
-
-  EXPECT_THAT(wgsl, HasSubstr("@compute @workgroup_size(8, 8, 1)\nfn cs_main("));
-  EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
-  EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
-                        "write>;"));
-  EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(2) var<uniform> params: FilterColorMatrixParams;"));
-  // All five columns must reach the result: four multipliers and the constant one.
-  for (const char* column : {"col0", "col1", "col2", "col3", "col4"}) {
-    EXPECT_THAT(wgsl, HasSubstr(std::string("params.") + column));
-  }
-  // A compute entry point returns nothing, so no generated output struct may appear.
-  EXPECT_THAT(wgsl, testing::Not(HasSubstr("cs_main_Output")));
-}
-
-TEST(FilterColorMatrixProgramTests, WgslUnpremultipliesAndPremultipliesAroundTheMatrix) {
-  const std::string wgsl = EmitFilterColorMatrixWgsl();
-
-  // The matrix is defined on straight-alpha values, so the source is divided through by its alpha
-  // and the clamped result is multiplied by its own alpha again. Dropping either would leave the
-  // matrix applied to premultiplied values.
-  EXPECT_THAT(wgsl, HasSubstr("(source.xyz / source.w)"));
-  EXPECT_THAT(wgsl, HasSubstr("(clamped.xyz * clamped.w)"));
-  // A fully transparent texel has no straight-alpha color to divide out, so it takes its own path
-  // and returns rather than falling through to the matrix.
-  EXPECT_THAT(wgsl, HasSubstr("} else {"));
-  EXPECT_THAT(wgsl, HasSubstr("saturate(params.col4)"));
-}
-
-TEST(FilterColorMatrixProgramTests, MslDeclaresTheKernelSurface) {
-  const std::string msl = EmitFilterColorMatrixMsl();
-
-  EXPECT_THAT(msl, HasSubstr("kernel void cs_main("));
-  EXPECT_THAT(msl, HasSubstr("uint3 gid [[thread_position_in_grid]]"));
-  EXPECT_THAT(msl, HasSubstr("texture2d<float> inputTexture [[texture(0)]]"));
-  EXPECT_THAT(msl, HasSubstr("texture2d<float, access::write> outputTexture [[texture(1)]]"));
-  // A kernel takes its builtins directly, so no stage-in struct may appear.
-  EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
+TEST(FilterColorMatrixProgramTests, MutationControlReflectsChangedInterface) {
+  const CompiledShaderView& shader = tests::FilterColorMatrixMutatedAllProjections();
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_test");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  ASSERT_NE(shader.resource("inputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("inputTexture")->binding, 6u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 5u);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->binding, 4u);
 }
 
 }  // namespace

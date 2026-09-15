@@ -12,6 +12,7 @@
 /// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`,
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <webgpu/webgpu.hpp>
@@ -55,17 +56,23 @@ struct FilterResourceArena;
 struct FilterResourceCache;
 
 /**
- * A compute pipeline built from a shader IR program's build-time emitted source, with the objects
- * it is layered on.
+ * A compute pipeline built from a precompiled shader artifact, with the objects it is layered on.
  *
  * Every handle is null when any step of the build failed, which is what a dispatch checks before
- * recording: a pipeline that was never created must not be dispatched with.
+ * recording: a pipeline that was never created must not be dispatched with. Binding slots come
+ * from the artifact's reflected resource names, never from a host-side table.
  */
 struct RuntimeComputeProgram {
   gpu::ShaderModule shaderModule;        //!< Module holding the compute entry point.
   gpu::BindGroupLayout bindGroupLayout;  //!< Layout of group 0.
   gpu::PipelineLayout pipelineLayout;    //!< Pipeline layout over that one group.
   gpu::ComputePipeline pipeline;         //!< The pipeline itself.
+  gpu::WorkgroupSize workgroupSize;      //!< Dispatch dimensions declared by the entry point.
+  std::array<uint32_t, 3> inputOutputParameterBindings = {0, 1, 2};
+  //!< Reflected input texture, output texture, and parameter resource bindings.
+  std::optional<uint32_t> transferTableBinding;  //!< Optional reflected lookup-table binding.
+  std::array<uint32_t, 4> twoInputBindings = {0, 1, 2, 3};
+  //!< Reflected source, backdrop, output and parameter bindings of a two-input program.
 };
 
 /**
@@ -509,8 +516,7 @@ private:
   RuntimeComputeProgram compositeProgram_;
 
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> blendPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
+  RuntimeComputeProgram blendProgram_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
   RuntimeComputeProgram morphologyProgram_;

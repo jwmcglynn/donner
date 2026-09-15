@@ -17,7 +17,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/shader/programs/TurbulenceBindings.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "tiny_skia/filter/Turbulence.h"
 
@@ -29,29 +29,8 @@ inline constexpr uint32_t kHeight = 5;
 inline constexpr uint32_t kTransferRowBytes = 256;
 inline constexpr uint32_t kPackedRowBytes = kWidth * 4 * sizeof(float);
 
-struct Params {
-  float baseFreqX;
-  float baseFreqY;
-  int32_t numOctaves;
-  int32_t seed;
-  uint32_t stitchTiles;
-  uint32_t typeFlag;
-  float tileWidth;
-  float tileHeight;
-  float filterFromDeviceA;
-  float filterFromDeviceB;
-  float filterFromDeviceC;
-  float filterFromDeviceD;
-};
-
-struct Tables {
-  std::array<int32_t, shader::programs::kTurbulenceTableSize> lattice{};
-  std::array<float, shader::programs::kTurbulenceGradientTableSize> gradX{};
-  std::array<float, shader::programs::kTurbulenceGradientTableSize> gradY{};
-};
-
-static_assert(sizeof(Params) == 48);
-static_assert(sizeof(Tables) == 18504);
+using Params = shader::programs::TurbulenceParams;
+using Tables = shader::programs::TurbulenceTables;
 
 inline int64_t Random(int64_t seed) {
   constexpr int64_t kRandM = 2147483647;
@@ -161,29 +140,33 @@ inline const std::array<Scenario, 4> kScenarios{{
 }  // namespace turbulence_details
 
 /**
- * Runs build-generated turbulence code against the independent CPU filter.
+ * Runs compiled turbulence code against the independent CPU filter.
  *
  * @param device Native device with bounded wait/readback support.
- * @param shaderDescriptor Build-generated platform descriptor.
+ * @param compiled Frozen shader and reflected interface.
  * @param readbackBuffer Reads a submitted buffer through the backend's host mapping API.
  */
 template <typename DeviceType, typename Readback>
-void CheckTurbulenceStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+void CheckTurbulenceStorage(DeviceType& device, const shader::CompiledShaderView& compiled,
                             Readback readbackBuffer) {
   using namespace turbulence_details;
-  using shader::programs::TurbulenceBinding;
-  const auto binding = [](TurbulenceBinding value) { return static_cast<uint32_t>(value); };
-
-  auto shader = device.createShaderModule(shaderDescriptor);
+  const auto* outputBinding = compiled.resource("outputTexture");
+  const auto* paramsBinding = compiled.resource("params");
+  const auto* tablesBinding = compiled.resource("tables");
+  ASSERT_NE(outputBinding, nullptr);
+  ASSERT_NE(paramsBinding, nullptr);
+  ASSERT_NE(tablesBinding, nullptr);
+  ASSERT_THAT(compiled.entryPoints, testing::SizeIs(1));
+  const auto& entry = compiled.entryPoints.front();
+  ASSERT_EQ(entry.stage, ShaderStage::Compute);
+  ASSERT_GT(entry.workgroupSize[0], 0u);
+  ASSERT_GT(entry.workgroupSize[1], 0u);
+  ASSERT_EQ(entry.workgroupSize[2], 1u);
+  auto shader = device.createShaderModule(
+      shader::MakeShaderDescriptor(compiled, device.shaderSourceKind(), "turbulence"));
   ASSERT_THAT(shader, HasResult());
-  auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
-      "turbulence",
-      {{binding(TurbulenceBinding::OutputTexture), ShaderStage::Compute,
-        BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA32Float},
-       {binding(TurbulenceBinding::Params), ShaderStage::Compute,
-        BindingType::ReadOnlyStorageBuffer},
-       {binding(TurbulenceBinding::Tables), ShaderStage::Compute,
-        BindingType::ReadOnlyStorageBuffer}}});
+  auto layout = device.createBindGroupLayout(
+      BindGroupLayoutDescriptor{"turbulence", shader::MakeBindingLayout(compiled)});
   ASSERT_THAT(layout, HasResult());
   auto pipelineLayout =
       device.createPipelineLayout(PipelineLayoutDescriptor{"turbulence", {layout.result()}});
@@ -191,8 +174,8 @@ void CheckTurbulenceStorage(DeviceType& device, const ShaderModuleDescriptor& sh
   auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
       "turbulence",
       pipelineLayout.result(),
-      ComputeState{shader.result(), RcString(shader::programs::kTurbulenceEntryPoint)},
-      {shader::programs::kTurbulenceWorkgroupSize, shader::programs::kTurbulenceWorkgroupSize, 1}});
+      ComputeState{shader.result(), RcString(entry.name.view())},
+      {entry.workgroupSize[0], entry.workgroupSize[1], entry.workgroupSize[2]}});
   ASSERT_THAT(pipeline, HasResult());
 
   for (const Scenario& scenario : kScenarios) {
@@ -236,11 +219,9 @@ void CheckTurbulenceStorage(DeviceType& device, const ShaderModuleDescriptor& sh
     auto group = device.createBindGroup(BindGroupDescriptor{
         scenario.name,
         layout.result(),
-        {{binding(TurbulenceBinding::OutputTexture), TextureViewBinding{outputView.result()}},
-         {binding(TurbulenceBinding::Params),
-          BufferBinding{paramsBuffer.result(), 0, sizeof(params)}},
-         {binding(TurbulenceBinding::Tables),
-          BufferBinding{tablesBuffer.result(), 0, sizeof(tables)}}}});
+        {{outputBinding->binding, TextureViewBinding{outputView.result()}},
+         {paramsBinding->binding, BufferBinding{paramsBuffer.result(), 0, sizeof(params)}},
+         {tablesBinding->binding, BufferBinding{tablesBuffer.result(), 0, sizeof(tables)}}}});
     ASSERT_THAT(group, HasResult());
     auto readback =
         device.createBuffer(BufferDescriptor{"turbulence readback", kTransferRowBytes * kHeight,
@@ -252,7 +233,10 @@ void CheckTurbulenceStorage(DeviceType& device, const ShaderModuleDescriptor& sh
     ASSERT_THAT(pass, HasResult());
     ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
     ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-    ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+    ASSERT_THAT(pass.result()->dispatchWorkgroups(
+                    (kWidth + entry.workgroupSize[0] - 1) / entry.workgroupSize[0],
+                    (kHeight + entry.workgroupSize[1] - 1) / entry.workgroupSize[1], 1),
+                IsOk());
     ASSERT_THAT(pass.result()->end(), IsOk());
     ASSERT_THAT(encoder.result()->copyTextureToBuffer(
                     TexelCopyTextureInfo{output.result()}, readback.result(),

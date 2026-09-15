@@ -53,8 +53,6 @@ struct GeodeGpuContext {
   const gpu::Sampler* dummyPatternSampler = nullptr;
   /// 1x1 full-coverage dummy view bound into the clip-mask slot when no clip mask is active.
   const gpu::TextureView* dummyClipMaskTextureView = nullptr;
-  /// Linear-ClampToEdge sampler paired with \ref dummyClipMaskTextureView (and real masks).
-  const gpu::Sampler* dummyClipMaskSampler = nullptr;
   /// One full-size identity instance record, bound by every non-instanced Slug fill.
   const gpu::Buffer* identityInstanceRecordBuffer = nullptr;
   /// One zero-filled gradient paint block, bound by draws that carry no gradient paint.

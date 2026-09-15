@@ -1,0 +1,1189 @@
+#pragma once
+/// @file
+/// Authoritative WGSL for ordinary and batched Slug fills.
+#include "donner/gpu/shader/wgsl/Compiler.h"
+namespace donner::gpu::shader::programs {
+inline constexpr wgsl::SourceText kSlugFillSource{
+    R"wgsl(// Slug fill pipeline: analytic dual-ray coverage at 1 sample/pixel.
+//
+// Algorithm:
+//   1. The path is decomposed on the CPU into horizontal bands (Y-monotonic
+//      curves, for the horizontal ray) AND vertical bands (X-monotonic curves,
+//      for the vertical ray). Dense band grids map a sample position to its
+//      band in O(1).
+//   2. One small convex bounding fan is drawn per path. The vertex shader performs
+//      dynamic half-pixel dilation so the enclosure expands by exactly half a pixel
+//      across each edge in viewport space.
+//   3. Because each pixel is rasterized by exactly one fragment (one convex fan),
+//      folded sampleCount=1 coverage composes correctly with no band-seam
+//      double-count (Blocker B is structurally impossible).
+//   4. The fragment shader casts a HORIZONTAL ray through the pixel's
+//      horizontal band and a VERTICAL ray through its vertical band,
+//      accumulating analytic coverage per Slug's `CalcCoverage`, then folds
+//      the result into the premultiplied output color.
+//
+// Curves are axis-monotonic quadratic Beziers (3 control points each); each
+// curve crosses a given ray at most once. The per-root coverage is
+// `saturate(r + 0.5)` (signed by winding direction) with weight
+// `saturate(1 - 2|r|)`, where `r` is the signed root distance from the pixel
+// center in pixels (`pixelsPerEm = 1/fwidth(sample_pos)`).
+
+// ============================================================================
+// Uniforms
+// ============================================================================
+
+struct Uniforms {
+  // Model-view-projection matrix (2D content uses an orthographic affine).
+  // For instanced / batched draws this is the orthographic screen-pixel
+  // mapping; each instance composes its own transform on top.
+  mvp: mat4x4f,
+  // Pattern sampling transform (paintMode == 1 only).
+  patternFromPath: mat4x4f,
+  // Viewport dimensions in pixels.
+  viewport: vec2f,
+  // Pattern tile size in pattern-tile space.
+  tileSize: vec2f,
+  // Nonzero when a convex 4-vertex clip polygon is active. Clip state is a
+  // batch boundary, so it stays batch-uniform rather than per-instance.
+  hasClipPolygon: u32,
+  // Nonzero when a path-clip mask texture is bound at binding 5.
+  hasClipMask: u32,
+  // Nonzero to preserve analytic edge coverage; zero emits binary coverage.
+  antialias: u32,
+  _pad1: u32,
+  // Four inward-facing half-planes in viewport-pixel space, one per polygon
+  // edge. `plane.xyz = (nx, ny, c)` with `nx*x + ny*y + c >= 0` inside.
+  clipPolygonPlanes: array<vec4f, 4>,
+  // Draw-level copy of the paint / geometry parameters below. Every draw
+  // whose instances share ONE paint and ONE encoded path - a single fill, a
+  // repeated `<use>` of the same entity - reads these instead of a
+  // per-instance record, so it needs no record storage at all. Only a
+  // cross-entity batch, whose instances differ in paint and geometry, reads
+  // them per instance (the `_batched` entry points).
+  color: vec4f,
+  fillRule: u32,
+  paintMode: u32,
+  patternOpacity: f32,
+  _pad2: u32,
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  boundingVertexCount: u32,
+  _gridPad0: u32,
+  bandBase: u32,
+  curveBase: u32,
+  vBandBase: u32,
+  vCurveBase: u32,
+  hGridBase: u32,
+  vGridBase: u32,
+  hRefsBase: u32,
+  vRefsBase: u32,
+  boundingVertices: array<vec4f, 4>,
+  // Draw-level copy of the per-instance clip rectangle, mirrored from the
+  // record the same draw would have written.
+  clipRect: vec4f,
+  clipRectActive: u32,
+  paintBase: u32,
+  gradientSpread: u32,
+  gradientStopCount: u32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+// ============================================================================
+// Storage buffers
+// ============================================================================
+
+// Compact per-band offset/count into the axis's curve-reference array.
+struct Band {
+  curveStart: u32,
+  curveCount: u32,
+};
+
+// Horizontal bands + curves (for the horizontal ray).
+@group(0) @binding(1) var<storage, read> bands: array<Band>;
+@group(0) @binding(2) var<storage, read> curveData: array<f32>;
+
+// Pattern tile texture + sampler.
+@group(0) @binding(3) var patternTexture: texture_2d<f32>;
+@group(0) @binding(4) var patternSampler: sampler;
+
+// Path-clip mask texture, read without filtering.
+@group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
+
+// Per-instance record (vertex + fragment stages). A cross-entity batch
+// binds one record per instance and reads all of it through the `_batched`
+// entry points, so overlapping instances blend in painter (instance) order.
+// Every other draw only reads `transform` here (in the vertex stage) and
+// takes the rest from the uniform, so it can bind the device's shared
+// identity record and write no record storage at all.
+struct InstanceTransform {
+  row0: vec4f,
+  row1: vec4f,
+};
+struct InstanceRecord {
+  // Full worldFromEntity * surfaceFromCanvas composition. The vertex stage
+  // composes `uniforms.mvp * transform` exactly like the non-instanced path
+  // composed its per-draw mvp.
+  transform: InstanceTransform,
+  // Fill color (premultiplied alpha). Only used when paintMode == 0.
+  color: vec4f,
+  // Fill rule: 0 = non-zero, 1 = even-odd.
+  fillRule: u32,
+  // Paint mode: 0 = solid color, 1 = pattern texture (repeat-tiled).
+  paintMode: u32,
+  // Pattern alpha multiplier (e.g., fill-opacity). 1.0 for solid paint.
+  patternOpacity: f32,
+  _pad0: u32,
+  // Band-grid parameters: the horizontal grid bins the path's
+  // Y-range into `hBandCount` strips of `hStride` starting at `yBase`; the
+  // vertical grid bins the X-range into `vBandCount` strips of `vStride`
+  // starting at `xBase`. Two vec4-aligned rows.
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  _gridPad0: u32,
+  _gridPad1: u32,
+  boundingVertexCount: u32,
+  _boundingPad0: u32,
+  _boundingPad1: u32,
+  _boundingPad2: u32,
+  // Two path-space vec2 vertices per vec4, up to eight vertices.
+  boundingVertices: array<vec4f, 4>,
+  // Element offsets into the bound arrays. When a batch binds a whole
+  // scene-class region (or the single-draw path binds its own range), these
+  // are relative to the binding's start; all geometry reads add them.
+  bandBase: u32,
+  curveBase: u32,
+  vBandBase: u32,
+  vCurveBase: u32,
+  hGridBase: u32,
+  vGridBase: u32,
+  hRefsBase: u32,
+  vRefsBase: u32,
+  // Axis-aligned device-pixel clip rectangle, half-open over integer pixel
+  // indices: a fragment survives when `floor(pixel_center)` lies in
+  // `[clipRect.xy, clipRect.zw)`. That is exactly the set a rasterizer
+  // scissor of the same rectangle keeps. Carrying the rectangle per instance
+  // is what lets a rect-clipped fill stay inside a deferred batch, whose one
+  // draw is recorded after the clip may already have moved on.
+  clipRect: vec4f,
+  clipRectActive: u32,
+  // Element index of this instance's gradient paint block in `paintData`.
+  // Meaningless (and never read) unless paintMode selects a gradient.
+  paintBase: u32,
+  gradientSpread: u32,
+  gradientStopCount: u32,
+  // Tail padding to 256 bytes so record-slab slot offsets satisfy the
+  // baseline min_storage_buffer_offset_alignment (256).
+  _padTail: vec4f,
+};
+@group(0) @binding(7) var<storage, read> instances: array<InstanceRecord>;
+
+// Vertical bands + curves (for the vertical ray).
+@group(0) @binding(8) var<storage, read> vBands: array<Band>;
+@group(0) @binding(9) var<storage, read> vCurveData: array<f32>;
+
+// Combined dense band-grid storage: hBandGrid, vBandGrid,
+// hCurveIndices, and vCurveIndices all live in ONE u32 array. Each
+// instance record carries the four element bases into this array, so a
+// batch (or a resident slot) binds one contiguous range instead of four
+// separate storage bindings - the fragment stage's storage-buffer count
+// stays under the baseline WebGPU limit of 8 per stage.
+// `gridData[hGridBase + i]` maps grid cell i to a slot in `bands` (or the
+// kNoBand sentinel); `gridData[vGridBase + j]` maps cell j to a slot in
+// `vBands`; `gridData[hRefsBase + ...]` / `gridData[vRefsBase + ...]`
+// index curves within a band.
+@group(0) @binding(10) var<storage, read> gridData: array<u32>;
+
+// Gradient paint parameters and stop ramp, as vec4 rows. Every instance
+// record carries the element index of its own block, so a run of differently
+// painted gradient fills needs no per-draw uniform rebinding and can share one
+// draw with the solid fills around it. Block layout, relative to `paintBase`:
+//
+//   +0  gradientFromPath row0 (a, c, e, 0)
+//   +1  gradientFromPath row1 (b, d, f, 0)
+//   +2  (startGrad.xy, endGrad.xy)                      linear
+//   +3  (center.xy, focalCenter.xy)                     radial
+//   +4  (radius, focalRadius, 0, 0)                     radial
+//   +5  .. +20  stop colours, straight alpha
+//   +21 .. +24  stop offsets, four per row
+//
+// A solid or pattern instance points at a zero-filled block and never reads
+// it, so the whole array can be one binding over the geometry chunk.
+@group(0) @binding(11) var<storage, read> paintData: array<vec4f>;
+
+const kPaintSolid: u32 = 0u;
+const kPaintPattern: u32 = 1u;
+const kPaintLinearGradient: u32 = 2u;
+const kPaintRadialGradient: u32 = 3u;
+
+const kMaxStops: u32 = 16u;
+const kPaintStopColorRow: u32 = 5u;
+const kPaintStopOffsetRow: u32 = 21u;
+const kInvalidGradientT: f32 = -1e30;
+
+// Sentinel for an empty grid cell (must match EncodedPath::kNoBand).
+const kNoBand: u32 = 0xFFFFFFFFu;
+
+fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
+  let dims = vec2i(textureDimensions(clipMaskTexture));
+  let texel = clamp(vec2i(round(pixel_center - vec2f(0.5))), vec2i(0), dims - vec2i(1));
+  let sample = textureLoad(clipMaskTexture, texel, 0);
+  return clamp((sample.r + sample.g + sample.b + sample.a) * 0.25, 0.0, 1.0);
+}
+
+// ============================================================================
+// Vertex stage
+// ============================================================================
+
+struct VertexOutput {
+  @builtin(position) clip_pos: vec4f,
+  // Path-space sample position. Fragment shader casts both rays from here.
+  @location(0) sample_pos: vec2f,
+  // Flat instance index - the fragment stage reads its InstanceRecord
+  // through this so overlapping batched instances blend in instance order.
+  @location(1) @interpolate(flat) instance_id: u32,
+};
+
+// Bounding polygon of the path this vertex belongs to. Built once per
+// vertex from either the uniform or the instance's record, so the dilation
+// helpers below are written once and serve both entry points.
+struct ShapeParams {
+  boundingVertexCount: u32,
+  boundingVertices: array<vec4f, 4>,
+};
+
+fn load_bounding_vertex(shape: ShapeParams, index: u32) -> vec2f {
+  let pair = shape.boundingVertices[index / 2u];
+  return select(pair.xy, pair.zw, (index & 1u) != 0u);
+}
+
+fn fan_polygon_index(vertex_index: u32) -> u32 {
+  let triangle = vertex_index / 3u;
+  let corner = vertex_index % 3u;
+  return select(triangle + corner, 0u, corner == 0u);
+}
+
+fn pixel_axes(effective_mvp: mat4x4f) -> mat2x2f {
+  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
+  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
+  let x_axis_pixel =
+    (effective_mvp * vec4f(1.0, 0.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  let y_axis_pixel =
+    (effective_mvp * vec4f(0.0, 1.0, 0.0, 1.0)).xy * pixel_scale - origin_pixel;
+  return mat2x2f(x_axis_pixel, y_axis_pixel);
+}
+
+fn axes_determinant(axes: mat2x2f) -> f32 {
+  return axes[0].x * axes[1].y - axes[0].y * axes[1].x;
+}
+
+fn axes_are_well_conditioned(axes: mat2x2f) -> bool {
+  let axis_scale = length(axes[0]) * length(axes[1]);
+  let determinant = axes_determinant(axes);
+  return axis_scale > 0.0 && axis_scale < 1e30 &&
+         abs(determinant) > axis_scale * 1e-6;
+}
+
+fn path_from_pixel_delta(axes: mat2x2f, pixel_delta: vec2f) -> vec2f {
+  let determinant = axes_determinant(axes);
+  return vec2f(axes[1].y * pixel_delta.x - axes[1].x * pixel_delta.y,
+               -axes[0].y * pixel_delta.x + axes[0].x * pixel_delta.y) /
+         determinant;
+}
+
+fn conservative_path_aabb_expansion(axes: mat2x2f) -> f32 {
+  let max_component = max(max(abs(axes[0].x), abs(axes[0].y)),
+                          max(abs(axes[1].x), abs(axes[1].y)));
+  if (!(max_component > 0.0 && max_component < 1e30)) {
+    return 0.0;
+  }
+
+  // For A's singular values, sigma_min >= abs(det(A)) / norm_frobenius(A).
+  // Expanding the path-space AABB by the radius below therefore makes its
+  // transformed image contain the complete half-pixel device-space square.
+  // Normalize first so high-shear transforms do not overflow the determinant.
+  let scaled_axes = mat2x2f(axes[0] / max_component, axes[1] / max_component);
+  let scaled_determinant = abs(axes_determinant(scaled_axes));
+  if (!(scaled_determinant > 0.0)) {
+    return 0.0;
+  }
+  let scaled_frobenius =
+    sqrt(dot(scaled_axes[0], scaled_axes[0]) + dot(scaled_axes[1], scaled_axes[1]));
+  let expansion = 0.7071068 * scaled_frobenius /
+                  (max_component * scaled_determinant);
+  return select(0.0, expansion, expansion > 0.0 && expansion < 1e30);
+}
+
+fn needs_device_aabb_fallback(shape: ShapeParams, axes: mat2x2f) -> bool {
+  if (!axes_are_well_conditioned(axes)) {
+    return false;
+  }
+  let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
+  for (var i = 0u; i < shape.boundingVertexCount; i = i + 1u) {
+    let previous = load_bounding_vertex(
+      shape, (i + shape.boundingVertexCount - 1u) % shape.boundingVertexCount);
+    let position = load_bounding_vertex(shape, i);
+    let next = load_bounding_vertex(shape, (i + 1u) % shape.boundingVertexCount);
+    let incoming = axes * (position - previous);
+    let outgoing = axes * (next - position);
+    let incoming_length = length(incoming);
+    let outgoing_length = length(outgoing);
+    if (!(incoming_length > 1e-6 && incoming_length < 1e30 &&
+          outgoing_length > 1e-6 && outgoing_length < 1e30)) {
+      return true;
+    }
+    let incoming_edge = incoming / incoming_length;
+    let outgoing_edge = outgoing / outgoing_length;
+    let incoming_normal = orientation * vec2f(incoming_edge.y, -incoming_edge.x);
+    let outgoing_normal = orientation * vec2f(outgoing_edge.y, -outgoing_edge.x);
+    let denominator = 1.0 + dot(incoming_normal, outgoing_normal);
+    if (!(denominator > 1e-6)) {
+      return true;
+    }
+    let miter = 0.5 * (incoming_normal + outgoing_normal) / denominator;
+    if (!(length(miter) <= 2.0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+fn load_device_aabb_vertex(shape: ShapeParams, effective_mvp: mat4x4f, axes: mat2x2f,
+                           polygon_index: u32) -> vec2f {
+  let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
+  let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
+  var pixel_min = vec2f(1e30, 1e30);
+  var pixel_max = vec2f(-1e30, -1e30);
+  for (var i = 0u; i < shape.boundingVertexCount; i = i + 1u) {
+    let pixel = origin_pixel + axes * load_bounding_vertex(shape, i);
+    pixel_min = min(pixel_min, pixel);
+    pixel_max = max(pixel_max, pixel);
+  }
+  let left = polygon_index == 0u || polygon_index == 3u;
+  let top = polygon_index < 2u;
+  let pixel_corner = vec2f(select(pixel_max.x + 0.5, pixel_min.x - 0.5, left),
+                           select(pixel_max.y + 0.5, pixel_min.y - 0.5, top));
+  return path_from_pixel_delta(axes, pixel_corner - origin_pixel);
+}
+
+fn load_path_aabb_vertex(shape: ShapeParams, expansion: f32, polygon_index: u32) -> vec2f {
+  var path_min = vec2f(1e30, 1e30);
+  var path_max = vec2f(-1e30, -1e30);
+  for (var i = 0u; i < shape.boundingVertexCount; i = i + 1u) {
+    let position = load_bounding_vertex(shape, i);
+    path_min = min(path_min, position);
+    path_max = max(path_max, position);
+  }
+  let left = polygon_index == 0u || polygon_index == 3u;
+  let lower = polygon_index < 2u;
+  return vec2f(select(path_max.x + expansion, path_min.x - expansion, left),
+               select(path_max.y + expansion, path_min.y - expansion, lower));
+}
+
+fn dilated_bounding_vertex(shape: ShapeParams, axes: mat2x2f, polygon_index: u32) -> vec2f {
+  let count = shape.boundingVertexCount;
+  let previous_index = (polygon_index + count - 1u) % count;
+  let next_index = (polygon_index + 1u) % count;
+  let previous = load_bounding_vertex(shape, previous_index);
+  let position = load_bounding_vertex(shape, polygon_index);
+  let next = load_bounding_vertex(shape, next_index);
+
+  // Work in viewport pixels, including WebGPU's Y flip. Intersect the two adjacent edge
+  // half-planes after moving each outward by half a pixel, then map that miter back to path
+  // space so the fragment shader's analytic sample coordinates remain exact.
+  if (!axes_are_well_conditioned(axes)) {
+    return position;
+  }
+  let previous_edge = normalize(axes * (position - previous));
+  let next_edge = normalize(axes * (next - position));
+
+  let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
+  let previous_normal = orientation * vec2f(previous_edge.y, -previous_edge.x);
+  let next_normal = orientation * vec2f(next_edge.y, -next_edge.x);
+  let miter_denominator = 1.0 + dot(previous_normal, next_normal);
+  let pixel_delta = 0.5 * (previous_normal + next_normal) / miter_denominator;
+  return position + path_from_pixel_delta(axes, pixel_delta);
+}
+
+fn effective_bounding_vertex(shape: ShapeParams, effective_mvp: mat4x4f,
+                             vertex_index: u32) -> vec2f {
+  let axes = pixel_axes(effective_mvp);
+  let path_aabb_expansion = conservative_path_aabb_expansion(axes);
+  let use_path_aabb = !axes_are_well_conditioned(axes) && path_aabb_expansion > 0.0;
+  let use_device_aabb = needs_device_aabb_fallback(shape, axes);
+  let use_aabb = use_path_aabb || use_device_aabb;
+  let effective_count = select(shape.boundingVertexCount, 4u, use_aabb);
+  let triangle = vertex_index / 3u;
+  var polygon_index = 0u;
+  if (triangle < effective_count - 2u) {
+    polygon_index = fan_polygon_index(vertex_index);
+  }
+  if (use_path_aabb) {
+    return load_path_aabb_vertex(shape, path_aabb_expansion, polygon_index);
+  }
+  if (use_device_aabb) {
+    return load_device_aabb_vertex(shape, effective_mvp, axes, polygon_index);
+  }
+  return dilated_bounding_vertex(shape, axes, polygon_index);
+}
+
+fn emit_vertex(shape: ShapeParams, xf: InstanceTransform, vertex_index: u32,
+               instance_index: u32) -> VertexOutput {
+  let instance_mat = mat4x4f(
+    vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
+    vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
+    vec4f(0.0,       0.0,       1.0, 0.0),
+    vec4f(xf.row0.z, xf.row1.z, 0.0, 1.0),
+  );
+  let effective_mvp = uniforms.mvp * instance_mat;
+
+  let dilated = effective_bounding_vertex(shape, effective_mvp, vertex_index);
+
+  var out: VertexOutput;
+  out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
+  out.sample_pos = dilated;
+  out.instance_id = instance_index;
+  return out;
+}
+
+/// Shared-geometry entry point: every instance draws the same encoded path,
+/// so the bounding polygon comes from the uniform and only the per-instance
+/// transform is read from the record. A single fill binds the device's
+/// identity record here and reads nothing else from binding 7.
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32,
+           @builtin(instance_index) instance_index: u32) -> VertexOutput {
+  var shape: ShapeParams;
+  shape.boundingVertexCount = uniforms.boundingVertexCount;
+  shape.boundingVertices = uniforms.boundingVertices;
+  return emit_vertex(shape, instances[instance_index].transform, vertex_index, instance_index);
+}
+
+/// Cross-entity batch entry point: each instance draws a DIFFERENT encoded
+/// path, so both the bounding polygon and the transform come from its record.
+@vertex
+fn vs_main_batched(@builtin(vertex_index) vertex_index: u32,
+                   @builtin(instance_index) instance_index: u32) -> VertexOutput {
+  let rec = instances[instance_index];
+  var shape: ShapeParams;
+  shape.boundingVertexCount = rec.boundingVertexCount;
+  shape.boundingVertices = rec.boundingVertices;
+  return emit_vertex(shape, rec.transform, vertex_index, instance_index);
+}
+
+// ============================================================================
+// Quadratic Bezier root solving
+// ============================================================================
+
+struct Quadratic {
+  p0: vec2f,
+  p1: vec2f,
+  p2: vec2f,
+};
+
+// Paint and geometry parameters of the path this fragment belongs to. Built
+// once per fragment from either the uniform or the instance's record, so the
+// coverage and shading code below is written once and serves both entry
+// points.
+struct PaintParams {
+  color: vec4f,
+  fillRule: u32,
+  paintMode: u32,
+  patternOpacity: f32,
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  bandBase: u32,
+  curveBase: u32,
+  vBandBase: u32,
+  vCurveBase: u32,
+  hGridBase: u32,
+  vGridBase: u32,
+  hRefsBase: u32,
+  vRefsBase: u32,
+  clipRect: vec4f,
+  clipRectActive: u32,
+  paintBase: u32,
+  gradientSpread: u32,
+  gradientStopCount: u32,
+};
+
+// ----------------------------------------------------------------------------
+// Gradient paint. The parameter math matches the dedicated gradient pipeline
+// exactly, statement for statement, so a fill that moves between the two
+// produces the same pixels; only where the parameters are read from differs.
+// ----------------------------------------------------------------------------
+
+fn gradient_space(paint: PaintParams, path_pos: vec2f) -> vec2f {
+  let row0 = paintData[paint.paintBase + 0u];
+  let row1 = paintData[paint.paintBase + 1u];
+  let gx = row0.x * path_pos.x + row0.y * path_pos.y + row0.z;
+  let gy = row1.x * path_pos.x + row1.y * path_pos.y + row1.z;
+  return vec2f(gx, gy);
+}
+
+fn linear_gradient_t(paint: PaintParams, gpos: vec2f) -> f32 {
+  let ends = paintData[paint.paintBase + 2u];
+  let start = ends.xy;
+  let axis = ends.zw - start;
+  let axisLenSq = max(dot(axis, axis), 1e-12);
+  return dot(gpos - start, axis) / axisLenSq;
+}
+
+fn radial_gradient_t(paint: PaintParams, gpos: vec2f) -> f32 {
+  let centers = paintData[paint.paintBase + 3u];
+  let radii = paintData[paint.paintBase + 4u];
+  let center = centers.xy;
+  let focal = centers.zw;
+  let outerRadius = radii.x;
+  let focalRadius = radii.y;
+
+  let e = gpos - focal;
+  let d = center - focal;
+  let dr = outerRadius - focalRadius;
+  let a = dot(d, d) - dr * dr;
+  let b = dot(e, d) + focalRadius * dr;
+  let c = dot(e, e) - focalRadius * focalRadius;
+
+  if (abs(a) < 1e-8) {
+    if (abs(b) < 1e-8) {
+      return 1.0;
+    }
+    let linear_t = c / (2.0 * b);
+    if (focalRadius + linear_t * dr < 0.0) {
+      return kInvalidGradientT;
+    }
+    return linear_t;
+  }
+
+  let disc = b * b - a * c;
+  if (disc < 0.0) {
+    return kInvalidGradientT;
+  }
+
+  let sqrtDisc = sqrt(disc);
+  let invA = 1.0 / a;
+  let t0 = (b - sqrtDisc) * invA;
+  let t1 = (b + sqrtDisc) * invA;
+
+  let r1 = focalRadius + t1 * dr;
+  if (r1 >= 0.0) {
+    return t1;
+  }
+  let r0 = focalRadius + t0 * dr;
+  if (r0 >= 0.0) {
+    return t0;
+  }
+  return kInvalidGradientT;
+}
+
+fn gradient_t(paint: PaintParams, path_pos: vec2f) -> f32 {
+  let gpos = gradient_space(paint, path_pos);
+  if (paint.paintMode == kPaintRadialGradient) {
+    return radial_gradient_t(paint, gpos);
+  }
+  return linear_gradient_t(paint, gpos);
+}
+
+fn apply_spread(t: f32, mode: u32) -> f32 {
+  if (mode == 1u) {
+    var r = t - 2.0 * floor(t * 0.5);
+    if (r > 1.0) {
+      r = 2.0 - r;
+    }
+    return r;
+  }
+  if (mode == 2u) {
+    return t - floor(t);
+  }
+  return clamp(t, 0.0, 1.0);
+}
+
+fn load_stop_offset(paint: PaintParams, index: u32) -> f32 {
+  let row = paintData[paint.paintBase + kPaintStopOffsetRow + index / 4u];
+  let lane = index % 4u;
+  if (lane == 0u) {
+    return row.x;
+  }
+  if (lane == 1u) {
+    return row.y;
+  }
+  if (lane == 2u) {
+    return row.z;
+  }
+  return row.w;
+}
+
+fn sample_stops(paint: PaintParams, t: f32) -> vec4f {
+  let count = min(paint.gradientStopCount, kMaxStops);
+  if (count == 0u) {
+    return vec4f(0.0, 0.0, 0.0, 0.0);
+  }
+  let firstOffset = load_stop_offset(paint, 0u);
+  if (t <= firstOffset) {
+    return paintData[paint.paintBase + kPaintStopColorRow];
+  }
+  let lastOffset = load_stop_offset(paint, count - 1u);
+  if (t >= lastOffset) {
+    return paintData[paint.paintBase + kPaintStopColorRow + count - 1u];
+  }
+  for (var i: u32 = 1u; i < count; i = i + 1u) {
+    let o0 = load_stop_offset(paint, i - 1u);
+    let o1 = load_stop_offset(paint, i);
+    if (t <= o1) {
+      let span = max(o1 - o0, 1e-6);
+      let f = (t - o0) / span;
+      let c0 = paintData[paint.paintBase + kPaintStopColorRow + i - 1u];
+      let c1 = paintData[paint.paintBase + kPaintStopColorRow + i];
+      return mix(c0, c1, f);
+    }
+  }
+  return paintData[paint.paintBase + kPaintStopColorRow + count - 1u];
+}
+
+fn load_h_curve(paint: PaintParams, index: u32) -> Quadratic {
+  let base = paint.curveBase + index * 6u;
+  var q: Quadratic;
+  q.p0 = vec2f(curveData[base + 0u], curveData[base + 1u]);
+  q.p1 = vec2f(curveData[base + 2u], curveData[base + 3u]);
+  q.p2 = vec2f(curveData[base + 4u], curveData[base + 5u]);
+  return q;
+}
+
+fn load_v_curve(paint: PaintParams, index: u32) -> Quadratic {
+  let base = paint.vCurveBase + index * 6u;
+  var q: Quadratic;
+  q.p0 = vec2f(vCurveData[base + 0u], vCurveData[base + 1u]);
+  q.p1 = vec2f(vCurveData[base + 2u], vCurveData[base + 3u]);
+  q.p2 = vec2f(vCurveData[base + 4u], vCurveData[base + 5u]);
+  return q;
+}
+
+// Solve a monotone quadratic axis at an owned sample. Endpoint identity must survive
+// coefficient rounding, and only an exactly linear polynomial may use a linear solve.
+fn solve_quadratic(start: f32, control: f32, end: f32, sample: f32) -> vec2f {
+  var roots = vec2f(-1.0, -1.0);
+  if (!all(abs(vec4f(start, control, end, sample)) <= vec4f(3.402823466e38))) {
+    return roots;
+  }
+  if (sample == start) {
+    return vec2f(0.0, -1.0);
+  }
+  if (sample == end) {
+    return vec2f(1.0, -1.0);
+  }
+
+  var a = (start - control) + (end - control);
+  var b = 2.0 * (control - start);
+  var c = start - sample;
+  if (!all(abs(vec3f(a, b, c)) <= vec3f(3.402823466e38))) {
+    return roots;
+  }
+  let coefficient_scale = max(max(abs(a), abs(b)), abs(c));
+  // Rescale extreme coefficients before squaring to avoid overflow and underflow.
+  if (coefficient_scale > 1e15 || (coefficient_scale > 0.0 && coefficient_scale < 1e-15)) {
+    a = a / coefficient_scale;
+    b = b / coefficient_scale;
+    c = c / coefficient_scale;
+  }
+  if (a == 0.0) {
+    if (b != 0.0) {
+      let t = -c / b;
+      if (t >= 0.0 && t <= 1.0) {
+        roots.x = t;
+      }
+    }
+    return roots;
+  }
+
+  let disc = b * b - 4.0 * a * c;
+  if (!(disc >= 0.0)) {
+    return roots;
+  }
+  let sqrt_disc = sqrt(disc);
+  let q = -0.5 * (b + select(-sqrt_disc, sqrt_disc, b >= 0.0));
+  if (q == 0.0) {
+    let t = -b * (0.5 / a);
+    if (t >= 0.0 && t <= 1.0) {
+      roots.x = t;
+    }
+    return roots;
+  }
+  let t0 = q / a;
+  let t1 = c / q;
+  if (t0 >= 0.0 && t0 <= 1.0) {
+    roots.x = t0;
+  }
+  if (t1 >= 0.0 && t1 <= 1.0) {
+    roots.y = t1;
+  }
+  return roots;
+}
+
+// Each ray retains signed winding coverage and integrates local NonZero intervals.
+// Only actual outside/inside transitions contribute to the corrected edge weight.
+
+struct RayCoverage {
+  cov: f32,
+  wgt: f32,
+  winding: f32,
+  legacyCov: f32,
+  legacyWgt: f32,
+  complete: bool,
+};
+
+// Fixed capacity bounds per-fragment sorting without truncating the fallback winding scan.
+const kMaxRayEvents: u32 = 32u;
+
+struct RayEvents {
+  values: array<vec2f, kMaxRayEvents>,
+  count: u32,
+  farWinding: i32,
+  complete: bool,
+};
+
+fn empty_ray() -> RayCoverage {
+  return RayCoverage(0.0, 0.0, 0.0, 0.0, 0.0, true);
+}
+
+fn add_ray_event(events: ptr<function, RayEvents>, r: f32, direction: f32) {
+  if (!(*events).complete) {
+    return;
+  }
+  if (!(abs(r) <= 3.402823466e38)) {
+    (*events).complete = false;
+    return;
+  }
+  if (r >= 0.5) {
+    (*events).farWinding += i32(direction);
+    return;
+  }
+  if (r <= -0.5) {
+    return;
+  }
+  if ((*events).count == kMaxRayEvents) {
+    (*events).complete = false;
+    return;
+  }
+
+  var j = (*events).count;
+  loop {
+    if (j == 0u) {
+      break;
+    }
+    if ((*events).values[j - 1u].x >= r) {
+      break;
+    }
+    (*events).values[j] = (*events).values[j - 1u];
+    j -= 1u;
+  }
+  (*events).values[j] = vec2f(r, direction);
+  (*events).count += 1u;
+}
+
+// Integrate the NonZero predicate; internal winding changes are not boundary edges.
+fn finish_ray(legacy: RayCoverage, events: ptr<function, RayEvents>) -> RayCoverage {
+  var result = legacy;
+  result.legacyCov = legacy.cov;
+  result.legacyWgt = legacy.wgt;
+  result.complete = (*events).complete;
+  if (!result.complete) {
+    return result;
+  }
+
+  result.cov = 0.0;
+  result.wgt = 0.0;
+  var cursor = 0.5;
+  var winding = (*events).farWinding;
+  var i = 0u;
+  while (i < (*events).count) {
+    let r = (*events).values[i].x;
+    let wasInside = winding != 0;
+    result.cov += (cursor - r) * select(0.0, 1.0, wasInside);
+    var delta = 0;
+    loop {
+      delta += i32((*events).values[i].y);
+      i += 1u;
+      if (i == (*events).count) {
+        break;
+      }
+      if ((*events).values[i].x != r) {
+        break;
+      }
+    }
+    winding += delta;
+    if (wasInside != (winding != 0)) {
+      result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+    }
+    cursor = r;
+  }
+  result.cov += (cursor + 0.5) * select(0.0, 1.0, winding != 0);
+  return result;
+}
+
+// Ownership of a shared vertex on the monotone axis, as a direction-independent
+// half-open interval [min, max): min-inclusive, max-exclusive. This is the standard
+// scanline winding convention. A start-inclusive/end-exclusive test (which flips to
+// max-inclusive for a decreasing curve) miscounts a Y-extremum shared vertex as a
+// single crossing when the sample lands exactly on the extremum value, breaking fill
+// parity for that scanline. Metal never samples exactly on the integer extremum;
+// llvmpipe does, so [min, max) is required for cross-backend agreement. Testing the
+// monotone axis directly also avoids backend-dependent root rounding near t=1.
+fn owns_axis_sample(start: f32, end: f32, sample: f32) -> bool {
+  let lo = min(start, end);
+  let hi = max(start, end);
+  return sample >= lo && sample < hi;
+}
+
+fn accumulateHoriz(paint: PaintParams, slot: u32, sample: vec2f,
+                   ppemX: f32, collectNonzero: bool) -> RayCoverage {
+  var result = empty_ray();
+  var events: RayEvents;
+  events.complete = collectNonzero && all(abs(sample) <= vec2f(3.402823466e38)) &&
+                    ppemX > 0.0 && ppemX <= 3.402823466e38;
+  if (slot == kNoBand) {
+    return result;
+  }
+  let band = bands[paint.bandBase + slot];
+  for (var i = 0u; i < band.curveCount; i = i + 1u) {
+    let curve = load_h_curve(paint, gridData[paint.hRefsBase + band.curveStart + i]);
+    if (!all(abs(vec4f(curve.p0, curve.p1)) <= vec4f(3.402823466e38)) ||
+        !all(abs(curve.p2) <= vec2f(3.402823466e38))) {
+      events.complete = false;
+    }
+    let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
+    if ((curve_max_x - sample.x) * ppemX <= -0.5) {
+      break;
+    }
+    if (!owns_axis_sample(curve.p0.y, curve.p2.y, sample.y)) {
+      continue;
+    }
+    let roots = solve_quadratic(curve.p0.y, curve.p1.y, curve.p2.y, sample.y);
+    for (var k = 0; k < 2; k = k + 1) {
+      let t = select(roots.y, roots.x, k == 0);
+      if (t < 0.0) {
+        continue;
+      }
+      let omt = 1.0 - t;
+      let x = omt * omt * curve.p0.x + 2.0 * omt * t * curve.p1.x + t * t * curve.p2.x;
+      // Signed pixel distance of the crossing from the pixel center along +X.
+      let r = (x - sample.x) * ppemX;
+      // Endpoint order preserves winding when the tangent derivative is zero.
+      let s = select(-1.0, 1.0, curve.p2.y > curve.p0.y);
+      // Preserve coincident constant-coordinate edges before grouping local crossings.
+      let eventCoordinate = select(x, curve.p0.x,
+          curve.p0.x == curve.p1.x && curve.p1.x == curve.p2.x);
+      add_ray_event(&events, (eventCoordinate - sample.x) * ppemX, s);
+      result.cov = result.cov + s * saturate(r + 0.5);
+      result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+      result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
+    }
+  }
+  return finish_ray(result, &events);
+}
+
+fn accumulateVert(paint: PaintParams, slot: u32, sample: vec2f,
+                   ppemY: f32, collectNonzero: bool) -> RayCoverage {
+  var result = empty_ray();
+  var events: RayEvents;
+  events.complete = collectNonzero && all(abs(sample) <= vec2f(3.402823466e38)) &&
+                    ppemY > 0.0 && ppemY <= 3.402823466e38;
+  if (slot == kNoBand) {
+    return result;
+  }
+  let band = vBands[paint.vBandBase + slot];
+  for (var i = 0u; i < band.curveCount; i = i + 1u) {
+    let curve = load_v_curve(paint, gridData[paint.vRefsBase + band.curveStart + i]);
+    if (!all(abs(vec4f(curve.p0, curve.p1)) <= vec4f(3.402823466e38)) ||
+        !all(abs(curve.p2) <= vec2f(3.402823466e38))) {
+      events.complete = false;
+    }
+    let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
+    if ((curve_max_y - sample.y) * ppemY <= -0.5) {
+      break;
+    }
+    if (!owns_axis_sample(curve.p0.x, curve.p2.x, sample.x)) {
+      continue;
+    }
+    // Solve for the t where the curve's X equals sample.x.
+    let roots = solve_quadratic(curve.p0.x, curve.p1.x, curve.p2.x, sample.x);
+    for (var k = 0; k < 2; k = k + 1) {
+      let t = select(roots.y, roots.x, k == 0);
+      if (t < 0.0) {
+        continue;
+      }
+      let omt = 1.0 - t;
+      let y = omt * omt * curve.p0.y + 2.0 * omt * t * curve.p1.y + t * t * curve.p2.y;
+      // Signed pixel distance of the crossing from the pixel center along +Y.
+      let r = (y - sample.y) * ppemY;
+      // Endpoint order preserves winding when the tangent derivative is zero.
+      let s = select(1.0, -1.0, curve.p2.x > curve.p0.x);
+      // Preserve coincident constant-coordinate edges before grouping local crossings.
+      let eventCoordinate = select(y, curve.p0.y,
+          curve.p0.y == curve.p1.y && curve.p1.y == curve.p2.y);
+      add_ray_event(&events, (eventCoordinate - sample.y) * ppemY, s);
+      result.cov = result.cov + s * saturate(r + 0.5);
+      result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+      result.winding = result.winding + s * select(0.0, 1.0, r >= 0.0);
+    }
+  }
+  return finish_ray(result, &events);
+}
+
+// Combine the two rays' coverage (reference `CalcCoverage`). The
+// weighted blend handles the general case; the `min(|xcov|,|ycov|)` floor
+// resolves near-axis-aligned / thin-feature / crosshair cases that a single
+// ray conflates.
+fn calc_coverage(h: RayCoverage, v: RayCoverage) -> f32 {
+  let blended = abs(h.cov * h.wgt + v.cov * v.wgt) / max(h.wgt + v.wgt, 1.0 / 65536.0);
+  let floor_cov = min(abs(h.cov), abs(v.cov));
+  return max(blended, floor_cov);
+}
+
+// Dense local intersections retain the complete legacy result for both rays.
+fn fill_coverage(horizontal: RayCoverage, vertical: RayCoverage,
+                 fillRule: u32, antialias: u32) -> f32 {
+  if (antialias == 0u) {
+    let winding = u32(abs(horizontal.winding));
+    if (fillRule == 0u) {
+      return select(0.0, 1.0, winding != 0u);
+    }
+    return f32(winding & 1u);
+  }
+  var h = horizontal;
+  var v = vertical;
+  if (fillRule != 0u || !h.complete || !v.complete) {
+    h.cov = h.legacyCov;
+    h.wgt = h.legacyWgt;
+    v.cov = v.legacyCov;
+    v.wgt = v.legacyWgt;
+  }
+  let coverage = calc_coverage(h, v);
+  if (fillRule == 0u) {
+    return saturate(coverage);
+  }
+  return 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
+}
+
+// ============================================================================
+// Fragment stage
+// ============================================================================
+
+// Half-open integer-pixel rectangle test. `pixel_pos` is
+// `@builtin(position).xy`, whose fractional part is always 0.5 at 1
+// sample/pixel, so flooring recovers the exact integer pixel index and the
+// comparison keeps precisely the pixels a rasterizer scissor of the same
+// rectangle would keep.
+fn sample_in_clip_rect(paint: PaintParams, pixel_pos: vec2f) -> bool {
+  if (paint.clipRectActive == 0u) {
+    return true;
+  }
+  let pixel = floor(pixel_pos);
+  return pixel.x >= paint.clipRect.x && pixel.x < paint.clipRect.z &&
+         pixel.y >= paint.clipRect.y && pixel.y < paint.clipRect.w;
+}
+
+fn sample_in_clip_polygon(pixel_pos: vec2f) -> bool {
+  if (uniforms.hasClipPolygon == 0u) {
+    return true;
+  }
+  for (var i = 0u; i < 4u; i = i + 1u) {
+    let plane = uniforms.clipPolygonPlanes[i];
+    if (plane.x * pixel_pos.x + plane.y * pixel_pos.y + plane.z < -1e-4) {
+      return false;
+    }
+  }
+  return true;
+}
+
+struct FragOutput {
+  @location(0) color: vec4f,
+};
+
+/// Analytic coverage of this fragment, folded through the fill rule and every
+/// clip. Returns zero when nothing of this path covers the pixel; the caller
+/// discards rather than blending a fully transparent fragment.
+fn shade_coverage(paint: PaintParams, in: VertexOutput) -> f32 {
+  let pixel_center = in.clip_pos.xy;
+
+  // Path-units per pixel, per axis. `sample_pos` is a linear function of the
+  // viewport position, so fwidth gives the constant per-pixel path delta.
+  let ppem = 1.0 / fwidth(in.sample_pos);
+
+  // Look up this pixel's horizontal and vertical bands in O(1).
+  var hCov = empty_ray();
+  if (paint.hBandCount > 0u) {
+    let hi = clamp(i32((in.sample_pos.y - paint.yBase) / paint.hStride),
+                   0, i32(paint.hBandCount) - 1);
+    let slot = gridData[paint.hGridBase + u32(hi)];
+    hCov = accumulateHoriz(paint, slot, in.sample_pos, ppem.x,
+                           paint.fillRule == 0u && uniforms.antialias != 0u);
+  }
+
+  var vCov = empty_ray();
+  if (paint.vBandCount > 0u) {
+    let vj = clamp(i32((in.sample_pos.x - paint.xBase) / paint.vStride),
+                   0, i32(paint.vBandCount) - 1);
+    let slot = gridData[paint.vGridBase + u32(vj)];
+    vCov = accumulateVert(paint, slot, in.sample_pos, ppem.y,
+                           paint.fillRule == 0u && uniforms.antialias != 0u);
+  }
+
+  var coverage = fill_coverage(hCov, vCov, paint.fillRule, uniforms.antialias);
+
+  // Convex clip-polygon test, in viewport-pixel space.
+  if (!sample_in_clip_polygon(pixel_center)) {
+    coverage = 0.0;
+  }
+
+  // Axis-aligned rect clip, in the same viewport-pixel space.
+  if (!sample_in_clip_rect(paint, pixel_center)) {
+    coverage = 0.0;
+  }
+
+  // Path-clip mask coverage (multiplicative).
+  var clipCoverage: f32 = 1.0;
+  if (uniforms.hasClipMask != 0u) {
+    clipCoverage = clip_mask_coverage(pixel_center);
+  }
+  return coverage * clipCoverage;
+}
+
+fn shade_pattern(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
+  let patternPos = (uniforms.patternFromPath * vec4f(in.sample_pos, 0.0, 1.0)).xy;
+  let wrapped = vec2f(
+    fract(patternPos.x / uniforms.tileSize.x) * uniforms.tileSize.x,
+    fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y,
+  );
+  let uv = wrapped / uniforms.tileSize;
+  // textureSampleLevel, not textureSample: the batched entry point reads
+  // paintMode per instance, so the solid-color early return in its caller is
+  // non-uniform control flow and WGSL forbids implicit-derivative sampling
+  // past it (browser compilers reject the module; native validation does
+  // not). Pattern textures are created with a single mip level, so sampling
+  // level 0 explicitly is an exact behavioral match.
+  return textureSampleLevel(patternTexture, patternSampler, uv, 0.0) *
+         paint.patternOpacity * coverage;
+}
+
+fn shade_gradient(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
+  let raw_t = gradient_t(paint, in.sample_pos);
+  if (raw_t < -1e20) {
+    discard;
+  }
+  let t = apply_spread(raw_t, paint.gradientSpread);
+  // Stops interpolate in straight alpha and premultiply at output, which is
+  // what the CPU renderer does and what the stop-opacity conformance cases
+  // expect.
+  let straight = sample_stops(paint, t);
+  return vec4f(straight.rgb * straight.a, straight.a) * coverage;
+}
+
+/// Shared-paint entry point: every instance of this draw carries the same
+/// paint and the same encoded path, so the parameters come from the uniform
+/// and the fragment stage never touches binding 7. Gradient paint never
+/// reaches here - a gradient draw either joins an ordered batch, which uses
+/// the batched entry point below, or goes to the dedicated gradient pipeline -
+/// so this entry point does not compile the gradient shading in, and the
+/// fragment cost of a plain solid fill is unchanged by its existence.
+@fragment
+fn fs_main(in: VertexOutput) -> FragOutput {
+  var paint: PaintParams;
+  paint.color = uniforms.color;
+  paint.fillRule = uniforms.fillRule;
+  paint.paintMode = uniforms.paintMode;
+  paint.patternOpacity = uniforms.patternOpacity;
+  paint.yBase = uniforms.yBase;
+  paint.hStride = uniforms.hStride;
+  paint.hBandCount = uniforms.hBandCount;
+  paint.xBase = uniforms.xBase;
+  paint.vStride = uniforms.vStride;
+  paint.vBandCount = uniforms.vBandCount;
+  paint.bandBase = uniforms.bandBase;
+  paint.curveBase = uniforms.curveBase;
+  paint.vBandBase = uniforms.vBandBase;
+  paint.vCurveBase = uniforms.vCurveBase;
+  paint.hGridBase = uniforms.hGridBase;
+  paint.vGridBase = uniforms.vGridBase;
+  paint.hRefsBase = uniforms.hRefsBase;
+  paint.vRefsBase = uniforms.vRefsBase;
+  paint.clipRect = uniforms.clipRect;
+  paint.clipRectActive = uniforms.clipRectActive;
+  paint.paintBase = uniforms.paintBase;
+  paint.gradientSpread = uniforms.gradientSpread;
+  paint.gradientStopCount = uniforms.gradientStopCount;
+
+  let coverage = shade_coverage(paint, in);
+  if (coverage <= 0.0) {
+    discard;
+  }
+  var out: FragOutput;
+  if (paint.paintMode == kPaintSolid) {
+    // `paint.color` is premultiplied; scale all channels by coverage.
+    out.color = paint.color * coverage;
+    return out;
+  }
+  out.color = shade_pattern(paint, in, coverage);
+  return out;
+}
+
+/// Cross-entity batch entry point: each instance carries its own paint and
+/// its own geometry, read through the flat instance-id varying so
+/// overlapping instances still blend in painter (instance) order.
+@fragment
+fn fs_main_batched(in: VertexOutput) -> FragOutput {
+  let rec = instances[in.instance_id];
+  var paint: PaintParams;
+  paint.color = rec.color;
+  paint.fillRule = rec.fillRule;
+  paint.paintMode = rec.paintMode;
+  paint.patternOpacity = rec.patternOpacity;
+  paint.yBase = rec.yBase;
+  paint.hStride = rec.hStride;
+  paint.hBandCount = rec.hBandCount;
+  paint.xBase = rec.xBase;
+  paint.vStride = rec.vStride;
+  paint.vBandCount = rec.vBandCount;
+  paint.bandBase = rec.bandBase;
+  paint.curveBase = rec.curveBase;
+  paint.vBandBase = rec.vBandBase;
+  paint.vCurveBase = rec.vCurveBase;
+  paint.hGridBase = rec.hGridBase;
+  paint.vGridBase = rec.vGridBase;
+  paint.hRefsBase = rec.hRefsBase;
+  paint.vRefsBase = rec.vRefsBase;
+  paint.clipRect = rec.clipRect;
+  paint.clipRectActive = rec.clipRectActive;
+  paint.paintBase = rec.paintBase;
+  paint.gradientSpread = rec.gradientSpread;
+  paint.gradientStopCount = rec.gradientStopCount;
+
+  let coverage = shade_coverage(paint, in);
+  if (coverage <= 0.0) {
+    discard;
+  }
+  var out: FragOutput;
+  if (paint.paintMode == kPaintSolid) {
+    out.color = paint.color * coverage;
+    return out;
+  }
+  if (paint.paintMode >= kPaintLinearGradient) {
+    out.color = shade_gradient(paint, in, coverage);
+    return out;
+  }
+  out.color = shade_pattern(paint, in, coverage);
+  return out;
+}
+)wgsl"};
+}

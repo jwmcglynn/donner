@@ -36,6 +36,7 @@
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/CompiledCheckerboard.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
@@ -165,6 +166,11 @@ TEST_F(MetalSolidFillTest, CheckerboardMatchesAnchoredAndCompositedPixels) {
   const Device& runtime = *device_;
   EXPECT_EQ(runtime.shaderSourceKind(), ShaderSourceKind::Msl);
   gpu::tests::ExpectCheckerboardPixels(*device_);
+}
+
+TEST_F(MetalSolidFillTest, CheckerboardMutatedArtifactMatchesAnchoredPixels) {
+  gpu::tests::ExpectCheckerboardShaderPixels(*device_,
+                                             shader::tests::CheckerboardMutatedAllProjections());
 }
 
 TEST_F(MetalSolidFillTest, CheckerboardPipelineUsesSelectedNativeDevice) {

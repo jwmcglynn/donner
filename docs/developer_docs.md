@@ -8,6 +8,7 @@
 - \subpage BuildAndMaintenanceDocs
 - \subpage DeveloperToolsDocs
 - \subpage ProjectPlanningDocs
+- \subpage WgslCompiler
 
 ## Design Docs
 

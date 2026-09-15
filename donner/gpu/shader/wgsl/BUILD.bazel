@@ -1,0 +1,138 @@
+load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+
+donner_cc_library(
+    name = "projection",
+    hdrs = ["Projection.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
+    name = "number",
+    hdrs = ["Number.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
+    name = "frontend",
+    hdrs = [
+        "Module.h",
+        "Parser.h",
+        "Uniformity.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":number",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "text_emitter",
+    hdrs = ["TextEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":frontend",
+        "//donner/gpu/shader:msl_binding_map",
+    ],
+)
+
+donner_cc_library(
+    name = "spirv_emitter",
+    hdrs = ["SpirvEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":frontend"],
+)
+
+donner_cc_library(
+    name = "compiler",
+    hdrs = ["Compiler.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":frontend",
+        ":projection",
+        ":spirv_emitter",
+        ":text_emitter",
+        "//donner/gpu/shader:compiled_shader",
+    ],
+)
+
+donner_cc_library(
+    name = "graphics_test_source",
+    testonly = True,
+    hdrs = [
+        "tests/ControlSource.h",
+        "tests/GraphicsSource.h",
+        "tests/MatrixSource.h",
+        "tests/StorageArraySource.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = [":compiler"],
+)
+
+donner_cc_library(
+    name = "graphics_test_artifact",
+    testonly = True,
+    srcs = ["tests/GraphicsArtifact.cc"],
+    hdrs = ["tests/GraphicsArtifact.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":graphics_test_source",
+        "//donner/gpu/shader:compiled_shader",
+    ],
+)
+
+donner_cc_test(
+    name = "wgsl_tests",
+    srcs = [
+        "tests/Compiler_tests.cc",
+        "tests/Graphics_tests.cc",
+        "tests/ImageFeatures_tests.cc",
+        "tests/Language_tests.cc",
+        "tests/Parser_tests.cc",
+        "tests/PointerLoop_tests.cc",
+        "tests/SlugFeatures_tests.cc",
+        "tests/TextEmitter_tests.cc",
+        "tests/Uniformity_tests.cc",
+    ],
+    deps = [
+        ":compiler",
+        ":graphics_test_artifact",
+        ":graphics_test_source",
+        "//donner/gpu/shader:gaussian_blur_artifact",
+        "//donner/gpu/shader:gaussian_blur_source",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "wgsl_diagnostics_tests",
+    srcs = ["tests/Diagnostics_tests.cc"],
+    deps = [
+        ":frontend",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "parser_fuzzer",
+    srcs = ["tests/Parser_fuzzer.cc"],
+    corpus = "tests/corpus",
+    deps = [
+        ":frontend",
+        ":spirv_emitter",
+        ":text_emitter",
+    ],
+)
+
+donner_cc_test(
+    name = "number_tests",
+    srcs = ["tests/Number_tests.cc"],
+    deps = [
+        ":number",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_package()

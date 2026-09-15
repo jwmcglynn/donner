@@ -15,7 +15,6 @@ To enable:
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
@@ -192,6 +191,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        "//donner/gpu/shader:slug_fill_api",
         # The slabs stamp every buffer they create with
         # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
         # this is a link dependency and not just an include.
@@ -291,9 +291,15 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/gpu",
+        "//donner/gpu/shader:checkerboard_api",
         "//donner/gpu/shader:checkerboard_artifact",
+        "//donner/gpu/shader:compiled_shader",
         "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["//donner/gpu/shader:checkerboard_native_artifact"],
+        "@platforms//os:linux": ["//donner/gpu/shader:checkerboard_native_artifact"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
@@ -351,37 +357,68 @@ donner_cc_library(
         "//examples:__pkg__",
     ],
     deps = [
-        "//donner/base",
-        "//donner/base:asyncify_suspend_probe",
-        "//donner/gpu",
-        "//donner/gpu/shader:color_space_convert_artifact",
-        "//donner/gpu/shader:component_transfer_artifact",
-        "//donner/gpu/shader:composite_artifact",
-        "//donner/gpu/shader:convolve_matrix_artifact",
-        "//donner/gpu/shader:displacement_map_artifact",
-        "//donner/gpu/shader:drop_shadow_artifact",
-        "//donner/gpu/shader:filter_color_matrix_artifact",
-        "//donner/gpu/shader:filter_image_artifact",
-        "//donner/gpu/shader:filter_resolve_artifact",
-        "//donner/gpu/shader:flood_artifact",
-        "//donner/gpu/shader:gaussian_blur_artifact",
-        "//donner/gpu/shader:lighting_artifacts",
-        "//donner/gpu/shader:merge_artifact",
-        "//donner/gpu/shader:morphology_artifact",
-        "//donner/gpu/shader:offset_artifact",
-        "//donner/gpu/shader:program_bindings",
-        "//donner/gpu/shader:snapshot_unpremultiply_artifact",
-        "//donner/gpu/shader:subregion_clip_artifact",
-        "//donner/gpu/shader:tile_artifact",
-        "//donner/gpu/shader:turbulence_artifact",
-        "//donner/svg/components/filter:components",
-        "//donner/svg/renderer:pixel_format_utils",
-        "//third_party/webgpu-cpp:webgpu_cpp",
         ":checkerboard_pipeline",
         ":geode_counters",
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
+        "//donner/base",
+        "//donner/base:asyncify_suspend_probe",
+        "//donner/gpu",
+        "//donner/gpu/shader:color_space_convert_api",
+        "//donner/gpu/shader:color_space_convert_artifact",
+        "//donner/gpu/shader:component_transfer_api",
+        "//donner/gpu/shader:component_transfer_artifact",
+        "//donner/gpu/shader:composite_api",
+        "//donner/gpu/shader:composite_artifact",
+        "//donner/gpu/shader:convolve_matrix_api",
+        "//donner/gpu/shader:convolve_matrix_artifact",
+        "//donner/gpu/shader:diffuse_lighting_api",
+        "//donner/gpu/shader:diffuse_lighting_artifact",
+        "//donner/gpu/shader:displacement_map_api",
+        "//donner/gpu/shader:displacement_map_artifact",
+        "//donner/gpu/shader:drop_shadow_api",
+        "//donner/gpu/shader:drop_shadow_artifact",
+        "//donner/gpu/shader:filter_blend_api",
+        "//donner/gpu/shader:filter_blend_artifact",
+        "//donner/gpu/shader:filter_color_matrix_api",
+        "//donner/gpu/shader:filter_color_matrix_artifact",
+        "//donner/gpu/shader:filter_image_api",
+        "//donner/gpu/shader:filter_image_artifact",
+        "//donner/gpu/shader:filter_resolve_api",
+        "//donner/gpu/shader:filter_resolve_artifact",
+        "//donner/gpu/shader:flood_api",
+        "//donner/gpu/shader:flood_artifact",
+        "//donner/gpu/shader:gaussian_blur_api",
+        "//donner/gpu/shader:gaussian_blur_artifact",
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:image_blit_artifact",
+        "//donner/gpu/shader:lighting_params",
+        "//donner/gpu/shader:merge_api",
+        "//donner/gpu/shader:merge_artifact",
+        "//donner/gpu/shader:morphology_api",
+        "//donner/gpu/shader:morphology_artifact",
+        "//donner/gpu/shader:offset_api",
+        "//donner/gpu/shader:offset_artifact",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
+        "//donner/gpu/shader:snapshot_unpremultiply_api",
+        "//donner/gpu/shader:snapshot_unpremultiply_artifact",
+        "//donner/gpu/shader:specular_lighting_api",
+        "//donner/gpu/shader:specular_lighting_artifact",
+        "//donner/gpu/shader:subregion_clip_api",
+        "//donner/gpu/shader:subregion_clip_artifact",
+        "//donner/gpu/shader:tile_api",
+        "//donner/gpu/shader:tile_artifact",
+        "//donner/gpu/shader:turbulence_api",
+        "//donner/gpu/shader:turbulence_artifact",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/renderer:pixel_format_utils",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -439,62 +476,6 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# Embed the WGSL shader source as a C++ resource. The generated header
-# exposes `donner::embedded::kSlugFillWgsl` as a `std::span<const unsigned char>`.
-embed_resources(
-    name = "slug_fill_wgsl",
-    header_output = "embed_resources/SlugFillWgsl.h",
-    resources = {
-        "kSlugFillWgsl": "shaders/slug_fill.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Linear-gradient fragment shader. Shares the vertex pipeline / band layout
-# with slug_fill.wgsl but the fragment stage reads a larger uniform that
-# carries gradient parameters (transform, start/end, spread, stops).
-embed_resources(
-    name = "slug_gradient_wgsl",
-    header_output = "embed_resources/SlugGradientWgsl.h",
-    resources = {
-        "kSlugGradientWgsl": "shaders/slug_gradient.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Embed the image-blit WGSL shader source. Used by the image-blit pipeline
-# (drawImage today, pattern tile sampling in Phase 2H).
-embed_resources(
-    name = "image_blit_wgsl",
-    header_output = "embed_resources/ImageBlitWgsl.h",
-    resources = {
-        "kImageBlitWgsl": "shaders/image_blit.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Path-clip mask shader. Same band/curve encoding as slug_fill.wgsl but
-# outputs a single-channel coverage value into an R8Unorm target so the
-# main fill / gradient pipelines can sample it as a clip mask (Phase 3b).
-embed_resources(
-    name = "slug_mask_wgsl",
-    header_output = "embed_resources/SlugMaskWgsl.h",
-    resources = {
-        "kSlugMaskWgsl": "shaders/slug_mask.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# feBlend W3C Compositing 1 blend-mode compute shader.
-embed_resources(
-    name = "filter_blend_wgsl",
-    header_output = "embed_resources/FilterBlendWgsl.h",
-    resources = {
-        "kFilterBlendWgsl": "shaders/filter_blend.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -502,15 +483,16 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
-        ":filter_blend_wgsl",
-        ":geode_wgpu_util",
-        ":image_blit_wgsl",
-        ":slug_fill_wgsl",
-        ":slug_gradient_wgsl",
-        ":slug_mask_wgsl",
         "//donner/base",
         "//donner/gpu",
-        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:image_blit_artifact",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
     ],
 )
 
@@ -520,17 +502,21 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_shaders",
         ":geode_gpu_wait",
+        ":geode_shaders",
         ":geode_wgpu_util",
-        ":slug_fill_wgsl",
-        ":slug_gradient_wgsl",
-        ":slug_mask_wgsl",
+        "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu:slug_fill_slice",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
         "//donner/gpu/shader:wgsl_emitter",
         "//third_party/webgpu-cpp:webgpu_cpp",
-        "//donner/base:gtest_timeout_main",
     ],
 )
 
@@ -585,6 +571,12 @@ donner_cc_library(
         ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_fill_artifact",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_gradient_artifact",
+        "//donner/gpu/shader:slug_mask_api",
+        "//donner/gpu/shader:slug_mask_artifact",
         "//donner/svg/core",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/resources:image_resource",
@@ -776,8 +768,8 @@ donner_cc_test(
         ":geode_device",
         ":geode_wgpu_util",
         "//donner/base",
-        "//donner/gpu:recording_device",
         "//donner/base:gtest_timeout_main",
+        "//donner/gpu:recording_device",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
     ],

@@ -1,0 +1,1 @@
+struct O{@builtin(position)p:vec4f,@location(0) @interpolate(flat)i:u32,}@vertex fn vs_main(@builtin(instance_index)i:u32)->O{var o:O;o.p=vec4f(0);o.i=i;return o;}@fragment fn fs_main(o:O)->@location(0)vec4f{return vec4f(f32(o.i));}

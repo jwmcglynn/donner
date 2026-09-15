@@ -693,77 +693,31 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
-        "WGPUBindGroupLayout",
         "WGPUTexture"
       ],
       "wgpuCppTokens": [
-        "BindGroup",
-        "BindGroupDescriptor",
-        "BindGroupEntry",
-        "BindGroupLayout",
-        "BindGroupLayoutDescriptor",
-        "BindGroupLayoutEntry",
         "Buffer",
-        "BufferBindingType",
         "BufferDescriptor",
-        "BufferUsage",
         "CommandBuffer",
         "CommandEncoder",
         "CommandEncoderDescriptor",
-        "ComputePassDescriptor",
-        "ComputePassEncoder",
-        "ComputePipeline",
-        "ComputePipelineDescriptor",
         "Device",
         "LoadOp",
-        "PipelineLayout",
-        "PipelineLayoutDescriptor",
         "RenderPassColorAttachment",
         "RenderPassDescriptor",
         "RenderPassEncoder",
-        "ShaderModule",
-        "ShaderStage",
-        "StorageTextureAccess",
         "StoreOp",
         "Texture",
         "TextureFormat",
-        "TextureSampleType",
         "TextureUsage",
-        "TextureView",
-        "TextureViewDimension"
+        "TextureView"
       ]
     },
     "donner/svg/renderer/geode/GeodeFilterEngine.h": {
       "wgpuCppTokens": [
-        "BindGroupLayout",
         "CommandEncoder",
-        "ComputePipeline",
         "Device",
         "Texture"
-      ]
-    },
-    "donner/svg/renderer/geode/GeodeShaders.cc": {
-      "operations": [
-        "createShaderModule"
-      ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCTypes": [
-        "WGPUStringView"
-      ],
-      "wgpuCppTokens": [
-        "Default",
-        "Device",
-        "ShaderModule",
-        "ShaderModuleDescriptor",
-        "ShaderSourceWGSL"
-      ]
-    },
-    "donner/svg/renderer/geode/GeodeShaders.h": {
-      "wgpuCppTokens": [
-        "Device",
-        "ShaderModule"
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.cc": {

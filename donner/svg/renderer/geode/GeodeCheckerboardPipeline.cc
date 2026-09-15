@@ -2,18 +2,47 @@
 
 #include <utility>
 
-#include "donner/gpu/shader/generated/CheckerboardShader.h"
+#include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/programs/Checkerboard.h"
 
 namespace donner::geode {
+
+namespace {
+
+/// The checkerboard projection \p device consumes. The adapter device takes WGSL; native Metal
+/// and Vulkan devices exercise this same class through their own projection, which the
+/// WebAssembly package never links.
+/// @param device Device the pipeline is created on.
+const gpu::shader::CompiledShaderView& SelectCheckerboardShader(const gpu::Device& device) {
+#if (defined(__APPLE__) || defined(__linux__)) && !defined(__EMSCRIPTEN__)
+  if (device.shaderSourceKind() != gpu::ShaderSourceKind::Wgsl) {
+    return gpu::shader::programs::CheckerboardNativeShader();
+  }
+#endif
+  return gpu::shader::programs::CheckerboardShader();
+}
+
+/// True when \p shader exposes the vertex/fragment pair and its uniform block.
+/// @param shader Static compiled interface.
+bool HasCheckerboardInterface(const gpu::shader::CompiledShaderView& shader) {
+  return shader.resource("params") != nullptr && shader.entryPoints.size() == 2 &&
+         shader.entryPoints[0].stage == gpu::ShaderStage::Vertex &&
+         shader.entryPoints[1].stage == gpu::ShaderStage::Fragment;
+}
+
+}  // namespace
 
 GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& adapterDevice,
                                                      gpu::TextureFormat colorFormat,
                                                      BlendMode blendMode) {
+  const gpu::shader::CompiledShaderView& shader = SelectCheckerboardShader(adapterDevice);
+  if (!HasCheckerboardInterface(shader)) {
+    return;
+  }
+  uniformBinding_ = shader.resource("params")->binding;
   gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
       adapterDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
-          "GeodeCheckerboardBGL",
-          {gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                     gpu::BindingType::UniformBuffer}}});
+          "GeodeCheckerboardBGL", gpu::shader::MakeBindingLayout(shader)});
   if (bindGroupLayout.hasError()) {
     return;
   }
@@ -26,8 +55,9 @@ GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& adapterDevice,
   }
   pipelineLayout_ = std::move(pipelineLayout).result();
 
-  gpu::Result<gpu::ShaderModule> shaderModule = adapterDevice.createShaderModule(
-      gpu::generated::checkerboard::BuildDescriptor(adapterDevice.shaderSourceKind()));
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      adapterDevice.createShaderModule(gpu::shader::MakeShaderDescriptor(
+          shader, adapterDevice.shaderSourceKind(), "GeodeCheckerboard"));
   if (shaderModule.hasError()) {
     return;
   }
@@ -48,8 +78,10 @@ GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& adapterDevice,
 
   gpu::Result<gpu::RenderPipeline> pipeline =
       adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "GeodeCheckerboard", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
-          gpu::FragmentState{shaderModule_, "fs_main", {colorTarget}},
+          "GeodeCheckerboard", pipelineLayout_,
+          gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
+          gpu::FragmentState{
+              shaderModule_, RcString(shader.entryPoints[1].name.view()), {colorTarget}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None});
   if (pipeline.hasError()) {
     return;

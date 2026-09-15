@@ -30,6 +30,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/programs/Morphology.h"
@@ -53,6 +54,12 @@ using testing::Not;
 
 namespace donner::gpu::shader {
 namespace {
+
+/// Square workgroup width the single compute entry of \p shader declares.
+/// @param shader Static compiled interface.
+uint32_t ReflectedWorkgroupWidth(const CompiledShaderView& shader) {
+  return shader.entryPoints.front().workgroupSize[0];
+}
 
 /// Marker printed by GeodeDevice's uncaptured-error callback (see GeodeDevice.cc).
 constexpr const char* kErrorMarker = "Uncaptured error";
@@ -516,10 +523,7 @@ TEST(WgslEmitterGeodeValidation, EmittedFloodComputePassesRendererValidation) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildFloodModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::FloodShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -540,10 +544,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFloodStorageAccessMismatc
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildFloodModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::FloodShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -562,10 +563,7 @@ TEST(WgslEmitterGeodeValidation, EmittedSubregionClipComputePassesRendererValida
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::SubregionClipShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -585,10 +583,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsSubregionClipSampleTypeMi
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::SubregionClipShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -658,10 +653,7 @@ TEST(WgslEmitterGeodeValidation, EmittedFilterColorMatrixPassesRendererValidatio
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::FilterColorMatrixShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -682,10 +674,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFilterColorMatrixStorageA
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::FilterColorMatrixShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -755,10 +744,7 @@ TEST(WgslEmitterGeodeValidation, EmittedOffsetComputePassesRendererValidation) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildOffsetModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -779,10 +765,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsOffsetParamsBufferTypeMis
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildOffsetModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -998,24 +981,16 @@ std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
   wgpu::Buffer readback = device.createBuffer(readbackDesc);
 
   wgpu::CommandEncoder encoder = device.createCommandEncoder();
-  const auto resolveModule = programs::BuildFilterResolveModule();
-  if (resolveModule.hasError()) {
-    ADD_FAILURE() << resolveModule.error();
-    return {};
-  }
-  const auto resolveWgsl = EmitWgsl(resolveModule.result());
-  if (resolveWgsl.hasError()) {
-    ADD_FAILURE() << resolveWgsl.error();
-    return {};
-  }
+  const std::string resolveWgsl(programs::FilterResolveShader().wgsl);
   const float clip[12] = {
       1, 0, 0, 1, 0, 0, 0, 0, static_cast<float>(width), static_cast<float>(height), 0, 0};
   const std::span<const uint8_t> clipBytes(reinterpret_cast<const uint8_t*>(clip), sizeof(clip));
   if (!RecordInputOutputUniformProgram(device, queue, encoder, wgsl, source, intermediate, uniforms,
                                        workgroupSize, transferSamples) ||
-      !RecordInputOutputUniformProgram(
-          device, queue, encoder, resolveWgsl.result(), intermediate, destination, clipBytes,
-          programs::kSubregionClipWorkgroupSize, programs::ColorTransferSamples())) {
+      !RecordInputOutputUniformProgram(device, queue, encoder, resolveWgsl, intermediate,
+                                       destination, clipBytes,
+                                       ReflectedWorkgroupWidth(programs::SubregionClipShader()),
+                                       programs::ColorTransferSamples())) {
     return {};
   }
 
@@ -1060,7 +1035,7 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   return RunInputOutputUniformProgram(
       device, queue, wgsl, OffsetSourceTexels(), kOffsetExtent, kOffsetExtent,
       std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-      programs::kOffsetWorkgroupSize);
+      programs::OffsetShader().entryPoints.front().workgroupSize[0]);
 }
 
 TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
@@ -1072,10 +1047,7 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildOffsetModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   struct Shift {
     float dx;
@@ -1163,10 +1135,8 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
-  auto module = programs::BuildGaussianBlurModule();
-  ASSERT_THAT(module, HasShaderResult());
-  auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
+  const CompiledShaderView& shader = programs::GaussianBlurShader();
+  const std::string wgsl(shader.wgsl);
   const auto source = OffsetSourceTexels();
   size_t index = 0;
   for (uint32_t axis : {0u, 1u}) {
@@ -1189,10 +1159,9 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
                                      clip,
                                      0};
           auto actual = RunInputOutputUniformProgram(
-              device->device(), device->queue(), wgsl.result(), source, kOffsetExtent,
-              kOffsetExtent,
+              device->device(), device->queue(), wgsl, source, kOffsetExtent, kOffsetExtent,
               std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-              programs::kGaussianBlurWorkgroupSize);
+              shader.entryPoints.front().workgroupSize[0]);
           ASSERT_THAT(actual, testing::SizeIs(source.size()));
           auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kOffsetExtent, kOffsetExtent);
           ASSERT_THAT(pixels.has_value(), testing::IsTrue());
@@ -1228,10 +1197,7 @@ TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTranspare
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
-  auto module = programs::BuildMorphologyModule();
-  ASSERT_THAT(module, HasShaderResult());
-  auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
+  const ShaderResult<std::string> wgsl = std::string(programs::MorphologyShader().wgsl);
   const auto source = OffsetSourceTexels();
   const int32_t radii[][2] = {{0, 0}, {1, 0}, {0, 2}, {2, 3}, {31, 0}, {0, 31}};
   size_t index = 0;
@@ -1243,7 +1209,7 @@ TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTranspare
       auto actual = RunInputOutputUniformProgram(
           device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-          programs::kMorphologyWorkgroupSize);
+          ReflectedWorkgroupWidth(programs::MorphologyShader()));
       ASSERT_THAT(actual, testing::SizeIs(source.size()));
       std::vector<uint8_t> expected(source.size(), op == 0 ? 255 : 0);
       for (int32_t y = 0; y < int32_t(kOffsetExtent); ++y) {
@@ -1277,10 +1243,7 @@ TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
-  auto module = programs::BuildTileModule();
-  ASSERT_THAT(module, HasShaderResult());
-  auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
+  const ShaderResult<std::string> wgsl = std::string(programs::TileShader().wgsl);
   const auto source = OffsetSourceTexels();
   const int32_t rectangles[][4] = {{0, 0, 13, 13},  {2, 3, 4, 5}, {-2, -3, 4, 5}, {11, 12, 4, 5},
                                    {-15, 17, 3, 2}, {0, 0, 0, 3}, {0, 0, 3, -1}};
@@ -1290,7 +1253,7 @@ TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
     auto actual = RunInputOutputUniformProgram(
         device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rect), sizeof(rect)),
-        programs::kTileWorkgroupSize);
+        ReflectedWorkgroupWidth(programs::TileShader()));
     ASSERT_THAT(actual, testing::SizeIs(source.size()));
     std::vector<uint8_t> expected(source.size(), 0);
     if (rect[2] > 0 && rect[3] > 0) {
@@ -1317,10 +1280,7 @@ TEST(WgslEmitterGeodeValidation, TilePreservesFloatStorageWithoutQuantization) {
   if (!geode) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
-  auto module = programs::BuildTileModule();
-  ASSERT_THAT(module, HasShaderResult());
-  auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
+  const ShaderResult<std::string> wgsl = std::string(programs::TileShader().wgsl);
   const auto& device = geode->device();
   const auto& queue = geode->queue();
   constexpr uint32_t kWidth = 16, kHeight = 2, kRowBytes = kWidth * 4 * sizeof(float);
@@ -1358,7 +1318,7 @@ TEST(WgslEmitterGeodeValidation, TilePreservesFloatStorageWithoutQuantization) {
       RecordInputOutputUniformProgram(
           device, queue, encoder, wgsl.result(), source, destination,
           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-          programs::kTileWorkgroupSize),
+          ReflectedWorkgroupWidth(programs::TileShader())),
       testing::IsTrue());
   copy.texture = destination;
   wgpu::TexelCopyBufferInfo bufferCopy = {};
@@ -1434,10 +1394,7 @@ TEST(WgslEmitterGeodeValidation, EmittedColorSpaceConvertPassesRendererValidatio
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::ColorSpaceConvertShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -1458,10 +1415,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsColorSpaceConvertStorageF
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::ColorSpaceConvertShader().wgsl);
 
   testing::internal::CaptureStderr();
   wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
@@ -1524,10 +1478,7 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::ColorSpaceConvertShader().wgsl);
 
   struct Direction {
     uint32_t value;
@@ -1544,7 +1495,8 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
         geodeDevice->device(), geodeDevice->queue(), wgsl.result(), TransferSourceTexels(),
         kTransferExtent, 1,
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-        programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples());
+        ReflectedWorkgroupWidth(programs::ColorSpaceConvertShader()),
+        programs::ColorTransferSamples());
     ASSERT_THAT(texels, testing::SizeIs(size_t{kTransferExtent} * 4u))
         << "dispatch failed for " << direction.name;
 
@@ -1586,10 +1538,10 @@ void ExpectColorTransferBoundaries(bool resolve) {
   }
   auto geode = donner::geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(geode, testing::NotNull());
-  const auto module =
-      resolve ? programs::BuildFilterResolveModule() : programs::BuildColorSpaceConvertModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
+  const auto wgsl = [&]() -> ShaderResult<std::string> {
+    if (resolve) return std::string(programs::FilterResolveShader().wgsl);
+    return std::string(programs::ColorSpaceConvertShader().wgsl);
+  }();
   ASSERT_THAT(wgsl, HasShaderResult());
   const auto& device = geode->device();
   const auto& queue = geode->queue();
@@ -1641,7 +1593,8 @@ void ExpectColorTransferBoundaries(bool resolve) {
             : std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params));
     ASSERT_THAT(RecordInputOutputUniformProgram(
                     device, queue, encoder, wgsl.result(), source, destination, uniforms,
-                    programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples()),
+                    ReflectedWorkgroupWidth(programs::ColorSpaceConvertShader()),
+                    programs::ColorTransferSamples()),
                 testing::IsTrue());
     wgpu::TexelCopyTextureInfo outputCopy = {};
     outputCopy.texture = destination;
@@ -1689,17 +1642,15 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTranspa
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
 
-  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
-  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+  const ShaderResult<std::string> wgsl = std::string(programs::ColorSpaceConvertShader().wgsl);
 
   std::vector<uint8_t> source(size_t{kTransferExtent} * 4u, 0u);
   const uint32_t params[4] = {programs::kColorSpaceConvertSrgbToLinear, 0u, 0u, 0u};
   const std::vector<uint8_t> texels = RunInputOutputUniformProgram(
       geodeDevice->device(), geodeDevice->queue(), wgsl.result(), source, kTransferExtent, 1,
       std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
-      programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples());
+      ReflectedWorkgroupWidth(programs::ColorSpaceConvertShader()),
+      programs::ColorTransferSamples());
   ASSERT_THAT(texels, testing::SizeIs(size_t{kTransferExtent} * 4u));
   EXPECT_THAT(texels, testing::Each(testing::Eq(0u)));
 }

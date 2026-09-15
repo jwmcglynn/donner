@@ -1,48 +1,62 @@
+/// @file
+/// Merge frozen-artifact metadata and projection tests.
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
+#include <array>
+#include <string_view>
+
 #include "donner/gpu/shader/programs/Merge.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/CompiledMerge.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-TEST(MergeProgramTests, BuildsAndEmitsDeterministically) {
-  const auto module = programs::BuildMergeModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
-  const auto repeatedWgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
-  ASSERT_THAT(repeatedWgsl, HasShaderResult());
-  EXPECT_THAT(repeatedWgsl.result(), testing::Eq(wgsl.result()));
-  const auto msl = EmitMsl(module.result());
-  const auto repeatedMsl = EmitMsl(module.result());
-  ASSERT_THAT(msl, HasShaderResult());
-  ASSERT_THAT(repeatedMsl, HasShaderResult());
-  EXPECT_THAT(repeatedMsl.result(), testing::Eq(msl.result()));
-  const auto spirv = EmitSpirv(module.result());
-  const auto repeatedSpirv = EmitSpirv(module.result());
-  ASSERT_THAT(spirv, HasShaderResult());
-  ASSERT_THAT(repeatedSpirv, HasShaderResult());
-  EXPECT_THAT(repeatedSpirv.result(), testing::Eq(spirv.result()));
+TEST(MergeProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
+  const CompiledShaderView& shader = tests::MergeAllProjections();
+
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(shader.msl, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.spirv, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().stage, ShaderStage::Compute);
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  ASSERT_THAT(shader.resources, testing::SizeIs(3));
+  ASSERT_NE(shader.resource("sourceTexture"), nullptr);
+  EXPECT_EQ(shader.resource("sourceTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("sourceTexture")->binding, 0u);
+  ASSERT_NE(shader.resource("destinationTexture"), nullptr);
+  EXPECT_EQ(shader.resource("destinationTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("destinationTexture")->binding, 1u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 2u);
+  EXPECT_NE(shader.wgsl.find("let remainingSourceAlpha"), std::string_view::npos);
+  EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }
 
-TEST(MergeProgramTests, GuardsRoundedDispatchAndClampsPremultipliedResult) {
-  const auto module = programs::BuildMergeModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
-  EXPECT_THAT(wgsl.result(), testing::HasSubstr("@compute @workgroup_size(8, 8, 1)"));
-  EXPECT_THAT(wgsl.result(),
-              testing::HasSubstr(
-                  "let extent = textureDimensions(outputTexture);\n"
-                  "  if (((gid.x >= extent.x) || (gid.y >= extent.y))) {\n    return;\n  }"));
-  EXPECT_THAT(wgsl.result(), testing::HasSubstr("source + (destination * remainingSourceAlpha)"));
-  EXPECT_THAT(wgsl.result(),
-              testing::HasSubstr("textureStore(outputTexture, coords, saturate(result));"));
+TEST(MergeProgramTests, AdapterArtifactRetainsOnlyWgsl) {
+  const CompiledShaderView& adapter = programs::MergeShader();
+  EXPECT_EQ(adapter.wgsl, tests::MergeAllProjections().wgsl);
+  EXPECT_TRUE(adapter.msl.empty());
+  EXPECT_TRUE(adapter.spirv.empty());
+  EXPECT_EQ(adapter.resources.size(), tests::MergeAllProjections().resources.size());
+  EXPECT_EQ(adapter.entryPoints.size(), tests::MergeAllProjections().entryPoints.size());
+}
+
+TEST(MergeProgramTests, MutationControlReflectsChangedInterface) {
+  const CompiledShaderView& shader = tests::MergeMutatedAllProjections();
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_test");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  ASSERT_NE(shader.resource("sourceTexture"), nullptr);
+  EXPECT_EQ(shader.resource("sourceTexture")->binding, 6u);
+  ASSERT_NE(shader.resource("destinationTexture"), nullptr);
+  EXPECT_EQ(shader.resource("destinationTexture")->binding, 5u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 4u);
 }
 
 }  // namespace

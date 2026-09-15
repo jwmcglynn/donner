@@ -16,8 +16,10 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/shader/programs/LightingBindings.h"
+#include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/programs/LightingParams.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/ReflectedComputeSlice.h"
 #include "tiny_skia/filter/FloatPixmap.h"
 
 namespace donner::gpu::tests {
@@ -214,36 +216,19 @@ inline shader::programs::LightingParams MakeParams(bool specular, uint32_t light
 
 /// Runs one lighting model/light-source pair and compares every finite output pixel strictly.
 /// @param device Native device with bounded wait/readback support.
-/// @param shaderDescriptor Build-time backend artifact with the shared compute entry point.
+/// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
 /// @param specular Selects the specular output contract instead of diffuse.
 /// @param lightType Zero distant, one point, two spot.
+/// @param overrideParams Optional parameters for numeric boundary cases.
 template <typename DeviceType, typename Readback>
-void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                          Readback readbackBuffer, bool specular, uint32_t lightType) {
+void CheckLightingStorage(DeviceType& device, const shader::CompiledShaderView& shader,
+                          Readback readbackBuffer, bool specular, uint32_t lightType,
+                          const shader::programs::LightingParams* overrideParams = nullptr) {
   using namespace lighting_detail;
-  using shader::programs::LightingBinding;
-  const auto binding = [](LightingBinding value) { return static_cast<uint32_t>(value); };
-  auto shaderModule = device.createShaderModule(shaderDescriptor);
-  ASSERT_THAT(shaderModule, HasResult());
-  auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
-      "lighting",
-      {{binding(LightingBinding::InputTexture), ShaderStage::Compute,
-        BindingType::SampledTexture2dUnfilterableFloat},
-       {binding(LightingBinding::OutputTexture), ShaderStage::Compute,
-        BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA32Float},
-       {binding(LightingBinding::Params), ShaderStage::Compute,
-        BindingType::ReadOnlyStorageBuffer}}});
-  ASSERT_THAT(layout, HasResult());
-  auto pipelineLayout =
-      device.createPipelineLayout(PipelineLayoutDescriptor{"lighting", {layout.result()}});
-  ASSERT_THAT(pipelineLayout, HasResult());
-  auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "lighting",
-      pipelineLayout.result(),
-      ComputeState{shaderModule.result(), RcString(shader::programs::kLightingEntryPoint)},
-      {shader::programs::kLightingWorkgroupSize, shader::programs::kLightingWorkgroupSize, 1}});
-  ASSERT_THAT(pipeline, HasResult());
+  ReflectedComputePipeline compute;
+  CreateReflectedComputePipeline(device, shader, "lighting", compute);
+  if (testing::Test::HasFatalFailure()) return;
   auto input =
       device.createTexture(TextureDescriptor{"lighting input",
                                              {kWidth, kHeight},
@@ -278,7 +263,8 @@ void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shad
       device.writeTexture(input.result(), upload, {0, kBytesPerRow, kHeight}, {kWidth, kHeight}),
       IsOk());
 
-  const shader::programs::LightingParams params = MakeParams(specular, lightType);
+  const shader::programs::LightingParams params =
+      overrideParams ? *overrideParams : MakeParams(specular, lightType);
   auto paramsBuffer = device.createBuffer(BufferDescriptor{
       "lighting parameters", sizeof(params), BufferUsage::Storage | BufferUsage::CopyDst});
   ASSERT_THAT(paramsBuffer, HasResult());
@@ -288,10 +274,10 @@ void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shad
               IsOk());
   auto group = device.createBindGroup(BindGroupDescriptor{
       "lighting",
-      layout.result(),
-      {{binding(LightingBinding::InputTexture), TextureViewBinding{inputView.result()}},
-       {binding(LightingBinding::OutputTexture), TextureViewBinding{outputView.result()}},
-       {binding(LightingBinding::Params),
+      compute.layout,
+      {{ReflectedBinding(shader, "inputTexture"), TextureViewBinding{inputView.result()}},
+       {ReflectedBinding(shader, "outputTexture"), TextureViewBinding{outputView.result()}},
+       {ReflectedBinding(shader, "params"),
         BufferBinding{paramsBuffer.result(), 0, sizeof(params)}}}});
   ASSERT_THAT(group, HasResult());
   auto readback = device.createBuffer(BufferDescriptor{
@@ -301,9 +287,10 @@ void CheckLightingStorage(DeviceType& device, const ShaderModuleDescriptor& shad
   ASSERT_THAT(encoder, HasResult());
   auto pass = encoder.result()->beginComputePass(ComputePassDescriptor{"lighting"});
   ASSERT_THAT(pass, HasResult());
-  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setPipeline(compute.pipeline), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+  const auto groups = compute.groupsFor(kWidth, kHeight);
+  ASSERT_THAT(pass.result()->dispatchWorkgroups(groups[0], groups[1], groups[2]), IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
                                                     readback.result(), {0, kBytesPerRow, kHeight},

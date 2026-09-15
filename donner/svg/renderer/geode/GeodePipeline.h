@@ -2,6 +2,7 @@
 /// @file
 /// Render pipeline for the Slug fill algorithm.
 
+#include <string_view>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/gpu/Device.h"
@@ -20,24 +21,7 @@ class GeodeWgpuAdapterDevice;
  *
  * The pipeline is created through the \c donner::gpu runtime, which owns it through RAII
  *
- * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
- * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath,
- *   viewport, tileSize, clip state, and the draw-level copy of the paint /
- *   geometry parameters)
- * - binding 1: storage buffer (read-only) - Band[]
- * - binding 2: storage buffer (read-only) - curve data (flat f32[])
- * - binding 3: pattern tile texture (2D, Float sampleType) - sampled only
- *   when paintMode == 1. A 1x1 dummy texture is bound in solid-fill draws.
- * - binding 4: pattern sampler (Filtering) - paired with binding 3.
- * - binding 5: nested clip-mask texture.
- * - binding 6: nested clip-mask sampler.
- * - binding 7: per-instance records. Only a cross-entity batch reads more
- *   than the transform here; every other draw binds the device's shared
- *   identity record.
- * - bindings 8 and 9: vertical Band[] and canonical curve data.
- * - binding 10: the four dense grid arrays in one combined storage range,
- *   indexed through the per-draw or per-instance element bases.
- * - binding 11: gradient paint blocks, addressed by each record's element base.
+ * Resource bindings and stage visibility come from the compiled Slug interface.
  *
  * The pipeline has no vertex buffer. Its shader expands the uniform bounding polygon into a
  * triangle fan from `vertex_index` and applies the half-pixel AA halo in device space.
@@ -83,8 +67,8 @@ public:
 private:
   /// Compile one variant of the Slug fill pipeline through the GPU runtime. Both variants share
   /// the layout, the shader module and the blend state; only the entry points differ.
-  gpu::RenderPipeline buildPipeline(const char* label, const char* vertexEntryPoint,
-                                    const char* fragmentEntryPoint) const;
+  gpu::RenderPipeline buildPipeline(const char* label, std::string_view vertexEntryPoint,
+                                    std::string_view fragmentEntryPoint) const;
 
   /// The device both pipeline variants are created through. Owned by the GeodeDevice that owns
   /// this pipeline, so it outlives every use here.
@@ -146,7 +130,7 @@ private:
 
 /**
  * Caches a compiled render pipeline for the path-clip mask shader
- * (`shaders/slug_mask.wgsl`) plus its bind-group layout.
+ * (`donner/gpu/shader/programs/SlugMaskSource.h`) plus its bind-group layout.
  *
  * The mask pipeline is a stripped-down sibling of @ref GeodePipeline -
  * it reuses the same vertex shader and band/curve storage SSBOs. The fragment
@@ -197,9 +181,10 @@ private:
 /**
  * Compute pipeline for GPU-side snapshot unpremultiplication.
  *
- * Reads a premultiplied-alpha render target (binding 0, `texture_2d<f32>`)
- * and writes straight-alpha RGBA8 into the storage texture at binding 1
- * (`rgba8unorm`, write-only). Owned lazily by `GeodeDevice` so every
+ * Reads a premultiplied-alpha render target (`texture_2d<f32>`) and writes
+ * straight-alpha RGBA8 into a write-only `rgba8unorm` storage texture; both
+ * binding slots and the workgroup shape come from the precompiled artifact's
+ * reflected interface. Owned lazily by `GeodeDevice` so every
  * snapshot sharing the device reuses one compiled pipeline (issue #575:
  * wgpu-native retains compiled pipelines).
  *
@@ -209,10 +194,8 @@ private:
  */
 class GeodeSnapshotReadbackPipeline {
 public:
-  /**
-   * Create the snapshot-unpremultiply compute pipeline for the given device.
-   */
-  /// Create the snapshot-unpremultiply compute pipeline on \p device from the shader IR program.
+  /// Create the snapshot-unpremultiply compute pipeline on \p device from the precompiled
+  /// artifact.
   /// @param device Runtime device the pipeline and its layouts are created on.
   explicit GeodeSnapshotReadbackPipeline(gpu::Device& device);
 
@@ -229,12 +212,21 @@ public:
   const gpu::ComputePipeline& pipeline() const { return pipeline_; }
   /// The bind group layout used by the pipeline.
   const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  /// Reflected binding of the premultiplied source texture.
+  uint32_t inputBinding() const { return inputBinding_; }
+  /// Reflected binding of the straight-alpha storage destination.
+  uint32_t outputBinding() const { return outputBinding_; }
+  /// Workgroup shape the entry point declares.
+  gpu::WorkgroupSize workgroupSize() const { return workgroupSize_; }
 
 private:
   gpu::ShaderModule shaderModule_;
   gpu::BindGroupLayout bindGroupLayout_;
   gpu::PipelineLayout pipelineLayout_;
   gpu::ComputePipeline pipeline_;
+  uint32_t inputBinding_ = 0;
+  uint32_t outputBinding_ = 1;
+  gpu::WorkgroupSize workgroupSize_{8, 8, 1};
 };
 
 }  // namespace donner::geode

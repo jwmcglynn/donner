@@ -280,7 +280,7 @@ TEST_F(RendererGeodeGoldenTests, StrokingStrokewidth) {
 // Linear gradient coverage. These exercise the gradient-fill
 // pipeline end-to-end: `GradientSystem` resolution in the driver →
 // `RendererGeode::drawPaintedPath` → `GeoEncoder::fillPathLinearGradient` →
-// `shaders/slug_gradient.wgsl`.
+// `donner/gpu/shader/programs/SlugGradientSource.h`.
 //
 // Each SVG isolates a specific axis of gradient behavior:
 //  - Basic: objectBoundingBox default units, horizontal pad.
@@ -319,7 +319,7 @@ TEST_F(RendererGeodeGoldenTests, LinearGradientStroke) {
 
 // ----------------------------------------------------------------------------
 // Radial gradient coverage. Same end-to-end pipeline as the linear
-// tests above but exercising the radial branch of `slug_gradient.wgsl` and
+// tests above but exercising the radial branch of `SlugGradientSource.h` and
 // `RendererGeode::resolveRadialGradientParams`. Sweep / conic gradients are
 // not yet supported because the donner SVG parser does not yet expose them.
 // ----------------------------------------------------------------------------

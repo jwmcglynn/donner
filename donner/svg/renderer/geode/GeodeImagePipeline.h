@@ -23,14 +23,8 @@ class GeodeWgpuAdapterDevice;
  * The pipeline and samplers are created through the \c donner::gpu runtime, which owns them
  * through RAII handles.
  *
- * Bind group layout (matches `shaders/image_blit.wgsl`):
- * - binding 0: uniform buffer (mvp, destRect, srcRect, targetSize, opacity, flags)
- * - binding 1: sampler (filter mode chosen at draw time)
- * - binding 2: sampled texture 2D (float)
- * - binding 3: sampled mask texture for `<mask>` luminance mode
- * - binding 4: sampled destination snapshot for `mix-blend-mode`
- * - binding 5: sampled path-clip mask texture
- * - binding 6: clip-mask sampler (always linear clamp-to-edge)
+ * Resource bindings and entry names come from the compiled shader interface. Optional texture
+ * inputs receive valid placeholder views when their corresponding feature is disabled.
  *
  * The pipeline takes no vertex buffer - the shader generates quad corners
  * from `@builtin(vertex_index)`. A draw call is `pass.Draw(6, 1, 0, 0)`.
@@ -68,9 +62,6 @@ public:
   /// `ImageRendering::CrispEdges` or its legacy alias is selected.
   const gpu::Sampler& nearestSampler() const { return nearestSampler_; }
 
-  /// Linear clamp-to-edge sampler used for path-clip mask textures.
-  const gpu::Sampler& clipMaskSampler() const { return clipMaskSampler_; }
-
   /// Color format the pipeline was built for.
   gpu::TextureFormat colorFormat() const { return colorFormat_; }
 
@@ -82,7 +73,6 @@ private:
   gpu::RenderPipeline pipeline_;
   gpu::Sampler linearSampler_;
   gpu::Sampler nearestSampler_;
-  gpu::Sampler clipMaskSampler_;
 };
 
 }  // namespace donner::geode

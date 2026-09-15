@@ -7,8 +7,11 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
-#include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
+#include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/programs/SlugFill.h"
+#include "donner/gpu/shader/programs/SlugGradient.h"
+#include "donner/gpu/shader/programs/SlugMask.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -38,55 +41,12 @@ gpu::BlendState PremultipliedSourceOverBlend() {
                           gpu::BlendOperation::Add}};
 }
 
-/// A fragment-visible read-only storage buffer entry at \p binding.
-gpu::BindGroupLayoutEntry FragmentStorageEntry(uint32_t binding) {
-  return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Fragment,
-                                   gpu::BindingType::ReadOnlyStorageBuffer};
-}
-
 }  // namespace
 
 GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat)
     : adapterDevice_(&adapterDevice), colorFormat_(colorFormat) {
-  // ----- Bind group layout -----
-  // Twelve bindings: uniforms, H bands SSBO, H curves SSBO, pattern
-  // texture, pattern sampler, clip-mask texture, clip-mask sampler, the
-  // per-instance records SSBO (transform, color, rule, grid parameters,
-  // bounding polygon, geometry bases; 256 bytes per record), V bands
-  // SSBO, V curves SSBO, the combined dense grid storage, and the gradient
-  // paint blocks. The pattern texture/sampler are only sampled when
-  // paintMode == "pattern" and the clip-mask texture/sampler only when
-  // `hasClipMask != 0`; a 1x1 dummy texture is bound for both when the
-  // feature is inactive so the bind group layout is stable across draw
-  // calls. Every draw binds at least one record; instanced and batched
-  // draws bind a contiguous record span indexed by instance_index.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      FragmentStorageEntry(1),
-      FragmentStorageEntry(2),
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      gpu::BindGroupLayoutEntry{5, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{6, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      // Per-instance records: the vertex stage reads the transform + bounding polygon, and the
-      // fragment stage reads color / rule / grid / geometry bases through a flat instance-id
-      // varying, so overlapping batched instances still blend in painter order.
-      gpu::BindGroupLayoutEntry{7, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::ReadOnlyStorageBuffer},
-      FragmentStorageEntry(8),
-      FragmentStorageEntry(9),
-      // The four dense grid arrays (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
-      // combined u32 storage binding; instance records carry the element bases. This keeps the
-      // fragment stage at seven storage bindings, under the baseline WebGPU limit of eight per
-      // stage.
-      FragmentStorageEntry(10),
-      // Gradient paint blocks, addressed by each record's element base, so a run of differently
-      // painted gradient fills shares one draw instead of rebinding a per-draw gradient uniform.
-      FragmentStorageEntry(11),
-  };
+  const auto& shader = gpu::shader::programs::SlugFillShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                                        gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
                                    "GeodeSlugFillBGL createBindGroupLayout");
@@ -100,16 +60,18 @@ GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::Texture
   // The default entry points take the draw's paint and geometry from the uniform, which serves
   // every draw whose instances share one paint and one encoded path. `batchedPipeline` builds the
   // record-reading variant.
-  pipeline_ = buildPipeline("GeodeSlugFill", "vs_main", "fs_main");
+  pipeline_ = buildPipeline("GeodeSlugFill", shader.entryPoints[0].name.view(),
+                            shader.entryPoints[2].name.view());
 }
 
-gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label, const char* vertexEntryPoint,
-                                                 const char* fragmentEntryPoint) const {
+gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label,
+                                                 std::string_view vertexEntryPoint,
+                                                 std::string_view fragmentEntryPoint) const {
   return UnwrapOrAbort(
       adapterDevice_->createRenderPipeline(gpu::RenderPipelineDescriptor{
-          label, pipelineLayout_, gpu::VertexState{shaderModule_, vertexEntryPoint, {}},
+          label, pipelineLayout_, gpu::VertexState{shaderModule_, RcString(vertexEntryPoint), {}},
           gpu::FragmentState{shaderModule_,
-                             fragmentEntryPoint,
+                             RcString(fragmentEntryPoint),
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       label);
@@ -121,7 +83,9 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
     // module, same blending - differing only in the entry points that read
     // paint and geometry from each instance's record. Built on first use
     // because only a cross-entity batch needs it.
-    batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", "vs_main_batched", "fs_main_batched");
+    const auto& shader = gpu::shader::programs::SlugFillShader();
+    batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", shader.entryPoints[1].name.view(),
+                                     shader.entryPoints[3].name.view());
   }
   return batchedPipeline_;
 }
@@ -133,27 +97,8 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
 GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice,
                                              gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
-  // Eleven bindings - uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
-  // clip-mask sampler, and (analytic dual-ray) V bands SSBO, V curves
-  // SSBO, H band grid, V band grid, and compact references into each canonical
-  // curve array. The clip-mask bindings always carry something valid; when
-  // `hasClipMask == 0` a 1x1 dummy texture is bound and the shader skips the
-  // sample work.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      FragmentStorageEntry(1),
-      FragmentStorageEntry(2),
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      FragmentStorageEntry(5),
-      FragmentStorageEntry(6),
-      FragmentStorageEntry(7),
-      FragmentStorageEntry(8),
-      FragmentStorageEntry(9),
-      FragmentStorageEntry(10),
-  };
+  const auto& shader = gpu::shader::programs::SlugGradientShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ =
       UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                         gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
@@ -168,9 +113,10 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
 
   pipeline_ = UnwrapOrAbort(
       adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "GeodeSlugGradient", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          "GeodeSlugGradient", pipelineLayout_,
+          gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,
-                             "fs_main",
+                             RcString(shader.entryPoints[1].name.view()),
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugGradient createRenderPipeline");
@@ -181,26 +127,8 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
 // ============================================================================
 
 GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
-  // Eleven bindings - uniforms, H bands SSBO, H curves SSBO, nested clip mask
-  // texture, nested clip mask sampler, and (analytic dual-ray) V bands SSBO,
-  // V curves SSBO, H band grid, V band grid, and compact references into each
-  // canonical curve array. The clip-mask slot is always bound; a 1x1 dummy is
-  // used when `uniforms.hasClipMask == 0`.
-  const std::vector<gpu::BindGroupLayoutEntry> entries = {
-      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
-                                gpu::BindingType::UniformBuffer},
-      FragmentStorageEntry(1),
-      FragmentStorageEntry(2),
-      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
-                                gpu::BindingType::SampledTexture2dFloat},
-      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
-      FragmentStorageEntry(5),
-      FragmentStorageEntry(6),
-      FragmentStorageEntry(7),
-      FragmentStorageEntry(8),
-      FragmentStorageEntry(9),
-      FragmentStorageEntry(10),
-  };
+  const auto& shader = gpu::shader::programs::SlugMaskShader();
+  const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
                                        gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
                                    "GeodeSlugMaskBGL createBindGroupLayout");
@@ -218,9 +146,10 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 
   pipeline_ = UnwrapOrAbort(
       adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "GeodeSlugMask", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          "GeodeSlugMask", pipelineLayout_,
+          gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,
-                             "fs_main",
+                             RcString(shader.entryPoints[1].name.view()),
                              {gpu::ColorTargetState{gpu::TextureFormat::RGBA8Unorm, maxBlend}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugMask createRenderPipeline");
@@ -231,26 +160,32 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 // ============================================================================
 
 GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device) {
-  const gpu::ShaderModuleDescriptor descriptor =
-      gpu::generated::snapshot_unpremultiply::BuildDescriptor(device.shaderSourceKind());
-  gpu::Result<gpu::ShaderModule> shaderModule = device.createShaderModule(descriptor);
+  const gpu::shader::CompiledShaderView& shader =
+      gpu::shader::programs::SnapshotUnpremultiplyShader();
+  const gpu::shader::ShaderResource* input = shader.resource("inputTexture");
+  const gpu::shader::ShaderResource* output = shader.resource("outputTexture");
+  if (input == nullptr || output == nullptr || shader.entryPoints.size() != 1 ||
+      shader.entryPoints.front().stage != gpu::ShaderStage::Compute) {
+    return;
+  }
+  inputBinding_ = input->binding;
+  outputBinding_ = output->binding;
+  const gpu::shader::ShaderEntryPoint& entry = shader.entryPoints.front();
+  workgroupSize_ = {entry.workgroupSize[0], entry.workgroupSize[1], entry.workgroupSize[2]};
+
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      device.createShaderModule(gpu::shader::MakeShaderDescriptor(shader, device.shaderSourceKind(),
+                                                                  "SnapshotUnpremultiply"));
   if (shaderModule.hasError()) {
     return;
   }
   shaderModule_ = std::move(shaderModule).result();
 
-  // Two bindings: the premultiplied render target read with textureLoad, and the straight-alpha
-  // RGBA8 staging storage texture.
-  using Binding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
+  // The reflected layout holds the premultiplied render target read with textureLoad and the
+  // straight-alpha RGBA8 staging storage texture.
   gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
       device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
-          "GeodeSnapshotReadbackBGL",
-          {gpu::BindGroupLayoutEntry{static_cast<uint32_t>(Binding::InputTexture),
-                                     gpu::ShaderStage::Compute,
-                                     gpu::BindingType::SampledTexture2dFloat},
-           gpu::BindGroupLayoutEntry{
-               static_cast<uint32_t>(Binding::OutputTexture), gpu::ShaderStage::Compute,
-               gpu::BindingType::WriteOnlyStorageTexture2d, gpu::TextureFormat::RGBA8Unorm}}});
+          "GeodeSnapshotReadbackBGL", gpu::shader::MakeBindingLayout(shader)});
   if (bindGroupLayout.hasError()) {
     return;
   }
@@ -266,8 +201,7 @@ GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device
   gpu::Result<gpu::ComputePipeline> pipeline =
       device.createComputePipeline(gpu::ComputePipelineDescriptor{
           "GeodeSnapshotReadback", pipelineLayout_,
-          gpu::ComputeState{shaderModule_, descriptor.computeEntryPoints.front().name},
-          descriptor.computeEntryPoints.front().workgroupSize});
+          gpu::ComputeState{shaderModule_, RcString(entry.name.view())}, workgroupSize_});
   if (pipeline.hasError()) {
     return;
   }

@@ -1,0 +1,2 @@
+@group(0) @binding(0) var a: texture_2d<f32>;
+@group(0) @binding(0) var b: texture_2d<f32>;

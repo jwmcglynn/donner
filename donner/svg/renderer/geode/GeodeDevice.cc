@@ -306,7 +306,6 @@ struct GeodeDevice::Impl {
   gpu::Sampler gpuDummyPatternSampler;
   gpu::Texture gpuDummyClipMaskTexture;
   gpu::TextureView gpuDummyClipMaskTextureView;
-  gpu::Sampler gpuDummyClipMaskSampler;
   /// Layout matches the WGSL `InstanceRecord` struct, whose leading member is a row-major affine
   /// as two vec4f rows carrying the identity `{(1,0,0,0), (0,1,0,0)}` followed by zeroes.
   gpu::Buffer gpuIdentityInstanceRecordBuffer;
@@ -1181,11 +1180,6 @@ void GeodeDevice::initSharedBindSlotResources() {
       adapterDevice.createTextureView(impl_->gpuDummyClipMaskTexture,
                                       gpu::TextureViewDescriptor{"GeodeDeviceDummyClipMaskView"}),
       "GeodeDeviceDummyClipMaskView createTextureView");
-  impl_->gpuDummyClipMaskSampler = unwrap(
-      adapterDevice.createSampler(gpu::SamplerDescriptor{
-          "GeodeDeviceDummyClipMaskSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
-          gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
-      "GeodeDeviceDummyClipMaskSampler createSampler");
 
   {
     // One full-size record: the identity affine in the leading two rows and zeroes everywhere
@@ -1233,7 +1227,6 @@ void GeodeDevice::initSharedBindSlotResources() {
   impl_->gpuContext.dummyPatternTextureView = &impl_->gpuDummyPatternTextureView;
   impl_->gpuContext.dummyPatternSampler = &impl_->gpuDummyPatternSampler;
   impl_->gpuContext.dummyClipMaskTextureView = &impl_->gpuDummyClipMaskTextureView;
-  impl_->gpuContext.dummyClipMaskSampler = &impl_->gpuDummyClipMaskSampler;
   impl_->gpuContext.identityInstanceRecordBuffer = &impl_->gpuIdentityInstanceRecordBuffer;
   impl_->gpuContext.dummyPaintDataBuffer = &impl_->gpuDummyPaintDataBuffer;
 }

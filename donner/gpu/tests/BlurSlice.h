@@ -16,6 +16,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 
@@ -29,24 +30,50 @@ namespace donner::gpu::tests {
 /// @param kernelType Zero for Gaussian, one for an asymmetric box.
 /// @param axis Zero for horizontal, one for vertical.
 /// @param edgeMode Zero for transparent, one for duplicate, two for wrap.
+/// @param shaderMetadata Optional frozen metadata used to derive binding indices and workgroup
+///     dimensions. Omit for legacy callers that use the Gaussian default contract.
 template <typename DeviceType, typename Readback>
 void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
                       Readback readbackBuffer, float sigma, uint32_t kernelType, uint32_t axis,
-                      uint32_t edgeMode) {
+                      uint32_t edgeMode,
+                      const shader::CompiledShaderView* shaderMetadata = nullptr) {
+  uint32_t inputBinding = 0;
+  uint32_t outputBinding = 1;
+  uint32_t uniformBinding = 2;
+  WorkgroupSize workgroupSize{8, 8, 1};
+  if (shaderMetadata != nullptr) {
+    ASSERT_THAT(shaderMetadata->entryPoints, testing::SizeIs(1));
+    ASSERT_EQ(shaderMetadata->entryPoints.front().stage, ShaderStage::Compute);
+    const shader::ShaderResource* input = shaderMetadata->resource("inputTexture");
+    const shader::ShaderResource* output = shaderMetadata->resource("outputTexture");
+    const shader::ShaderResource* uniform = shaderMetadata->resource("params");
+    ASSERT_NE(input, nullptr);
+    ASSERT_NE(output, nullptr);
+    ASSERT_NE(uniform, nullptr);
+    ASSERT_EQ(input->type, BindingType::SampledTexture2dUnfilterableFloat);
+    ASSERT_EQ(output->type, BindingType::WriteOnlyStorageTexture2d);
+    ASSERT_EQ(uniform->type, BindingType::UniformBuffer);
+    inputBinding = input->binding;
+    outputBinding = output->binding;
+    uniformBinding = uniform->binding;
+    workgroupSize = {shaderMetadata->entryPoints.front().workgroupSize[0],
+                     shaderMetadata->entryPoints.front().workgroupSize[1],
+                     shaderMetadata->entryPoints.front().workgroupSize[2]};
+  }
   auto shader = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shader, HasResult());
   auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
       "float",
-      {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
-       {1, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
+      {{inputBinding, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
+       {outputBinding, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
         TextureFormat::RGBA32Float},
-       {2, ShaderStage::Compute, BindingType::UniformBuffer}}});
+       {uniformBinding, ShaderStage::Compute, BindingType::UniformBuffer}}});
   ASSERT_THAT(layout, HasResult());
   auto pipelineLayout =
       device.createPipelineLayout(PipelineLayoutDescriptor{"float", {layout.result()}});
   ASSERT_THAT(pipelineLayout, HasResult());
   auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "float", pipelineLayout.result(), ComputeState{shader.result(), "cs_main"}, {8, 8, 1}});
+      "float", pipelineLayout.result(), ComputeState{shader.result(), "cs_main"}, workgroupSize});
   ASSERT_THAT(pipeline, HasResult());
   auto input =
       device.createTexture(TextureDescriptor{"blur input",
@@ -90,12 +117,12 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
                          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),
                                                   sizeof(params))),
       IsOk());
-  auto group =
-      device.createBindGroup(BindGroupDescriptor{"float",
-                                                 layout.result(),
-                                                 {{0, TextureViewBinding{inputView.result()}},
-                                                  {1, TextureViewBinding{outputView.result()}},
-                                                  {2, BufferBinding{uniform.result(), 0, 48}}}});
+  auto group = device.createBindGroup(
+      BindGroupDescriptor{"float",
+                          layout.result(),
+                          {{inputBinding, TextureViewBinding{inputView.result()}},
+                           {outputBinding, TextureViewBinding{outputView.result()}},
+                           {uniformBinding, BufferBinding{uniform.result(), 0, 48}}}});
   ASSERT_THAT(group, HasResult());
   auto readback = device.createBuffer(
       BufferDescriptor{"blur readback", 1024, BufferUsage::CopyDst | BufferUsage::MapRead});
@@ -106,7 +133,10 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   ASSERT_THAT(pass, HasResult());
   ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+  ASSERT_THAT(pass.result()->dispatchWorkgroups((4 + workgroupSize.x - 1) / workgroupSize.x,
+                                                (4 + workgroupSize.y - 1) / workgroupSize.y,
+                                                (1 + workgroupSize.z - 1) / workgroupSize.z),
+              IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
                                                     readback.result(), {0, 256, 4}, {4, 4}),

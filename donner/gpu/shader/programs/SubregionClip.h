@@ -1,31 +1,19 @@
 #pragma once
 /// @file
-/// The subregion-clip compute program, expressed in the \c donner::gpu::shader IR.
+/// Subregion clipping precompiled shader projections over the shared resolve parameters.
+#include <cstdint>
 
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/SubregionClipBindings.h"
-
+#include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 namespace donner::gpu::shader::programs {
-
-/**
- * Builds the subregion-clip compute program: one `@compute @workgroup_size(8, 8, 1)` entry point
- * named `cs_main` that copies texels inside a rectangle and writes transparent black outside it.
- *
- * The rectangle is axis-aligned in user space, not in the destination's pixel space, so the test
- * runs on the pixel center mapped back through the uniform's inverse transform. That is what
- * makes the clip correct under a rotated transform, where a pixel-space rectangle would not
- * describe the same region. The rectangle is half-open on both axes: a coordinate equal to the
- * low edge is inside, one equal to the high edge is outside, so abutting subregions neither
- * overlap nor leave a seam.
- *
- * Invocations outside the destination extent return without writing, so a dispatch rounded up to
- * whole workgroups is safe.
- */
-ShaderResult<IrModule> BuildSubregionClipModule();
-
-/// Builds the final filter clip, resolving premultiplied float channels to RGBA8 with half-up
-/// rounding. Uses the same clipping parameters and entry point as BuildSubregionClipModule.
-/// The pad0 word selects linear-to-sRGB conversion through the shared table at binding 3.
-ShaderResult<IrModule> BuildFilterResolveModule();
-
+/// The clip and resolve programs share one 48-byte host block; the clip ignores the
+/// conversion flag.
+using SubregionClipParams = FilterResolveParams;
+/// Returns the WGSL subregion-clip artifact: float texels outside the user rectangle become
+/// transparent.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& SubregionClipShader();
+/// Returns only the platform-native SubregionClip projection.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& SubregionClipNativeShader();
 }  // namespace donner::gpu::shader::programs

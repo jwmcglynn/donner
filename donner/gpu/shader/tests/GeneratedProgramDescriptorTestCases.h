@@ -1,90 +1,69 @@
 #pragma once
 /// @file
-/// Shared production shader cases for interface checks and explicit allocation measurements.
+/// Shared production compute shader cases for interface checks and explicit allocation
+/// measurements.
 
 #include <ostream>
 
-#include "donner/gpu/shader/generated/ColorSpaceConvertShader.h"
-#include "donner/gpu/shader/generated/ComponentTransferShader.h"
-#include "donner/gpu/shader/generated/CompositeShader.h"
-#include "donner/gpu/shader/generated/ConvolveMatrixShader.h"
-#include "donner/gpu/shader/generated/DiffuseLightingShader.h"
-#include "donner/gpu/shader/generated/DisplacementMapShader.h"
-#include "donner/gpu/shader/generated/DropShadowShader.h"
-#include "donner/gpu/shader/generated/FilterColorMatrixShader.h"
-#include "donner/gpu/shader/generated/FilterImageShader.h"
-#include "donner/gpu/shader/generated/FilterResolveShader.h"
-#include "donner/gpu/shader/generated/FloodShader.h"
-#include "donner/gpu/shader/generated/GaussianBlurShader.h"
-#include "donner/gpu/shader/generated/MergeShader.h"
-#include "donner/gpu/shader/generated/MorphologyShader.h"
-#include "donner/gpu/shader/generated/OffsetShader.h"
-#include "donner/gpu/shader/generated/SnapshotUnpremultiplyShader.h"
-#include "donner/gpu/shader/generated/SpecularLightingShader.h"
-#include "donner/gpu/shader/generated/SubregionClipShader.h"
-#include "donner/gpu/shader/generated/TileShader.h"
-#include "donner/gpu/shader/generated/TurbulenceShader.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
 #include "donner/gpu/shader/programs/ConvolveMatrix.h"
+#include "donner/gpu/shader/programs/DiffuseLighting.h"
 #include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/shader/programs/DropShadow.h"
+#include "donner/gpu/shader/programs/FilterBlend.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterImage.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
-#include "donner/gpu/shader/programs/Lighting.h"
 #include "donner/gpu/shader/programs/Merge.h"
 #include "donner/gpu/shader/programs/Morphology.h"
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
+#include "donner/gpu/shader/programs/SpecularLighting.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
 
 namespace donner::gpu::shader::tests {
 
+/// One production compute artifact and its build-facing name.
 struct Program {
-  const char* name;
-  ShaderResult<IrModule> (*buildModule)();
-  ShaderModuleDescriptor (*buildDescriptor)(ShaderSourceKind);
-  bool nativeSources;
+  const char* name;                               //!< Build-facing program identifier.
+  const CompiledShaderView& (*compiledShader)();  //!< WGSL projection consumed by the adapter.
+
+  /// Builds the runtime descriptor exactly as the production callers do.
+  /// @param kind Device-selected projection.
+  ShaderModuleDescriptor buildDescriptor(ShaderSourceKind kind) const {
+    return MakeShaderDescriptor(compiledShader(), kind, name);
+  }
 };
 
 inline const Program kPrograms[] = {
-    {"snapshot_unpremultiply", programs::BuildSnapshotUnpremultiplyModule,
-     generated::snapshot_unpremultiply::BuildDescriptor, false},
-    {"flood", programs::BuildFloodModule, generated::flood::BuildDescriptor, false},
-    {"subregion_clip", programs::BuildSubregionClipModule,
-     generated::subregion_clip::BuildDescriptor, false},
-    {"offset", programs::BuildOffsetModule, generated::offset::BuildDescriptor, false},
-    {"color_space_convert", programs::BuildColorSpaceConvertModule,
-     generated::color_space_convert::BuildDescriptor, false},
-    {"filter_color_matrix", programs::BuildFilterColorMatrixModule,
-     generated::filter_color_matrix::BuildDescriptor, false},
-    {"gaussian_blur", programs::BuildGaussianBlurModule, generated::gaussian_blur::BuildDescriptor,
-     false},
-    {"merge", programs::BuildMergeModule, generated::merge::BuildDescriptor, false},
-    {"composite", programs::BuildCompositeModule, generated::composite::BuildDescriptor, false},
-    {"morphology", programs::BuildMorphologyModule, generated::morphology::BuildDescriptor, false},
-    {"tile", programs::BuildTileModule, generated::tile::BuildDescriptor, false},
-    {"filter_resolve", programs::BuildFilterResolveModule,
-     generated::filter_resolve::BuildDescriptor, false},
-    {"component_transfer", programs::BuildComponentTransferModule,
-     generated::component_transfer::BuildDescriptor, true},
-    {"displacement_map", programs::BuildDisplacementMapModule,
-     generated::displacement_map::BuildDescriptor, true},
-    {"drop_shadow", programs::BuildDropShadowModule, generated::drop_shadow::BuildDescriptor, true},
-    {"convolve_matrix", programs::BuildConvolveMatrixModule,
-     generated::convolve_matrix::BuildDescriptor, true},
-    {"filter_image", programs::BuildFilterImageModule, generated::filter_image::BuildDescriptor,
-     true},
-    {"turbulence", programs::BuildTurbulenceModule, generated::turbulence::BuildDescriptor, true},
-    {"diffuse_lighting", programs::BuildDiffuseLightingModule,
-     generated::diffuse_lighting::BuildDescriptor, true},
-    {"specular_lighting", programs::BuildSpecularLightingModule,
-     generated::specular_lighting::BuildDescriptor, true},
+    {"snapshot_unpremultiply", programs::SnapshotUnpremultiplyShader},
+    {"flood", programs::FloodShader},
+    {"subregion_clip", programs::SubregionClipShader},
+    {"offset", programs::OffsetShader},
+    {"color_space_convert", programs::ColorSpaceConvertShader},
+    {"filter_color_matrix", programs::FilterColorMatrixShader},
+    {"gaussian_blur", programs::GaussianBlurShader},
+    {"merge", programs::MergeShader},
+    {"composite", programs::CompositeShader},
+    {"morphology", programs::MorphologyShader},
+    {"tile", programs::TileShader},
+    {"filter_resolve", programs::FilterResolveShader},
+    {"component_transfer", programs::ComponentTransferShader},
+    {"displacement_map", programs::DisplacementMapShader},
+    {"drop_shadow", programs::DropShadowShader},
+    {"convolve_matrix", programs::ConvolveMatrixShader},
+    {"filter_image", programs::FilterImageShader},
+    {"turbulence", programs::TurbulenceShader},
+    {"diffuse_lighting", programs::DiffuseLightingShader},
+    {"specular_lighting", programs::SpecularLightingShader},
+    {"filter_blend", programs::FilterBlendShader},
 };
 
 inline void PrintTo(const Program& program, std::ostream* stream) {

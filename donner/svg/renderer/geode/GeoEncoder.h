@@ -78,7 +78,7 @@ class GeodeGradientPipeline;
  * All geometry fields are in the gradient's own coordinate system (after the
  * caller has already folded `gradientUnits` + the `gradientTransform`
  * attribute into `gradientFromPath`). The encoder uploads these verbatim into
- * a per-draw uniform buffer consumed by `shaders/slug_gradient.wgsl`.
+ * a per-draw uniform buffer consumed by `donner/gpu/shader/programs/SlugGradientSource.h`.
  */
 struct LinearGradientParams {
   /// Start point in gradient space.
@@ -94,10 +94,10 @@ struct LinearGradientParams {
   /// 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
   /// Gradient stops. Colors are in straight alpha, 0..1 per channel - the
-  /// encoder premultiplies before upload. Offsets must be in [0, 1].
+  /// shader interpolates in straight alpha and premultiplies at output. Offsets are in [0, 1].
   ///
   /// A hard cap of 16 stops is enforced inside the encoder to match the
-  /// fixed-size uniform buffer layout in `slug_gradient.wgsl`. Stops beyond
+  /// fixed-size uniform buffer layout in `SlugGradientSource.h`. Stops beyond
   /// the cap are silently truncated - a follow-up will move stop storage to
   /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
   /// A single gradient stop: normalized offset and STRAIGHT-alpha RGBA.
@@ -562,7 +562,7 @@ public:
    *
    * The caller has already packed each transform into the wire format
    * the shader expects: two `vec4f` rows per instance (row-major affine,
-   * 32 bytes per entry). See `donner/svg/renderer/geode/shaders/slug_fill.wgsl`
+   * 32 bytes per entry). See `donner/gpu/shader/programs/SlugFillSource.h`
    * `struct InstanceTransform` for the exact layout.
    *
    * The vertex shader composes each instance's transform with the
@@ -747,7 +747,7 @@ public:
    * Same CPU encoding and GPU-dispatch machinery as @ref
    * fillPathLinearGradient, but the gradient parameter `t` is derived from
    * a two-circle radial construction in the shader (see
-   * `radial_t()` in `shaders/slug_gradient.wgsl`).
+   * `radial_t()` in `donner/gpu/shader/programs/SlugGradientSource.h`).
    *
    * If the path encodes to zero bands, the stop list is empty, or
    * `params.radius <= 0`, the call is a no-op.

@@ -270,6 +270,42 @@ class GeneratedRootCmakeTest(unittest.TestCase):
         self.assertIn("tools/cmake/apply_woff2_patch.cmake", contents)
 
 
+class GeneratedCompileBudgetTest(unittest.TestCase):
+    def test_clang_budget_is_scoped_to_clang_for_all_target_kinds(self):
+        for kind, concrete in [("cc_library", True), ("cc_library", False),
+                               ("cc_binary", True), ("cc_test", True)]:
+            with self.subTest(kind=kind, concrete=concrete):
+                contents = self._generate(kind, concrete)
+                self.assertIn(
+                    "$<$<CXX_COMPILER_ID:Clang,AppleClang>:-fconstexpr-steps=2097152>",
+                    contents,
+                )
+                self.assertNotRegex(contents, r"(?m)^target_compile_options\([^\n]* -fconstexpr-steps=")
+                self.assertIn("-Wall", contents)
+
+    @staticmethod
+    def _generate(kind, concrete):
+        values = g._target_value_map()
+        values["hdrs"]["Shader.h"] = set(g._ALL_CONFIG_NAMES)
+        if concrete:
+            values["srcs"]["Shader.cc"] = set(g._ALL_CONFIG_NAMES)
+        values["copts"]["-fconstexpr-steps=2097152"] = set(g._ALL_CONFIG_NAMES)
+        values["copts"]["-Wall"] = set(g._ALL_CONFIG_NAMES)
+        target = g.CMakeTarget(
+            label="//donner/gpu/shader:budget_probe", package="donner/gpu/shader",
+            name="budget_probe", kind=kind, configs=set(g._ALL_CONFIG_NAMES), values=values,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(temp_dir)
+                with mock.patch.object(g, "get_cmake_targets", return_value={target.label: target}):
+                    g.generate_all_packages()
+                return Path("donner/gpu/shader/CMakeLists.txt").read_text()
+            finally:
+                os.chdir(previous_cwd)
+
+
 class ConditionDerivationTest(unittest.TestCase):
     def _configs_where(self, predicate):
         return {config.name for config in g.CMAKE_CONFIGS if predicate(config)}

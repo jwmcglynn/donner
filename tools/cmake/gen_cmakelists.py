@@ -967,6 +967,8 @@ def _values_for_target(
     conditional: List[Tuple[str, str]] = []
     for value, configs in sorted(target.values[attr].items()):
         condition = _condition_for_item(target, value, configs)
+        if attr == "copts":
+            value = _cmake_compile_option(value)
         if condition is None:
             fixed.append(value)
         elif condition != "FALSE":
@@ -1309,6 +1311,13 @@ def _scope_for_target(kind: str, has_concrete_sources: bool) -> str:
     if kind in {"cc_binary", "cc_test"}:
         return "PRIVATE"
     return "PUBLIC" if has_concrete_sources else "INTERFACE"
+
+
+def _cmake_compile_option(option: str) -> str:
+    """Keep positive Clang evaluator budgets local to compatible CMake compilers."""
+    if re.fullmatch(r"-fconstexpr-steps=[1-9][0-9]*", option):
+        return f"$<$<CXX_COMPILER_ID:Clang,AppleClang>:{option}>"
+    return option
 
 
 def _compile_option_scope(kind: str, has_concrete_sources: bool) -> str:

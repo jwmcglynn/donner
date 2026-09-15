@@ -19,7 +19,8 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/shader/programs/ConvolveMatrixBindings.h"
+#include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "tiny_skia/filter/FloatPixmap.h"
 
@@ -31,6 +32,9 @@ inline constexpr uint32_t kHeight = 4;
 inline constexpr uint32_t kBytesPerRow = 256;
 
 using Params = shader::programs::ConvolveMatrixParams;
+
+/// Dynamic coefficient-array index selected by a test artifact.
+enum class ArrayIndexMode { Authored, High, Low };
 
 /// Varied premultiplied source whose position, channels, and fractional alpha are independent.
 inline std::array<float, kWidth * kHeight * 4> InputTexels() {
@@ -49,8 +53,15 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
 }
 
 /// Asymmetric kernel and off-center target expose transposition, reversal, and offset errors.
-inline Params Parameters(uint32_t edgeMode, bool preserveAlpha) {
+inline Params Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode) {
   Params result{2, 3, 0, 1, 2.0f, 0.04f, edgeMode, preserveAlpha ? 1u : 0u, {}};
+  if (indexMode != ArrayIndexMode::Authored) {
+    std::fill(result.kernel, result.kernel + shader::programs::kConvolveMatrixKernelCapacity,
+              0.25f);
+    result.kernel[0] = 0.125f;
+    result.kernel[shader::programs::kConvolveMatrixKernelCapacity - 1] = 0.5f;
+    return result;
+  }
   const std::array<float, 6> coefficients{0.25f, -0.5f, 1.25f, 0.75f, -0.25f, 0.5f};
   std::copy(coefficients.begin(), coefficients.end(), result.kernel);
   return result;
@@ -121,34 +132,51 @@ inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeig
  * @param readbackBuffer Reads a submitted buffer through the backend's host mapping API.
  * @param edgeMode Zero for duplicate, one for wrap, and two for transparent black.
  * @param preserveAlpha Whether to convolve straight RGB while retaining source alpha.
+ * @param shaderMetadata Reflected binding and workgroup interface, when supplied.
  */
 template <typename DeviceType, typename Readback>
 void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
-                                Readback readbackBuffer, uint32_t edgeMode, bool preserveAlpha) {
+                                Readback readbackBuffer, uint32_t edgeMode, bool preserveAlpha,
+                                convolve_matrix_slice::ArrayIndexMode indexMode =
+                                    convolve_matrix_slice::ArrayIndexMode::Authored,
+                                const shader::CompiledShaderView* shaderMetadata = nullptr) {
   using namespace convolve_matrix_slice;
-  using shader::programs::ConvolveMatrixBinding;
-  const auto binding = [](ConvolveMatrixBinding value) { return static_cast<uint32_t>(value); };
+  uint32_t inputBinding = 0;
+  uint32_t outputBinding = 1;
+  uint32_t paramsBinding = 2;
+  WorkgroupSize workgroupSize{8, 8, 1};
+  if (shaderMetadata != nullptr) {
+    ASSERT_THAT(shaderMetadata->entryPoints, testing::SizeIs(1));
+    ASSERT_EQ(shaderMetadata->entryPoints.front().stage, ShaderStage::Compute);
+    const shader::ShaderResource* input = shaderMetadata->resource("inputTexture");
+    const shader::ShaderResource* output = shaderMetadata->resource("outputTexture");
+    const shader::ShaderResource* params = shaderMetadata->resource("params");
+    ASSERT_NE(input, nullptr);
+    ASSERT_NE(output, nullptr);
+    ASSERT_NE(params, nullptr);
+    inputBinding = input->binding;
+    outputBinding = output->binding;
+    paramsBinding = params->binding;
+    workgroupSize = {shaderMetadata->entryPoints.front().workgroupSize[0],
+                     shaderMetadata->entryPoints.front().workgroupSize[1],
+                     shaderMetadata->entryPoints.front().workgroupSize[2]};
+  }
 
   Result<ShaderModule> shaderModule = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shaderModule, HasResult());
   Result<BindGroupLayout> layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
       "convolve matrix",
-      {{binding(ConvolveMatrixBinding::InputTexture), ShaderStage::Compute,
-        BindingType::SampledTexture2dUnfilterableFloat},
-       {binding(ConvolveMatrixBinding::OutputTexture), ShaderStage::Compute,
-        BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA32Float},
-       {binding(ConvolveMatrixBinding::Params), ShaderStage::Compute,
-        BindingType::ReadOnlyStorageBuffer}}});
+      {{inputBinding, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
+       {outputBinding, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
+        TextureFormat::RGBA32Float},
+       {paramsBinding, ShaderStage::Compute, BindingType::ReadOnlyStorageBuffer}}});
   ASSERT_THAT(layout, HasResult());
   Result<PipelineLayout> pipelineLayout =
       device.createPipelineLayout(PipelineLayoutDescriptor{"convolve matrix", {layout.result()}});
   ASSERT_THAT(pipelineLayout, HasResult());
-  Result<ComputePipeline> pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "convolve matrix",
-      pipelineLayout.result(),
-      ComputeState{shaderModule.result(), RcString(shader::programs::kConvolveMatrixEntryPoint)},
-      {shader::programs::kConvolveMatrixWorkgroupSize,
-       shader::programs::kConvolveMatrixWorkgroupSize, 1}});
+  Result<ComputePipeline> pipeline = device.createComputePipeline(
+      ComputePipelineDescriptor{"convolve matrix", pipelineLayout.result(),
+                                ComputeState{shaderModule.result(), "cs_main"}, workgroupSize});
   ASSERT_THAT(pipeline, HasResult());
 
   Result<Texture> input =
@@ -178,7 +206,13 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
       device.writeTexture(input.result(), upload, {0, kBytesPerRow, kHeight}, {kWidth, kHeight}),
       IsOk());
 
-  const Params params = Parameters(edgeMode, preserveAlpha);
+  const Params params = Parameters(edgeMode, preserveAlpha, indexMode);
+  Params expectedParams = params;
+  if (indexMode != ArrayIndexMode::Authored) {
+    const float endpoint = indexMode == ArrayIndexMode::High ? params.kernel[24] : params.kernel[0];
+    std::fill(expectedParams.kernel,
+              expectedParams.kernel + shader::programs::kConvolveMatrixKernelCapacity, endpoint);
+  }
   Result<Buffer> paramsBuffer = device.createBuffer(BufferDescriptor{
       "convolve parameters", sizeof(params), BufferUsage::Storage | BufferUsage::CopyDst});
   ASSERT_THAT(paramsBuffer, HasResult());
@@ -189,10 +223,9 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
   Result<BindGroup> bindGroup = device.createBindGroup(BindGroupDescriptor{
       "convolve matrix",
       layout.result(),
-      {{binding(ConvolveMatrixBinding::InputTexture), TextureViewBinding{inputView.result()}},
-       {binding(ConvolveMatrixBinding::OutputTexture), TextureViewBinding{outputView.result()}},
-       {binding(ConvolveMatrixBinding::Params),
-        BufferBinding{paramsBuffer.result(), 0, sizeof(params)}}}});
+      {{inputBinding, TextureViewBinding{inputView.result()}},
+       {outputBinding, TextureViewBinding{outputView.result()}},
+       {paramsBinding, BufferBinding{paramsBuffer.result(), 0, sizeof(params)}}}});
   ASSERT_THAT(bindGroup, HasResult());
 
   Result<Buffer> readback =
@@ -206,7 +239,10 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
   ASSERT_THAT(pass, HasResult());
   ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
   ASSERT_THAT(pass.result()->setBindGroup(0, bindGroup.result()), IsOk());
-  ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+  ASSERT_THAT(pass.result()->dispatchWorkgroups((kWidth + workgroupSize.x - 1) / workgroupSize.x,
+                                                (kHeight + workgroupSize.y - 1) / workgroupSize.y,
+                                                (1 + workgroupSize.z - 1) / workgroupSize.z),
+              IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
   ASSERT_THAT(encoder.result()->copyTextureToBuffer(TexelCopyTextureInfo{output.result()},
                                                     readback.result(), {0, kBytesPerRow, kHeight},
@@ -231,7 +267,7 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
     std::memcpy(actual->data().data() + size_t{y} * kWidth * 4,
                 bytes.result().data() + size_t{y} * kBytesPerRow, kWidth * 4 * sizeof(float));
     for (uint32_t x = 0; x < kWidth; ++x) {
-      const std::array<float, 4> reference = ExpectedTexel(inputTexels, params, x, y);
+      const std::array<float, 4> reference = ExpectedTexel(inputTexels, expectedParams, x, y);
       std::copy(reference.begin(), reference.end(),
                 expected->data().begin() + size_t{y * kWidth + x} * 4);
     }

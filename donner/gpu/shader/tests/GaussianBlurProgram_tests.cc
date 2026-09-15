@@ -1,57 +1,38 @@
 /// @file
-/// GaussianBlur compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, with compiler and execution checks in separate suites.
+/// Gaussian blur frozen-artifact metadata and projection tests.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <string>
-#include <vector>
+#include <array>
+#include <string_view>
 
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/GaussianBlur.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/CompiledGaussian.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-std::string EmitGaussianBlurWgsl() {
-  ShaderResult<IrModule> module = programs::BuildGaussianBlurModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
-}
+TEST(GaussianBlurProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
+  const CompiledShaderView& shader = tests::GaussianBlurAllProjections();
 
-std::string EmitGaussianBlurMsl() {
-  ShaderResult<IrModule> module = programs::BuildGaussianBlurModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
-}
-
-std::vector<uint32_t> EmitGaussianBlurSpirvWords() {
-  ShaderResult<IrModule> module = programs::BuildGaussianBlurModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return {};
-  }
-  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
-}
-
-TEST(GaussianBlurProgramTests, ModuleBuildsCleanly) {
-  EXPECT_THAT(programs::BuildGaussianBlurModule(), HasShaderResult());
-}
-
-TEST(GaussianBlurProgramTests, EmitsDeterministically) {
-  EXPECT_THAT(EmitGaussianBlurWgsl(), testing::Eq(EmitGaussianBlurWgsl()));
-  EXPECT_THAT(EmitGaussianBlurMsl(), testing::Eq(EmitGaussianBlurMsl()));
-  EXPECT_THAT(EmitGaussianBlurSpirvWords(), testing::Eq(EmitGaussianBlurSpirvWords()));
+  EXPECT_FALSE(shader.wgsl.empty());
+  EXPECT_FALSE(shader.msl.empty());
+  EXPECT_FALSE(shader.spirv.empty());
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  ASSERT_NE(shader.resource("inputTexture"), nullptr);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("inputTexture")->binding, 0u);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 1u);
+  EXPECT_EQ(shader.resource("params")->binding, 2u);
+  EXPECT_TRUE(shader.matchesMember("params", "stdDeviation", 0, 4, ShaderScalarType::F32));
+  EXPECT_TRUE(shader.matchesMember("params", "clipMin", 24, 8, ShaderScalarType::I32, 2));
+  EXPECT_TRUE(shader.matchesMember("params", "pad", 44, 4, ShaderScalarType::U32));
+  EXPECT_NE(shader.wgsl.find("fn sampleEdge"), std::string_view::npos);
+  EXPECT_NE(shader.msl.find("donner_msl_texture_load"), std::string_view::npos);
+  EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }
 
 }  // namespace

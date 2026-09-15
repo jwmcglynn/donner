@@ -1,109 +1,63 @@
 /// @file
-/// Subregion-clip compute program tests: the module builds cleanly, all three emitters produce
-/// deterministic output, and expose the expected program interfaces.
+/// SubregionClip frozen-artifact metadata and projection tests.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <string>
-#include <vector>
+#include <array>
+#include <string_view>
 
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
-
-using testing::HasSubstr;
+#include "donner/gpu/shader/tests/CompiledSubregionClip.h"
 
 namespace donner::gpu::shader {
 namespace {
 
-std::string EmitSubregionClipWgsl() {
-  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
+TEST(SubregionClipProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
+  const CompiledShaderView& shader = tests::SubregionClipAllProjections();
+
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(shader.msl, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.spirv, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_main");
+  EXPECT_EQ(shader.entryPoints.front().stage, ShaderStage::Compute);
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  ASSERT_THAT(shader.resources, testing::SizeIs(3));
+  ASSERT_NE(shader.resource("inputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("inputTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("inputTexture")->binding, 0u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->group, 0u);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 1u);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->group, 0u);
+  EXPECT_EQ(shader.resource("params")->binding, 2u);
+  EXPECT_EQ(shader.resource("params")->minSizeBytes, sizeof(programs::SubregionClipParams));
+  EXPECT_NE(shader.wgsl.find("struct SubregionClipParams"), std::string_view::npos);
+  EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }
 
-std::string EmitSubregionClipMsl() {
-  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return "";
-  }
-  return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
+TEST(SubregionClipProgramTests, AdapterArtifactRetainsOnlyWgsl) {
+  const CompiledShaderView& adapter = programs::SubregionClipShader();
+  EXPECT_EQ(adapter.wgsl, tests::SubregionClipAllProjections().wgsl);
+  EXPECT_TRUE(adapter.msl.empty());
+  EXPECT_TRUE(adapter.spirv.empty());
+  EXPECT_EQ(adapter.resources.size(), tests::SubregionClipAllProjections().resources.size());
+  EXPECT_EQ(adapter.entryPoints.size(), tests::SubregionClipAllProjections().entryPoints.size());
 }
 
-std::vector<uint32_t> EmitSubregionClipSpirv() {
-  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
-  EXPECT_THAT(module, HasShaderResult());
-  if (module.hasError()) {
-    return {};
-  }
-  return GetShaderResultOrFail(EmitSpirv(module.result()), std::vector<uint32_t>());
-}
-
-TEST(SubregionClipProgramTests, ModuleBuildsCleanly) {
-  EXPECT_THAT(programs::BuildSubregionClipModule(), HasShaderResult());
-}
-
-TEST(SubregionClipProgramTests, FinalResolveBuildsAndRoundsClampedChannelsHalfUp) {
-  const auto module = programs::BuildFilterResolveModule();
-  ASSERT_THAT(module, HasShaderResult());
-  const auto wgsl = EmitWgsl(module.result());
-  ASSERT_THAT(wgsl, HasShaderResult());
-  EXPECT_THAT(wgsl.result(), HasSubstr("texture_storage_2d<rgba8unorm, write>"));
-  EXPECT_THAT(wgsl.result(), HasSubstr("floor("));
-  EXPECT_THAT(wgsl.result(), HasSubstr("vec4<f32>(0.5f)"));
-  EXPECT_THAT(wgsl.result(), HasSubstr("if (outside)"));
-  EXPECT_THAT(wgsl.result(), HasSubstr("linear_channel_to_srgb"));
-  EXPECT_THAT(wgsl.result(), HasSubstr("transferTable"));
-}
-
-TEST(SubregionClipProgramTests, EmitsDeterministically) {
-  EXPECT_THAT(EmitSubregionClipWgsl(), testing::Eq(EmitSubregionClipWgsl()));
-  EXPECT_THAT(EmitSubregionClipMsl(), testing::Eq(EmitSubregionClipMsl()));
-  EXPECT_THAT(EmitSubregionClipSpirv(), testing::Eq(EmitSubregionClipSpirv()));
-}
-
-TEST(SubregionClipProgramTests, WgslDeclaresTheComputeSurface) {
-  const std::string wgsl = EmitSubregionClipWgsl();
-
-  EXPECT_THAT(wgsl, HasSubstr("@compute @workgroup_size(8, 8, 1)\nfn cs_main("));
-  EXPECT_THAT(wgsl, HasSubstr("@builtin(global_invocation_id) gid: vec3<u32>"));
-  EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(0) var inputTexture: texture_2d<f32>;"));
-  EXPECT_THAT(wgsl,
-              HasSubstr("@group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, "
-                        "write>;"));
-  EXPECT_THAT(wgsl, HasSubstr("@group(0) @binding(2) var<uniform> params: SubregionClipParams;"));
-  // The two trailing words are load-bearing: without them the ten f32 members size the block at
-  // 40 bytes, and a host mirror declared with 16-byte alignment sizes the same members at 48.
-  EXPECT_THAT(wgsl, HasSubstr("  pad0: u32,\n  pad1: u32,\n}"));
-  // Both arms of the clip write: outside is transparent black, inside is the untouched source
-  // texel. A missing else would leave the destination undefined outside the region.
-  EXPECT_THAT(wgsl, HasSubstr("textureStore(outputTexture, coords, vec4<f32>(0f, 0f, 0f, 0f));"));
-  EXPECT_THAT(wgsl, HasSubstr("} else {"));
-  EXPECT_THAT(
-      wgsl,
-      HasSubstr("textureStore(outputTexture, coords, textureLoad(inputTexture, coords, 0i));"));
-  // A compute entry point returns nothing, so no generated output struct may appear.
-  EXPECT_THAT(wgsl, testing::Not(HasSubstr("cs_main_Output")));
-}
-
-TEST(SubregionClipProgramTests, MslDeclaresTheKernelSurface) {
-  const std::string msl = EmitSubregionClipMsl();
-
-  EXPECT_THAT(msl, HasSubstr("kernel void cs_main("));
-  EXPECT_THAT(msl, HasSubstr("uint3 gid [[thread_position_in_grid]]"));
-  EXPECT_THAT(msl, HasSubstr("texture2d<float> inputTexture [[texture(0)]]"));
-  EXPECT_THAT(msl, HasSubstr("texture2d<float, access::write> outputTexture [[texture(1)]]"));
-  EXPECT_THAT(msl,
-              HasSubstr("outputTexture.write(float4(0.0f, 0.0f, 0.0f, 0.0f), uint2(coords));"));
-  // A kernel takes its builtins directly, so no stage-in struct may appear.
-  EXPECT_THAT(msl, testing::Not(HasSubstr("stage_in")));
+TEST(SubregionClipProgramTests, MutationControlReflectsChangedInterface) {
+  const CompiledShaderView& shader = tests::SubregionClipMutatedAllProjections();
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
+  EXPECT_EQ(shader.entryPoints.front().name.view(), "cs_test");
+  EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
+  ASSERT_NE(shader.resource("inputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("inputTexture")->binding, 6u);
+  ASSERT_NE(shader.resource("outputTexture"), nullptr);
+  EXPECT_EQ(shader.resource("outputTexture")->binding, 5u);
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->binding, 4u);
 }
 
 }  // namespace

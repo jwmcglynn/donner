@@ -57,7 +57,7 @@ class ShaderFeaturesManifestTest(unittest.TestCase):
         self.manifest = load_manifest("shader_features.json")
 
     def test_solid_fill_shader_shape(self):
-        shader = self.manifest["shaders"]["donner/svg/renderer/geode/shaders/slug_fill.wgsl"]
+        shader = self.manifest["shaders"]["donner/gpu/shader/programs/SlugFillSource.h#inline0"]
         # Two entry-point pairs: the default ones take the draw's paint and
         # geometry from the uniform, the `_batched` ones take them from each
         # instance record. Both pairs share one bind-group layout.
@@ -71,12 +71,10 @@ class ShaderFeaturesManifestTest(unittest.TestCase):
                 ("vertex", "vs_main_batched"),
             ],
         )
-        # The instance-record consolidation folded the per-draw uniform
-        # bindings into the record SSBO plus a combined grid binding, and
-        # gradient paint blocks add one more storage binding, so the
-        # solid-fill shader declares 12 bindings.
-        self.assertEqual(len(shader["bindings"]), 12)
+        # The unused clip sampler is absent from the authored Slug interface.
+        self.assertEqual(len(shader["bindings"]), 11)
         bindings = {entry["binding"]: entry["name"] for entry in shader["bindings"]}
+        self.assertNotIn(6, bindings)
         # Curve references and both band grids live in the combined grid
         # storage at binding 10, the per-instance records ride binding 7, and
         # the gradient paint blocks ride binding 11.

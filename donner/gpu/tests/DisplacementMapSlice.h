@@ -15,8 +15,9 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/shader/programs/DisplacementMapBindings.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/ReflectedComputeSlice.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 
 namespace donner::gpu::tests {
@@ -78,46 +79,23 @@ inline std::array<float, 4> BilinearSample(const std::array<float, kWidth * kHei
 }  // namespace displacement_map_details
 
 /**
- * Runs generated displacement-map code against an independent host oracle.
+ * Runs the displacement-map artifact against an independent host oracle.
  *
  * The source and map are distinct and nonuniform. Map alpha varies down to zero, so RGB selectors
  * must unpremultiply while the alpha selector remains direct. The scenarios cover every selector,
  * zero and negative scale, fractional sampling, and transparent border taps.
  *
  * @param device Native device with bounded wait/readback support.
- * @param shaderDescriptor Build-generated platform descriptor.
+ * @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
  * @param readbackBuffer Reads a submitted buffer through the backend's host mapping API.
  */
 template <typename DeviceType, typename Readback>
-void CheckDisplacementMapStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
+void CheckDisplacementMapStorage(DeviceType& device, const shader::CompiledShaderView& shader,
                                  Readback readbackBuffer) {
   using namespace displacement_map_details;
-  using shader::programs::DisplacementMapBinding;
-  const auto binding = [](DisplacementMapBinding value) { return static_cast<uint32_t>(value); };
-
-  auto shader = device.createShaderModule(shaderDescriptor);
-  ASSERT_THAT(shader, HasResult());
-  auto layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
-      "displacement",
-      {{binding(DisplacementMapBinding::SourceTexture), ShaderStage::Compute,
-        BindingType::SampledTexture2dUnfilterableFloat},
-       {binding(DisplacementMapBinding::MapTexture), ShaderStage::Compute,
-        BindingType::SampledTexture2dUnfilterableFloat},
-       {binding(DisplacementMapBinding::OutputTexture), ShaderStage::Compute,
-        BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA32Float},
-       {binding(DisplacementMapBinding::Params), ShaderStage::Compute,
-        BindingType::UniformBuffer}}});
-  ASSERT_THAT(layout, HasResult());
-  auto pipelineLayout =
-      device.createPipelineLayout(PipelineLayoutDescriptor{"displacement", {layout.result()}});
-  ASSERT_THAT(pipelineLayout, HasResult());
-  auto pipeline = device.createComputePipeline(ComputePipelineDescriptor{
-      "displacement",
-      pipelineLayout.result(),
-      ComputeState{shader.result(), RcString(shader::programs::kDisplacementMapEntryPoint)},
-      {shader::programs::kDisplacementMapWorkgroupSize,
-       shader::programs::kDisplacementMapWorkgroupSize, 1}});
-  ASSERT_THAT(pipeline, HasResult());
+  ReflectedComputePipeline compute;
+  CreateReflectedComputePipeline(device, shader, "displacement", compute);
+  if (testing::Test::HasFatalFailure()) return;
 
   auto source =
       device.createTexture(TextureDescriptor{"displacement source",
@@ -180,13 +158,8 @@ void CheckDisplacementMapStorage(DeviceType& device, const ShaderModuleDescripto
     auto outputView = device.createTextureView(output.result(), TextureViewDescriptor{"output"});
     ASSERT_THAT(outputView, HasResult());
 
-    struct Params {
-      float scale;
-      uint32_t xChannel;
-      uint32_t yChannel;
-      uint32_t padding;
-    };
-    const Params params{scenario.scale, scenario.xChannel, scenario.yChannel, 0};
+    const shader::programs::DisplacementMapParams params{scenario.scale, scenario.xChannel,
+                                                         scenario.yChannel, 0};
     auto uniform = device.createBuffer(BufferDescriptor{
         "displacement parameters", sizeof(params), BufferUsage::Uniform | BufferUsage::CopyDst});
     ASSERT_THAT(uniform, HasResult());
@@ -196,11 +169,11 @@ void CheckDisplacementMapStorage(DeviceType& device, const ShaderModuleDescripto
                 IsOk());
     auto group = device.createBindGroup(BindGroupDescriptor{
         scenario.name,
-        layout.result(),
-        {{binding(DisplacementMapBinding::SourceTexture), TextureViewBinding{sourceView.result()}},
-         {binding(DisplacementMapBinding::MapTexture), TextureViewBinding{mapView.result()}},
-         {binding(DisplacementMapBinding::OutputTexture), TextureViewBinding{outputView.result()}},
-         {binding(DisplacementMapBinding::Params),
+        compute.layout,
+        {{ReflectedBinding(shader, "sourceTexture"), TextureViewBinding{sourceView.result()}},
+         {ReflectedBinding(shader, "mapTexture"), TextureViewBinding{mapView.result()}},
+         {ReflectedBinding(shader, "outputTexture"), TextureViewBinding{outputView.result()}},
+         {ReflectedBinding(shader, "params"),
           BufferBinding{uniform.result(), 0, sizeof(params)}}}});
     ASSERT_THAT(group, HasResult());
     auto readback =
@@ -211,9 +184,10 @@ void CheckDisplacementMapStorage(DeviceType& device, const ShaderModuleDescripto
     ASSERT_THAT(encoder, HasResult());
     auto pass = encoder.result()->beginComputePass(ComputePassDescriptor{scenario.name});
     ASSERT_THAT(pass, HasResult());
-    ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+    ASSERT_THAT(pass.result()->setPipeline(compute.pipeline), IsOk());
     ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-    ASSERT_THAT(pass.result()->dispatchWorkgroups(1, 1, 1), IsOk());
+    const auto groups = compute.groupsFor(kWidth, kHeight);
+    ASSERT_THAT(pass.result()->dispatchWorkgroups(groups[0], groups[1], groups[2]), IsOk());
     ASSERT_THAT(pass.result()->end(), IsOk());
     ASSERT_THAT(encoder.result()->copyTextureToBuffer(
                     TexelCopyTextureInfo{output.result()}, readback.result(),
@@ -262,7 +236,9 @@ void CheckDisplacementMapStorage(DeviceType& device, const ShaderModuleDescripto
             Vector2i(kWidth, kHeight),
             std::vector<uint8_t>(expectedPixels.data().begin(), expectedPixels.data().end()),
             kWidth * 4},
-        std::string("displacement_") + scenario.name, editor::tests::PixelmatchIdentityParams());
+        std::string("displacement_") + scenario.name + "_" +
+            std::string(shader.entryPoints.front().name.view()),
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 

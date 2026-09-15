@@ -1,35 +1,52 @@
 #pragma once
 /// @file
-/// The sRGB-to-linear filter color space conversion, expressed in the \c donner::gpu::shader IR.
+/// Color-space conversion parameters, transfer table and precompiled shader projections.
+#include <array>
+#include <cmath>
+#include <cstdint>
 
-#include "donner/gpu/shader/IrModule.h"
-#include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
-
+#include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
-
-/**
- * Builds the color space conversion program: one `@compute @workgroup_size(8, 8, 1)` entry point
- * named `cs_main` that rewrites every texel from sRGB encoding into linear light, or back, as the
- * direction parameter selects.
- *
- * The specification's `color-interpolation-filters` property makes linear light the default space
- * a filter chain computes in, so a chain converts on the way in and back on the way out. The
- * transfer uses 4096 samples per direction, computed in double precision and rounded once to
- * float, matching the software filter path. A shared read-only table avoids backend-dependent
- * power-function results. Comparison-based clamping maps nonpositive and NaN channels to zero
- * before bounded nearest-sample indexing.
- *
- * The chain carries premultiplied color while the transfer is defined on straight-alpha values,
- * so the program multiplies by reciprocal alpha, converts the three color channels, and
- * re-associates. Alpha itself is not a color channel and is carried across unchanged.
- *
- * Invocations outside the destination extent return without writing, so a dispatch rounded up to
- * whole workgroups is safe.
- */
-ShaderResult<IrModule> BuildColorSpaceConvertModule();
-
-/// Adds the shared sampled transfer table and channel conversion functions to a module.
-/// @param builder Destination module. @param binding Read-only table binding in group zero.
-ShaderStatus AddColorTransferFunctions(ModuleBuilder& builder, uint32_t binding);
-
+/// Uniform direction selector.
+struct ColorSpaceConvertParams {
+  uint32_t
+      direction;  //!< \ref kColorSpaceConvertSrgbToLinear or \ref kColorSpaceConvertLinearToSrgb.
+  uint32_t pad0;  //!< Reserved layout padding.
+  uint32_t pad1;  //!< Reserved layout padding.
+  uint32_t pad2;  //!< Reserved layout padding.
+};
+static_assert(sizeof(ColorSpaceConvertParams) == 16);
+/// Direction value converting sRGB input to linear output.
+inline constexpr uint32_t kColorSpaceConvertSrgbToLinear = 0;
+/// Direction value converting linear input to sRGB output.
+inline constexpr uint32_t kColorSpaceConvertLinearToSrgb = 1;
+/// Samples per transfer direction; the table holds the forward then the inverse curve.
+inline constexpr uint32_t kColorTransferSampleCount = 4096;
+/// Read-only storage layout of the shared transfer table.
+struct ColorTransferTable {
+  float samples[2 * kColorTransferSampleCount];  //!< sRGB-to-linear then linear-to-sRGB.
+};
+static_assert(sizeof(ColorTransferTable) == 32768);
+/// Returns the process-lifetime transfer samples in the shader's table order.
+/// @return Stable reference to the shared table contents.
+inline const std::array<float, 2 * kColorTransferSampleCount>& ColorTransferSamples() {
+  static const std::array<float, 2 * kColorTransferSampleCount> samples = [] {
+    std::array<float, 2 * kColorTransferSampleCount> result{};
+    for (uint32_t i = 0; i < kColorTransferSampleCount; ++i) {
+      const double c = static_cast<double>(i) / (kColorTransferSampleCount - 1);
+      result[i] = static_cast<float>(c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4));
+      result[kColorTransferSampleCount + i] =
+          static_cast<float>(c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055);
+    }
+    return result;
+  }();
+  return samples;
+}
+/// Returns the WGSL color-space artifact: straight-alpha channels pass through the selected half of
+/// the transfer table.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& ColorSpaceConvertShader();
+/// Returns only the platform-native ColorSpaceConvert projection.
+/// @return Stable view into process-lifetime data.
+const CompiledShaderView& ColorSpaceConvertNativeShader();
 }  // namespace donner::gpu::shader::programs

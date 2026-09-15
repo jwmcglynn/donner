@@ -1,0 +1,1 @@
+struct S{x:f32,} fn f()->f32{return S(1f).x / 0f;}

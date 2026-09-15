@@ -1,0 +1,1 @@
+@fragment fn first()->@location(0)vec4f{return vec4f(0);}@fragment fn second()->@location(0)vec4f{return vec4f(1);}

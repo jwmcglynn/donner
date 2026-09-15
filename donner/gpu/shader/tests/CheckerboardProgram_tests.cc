@@ -1,81 +1,55 @@
 /// @file
-/// Checkerboard interface and backend emission contracts.
+/// Checkerboard frozen-artifact metadata and projection tests.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <string_view>
 
-#include "donner/gpu/RecordingDevice.h"
-#include "donner/gpu/shader/IrLayout.h"
-#include "donner/gpu/shader/ModuleInterface.h"
-#include "donner/gpu/shader/MslEmitter.h"
-#include "donner/gpu/shader/SpirvEmitter.h"
-#include "donner/gpu/shader/WgslEmitter.h"
-#include "donner/gpu/shader/generated/CheckerboardShader.h"
 #include "donner/gpu/shader/programs/Checkerboard.h"
-#include "donner/gpu/shader/tests/ShaderTestUtils.h"
-#include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/shader/tests/CompiledCheckerboard.h"
 
 namespace donner::gpu::shader {
+namespace {
 
-TEST(CheckerboardProgramTests, GeneratedDescriptorsPreserveShaderInterface) {
-  auto module = programs::BuildCheckerboardModule();
-  ASSERT_THAT(module, HasShaderResult());
-  auto bindings = BufferBindingsOf(module.result());
-  ASSERT_THAT(bindings, HasShaderResult());
-  for (auto kind : {ShaderSourceKind::Wgsl, ShaderSourceKind::Msl, ShaderSourceKind::Spirv}) {
-    auto descriptor = gpu::generated::checkerboard::BuildDescriptor(kind);
-    EXPECT_EQ(descriptor.sourceKind, kind);
-    bool available = kind == ShaderSourceKind::Wgsl;
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-    available |= kind == ShaderSourceKind::Msl;
-#endif
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-    available |= kind == ShaderSourceKind::Spirv;
-#endif
-    if (!available) {
-      EXPECT_TRUE(descriptor.sourceText.empty());
-      EXPECT_THAT(descriptor.spirvWords, testing::IsEmpty());
-      EXPECT_FALSE(descriptor.bufferBindings.has_value());
-      RecordingDevice device;
-      EXPECT_THAT(device.createShaderModule(descriptor),
-                  IsGpuError(GpuErrorType::InvalidDescriptor));
-      continue;
-    }
-    ASSERT_TRUE(descriptor.bufferBindings.has_value());
-    EXPECT_THAT(*descriptor.bufferBindings, testing::ElementsAreArray(bindings.result()));
-    EXPECT_THAT(descriptor.computeEntryPoints, testing::IsEmpty());
-    EXPECT_EQ(descriptor.sourceText.empty(), kind == ShaderSourceKind::Spirv);
-    EXPECT_EQ(descriptor.spirvWords.empty(), kind != ShaderSourceKind::Spirv);
-  }
+TEST(CheckerboardProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
+  const CompiledShaderView& shader = tests::CheckerboardAllProjections();
+
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(shader.msl, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.spirv, testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(2));
+  EXPECT_EQ(shader.entryPoints[0].name.view(), "vs_main");
+  EXPECT_EQ(shader.entryPoints[0].stage, ShaderStage::Vertex);
+  EXPECT_EQ(shader.entryPoints[1].name.view(), "fs_main");
+  EXPECT_EQ(shader.entryPoints[1].stage, ShaderStage::Fragment);
+  ASSERT_THAT(shader.resources, testing::SizeIs(1));
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->group, 0u);
+  EXPECT_EQ(shader.resource("params")->binding, 0u);
+  EXPECT_EQ(shader.resource("params")->minSizeBytes, sizeof(programs::CheckerboardParams));
+  EXPECT_NE(shader.wgsl.find("struct CheckerboardParams"), std::string_view::npos);
+  EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }
 
-TEST(CheckerboardProgramTests, UniformLayoutMatchesTheUploadedSixtyFourBytes) {
-  auto module = programs::BuildCheckerboardModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ASSERT_EQ(module.result().bindings().size(), 1u);
-  const IrBinding& binding = module.result().bindings().front();
-  EXPECT_EQ(binding.group, 0u);
-  EXPECT_EQ(binding.binding, 0u);
-  EXPECT_EQ(binding.kind, BindingKind::UniformBuffer);
-  auto layout = ComputeStructLayout(binding.type, AddressSpace::Uniform);
-  ASSERT_THAT(layout, HasShaderResult());
-  EXPECT_EQ(layout.result().sizeBytes, 64u);
-  const std::array<uint32_t, 7> offsets{0, 8, 12, 16, 32, 48, 56};
-  ASSERT_EQ(layout.result().members.size(), offsets.size());
-  for (size_t i = 0; i < offsets.size(); ++i) {
-    EXPECT_EQ(layout.result().members[i].offsetBytes, offsets[i]);
-  }
+TEST(CheckerboardProgramTests, AdapterArtifactRetainsOnlyWgsl) {
+  const CompiledShaderView& adapter = programs::CheckerboardShader();
+  EXPECT_EQ(adapter.wgsl, tests::CheckerboardAllProjections().wgsl);
+  EXPECT_TRUE(adapter.msl.empty());
+  EXPECT_TRUE(adapter.spirv.empty());
+  EXPECT_EQ(adapter.resources.size(), tests::CheckerboardAllProjections().resources.size());
+  EXPECT_EQ(adapter.entryPoints.size(), tests::CheckerboardAllProjections().entryPoints.size());
 }
 
-TEST(CheckerboardProgramTests, AllBackendEmittersAcceptTheRenderModule) {
-  auto module = programs::BuildCheckerboardModule();
-  ASSERT_THAT(module, HasShaderResult());
-  ASSERT_EQ(module.result().functions().size(), 2u);
-  EXPECT_THAT(EmitWgsl(module.result()), HasShaderResult());
-  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
-  EXPECT_THAT(EmitSpirv(module.result()), HasShaderResult());
+TEST(CheckerboardProgramTests, MutationControlReflectsChangedInterface) {
+  const CompiledShaderView& shader = tests::CheckerboardMutatedAllProjections();
+  ASSERT_THAT(shader.entryPoints, testing::SizeIs(2));
+  EXPECT_EQ(shader.entryPoints[0].name.view(), "vs_test");
+  EXPECT_EQ(shader.entryPoints[1].name.view(), "fs_test");
+  ASSERT_NE(shader.resource("params"), nullptr);
+  EXPECT_EQ(shader.resource("params")->binding, 4u);
 }
 
+}  // namespace
 }  // namespace donner::gpu::shader

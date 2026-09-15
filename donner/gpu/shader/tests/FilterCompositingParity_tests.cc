@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -19,6 +20,42 @@
 
 namespace donner::gpu::shader {
 namespace {
+
+TEST(FilterBlendParity, HueAndSaturationPreserveMiddleChannel) {
+  struct Case {
+    const char* mode;
+    std::array<uint8_t, 4> expected;
+  };
+  constexpr std::array cases{Case{"hue", {168, 104, 40, 255}},
+                             Case{"saturation", {64, 128, 192, 255}}};
+  static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.mode);
+    const std::string source =
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="3" height="3">
+          <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="3" height="3"
+          color-interpolation-filters="sRGB">
+          <feFlood flood-color="rgb(192,128,64)" result="source"/>
+          <feFlood flood-color="rgb(64,128,192)" result="backdrop"/>
+          <feBlend in="source" in2="backdrop" mode=")svg") +
+        testCase.mode +
+        R"svg("/></filter></defs><rect width="3" height="3" filter="url(#f)"/></svg>)svg";
+    ParseWarningSink warnings;
+    auto document = svg::parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_THAT(document.hasResult(), testing::IsTrue());
+    ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+    svg::RendererGeode renderer(device);
+    renderer.draw(document.result());
+    std::vector<uint8_t> expected(3 * 3 * 4);
+    for (size_t offset = 0; offset < expected.size(); offset += 4)
+      std::copy(testCase.expected.begin(), testCase.expected.end(), expected.begin() + offset);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
+                                         svg::RendererBitmap{Vector2i(3, 3), expected, 12},
+                                         std::string("filter_blend_middle_") + testCase.mode,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST(FilterPrecisionParity, DropShadowHalfOffsetsMatchSoftwareRenderer) {
   const char* offsets[][2] = {
