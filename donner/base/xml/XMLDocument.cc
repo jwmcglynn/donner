@@ -1782,15 +1782,6 @@ std::optional<ParseDiagnostic> IncrementalLimitParseDiagnostic(const ParseDiagno
   return std::nullopt;
 }
 
-std::optional<ParseDiagnostic> OpeningTagLimitParseDiagnostic(const ParseDiagnostic& diagnostic,
-                                                              SourceRange range) {
-  if (std::string_view(diagnostic.reason) == "Maximum total attribute count exceeded") {
-    return MakeEditDiagnostic("Incremental source edit exceeds the document total-attribute limit",
-                              range);
-  }
-  return std::nullopt;
-}
-
 std::optional<XMLNode> SingleMatchingElement(XMLDocument& parsedDocument,
                                              const XMLQualifiedNameRef& expectedName) {
   std::optional<XMLNode> parsedNode = parsedDocument.root().firstChild();
@@ -1843,7 +1834,7 @@ std::optional<ParseDiagnostic> PreflightOpeningTagEdit(XMLDocument& document, XM
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseOpeningTag(
       *prospective, IncrementalReparseOptions(document, prospective->size()));
   if (parsed.hasError()) {
-    return OpeningTagLimitParseDiagnostic(parsed.error(), intent.range);
+    return IncrementalLimitParseDiagnostic(parsed.error(), intent.range);
   }
 
   std::optional<XMLNode> parsedNode = SingleMatchingElement(parsed.result(), edit.node.tagName());
