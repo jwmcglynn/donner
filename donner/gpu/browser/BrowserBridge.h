@@ -398,6 +398,15 @@ public:
    * until this thread yields. Resting between slices is not enough, because resting is still not
    * yielding. This is the call that hands the loop back.
    *
+   * How a shipped build yields is not settled. The implementation unwinds the stack, which needs
+   * that support enabled at link time and costs module size and speed; the WebAssembly binaries
+   * enable it today, but they do so for the transitional WebGPU path this bridge is meant to
+   * replace, so its presence is not something this bridge can assume it keeps. The alternatives
+   * are stack switching, which is not available on every browser in the support matrix, and making
+   * readback asynchronous up the calling stack so nothing ever waits here. That choice belongs to
+   * the production cutover and touches renderer code outside this package; until it is made, treat
+   * a blocking wait through this call as workable rather than as the shipped design.
+   *
    * @param seconds Longest this call may yield for.
    */
   virtual void yieldToBrowser(double seconds) = 0;

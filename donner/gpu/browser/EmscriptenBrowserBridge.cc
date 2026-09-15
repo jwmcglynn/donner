@@ -520,9 +520,16 @@ MapSliceState EmscriptenBrowserBridge::mappingState(BrowserObjectId mappingId) c
 
 void EmscriptenBrowserBridge::yieldToBrowser(double seconds) {
   // emscripten_sleep unwinds and rewinds this thread through Asyncify, which is what lets the
-  // browser run the promise callbacks that settle a mapping. Both WebAssembly configurations that
-  // reach this code enable Asyncify. A negative or absent budget still yields once, because the
-  // point is to hand the loop back at all, not to wait a particular length of time.
+  // browser run the promise callbacks that settle a mapping. A negative or absent budget still
+  // yields once, because the point is to hand the loop back at all, not to wait a particular
+  // length of time.
+  //
+  // Both WebAssembly binaries enable Asyncify today, but each does so for the transitional WebGPU
+  // path: the editor's link line justifies it by that path's synchronous device creation and
+  // buffer-map waits, and a second copy arrives with the bindings this bridge replaces. Whether a
+  // shipped build keeps Asyncify for this yield, moves to stack switching, or makes readback
+  // asynchronous so nothing waits here is a cutover decision that reaches renderer code outside
+  // this package and is not made by this change.
   const double milliseconds = seconds > 0.0 ? seconds * 1000.0 : 0.0;
   emscripten_sleep(static_cast<unsigned int>(milliseconds));
 }
