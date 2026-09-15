@@ -130,6 +130,54 @@ TEST_F(LocalEditorControlTest, DeferredFeedbackWaitDoesNotBlockUiProcessing) {
   EXPECT_THAT(response.get()["result"], Eq("comment added"));
 }
 
+TEST_F(LocalEditorControlTest, DeferredFeedbackDoesNotBlockAnotherClientsCommand) {
+  start();
+  auto waiting =
+      std::async(std::launch::async, [this]() { return send(R"({"id":1,"method":"wait"})"); });
+  ASSERT_THAT(awaitRequest(), Eq(true));
+  EXPECT_THAT(control.process([](const Json&) -> std::optional<Json> { return std::nullopt; }),
+              Eq(false));
+  auto command =
+      std::async(std::launch::async, [this]() { return send(R"({"id":2,"method":"ping"})"); });
+  const bool commandArrived = awaitRequest(2);
+  if (!commandArrived) control.stop();
+  ASSERT_THAT(commandArrived, Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    if (request["method"] == "wait") return std::nullopt;
+    return Json{{"id", request["id"]}, {"result", "command completed"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(command.get()["result"], Eq("command completed"));
+  EXPECT_THAT(control.hasPending(), Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "feedback changed"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(waiting.get()["result"], Eq("feedback changed"));
+}
+
+TEST_F(LocalEditorControlTest, PartialInputDoesNotBlockAnotherClient) {
+  start();
+  const int incomplete = socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_THAT(incomplete >= 0, Eq(true));
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::memcpy(address.sun_path, endpoint.c_str(), endpoint.size() + 1);
+  ASSERT_THAT(connect(incomplete, reinterpret_cast<sockaddr*>(&address), sizeof(address)), Eq(0));
+  ASSERT_THAT(::send(incomplete, "{", 1, 0), Eq(1));
+  auto command =
+      std::async(std::launch::async, [this]() { return send(R"({"id":2,"method":"ping"})"); });
+  const bool commandArrived = awaitRequest();
+  close(incomplete);
+  if (!commandArrived) control.stop();
+  ASSERT_THAT(commandArrived, Eq(true));
+  EXPECT_THAT(control.process([](const Json& request) -> std::optional<Json> {
+    return Json{{"id", request["id"]}, {"result", "responsive"}};
+  }),
+              Eq(true));
+  EXPECT_THAT(command.get()["result"], Eq("responsive"));
+}
+
 TEST_F(LocalEditorControlTest, ShutdownCancelsPendingWorkAndRemovesOnlyOwnedSocket) {
   start();
   auto response =
