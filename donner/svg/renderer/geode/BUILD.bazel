@@ -499,6 +499,11 @@ donner_cc_library(
 
 donner_cc_test(
     name = "geode_shaders_tests_impl",
+    # 30 cases that each build and run a real shader pipeline, 66 s of test time measured on a
+    # software-rasterizer lane, so the implicit "small" this used to take is wrong by construction:
+    # that budget is 60 s. See the wrapper below for why this one does not keep the tight
+    # hang-detecting timeout its neighbours use.
+    size = "medium",
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
@@ -523,8 +528,12 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_shaders_tests",
-    # See geode_device_tests for the rationale on the short timeout.
-    timeout = "short",
+    # Not the short timeout its neighbours use. That one is a hang detector for device creation,
+    # which should take seconds on a healthy driver; this suite legitimately runs 30 shader
+    # pipelines, and needs 66 s of them on a software rasterizer. Moderate keeps the intent -
+    # a hung driver is still killed, in five minutes rather than one - without failing a run
+    # where every case passes steadily.
+    timeout = "moderate",
     testonly = 1,
     dep = ":geode_shaders_tests_impl",
     opens_gpu_device = True,
@@ -843,6 +852,16 @@ donner_multi_transitioned_test(
 
 donner_cc_test(
     name = "geode_filter_engine_tests_impl",
+    # Filter graphs built and executed on a real device: 54 s uninstrumented on a
+    # software-rasterizer lane, and 113 to 117 s under the sanitizers, against the 60 s
+    # the implicit "small" allows. The uninstrumented number passes today only by a tenth
+    # of its budget; the instrumented one does not pass at all without a timeout
+    # override on the command line, which is not a declaration.
+    #
+    # Same shape as geode_stroke_tolerance_tests above, which carries medium for the
+    # same reason: a suite whose honest runtime crossed the short-test budget on the
+    # slower lanes, measured across lanes rather than on one.
+    size = "medium",
     srcs = ["tests/GeodeFilterEngine_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
@@ -856,7 +875,9 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_filter_engine_tests",
-    timeout = "short",
+    # This timeout, not the size above, is what governs on the sanitizer lane: that lane runs
+    # the package without --config=geode, so the implementation target is skipped there.
+    timeout = "moderate",
     testonly = 1,
     dep = ":geode_filter_engine_tests_impl",
     opens_gpu_device = True,
