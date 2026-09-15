@@ -207,8 +207,9 @@ gpu::Status ValidateCommandIndices(const ImDrawCmd& command, const ImDrawList& l
     const ImDrawIdx index = list.IdxBuffer[static_cast<int>(indexOffset)];
     const std::optional<uint64_t> vertex = gpu::CheckedAdd(command.VtxOffset, index);
     if (!vertex.has_value() || *vertex >= static_cast<uint64_t>(list.VtxBuffer.Size)) {
-      return gpu::GpuError{gpu::GpuErrorType::OutOfBounds,
-                           "UI draw command index value leaves its owning draw list"};
+      return gpu::GpuError{
+          gpu::GpuErrorType::OutOfBounds,
+          "UI draw command index value or base vertex leaves its owning draw list"};
     }
   }
   return gpu::OkStatus();
@@ -479,7 +480,7 @@ gpu::Status ImGuiRuntimeRenderer::ensureCapacity(gpu::Buffer& buffer, uint64_t& 
                                                  gpu::BufferUsage usage, const char* label) {
   if (requiredBytes > maxBytes) {
     return gpu::GpuError{gpu::GpuErrorType::LimitExceeded,
-                         "UI frame geometry exceeds its byte bound"};
+                         "UI frame geometry exceeds the uiDrawVertices or uiDrawIndices bound"};
   }
   if (capacityBytes >= requiredBytes && buffer.isValid()) {
     return gpu::OkStatus();
