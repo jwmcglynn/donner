@@ -199,6 +199,19 @@ struct RenderingInstanceComponent {
   Entity dataEntity = entt::null;
 
   /**
+   * Set when this instance paints part of a text element rather than its own geometry: the root
+   * \ref xml_text entity whose laid-out spans it draws.
+   *
+   * A \ref xml_tspan or \ref xml_textPath that carries `clip-path`, `mask`, or `filter` becomes
+   * its own instance so those effects get their own layer, while \ref dataEntity stays the span so
+   * `objectBoundingBox` effect regions resolve against the span's own box. The text root's instance
+   * paints every span that no such instance claims. A span nested inside a claimed span is painted
+   * by the outer instance, so its own effects are not applied yet, and a claimed span paints after
+   * the text root's remaining spans rather than in document order.
+   */
+  Entity textSpanRoot = entt::null;
+
+  /**
    * The resolved paint server for the instance's fill, if any.
    */
   ResolvedPaintServer resolvedFill = PaintServer::None();

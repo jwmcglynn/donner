@@ -2351,6 +2351,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
             Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + emBottom));
       }
       addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
+      cache.spanBounds.push_back({span.sourceEntity, runEmBounds});
     }
 
     for (const auto& glyph : PaintedSpanGlyphs(span, run)) {
@@ -2447,7 +2448,21 @@ Box2d TextEngine::computedInkBounds(EntityHandle handle) const {
 Box2d TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
   const Entity rootEntity = findTextRootEntity(handle);
   const auto& cache = ensureComputedTextGeometryComponent(handle);
-  return handle.entity() == rootEntity ? cache.emBoxBounds : computedInkBounds(handle);
+  if (handle.entity() == rootEntity) {
+    return cache.emBoxBounds;
+  }
+
+  // SVG defines the object bounding box of a text content element as the union of its glyphs' full
+  // cells, advance width by the font's full ascent and descent, for a span the same as for the
+  // root. Accumulate only the spans this element contributes.
+  Box2d result;
+  bool initialized = false;
+  for (const auto& spanBounds : cache.spanBounds) {
+    if (isDescendantOf(registry_, spanBounds.sourceEntity, handle.entity())) {
+      addBox(result, initialized, spanBounds.emBox);
+    }
+  }
+  return result;
 }
 
 long TextEngine::getNumberOfChars(EntityHandle handle) const {

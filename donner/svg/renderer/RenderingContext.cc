@@ -442,6 +442,11 @@ public:
   // TODO(jwmcglynn): Since 'stroke' and 'fill' may reference the same tree, we need to create two
   // instances of it in the render tree.
   std::optional<PreparedTraversalNode> prepareTraversalNode(Entity treeEntity) {
+    // Consumed by this entity alone. Offscreen subtrees (mask, pattern, and marker content) are
+    // instantiated from inside this function through their own `traverseTree` call, and they are
+    // not text spans of the element that pulled them in.
+    const Entity textSpanRoot = std::exchange(currentTextSpanRoot_, entt::null);
+
     const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(treeEntity);
     const Entity styleEntity = treeEntity;
     const EntityHandle dataHandle(
@@ -528,6 +533,7 @@ public:
 
     instance.clipRect = clipRect;
     instance.dataEntity = dataHandle.entity();
+    instance.textSpanRoot = textSpanRoot;
 
     if (verbose_) {
       std::cout << "Instantiating " << dataHandle.get<ElementTypeComponent>().type() << " ";
@@ -600,7 +606,8 @@ public:
     const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
 
     if (setsContextColors || (instance.visible && (dataHandle.all_of<ComputedPathComponent>() ||
-                                                   dataHandle.all_of<ComputedTextComponent>()))) {
+                                                   dataHandle.all_of<ComputedTextComponent>() ||
+                                                   instance.textSpanRoot != entt::null))) {
       if (auto fill = properties.fill.get()) {
         instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
                                              fill.value(), instance.worldFromEntityTransform);
@@ -714,6 +721,54 @@ public:
     };
   }
 
+#ifdef DONNER_TEXT_ENABLED
+  /// True when this text content element declares an effect that needs its own rendering layer.
+  bool textSpanDeclaresEffect(Entity entity) const {
+    const auto* style = registry_.try_get<ComputedStyleComponent>(entity);
+    if (!style || !style->properties.has_value()) {
+      return false;
+    }
+
+    const auto& properties = style->properties.value();
+    const std::vector<FilterEffect>* filterEffects = properties.filter.getStoredValue();
+    return properties.clipPath.get().has_value() || properties.mask.get().has_value() ||
+           (filterEffects != nullptr && !filterEffects->empty());
+  }
+
+  /**
+   * Give each outermost \ref xml_tspan or \ref xml_textPath that declares `clip-path`, `mask`, or
+   * `filter` its own rendering instance, so the driver wraps that span's glyphs in the effect's
+   * layer. A \ref xml_text element renders as a unit, so its descendants are never reached by the
+   * ordinary traversal.
+   *
+   * Recursion stops at a span that gets an instance: an effect nested inside another span's effect
+   * would need nested layers, which the span instance does not provide yet.
+   *
+   * @param textRootEntity The root \ref xml_text entity being instantiated.
+   */
+  void traverseTextSpanEffects(Entity textRootEntity) {
+    if (!registry_.all_of<TextRootComponent>(textRootEntity) ||
+        !registry_.all_of<RenderingInstanceComponent>(textRootEntity)) {
+      return;
+    }
+
+    const auto visitChildren = [this, textRootEntity](Entity parent, auto& self) -> void {
+      for (Entity cur = registry_.get<donner::components::TreeComponent>(parent).firstChild();
+           cur != entt::null;
+           cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
+        if (textSpanDeclaresEffect(cur)) {
+          currentTextSpanRoot_ = textRootEntity;
+          traverseTree(cur);
+          currentTextSpanRoot_ = entt::null;
+        } else {
+          self(cur, self);
+        }
+      }
+    };
+    visitChildren(textRootEntity, visitChildren);
+  }
+#endif
+
   /**
    * Traverse a tree, instantiating each entity in the tree.
    *
@@ -726,6 +781,10 @@ public:
     if (!prepared.has_value()) {
       return;
     }
+
+#ifdef DONNER_TEXT_ENABLED
+    traverseTextSpanEffects(treeEntity);
+#endif
 
     if (prepared->traverseChildren) {
       const auto& tree = registry_.get<donner::components::TreeComponent>(treeEntity);
@@ -1245,7 +1304,10 @@ private:
   bool verbose_;              //!< If true, enable verbose logging.
   bool ignoreNonrenderable_;  //!< If true, skip the Nonrenderable behavior check.
 
-  int drawOrder_ = 0;                       //!< The current draw order index.
+  int drawOrder_ = 0;  //!< The current draw order index.
+  /// Root \ref xml_text entity for the one effect-carrying span about to be instantiated. Cleared
+  /// by \ref prepareTraversalNode as soon as that span consumes it.
+  Entity currentTextSpanRoot_ = entt::null;
   Entity lastRenderedEntity_ = entt::null;  //!< The last entity rendered.
   /// Holds the current paint servers for resolving the `context-fill` and `context-stroke` paint
   /// values.

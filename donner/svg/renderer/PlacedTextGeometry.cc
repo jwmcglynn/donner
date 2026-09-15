@@ -118,10 +118,11 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
 }
 
 void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
-                              std::vector<TextRun>& runs) {
+                              entt::entity spanEffectOwner, std::vector<TextRun>& runs) {
   const size_t count = std::min(runs.size(), text.spans.size());
   for (size_t runIndex = 0; runIndex < count; ++runIndex) {
-    if (text.spans[runIndex].visibility != Visibility::Visible) {
+    const auto& span = text.spans[runIndex];
+    if (span.visibility != Visibility::Visible || span.effectOwner != spanEffectOwner) {
       runs[runIndex].glyphs.clear();
     }
   }

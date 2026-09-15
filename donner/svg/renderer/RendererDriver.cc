@@ -366,6 +366,33 @@ std::optional<ResolvedTextFont> ResolveDecorationFont(Registry& registry, Entity
                 : std::nullopt;
 }
 
+/**
+ * @brief The rendering instance that paints a span, expressed as the span entity that owns it.
+ *
+ * A \ref xml_tspan or \ref xml_textPath carrying `clip-path`, `mask`, or `filter` renders through
+ * its own instance, which is marked by \ref components::RenderingInstanceComponent::textSpanRoot.
+ * Walking up from the span's source entity finds the nearest such ancestor-or-self; when there is
+ * none the text root's own instance paints the span, which is `entt::null`.
+ *
+ * @param registry The registry to query.
+ * @param textRootEntity Root text entity, where the walk stops.
+ * @param spanSourceEntity The span's source entity.
+ * @return The owning span entity, or `entt::null` for the text root's own instance.
+ */
+Entity SpanEffectOwner(Registry& registry, Entity textRootEntity, Entity spanSourceEntity) {
+  for (Entity current = spanSourceEntity; current != entt::null && current != textRootEntity;) {
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(current);
+    if (instance != nullptr && instance->textSpanRoot == textRootEntity) {
+      return current;
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree != nullptr ? tree->parent() : entt::null;
+  }
+
+  return entt::null;
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 ///
@@ -395,6 +422,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     if (span.sourceEntity == entt::null) {
       continue;
     }
+
+    span.effectOwner = SpanEffectOwner(registry, textRootHandle.entity(), span.sourceEntity);
 
     const Box2d viewBox =
         textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
@@ -1141,7 +1170,7 @@ css::Color resolveFillColor(const components::RenderingInstanceComponent& instan
 
 TextParams toTextParams(Registry& registry, const components::RenderingInstanceComponent& instance,
                         const components::ComputedStyleComponent& style,
-                        const components::TextComponent* textComp) {
+                        const components::TextComponent* textComp, EntityHandle textRootHandle) {
   TextParams params;
   const auto& properties = style.properties.value();
   const css::RGBA currentColor = properties.color.get().value().rgba();
@@ -1162,7 +1191,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
 
   params.fontFamilies = properties.fontFamily.get().value();
   params.fontSize = properties.fontSize.get().value();
-  params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  params.viewBox = components::LayoutSystem().getViewBox(textRootHandle);
   // Resolve font size so that em/ex units in text positioning attributes resolve correctly.
   {
     const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
@@ -1195,9 +1224,70 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   }
 
   // Pass the text root entity for cached layout lookup.
-  params.textRootEntity = instance.dataHandle(registry).entity();
+  params.textRootEntity = textRootHandle.entity();
+  params.spanEffectOwner = instance.textSpanRoot != entt::null ? instance.dataEntity : entt::null;
 
   return params;
+}
+
+/**
+ * @brief The root text entity whose laid-out spans this instance paints.
+ *
+ * A span instance paints part of another element's text, so it names that root explicitly; every
+ * other instance paints its own text, if it has any.
+ *
+ * @param registry The registry to query.
+ * @param instance The rendering instance.
+ * @return The text root entity, or `entt::null` when this instance paints no text.
+ */
+Entity InstanceTextRootEntity(Registry& registry,
+                              const components::RenderingInstanceComponent& instance) {
+  if (instance.textSpanRoot != entt::null) {
+    return instance.textSpanRoot;
+  }
+
+  return registry.all_of<components::ComputedTextComponent>(instance.dataEntity)
+             ? instance.dataEntity
+             : entt::null;
+}
+
+/**
+ * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
+ *
+ * @param renderer Backend to emit the draw to.
+ * @param registry The registry to query.
+ * @param instance The rendering instance being drawn.
+ * @param entity Entity owning the instance, for font dependency capture.
+ * @param textRootEntity Root text entity supplying the laid-out spans.
+ * @param style Computed style of \p entity.
+ * @param paint Paint already resolved for \p instance.
+ */
+void DrawInstanceText(RendererInterface& renderer, Registry& registry,
+                      const components::RenderingInstanceComponent& instance, Entity entity,
+                      Entity textRootEntity, const components::ComputedStyleComponent& style,
+                      const PaintParams& paint) {
+  const EntityHandle textRootHandle(registry, textRootEntity);
+  auto* text = textRootHandle.try_get<components::ComputedTextComponent>();
+  if (text == nullptr) {
+    return;
+  }
+
+  // A span instance carries the span's own style, which is what its effects and paint resolve
+  // against, but the element-level layout parameters belong to the text root.
+  const auto* textRootStyle = instance.textSpanRoot != entt::null
+                                  ? textRootHandle.try_get<components::ComputedStyleComponent>()
+                                  : &style;
+  if (textRootStyle == nullptr || !textRootStyle->properties.has_value()) {
+    return;
+  }
+
+  const CapturePaintFontDependencies captureFontDependencies(registry, entity,
+                                                             /*preparesReferences=*/false);
+  const auto* textComp = textRootHandle.try_get<components::TextComponent>();
+  const TextParams textParams =
+      toTextParams(registry, instance, *textRootStyle, textComp, textRootHandle);
+  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke);
+  renderer.drawText(registry, *text, textParams);
 }
 
 std::optional<ImageParams> toImageParams(const components::RenderingInstanceComponent& instance,
@@ -1687,15 +1777,9 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
-      } else if (auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
-                                                                   /*preparesReferences=*/false);
-        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
-        const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
-                             paint.stroke);
-        renderer_.drawText(registry, *text, textParams);
+      } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
+                 textRootEntity != entt::null) {
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -2274,15 +2358,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
-      } else if (auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
-                                                                   /*preparesReferences=*/false);
-        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
-        const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
-                             paint.stroke);
-        renderer_.drawText(registry, *text, textParams);
+      } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
+                 textRootEntity != entt::null) {
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         // SVG sub-document referenced by <image>.
@@ -2361,15 +2439,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             renderer_.drawImage(*image->image, *imageParams);
           }
         }
-      } else if (auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
-                                                                   /*preparesReferences=*/false);
-        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
-        const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
-                             paint.stroke);
-        renderer_.drawText(registry, *text, textParams);
+      } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
+                 textRootEntity != entt::null) {
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
       }
     }
 
@@ -2542,15 +2614,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
-      } else if (auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
-                                                                   /*preparesReferences=*/false);
-        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
-        const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
-                             paint.stroke);
-        renderer_.drawText(registry, *text, textParams);
+      } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
+                 textRootEntity != entt::null) {
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         if (svgImage->subDocument) {
@@ -2597,15 +2663,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             renderer_.drawImage(*image->image, *imageParams);
           }
         }
-      } else if (auto* text =
-                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const CapturePaintFontDependencies captureFontDependencies(registry, entity,
-                                                                   /*preparesReferences=*/false);
-        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
-        const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
-                             paint.stroke);
-        renderer_.drawText(registry, *text, textParams);
+      } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
+                 textRootEntity != entt::null) {
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
       }
     }
 
@@ -2724,8 +2784,10 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   SmallVector<const components::ResolvedMask*, 3> chain;
   chain.push_back(&mask);
 
+  // Text geometry is not a computed path, so ask for the element's object bounding box rather than
+  // the shape bounds, which would be empty for a text element or a text span.
   const Box2d shapeLocalBounds =
-      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Box2d());
+      RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
 
   for (const auto* m : chain) {
     if (!m->subtreeInfo || !m->reference.handle.valid()) {
@@ -2860,10 +2922,10 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   // For paints inherited via `context-fill` / `context-stroke`, objectBoundingBox units resolve
   // against the context element's bounding box instead of the consuming shape's.
-  const Box2d pathBounds = ref.contextRemap ? ref.contextRemap->contextBounds
-                                            : components::ShapeSystem()
-                                                  .getShapeBounds(instance.dataHandle(registry))
-                                                  .value_or(Box2d());
+  const Box2d pathBounds =
+      ref.contextRemap
+          ? ref.contextRemap->contextBounds
+          : RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
 
   const bool objectBoundingBox = computedPattern->patternUnits == PatternUnits::ObjectBoundingBox;
   const bool patternContentObjectBoundingBox =

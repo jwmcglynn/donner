@@ -6472,7 +6472,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   const Box2d textBounds = ComputeTextBounds(textEngine, runs);
 
   // Hidden spans are part of the bounding box above but are not drawn below.
-  ClearUnpaintedSpanGlyphs(text, runs);
+  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
 
   const Path textBoundsPath =
       textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();
