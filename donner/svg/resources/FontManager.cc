@@ -518,7 +518,8 @@ bool FontManager::hasFamily(std::string_view family) const {
   const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
   const std::string resolvedLower = isGeneric ? ToLowerAscii(resolved) : familyLower;
 
-  if (registeredFamiliesLower_.count(resolvedLower) != 0) {
+  if (registeredFamiliesLower_.count(resolvedLower) != 0 ||
+      providerResolvedFamiliesLower_.count(resolvedLower) != 0) {
     return true;
   }
 
@@ -649,6 +650,8 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   };
 
   if (provider_ != nullptr && provider_->hasFamily(family)) {
+    // Record the claim so later availability queries for this family skip the provider entirely.
+    providerResolvedFamiliesLower_.insert(ToLowerAscii(family));
     return findProviderFont(family, dependencyKey, cacheKey, matchedSourceFailedToLoad);
   }
 

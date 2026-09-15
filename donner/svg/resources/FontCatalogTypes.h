@@ -162,8 +162,14 @@ public:
    *
    * Matching must be case-insensitive: callers fold family names when they index them, so a
    * provider that compared case-sensitively would disagree with its own caller about which
-   * families exist. Text layout calls this once per unresolved family per span, so it must also
-   * answer cheaply, without I/O or re-enumerating the underlying font source on each call.
+   * families exist.
+   *
+   * It must also answer in constant or logarithmic time. Text layout asks once per unresolved
+   * family per span, and the number of families a provider holds is set by the host rather than by
+   * the document, so a linear scan of the provider's list turns one layout into work proportional
+   * to spans times families times installed fonts. Providers that enumerate a list should build a
+   * folded index alongside it rather than scanning it per call, and must not perform I/O or
+   * re-enumerate the underlying font source here.
    *
    * @param family Font family name to test.
    * @return True when this provider can supply the family.

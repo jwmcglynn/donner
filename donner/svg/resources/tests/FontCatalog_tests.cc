@@ -4,8 +4,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <ranges>
+#include <string>
 
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
@@ -239,6 +241,30 @@ TEST(SystemFontProviderTest, EnumeratesSystemFamilies) {
     EXPECT_FALSE(info.family.empty());
     EXPECT_NE(info.family.front(), '.');
   }
+}
+
+TEST(SystemFontProviderTest, FamilyLookupMatchesPresentAbsentAndCaseVariants) {
+  SystemFontProvider provider;
+  ASSERT_TRUE(SystemFontProvider::isSupported());
+
+  const std::vector<FontFamilyInfo> families = provider.families();
+  ASSERT_FALSE(families.empty());
+  const std::string present = families.front().family;
+
+  EXPECT_TRUE(provider.hasFamily(present));
+
+  // Layout folds family names when it indexes them, so the provider has to agree on casing.
+  std::string upper = present;
+  std::transform(upper.begin(), upper.end(), upper.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  std::string lower = present;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  EXPECT_TRUE(provider.hasFamily(upper));
+  EXPECT_TRUE(provider.hasFamily(lower));
+
+  EXPECT_FALSE(provider.hasFamily("Definitely Not An Installed Family"));
+  EXPECT_FALSE(provider.hasFamily(""));
 }
 
 TEST(SystemFontProviderTest, LoadsSfntForKnownSystemFamily) {

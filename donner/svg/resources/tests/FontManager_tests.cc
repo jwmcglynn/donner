@@ -1273,6 +1273,41 @@ TEST(FontManagerTest, RegisteredFamilyAvailabilityNeverConsultsTheProvider) {
   EXPECT_THAT(provider.hasFamilyCalls, Eq(0));
 }
 
+TEST(FontManagerTest, ResolvedProviderFamilyAvailabilityStopsConsultingTheProvider) {
+  Registry registry;
+  FontManager manager(registry);
+  FakeFontProvider provider({"Provided Family"});
+  manager.setFontProvider(&provider);
+
+  // The first availability query has nothing to go on and asks the provider.
+  EXPECT_TRUE(manager.hasFamily("Provided Family"));
+  EXPECT_THAT(provider.hasFamilyCalls, Eq(1));
+
+  // Resolving the family records the provider's claim, so later spans asking about the same family
+  // are answered without going back to it.
+  ASSERT_TRUE(static_cast<bool>(manager.findFont("Provided Family")));
+  const int afterResolve = provider.hasFamilyCalls;
+  for (int i = 0; i < 32; ++i) {
+    EXPECT_TRUE(manager.hasFamily("Provided Family"));
+    EXPECT_TRUE(manager.hasFamily("provided family"));
+  }
+  EXPECT_THAT(provider.hasFamilyCalls, Eq(afterResolve));
+}
+
+TEST(FontManagerTest, ChangingTheProviderForgetsResolvedFamilyAvailability) {
+  Registry registry;
+  FontManager manager(registry);
+  FakeFontProvider first({"Provided Family"});
+  FakeFontProvider second({"Other Family"});
+
+  manager.setFontProvider(&first);
+  ASSERT_TRUE(static_cast<bool>(manager.findFont("Provided Family")));
+  EXPECT_TRUE(manager.hasFamily("Provided Family"));
+
+  manager.setFontProvider(&second);
+  EXPECT_FALSE(manager.hasFamily("Provided Family"));
+}
+
 TEST(FontManagerTest, FamilyAvailabilityIsStableAcrossRepeatedQueries) {
   Registry registry;
   FontManager manager(registry);

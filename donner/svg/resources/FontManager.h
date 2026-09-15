@@ -207,8 +207,10 @@ public:
    * manager over the same registry that registers its own rules does not update this one's.
    *
    * Like every other query here this writes nothing, so it is safe to run in parallel under the
-   * registry read lock. Families no registered rule claims fall through to the provider on every
-   * call, which is why \ref FontFamilyProvider::hasFamily must answer cheaply.
+   * registry read lock. A family the provider already resolved through \ref findFont is answered
+   * from a second index that resolution fills, and anything still unknown falls through to the
+   * provider, which is why \ref FontFamilyProvider::hasFamily must answer in constant or
+   * logarithmic time.
    *
    * @param family Font family name to test, before generic-name resolution.
    * @return True when a registered rule or the provider claims the resolved family.
@@ -363,6 +365,7 @@ public:
       providerFonts_.clear();
       providerFailures_.clear();
       providerDependencies_.clear();
+      providerResolvedFamiliesLower_.clear();
       fontDependenciesOverflowed_ = false;
       ++fontResourceRevision_;
       cache_.clear();
@@ -590,6 +593,12 @@ private:
   /// extended by \ref addFontFace, which is the only place `FontFaceComponent` entities are
   /// created. Both are serialized write paths, which keeps \ref hasFamily a pure read.
   std::unordered_set<std::string> registeredFamiliesLower_;
+
+  /// Lowercased family names the provider has already claimed during a \ref findFont resolution,
+  /// so later availability queries for a family this document already uses answer without going
+  /// back to the provider at all. Written only by \ref findFont, which is a serialized write path,
+  /// and dropped with the rest of the provider state when the provider changes.
+  std::unordered_set<std::string> providerResolvedFamiliesLower_;
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;

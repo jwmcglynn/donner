@@ -3,6 +3,8 @@
 
 #include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_set>
 
 #include "donner/svg/resources/FontCatalogTypes.h"
 
@@ -43,6 +45,12 @@ private:
 
   mutable std::once_flag enumeratedOnce_;
   mutable std::vector<std::string> familyNames_;
+
+  /// Lowercased copies of \ref familyNames_, built in the same enumeration, so \ref hasFamily is a
+  /// hash lookup rather than a scan of every installed family. Text layout asks once per
+  /// unresolved family per span, and the installed-family count is set by the host, not the
+  /// document.
+  mutable std::unordered_set<std::string> familyNamesLower_;
 };
 
 }  // namespace donner::svg
