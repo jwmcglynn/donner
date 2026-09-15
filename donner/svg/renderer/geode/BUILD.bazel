@@ -17,6 +17,14 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
+load(
+    "//donner/gpu/shader:shader_families.bzl",
+    "CHECKERBOARD_SHADER_FAMILIES",
+    "GEODE_DEVICE_SHADER_FAMILIES",
+    "GEODE_ENCODER_SHADER_FAMILIES",
+    "GEODE_MODULE_SHADER_FAMILIES",
+    "native_shader_artifacts",
+)
 
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 bool_flag(
@@ -34,6 +42,14 @@ config_setting(
 # Targets below are only compatible when --//donner/svg/renderer/geode:enable_geode=true.
 _GEODE_ONLY = select({
     ":geode_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+# Targets below additionally require the platform-native shader artifacts, which exist only on
+# the platforms with a native device.
+_NATIVE_SHADERS_ONLY = select({
+    "@platforms//os:macos": [],
+    "@platforms//os:linux": [],
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
@@ -295,11 +311,7 @@ donner_cc_library(
         "//donner/gpu/shader:checkerboard_artifact",
         "//donner/gpu/shader:compiled_shader",
         "//third_party/webgpu-cpp:webgpu_cpp",
-    ] + select({
-        "@platforms//os:macos": ["//donner/gpu/shader:checkerboard_native_artifact"],
-        "@platforms//os:linux": ["//donner/gpu/shader:checkerboard_native_artifact"],
-        "//conditions:default": [],
-    }),
+    ] + native_shader_artifacts(CHECKERBOARD_SHADER_FAMILIES),
 )
 
 donner_cc_library(
@@ -419,7 +431,7 @@ donner_cc_library(
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
+    ] + native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
 )
 
 donner_cc_test(
@@ -494,7 +506,7 @@ donner_cc_library(
         "//donner/gpu/shader:slug_gradient_artifact",
         "//donner/gpu/shader:slug_mask_api",
         "//donner/gpu/shader:slug_mask_artifact",
-    ],
+    ] + native_shader_artifacts(GEODE_MODULE_SHADER_FAMILIES),
 )
 
 donner_cc_test(
@@ -537,6 +549,32 @@ donner_multi_transitioned_test(
     testonly = 1,
     dep = ":geode_shaders_tests_impl",
     opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
+donner_cc_test(
+    name = "geode_shader_projection_tests_impl",
+    srcs = ["tests/GeodeShaderProjection_tests.cc"],
+    target_compatible_with = _GEODE_ONLY + _NATIVE_SHADERS_ONLY,
+    deps = [
+        ":geode_shaders",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:image_blit_api",
+        "//donner/gpu/shader:slug_fill_api",
+        "//donner/gpu/shader:slug_gradient_api",
+        "//donner/gpu/shader:slug_mask_api",
+    ],
+)
+
+# Selection runs against a fake device, so no GPU is opened.
+donner_multi_transitioned_test(
+    name = "geode_shader_projection_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_shader_projection_tests_impl",
     renderer_backend = "geode",
 )
 
@@ -591,7 +629,7 @@ donner_cc_library(
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/resources:image_resource",
         "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
+    ] + native_shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES),
 )
 
 donner_cc_test(

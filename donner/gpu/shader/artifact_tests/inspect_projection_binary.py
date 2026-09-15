@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Checks selected and excluded shader payloads in a linked executable."""
+"""Checks selected and excluded shader payloads in a linked executable.
+
+Each --family names one shader family to check; repeat it to check every family a binary
+links, which is how the production link of a whole renderer is inspected in one pass.
+"""
 
 import argparse
 import pathlib
@@ -48,7 +52,13 @@ def require(payload: bytes, marker: bytes, present: bool, label: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--family", choices=tuple(PAYLOAD_MARKERS), default="gaussian")
+    parser.add_argument(
+        "--family",
+        choices=tuple(PAYLOAD_MARKERS),
+        action="append",
+        required=True,
+        help="Shader family to check; repeat to check every family a binary links.",
+    )
     parser.add_argument("--binary", required=True)
     parser.add_argument("--format", choices=("macho", "elf"), required=True)
     parser.add_argument("--wgsl", action="store_true")
@@ -61,9 +71,10 @@ def main() -> int:
         raise AssertionError("probe is not a Mach-O executable")
     if args.format == "elf" and payload[:4] != ELF_MAGIC:
         raise AssertionError("probe is not an ELF executable")
-    wgsl_marker, msl_marker = PAYLOAD_MARKERS[args.family]
-    require(payload, wgsl_marker, args.wgsl, "WGSL payload")
-    require(payload, msl_marker, args.msl, "MSL payload")
+    for family in args.family:
+        wgsl_marker, msl_marker = PAYLOAD_MARKERS[family]
+        require(payload, wgsl_marker, args.wgsl, f"{family} WGSL payload")
+        require(payload, msl_marker, args.msl, f"{family} MSL payload")
     require(payload, SPIRV_HEADER, args.spirv, "SPIR-V header")
     print(f"{args.binary}: {len(payload)} bytes")
     return 0
