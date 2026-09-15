@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { readEditorPixelBounds } from "./canvas-color-stats";
 import {
   attachCompositedReadbacks,
@@ -842,18 +843,30 @@ test.describe("dragRegressions classifier (pure)", () => {
 test("composited readback capture keeps exact slots and bounds retained memory", async () => {
   const pending: Array<() => void> = [];
   let drawable = true;
+  let encodingAllowed = false;
+  const encoded: Array<{ data: Uint8ClampedArray; width: number; height: number }> = [];
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+    "base64",
+  );
   const pixels = new Uint8ClampedArray([255, 0, 0, 255]);
   const context = {
     clearRect() {},
     drawImage() {},
     getImageData: () => ({ data: pixels }),
+    putImageData(image: { data: Uint8ClampedArray; width: number; height: number }) {
+      expect(encodingAllowed).toBe(true);
+      encoded.push({ ...image, data: image.data.slice() });
+    },
   };
   const readback = {
     width: 1,
     height: 1,
     getContext: () => context,
     toDataURL() {
-      throw new Error("PNG encoding must wait until sampling stops");
+      if (!encodingAllowed) throw new Error("PNG encoding must wait until sampling stops");
+      expect(encoded.length).toBeGreaterThan(0);
+      return `data:image/png;base64,${png.toString("base64")}`;
     },
   };
   const surface = {
@@ -863,6 +876,16 @@ test("composited readback capture keeps exact slots and bounds retained memory",
   };
   const globals = {
     window: {},
+    ImageData: class {
+      data: Uint8ClampedArray;
+      width: number;
+      height: number;
+      constructor(data: Uint8ClampedArray, width: number, height: number) {
+        this.data = data;
+        this.width = width;
+        this.height = height;
+      }
+    },
     document: { createElement: () => readback, querySelector: () => drawable ? surface : null },
     requestAnimationFrame: (callback: () => void) => pending.push(callback),
   };
@@ -922,10 +945,23 @@ test("composited readback capture keeps exact slots and bounds retained memory",
     );
     probe.rawReadbackOverflow = false;
     await expect(attachCompositedReadbacks(fakePage, test.info(), [2])).rejects.toThrow(/Missing/);
+    const retainedFirstFrame = probe.rawReadbacks[0];
     probe.rawReadbacks[0] = new Uint8ClampedArray([1, 2]);
     await expect(attachCompositedReadbacks(fakePage, test.info(), [0])).rejects.toThrow(
       /dimensions/,
     );
+    probe.rawReadbacks[0] = retainedFirstFrame;
+    encodingAllowed = true;
+    const evidence = await attachCompositedReadbacks(fakePage, test.info(), [0, 1]);
+    expect(evidence.indices).toEqual([0, 1]);
+    expect(evidence.bytes).toBe(png.length * 2);
+    expect(encoded).toEqual([
+      { data: new Uint8ClampedArray([255, 0, 0, 255]), width: 1, height: 1 },
+      { data: new Uint8ClampedArray([0, 255, 0, 255]), width: 1, height: 1 },
+    ]);
+    for (const index of evidence.indices) {
+      expect(readFileSync(test.info().outputPath(`composited-frame-${index}.png`))).toEqual(png);
+    }
   } finally {
     for (const [name, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
