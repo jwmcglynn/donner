@@ -2614,7 +2614,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
 
 Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                     const TexelCopyBufferLayout& dataLayout,
-                                    const Extent2d& writeSize) {
+                                    const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   Impl& impl = *impl_;
   Impl::TextureRecord* texture = FindRecord(impl.textures, slotIndex);
   if (texture == nullptr) {

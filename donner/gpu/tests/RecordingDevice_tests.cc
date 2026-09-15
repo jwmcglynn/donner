@@ -61,7 +61,7 @@ protected:
   void onDestroyResource(std::string_view, uint32_t) override {}
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
-                        const Extent2d&) override {
+                        const Extent2d&, const Origin2d&) override {
     return OkStatus();
   }
   Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override {
@@ -237,7 +237,7 @@ createShaderModule shaderModule#0 label="solidFill" sourceKind=Wgsl sourceBytes=
 createRenderPipeline renderPipeline#0 label="solid" layout=pipelineLayout#0 vertex={module=shaderModule#0 entryPoint="vsMain" buffers=[{strideBytes=8 stepMode=Vertex attributes=[{format=Float32x2 offsetBytes=0 shaderLocation=0}]}]} fragment={module=shaderModule#0 entryPoint="fsMain" targets=[{format=RGBA8Unorm blend={color={srcFactor=One dstFactor=OneMinusSrcAlpha operation=Add} alpha={srcFactor=One dstFactor=OneMinusSrcAlpha operation=Add}} writeMask=Red|Green|Blue|Alpha}]} topology=TriangleList cullMode=None multisampleCount=1
 writeBuffer buffer#0 offsetBytes=0 byteCount=48 dataHash=dd7a5e9540df1b95
 writeBuffer buffer#1 offsetBytes=0 byteCount=16 dataHash=7c84dc9477851775
-writeTexture texture#1 offsetBytes=0 bytesPerRow=256 rowsPerImage=4 writeSize=4x4 byteCount=784 dataHash=aaaef608c2729075
+writeTexture texture#1 offsetBytes=0 bytesPerRow=256 rowsPerImage=4 writeSize=4x4 origin=(0, 0) byteCount=784 dataHash=aaaef608c2729075
 destroy buffer#3
 submit serial=1 commandBuffer#0 commandCount=9
   beginRenderPass label="mainPass" colorAttachments=[{view=textureView#0 loadOp=Clear storeOp=Store clearColor=(0 0 0.5 1)}]
@@ -335,6 +335,28 @@ TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSourceDestinationAndSiz
   EXPECT_THAT(device.serialize(),
               HasSubstr("  copyTextureToTexture src=texture#0 srcOrigin=(0, 0) dst=texture#1 "
                         "dstOrigin=(0, 0) copySize=4x4\n"));
+}
+
+TEST(RecordingDeviceTests, WriteTextureSerializesItsDestinationOrigin) {
+  RecordingDevice device;
+  const Texture destination = GetResultOrFail(device.createTexture(TextureDescriptor{
+      "destination", Extent2d{8, 8}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+
+  ASSERT_THAT(device.writeTexture(destination, MakeBytes(256 + 12),
+                                  TexelCopyBufferLayout{0, 256, 2}, Extent2d{3, 2}, Origin2d{5, 1}),
+              IsOk());
+  ASSERT_THAT(device.writeTexture(destination, MakeBytes(256 + 12),
+                                  TexelCopyBufferLayout{0, 256, 2}, Extent2d{3, 2}, Origin2d{0, 6}),
+              IsOk());
+
+  // Two uploads that differ only in where they land must serialize differently, or a recorded
+  // stream cannot be used to tell them apart.
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("writeTexture texture#0 offsetBytes=0 bytesPerRow=256 rowsPerImage=2 "
+                        "writeSize=3x2 origin=(5, 1) byteCount=268"));
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("writeTexture texture#0 offsetBytes=0 bytesPerRow=256 rowsPerImage=2 "
+                        "writeSize=3x2 origin=(0, 6) byteCount=268"));
 }
 
 TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSubRectangleOrigins) {

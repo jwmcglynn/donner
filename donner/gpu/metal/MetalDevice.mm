@@ -1140,7 +1140,7 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 
 Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                    const TexelCopyBufferLayout& dataLayout,
-                                   const Extent2d& writeSize) {
+                                   const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
   if (texture == nil) {
     return GpuError{GpuErrorType::InvalidState,

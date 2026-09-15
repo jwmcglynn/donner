@@ -1339,7 +1339,8 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteBuffer(uint32_t slotIndex, uint64_t o
 gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
                                                    std::span<const uint8_t> data,
                                                    const gpu::TexelCopyBufferLayout& dataLayout,
-                                                   const gpu::Extent2d& writeSize) {
+                                                   const gpu::Extent2d& writeSize,
+                                                   const gpu::Origin2d& destinationOrigin) {
   wgpu::Texture texture =
       slotIndex < slotTextures_.size() ? slotTextures_[slotIndex].texture : wgpu::Texture();
   if (!texture) {

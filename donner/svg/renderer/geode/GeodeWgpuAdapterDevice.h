@@ -294,7 +294,8 @@ protected:
                             std::span<const uint8_t> data) override;
   gpu::Status onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                              const gpu::TexelCopyBufferLayout& dataLayout,
-                             const gpu::Extent2d& writeSize) override;
+                             const gpu::Extent2d& writeSize,
+                             const gpu::Origin2d& destinationOrigin) override;
   gpu::Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                        std::span<const gpu::Command> commands) override;
 

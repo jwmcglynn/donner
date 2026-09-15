@@ -1755,7 +1755,8 @@ Status Device::writeBuffer(const Buffer& buffer, uint64_t offsetBytes,
 }
 
 Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> data,
-                            const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize) {
+                            const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
+                            const Origin2d& destinationOrigin) {
   auto record = resolve(textures_, texture, TextureTag::kName);
   if (record.hasError()) {
     return std::move(record).error();
@@ -1766,11 +1767,19 @@ Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> dat
                std::format("writeTexture: texture \"{}\" lacks the CopyDst usage",
                            textureDescriptor.label.str()));
   }
-  if (writeSize.width > textureDescriptor.size.width ||
-      writeSize.height > textureDescriptor.size.height) {
+  // The origin is caller-supplied, so the far edge is computed in 64 bits: a near-UINT32_MAX
+  // origin plus a large extent wraps in 32-bit arithmetic and would compare as in-bounds.
+  const std::optional<uint64_t> right =
+      CheckedAdd(uint64_t{destinationOrigin.x}, uint64_t{writeSize.width});
+  const std::optional<uint64_t> bottom =
+      CheckedAdd(uint64_t{destinationOrigin.y}, uint64_t{writeSize.height});
+  if (!right || !bottom || *right > textureDescriptor.size.width ||
+      *bottom > textureDescriptor.size.height) {
     return Err(GpuErrorType::OutOfBounds,
-               std::format("writeTexture: write size {}x{} exceeds texture \"{}\" size {}x{}",
-                           writeSize.width, writeSize.height, textureDescriptor.label.str(),
+               std::format("writeTexture: write rectangle {}x{} at ({}, {}) does not fit texture "
+                           "\"{}\" size {}x{}",
+                           writeSize.width, writeSize.height, destinationOrigin.x,
+                           destinationOrigin.y, textureDescriptor.label.str(),
                            textureDescriptor.size.width, textureDescriptor.size.height));
   }
   Result<uint64_t> requiredEnd =
@@ -1784,7 +1793,7 @@ Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> dat
                            requiredEnd.result(), data.size()));
   }
 
-  return onWriteTexture(texture.slotIndex(), data, dataLayout, writeSize);
+  return onWriteTexture(texture.slotIndex(), data, dataLayout, writeSize, destinationOrigin);
 }
 
 Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {

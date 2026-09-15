@@ -6,6 +6,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
+#include <utility>
 #include <vector>
 
 #include "donner/gpu/GpuLimits.h"
@@ -690,6 +692,10 @@ protected:
   /// 4x4 RGBA rows padded to the 256-byte row pitch: 3 * 256 + 16 bytes.
   static constexpr size_t kPaddedByteCount = 3 * 256 + 16;
 
+  /// Two RGBA rows of at most 64 texels at the 256-byte row pitch: 256 + 8 bytes covers a 2x2
+  /// write, which is the rectangle the origin cases move around the 4x4 texture.
+  static constexpr size_t kTwoRowByteCount = 256 + 8;
+
   Texture texture_;
 };
 
@@ -763,6 +769,93 @@ TEST_F(WriteTextureTests, RejectsRowsPerImageBelowHeight) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("rowsPerImage 2")));
 }
 
+TEST_F(WriteTextureTests, AcceptsANonzeroOriginAtEveryEdgeAndCorner) {
+  // A 2x2 write into a 4x4 texture, walked across all four corners and all four edge midpoints:
+  // an implementation that clamped, mirrored, or transposed the origin would refuse or misplace
+  // at least one of these.
+  for (const Origin2d origin : {Origin2d{0, 0}, Origin2d{2, 0}, Origin2d{0, 2}, Origin2d{2, 2},
+                                Origin2d{1, 0}, Origin2d{0, 1}, Origin2d{2, 1}, Origin2d{1, 2}}) {
+    EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(kTwoRowByteCount),
+                                     TexelCopyBufferLayout{0, 256, 2}, Extent2d{2, 2}, origin),
+                IsOk())
+        << "origin " << origin;
+  }
+}
+
+TEST_F(WriteTextureTests, AcceptsARectangleEndingExactlyOnTheTextureEdge) {
+  EXPECT_THAT(
+      device_.writeTexture(texture_, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{2, 2}),
+      IsOk());
+  EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(256), TexelCopyBufferLayout{0, 256, 1},
+                                   Extent2d{1, 1}, Origin2d{3, 3}),
+              IsOk());
+}
+
+TEST_F(WriteTextureTests, RejectsARectangleOneTexelPastTheTextureEdge) {
+  EXPECT_THAT(
+      device_.writeTexture(texture_, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{3, 2}),
+      IsGpuErrorWithMessage(GpuErrorType::OutOfBounds,
+                            HasSubstr("write rectangle 2x2 at (3, 2) does not fit texture "
+                                      "\"image\" size 4x4")));
+  EXPECT_THAT(
+      device_.writeTexture(texture_, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{2, 3}),
+      IsGpuErrorWithMessage(GpuErrorType::OutOfBounds,
+                            HasSubstr("write rectangle 2x2 at (2, 3) does not fit texture "
+                                      "\"image\" size 4x4")));
+}
+
+TEST_F(WriteTextureTests, RejectsAnOriginOutsideTheTextureEntirely) {
+  EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(256), TexelCopyBufferLayout{0, 256, 1},
+                                   Extent2d{1, 1}, Origin2d{4, 0}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("at (4, 0)")));
+  EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(256), TexelCopyBufferLayout{0, 256, 1},
+                                   Extent2d{1, 1}, Origin2d{0, 4}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("at (0, 4)")));
+}
+
+TEST_F(WriteTextureTests, RejectsAnOriginWhoseFarEdgeOverflowsThirtyTwoBits) {
+  // origin.x + width wraps to 1 in 32-bit arithmetic, which would compare as inside a 4-wide
+  // texture. The far edge is computed in 64 bits precisely so this is refused.
+  constexpr uint32_t kMaxOrigin = std::numeric_limits<uint32_t>::max();
+  EXPECT_THAT(
+      device_.writeTexture(texture_, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{kMaxOrigin, 0}),
+      IsGpuError(GpuErrorType::OutOfBounds));
+  EXPECT_THAT(
+      device_.writeTexture(texture_, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{0, kMaxOrigin}),
+      IsGpuError(GpuErrorType::OutOfBounds));
+}
+
+TEST_F(WriteTextureTests, RejectsAZeroExtentWriteAtTheOriginAsBefore) {
+  // Adding an origin did not make a degenerate write legal: a zero dimension is still refused by
+  // the layout validator, with the same error it produced before origins existed.
+  EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(kPaddedByteCount),
+                                   TexelCopyBufferLayout{0, 256, 4}, Extent2d{0, 0}, Origin2d{}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("copy size 0x0 has a zero dimension")));
+  EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(kPaddedByteCount),
+                                   TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 0}, Origin2d{}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("copy size 4x0 has a zero dimension")));
+}
+
+TEST_F(WriteTextureTests, RejectsADestroyedTextureBeforeTheBackendSeesTheWrite) {
+  Texture doomed = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "doomed", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+  ASSERT_THAT(device_.destroyTexture(std::move(doomed)), IsOk());
+
+  EXPECT_THAT(
+      device_.writeTexture(doomed, MakeBytes(kTwoRowByteCount), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{2, 2}, Origin2d{1, 1}),
+      IsGpuError(GpuErrorType::InvalidHandle));
+  // The recording is the backend here, so an absent line proves the write never reached one.
+  EXPECT_THAT(device_.serialize(), testing::Not(HasSubstr("writeTexture")));
+}
+
 TEST_F(WriteTextureTests, RejectsMissingCopyDstUsage) {
   const Texture sampledOnly = GetResultOrFail(device_.createTexture(TextureDescriptor{
       "sampledOnly", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
@@ -834,7 +927,7 @@ protected:
   void onDestroyResource(std::string_view, uint32_t) override {}
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
-                        const Extent2d&) override {
+                        const Extent2d&, const Origin2d&) override {
     return OkStatus();
   }
   Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }

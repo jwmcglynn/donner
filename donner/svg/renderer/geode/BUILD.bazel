@@ -433,6 +433,7 @@ donner_cc_test(
         "//donner/gpu:float_texture_slice",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:sub_rectangle_copy_scene",
+        "//donner/gpu:sub_rectangle_upload_scene",
         "//donner/gpu:vertex_input_slice",
         "//donner/gpu/shader:float_storage_test_module",
         "//donner/gpu/shader:module_interface",

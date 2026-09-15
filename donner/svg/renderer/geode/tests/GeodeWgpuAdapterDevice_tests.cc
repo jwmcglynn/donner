@@ -23,6 +23,7 @@
 #include "donner/gpu/tests/FloatTextureSlice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SubRectangleCopyScene.h"
+#include "donner/gpu/tests/SubRectangleUploadScene.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
@@ -592,6 +593,42 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplayInterleavesInOneBufferAndDe
   EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
 
   geodeDevice_->setCounters(nullptr);
+}
+
+/// A host upload at a nonzero destination origin must reach wgpu with that origin intact. The
+/// scene fills the whole destination with a sentinel first, so an adapter that dropped the origin
+/// would land the rectangle at (0, 0) and leave the sentinel where the rectangle belongs.
+TEST_F(GeodeWgpuAdapterDeviceTests, WriteTextureHonorsTheDestinationOrigin) {
+  const gpu::Extent2d extent{gpu::tests::kSubRectUploadExtent, gpu::tests::kSubRectUploadExtent};
+  const gpu::Texture destination = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"subRectUploadDestination", extent, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+
+  ASSERT_THAT(
+      adapter_->writeTexture(destination, gpu::tests::SubRectUploadDestinationFillBytes(),
+                             gpu::TexelCopyBufferLayout{0, gpu::tests::kSubRectUploadBytesPerRow,
+                                                        gpu::tests::kSubRectUploadExtent},
+                             extent),
+      gpu::IsOk());
+  ASSERT_THAT(adapter_->writeTexture(
+                  destination, gpu::tests::SubRectUploadBytes(),
+                  gpu::TexelCopyBufferLayout{0, gpu::tests::kSubRectUploadBytesPerRow,
+                                             gpu::tests::kSubRectUploadHeight},
+                  gpu::Extent2d{gpu::tests::kSubRectUploadWidth, gpu::tests::kSubRectUploadHeight},
+                  gpu::Origin2d{gpu::tests::kSubRectUploadX, gpu::tests::kSubRectUploadY}),
+              gpu::IsOk());
+
+  const std::vector<uint8_t> pixels = ReadbackTexturePixels(
+      *geodeDevice_, adapter_->wgpuTextureOf(destination), gpu::tests::kSubRectUploadExtent);
+  ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "destination readback failed";
+  for (uint32_t y = 0; y < gpu::tests::kSubRectUploadExtent; ++y) {
+    for (uint32_t x = 0; x < gpu::tests::kSubRectUploadExtent; ++x) {
+      const std::array<uint8_t, 4> expected = gpu::tests::SubRectUploadExpectedTexel(x, y);
+      EXPECT_THAT(PixelAt(pixels, x, y),
+                  ElementsAre(expected[0], expected[1], expected[2], expected[3]))
+          << "texel (" << x << ", " << y << ")";
+    }
+  }
 }
 
 /// The sub-rectangle copy scene on this adapter: a source holding the shared coordinate-encoding

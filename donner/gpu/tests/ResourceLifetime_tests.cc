@@ -73,7 +73,7 @@ protected:
   }
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
-                        const Extent2d&) override {
+                        const Extent2d&, const Origin2d&) override {
     return OkStatus();
   }
   Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }
