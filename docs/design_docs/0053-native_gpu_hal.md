@@ -102,7 +102,7 @@ commits and their fixes together in a focused reviewable change.
       checkerboard pipeline pass the device's kind, and so do the Slug fill, gradient, mask and
       image-blit module constructors in `GeodeShaders.cc`. No production call site names a
       projection of its own.
-- [x] The native artifact library (`<family>_native_artifact`, MSL on Apple platforms and SPIR-V
+- [ ] The native artifact library (`<family>_native_artifact`, MSL on Apple platforms and SPIR-V
       on Linux) is linked into the Geode libraries for every production family through the shared
       platform `select()` the checkerboard pipeline established, and the `GeodeShaders.cc`
       constructors select the device's kind. The WebAssembly package contributes no native
@@ -110,7 +110,9 @@ commits and their fixes together in a focused reviewable change.
       family set proves one linked binary carries the authored WGSL and the platform-native
       payload of each family and nothing from the other platform's projection, and the module
       constructors are covered against a device reporting each source kind, including refusal of
-      a kind the linked artifact does not carry.
+      a kind the linked artifact does not carry. The filter engine and the shared render pipeline
+      still select the WGSL view, so the native objects for those families are linked but dropped
+      by the linker until that selection changes.
 - [ ] Qualify each family through the selected native backend with strict pixel acceptance:
       resvg filter cases, chained filters, fractional alpha, nonzero subregions, refusal paths and
       DPR2. The native Metal and Vulkan execution suites establish per-shader correctness today; they

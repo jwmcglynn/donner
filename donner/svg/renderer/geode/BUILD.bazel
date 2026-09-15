@@ -489,6 +489,19 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# Header-only projection selection, shared by every production call site that creates a shader
+# module so the platform guard and the artifact choice are written once.
+donner_cc_library(
+    name = "geode_shader_selection",
+    hdrs = ["GeodeShaderSelection.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu/shader:compiled_shader",
+    ],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -496,6 +509,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":geode_shader_selection",
         "//donner/base",
         "//donner/gpu",
         "//donner/gpu/shader:image_blit_api",
