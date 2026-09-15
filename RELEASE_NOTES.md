@@ -11,6 +11,12 @@ authoring paths.
 
 ### Highlights
 
+- **Compile-time WGSL shaders**: every Geode production shader is authored as WGSL and compiled by
+  a C++20 `consteval` compiler into frozen WGSL, Metal Shading Language and SPIR-V artifacts with a
+  reflected resource interface. Host parameter layouts, binding slots, entry names and workgroup
+  shapes are checked against the shader at build time, and no shader parser or emitter ships in the
+  application. The compiler implements a documented v1 profile of WGSL rather than the full
+  language; see `docs/wgsl_compiler.md` for the boundary.
 - **Geode default editor rendering** — the editor renders through the Geode GPU backend by default.
 - **Fluid canvas rendering** — zoom, drag, overlay, and large selections stay responsive.
 - **In-tree path operations + editor pathfinder fixes** — boolean path operations backed by in-tree

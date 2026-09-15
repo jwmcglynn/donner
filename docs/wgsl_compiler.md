@@ -61,6 +61,30 @@ derives its x/y sizes from reflected metadata.
 stride 4 and offset 32; the complete block is 132 bytes. Array length, stride, member types and host
 field offsets are checked against reflection independently for each retained projection.
 
+## v1 language boundary {#WgslV1Boundary}
+
+The compiler implements a fixed WGSL profile, not the complete language. The profile is the set of
+constructs the production shader families use, together with diagnostics that name everything else.
+v1 makes these claims and no others:
+
+- Every production shader under `donner/gpu/shader/programs/` compiles during C++ constant
+  evaluation under this profile, and its WGSL, MSL and SPIR-V projections are frozen into the
+  artifact libraries described above.
+- Source outside the profile fails C++ compilation with a named `ErrorCode` and a source span. No
+  runtime compiler, partial artifact or alternate code path stands in for a rejected shader.
+- Conformance with the WGSL specification is claimed only for the constructs listed under
+  "Supported profile and limits", as exercised by the shader tests, the offline Metal and SPIR-V
+  validators, the native execution suites and the parser fuzzer. Full WGSL conformance, the
+  optional feature extensions and the WebGPU conformance test suite are outside v1.
+
+Outside the profile, and rejected explicitly: `f16` and matrix types; `atomic`, `bitcast`, `override` and pipeline-overridable constants; `alias`, `const_assert`, `enable` and `requires` directives; the `workgroup` and `private` address spaces, workgroup shared memory and barriers; `binding_array`, depth, cube, 1D, 3D and arrayed textures and texture builtins other than `textureDimensions`, `textureLoad`, `textureSample`, `textureSampleLevel` and `textureStore`; bit shifts and bitwise operators other than the boolean forms the profile lists; constant f32 arithmetic in constant expressions (integer constant expressions only); `continuing` blocks; pointers outside a call argument or dereference, including pointers to resources, immutables, members and array elements; arrays of structures, nested arrays, array parameters and returns; module-scope mutable variables; bindings outside group zero; and any source byte outside ASCII. `Parser.h` and the profile section above are the exact record; the compiler names the construct it rejects.
+
+Extending the profile is the intended response when a production shader needs a construct the
+compiler rejects: add the construct to the parser and to all three emitters together, add positive
+cases for each projection and a negative case for the previous rejection, extend the validators
+and fuzzer corpus, and update the profile section. Working around the compiler by generating the
+shader elsewhere is not part of the design.
+
 ## Supported profile and limits
 
 The compute frontend supports the migrated filter families with: numeric buffer structures, including bounded nesting,

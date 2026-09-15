@@ -630,7 +630,7 @@ donner_cc_binary(
     name = "slug_fill_all_probe",
     testonly = 1,
     srcs = ["SlugFillAllProbe.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = ["-fconstexpr-steps=8388608"],
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:slug_fill_source"],
 )

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "tools/ci/**"
+      - "donner/gpu/shader/**"
       - "donner/svg/renderer/geode/**"
       - "donner/svg/renderer/RendererDriver.*"
       - "donner/svg/renderer/RendererGeode.*"

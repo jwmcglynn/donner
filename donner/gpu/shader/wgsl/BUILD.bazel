@@ -106,6 +106,15 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "wgsl_diagnostics_tests",
+    srcs = ["tests/Diagnostics_tests.cc"],
+    deps = [
+        ":frontend",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_fuzzer(
     name = "parser_fuzzer",
     srcs = ["tests/Parser_fuzzer.cc"],

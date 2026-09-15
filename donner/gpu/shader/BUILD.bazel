@@ -1094,10 +1094,14 @@ donner_cc_library(
     deps = [":slug_fill_api"],
 )
 
+# Slug fill compilation uses a measured, bounded target-local evaluator budget. The ported
+# ray-event source needs about 4.07M Apple Clang evaluation steps, 97 percent of the former
+# 4,194,304 budget, so its three artifact targets and the all-projection probe use 8,388,608 to
+# keep headroom for other toolchains' step accounting. The other Slug programs stay at 4,194,304.
 donner_cc_library(
     name = "slug_fill_artifact",
     srcs = ["programs/SlugFill.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = ["-fconstexpr-steps=8388608"],
     visibility = donner_internal_visibility(),
     deps = [
         ":slug_fill_api",
@@ -1109,7 +1113,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_fill_native_artifact",
     srcs = ["programs/SlugFillNative.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = ["-fconstexpr-steps=8388608"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -1128,7 +1132,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledSlugFill.cc"],
     hdrs = ["tests/CompiledSlugFill.h"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = ["-fconstexpr-steps=8388608"],
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",

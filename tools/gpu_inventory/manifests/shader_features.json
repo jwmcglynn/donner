@@ -1819,6 +1819,97 @@
         "Scalar"
       ]
     },
+    "donner/gpu/shader/tests/CompiledImageBlit.cc#inline4": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "array",
+        "break",
+        "const",
+        "if",
+        "let",
+        "loop",
+        "return",
+        "select",
+        "step",
+        "textureLoad",
+        "textureStore",
+        "var",
+        "while"
+      ],
+      "structs": [
+        "Accumulator",
+        "Summary"
+      ]
+    },
+    "donner/gpu/shader/tests/CompiledImageBlit.cc#inline5": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float,write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "break",
+        "if",
+        "let",
+        "loop",
+        "return",
+        "textureLoad",
+        "textureStore",
+        "var",
+        "while"
+      ],
+      "structs": []
+    },
     "donner/gpu/shader/tests/CompiledOffset.cc#inline0": {
       "bindings": [
         {
@@ -2302,6 +2393,25 @@
         "Varyings"
       ]
     },
+    "donner/gpu/shader/wgsl/tests/corpus/inferred_literal.wgsl": {
+      "bindings": [],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "let"
+      ],
+      "structs": []
+    },
     "donner/gpu/shader/wgsl/tests/corpus/invalid_layout.wgsl": {
       "bindings": [
         {
@@ -2332,8 +2442,21 @@
         "Outer"
       ]
     },
-    "donner/gpu/shader/wgsl/tests/corpus/invalid_literal.wgsl": {
-      "bindings": [],
+    "donner/gpu/shader/wgsl/tests/corpus/loop_while_compound.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        }
+      ],
       "builtins": [
         "global_invocation_id"
       ],
@@ -2342,12 +2465,22 @@
           "name": "cs_main",
           "stage": "compute",
           "workgroupSize": [
+            "1",
+            "1",
             "1"
           ]
         }
       ],
       "features": [
-        "let"
+        "break",
+        "if",
+        "let",
+        "loop",
+        "return",
+        "textureLoad",
+        "textureStore",
+        "var",
+        "while"
       ],
       "structs": []
     },
@@ -2458,6 +2591,93 @@
       ],
       "structs": [
         "Item"
+      ]
+    },
+    "donner/gpu/shader/wgsl/tests/corpus/pointer_loop.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba32float, write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "1",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "array",
+        "break",
+        "const",
+        "if",
+        "let",
+        "loop",
+        "return",
+        "select",
+        "step",
+        "textureLoad",
+        "textureStore",
+        "var",
+        "while"
+      ],
+      "structs": [
+        "Accumulator",
+        "Summary"
+      ]
+    },
+    "donner/gpu/shader/wgsl/tests/corpus/pointer_uniformity.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "sourceTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "sourceSampler",
+          "type": "sampler"
+        }
+      ],
+      "builtins": [
+        "position"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        }
+      ],
+      "features": [
+        "break",
+        "fwidth",
+        "if",
+        "let",
+        "loop",
+        "return",
+        "var",
+        "while"
+      ],
+      "structs": [
+        "Cell"
       ]
     },
     "donner/gpu/shader/wgsl/tests/corpus/storage_arrays.wgsl": {

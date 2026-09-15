@@ -80,7 +80,7 @@ std::string Program(std::string_view body) {
   return std::string(kResources) + std::string(body) + std::string(kEntry);
 }
 
-constexpr std::string_view kPointerLoopBody = R"wgsl(
+constexpr std::string_view kPointerLoopBody = R"(
 const kSlots: u32 = 4u;
 
 struct Accumulator {
@@ -132,7 +132,7 @@ fn evaluate(seed: f32) -> f32 {
   result += select(0.0, 0.5, !summary.complete);
   return result + f32(summary.steps + state.total) * 0.0625;
 }
-)wgsl";
+)";
 
 TEST(PointerLoop, AcceptsPointerParametersLoopsAndCompoundAssignments) {
   const std::string source = Program(kPointerLoopBody);

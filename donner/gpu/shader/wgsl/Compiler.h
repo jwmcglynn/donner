@@ -63,7 +63,7 @@ consteval bool RequireValidSource() {
 
 struct Emitted {
   std::array<char, kMaxTextEmitBytes> msl{};
-  std::array<uint32_t, 24576> spirv{};
+  std::array<uint32_t, kMaxSpirvEmitWords> spirv{};
   uint32_t mslSize = 0;
   uint32_t spirvSize = 0;
   TextEmitError textError = TextEmitError::None;
