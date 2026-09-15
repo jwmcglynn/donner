@@ -459,4 +459,56 @@ cc_test(
     ],
 )
 
+# The Metal presentation slice: an offscreen Core Animation Metal layer driven through the
+# runtime's surface hooks. Objective-C++ because the test owns the layer, so it takes the same
+# objc_library plus cc_test shape as the shader-memory validation probe above. Metal API
+# validation is enabled so validation issues abort loudly.
+objc_library(
+    name = "metal_surface_tests_impl",
+    testonly = True,
+    srcs = ["MetalSurface_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+        "QuartzCore",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "metal_surface_tests",
+    size = "small",
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+    },
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_surface_tests_impl",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()

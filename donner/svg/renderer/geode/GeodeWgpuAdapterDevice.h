@@ -262,6 +262,7 @@ protected:
                                                           uint32_t textureSlotIndex) override;
   gpu::Result<gpu::SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
   void onAbandonCurrentTexture(uint32_t slotIndex) override;
+  void onDestroySurface(uint32_t slotIndex) override;
 
   gpu::Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
                                gpu::MapMode mode, uint64_t offsetBytes,
