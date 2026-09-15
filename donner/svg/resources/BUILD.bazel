@@ -88,18 +88,6 @@ donner_cc_test(
     ],
 )
 
-donner_cc_library(
-    name = "font_loader",
-    srcs = ["FontLoader.cc"],
-    hdrs = ["FontLoader.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        "//donner/base/fonts",
-        "//donner/svg/components/resources:font_resource",
-        "//donner/svg/resources:url_loader",
-    ],
-)
-
 # Lightweight font-catalog interface + value types. Depended on by both the core
 # FontManager (so it can resolve through an injected provider without pulling in
 # any font bytes) and the concrete FontCatalog (editor).

@@ -54,9 +54,9 @@ tests that run under plain `bazel test //...` (see the `donner-build-test` skill
 
 **Font loading and `@font-face` runtime** (`donner/svg/resources/`):
 
-- `FontManager.{h,cc}` — font registration, `FontHandle` entities, face matching, and the WOFF2
-  decompress call (`Woff2Parser::Decompress`). Most registration/matching bugs live here.
-- `FontLoader.{h,cc}` — URL → `FontResource`; runs every loaded font through `WoffParser::Parse`.
+- `FontManager.{h,cc}` — font registration, `FontHandle` entities, face matching, and the WOFF
+  decode calls (`WoffParser::Parse` for WOFF1, `Woff2Parser::Decompress` for WOFF2). Most
+  registration/matching bugs live here.
 - `FontMetadata.{h,cc}` — parsed font metadata.
 - `UrlLoader` — raw URL / data-URI resolution.
 
@@ -106,10 +106,11 @@ Text rendering is deceptively simple on Latin scripts and viciously complicated 
 Web fonts land via `@font-face` rules in CSS. The flow:
 
 1. **Parse**: CSSBot's `donner/css/parser/` turns the `@font-face` rule into a `FontFace` object.
-2. **Fetch**: the `src` URL is resolved via `FontLoader` (which uses `UrlLoader` for raw
-   URL/data-URI resolution).
-3. **Decompress**: WOFF1 fonts go through `WoffParser::Parse` in every tier (`FontLoader.cc`).
-   WOFF2 goes through `Woff2Parser::Decompress`, called from `FontManager.cc`, and is
+2. **Fetch**: the file-local `LoadFontFaces` helper in `ResourceManagerContext.cc` resolves each
+   `src` URL through `UrlLoader` (raw URL/data-URI resolution) and rewrites it to in-memory data
+   before registration.
+3. **Decompress**: WOFF1 fonts go through `WoffParser::Parse` in `FontManager::loadWoff1` in every
+   tier. WOFF2 goes through `Woff2Parser::Decompress`, called from `FontManager::loadWoff2`, and is
    `text_full`-only.
 4. **Register**: the font data is registered with `FontManager` (as a `FontHandle`); the active
    text backend consumes it.
@@ -164,7 +165,7 @@ default tier is the lower-fidelity fallback and is allowed to produce dumber out
 
 **"Text looks different between the default tier and `--config=text-full`"** — this is **expected** at some level (shaping vs. no shaping), and a **bug** at another (different glyph count for plain Latin, different metrics). Diagnose by comparing glyph runs: same codepoints, same glyphs? If yes, it's a metrics difference — find the real cause. If no, shaping produced different output, which is expected for ligatures and complex scripts but a regression for plain Latin.
 
-**"My web font isn't loading"** — trace the pipeline: parse → fetch (`FontLoader`/`UrlLoader`) → decompress (`WoffParser`/`Woff2Parser`) → register (`FontManager`) → match. Most failures are at fetch (URL resolution) or match (cascade didn't select the right face). CSSBot owns the cascade; you own the rest.
+**"My web font isn't loading"** — trace the pipeline: parse → fetch (`ResourceManagerContext`/`UrlLoader`) → decompress (`WoffParser`/`Woff2Parser`, called from `FontManager`) → register (`FontManager`) → match. Most failures are at fetch (URL resolution) or match (cascade didn't select the right face). CSSBot owns the cascade; you own the rest.
 
 **"WOFF file crashed the parser"** — P0 bug. WOFF1: add the input to the `WoffParser_fuzzer.cc` corpus, reproduce, fix. WOFF2: there is no fuzzer yet — reproduce via `Woff2Parser_tests.cc` and raise the fuzzer gap with ParserBot.
 

@@ -52,7 +52,6 @@ FEATURES: tuple[FeatureDefinition, ...] = (
         patterns=(
             "donner/base/fonts/**",
             "donner/css/FontFace.h",
-            "donner/svg/components/resources/FontResource.h",
             "donner/svg/components/text/**",
             "donner/svg/core/Font*.h",
             "donner/svg/core/Text*.h",

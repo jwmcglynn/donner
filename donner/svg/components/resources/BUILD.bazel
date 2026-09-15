@@ -18,13 +18,6 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "font_resource",
-    hdrs = ["FontResource.h"],
-    visibility = ["//donner/svg:__subpackages__"],
-    deps = ["//donner/base/fonts"],
-)
-
-donner_cc_library(
     name = "resource_manager_context",
     srcs = [
         "ResourceManagerContext.cc",
