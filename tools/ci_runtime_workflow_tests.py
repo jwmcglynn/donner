@@ -232,6 +232,19 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             % (consumers,),
         )
 
+    def test_failed_coverage_retains_test_failure_artifacts(self):
+        coverage_jobs = [
+            (name, body) for name, body in self._coverage_jobs()
+            if re.search(r"^          tools/coverage\.sh ", body, re.MULTILINE)
+        ]
+        self.assertEqual(["build", "coverage-self-hosted"], [name for name, _ in coverage_jobs])
+        for job_name, job_body in coverage_jobs:
+            with self.subTest(job=job_name):
+                step = self._step_body(job_body, "Upload coverage test failure artifacts")
+                self.assertIn("if: failure() && steps.coverage.outcome == 'failure'", step)
+                self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", step)
+                self.assertIn("name: coverage-test-failure-${{ github.job }}", step)
+
     def test_coverage_excludes_all_opt_in_test_tags(self):
         """Coverage must not run manual/perf tests through its own override."""
         match = re.search(
