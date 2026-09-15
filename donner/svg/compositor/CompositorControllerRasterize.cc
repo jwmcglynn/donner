@@ -871,6 +871,8 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     return;
   }
 
+  const auto composeStart = std::chrono::steady_clock::now();
+  ++lastRenderFrameStats_.mainComposeCount;
   renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
@@ -1022,6 +1024,9 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   }
 
   renderer().endFrame();
+  lastRenderFrameStats_.mainComposeMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - composeStart)
+          .count();
   // Record that the main renderer's framebuffer now holds a full
   // compose - future drag frames can safely skip `composeLayers` and
   // `takeSnapshot` will still return a valid full-canvas snapshot.

@@ -842,6 +842,10 @@ public:
     double immediateRasterizeMs = 0.0;
     /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
     double cachedRasterizeMs = 0.0;
+    /// Time spent composing retained tiles and immediate spans into the main renderer.
+    double mainComposeMs = 0.0;
+    /// Main-renderer composition passes, excluding the initial direct document render.
+    int mainComposeCount = 0;
     /// Count of static spans charged to immediate raster work.
     int immediateTileCount = 0;
     /// Count of segment/layer tiles charged to cached raster work.

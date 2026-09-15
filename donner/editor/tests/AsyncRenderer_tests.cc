@@ -4653,6 +4653,8 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
   double diagnosticsTotalMs = 0.0;
   double immediateTotalMs = 0.0;
   double cachedTotalMs = 0.0;
+  double mainComposeTotalMs = 0.0;
+  int mainComposeCount = 0;
   std::size_t payloadBytes = 0;
   int immediateTiles = 0;
   int cachedTiles = 0;
@@ -4678,6 +4680,8 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
     const auto renderStats = asyncRenderer.compositorRenderFrameStats();
     immediateTotalMs += renderStats.immediateRasterizeMs;
     cachedTotalMs += renderStats.cachedRasterizeMs;
+    mainComposeTotalMs += renderStats.mainComposeMs;
+    mainComposeCount += renderStats.mainComposeCount;
     immediateTiles = renderStats.immediateTileCount;
     cachedTiles = renderStats.cachedTileCount;
     if (result->compositedPreview.has_value()) {
@@ -4695,6 +4699,8 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
             << "  immediate rasterize avg=" << (immediateTotalMs / kZoomFrames)
             << " ms, cached rasterize avg=" << (cachedTotalMs / kZoomFrames)
             << " ms, immediate tiles=" << immediateTiles << ", cached tiles=" << cachedTiles << "\n"
+            << "  main compose avg=" << (mainComposeTotalMs / kZoomFrames)
+            << " ms, passes=" << mainComposeCount << "\n"
             << "  payload bytes/frame=" << payloadBytes << " (~"
             << (payloadBytes / (1024.0 * 1024.0)) << " MB)\n";
 
