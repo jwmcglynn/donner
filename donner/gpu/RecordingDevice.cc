@@ -415,12 +415,17 @@ Status RecordingDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 
 Status RecordingDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                        const TexelCopyBufferLayout& dataLayout,
-                                       const Extent2d& writeSize) {
+                                       const Extent2d& writeSize,
+                                       const Origin2d& destinationOrigin) {
+  // The origin is serialized unconditionally, including the (0, 0) default: a stream is read to
+  // tell two recordings apart, and a field that disappears when it holds its default makes a
+  // whole-texture upload and one deliberately reset to the origin look identical.
   std::ostringstream os = MakeLineStream();
   os << "writeTexture " << RefId(TextureTag::kName, slotIndex)
      << " offsetBytes=" << dataLayout.offsetBytes << " bytesPerRow=" << dataLayout.bytesPerRow
      << " rowsPerImage=" << dataLayout.rowsPerImage << " writeSize=" << writeSize
-     << " byteCount=" << data.size() << " dataHash=" << HashBytes(data);
+     << " origin=" << destinationOrigin << " byteCount=" << data.size()
+     << " dataHash=" << HashBytes(data);
   lines_.push_back(os.str());
   return OkStatus();
 }

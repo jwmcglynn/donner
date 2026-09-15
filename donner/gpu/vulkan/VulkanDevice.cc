@@ -1396,9 +1396,11 @@ struct VulkanDevice::Impl {
   /// @param stagingBuffer Buffer holding the upload bytes.
   /// @param dataLayout Row layout of the upload bytes.
   /// @param writeSize Destination extent in texels.
+  /// @param destinationOrigin Top-left destination texel the copy writes to.
   void recordTextureUploadCopy(VkCommandBuffer commandBuffer, uint32_t textureSlot,
                                const TextureRecord& texture, VkBuffer stagingBuffer,
-                               const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize);
+                               const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
+                               const Origin2d& destinationOrigin);
 
   /// Creates \p fence, submits \p commandBuffer on it, and waits for completion. On timeout the
   /// submission is still pending, so \p objectsStillInUse is set and the caller must not destroy
@@ -2553,7 +2555,8 @@ void VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer commandBuffer,
                                                  uint32_t textureSlot, const TextureRecord& texture,
                                                  VkBuffer stagingBuffer,
                                                  const TexelCopyBufferLayout& dataLayout,
-                                                 const Extent2d& writeSize) {
+                                                 const Extent2d& writeSize,
+                                                 const Origin2d& destinationOrigin) {
   transitionTexture(commandBuffer, textureSlot, texture, TextureUsageKind::TransferWrite);
 
   const uint32_t texelSize = TextureFormatBytesPerTexel(texture.format);
@@ -2562,7 +2565,8 @@ void VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer commandBuffer,
   copyRegion.bufferRowLength = dataLayout.bytesPerRow / texelSize;  // In texels.
   copyRegion.bufferImageHeight = dataLayout.rowsPerImage;
   copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  copyRegion.imageOffset = VkOffset3D{0, 0, 0};
+  copyRegion.imageOffset = VkOffset3D{static_cast<int32_t>(destinationOrigin.x),
+                                      static_cast<int32_t>(destinationOrigin.y), 0};
   copyRegion.imageExtent = VkExtent3D{writeSize.width, writeSize.height, 1};
   api->vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, texture.image,
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
@@ -2614,7 +2618,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
 
 Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                     const TexelCopyBufferLayout& dataLayout,
-                                    const Extent2d& writeSize) {
+                                    const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   Impl& impl = *impl_;
   Impl::TextureRecord* texture = FindRecord(impl.textures, slotIndex);
   if (texture == nullptr) {
@@ -2681,7 +2685,7 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   } stagedUploadGuard{&impl, false};
 
   impl.recordTextureUploadCopy(commandBuffer, slotIndex, *texture, staging.buffer, dataLayout,
-                               writeSize);
+                               writeSize, destinationOrigin);
 
   if (const VkResult result = impl_->api->vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
     cleanup();

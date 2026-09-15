@@ -149,6 +149,21 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
 )
 
+# The destination-origin upload scene: one sentinel-filled destination, one rectangle uploaded at
+# a nonzero origin, and one expected image, shared by every backend's writeTexture test.
+donner_cc_library(
+    name = "sub_rectangle_upload_scene",
+    testonly = 1,
+    hdrs = ["tests/SubRectangleUploadScene.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 # gmock matchers and unwrap helpers shared by the model tests here and by backend/adapter
 # conformance tests in other packages (e.g. the Geode wgpu adapter).
 donner_cc_library(

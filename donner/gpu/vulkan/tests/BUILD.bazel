@@ -272,6 +272,25 @@ donner_cc_test(
     ],
 )
 
+# Vulkan writeTexture destination-origin conformance: one rectangle uploaded at a nonzero origin,
+# compared against the shared expected image so the untouched texels around it are checked too.
+donner_cc_test(
+    name = "vulkan_sub_rectangle_upload_tests",
+    srcs = ["VulkanSubRectangleUpload_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:sub_rectangle_upload_scene",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "vulkan_buffer_writes_tests",
     srcs = ["VulkanBufferWrites_tests.cc"],

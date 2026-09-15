@@ -511,18 +511,24 @@ public:
   Status writeBuffer(const Buffer& buffer, uint64_t offsetBytes, std::span<const uint8_t> data);
 
   /**
-   * Writes texel rows from \p data into \p texture starting at texel (0, 0). Fails closed unless
-   * the texture has \ref TextureUsage::CopyDst, \p dataLayout is 256-aligned and covers
-   * \p writeSize, \p writeSize fits in the texture, and the described rows fit inside \p data
-   * (checked arithmetic).
+   * Writes texel rows from \p data into the \p writeSize rectangle of \p texture whose top-left
+   * texel is \p destinationOrigin, leaving every texel outside that rectangle unchanged. The
+   * origin defaults to texel (0, 0), the whole-rect-from-the-origin convention this operation had
+   * before sub-rectangle writes existed, so an existing call keeps its meaning.
+   *
+   * Fails closed unless the texture has \ref TextureUsage::CopyDst, \p dataLayout is 256-aligned
+   * and covers \p writeSize, \p destinationOrigin plus \p writeSize fits inside the texture,
+   * and the described rows fit inside \p data (all checked arithmetic).
    *
    * @param texture Destination texture.
    * @param data Payload bytes laid out per \p dataLayout.
    * @param dataLayout Row layout of \p data.
    * @param writeSize Extent to write in texels.
+   * @param destinationOrigin Top-left texel of the written rectangle.
    */
   Status writeTexture(const Texture& texture, std::span<const uint8_t> data,
-                      const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize);
+                      const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
+                      const Origin2d& destinationOrigin = {});
 
   /**
    * Submits a finished command buffer, consuming it, and returns the assigned submission serial.
@@ -624,12 +630,15 @@ protected:
   /// @param data Payload bytes.
   virtual Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                std::span<const uint8_t> data) = 0;
-  /// Backend hook: a validated texture write.
+  /// Backend hook: a validated texture write. The written rectangle is \p writeSize texels
+  /// wide and tall with its top-left texel at \p destinationOrigin; texels outside it keep their
+  /// contents.
   /// @param slotIndex Destination texture slot. @param data Payload bytes.
   /// @param dataLayout Row layout of \p data. @param writeSize Extent written in texels.
+  /// @param destinationOrigin Top-left texel of the written rectangle.
   virtual Status onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
-                                const TexelCopyBufferLayout& dataLayout,
-                                const Extent2d& writeSize) = 0;
+                                const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
+                                const Origin2d& destinationOrigin) = 0;
 
   /**
    * Validates a buffer handle for backend-provided auxiliary entry points (test readback

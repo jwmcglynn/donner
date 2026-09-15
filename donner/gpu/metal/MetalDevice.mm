@@ -252,6 +252,7 @@ struct MetalDevice::Impl {
     id<MTLTexture> texture = nil;
     uint64_t offsetBytes = 0;
     Extent2d size;
+    Origin2d origin;
     uint32_t bytesPerRow = 0;
     uint64_t payloadBytes = 0;
     std::vector<uint8_t> bytes;
@@ -283,7 +284,7 @@ struct MetalDevice::Impl {
     const auto previous = std::ranges::find_if(pendingWrites, [&](const PendingWrite& pending) {
       return pending.buffer == write.buffer && pending.texture == write.texture &&
              pending.offsetBytes == write.offsetBytes && pending.size == write.size &&
-             pending.bytes.size() == byteCount;
+             pending.origin == write.origin && pending.bytes.size() == byteCount;
     });
     const uint64_t replacedStagingBytes =
         previous == pendingWrites.end() ? 0 : StagingSize(previous->bytes.size());
@@ -1140,7 +1141,7 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 
 Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                    const TexelCopyBufferLayout& dataLayout,
-                                   const Extent2d& writeSize) {
+                                   const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
   if (texture == nil) {
     return GpuError{GpuErrorType::InvalidState,
@@ -1159,6 +1160,7 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
         impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
                                              .texture = texture,
                                              .size = writeSize,
+                                             .origin = destinationOrigin,
                                              .bytesPerRow = rowPitch,
                                              .payloadBytes = uint64_t{rowBytes} * writeSize.height},
                           uint64_t{rowPitch} * writeSize.height);
@@ -1173,7 +1175,8 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
     return OkStatus();
   }
 
-  [texture replaceRegion:MTLRegionMake2D(0, 0, writeSize.width, writeSize.height)
+  [texture replaceRegion:MTLRegionMake2D(destinationOrigin.x, destinationOrigin.y, writeSize.width,
+                                         writeSize.height)
              mipmapLevel:0
                withBytes:data.data() + dataLayout.offsetBytes
              bytesPerRow:dataLayout.bytesPerRow];
@@ -1807,7 +1810,7 @@ Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
                     toTexture:write.texture
              destinationSlice:0
              destinationLevel:0
-            destinationOrigin:MTLOriginMake(0, 0, 0)];
+            destinationOrigin:MTLOriginMake(write.origin.x, write.origin.y, 0)];
     }
     sourceOffset += StagingSize(write.bytes.size());
   }
