@@ -1187,6 +1187,14 @@ jobs:
           test -x /opt/homebrew/bin/bazel
           test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
 
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk --nohome_rc fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
+
       - name: Require full Metal shader validation
         id: metal_profile
         shell: bash
