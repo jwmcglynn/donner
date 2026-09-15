@@ -222,6 +222,39 @@ protected:
   }
 };
 
+TEST_F(EditorCollaborationUiTest, PendingCommentMarkerTracksViewportAndClearsOnCancel) {
+  const Vector2d point(80, 60);
+  const auto original = captureDocumentPixel(point);
+  ASSERT_THAT(original.empty(), Eq(false));
+  call("get_svg_source");
+  EditorCollaborationUiTestAccess::OpenContextMenu(*shell, point);
+  frame();
+  ASSERT_THAT(GImGui->OpenPopupStack.empty(), Eq(false));
+  ImGuiWindow* menu = GImGui->OpenPopupStack.back().Window;
+  ASSERT_THAT(menu != nullptr, Eq(true));
+  ImGui::ActivateItemByID(menu->GetID("Add Comment Here"));
+  frame();
+  frame();
+  svg::RendererBitmap marker;
+  marker.dimensions = Vector2i(1, 1);
+  marker.rowBytes = 4;
+  marker.pixels = {114, 202, 255, 255};
+  tests::CompareBitmapToBitmap(captureDocumentPixel(point), marker, "pending_comment_marker",
+                               tests::PixelmatchIdentityParams());
+  auto viewport = shell->viewportForReadback();
+  viewport.panBy(Vector2d(24, 16));
+  shell->overrideViewportForReplay(viewport);
+  frame();
+  tests::CompareBitmapToBitmap(captureDocumentPixel(point), marker, "panned_comment_marker",
+                               tests::PixelmatchIdentityParams());
+  ImGuiWindow* comments = ImGui::FindWindowByName("Comments");
+  ASSERT_THAT(comments != nullptr, Eq(true));
+  ImGui::ActivateItemByID(comments->GetID("Cancel"));
+  frame();
+  tests::CompareBitmapToBitmap(captureDocumentPixel(point), original, "cancelled_comment_marker",
+                               tests::PixelmatchIdentityParams());
+}
+
 class PolygonClipCollaborationUiTest : public EditorCollaborationUiTest {
 protected:
   std::string initialSource() override {

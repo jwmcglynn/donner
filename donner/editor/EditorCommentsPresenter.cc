@@ -16,6 +16,7 @@ void EditorCommentsPresenter::drawPins(EditorCollaboration& collaboration,
                                        const ViewportState& viewport) {
   const ImVec2 oldCursor = ImGui::GetCursorScreenPos();
   pinRegions_.clear();
+  drawPendingAnchor(collaboration, viewport);
   for (const auto& comment : collaboration.comments()) {
     if (comment.resolved || !collaboration.isCurrentComment(comment)) continue;
     const Vector2d point = viewport.documentToScreen(comment.presentedPoint);
@@ -37,6 +38,23 @@ void EditorCommentsPresenter::drawPins(EditorCollaboration& collaboration,
     ImGui::PopID();
   }
   ImGui::SetCursorScreenPos(oldCursor);
+}
+
+void EditorCommentsPresenter::drawPendingAnchor(EditorCollaboration& collaboration,
+                                                const ViewportState& viewport) {
+  if (!visible_ || !pendingAnchor_ || !collaboration.isCurrentComment(*pendingAnchor_)) return;
+  const Vector2d point = viewport.documentToScreen(pendingAnchor_->presentedPoint);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->PushClipRect(
+      ImVec2(static_cast<float>(viewport.paneOrigin.x), static_cast<float>(viewport.paneOrigin.y)),
+      ImVec2(static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x),
+             static_cast<float>(viewport.paneOrigin.y + viewport.paneSize.y)),
+      true);
+  const ImVec2 center(static_cast<float>(point.x), static_cast<float>(point.y));
+  drawList->AddCircle(center, 11.0f, IM_COL32(20, 28, 40, 240), 32, 5.0f);
+  drawList->AddCircle(center, 11.0f, IM_COL32(114, 202, 255, 255), 32, 2.0f);
+  drawList->AddCircleFilled(center, 3.0f, IM_COL32(114, 202, 255, 255));
+  drawList->PopClipRect();
 }
 
 void EditorCommentsPresenter::drawPanel(EditorCollaboration& collaboration, bool rendererIdle,

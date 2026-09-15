@@ -33,6 +33,7 @@ public:
   void setPersistenceError(std::string error) { persistenceError_ = std::move(error); }
 
 private:
+  void drawPendingAnchor(EditorCollaboration& collaboration, const ViewportState& viewport);
   void drawComposer(EditorCollaboration& collaboration, bool rendererIdle);
   void drawCommentList(EditorCollaboration& collaboration);
   bool visible_ = false;
