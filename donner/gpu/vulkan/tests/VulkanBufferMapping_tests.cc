@@ -13,10 +13,11 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/BufferMappingScene.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/vulkan/tests/NativeQueueGate.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
+#include "donner/gpu/vulkan/tests/NativeQueueGate.h"
 
 namespace donner::gpu::vulkan {
 namespace {
@@ -103,11 +104,25 @@ TEST_F(VulkanBufferMappingTest, AWriteStillWaitingForTheQueueBlocksMapping) {
       BufferDescriptor{"queuedWrite", kMappingSceneByteSize,
                        BufferUsage::CopyDst | BufferUsage::CopySrc | BufferUsage::MapRead}));
 
+  // The scene is built before the gate closes: writeTexture submits and waits on its own fence,
+  // which a gated queue would never let complete.
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*gated, scene));
+  ASSERT_THAT(gated->waitForSerial(scene.serial, 30.0), testing::IsTrue())
+      << gated->lastErrorForTest();
+
   tests::NativeQueueGate gate(gated->nativeContextForTest());
   ASSERT_NO_FATAL_FAILURE(gate.start());
 
-  MappingScene scene;
-  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*gated, scene));
+  // A submission the gate holds open leaves the buffer busy, so the write has to queue.
+  std::unique_ptr<CommandEncoder> busy = GetResultOrFail(gated->createCommandEncoder());
+  ASSERT_THAT(busy->copyTextureToBuffer(
+                  TexelCopyTextureInfo{scene.texture}, buffer,
+                  TexelCopyBufferLayout{0, gpu::tests::kMappingSceneBytesPerRow,
+                                        gpu::tests::kMappingSceneExtent},
+                  Extent2d{gpu::tests::kMappingSceneExtent, gpu::tests::kMappingSceneExtent}),
+              IsOk());
+  const uint64_t busySerial = GetResultOrFail(gated->submit(GetResultOrFail(busy->finish())));
   const std::vector<uint8_t> payload(16, 0x7C);
   ASSERT_THAT(gated->writeBuffer(buffer, 0, payload), IsOk());
   ASSERT_GT(gated->bufferWriteStatsForTest().pendingBytes, 0u) << "the write must have queued";
@@ -117,6 +132,8 @@ TEST_F(VulkanBufferMappingTest, AWriteStillWaitingForTheQueueBlocksMapping) {
       << "A mapping must not be taken while a queued write for that buffer is still unapplied";
 
   ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(gated->waitForSerial(busySerial, 30.0), testing::IsTrue())
+      << gated->lastErrorForTest();
   // An ordinary submission applies the queued writes first.
   const uint64_t flushSerial = GetResultOrFail(
       gated->submit(GetResultOrFail(GetResultOrFail(gated->createCommandEncoder())->finish())));
