@@ -1,10 +1,11 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
-**Status:** Implementing. Production cutover remains open across shader selection, resource ownership,
-indexed UI rendering, native mapping and surfaces, and the browser bridge. The implementation plan
-below contains the work required to complete that cutover.\
+**Status:** Implementing. Every production shader now compiles from authored WGSL into per-backend
+artifacts (#1195), and indexed drawing is merged. Production cutover remains open across native
+artifact linkage, resource ownership, UI rendering, native mapping and surfaces, and the browser
+bridge. The implementation plan below contains the work required to complete that cutover.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-11\
+**Updated:** 2026-09-15\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -16,13 +17,17 @@ missing draw, mapping, upload, and presentation operations, and remove the trans
 implementation from the dependency closure.
 
 `donner::gpu` provides the foundation for resource validation, command recording, submission,
-backend execution, and typed shader generation. Production `GeodeDevice`, filter resource plumbing,
-texture caches, and editor presentation still depend on concrete WebGPU objects. Native shader
+backend execution, and compile-time shader artifacts: every production shader is authored as WGSL
+and compiled during C++ constant evaluation into the WGSL, MSL, or SPIR-V projection its consumer
+links, with the host interface reflected from the same compile
+([WGSL shader compilation](../wgsl_compiler.md)). Production `GeodeDevice`, filter resource
+plumbing, texture caches, and editor presentation still depend on concrete WebGPU objects. Native shader
 execution tests therefore establish individual capabilities; they do not establish a complete
 native editor or a Rust-independent build.
 
 The target is an original C++20 runtime serving Donner's own rendering requirements. It is not a
-WebGPU C ABI implementation or a general shader compiler.
+WebGPU C ABI implementation, and its shader compiler accepts a documented WGSL profile at build time
+rather than arbitrary shader text at runtime.
 
 ## Goals
 
@@ -47,11 +52,12 @@ WebGPU C ABI implementation or a general shader compiler.
 
 ## Next Steps
 
-1. Reconcile the open lighting and image changes with the integrated filter programs and complete
-   their CI gates. Finish the indexed-draw, blend, and convolve-matrix candidates with native
-   validation and renderer acceptance.
+1. Link the native artifact of every production shader family into the Geode libraries for the
+   Metal and Vulkan platforms, as the checkerboard pipeline already does, switch the remaining
+   hard-coded WGSL descriptors in `GeodeShaders.cc` to `Device::shaderSourceKind()`, and qualify
+   each family through the selected backend with strict pixel acceptance.
 2. Replace concrete adapter resource and encoder access in production callers, preserving the
-   qualified typed shaders, checkerboard, and snapshot ownership paths.
+   compiled shader artifacts, checkerboard, indexed drawing, and snapshot ownership paths.
 3. Develop mapping, native surfaces, and the browser bridge against the existing runtime contracts
    while resource and UI migration proceeds. Switch platform ownership after those paths qualify.
 
@@ -67,35 +73,47 @@ commits and their fixes together in a focused reviewable change.
       retaining 29 shader-buffer bindings and refusing binding collisions.
       [PR #1139](https://github.com/jwmcglynn/donner/pull/1139) is merged; the native vertex-layout
       targets below cover these contracts.
-- [ ] Add `setIndexBuffer` and `drawIndexed` to the shared command contract and platform backends.
-      Define index formats, index-buffer byte bounds, first-index/base-vertex semantics, and resource
-      retirement. Implementation and native conformance tests are prepared; reconciliation and
-      integrated qualification remain open, including texture-copy visibility to index consumers.
-      Verify indexed geometry and invalid inputs on all three backends.
+- [x] `setIndexBuffer` and `drawIndexed` are part of the shared command contract and platform
+      backends, with index formats, byte bounds, first-index/base-vertex semantics, resource
+      retirement, empty-binding validation and texture-copy-to-index synchronization covered by the
+      encoder contract tests and the Vulkan execution suite.
+      [PR #1154](https://github.com/jwmcglynn/donner/pull/1154) is merged. Metal and browser
+      execution of indexed geometry join the UI-rendering work below.
 
-### Typed shaders and production selection
+### Compiled shaders and production selection
 
-- [x] Gaussian/box blur, drop-shadow, component transfer, displacement, and turbulence use typed
-      runtime shader programs. The merged changes include native/compiler validation and renderer
-      coverage: [blur #1142](https://github.com/jwmcglynn/donner/pull/1142),
-      [shadow #1146](https://github.com/jwmcglynn/donner/pull/1146),
-      [component transfer #1148](https://github.com/jwmcglynn/donner/pull/1148),
-      [displacement #1149](https://github.com/jwmcglynn/donner/pull/1149), and
-      [turbulence #1151](https://github.com/jwmcglynn/donner/pull/1151).
-- [ ] Complete [lighting #1150](https://github.com/jwmcglynn/donner/pull/1150) and
-      [image #1152](https://github.com/jwmcglynn/donner/pull/1152). Reconcile their shared engine,
-      shader catalog, and build files against the merged programs; qualify the image upload repair
-      under the sanitizer configuration that exposed it.
-- [ ] Integrate and qualify the prepared blend and convolve-matrix programs. Preserve causal
-      regression evidence, native execution, and strict pixel acceptance. Use the production
-      inventory to find additional live raw shader families.
-- [x] Checkerboard uses a typed program and runtime-device constructor, preserving device-pixel
-      origin, DPR, clipping and both compositing modes.
-      [PR #1140](https://github.com/jwmcglynn/donner/pull/1140) is merged with native pixel validation.
-- [ ] Make production pipeline creation select generated MSL, SPIR-V, or WGSL for the chosen backend.
-      Replace the WGSL-only assumption in `GeodeFilterEngine` and shared Geode pipeline construction.
-- [ ] Qualify the remaining emitter instruction contracts, real compiler outputs, native execution,
-      and renderer pixels. Remove each obsolete raw shader path with its final production caller.
+- [x] Every production shader family is authored as WGSL under `donner/gpu/shader/programs/` and
+      compiled during constant evaluation into frozen artifacts with a reflected host interface:
+      blur, convolution, Slug mask/fill/gradients, offset, filter resolve, diffuse and specular
+      lighting, turbulence, image blit, feBlend, feFlood, feMerge, feComposite, feColorMatrix, feMorphology, feComponentTransfer,
+      feDisplacementMap, feDropShadow, feImage, feTile, subregion clipping, color-space conversion,
+      snapshot unpremultiply and the transparency checkerboard. The filter engine, checkerboard
+      pipeline and snapshot readback derive bindings, entry points and workgroup shapes from
+      reflection, and the build-time emitter tool, generated descriptor headers and IR builders are
+      removed. The typed IR remains only as an emitter and native-execution test fixture.
+      [PR #1195](https://github.com/jwmcglynn/donner/pull/1195) is merged; it supersedes the earlier
+      per-family typed-program changes (blur #1142, checkerboard #1140, shadow #1146, component
+      transfer #1148, displacement #1149, turbulence #1151, lighting #1150, image #1152,
+      convolution #1157) and the prepared blend program.
+- [x] Descriptor construction can select the projection for the chosen backend:
+      `MakeShaderDescriptor(view, device.shaderSourceKind(), label)` supplies WGSL text, MSL text or
+      SPIR-V words, and a device refuses a descriptor whose projection is absent from the linked
+      artifact instead of compiling nothing. The filter engine, the shared render pipeline and the
+      checkerboard pipeline pass the device's kind; the Slug fill, gradient, mask and image-blit
+      module constructors in `GeodeShaders.cc` still pass the WGSL kind explicitly.
+- [ ] Link the native artifact library (`<family>_native_artifact`, MSL on Apple platforms and
+      SPIR-V on Linux) into the Geode libraries for each production family, as the checkerboard
+      pipeline already does through a platform `select()`, switch the `GeodeShaders.cc`
+      constructors to the device's kind, and keep the WebAssembly editor on the WGSL-only
+      artifacts. This is the remaining shader work for the native cutover; it is a build, linkage
+      and constructor change, not a shader change.
+- [ ] Qualify each family through the selected native backend with strict pixel acceptance:
+      resvg filter cases, chained filters, fractional alpha, nonzero subregions, refusal paths and
+      DPR2. The native Metal and Vulkan execution suites establish per-shader correctness today; they
+      do not close this item on their own.
+- [ ] Shader profile additions follow the compiler's rules: a construct the v1 profile rejects is
+      added to the compiler with tests across all three projections rather than worked around, and
+      the UI renderer's shaders are authored as WGSL sources under the same contract.
 
 ### Snapshot and target identity
 
@@ -134,7 +152,7 @@ commits and their fixes together in a focused reviewable change.
 
 - [ ] Replace raw WebGPU texture-view IDs in `GlTextureCache` and `CompositorDebugPanel` with runtime
       UI texture registrations carrying device identity, alpha mode, and frame lifetime.
-- [ ] Implement the ImGui renderer over typed shaders, indexed draws, bounded vertex/index uploads,
+- [ ] Implement the ImGui renderer over compiled WGSL shaders, indexed draws, bounded vertex/index uploads,
       texture/sampler bindings, scissors, and renderer-state reset operations.
 - [ ] Migrate frame composition and remove `imgui_wgpu_backend` dependencies, registration calls,
       and obsolete patches when their final consumers move.
@@ -151,7 +169,7 @@ commits and their fixes together in a focused reviewable change.
 ### Browser bridge
 
 - [ ] Replace the C WebGPU wrapper with the Donner-owned C++/JavaScript descriptor and command bridge
-      to `navigator.gpu`; keep generated WGSL as trusted build input.
+      to `navigator.gpu`; the compiled WGSL projections remain trusted build input.
 - [ ] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
       configuration, completion, mapping, and device-loss propagation behind the runtime contract.
 - [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and remaining
@@ -172,7 +190,8 @@ commits and their fixes together in a focused reviewable change.
 ### Remaining GPU audit acceptance
 
 - [ ] Inspect the integrated source/dependency graph for concrete adapter access, raw handles outside
-      backend boundaries, duplicate ownership, unnecessary runtime emitter dependencies, and dead code.
+      backend boundaries, duplicate ownership, shader compiler or emitter symbols in application
+      binaries, and dead code.
 - [ ] Compare logical allocation accounting with actual CPU RAM/GPU residency for pending uploads,
       scratch, parameter storage, cached textures, and deferred retirement under overlapping frames.
 - [ ] Verify representative DPR2 filter/thumbnail workloads under the existing 128 MiB Wasm and
@@ -192,8 +211,8 @@ flowchart TD
     GPU --> METAL[Metal resources, completion and surfaces]
     GPU --> VULKAN[Vulkan resources, completion and surfaces]
     GPU --> WEB[Donner browser bridge to navigator.gpu]
-    IR[Typed Donner shader IR] --> BUILD[Build-time WGSL / MSL / SPIR-V generation]
-    BUILD --> ARTIFACTS[Backend shader artifacts and layouts]
+    WGSL[Authored WGSL sources] --> COMPILER[C++20 constant-evaluation WGSL compiler]
+    COMPILER --> ARTIFACTS[Frozen WGSL / MSL / SPIR-V artifacts with reflected layouts]
     ARTIFACTS --> GEODE
     ARTIFACTS --> UI
     TESTS[Recording and model tests] -.-> GPU
@@ -241,14 +260,24 @@ after shader selection, resources, mapping, UI, and platform presentation work t
 
 ### Shader and build boundary
 
-Typed shader programs are authored using Donner's IR and translated to deterministic backend
-artifacts at build time. Production binaries consume the artifact appropriate to the selected
-backend without linking shader emitters merely to regenerate constant shader text.
+Production shaders are authored as inline WGSL and compiled by Donner's C++20 `consteval` compiler
+into frozen artifacts during the ordinary C++ build ([WGSL shader compilation](../wgsl_compiler.md)).
+Each artifact library retains exactly the projection its consumer uses: the WebGPU adapter links
+WGSL-only artifacts, native Apple consumers link MSL-only artifacts, native Linux consumers link
+SPIR-V-only artifacts, and all-projection artifacts are test controls. Linked-binary isolation
+probes prove that a production artifact carries no other projection; the absence of compiler and
+emitter symbols from application binaries is part of the audit acceptance below.
+The compiler implements a documented v1 profile of WGSL; source outside the profile fails C++
+compilation with a named diagnostic, and there is no runtime parser, generator or fallback.
 
-WGSL/MSL/SPIR-V remain build outputs, not committed or large inline emitted-shader goldens. Use
-focused structure/layout/error assertions, deterministic generation, real compiler validation,
-native execution, and strict renderer pixel comparisons. IR serialization tests retain their
-separate role.
+Host parameter layouts, binding slots, entry names and workgroup shapes are reflected from the
+same compile and checked against the host structures with `static_assert`, so an interface edit
+fails the build instead of changing the bytes a shader reads. The shipped WGSL projection is the
+authored source without comments, indentation or blank lines; MSL and SPIR-V are emitted from the
+parsed module. Committed shader text is the authored source; emitted projections are never
+committed as goldens. Verification uses the compiler's own tests, offline Metal and SPIR-V
+validation, native execution, and strict renderer pixel comparisons. The typed IR and its emitters
+remain as test fixtures only.
 
 Bazel is the primary build. CMake must describe the same native sources, shader artifacts, platform
 libraries, and feature flags. Tiny renderer profiles must remain independent of GPU backend linkage.
@@ -307,7 +336,7 @@ operation and shader manifests must use the complete repository input set, with
 | Contract / remaining work | Owning verification |
 | --- | --- |
 | Indexed draws, resource identity, command/lifetime validation | `//donner/gpu:gpu_tests`; extend native Metal/Vulkan execution tests and browser contract tests for indexed draws. |
-| Shader structure and emitter contracts | `//donner/gpu/shader:shader_tests`; `msl_xcrun_validation_tests`, `spirv_val_validation_tests`, and `wgsl_emitter_geode_validation_tests` in the same package. |
+| Compiled shader artifacts, reflection and projection isolation | `//donner/gpu/shader/wgsl:wgsl_tests` and `wgsl_diagnostics_tests`, `//donner/gpu/shader:shader_tests`, `generated_program_descriptor_tests`, `msl_xcrun_validation_tests`, `spirv_val_validation_tests`, `wgsl_emitter_geode_validation_tests` (each shipped WGSL projection through the Geode WebGPU device), the linked isolation probes under `//donner/gpu/shader/artifact_tests`, and the parser fuzzer. |
 | Native vertex layouts and pixels | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests`; add the matching browser execution cases. |
 | Snapshot/target lifetime, alpha, cropping, refusal | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates. |
 | Filter resource ordering, scratch and working sets | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites. |
@@ -371,3 +400,4 @@ The exact integrated candidate must satisfy all applicable platform gates:
 - [0042: Geode Slug conformance](0042-geode_slug_conformance.md)
 - [0043: Deterministic replay testing](0043-deterministic_replay_testing.md)
 - [0064: GPU release matrix and binary-size budgets](0064-gpu_release_matrix.md)
+- [WGSL shader compilation](../wgsl_compiler.md)
