@@ -499,7 +499,7 @@ donner_cc_library(
 donner_cc_test(
     name = "geode_shaders_tests_impl",
     # 30 cases that each build and run a real shader pipeline, 66 s of test time measured on a
-    # software rasterizer, so the implicit "small" this used to take is wrong by construction:
+    # software-rasterizer lane, so the implicit "small" this used to take is wrong by construction:
     # that budget is 60 s. See the wrapper below for why this one does not keep the tight
     # hang-detecting timeout its neighbours use.
     size = "medium",

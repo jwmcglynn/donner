@@ -130,13 +130,13 @@ donner_multi_transitioned_test(
 # path a pinned software driver never would.
 donner_cc_test(
     name = "vulkan_color_matrix_tests",
-    # 171 cases over every compute slice, 69 s of test time measured on a software
-    # Vulkan (lavapipe) lane, so the implicit "small" this used to take is wrong by
-    # construction: that budget is 60 s. Nothing here is individually slow - the
-    # slowest case is 2.5 s and the median is 0.3 s - the suite is simply large, so
-    # the declaration is what changes rather than the tests. Medium's 300 s leaves
-    # better than four times the measured headroom while still killing a driver hang
-    # in five minutes.
+    # 174 cases across three suites, 69 s of test time measured on a software-rasterizer
+    # lane (across the 171 that reported timings), so the implicit "small" this used to
+    # take is wrong by construction: that budget is 60 s. Nothing here is individually
+    # slow - the slowest case is 2.5 s and the median is 0.3 s - the suite is simply
+    # large, so the declaration is what changes rather than the tests. Medium's 300 s is
+    # better than four times the measured time while still killing a driver hang in five
+    # minutes.
     size = "medium",
     srcs = ["VulkanColorMatrix_tests.cc"],
     env = {
