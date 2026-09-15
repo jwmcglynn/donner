@@ -27,6 +27,7 @@
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
+#include "donner/gpu/vulkan/VulkanSwapchain.h"
 
 namespace donner::gpu::vulkan::tests {
 namespace {
@@ -170,6 +171,18 @@ TEST_F(VulkanSurfaceTest, ADeviceCreatedWithoutPresentationSupportRefusesEverySu
   EXPECT_TRUE(device_->supportsPresentation());
 }
 
+TEST(VulkanPresentationCreationTest, RefusesAnUnavailableRequiredInstanceExtension) {
+  static constexpr const char* kUnavailable[] = {"VK_DONNER_extension_that_does_not_exist"};
+  EXPECT_THAT(VulkanDevice::CreateWithPresentationSupport(kUnavailable), testing::IsNull());
+}
+
+TEST(VulkanPresentationCreationTest, ExpandsTheUndefinedSurfaceFormatWildcard) {
+  const std::vector<VkSurfaceFormatKHR> wildcard = {
+      {VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+  EXPECT_THAT(RuntimeSurfaceFormatsForTest(wildcard),
+              testing::UnorderedElementsAre(TextureFormat::BGRA8Unorm, TextureFormat::RGBA8Unorm));
+}
+
 TEST_F(VulkanSurfaceTest, PointsAWindowSystemKindAtTheEmbedderPath) {
   // Making a surface from a raw window would need that window system's client headers. An
   // embedder already links one, so the refusal names the path that works rather than leaving
@@ -307,6 +320,21 @@ TEST_F(VulkanSurfaceTest, AFrameIsARenderTargetTheRuntimeCanDrawIntoAndReadBack)
   EXPECT_THAT(device_->createTextureView(frame.texture, TextureViewDescriptor{"after"}),
               IsGpuError(GpuErrorType::InvalidHandle))
       << "The swapchain owns the frame once it has been handed over";
+}
+
+TEST_F(VulkanSurfaceTest, RefusesPresentationAfterTheAcquiredTextureIsReleasedAndRecycled) {
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  const uint32_t frameSlot = frame.texture.slotIndex();
+  frame.texture = Texture{};
+
+  Texture replacement =
+      unwrap(device_->createTexture(TextureDescriptor{
+                 "replacement", {1, 1}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}),
+             "createTexture");
+  ASSERT_EQ(replacement.slotIndex(), frameSlot);
+  EXPECT_THAT(device_->presentSurface(surface),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("released or replaced")));
 }
 
 TEST_F(VulkanSurfaceTest, PresentsMoreFramesThanTheSwapchainHoldsImages) {

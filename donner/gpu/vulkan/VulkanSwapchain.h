@@ -17,6 +17,12 @@
 
 namespace donner::gpu::vulkan {
 
+/// Converts native surface formats into the formats the runtime can present.
+/// Exposed for deterministic capability tests whose driver cannot advertise the wildcard.
+/// @param nativeFormats Formats reported by the presentation engine.
+std::vector<TextureFormat> RuntimeSurfaceFormatsForTest(
+    const std::vector<VkSurfaceFormatKHR>& nativeFormats);
+
 /// What a swapchain borrows from the device that owns it. None of these are owned here, and all
 /// of them outlive the swapchain.
 struct VulkanSurfaceContext {
@@ -261,7 +267,7 @@ private:
   void pollPendingSubmissions();
 
   /// Waits for every submission this swapchain made, then releases their objects.
-  void drainPendingSubmissions();
+  Status drainPendingSubmissions();
 
   /// Releases the swapchain, its per-image semaphores, and the acquire ring.
   void destroySwapchain();

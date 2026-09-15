@@ -692,7 +692,8 @@ struct InstanceSetup {
 /// enumerate VK_KHR_surface. VK_EXT_headless_surface is added when present: it is what lets the
 /// presentation contract be exercised on a machine with no display at all.
 /// @param api Resolved global entry points.
-std::vector<const char*> EnumeratePresentationExtensions(const VulkanApi& api) {
+std::vector<const char*> EnumeratePresentationExtensions(
+    const VulkanApi& api, std::span<const char* const> requiredExtensions) {
   std::vector<const char*> enabledExtensions;
   uint32_t extensionCount = 0;
   if (api.vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) != VK_SUCCESS ||
@@ -717,6 +718,16 @@ std::vector<const char*> EnumeratePresentationExtensions(const VulkanApi& api) {
   if (offers(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
     enabledExtensions.push_back(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
   }
+  for (const char* required : requiredExtensions) {
+    if (required == nullptr || !offers(required)) {
+      return {};
+    }
+    if (std::ranges::none_of(enabledExtensions, [required](const char* enabled) {
+          return std::strcmp(enabled, required) == 0;
+        })) {
+      enabledExtensions.push_back(required);
+    }
+  }
   return enabledExtensions;
 }
 
@@ -724,7 +735,8 @@ std::vector<const char*> EnumeratePresentationExtensions(const VulkanApi& api) {
 /// creates the instance with the validation layer and debug-utils messenger extension when they
 /// are available, plus the surface extensions when presentation was asked for.
 /// @param withPresentation Whether to enable the surface extensions as well.
-InstanceSetup CreateInstance(bool withPresentation = false) {
+InstanceSetup CreateInstance(bool withPresentation = false,
+                             std::span<const char* const> requiredExtensions = {}) {
   InstanceSetup setup;
   // Vulkan is reached entirely through the loader this opens: nothing in this backend is a
   // link-time symbol, so a machine without a Vulkan runtime reports it here instead of failing
@@ -757,7 +769,7 @@ InstanceSetup CreateInstance(bool withPresentation = false) {
   // Presentation is opt in, so the default instance stays exactly as headless as it was.
   std::vector<const char*> presentationExtensions;
   if (withPresentation) {
-    presentationExtensions = EnumeratePresentationExtensions(api);
+    presentationExtensions = EnumeratePresentationExtensions(api, requiredExtensions);
     if (presentationExtensions.empty()) {
       return {};  // Asked to present on a loader with no surface extension: fail closed.
     }
@@ -1751,13 +1763,15 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithTimelineSemaphoreForTest()
   return CreateImpl(true, false);
 }
 
-std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithPresentationSupport() {
-  return CreateImpl(false, true);
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithPresentationSupport(
+    std::span<const char* const> requiredInstanceExtensions) {
+  return CreateImpl(false, true, requiredInstanceExtensions);
 }
 
-std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaphoreForTest,
-                                                       bool enablePresentation) {
-  InstanceSetup setup = CreateInstance(enablePresentation);
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
+    bool enableTimelineSemaphoreForTest, bool enablePresentation,
+    std::span<const char* const> requiredInstanceExtensions) {
+  InstanceSetup setup = CreateInstance(enablePresentation, requiredInstanceExtensions);
   if (setup.loader == nullptr) {
     return nullptr;
   }
@@ -3860,9 +3874,15 @@ Result<SurfaceStatus> VulkanDevice::onPresentSurface(uint32_t slotIndex) {
   // What last touched the frame is the source scope of the barrier into the layout the
   // presentation engine reads; an untouched frame reports having touched nothing, which is
   // exactly the barrier a frame nobody drew into needs.
-  const TextureSyncState state = textureSlot.has_value()
-                                     ? impl_->syncStates.committedStateOf(*textureSlot)
-                                     : TextureSyncState{};
+  TextureSyncState state;
+  if (textureSlot.has_value()) {
+    const Impl::TextureRecord* record = FindRecord(impl_->textures, *textureSlot);
+    if (record == nullptr || record->image != frameImage) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "presentSurface: the acquired texture was released or replaced"};
+    }
+    state = impl_->syncStates.committedStateOf(*textureSlot);
+  }
 
   Result<SurfaceStatus> status = surface->present(state);
   impl_->releaseFrameTextureSlot(slotIndex, frameImage);

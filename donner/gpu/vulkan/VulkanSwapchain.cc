@@ -267,6 +267,10 @@ Result<std::vector<VkPresentModeKHR>> QueryPresentModes(const VulkanApi& api,
 ///
 /// @param nativeFormats Formats the surface offers.
 std::vector<TextureFormat> RuntimeFormats(const std::vector<VkSurfaceFormatKHR>& nativeFormats) {
+  if (nativeFormats.size() == 1 && nativeFormats.front().format == VK_FORMAT_UNDEFINED &&
+      nativeFormats.front().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+    return {TextureFormat::BGRA8Unorm, TextureFormat::RGBA8Unorm};
+  }
   std::vector<TextureFormat> formats;
   for (const VkSurfaceFormatKHR& nativeFormat : nativeFormats) {
     if (nativeFormat.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
@@ -372,6 +376,11 @@ std::optional<SurfaceStatus> RuntimeStatus(VkResult result) {
 
 }  // namespace
 
+std::vector<TextureFormat> RuntimeSurfaceFormatsForTest(
+    const std::vector<VkSurfaceFormatKHR>& nativeFormats) {
+  return RuntimeFormats(nativeFormats);
+}
+
 Result<std::unique_ptr<VulkanSwapchain>> VulkanSwapchain::Create(
     const VulkanSurfaceContext& context, const SurfaceDescriptor& descriptor) {
   const VulkanApi& api = *context.api;
@@ -414,7 +423,11 @@ VulkanSwapchain::VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceK
     : context_(context), surface_(surface), ownsSurface_(ownsSurface) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
-  drainPendingSubmissions();
+  const VkResult idle = context_.api->vkDeviceWaitIdle(context_.device);
+  if (idle != VK_SUCCESS && idle != VK_ERROR_DEVICE_LOST) {
+    return;
+  }
+  (void)drainPendingSubmissions();
   destroySwapchain();
   // An embedder's surface outlives its swapchain: the library that made it destroys it, usually
   // with the window, and doing it here would destroy an object that library still tracks.
@@ -513,7 +526,9 @@ Status VulkanSwapchain::createSwapchainUnguarded() {
     if (const VkResult result = api.vkDeviceWaitIdle(context_.device); result != VK_SUCCESS) {
       return VkError("vkDeviceWaitIdle", result);
     }
-    drainPendingSubmissions();
+    if (Status drained = drainPendingSubmissions(); drained.hasError()) {
+      return drained;
+    }
   }
 
   VkSurfaceCapabilitiesKHR native = {};
@@ -912,15 +927,19 @@ void VulkanSwapchain::pollPendingSubmissions() {
   }
 }
 
-void VulkanSwapchain::drainPendingSubmissions() {
+Status VulkanSwapchain::drainPendingSubmissions() {
   const VulkanApi& api = *context_.api;
   std::vector<VkFence> fences;
   for (const PendingSubmission& submission : pending_) {
     fences.push_back(submission.fence);
   }
   if (!fences.empty()) {
-    api.vkWaitForFences(context_.device, static_cast<uint32_t>(fences.size()), fences.data(),
-                        VK_TRUE, kDrainTimeoutNanoseconds);
+    const VkResult result =
+        api.vkWaitForFences(context_.device, static_cast<uint32_t>(fences.size()), fences.data(),
+                            VK_TRUE, kDrainTimeoutNanoseconds);
+    if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST) {
+      return VkError("vkWaitForFences (surface drain)", result);
+    }
   }
   for (PendingSubmission& submission : pending_) {
     api.vkFreeCommandBuffers(context_.device, context_.commandPool, 1, &submission.commandBuffer);
@@ -928,6 +947,7 @@ void VulkanSwapchain::drainPendingSubmissions() {
   }
   pending_.clear();
   std::ranges::fill(acquireRingFences_, VK_NULL_HANDLE);
+  return OkStatus();
 }
 
 void VulkanSwapchain::destroySwapchain() {

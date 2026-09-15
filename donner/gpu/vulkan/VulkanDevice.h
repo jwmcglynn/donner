@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -122,8 +123,12 @@ public:
    * a device created by \ref Create refuses every surface rather than appearing to support one.
    * Whether the queue can present to a particular surface is checked when that surface is
    * created, since that is the first point at which the question can be asked.
+   *
+   * @param requiredInstanceExtensions Platform surface extensions the embedder needs enabled on
+   *   the returned instance. Creation fails when the loader does not offer any requested name.
    */
-  static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport();
+  static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport(
+      std::span<const char* const> requiredInstanceExtensions = {});
 
   /// Whether this device was created with presentation support. Test accessor, so a suite can
   /// say which device it is looking at rather than inferring it from a refusal.
@@ -369,8 +374,9 @@ private:
   /// the surface/swapchain extensions presentation needs.
   /// @param enableTimelineSemaphoreForTest Whether to request VK_KHR_timeline_semaphore.
   /// @param enablePresentation Whether to request the surface and swapchain extensions.
-  static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest,
-                                                  bool enablePresentation);
+  static std::unique_ptr<VulkanDevice> CreateImpl(
+      bool enableTimelineSemaphoreForTest, bool enablePresentation,
+      std::span<const char* const> requiredInstanceExtensions = {});
 
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();
