@@ -226,6 +226,9 @@ TEST_F(EditorCollaborationTest, DraftFeedbackKeepsItsAnchorWhileTheElementMoves)
   Json args = revision();
   args["edits"] = {{{"selector", "#box"}, {"attribute", "transform"}, {"value", "translate(5 7)"}}};
   ASSERT_THAT(call("apply_edits", args)["isError"], Eq(false));
+  controller.refreshCommentAnchor(*draft);
+  EXPECT_THAT(draft->documentPoint, Eq(Vector2d(10, 20)));
+  EXPECT_THAT(draft->presentedPoint, Eq(Vector2d(15, 27)));
   std::string error;
   ASSERT_THAT(controller.addAnchoredComment(*draft, "Comment written during the move", &error),
               Eq(true));

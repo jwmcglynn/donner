@@ -64,6 +64,9 @@ public:
   bool isCurrentComment(const EditorComment& comment) const;
   /// Refresh element-relative anchors at a safe frame boundary.
   void refreshCommentAnchors();
+  /// Refresh a retained or draft anchor at a safe frame boundary.
+  /// @param comment Anchor whose presented position follows the referenced element.
+  void refreshCommentAnchor(EditorComment& comment);
   /// Feedback across retained document sessions for private persistence.
   nlohmann::json feedbackArchive() const;
   /// Monotonic feedback cursor for event-driven clients.

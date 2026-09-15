@@ -12,6 +12,10 @@ void EditorCommentsPresenter::beginComment(EditorCollaboration& collaboration, V
   error_.clear();
 }
 
+void EditorCommentsPresenter::refreshPendingAnchor(EditorCollaboration& collaboration) {
+  if (pendingAnchor_) collaboration.refreshCommentAnchor(*pendingAnchor_);
+}
+
 void EditorCommentsPresenter::drawPins(EditorCollaboration& collaboration,
                                        const ViewportState& viewport) {
   const ImVec2 oldCursor = ImGui::GetCursorScreenPos();

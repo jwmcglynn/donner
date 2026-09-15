@@ -19,6 +19,9 @@ public:
   /// Start a comment at an observed document point and optional element.
   void beginComment(EditorCollaboration& collaboration, Vector2d point,
                     std::optional<svg::SVGElement> element);
+  /// Update the draft's presented point when the displayed document is current.
+  /// @param collaboration Controller that owns the current document and anchor mapping.
+  void refreshPendingAnchor(EditorCollaboration& collaboration);
   /// Draw comment pins using the same viewport as the presented artwork.
   void drawPins(EditorCollaboration& collaboration, const ViewportState& viewport);
   /// Draw the non-modal comment composer and feedback list.

@@ -437,16 +437,20 @@ void EditorCollaboration::refreshCommentAnchors() {
   anchorFrameVersion_ = version;
   auto& doc = app_.document().document();
   auto access = doc.writeAccess();
-  for (auto& comment : comments_) {
-    if (!isCurrentComment(comment) || comment.elementId.empty()) continue;
-    auto element = doc.querySelector(ElementIdSelector(comment.elementId));
-    comment.orphaned = !element.has_value();
-    if (element && comment.elementPoint && element->isa<svg::SVGGraphicsElement>()) {
-      const Vector2d point =
-          element->cast<svg::SVGGraphicsElement>().elementFromWorld().transformPosition(
-              *comment.elementPoint);
-      if (std::isfinite(point.x) && std::isfinite(point.y)) comment.presentedPoint = point;
-    }
+  for (auto& comment : comments_) refreshCommentAnchor(comment);
+}
+
+void EditorCollaboration::refreshCommentAnchor(EditorComment& comment) {
+  if (!app_.hasDocument() || !isCurrentComment(comment) || comment.elementId.empty()) return;
+  auto& doc = app_.document().document();
+  auto access = doc.writeAccess();
+  auto element = doc.querySelector(ElementIdSelector(comment.elementId));
+  comment.orphaned = !element.has_value();
+  if (element && comment.elementPoint && element->isa<svg::SVGGraphicsElement>()) {
+    const Vector2d point =
+        element->cast<svg::SVGGraphicsElement>().elementFromWorld().transformPosition(
+            *comment.elementPoint);
+    if (std::isfinite(point.x) && std::isfinite(point.y)) comment.presentedPoint = point;
   }
 }
 

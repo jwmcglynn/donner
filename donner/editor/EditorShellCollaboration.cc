@@ -104,8 +104,10 @@ void EditorShell::renderCollaborationPins(const ViewportState& viewport, bool li
   if (!collaboration_) return;
   if (!renderCoordinator_.asyncRenderer().isBusy() &&
       (liveDrag || app_.document().currentFrameVersion() <=
-                       renderCoordinator_.displayedDocVersionForDiagnostics()))
+                       renderCoordinator_.displayedDocVersionForDiagnostics())) {
     collaboration_->refreshCommentAnchors();
+    commentsPresenter_.refreshPendingAnchor(*collaboration_);
+  }
   commentsPresenter_.drawPins(*collaboration_, viewport);
 }
 
