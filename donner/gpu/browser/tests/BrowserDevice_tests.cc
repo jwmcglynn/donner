@@ -162,7 +162,7 @@ TEST(BrowserDevice, CreatesResourcesThroughTheBridgeWithEncodedValues) {
       fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled | TextureUsage::CopyDst));
   ASSERT_THAT(texture, HasResult());
 
-  EXPECT_THAT(fixture.bridge->calls,
+  EXPECT_THAT(*fixture.bridge->calls,
               ElementsAre("beginDeviceRequest", "createBuffer id=1 byteSize=256 usage=33",
                           "createTexture id=2 size=4x4 format=1 usage=10"));
 }
@@ -318,11 +318,11 @@ TEST(BrowserDevice, DiscardsARecordingLeftOpenByARefusedSubmission) {
   // The next submission opens a fresh recording rather than continuing that one, so nothing
   // recorded before the refusal can reach the queue.
   fixture.bridge->failOperation.clear();
-  const size_t beforeSubmit = fixture.bridge->calls.size();
+  const size_t beforeSubmit = fixture.bridge->calls->size();
   ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
 
-  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
-                                          fixture.bridge->calls.end());
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
+                                          fixture.bridge->calls->end());
   EXPECT_THAT(replayed, ElementsAre("beginCommandBuffer serial=1",
                                     "beginRenderPass attachments=[(view=2 load=1 store=1 "
                                     "clear=[0.000,0.000,0.000,1.000])]",
@@ -345,6 +345,7 @@ TEST(BrowserDevice, HandsAFrameBackRatherThanDestroyingItWhenTheDeviceIsDestroye
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
   std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
 
   SurfaceDescriptor surfaceDescriptor;
   surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
@@ -364,8 +365,8 @@ TEST(BrowserDevice, HandsAFrameBackRatherThanDestroyingItWhenTheDeviceIsDestroye
   // surface rather than destroying it.
   fixture.device.reset();
   EXPECT_THAT(objects->size(), 0u);
-  EXPECT_THAT(FindCall(fixture.bridge->calls, "abandonCurrentTexture surface=1"), true);
-  EXPECT_THAT(FindCall(fixture.bridge->calls, "destroyObject kind=texture id=2"), false);
+  EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);
+  EXPECT_THAT(FindCall(*calls, "destroyObject kind=texture id=2"), false);
 }
 
 TEST(BrowserDevice, SurfacesTheBrowsersRefusalAsAnIdentifierFailure) {
@@ -443,11 +444,11 @@ TEST(BrowserDevice, MirrorsARecordedRenderPassOntoTheBridgeInRecordingOrder) {
   Result<CommandBuffer> commandBuffer = commands->finish();
   ASSERT_THAT(commandBuffer, HasResult());
 
-  const size_t beforeSubmit = fixture.bridge->calls.size();
+  const size_t beforeSubmit = fixture.bridge->calls->size();
   ASSERT_THAT(fixture.device->submit(std::move(commandBuffer).result()), HasResult());
 
-  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
-                                          fixture.bridge->calls.end());
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
+                                          fixture.bridge->calls->end());
   EXPECT_THAT(replayed,
               ElementsAre("beginCommandBuffer serial=1",
                           "beginRenderPass attachments=[(view=2 load=1 store=1 "
@@ -515,11 +516,11 @@ TEST(BrowserDevice, MirrorsARecordedComputePassOntoTheBridgeInRecordingOrder) {
   Result<CommandBuffer> commandBuffer = commands->finish();
   ASSERT_THAT(commandBuffer, HasResult());
 
-  const size_t beforeSubmit = fixture.bridge->calls.size();
+  const size_t beforeSubmit = fixture.bridge->calls->size();
   ASSERT_THAT(fixture.device->submit(std::move(commandBuffer).result()), HasResult());
 
-  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
-                                          fixture.bridge->calls.end());
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
+                                          fixture.bridge->calls->end());
   EXPECT_THAT(
       replayed,
       ElementsAre("beginCommandBuffer serial=1", "beginComputePass",
@@ -556,11 +557,11 @@ TEST(BrowserDevice, MirrorsRecordedCopiesOntoTheBridge) {
   Result<CommandBuffer> commandBuffer = commands->finish();
   ASSERT_THAT(commandBuffer, HasResult());
 
-  const size_t beforeSubmit = fixture.bridge->calls.size();
+  const size_t beforeSubmit = fixture.bridge->calls->size();
   ASSERT_THAT(fixture.device->submit(std::move(commandBuffer).result()), HasResult());
 
-  const std::vector<std::string> replayed(fixture.bridge->calls.begin() + beforeSubmit,
-                                          fixture.bridge->calls.end());
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
+                                          fixture.bridge->calls->end());
   EXPECT_THAT(replayed,
               ElementsAre("beginCommandBuffer serial=1",
                           "copyTextureToBuffer texture=1 buffer=3 offset=0 bytesPerRow=256 "
@@ -775,7 +776,7 @@ TEST(BrowserDevice, WritesTexelRowsThroughTheBridge) {
   ASSERT_THAT(fixture.device->writeTexture(texture.result(), payload, layout, Extent2d{4, 4}),
               IsOk());
 
-  EXPECT_THAT(fixture.bridge->calls.back(),
+  EXPECT_THAT(fixture.bridge->calls->back(),
               "writeTexture texture=1 bytes=1024 offset=0 bytesPerRow=256 rowsPerImage=4 "
               "destination=(0,0) size=4x4");
 }

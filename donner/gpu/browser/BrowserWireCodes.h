@@ -6,9 +6,22 @@
 /// The browser side is JavaScript, so it cannot share the runtime's C++ enumerators. Rather than
 /// let it read their underlying values - which would turn reordering an enumerator into a silent
 /// change of what a descriptor means - every enumerated value that crosses the boundary is
-/// translated here into a code that is fixed for the life of the protocol. `library_donner_gpu.js`
-/// holds the same codes, and the tests in this package pin each one, so the two sides cannot
-/// drift apart without a test failing.
+/// translated here into a code that is fixed for the life of the protocol.
+///
+/// Three things keep the two halves in agreement, and it is worth being exact about which does
+/// what, because none of them covers the others:
+///
+/// - The translations below are exhaustive switches, so adding an enumerator without giving it a
+///   code fails to compile and removing one stops compiling at its use.
+/// - The tests in this package pin every code, so changing a number on this side is a test
+///   failure. They cannot see the JavaScript side.
+/// - \ref ProtocolCodeTable is compared against the table `library_donner_gpu.js` holds, element
+///   by element, before a device is requested. That is the check that covers the JavaScript side,
+///   and it is a runtime one: a disagreement fails the device request rather than the build.
+///
+/// Linking covers something narrower still: it proves the C++ half references no entry point the
+/// library leaves undefined. It does not check parameter lists, because a JavaScript function
+/// ignores extra arguments and reads missing ones as undefined.
 ///
 /// Every translation is total over the enumerators it accepts and returns nullopt for anything
 /// else, so a value that reached here without passing the runtime's own enum validation stops at

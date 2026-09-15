@@ -64,7 +64,10 @@ public:
   SurfaceStatus acquireStatus = SurfaceStatus::Success;
 
   /// Every accepted call, one deterministic line each, in order.
-  std::vector<std::string> calls;
+  ///
+  /// Shared for the same reason the registry below is: the device owns the bridge, so a test that
+  /// looks at what teardown did would otherwise be reading a destroyed vector.
+  std::shared_ptr<std::vector<std::string>> calls = std::make_shared<std::vector<std::string>>();
 
   /// The objects this bridge holds, by identifier.
   ///
@@ -99,7 +102,7 @@ public:
     if (beginStatus != BridgeStatus::Success) {
       return beginStatus;
     }
-    calls.push_back("beginDeviceRequest");
+    calls->push_back("beginDeviceRequest");
     return BridgeStatus::Success;
   }
 
@@ -243,7 +246,7 @@ public:
     }
     objects->erase(id);
     mappings_.erase(id);
-    calls.push_back(std::format("destroyObject kind={} id={}", BrowserObjectKindName(kind), id));
+    calls->push_back(std::format("destroyObject kind={} id={}", BrowserObjectKindName(kind), id));
     return BridgeStatus::Success;
   }
 
@@ -306,7 +309,7 @@ public:
     if (status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back("endRenderPass");
+    calls->push_back("endRenderPass");
     passOpen_ = false;
     return BridgeStatus::Success;
   }
@@ -327,7 +330,7 @@ public:
     if (status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back("endComputePass");
+    calls->push_back("endComputePass");
     passOpen_ = false;
     return BridgeStatus::Success;
   }
@@ -435,7 +438,7 @@ public:
     if (passOpen_) {
       return BridgeStatus::Failed;
     }
-    calls.push_back(line);
+    calls->push_back(line);
     encoderOpen_ = false;
     return BridgeStatus::Success;
   }
@@ -488,7 +491,7 @@ public:
     }
     objects->erase(mappingId);
     mappings_.erase(mappingId);
-    calls.push_back(std::format("unmapBuffer mapping={}", mappingId));
+    calls->push_back(std::format("unmapBuffer mapping={}", mappingId));
     return BridgeStatus::Success;
   }
 
@@ -528,7 +531,7 @@ public:
     if (acquireStatus != SurfaceStatus::Success && acquireStatus != SurfaceStatus::Outdated) {
       // No frame came back, so nothing is registered under the identifier the runtime minted for
       // one; recording the call still shows the acquisition was attempted.
-      calls.push_back(std::format("acquireCurrentTexture surface={} status=no-frame", surfaceId));
+      calls->push_back(std::format("acquireCurrentTexture surface={} status=no-frame", surfaceId));
       return BridgeStatus::Success;
     }
     const BridgeStatus created =
@@ -630,7 +633,7 @@ private:
       return BridgeStatus::Failed;
     }
     (*objects)[id] = kind;
-    calls.push_back(line);
+    calls->push_back(line);
     return BridgeStatus::Success;
   }
 
@@ -639,7 +642,7 @@ private:
     if (const BridgeStatus status = guard(line); status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back(line);
+    calls->push_back(line);
     return BridgeStatus::Success;
   }
 
@@ -652,7 +655,7 @@ private:
     if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back(line);
+    calls->push_back(line);
     return BridgeStatus::Success;
   }
 
@@ -661,7 +664,7 @@ private:
     if (const BridgeStatus status = requirePass(line); status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back(line);
+    calls->push_back(line);
     return BridgeStatus::Success;
   }
 
@@ -674,7 +677,7 @@ private:
     if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back(line);
+    calls->push_back(line);
     return BridgeStatus::Success;
   }
 
@@ -688,7 +691,7 @@ private:
     if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
       return status;
     }
-    calls.push_back(line);
+    calls->push_back(line);
     return BridgeStatus::Success;
   }
 

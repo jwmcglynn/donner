@@ -17,8 +17,12 @@ namespace donner::gpu::browser {
  *
  * Every method forwards to one entry point of `library_donner_gpu.js`, which owns the browser
  * objects and performs the identifier, kind and ownership checks on its side. This class holds no
- * browser state of its own beyond the mapped bytes it copies out of the browser's heap and the
- * pipeline being described, so the two sides cannot disagree about what exists.
+ * browser state of its own beyond the mapped bytes it copies out of the browser's heap, so what
+ * exists is recorded in one place rather than in two that could disagree.
+ *
+ * \ref beginDeviceRequest compares \ref ProtocolCodeTable against the table the library holds
+ * before asking for a device, so the two halves agree on what their numbers mean before anything
+ * is built on them. See BrowserWireCodes.h for what that check covers and what it does not.
  *
  * Sizes and offsets cross as doubles rather than 64-bit integers. Every value that crosses is
  * bounded far below the 2^53 a double represents exactly - the runtime caps buffers at 1 GiB and
