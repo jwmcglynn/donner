@@ -844,8 +844,16 @@ test("browser overlay control stays disabled after a normal editor frame", async
     frames: window.__donnerMainLoopRenderedFrames || 0,
     overlays: window.__donnerOverlayStats,
   }));
+  expect(before.overlays).toMatchObject({
+    compositorTileOverlay: expect.any(Boolean),
+    geometryDebugOverlay: expect.any(Boolean),
+  });
   const accepted = await page.evaluate(() => {
-    const result = window.Module?._donner_set_overlay_state?.(0, 1) ?? 0;
+    const control = window.Module?._donner_set_overlay_state;
+    if (typeof control !== "function") {
+      return null;
+    }
+    const result = [control(0, 1), control(1, 1)];
     window.__donnerEditorFrameRequested = true;
     return result;
   });
@@ -854,7 +862,12 @@ test("browser overlay control stays disabled after a normal editor frame", async
     .toBeGreaterThan(before.frames);
   const after = await page.evaluate(() => window.__donnerOverlayStats);
 
-  expect(accepted, "a normal editor URL must reject the browser overlay control").toBe(0);
+  expect(accepted, "the browser overlay control export must exist").not.toBeNull();
+  expect(accepted, "a normal editor URL must reject both overlay controls").toEqual([0, 0]);
+  expect(after).toMatchObject({
+    compositorTileOverlay: expect.any(Boolean),
+    geometryDebugOverlay: expect.any(Boolean),
+  });
   expect(after?.compositorTileOverlay).toBe(before.overlays?.compositorTileOverlay);
   expect(after?.geometryDebugOverlay).toBe(before.overlays?.geometryDebugOverlay);
   expect(failures).toEqual([]);
