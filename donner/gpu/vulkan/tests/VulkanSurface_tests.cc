@@ -34,8 +34,8 @@ namespace donner::gpu::vulkan {
 namespace {
 
 struct TeardownRecorder {
-  VkResult idleResult = VK_SUCCESS;
-  VkResult fenceResult = VK_SUCCESS;
+  std::vector<VkResult> fenceResults;
+  size_t fenceWait = 0;
   std::vector<std::string_view> calls;
 };
 
@@ -43,13 +43,20 @@ TeardownRecorder* gTeardownRecorder = nullptr;
 
 VKAPI_ATTR VkResult VKAPI_CALL RecordDeviceWaitIdle(VkDevice) {
   gTeardownRecorder->calls.push_back("wait-idle");
-  return gTeardownRecorder->idleResult;
+  return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL RecordWaitForFences(VkDevice, uint32_t, const VkFence*, VkBool32,
                                                    uint64_t) {
   gTeardownRecorder->calls.push_back("wait-fences");
-  return gTeardownRecorder->fenceResult;
+  const size_t index = gTeardownRecorder->fenceWait++;
+  return index < gTeardownRecorder->fenceResults.size() ? gTeardownRecorder->fenceResults[index]
+                                                        : VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordResetFences(VkDevice, uint32_t, const VkFence*) {
+  gTeardownRecorder->calls.push_back("reset-fences");
+  return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL RecordFreeCommandBuffers(VkDevice, VkCommandPool, uint32_t,
@@ -92,6 +99,7 @@ public:
     VulkanApi api;
     api.vkDeviceWaitIdle = RecordDeviceWaitIdle;
     api.vkWaitForFences = RecordWaitForFences;
+    api.vkResetFences = RecordResetFences;
     api.vkFreeCommandBuffers = RecordFreeCommandBuffers;
     api.vkDestroyFence = RecordDestroyFence;
     api.vkDestroySemaphore = RecordDestroySemaphore;
@@ -109,6 +117,8 @@ public:
         new VulkanSwapchain(context, FakeHandle<VkSurfaceKHR>(4), true));
     swapchain->swapchain_ = FakeHandle<VkSwapchainKHR>(5);
     swapchain->handoverSemaphores_.push_back(FakeHandle<VkSemaphore>(6));
+    swapchain->presentFences_.push_back(FakeHandle<VkFence>(10));
+    swapchain->presentFencePending_.push_back(true);
     swapchain->acquireSemaphores_.push_back(FakeHandle<VkSemaphore>(7));
     swapchain->pending_.push_back(
         VulkanSwapchain::PendingSubmission{FakeHandle<VkFence>(8), FakeHandle<VkCommandBuffer>(9)});
@@ -294,24 +304,25 @@ TEST(VulkanPresentationCreationTest, ExpandsTheUndefinedSurfaceFormatWildcard) {
 TEST(VulkanPresentationCreationTest, TeardownWaitsForPresentAndSubmissionBeforeDestroying) {
   TeardownRecorder recorder;
   VulkanSwapchainTestAccess::RunTeardown(recorder);
-  EXPECT_THAT(recorder.calls,
-              testing::ElementsAre("wait-idle", "wait-fences", "free-command-buffer",
-                                   "destroy-fence", "destroy-semaphore", "destroy-semaphore",
-                                   "destroy-swapchain", "destroy-surface"));
+  EXPECT_THAT(
+      recorder.calls,
+      testing::ElementsAre("wait-fences", "reset-fences", "wait-fences", "free-command-buffer",
+                           "destroy-fence", "destroy-semaphore", "destroy-fence",
+                           "destroy-semaphore", "destroy-swapchain", "destroy-surface"));
 }
 
 TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhilePresentMayStillBePending) {
   TeardownRecorder recorder;
-  recorder.idleResult = VK_TIMEOUT;
+  recorder.fenceResults = {VK_TIMEOUT};
   VulkanSwapchainTestAccess::RunTeardown(recorder);
-  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-idle"));
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
 }
 
 TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhenFenceCompletionFails) {
   TeardownRecorder recorder;
-  recorder.fenceResult = VK_TIMEOUT;
+  recorder.fenceResults = {VK_SUCCESS, VK_TIMEOUT};
   VulkanSwapchainTestAccess::RunTeardown(recorder);
-  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-idle", "wait-fences"));
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences", "reset-fences", "wait-fences"));
 }
 
 TEST_F(VulkanSurfaceTest, PointsAWindowSystemKindAtTheEmbedderPath) {
