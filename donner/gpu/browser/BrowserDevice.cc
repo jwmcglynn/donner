@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/Utils.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
@@ -50,6 +51,23 @@ GpuError ErrorForBridgeStatus(BridgeStatus status, std::string_view operation) {
                  std::format("{}: the browser refused the operation", operation));
   }
   return Err(GpuErrorType::InvalidState, std::format("{}: unrecognized bridge status", operation));
+}
+
+/// Bounds a caller-supplied wait slice to something a backend can express.
+///
+/// The runtime only checks that a slice is above zero, so the value arriving here can be anything,
+/// including a value no fixed-width unit can hold. Clamping does not shorten the wait, because the
+/// runtime re-enters this hook until its own budget elapses; it only means the browser gets the
+/// thread back more often. A value that is not a number yields the shortest slice rather than
+/// propagating into the conversion.
+///
+/// @param seconds Slice the caller asked for.
+/// @param maxSeconds Longest slice this device will hand over.
+double ClampYieldSeconds(double seconds, double maxSeconds) {
+  if (!(seconds > 0.0)) {
+    return 0.0;
+  }
+  return seconds < maxSeconds ? seconds : maxSeconds;
 }
 
 /// Success, or the error \p status stands for. @param status Status the bridge returned.
@@ -274,6 +292,14 @@ BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge)
     : bridge_(std::move(bridge)), ownerThread_(std::this_thread::get_id()) {}
 
 BrowserDevice::~BrowserDevice() {
+  // Destroying a device from inside its own wait would free this object while the wait is still
+  // going to read through it when the browser hands the thread back. It cannot be guarded against
+  // from here - the storage is already going away - so it is named instead: this aborts where the
+  // contract was broken rather than reading freed memory a step later.
+  UTILS_RELEASE_ASSERT_MSG(!yielding_,
+                           "a browser device was destroyed while one of its waits had handed the "
+                           "thread to the browser; release the device from outside the wait");
+
   // Hand back any frame a surface still holds first: a frame texture belongs to the canvas that
   // supplied it, so the sweep below must not reach one.
   for (uint32_t surfaceSlotIndex = 0;
@@ -1169,12 +1195,31 @@ MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doubl
     return state;
   }
 
+  if (yielding_) {
+    // Entered from inside this device's own yield. Handing the thread over again would start a
+    // second stack unwind on top of the first, which the runtime underneath cannot represent, so
+    // the nested wait is refused instead of taken.
+    ++nestedWaitRefusals_;
+    return MapSliceState::Failed;
+  }
+
   // Still pending, so spend the slice giving the browser the thread rather than returning at once.
   // What settles a mapping is a promise callback, and that cannot run while this thread holds the
   // event loop; a slice spent resting instead of yielding would let the whole budget elapse with
   // the browser never getting the chance to finish the mapping it was asked for.
-  bridge_->yieldToBrowser(sliceSeconds);
-  return bridge_->mappingState(*mappingId);
+  yielding_ = true;
+  bridge_->yieldToBrowser(ClampYieldSeconds(sliceSeconds, kMaxYieldSeconds));
+  yielding_ = false;
+
+  // Anything may have happened while the browser had the thread, including this mapping being
+  // released, so the identifier is looked up again rather than reused: the one from before the
+  // yield could now name nothing.
+  const std::optional<BrowserObjectId> afterYield =
+      objects_.find(BrowserObjectKind::BufferMapping, mappingSlotIndex);
+  if (!afterYield.has_value()) {
+    return MapSliceState::Failed;
+  }
+  return bridge_->mappingState(*afterYield);
 }
 
 Result<std::span<const uint8_t>> BrowserDevice::onMappedBytes(uint32_t mappingSlotIndex) const {

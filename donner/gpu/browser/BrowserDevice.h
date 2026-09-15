@@ -109,6 +109,15 @@ private:
  * backend and a frame ends by abandoning its acquired texture. Acquiring, configuring and
  * reconfiguring behave as the runtime documents.
  *
+ * What a \ref NativeSurfaceKind::CanvasSelector names is narrower here than the descriptor
+ * suggests, and narrower in a worker than on the main thread. On the main thread it is a CSS
+ * selector, resolved against the document. A worker has no document, and a canvas reaches one by
+ * being transferred, so there it names the canvas by its element id and a selector that is not a
+ * plain id will not resolve. The editor renders from a worker, so that is the case to write
+ * against; passing `"#canvas"` satisfies both readings, which is why it is the form used
+ * throughout. Widening this back out is a change to the descriptor's own documentation and belongs
+ * with the unit that owns it.
+ *
  * The compiled WGSL projection is what this backend accepts, matching the browser's own shading
  * language.
  *
@@ -144,6 +153,10 @@ public:
   uint64_t foreignThreadReleasesForTest() const {
     return foreignThreadReleases_.load(std::memory_order_relaxed);
   }
+
+  /// How many waits this device refused for being entered while it was already yielding. Test
+  /// accessor; a nonzero count is a caller error, not a device state.
+  uint64_t nestedWaitRefusalsForTest() const { return nestedWaitRefusals_; }
 
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
@@ -362,6 +375,22 @@ private:
 
   /// Releases from a thread that does not own the browser device, counted rather than performed.
   std::atomic<uint64_t> foreignThreadReleases_ = 0;
+
+  /**
+   * Longest a single wait slice may hand the thread over for.
+   *
+   * The slice is a caller-supplied duration the runtime only bounds above zero, so an unbounded one
+   * would reach a backend that must express it in a fixed-width unit. Clamping costs nothing: the
+   * runtime re-enters this hook until its own budget elapses, so a clamped slice does not shorten
+   * the wait, it only gives the browser the thread back more often.
+   */
+  static constexpr double kMaxYieldSeconds = 1.0;
+
+  /// True while this device has handed the thread to the browser and not yet taken it back.
+  bool yielding_ = false;
+
+  /// Waits refused because they were entered while this device was already yielding.
+  uint64_t nestedWaitRefusals_ = 0;
 
   /// Thread that obtained the browser device. Browser objects are unusable off it, so every
   /// operation checks it rather than relying on the runtime's documented affinity alone.

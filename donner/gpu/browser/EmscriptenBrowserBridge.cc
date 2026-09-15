@@ -530,7 +530,16 @@ void EmscriptenBrowserBridge::yieldToBrowser(double seconds) {
   // shipped build keeps Asyncify for this yield, moves to stack switching, or makes readback
   // asynchronous so nothing waits here is a cutover decision that reaches renderer code outside
   // this package and is not made by this change.
-  const double milliseconds = seconds > 0.0 ? seconds * 1000.0 : 0.0;
+  //
+  // The duration is bounded again here rather than trusted. This is a public interface, so the
+  // value reaching it is whatever a caller passed, and converting a double that does not fit the
+  // unsigned argument would be undefined; the runtime clamps too, and neither side relies on the
+  // other to have done it.
+  static constexpr double kMaxSleepMilliseconds = 60.0 * 1000.0;
+  double milliseconds = seconds > 0.0 ? seconds * 1000.0 : 0.0;
+  if (!(milliseconds < kMaxSleepMilliseconds)) {
+    milliseconds = kMaxSleepMilliseconds;
+  }
   emscripten_sleep(static_cast<unsigned int>(milliseconds));
 }
 

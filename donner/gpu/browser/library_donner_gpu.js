@@ -482,7 +482,7 @@ var LibraryDonnerGpu = {
     // while each C++ side numbers identifiers from one, so the two would collide or operate on
     // each other's objects; refusing is the only answer that keeps either of them coherent.
     if (DonnerGpu.requested) {
-      DonnerGpu.requestError = 'this context already holds a GPU bridge device';
+      DonnerGpu.requestError = 'this context has already requested a GPU bridge device';
       DonnerGpu.requestState = DonnerGpu.kRequestFailed;
       return DonnerGpu.kFailed;
     }
@@ -964,6 +964,9 @@ var LibraryDonnerGpu = {
       // than continued, so nothing recorded before the refusal can reach the queue.
       DonnerGpu.pass = null;
       DonnerGpu.attachments = null;
+      // Drop the old encoder before asking for a new one. If that ask throws, what is left behind
+      // is nothing rather than the previous recording sitting under the new serial.
+      DonnerGpu.encoder = null;
       DonnerGpu.recordingSerial = submissionSerial;
       DonnerGpu.encoder = DonnerGpu.device.createCommandEncoder();
     });

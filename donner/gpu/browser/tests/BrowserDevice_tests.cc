@@ -656,6 +656,64 @@ TEST(BrowserDevice, GivesTheBrowserTheThreadWhileAMappingIsPending) {
   EXPECT_THAT(fixture.bridge->yieldCount, 1u);
 }
 
+TEST(BrowserDevice, BoundsTheSliceItHandsToTheBrowser) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+
+  // The runtime only checks that a slice is above zero, so a caller can ask for one no fixed-width
+  // unit could hold. Complete the mapping from the yield so the wait ends after one slice.
+  fixture.bridge->onYield = [&] { fixture.bridge->completeMapping(2, std::vector<uint8_t>{1}); };
+  Result<MapWaitOutcome> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{1.0e12, 1.0e12}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+
+  // Bounded, and the bound does not shorten the wait: the runtime re-enters until its own budget
+  // elapses, so a clamped slice only hands the thread back more often.
+  EXPECT_THAT(fixture.bridge->yieldCount, 1u);
+  EXPECT_THAT(fixture.bridge->yieldedSeconds, testing::Le(1.0));
+  EXPECT_THAT(fixture.bridge->yieldedSeconds, testing::Gt(0.0));
+}
+
+TEST(BrowserDevice, RefusesAWaitEnteredFromInsideItsOwnYield) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+
+  // Waiting again from inside the yield is what a callback running on the browser's thread could
+  // do. Handing the thread over a second time would stack one unwind on another, which the runtime
+  // underneath cannot represent, so the nested wait is refused rather than taken.
+  Result<MapWaitOutcome> nested = Result<MapWaitOutcome>(GpuError{GpuErrorType::InvalidState, ""});
+  fixture.bridge->onYield = [&] {
+    nested = fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+    fixture.bridge->completeMapping(2, std::vector<uint8_t>{1});
+  };
+
+  Result<MapWaitOutcome> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+
+  ASSERT_THAT(nested, HasResult());
+  EXPECT_THAT(nested.result(), MapWaitOutcome::Failed);
+  EXPECT_THAT(fixture.device->nestedWaitRefusalsForTest(), 1u);
+  // Only the outer wait handed the thread over; the refused one did not.
+  EXPECT_THAT(fixture.bridge->yieldCount, 1u);
+}
+
 TEST(BrowserDevice, DoesNotYieldOnceAMappingHasSettled) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
