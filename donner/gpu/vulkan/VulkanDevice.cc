@@ -3769,6 +3769,8 @@ void VulkanDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
   if (impl_->mappingTable) {
     impl_->mappingTable->release(mappingSlotIndex);
   }
+}
+
 // == Presentation ==============================================================================
 
 bool VulkanDevice::supportsPresentation() const {
