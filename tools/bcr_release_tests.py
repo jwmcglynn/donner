@@ -177,6 +177,27 @@ class SubmissionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manual PR recovery"):
             release.existing_submission("v1.0.0", SHA, self.receipt)
 
+    @mock.patch.object(release.subprocess, "check_output")
+    @mock.patch.object(release, "fork_contents")
+    @mock.patch.object(release, "gh_json")
+    def test_stale_registry_metadata_does_not_count_as_identical(self, gh, contents, git):
+        template = {"homepage": "https://github.com/jwmcglynn/donner", "maintainers": [{"github": "jwmcglynn"}],
+                    "repository": ["github:jwmcglynn/donner"], "versions": [], "yanked_versions": {}}
+        git.side_effect = lambda args: (json.dumps(template).encode()
+                                       if args[-1].endswith("metadata.template.json") else b"expected")
+        valid = dict(template, versions=["0.9.0", "1.0.0"])
+        for change in [{"maintainers": []}, {"versions": ["0.9.0"]},
+                       {"versions": ["1.0.0", "1.0.0"]}, {"yanked_versions": {"1.0.0": "withdrawn"}}]:
+            metadata = dict(valid, **change)
+            gh.side_effect = [[self.ref], [self.pr]]
+            def file_contents(path, head):
+                if path.endswith("metadata.json"):
+                    return json.dumps(metadata).encode()
+                return json.dumps(self.source).encode() if path.endswith("source.json") else b"expected"
+            contents.side_effect = file_contents
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "registry metadata"):
+                release.existing_submission("v1.0.0", SHA, self.receipt)
+
     @mock.patch.object(release, "verify_published_source")
     @mock.patch.object(release, "check_source")
     @mock.patch.object(release.bcr_source, "git", return_value='module(name="donner", version="1.0.0-pre")')
