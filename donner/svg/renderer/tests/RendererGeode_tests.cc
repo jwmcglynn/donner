@@ -24,6 +24,8 @@
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
