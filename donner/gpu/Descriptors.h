@@ -123,6 +123,27 @@ enum class NativeSurfaceKind : uint8_t {
   /// when the host says so rather than when the caller asks: an explicit present on it is
   /// rejected rather than performed. Everything else about the surface behaves the same.
   CanvasSelector,
+  /// A surface object the embedder created itself, named by its 64-bit handle.
+  ///
+  /// The production path on a platform whose windowing library already knows how to make one. A
+  /// window-system surface is scoped to the graphics instance it was created against, so the
+  /// embedder creates it against the instance the runtime exposes for exactly this purpose, and
+  /// keeps ownership: the runtime builds its swapchain on the surface and tears that down with
+  /// the surface handle, but never destroys the surface itself, because the library that made it
+  /// generally destroys it with the window. Destroy order is the runtime's surface first, then
+  /// the embedder's, then the device.
+  ///
+  /// This is what keeps the runtime free of window-system headers: the embedder links the one it
+  /// already uses and hands over the result.
+  EmbedderSurface,
+  /// A surface with no window behind it at all.
+  ///
+  /// Presentation is the one part of this runtime that a machine without a display cannot
+  /// exercise, which is exactly where its synchronization has to be checked. A headless surface
+  /// names no platform object and presents to nothing; every other part of the contract - the
+  /// configuration it accepts, the frames it hands out, the order its submissions and presents
+  /// must take - behaves as it does for a window.
+  Headless,
 };
 
 /// The platform object a surface presents to.
@@ -138,8 +159,8 @@ struct NativeSurfaceHandle {
   /// MetalLayer: the layer. XlibWindow: the display. WaylandSurface: the display. Null for
   /// CanvasSelector.
   void* display = nullptr;
-  /// XlibWindow: the window id. WaylandSurface: the surface. Zero for MetalLayer and
-  /// CanvasSelector.
+  /// XlibWindow: the window id. WaylandSurface: the surface. EmbedderSurface: the handle of the
+  /// surface object the embedder created. Zero for MetalLayer, CanvasSelector and Headless.
   uint64_t window = 0;
   /// CanvasSelector: the selector naming the canvas. Empty for every other kind.
   RcString selector;

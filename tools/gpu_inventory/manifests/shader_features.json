@@ -1658,6 +1658,57 @@
         "TurbulenceTables"
       ]
     },
+    "donner/gpu/shader/programs/UiDrawSource.h#inline0": {
+      "bindings": [
+        {
+          "addressSpace": "uniform",
+          "binding": 0,
+          "group": 0,
+          "name": "params",
+          "type": "UiDrawParams"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "uiSampler",
+          "type": "sampler"
+        },
+        {
+          "binding": 2,
+          "group": 0,
+          "name": "uiTexture",
+          "type": "texture_2d<f32>"
+        }
+      ],
+      "builtins": [
+        "position"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_premultiplied_alpha",
+          "stage": "fragment"
+        },
+        {
+          "name": "fs_straight_alpha",
+          "stage": "fragment"
+        },
+        {
+          "name": "vs_main",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "let",
+        "return",
+        "textureSample",
+        "var"
+      ],
+      "structs": [
+        "UiDrawParams",
+        "fs_main_Output",
+        "vs_main_Output"
+      ]
+    },
     "donner/gpu/shader/tests/CompiledImageBlit.cc#inline0": {
       "bindings": [
         {
@@ -2129,6 +2180,22 @@
       "structs": [
         "Varyings"
       ]
+    },
+    "donner/gpu/shader/wgsl/tests/Graphics_tests.cc#inline0": {
+      "bindings": [],
+      "builtins": [
+        "position"
+      ],
+      "entryPoints": [
+        {
+          "name": "vs_attributes",
+          "stage": "vertex"
+        }
+      ],
+      "features": [
+        "return"
+      ],
+      "structs": []
     },
     "donner/gpu/shader/wgsl/tests/Graphics_tests.cc#source": {
       "bindings": [],

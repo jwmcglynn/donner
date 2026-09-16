@@ -1479,6 +1479,43 @@ TEST_F(SurfaceTests, AcceptsACanvasNamedBySelector) {
   EXPECT_THAT(device_.createSurface(descriptor), IsOk());
 }
 
+TEST_F(SurfaceTests, AcceptsTheKindsThatNameNoPlatformObjectOfTheirOwn) {
+  SurfaceDescriptor headless;
+  headless.native.kind = NativeSurfaceKind::Headless;
+  EXPECT_THAT(device_.createSurface(headless), IsOk())
+      << "A surface with no window behind it names nothing, so every payload slot stays empty";
+
+  SurfaceDescriptor embedder;
+  embedder.native.kind = NativeSurfaceKind::EmbedderSurface;
+  embedder.native.window = 0x1234;
+  EXPECT_THAT(device_.createSurface(embedder), IsOk())
+      << "An embedder-created surface is named by its handle alone";
+}
+
+TEST_F(SurfaceTests, RejectsAPayloadTheNewKindsDoNotUse) {
+  SurfaceDescriptor headlessWithWindow;
+  headlessWithWindow.native.kind = NativeSurfaceKind::Headless;
+  headlessWithWindow.native.window = 7;
+  EXPECT_THAT(device_.createSurface(headlessWithWindow),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("does not use a window handle")));
+
+  SurfaceDescriptor embedderWithoutHandle;
+  embedderWithoutHandle.native.kind = NativeSurfaceKind::EmbedderSurface;
+  EXPECT_THAT(
+      device_.createSurface(embedderWithoutHandle),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("needs a window handle")))
+      << "There is nothing else in the descriptor that could name the embedder's surface";
+
+  SurfaceDescriptor embedderWithLayer;
+  embedderWithLayer.native.kind = NativeSurfaceKind::EmbedderSurface;
+  embedderWithLayer.native.window = 0x1234;
+  embedderWithLayer.native.display = &layer_;
+  EXPECT_THAT(device_.createSurface(embedderWithLayer),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("does not use a platform object")));
+}
+
 TEST_F(SurfaceTests, RejectsAConfigurationWithNoExtent) {
   const Surface surface = metalSurface();
   EXPECT_THAT(device_.configureSurface(surface, configuration(0, 480)),

@@ -52,6 +52,29 @@ class CheckBannedPatternsTests(unittest.TestCase):
         self.assertTrue(any("em dash (U+2014 EM DASH)" in desc for desc in descriptions))
         self.assertTrue(any("en dash (U+2013 EN DASH)" in desc for desc in descriptions))
 
+    def test_blocks_horizontal_bar_with_escape_and_suppression_controls(self):
+        descriptions = self._descriptions_for(
+            '// A comment with a horizontal bar: \u2015\n'
+        )
+
+        self.assertTrue(
+            any("horizontal bar (U+2015 HORIZONTAL BAR)" in desc for desc in descriptions)
+        )
+
+        # An escaped code point is ASCII source text and must not trigger.
+        self.assertEqual(
+            [],
+            self._descriptions_for('const char* bar = "\\u2015";\n'),
+        )
+
+        # An explicit suppression still applies to the new diagnostic.
+        self.assertEqual(
+            [],
+            self._descriptions_for(
+                '// A comment with a horizontal bar: \u2015  // NOLINT(banned_patterns)\n'
+            ),
+        )
+
     def test_blocks_smart_quotes(self):
         descriptions = self._descriptions_for(
             '// Smart single quotes: \u2018value\u2019\n'

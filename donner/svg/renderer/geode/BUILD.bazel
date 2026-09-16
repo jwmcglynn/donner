@@ -29,6 +29,14 @@ load(
     "shader_artifacts",
 )
 
+exports_files(
+    [
+        "GeodeDevice.cc",
+        "GeodeDevice.h",
+    ],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 bool_flag(
     name = "enable_geode",

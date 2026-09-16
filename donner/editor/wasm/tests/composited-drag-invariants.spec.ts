@@ -271,7 +271,9 @@ const kOrderingDrag = {
 const kBlueRectOffset = { x: 408, y: 353 };
 const kOldOrderingCssPerSample = { x: 320 / 96, y: 250 / 96 };
 
-function orderingTrajectoryRegion(initial: Rect): Rect & { sampleWidth: number; sampleHeight: number } {
+function orderingTrajectoryRegion(
+  initial: Rect,
+): Rect & { sampleWidth: number; sampleHeight: number } {
   let minDx = 0;
   let maxDx = 0;
   let minDy = 0;
@@ -283,8 +285,10 @@ function orderingTrajectoryRegion(initial: Rect): Rect & { sampleWidth: number; 
     const swing = Math.sin(fraction * Math.PI * kOrderingDrag.reversals);
     const dx = kOrderingDrag.dx * fraction + kOrderingDrag.reversalAmplitudePx * swing;
     const dy = kOrderingDrag.dy * fraction + kOrderingDrag.reversalAmplitudePx * 0.5 * swing;
-    minDx = Math.min(minDx, dx); maxDx = Math.max(maxDx, dx);
-    minDy = Math.min(minDy, dy); maxDy = Math.max(maxDy, dy);
+    minDx = Math.min(minDx, dx);
+    maxDx = Math.max(maxDx, dx);
+    minDy = Math.min(minDy, dy);
+    maxDy = Math.max(maxDy, dy);
   }
   const margin = 4;
   const region = {
@@ -301,42 +305,61 @@ function orderingTrajectoryRegion(initial: Rect): Rect & { sampleWidth: number; 
 }
 
 async function openBasicShapes(page: Page): Promise<{
-  editorBounds: Rect; documentRect: Rect; blueBounds: Rect;
+  editorBounds: Rect;
+  documentRect: Rect;
+  blueBounds: Rect;
 }> {
   const editorCanvas = page.locator("canvas#canvas");
   const editorBounds = await editorCanvas.boundingBox();
   expect(editorBounds, "the editor canvas is missing").not.toBeNull();
   if (editorBounds === null) throw new Error("editor canvas is missing");
-  await expect.poll(() => page.evaluate(() => {
-    const stats = (window as unknown as { __donnerSampleThumbnailStats?: {
-      completed?: number; ready?: number; active?: boolean; pending?: boolean;
-    } }).__donnerSampleThumbnailStats;
-    return !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
-      && !stats.active && !stats.pending;
-  }), { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] }).toBe(true);
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const stats = (window as unknown as {
+        __donnerSampleThumbnailStats?: {
+          completed?: number;
+          ready?: number;
+          active?: boolean;
+          pending?: boolean;
+        };
+      }).__donnerSampleThumbnailStats;
+      return !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
+        && !stats.active && !stats.pending;
+    }), { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] }).toBe(true);
   const before = await page.evaluate(() =>
     (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
       .__donnerWorkerStats?.completedResults ?? 0
   );
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expect.poll(() => page.evaluate((prior) =>
-    ((window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
-      .__donnerWorkerStats?.completedResults ?? 0) > prior, before
-  ), { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] }).toBe(true);
+  await expect.poll(
+    () =>
+      page.evaluate(
+        (prior) =>
+          ((window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
+            .__donnerWorkerStats?.completedResults ?? 0) > prior,
+        before,
+      ),
+    { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] },
+  ).toBe(true);
   // The debounced canvas-size commit lands after the first worker result. Bind the measured blue
   // bounds and trajectory ROI only after that geometry has settled.
   await page.waitForTimeout(scaledMs(1_500));
   const settled = await readSettledViewportStats(page);
   const documentRect = {
-    x: settled.documentX, y: settled.documentY,
-    width: settled.documentWidth, height: settled.documentHeight,
+    x: settled.documentX,
+    y: settled.documentY,
+    width: settled.documentWidth,
+    height: settled.documentHeight,
   };
   let blueBounds: Rect | null = null;
   await expect.poll(async () => {
     const shot = await page.screenshot({ clip: documentRect });
     const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentRect, {
-      minX: 0, minY: 0, maxX: documentRect.width, maxY: documentRect.height,
+      minX: 0,
+      minY: 0,
+      maxX: documentRect.width,
+      maxY: documentRect.height,
     });
     blueBounds = bounds === null ? null : {
       x: documentRect.x + bounds.minX,
@@ -347,12 +370,17 @@ async function openBasicShapes(page: Page): Promise<{
     return bounds?.pixels ?? 0;
   }, {
     message: "Basic Shapes must present its unique blue rectangle before the drag probe starts",
-    timeout: scaledMs(10_000), intervals: [16, 25, 50, 100],
+    timeout: scaledMs(10_000),
+    intervals: [16, 25, 50, 100],
   }).toBeGreaterThan(0);
   if (blueBounds === null) throw new Error("Basic Shapes blue rectangle is missing");
-  return { editorBounds, documentRect: {
-    ...documentRect,
-  }, blueBounds };
+  return {
+    editorBounds,
+    documentRect: {
+      ...documentRect,
+    },
+    blueBounds,
+  };
 }
 
 /** Confirm the editor really has a selection, so a drag drags something. */

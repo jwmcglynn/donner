@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -12,6 +14,16 @@
 namespace donner::gpu::vulkan {
 
 struct VulkanApi;
+struct VulkanSurfaceContext;
+class VulkanSwapchain;
+
+/// Selects presentation instance extensions from the names a loader offers.
+/// Exposed for deterministic platform-companion extension tests.
+/// @param offeredExtensions NUL-terminated names offered by the loader.
+/// @param requiredExtensions NUL-terminated embedder-required names.
+std::vector<const char*> SelectPresentationExtensionsForTest(
+    std::span<const char* const> offeredExtensions,
+    std::span<const char* const> requiredExtensions);
 
 /**
  * Vulkan backend of the Donner GPU runtime.
@@ -30,9 +42,10 @@ struct VulkanApi;
  * Targets Vulkan 1.1 core only: classic VkRenderPass + VkFramebuffer (no dynamic rendering),
  * per-submission VkFence completion tracking, and the core negative-viewport-height feature
  * (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU clip-space semantics - identical
- * SPIR-V positions land on identical pixels as the wgpu baseline. No device extension is
- * enabled on any production path; the sole exception is VK_KHR_timeline_semaphore, which
- * \ref CreateWithTimelineSemaphoreForTest requests so a test can hold a submission open.
+ * SPIR-V positions land on identical pixels as the wgpu baseline. Presentation additionally
+ * requires swapchain maintenance1 and its matching instance extension dependencies. The headless
+ * path needs no device extension; \ref CreateWithTimelineSemaphoreForTest optionally requests
+ * VK_KHR_timeline_semaphore so a test can hold a submission open.
  *
  * Every buffer lives in HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped.
  * Idle queue writes copy directly. Four-byte-aligned writes to busy buffers copy their payload
@@ -68,9 +81,19 @@ struct VulkanApi;
  * Barrier elision - dropping a barrier the model says is needed - is still not attempted; that
  * would need counter and timing evidence naming the bottleneck it removes.
  *
+ * Presentation is opt in through \ref CreateWithPresentationSupport, because a swapchain has to
+ * be requested before any surface exists. Frames come from a VK_KHR_swapchain swapchain over a
+ * surface the embedder's platform object names, or over a headless surface where there is no
+ * window; a frame is acquired with a semaphore the first submission writing it waits on, and is
+ * handed to the presentation engine by a barrier submitted after that work. A frame that is
+ * discarded rather than presented cannot be given back, so the swapchain is recreated to reclaim
+ * it. Everything above is inert on a device created by \ref Create, which refuses every surface.
+ *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no
- * cross-thread callbacks.
+ * cross-thread callbacks. Creation is serialized against failed shutdown: if a bounded completion
+ * wait cannot prove native work finished, the complete device graph is retained until process exit
+ * and every later Vulkan device creation returns nullptr. Restart the process to retry Vulkan.
  *
  * The header is pure C++ (Vulkan state lives behind a pimpl) so it is includable without the
  * Vulkan headers on any platform; the implementation compiles against the hermetic
@@ -102,6 +125,45 @@ public:
   /// Creates a device with VK_KHR_timeline_semaphore enabled solely for test-owned host gates.
   /// Returns nullptr if the test extension/feature is unavailable; ordinary Create needs neither.
   static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest();
+
+  /**
+   * Creates a device that can present: an instance with the surface extensions the loader offers
+   * and a device with VK_KHR_swapchain enabled. Returns nullptr when the loader offers no surface
+   * extension or the device no swapchain support.
+   *
+   * Presentation is opt in because a swapchain has to be asked for before any surface exists:
+   * the device has to already carry swapchain support by the time `createSurface` is called, and
+   * a device created by \ref Create refuses every surface rather than appearing to support one.
+   * Whether the queue can present to a particular surface is checked when that surface is
+   * created, since that is the first point at which the question can be asked.
+   *
+   * @param requiredInstanceExtensions Platform surface extensions the embedder needs enabled on
+   *   the returned instance. The span and each non-null, NUL-terminated name it contains are
+   *   borrowed synchronously and must remain readable until this call returns. Creation fails
+   *   when the count does not fit Vulkan's uint32_t field or the loader does not offer a name.
+   */
+  static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport(
+      std::span<const char* const> requiredInstanceExtensions = {});
+
+  /// Whether this device was created with presentation support. Test accessor, so a suite can
+  /// say which device it is looking at rather than inferring it from a refusal.
+  [[nodiscard]] bool supportsPresentation() const;
+
+  /**
+   * The Vulkan instance this device was created on, for an embedder that creates its own surface.
+   *
+   * A window-system surface is scoped to the instance it was created against, so an embedder
+   * whose windowing library already knows how to make one (GLFW and SDL both do) needs this
+   * instance to make it against; that is what keeps this build free of Xlib and Wayland headers.
+   * Pass the resulting handle back as \ref donner::gpu::NativeSurfaceKind::EmbedderSurface.
+   *
+   * Returned as an opaque pointer so this header stays free of Vulkan types; it is a `VkInstance`.
+   * This device owns it and it stays valid for the device's lifetime. Ownership of a surface made
+   * against it stays with the embedder: destroy the runtime's surface first, then the embedder's,
+   * then this device. Null when the device was created without presentation support, since
+   * without the surface extensions there is nothing an embedder could create against it.
+   */
+  [[nodiscard]] void* nativeInstance() const;
 
   /// Destructor; waits for in-flight submissions (vkDeviceWaitIdle), drains deferred
   /// destructions, then destroys all remaining Vulkan objects in dependency-safe order.
@@ -210,6 +272,7 @@ public:
   /// finish their native work before destroying any of these objects or the device.
   struct NativeContextForTest {
     const VulkanApi* api;       //!< Device entry points, owned by this device.
+    void* instance;             //!< Borrowed VkInstance, for a test that stands in for an embedder.
     void* device;               //!< Borrowed VkDevice.
     void* queue;                //!< Borrowed VkQueue.
     uint32_t queueFamilyIndex;  //!< Family of the borrowed queue.
@@ -217,6 +280,36 @@ public:
 
   /// Returns borrowed native objects solely for deterministic backend synchronization tests.
   NativeContextForTest nativeContextForTest() const;
+
+  /// Builds an otherwise-empty device owner around fake native handles for teardown tests.
+  /// @param api Copied native callbacks. @param instanceHandle Fake instance.
+  /// @param deviceHandle Fake device. @param commandPoolHandle Fake command pool.
+  /// @param onAdmission Optional callback invoked while holding the creation gate.
+  /// @param admissionContext Opaque argument for the admission callback.
+  static std::unique_ptr<VulkanDevice> CreateForTeardownTest(const VulkanApi* api,
+                                                             uint64_t instanceHandle,
+                                                             uint64_t deviceHandle,
+                                                             uint64_t commandPoolHandle,
+                                                             void (*onAdmission)(void*) = nullptr,
+                                                             void* admissionContext = nullptr);
+
+  /// Exercises native instance/device creation through a fake API and immediately destroys them.
+  /// @param api Fake Vulkan callbacks. @param enablePresentation Whether to enable presentation.
+  /// @param requiredInstanceExtensions Embedder-required extension names.
+  static bool CreateNativeObjectsForPresentationTest(
+      const VulkanApi& api, bool enablePresentation,
+      std::span<const char* const> requiredInstanceExtensions = {});
+
+  /// Adds fake pending native work to the real ownership graph, without submitting to a GPU.
+  /// @param upload Whether this is an internal texture upload instead of an ordinary submission.
+  /// @param fenceHandle Nonzero fake fence. @param commandBufferHandle Nonzero fake command buffer.
+  void attachWorkForTeardownTest(bool upload, uint64_t fenceHandle, uint64_t commandBufferHandle);
+
+  /// Returns the fake device's borrowed native context and shared child lifetime token.
+  VulkanSurfaceContext surfaceContextForTeardownTest() const;
+
+  /// Attaches a real swapchain owner to the fake device teardown graph.
+  void attachSurfaceForTeardownTest(std::unique_ptr<VulkanSwapchain> surface);
 
   /// Snapshot of queued buffer-write ownership, without polling the queue.
   struct BufferWriteStats {
@@ -239,6 +332,32 @@ public:
   /// Makes the next native submission fail before it reaches the queue, after encoding finishes.
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
+
+  /// Makes the next acquisition on the surface at \p surfaceSlotIndex report the swapchain as
+  /// out of date, so its rebuild-and-retry path runs. Test seam; see the swapchain's own note for
+  /// why a headless surface needs one.
+  /// @param surfaceSlotIndex Slot of a live surface of this device.
+  void forceNextAcquireOutOfDateForTest(uint32_t surfaceSlotIndex);
+
+  /// Makes the next swapchain creation for the surface at \p surfaceSlotIndex ask for the fewest
+  /// images allowed, so a rebuild shrinks its acquisition ring. Test seam.
+  /// @param surfaceSlotIndex Slot of a live surface of this device.
+  void forceMinimumImageCountOnceForTest(uint32_t surfaceSlotIndex);
+
+  /// What a surface's acquisition bookkeeping looks like from outside, for the contracts whose
+  /// only other symptom is timing dependent.
+  struct SurfaceAcquisitionForTest {
+    bool live = false;             //!< Whether that slot holds a surface at all.
+    bool owesAcquireWait = false;  //!< Whether it still owes its frame's acquisition wait.
+    size_t frameRingSlot = 0;      //!< Ring slot the frame it holds was acquired on.
+    std::optional<size_t> lastFencedRingSlot;  //!< Ring slot its last handover fenced.
+    size_t ringSize = 0;                       //!< Slots in its acquisition ring.
+  };
+
+  /// Reads the acquisition bookkeeping of the surface at \p surfaceSlotIndex. Test accessor.
+  /// @param surfaceSlotIndex Slot of a surface of this device.
+  [[nodiscard]] SurfaceAcquisitionForTest surfaceAcquisitionForTest(
+      uint32_t surfaceSlotIndex) const;
 
   /// First latched Vulkan failure observed during submission, polling, or waiting on fences
   /// (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
@@ -271,6 +390,14 @@ protected:
                         const Origin2d& destinationOrigin) override;
   Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                   std::span<const Command> commands) override;
+  Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) override;
+  Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
+  Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration) override;
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
+                                                uint32_t textureSlotIndex) override;
+  Result<SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
+  void onAbandonCurrentTexture(uint32_t slotIndex) override;
+  void onDestroySurface(uint32_t slotIndex) override;
 
   // Host buffer mapping. Every buffer this backend allocates is already host-visible, coherent,
   // and persistently mapped, so a mapping is the wait for the work that fills it plus a
@@ -283,13 +410,20 @@ protected:
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 
 private:
+  friend class VulkanSwapchainTestAccess;
+
   /// Waits for a buffer's last use and reports timeout or device error before host access.
   /// @param serial Last submitted use of this buffer.
   /// @param operation Operation name included in a timeout diagnostic.
   Status waitForBufferAccess(uint64_t serial, std::string_view operation);
 
-  /// Creates the common backend, optionally enabling the extension used by native test gates.
-  static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest);
+  /// Creates the common backend, optionally enabling the extension used by native test gates and
+  /// the surface/swapchain extensions presentation needs.
+  /// @param enableTimelineSemaphoreForTest Whether to request VK_KHR_timeline_semaphore.
+  /// @param enablePresentation Whether to request the surface and swapchain extensions.
+  static std::unique_ptr<VulkanDevice> CreateImpl(
+      bool enableTimelineSemaphoreForTest, bool enablePresentation,
+      std::span<const char* const> requiredInstanceExtensions = {});
 
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();

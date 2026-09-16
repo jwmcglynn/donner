@@ -9,9 +9,9 @@
 #endif
 
 #include "backends/imgui_impl_glfw.h"
-#ifdef DONNER_EDITOR_WGPU
-#include "backends/imgui_impl_wgpu.h"
-#else
+// The WebGPU tier draws its own draw data through the GPU runtime, so it needs no renderer
+// backend here; the OpenGL tier still uses the stock one.
+#ifndef DONNER_EDITOR_WGPU
 #include "backends/imgui_impl_opengl3.h"
 #endif
 #include "imgui.h"

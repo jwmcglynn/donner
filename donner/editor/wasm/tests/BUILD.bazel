@@ -330,6 +330,42 @@ js_test(
 )
 
 js_test(
+    name = "selector_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = glob([
+        "*.js",
+        "*.json",
+        "*.mjs",
+        "*.ts",
+        "*.yaml",
+    ]) + [
+        "BUILD.bazel",
+        ":node_modules/@playwright/test",
+        "//:.github/workflows/editor_wasm.yml",
+        "//:MODULE.bazel",
+        "//donner/editor:AsyncRenderer.cc",
+        "//donner/editor:AsyncRenderer.h",
+        "//donner/editor:EditorShell.cc",
+        "//donner/editor:RenderCoordinator.cc",
+        "//donner/editor:RotateCursorSet.cc",
+        "//donner/editor/gui:EditorWindow.cc",
+        "//donner/editor/wasm:BUILD.bazel",
+        "//donner/editor/wasm:editor.css",
+        "//donner/editor/wasm:editor-bootstrap.js",
+        "//donner/editor/wasm:enable-threads.js",
+        "//donner/editor/wasm:index.html",
+        "//donner/svg/renderer/geode:GeodeDevice.cc",
+        "//donner/svg/renderer/geode:GeodeDevice.h",
+        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu.js",
+        "//tools:run-browser-ci.sh",
+    ],
+    entry_point = "selector-tests.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
+)
+
+js_test(
     name = "catalog_font_broker_tests",
     size = "small",
     copy_data_to_bin = False,
