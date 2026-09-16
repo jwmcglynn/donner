@@ -279,24 +279,24 @@ gpu::Status ImGuiRuntimeRenderer::createProgram(const gpu::shader::CompiledShade
 }
 
 gpu::Status ImGuiRuntimeRenderer::createPipelines(gpu::TextureFormat targetFormat) {
-  const gpu::VertexState vertexState{shaderModule_, "vs_main", {UiDrawVertexLayout()}};
+  gpu::RenderPipelineDescriptor descriptor{
+      "uiDrawStraightAlpha", pipelineLayout_,
+      gpu::VertexState{shaderModule_, "vs_main", {UiDrawVertexLayout()}},
+      gpu::FragmentState{
+          shaderModule_, "fs_straight_alpha", {{targetFormat, StraightAlphaBlend()}}}};
 
   gpu::Result<gpu::RenderPipeline> straightAlphaPipeline =
-      device_->createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "uiDrawStraightAlpha", pipelineLayout_, vertexState,
-          gpu::FragmentState{
-              shaderModule_, "fs_straight_alpha", {{targetFormat, StraightAlphaBlend()}}}});
+      device_->createRenderPipeline(descriptor);
   if (straightAlphaPipeline.hasError()) {
     return std::move(straightAlphaPipeline).error();
   }
   straightAlphaPipeline_ = std::move(straightAlphaPipeline).result();
 
+  descriptor.label = "uiDrawPremultipliedAlpha";
+  descriptor.fragment.entryPoint = "fs_premultiplied_alpha";
+  descriptor.fragment.targets.front().blend = PremultipliedAlphaBlend();
   gpu::Result<gpu::RenderPipeline> premultipliedAlphaPipeline =
-      device_->createRenderPipeline(gpu::RenderPipelineDescriptor{
-          "uiDrawPremultipliedAlpha", pipelineLayout_, vertexState,
-          gpu::FragmentState{shaderModule_,
-                             "fs_premultiplied_alpha",
-                             {{targetFormat, PremultipliedAlphaBlend()}}}});
+      device_->createRenderPipeline(descriptor);
   if (premultipliedAlphaPipeline.hasError()) {
     return std::move(premultipliedAlphaPipeline).error();
   }
