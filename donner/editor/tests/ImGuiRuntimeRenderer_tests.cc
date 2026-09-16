@@ -378,6 +378,70 @@ TEST_F(ImGuiRuntimeRendererTest, RetiredBackingLivesUntilItsExactRegistrationIsR
   EXPECT_THAT(renderer_->retainedTextureBackingCountForTest(), Eq(0u));
 }
 
+TEST(ImGuiRuntimeRendererLifetimeTest, RebuiltFontAtlasRetainsBackingForAnUnsubmittedOldDraw) {
+  gpu::RecordingDevice device;
+  UiTextureRegistry registry(device);
+  auto created = ImGuiRuntimeRenderer::Create(device, registry, gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_THAT(created, gpu::HasResult());
+  std::unique_ptr<ImGuiRuntimeRenderer> renderer = std::move(created).result();
+
+  ImFontAtlas atlas;
+  ASSERT_NE(atlas.AddFontDefault(), nullptr);
+  ASSERT_THAT(renderer->buildFontAtlas(atlas), gpu::IsOk());
+  const UiTextureId oldId = renderer->fontAtlasTexture();
+  ASSERT_THAT(oldId.isValid(), Eq(true));
+
+  std::unique_ptr<tests::UiSceneDrawLists> oldDraw = tests::BuildUiScene(oldId, oldId);
+  auto target = device.createTexture(gpu::TextureDescriptor{
+      "target",
+      {tests::kUiSceneWidth, tests::kUiSceneHeight},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::RenderAttachment,
+  });
+  ASSERT_THAT(target, gpu::HasResult());
+  auto targetView = device.createTextureView(target.result(), gpu::TextureViewDescriptor{"target"});
+  ASSERT_THAT(targetView, gpu::HasResult());
+  auto encoder = device.createCommandEncoder();
+  ASSERT_THAT(encoder, gpu::HasResult());
+  auto pass = encoder.result()->beginRenderPass(gpu::RenderPassDescriptor{
+      "ui", {{targetView.result(), gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 0, 1}}}});
+  ASSERT_THAT(pass, gpu::HasResult());
+  ASSERT_THAT(renderer->render(oldDraw->drawData, *pass.result(),
+                               {tests::kUiSceneWidth, tests::kUiSceneHeight}),
+              gpu::IsOk());
+  ASSERT_THAT(renderer->cachedBindingCount(), Eq(1u));
+
+  ASSERT_NE(atlas.AddFontDefault(), nullptr);
+  ASSERT_TRUE(atlas.Build());
+  ASSERT_THAT(renderer->buildFontAtlas(atlas), gpu::IsOk());
+  const UiTextureId newId = renderer->fontAtlasTexture();
+  EXPECT_THAT(newId.isValid(), Eq(true));
+  EXPECT_THAT(newId, Not(Eq(oldId)));
+  EXPECT_THAT(registry.liveCount(), Eq(1u));
+  EXPECT_THAT(registry.retiredCount(), Eq(1u));
+  EXPECT_THAT(renderer->retainedTextureBackingCountForTest(), Eq(1u));
+  EXPECT_THAT(renderer->cachedBindingCount(), Eq(1u));
+
+  ASSERT_THAT(pass.result()->end(), gpu::IsOk());
+  auto commands = encoder.result()->finish();
+  ASSERT_THAT(commands, gpu::HasResult());
+  EXPECT_THAT(device.submit(std::move(commands).result()), gpu::HasResult())
+      << "The old draw must retain its atlas backing through deferred submission";
+
+  for (uint32_t frame = 1; frame < registry.retirementFrames(); ++frame) {
+    EXPECT_THAT(renderer->advanceFrame(), testing::IsEmpty());
+    EXPECT_THAT(registry.retiredCount(), Eq(1u));
+    EXPECT_THAT(renderer->retainedTextureBackingCountForTest(), Eq(1u));
+    EXPECT_THAT(renderer->cachedBindingCount(), Eq(1u));
+  }
+  EXPECT_THAT(renderer->advanceFrame(), testing::ElementsAre(oldId));
+  EXPECT_THAT(registry.retiredCount(), Eq(0u));
+  EXPECT_THAT(renderer->retainedTextureBackingCountForTest(), Eq(0u));
+  EXPECT_THAT(renderer->cachedBindingCount(), Eq(0u));
+  EXPECT_THAT(renderer->advanceFrame(), testing::IsEmpty())
+      << "The old atlas registration must be released exactly once";
+}
+
 TEST_F(ImGuiRuntimeRendererTest, AnIndexAtTheOwningListsVertexBoundaryIsRefused) {
   std::unique_ptr<tests::UiSceneDrawLists> scene = tests::BuildUiScene(premultiplied_, straight_);
   scene->lists[0]->IdxBuffer[2] = 4;

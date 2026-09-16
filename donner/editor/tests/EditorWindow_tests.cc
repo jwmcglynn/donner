@@ -932,6 +932,29 @@ TEST(EditorWindowTest, WasmDiagnosticReadbackCompletionAlwaysRechecksPendingRequ
 }
 
 #if defined(DONNER_EDITOR_WGPU)
+TEST(EditorWindowTest, WgpuReuploadsPrebuiltFontAtlasWhenRuntimeTextureIsMissing) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Prebuilt Font Atlas Test",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU-backed hidden editor window is unavailable on this host";
+  }
+
+  ImFontAtlas& atlas = *ImGui::GetIO().Fonts;
+  ASSERT_NE(atlas.AddFontDefault(), nullptr);
+  ASSERT_TRUE(atlas.Build());
+  ASSERT_EQ(atlas.TexID, 0u)
+      << "The regression requires a CPU-built atlas whose runtime texture was invalidated";
+
+  window.beginFrame();
+  EXPECT_NE(atlas.TexID, 0u)
+      << "beginFrame must upload a built atlas when its runtime texture is missing";
+  window.endFrame();
+}
+
 #if defined(__linux__)
 TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
   EditorWindow window(EditorWindowOptions{
