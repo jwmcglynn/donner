@@ -1684,10 +1684,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Opens the fresh raw/runtime encoder pair that records the post-filter composite.
   [[nodiscard]] bool restoreFrameAfterFilter() {
     if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
+    if (!device || device->isDeviceLost()) return false;
     wgpu::CommandEncoderDescriptor descriptor = {};
     descriptor.label = wgpuLabel("RendererGeodePostFilterCE");
     frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
-    return frameCommandEncoder && openFrameGpuEncoder();
+    if (!frameCommandEncoder || device->isDeviceLost() || !openFrameGpuEncoder() ||
+        device->isDeviceLost()) {
+      discardFrameGpuEncoder();
+      return false;
+    }
+    return true;
   }
 
   /// Abandon this frame without completing any other renderer's recorded work.
