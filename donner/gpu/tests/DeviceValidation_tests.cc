@@ -7,9 +7,11 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -1178,6 +1180,229 @@ TEST_F(BufferMappingTests, DroppingAMappingReleasesItExactlyOnce) {
     EXPECT_EQ(device_.unmapCalls, 0);
   }
   EXPECT_EQ(device_.unmapCalls, 1) << "A dropped mapping must release through the same path";
+}
+
+TEST_F(BufferMappingTests, ReadingBeforeAWaitReportsTheMappingIncomplete) {
+  const Buffer buffer = readableBuffer();
+  device_.trailingState = MapSliceState::Ready;
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_THAT(device_.mappedBytes(mapping),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("has not completed")))
+      << "Bytes must not be readable until a wait has seen the mapping complete";
+}
+
+TEST_F(BufferMappingTests, ReadingIsAllowedOnceAWaitHasSeenTheMappingComplete) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  ASSERT_THAT(device_.mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState));
+
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+
+  EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
+}
+
+TEST_F(BufferMappingTests, AWaitThatDidNotCompleteLeavesTheMappingUnreadable) {
+  const Buffer buffer = readableBuffer();
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+            MapWaitOutcome::TimedOut);
+
+  EXPECT_THAT(device_.mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState));
+}
+
+TEST_F(BufferMappingTests, ASecondMappingOfTheSameBufferIsRefused) {
+  const Buffer buffer = readableBuffer();
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 32));
+
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 32, 32),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("already has an open "
+                                                                          "mapping")))
+      << "Two mappings of one buffer would each be released by the other's unmap";
+}
+
+TEST_F(BufferMappingTests, ABufferCanBeMappedAgainAfterItsMappingIsReleased) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  ASSERT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
+
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64), HasResult())
+      << "The one-mapping rule counts open mappings, not mappings ever taken";
+}
+
+TEST_F(BufferMappingTests, MappingADestroyedBufferIsRefused) {
+  Buffer buffer = readableBuffer();
+  ASSERT_THAT(device_.destroyBuffer(std::move(buffer)), IsOk());
+
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(BufferMappingTests, DestroyingTheBufferInvalidatesAnOpenMapping) {
+  Buffer buffer = readableBuffer();
+  device_.trailingState = MapSliceState::Ready;
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+
+  ASSERT_THAT(device_.destroyBuffer(std::move(buffer)), IsOk())
+      << "A mapping must not keep its buffer alive";
+
+  EXPECT_THAT(device_.mappedBytes(mapping),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("was destroyed")));
+  EXPECT_THAT(device_.waitForMapping(mapping, fourSlices(), {}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("can never complete")));
+}
+
+TEST_F(BufferMappingTests, ANewBufferInARecycledSlotCanStillBeMapped) {
+  // Destroying a buffer while its mapping is held is supported, and the slot it frees is handed
+  // to the next buffer created. The mapping left behind still names that slot number, so a
+  // one-mapping-per-buffer rule that compared slot numbers alone would refuse to map the new
+  // buffer because of a mapping that belongs to a buffer that no longer exists.
+  Buffer first = readableBuffer();
+  device_.trailingState = MapSliceState::Ready;
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(first, MapMode::Read, 0, 64));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+  ASSERT_THAT(device_.destroyBuffer(std::move(first)), IsOk());
+
+  const Buffer second = readableBuffer();
+
+  EXPECT_THAT(device_.mapBufferAsync(second, MapMode::Read, 0, 64), HasResult())
+      << "A mapping of a destroyed buffer must not block the buffer that reuses its slot";
+}
+
+TEST_F(BufferMappingTests, UnmappingAMappingTwiceIsReportedOnTheSecondCall) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  ASSERT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
+  ASSERT_EQ(device_.unmapCalls, 1);
+
+  EXPECT_THAT(device_.unmapBuffer(std::move(mapping)), IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_EQ(device_.unmapCalls, 1) << "A second release must not reach the backend again";
+}
+
+TEST_F(BufferMappingTests, SubmittingWorkThatWritesAMappedBufferIsRefused) {
+  // The mapped range aliases the buffer's own storage, not a snapshot of it, and the mapping's
+  // readiness is fixed at the submission it was taken against. Letting later work write that
+  // buffer would leave the host reading bytes the GPU is concurrently producing while the mapping
+  // still reports itself readable.
+  const Buffer buffer = readableBuffer(1024);
+  const Texture target = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 1024));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, buffer,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("open mapping")));
+}
+
+TEST_F(BufferMappingTests, WorkUsingTheBufferSubmitsOnceTheMappingIsReleased) {
+  Buffer buffer = readableBuffer(1024);
+  const Texture target = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 1024));
+  ASSERT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, buffer,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())), HasResult())
+      << "Releasing the mapping must hand the buffer back to the GPU";
+}
+
+TEST_F(BufferMappingTests, WritingAMappedBufferIsRefused) {
+  const Buffer buffer = readableBuffer();
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  const std::vector<uint8_t> payload(16, 0x5A);
+
+  EXPECT_THAT(device_.writeBuffer(buffer, 0, payload),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("open mapping")))
+      << "A queue write would change bytes the host is holding a view of";
+}
+
+TEST_F(BufferMappingTests, SubmittingADrawThatOnlyReadsAMappedBufferIsAlsoRefused) {
+  // The rule is not "no writes": a mapped range aliases the buffer's own storage, and a reader
+  // cannot tell which parts of it a submission will touch, so the buffer belongs either to the
+  // host or to the device. Narrowing this to write-only uses later fails here.
+  const Buffer vertices = GetResultOrFail(device_.createBuffer(
+      BufferDescriptor{"vertices", 64, BufferUsage::Vertex | BufferUsage::MapRead}));
+  const Texture target = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView targetView =
+      GetResultOrFail(device_.createTextureView(target, TextureViewDescriptor{"targetView"}));
+  const PipelineLayout layout =
+      GetResultOrFail(device_.createPipelineLayout(PipelineLayoutDescriptor{"empty", {}}));
+  const ShaderModule shader = GetResultOrFail(device_.createShaderModule(ShaderModuleDescriptor{
+      "solid", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
+  const RenderPipeline pipeline =
+      GetResultOrFail(device_.createRenderPipeline(RenderPipelineDescriptor{
+          "solid", layout,
+          VertexState{
+              shader,
+              "vsMain",
+              {VertexBufferLayout{
+                  8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
+          FragmentState{shader, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(vertices, MapMode::Read, 0, 64));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+      "pass",
+      {RenderPassColorAttachment{targetView, LoadOp::Clear, StoreOp::Store, {0, 0, 0, 1}}}}));
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setVertexBuffer(0, vertices), IsOk());
+  ASSERT_THAT(pass->draw(3), IsOk());
+  ASSERT_THAT(pass->end(), IsOk());
+
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("open mapping")))
+      << "A draw that only reads the mapped buffer must be refused too";
+}
+
+TEST_F(BufferMappingTests, ANewBufferInARecycledSlotSubmitsAndAcceptsWrites) {
+  // The submit and write refusals use the same "open mapping" rule as mapBufferAsync, so they
+  // must ignore a mapping whose buffer was destroyed in the same way.
+  Buffer first = readableBuffer(1024);
+  device_.trailingState = MapSliceState::Ready;
+  const BufferMapping mapping =
+      GetResultOrFail(device_.mapBufferAsync(first, MapMode::Read, 0, 1024));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+  ASSERT_THAT(device_.destroyBuffer(std::move(first)), IsOk());
+
+  const Buffer second = readableBuffer(1024);
+  const Texture target = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, second,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+
+  EXPECT_THAT(device_.submit(GetResultOrFail(encoder->finish())), HasResult());
+  EXPECT_THAT(device_.writeBuffer(second, 0, std::vector<uint8_t>(16, 0x11)), IsOk());
 }
 
 TEST_F(BufferMappingTests, ABackendWithoutMappingReportsItUnsupported) {

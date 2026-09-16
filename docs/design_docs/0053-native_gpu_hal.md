@@ -52,7 +52,7 @@ capabilities are integrated foundations; they do not by themselves complete the 
 | Order | Unit | Completion boundary |
 | --- | --- | --- |
 | 1 | Active UI, shader-linkage, and Vulkan-surface units above | Finish qualification and review without expanding their scope. |
-| 2 | Filter resource migration, slices 2 and 3 | Move the remaining shared pipeline resources, frame recording, source/result ownership, copies, clears, and allocator return path to runtime handles. |
+| 2 | Filter runtime command recording, then shared pipeline resources | Give filter execution its own runtime command encoder and chunk submission; then remove raw resource/encoder access in the surrounding shared pipelines and production callers. |
 | 3 | Texture-cache upload migration | Move bitmap and thumbnail uploads, border replication, clears, allocation reuse, and deferred retirement to runtime resources. |
 | 4 | Snapshot, target, and readback identity | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation. |
 | 5 | Device ownership plumbing | Make the selected runtime device the backend owner and move shared renderer services behind backend-neutral ownership before platform presentation callers switch. |
@@ -173,16 +173,14 @@ commits and their fixes together in a focused reviewable change.
 
 ### Resource plumbing and uploads
 
-- [ ] `GeodeFilterEngine::FilterResourceArena` and the intermediate textures it hands out are
-      runtime textures end to end: allocation, exact-descriptor reuse, color-space caching,
-      transparent clears, tile copies and the graph's result are runtime handles, with no backend
-      export or reimport left between primitives. `execute` takes the source graphic as a runtime
-      texture and returns an explicit outcome whose output the caller owns and releases through the
-      same allocator that issued it; `RendererGeode` passes its pooled captures straight in. The
-      first slice is merged in [PR #1268](https://github.com/jwmcglynn/donner/pull/1268), moving
-      filter intermediates to runtime texture handles. Allocation reuse, remaining copies and
-      clears, frame recording, source/result ownership and final raw export/reimport removal remain
-      in slices 2 and 3.
+- [x] `GeodeFilterEngine::FilterResourceArena` and its intermediates use runtime textures.
+      [PR #1268](https://github.com/jwmcglynn/donner/pull/1268) also migrated color-space cache
+      identity, transparent clears, tile copies, and explicit output detach/release through the
+      issuing allocator. SourceGraphic and output ownership remain distinct.
+- [ ] Replace the filter engine's borrowed raw WebGPU command encoder with an owned runtime
+      encoder. Preserve the existing 64-pass chunk boundary, submission failure handling, and
+      source-render/filter/composite queue order. This is the next filter slice; it must not redo
+      the already merged texture and allocator migration.
 - [ ] Convert the shared Geode pipeline resources and filter frame recording to runtime handles and
       encoders. Remove the remaining raw export/reimport cycles and concrete host-encoder access as
       their callers migrate.
@@ -197,15 +195,27 @@ commits and their fixes together in a focused reviewable change.
 ### Native mapping and completion
 
 - [x] Implement native Metal and Vulkan hooks for `mapBufferAsync`, mapping readiness,
-      `mappedBytes`, and unmap/invalidation using the existing public runtime contract. Both
-      backends use the shared mapping table for readiness, bounds, invalidation and error handling.
-      [PR #1264](https://github.com/jwmcglynn/donner/pull/1264) is merged.
+      `mappedBytes`, and unmap/invalidation using the existing public runtime contract.
+      [PR #1264](https://github.com/jwmcglynn/donner/pull/1264) is merged. Both backends use the
+      shared mapping table to tie readiness to the submission serial filling the buffer and enforce
+      bounds, one open mapping per buffer, no reads before readiness, and invalidation when the
+      buffer is destroyed. Metal and Vulkan execution passed, including Khronos synchronization
+      validation.
 - [ ] Route renderer readback and completion through those hooks, with the relevant submission
-      serial, bounded waits, cancellation, and device-loss outcomes.
+      serial, bounded waits, cancellation, and device-loss outcomes. `RendererGeode` already
+      expresses its readback entirely in runtime mapping calls, with a caller-owned deadline, one
+      slice per wait, a cancellation predicate and distinct device-loss handling, and those hooks
+      now have native implementations. The renderer still binds the transitional adapter type
+      statically for four operations with no runtime equivalent (`destroyBufferBacking`,
+      `mappingUsedTimedWaitAny`, `importExternalTexture`, `submitStandalone`), so a native device
+      does not yet serve production readback; replacing that reference belongs with device
+      ownership below.
 - [ ] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
       and that unmap, retirement, and loss invalidate access at the documented boundary. Native
-      cancellation, device-loss and invalidation tests pass with the merged mapping hooks; the
-      production readback-pool integration remains part of the deferred ownership cutover.
+      cancellation, device-loss and invalidation tests pass with the merged mapping hooks. Renderer
+      regressions cover abandoned capture, device loss during mapping, and subsequent pooled-buffer
+      reuse through the current adapter. Production readback through a selected native device
+      remains part of the ownership cutover.
 
 ### UI rendering
 

@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/BufferMappingTable.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/vulkan/VulkanBufferAllocator.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
@@ -951,6 +952,27 @@ struct VulkanDevice::Impl {
 
   /// Returns true once any failure was recorded.
   bool hasError() const { return errorState->hadError.load(std::memory_order_acquire); }
+
+  /// The Vulkan answers behind a host mapping. Nested here because it reads the buffer slot
+  /// table, whose record type is private to this implementation; the bodies are defined with the
+  /// mapping hooks at the end of this file.
+  class MappingHost final : public BufferMappingHost {
+  public:
+    /// @param device Device whose submissions decide readiness. @param impl State of \p device.
+    MappingHost(VulkanDevice& device, Impl& impl) : device_(device), impl_(impl) {}
+
+    std::span<const uint8_t> mappableBytes(uint32_t bufferSlotIndex) const override;
+    uint64_t completedSubmissionSerial() const override;
+    bool waitForSubmission(uint64_t serial, double sliceSeconds) override;
+    bool deviceLost() const override;
+
+  private:
+    VulkanDevice& device_;  //!< Device whose submissions decide readiness.
+    Impl& impl_;            //!< Buffer slots and error state.
+  };
+
+  std::optional<MappingHost> mappingHost;          //!< Created with the first mapping.
+  std::optional<BufferMappingTable> mappingTable;  //!< Open host mappings.
 
   /// Submits one command buffer, with the shared one-shot native failure seam for tests.
   /// @param commandBuffer Command buffer to submit.
@@ -2432,6 +2454,9 @@ void VulkanDevice::Impl::destroyComputePipelineSlot(uint32_t slotIndex) {
 
 void VulkanDevice::onRetireBuffer(uint32_t slotIndex) {
   impl_->discardPendingBufferWrites(slotIndex);
+  if (impl_->mappingTable) {
+    impl_->mappingTable->invalidateBuffer(slotIndex);
+  }
 }
 
 void VulkanDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
@@ -3379,6 +3404,79 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   impl.commitPendingBufferWrites(submissionSerial);
   impl.inFlight.push_back(std::move(submission));
   return OkStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Host buffer mapping
+// ---------------------------------------------------------------------------
+
+std::span<const uint8_t> VulkanDevice::Impl::MappingHost::mappableBytes(
+    uint32_t bufferSlotIndex) const {
+  const Impl::BufferRecord* record = FindRecord(impl_.buffers, bufferSlotIndex);
+  if (record == nullptr || record->allocation.mapped == nullptr) {
+    return {};
+  }
+  // The allocator keeps every buffer host-visible, host-coherent and mapped for its lifetime, so
+  // the pointer is already there and needs no flush or invalidate to read.
+  return std::span<const uint8_t>(static_cast<const uint8_t*>(record->allocation.mapped),
+                                  static_cast<size_t>(record->byteSize));
+}
+
+uint64_t VulkanDevice::Impl::MappingHost::completedSubmissionSerial() const {
+  return device_.completedSerial();
+}
+
+bool VulkanDevice::Impl::MappingHost::waitForSubmission(uint64_t serial, double sliceSeconds) {
+  return device_.waitForSerial(serial, sliceSeconds);
+}
+
+bool VulkanDevice::Impl::MappingHost::deviceLost() const {
+  return impl_.hasError();
+}
+
+Status VulkanDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
+                                      MapMode /*mode*/, uint64_t offsetBytes, uint64_t byteCount) {
+  if (!impl_->mappingTable) {
+    impl_->mappingHost.emplace(*this, *impl_);
+    impl_->mappingTable.emplace(*impl_->mappingHost);
+  }
+  // A queued write has no serial yet: it is applied at the start of whichever submission happens
+  // next, which can be unrelated work, so it would change the mapped bytes after the mapping had
+  // already reported itself ready. Readiness cannot express that, so the mapping is refused until
+  // the queue drains.
+  if (impl_->hasPendingBufferWrite(bufferSlotIndex)) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("mapBufferAsync: buffer (slot {}) has a queued write that has not "
+                                "been applied yet; submit before mapping",
+                                bufferSlotIndex)};
+  }
+  const Impl::BufferRecord* record = FindRecord(impl_->buffers, bufferSlotIndex);
+  // A mapping observes work that was already submitted, so the serial is taken now rather than
+  // when the wait starts: a submission issued after this call belongs to a later mapping.
+  const uint64_t readySerial =
+      std::max(bufferLastUseSerial(bufferSlotIndex), record != nullptr ? record->uploadSerial : 0);
+  return impl_->mappingTable->begin(mappingSlotIndex, bufferSlotIndex, offsetBytes, byteCount,
+                                    readySerial);
+}
+
+MapSliceState VulkanDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+  if (!impl_->mappingTable) {
+    return MapSliceState::Failed;
+  }
+  return impl_->mappingTable->waitSlice(mappingSlotIndex, sliceSeconds);
+}
+
+Result<std::span<const uint8_t>> VulkanDevice::onMappedBytes(uint32_t mappingSlotIndex) const {
+  if (!impl_->mappingTable) {
+    return GpuError{GpuErrorType::InvalidHandle, "mappedBytes: this device has no open mappings"};
+  }
+  return impl_->mappingTable->bytes(mappingSlotIndex);
+}
+
+void VulkanDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
+  if (impl_->mappingTable) {
+    impl_->mappingTable->release(mappingSlotIndex);
+  }
 }
 
 }  // namespace donner::gpu::vulkan

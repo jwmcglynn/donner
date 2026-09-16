@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -70,15 +71,35 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             script = Path(temp_dir) / "fixture.sh"
             script.write_text(text)
             script.chmod(0o755)
+            python = Path(temp_dir) / "python3"
+            python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+            python.chmod(0o755)
+            fixture_env = dict(os.environ if env is None else env)
+            fixture_env["FIXTURE_PYTHON"] = sys.executable
+            fixture_env["PATH"] = temp_dir + os.pathsep + fixture_env.get("PATH", os.defpath)
             return subprocess.run(
-                [str(script), *args],
+                ["/bin/bash", str(script), *args],
                 check=False,
                 capture_output=True,
                 text=True,
-                env=env,
+                env=fixture_env,
                 timeout=timeout,
                 cwd=cwd,
             )
+
+    def test_shell_fixture_uses_the_test_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / "python3"
+            python.write_text("#!/bin/sh\necho ambient-python-was-used >&2\nexit 97\n")
+            python.chmod(0o755)
+            result = self._run_script(
+                "#!/bin/bash\npython3 -c 'import sys; print(sys.executable)'\n",
+                [],
+                env={"PATH": str(root) + os.pathsep + os.environ["PATH"]},
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(sys.executable, result.stdout.strip())
 
     def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
         hosted = self._job_body("macos")
@@ -230,6 +251,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "consumer discovery matched %r, which is fewer than exist; the "
             "match is stale and this test is no longer checking anything"
             % (consumers,),
+        )
+
+    def test_failed_hosted_coverage_retains_test_failure_artifacts(self):
+        jobs = dict(self._coverage_jobs())
+        step = self._step_body(jobs["build"], "Upload coverage test failure artifacts")
+        self.assertIn("if: failure() && steps.coverage.outcome == 'failure'", step)
+        self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", step)
+        self.assertIn("name: coverage-test-failure-${{ github.job }}", step)
+        self.assertNotIn(
+            "uses: ./.github/actions/upload-bazel-test-artifacts", jobs["coverage-self-hosted"]
         )
 
     def test_coverage_excludes_all_opt_in_test_tags(self):
@@ -562,4 +593,4 @@ run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

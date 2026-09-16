@@ -585,6 +585,14 @@ void Device::onRetireTexture(uint32_t) {}
 
 void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial) {
   if (kind == ResourceKind::Buffer) {
+    // A mapping names bytes of this buffer, so it cannot outlive the allocation. The handle stays
+    // resolvable and fails closed on use, which tells its holder what happened; keeping the
+    // buffer alive instead would let a reader that never unmaps pin it forever.
+    bufferMappings_.forEachLive([&](MappingRecord& mappingRecord) {
+      if (mappingRecord.bufferSlotIndex == slotIndex) {
+        mappingRecord.bufferRetired = true;
+      }
+    });
     onRetireBuffer(slotIndex);
   } else if (kind == ResourceKind::Texture) {
     onRetireTexture(slotIndex);
@@ -1323,6 +1331,25 @@ Status ValidateMapWaitParams(const MapWaitParams& params) {
   return OkStatus();
 }
 
+/// The clock a wait measures its budget against: the caller's, or the real one.
+/// @param testHooks Hooks the caller supplied; may be empty.
+std::function<std::chrono::steady_clock::time_point()> WaitClock(
+    const Device::MapWaitTestHooks& testHooks) {
+  if (testHooks.now) {
+    return testHooks.now;
+  }
+  return [] { return std::chrono::steady_clock::now(); };
+}
+
+/// How a wait spends the remainder of a slice the backend returned from early.
+/// @param testHooks Hooks the caller supplied; may be empty.
+std::function<void(std::chrono::microseconds)> WaitRest(const Device::MapWaitTestHooks& testHooks) {
+  if (testHooks.rest) {
+    return testHooks.rest;
+  }
+  return [](std::chrono::microseconds duration) { std::this_thread::sleep_for(duration); };
+}
+
 /// Maps what one backend slice reported onto the outcome a waiter sees, or nullopt to keep
 /// waiting.
 /// @param state What the backend reported.
@@ -1378,8 +1405,17 @@ Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
                     record.result()->descriptor.byteSize)};
   }
 
+  if (bufferHasOpenMapping(buffer.slotIndex())) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("mapBufferAsync: buffer \"{}\" already has an open mapping",
+                                record.result()->descriptor.label.str())};
+  }
+
   BufferMapping handle = allocateHandle<BufferMappingTag>(
-      bufferMappings_, MappingRecord{buffer.slotIndex(), mode, offsetBytes, byteCount});
+      bufferMappings_, MappingRecord{.bufferSlotIndex = buffer.slotIndex(),
+                                     .mode = mode,
+                                     .offsetBytes = offsetBytes,
+                                     .byteCount = byteCount});
   if (Status status =
           onMapBufferAsync(handle.slotIndex(), buffer.slotIndex(), mode, offsetBytes, byteCount);
       status.hasError()) {
@@ -1387,6 +1423,28 @@ Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
     return std::move(status).error();
   }
   return handle;
+}
+
+bool Device::bufferHasOpenMapping(uint32_t bufferSlotIndex) const {
+  // A mapping whose buffer was destroyed still names that buffer's slot, and the slot is handed
+  // to the next buffer created, so a retired mapping must not speak for the slot's new occupant.
+  bool open = false;
+  bufferMappings_.forEachLive([&](const MappingRecord& existing) {
+    open = open || (!existing.bufferRetired && existing.bufferSlotIndex == bufferSlotIndex);
+  });
+  return open;
+}
+
+void Device::noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome outcome) {
+  if (outcome != MapWaitOutcome::Ready) {
+    return;
+  }
+  // Reading is gated on a wait having seen the mapping complete, so that observation is what the
+  // runtime records here.
+  if (MappingRecord* record =
+          bufferMappings_.findMutable(mapping.slotIndex(), mapping.generation())) {
+    record->ready = true;
+  }
 }
 
 Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
@@ -1400,21 +1458,19 @@ Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
   if (record.hasError()) {
     return std::move(record).error();
   }
+  if (record.result()->bufferRetired) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    "waitForMapping: the mapped buffer was destroyed; the mapping can never "
+                    "complete"};
+  }
 
   // The budget is wall time that actually passed, not slices counted off. A backend whose slice
   // returns as soon as it has polled did not wait the slice it was offered, so counting it as a
   // full one declares the budget spent in a burst of fast calls microseconds after the wait
   // began. Whatever a slice leaves unused is rested here instead, which keeps the budget honest
   // and keeps a fast slice from turning the wait into a spin.
-  const std::function<std::chrono::steady_clock::time_point()> now =
-      testHooks.now ? testHooks.now : std::function<std::chrono::steady_clock::time_point()>([] {
-        return std::chrono::steady_clock::now();
-      });
-  const std::function<void(std::chrono::microseconds)> rest =
-      testHooks.rest
-          ? testHooks.rest
-          : std::function<void(std::chrono::microseconds)>(
-                [](std::chrono::microseconds duration) { std::this_thread::sleep_for(duration); });
+  const std::function<std::chrono::steady_clock::time_point()> now = WaitClock(testHooks);
+  const std::function<void(std::chrono::microseconds)> rest = WaitRest(testHooks);
 
   const std::chrono::steady_clock::time_point start = now();
   while (true) {
@@ -1425,6 +1481,7 @@ Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
     const std::optional<MapWaitOutcome> outcome =
         OutcomeForSlice(onWaitMappingSlice(mapping.slotIndex(), params.sliceSeconds));
     if (outcome.has_value()) {
+      noteMappingOutcome(mapping, *outcome);
       return *outcome;
     }
 
@@ -1443,6 +1500,15 @@ Result<std::span<const uint8_t>> Device::mappedBytes(const BufferMapping& mappin
   auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
   if (record.hasError()) {
     return std::move(record).error();
+  }
+  if (record.result()->bufferRetired) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    "mappedBytes: the mapped buffer was destroyed while the mapping was open"};
+  }
+  if (!record.result()->ready) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "mappedBytes: the mapping has not completed; wait for it with waitForMapping "
+                    "before reading its bytes"};
   }
   return onMappedBytes(mapping.slotIndex());
 }
@@ -1771,6 +1837,12 @@ Status Device::writeBuffer(const Buffer& buffer, uint64_t offsetBytes,
                std::format("writeBuffer: buffer \"{}\" lacks the CopyDst usage",
                            record.result()->descriptor.label.str()));
   }
+  if (bufferHasOpenMapping(buffer.slotIndex())) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("writeBuffer: buffer \"{}\" has an open mapping; the write would change "
+                           "bytes the host is holding a view of",
+                           record.result()->descriptor.label.str()));
+  }
   const std::optional<uint64_t> endByte = CheckedAdd(offsetBytes, data.size());
   if (!endByte || *endByte > record.result()->descriptor.byteSize) {
     return Err(GpuErrorType::OutOfBounds,
@@ -1844,6 +1916,19 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
   Result<std::vector<SubmissionUse>> uses = validateSubmissionResources(commands);
   if (uses.hasError()) {
     return std::move(uses).error();
+  }
+
+  // The mapped range aliases the buffer's own storage and its readiness was fixed at the
+  // submission it was taken against, so work accepted now would be written underneath a host that
+  // still reads the mapping as ready. The buffer comes back when the mapping is released.
+  for (const SubmissionUse& use : uses.result()) {
+    if (use.kind == ResourceKind::Buffer && bufferHasOpenMapping(use.slotIndex)) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("submit: buffer (slot {}) has an open mapping; release it and record the "
+                      "work again before submitting work that uses the buffer",
+                      use.slotIndex)};
+    }
   }
 
   // Advance the serial only after the backend accepts the submission: a failed submit must not

@@ -117,9 +117,21 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     const tags = [...(/tags = \[([\s\S]*?)\]/.exec(lane)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
       .map(([, tag]) => tag);
     if (performanceLane) {
-      assert.deepEqual(tags.sort(), ["manual", "perf"], "responsiveness timing must remain opt-in");
+      assert.deepEqual(
+        tags.sort(),
+        ["manual", "no-sandbox", "perf"],
+        "responsiveness timing must remain opt-in while allowing Firefox's own sandbox",
+      );
       assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
       assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+      assert.doesNotMatch(
+        lane,
+        /"@playwright\/\/:(?:chromium|firefox)"/,
+        "macOS application symlinks must not travel inside Bazel tree artifacts",
+      );
+      assert.match(lane, /"DONNER_CHROMIUM_ARCHIVE":/);
+      assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
+      assert.ok(lane.includes("\"prepare-browser-archives.js\""));
     } else if (laneName === "firefox_composited_invariants_test") {
       assert.deepEqual(
         tags.sort(),
@@ -451,6 +463,65 @@ test("composited probe evidence survives lane archival and the next lane", async
   }
 });
 
+test("drag failure readbacks are archived after sampling with exact frame identities", async () => {
+  const { attachCompositedReadbacks } = await import("./composited-probe-evidence.mjs");
+  const temporary = mkdtempSync(path.join(tmpdir(), "donner-readback-evidence-"));
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const attachments = [];
+  const testInfo = {
+    outputPath: (name) => path.join(temporary, name),
+    attach: async (name, attachment) => attachments.push({ name, ...attachment }),
+  };
+  try {
+    await attachCompositedReadbacks(
+      {
+        evaluate: async (_callback, request) => {
+          assert.deepEqual(request.indices, [0, 340, 341, 342]);
+          return request.indices.map((index) => ({ index, png: png.toString("base64") }));
+        },
+      },
+      testInfo,
+      [0, 340, 341, 342, 341],
+    );
+    assert.deepEqual(attachments.map((item) => item.name), [
+      "composited-frame-0",
+      "composited-frame-340",
+      "composited-frame-341",
+      "composited-frame-342",
+    ]);
+    for (const attachment of attachments) {
+      assert.equal(attachment.contentType, "image/png");
+      assert.deepEqual(readFileSync(attachment.path), png);
+      assert.equal(path.dirname(attachment.path), temporary);
+    }
+    await assert.rejects(
+      () => attachCompositedReadbacks({ evaluate: async () => [] }, testInfo, [341]),
+      /missing.*341/i,
+    );
+    await assert.rejects(
+      () =>
+        attachCompositedReadbacks(
+          {
+            evaluate: async () => [{
+              index: 341,
+              png: Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64"),
+            }],
+          },
+          testInfo,
+          [341],
+        ),
+      /budget/i,
+    );
+    assert.equal(attachments.length, 4, "invalid evidence must not attach a partial set");
+    assert.deepEqual(readFileSync(path.join(temporary, "composited-frame-341.png")), png);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("real Safari gate pins the served Wasm and scopes every visibility probe", () => {
   const harness = readFileSync(
     path.join(testDirectory, "safari-geode-regression.mjs"),
@@ -517,5 +588,26 @@ test("real Safari memory gate clicks Donner Splash and dwells for five minutes",
     harness,
     /__donnerSafariRegressionPageLifetimeToken[\s\S]*finalState\.pageLifetimeToken[\s\S]*kPageLifetimeToken/,
     "reload detection must use a stable page token rather than Safari's drifting time origin",
+  );
+});
+
+test("macOS perf Firefox archive has a content integrity pin", () => {
+  const packageJson = JSON.parse(readFileSync(path.join(testDirectory, "package.json"), "utf8"));
+  const version = packageJson.devDependencies["@playwright/test"];
+  const browserMetadata = JSON.parse(
+    readFileSync(path.join(testDirectory, `browsers.${version}.json`), "utf8"),
+  );
+  const firefox = browserMetadata.browsers.find((browser) => browser.name === "firefox");
+  assert.ok(firefox, "the browser metadata must include Firefox");
+  const moduleSource = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
+  const integrityMap = /integrity_path_map\s*=\s*\{([\s\S]*?)\}/.exec(moduleSource)?.[1] ?? "";
+  const entries = new Map(
+    [...integrityMap.matchAll(/"([^"\n]+)":\s*"([^"\n]+)"/g)].map((match) => [match[1], match[2]]),
+  );
+  const archive = `builds/firefox/${firefox.revision}/firefox-mac-arm64.zip`;
+  assert.match(
+    entries.get(archive) ?? "",
+    /^sha256-[A-Za-z0-9+/]{43}=$/,
+    "the native extractor must receive a content-authenticated Firefox archive",
   );
 });

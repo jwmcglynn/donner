@@ -94,6 +94,7 @@ jobs:
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
       - name: Test perf-tagged targets
+        id: perf
         if: steps.discover.outputs.targets != ''
         run: |
           # -c opt: budgets assume production-speed codegen, not fastbuild's default.
@@ -104,3 +105,9 @@ jobs:
             --build_tag_filters=perf \
             --test_tag_filters=perf \
             ${{ steps.discover.outputs.targets }}
+
+      - name: Upload perf test failure artifacts
+        if: failure() && steps.perf.outcome == 'failure'
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: perf-test-failure-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}

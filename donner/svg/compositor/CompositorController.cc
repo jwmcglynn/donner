@@ -1234,7 +1234,6 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     markAllSegmentsDirty();
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
-    mainRendererHasCachedFrame_ = false;
   }
   lastViewport_ = viewport;
   hasLastViewport_ = true;

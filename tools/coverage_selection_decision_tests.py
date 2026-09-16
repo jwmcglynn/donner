@@ -35,9 +35,11 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 from python.runfiles import runfiles
 
@@ -109,6 +111,9 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             stub = bin_dir / "bazelisk"
             stub.write_text(_STUB_BAZELISK, encoding="utf-8")
             stub.chmod(0o755)
+            python = bin_dir / "python3"
+            python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+            python.chmod(0o755)
 
             scratch = root / "scratch"
             scratch.mkdir()
@@ -140,11 +145,13 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = "%s:%s" % (bin_dir, env["PATH"])
             env["STUB_CQUERY_OUTPUT"] = str(compat_file)
+            env["FIXTURE_PYTHON"] = sys.executable
             if cquery_fails:
                 env["STUB_CQUERY_FAIL"] = "1"
 
             result = subprocess.run(
                 [
+                    "/bin/bash",
                     str(fixture),
                     str(final_file),
                     str(kinds_file),
@@ -161,6 +168,22 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             )
             self.assertEqual(0, result.returncode, result.stderr)
             return result.stdout.strip()
+
+    def test_classifier_uses_the_test_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / "python3"
+            python.write_text("#!/bin/sh\necho ambient-python-was-used >&2\nexit 97\n")
+            python.chmod(0o755)
+            with mock.patch.dict(os.environ, {
+                "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            }):
+                verdict = self._decide(
+                    label_kinds=["py_test rule //example:test"],
+                    final_targets=["//example:test"],
+                    host_compat=["@@//example:test HOST_COMPATIBLE"],
+                )
+            self.assertEqual("skip", verdict)
 
     # ---- the three incidents -------------------------------------------
 
@@ -404,4 +427,4 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

@@ -830,47 +830,16 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   // interleave. Each segment holds non-promoted content only, each
   // layer is independent, so paint order is preserved.
   //
-  // When the editor is composing the drag overlay itself via GL, the
-  // main-renderer compose output is only needed for the next full-canvas
-  // composited tile. Re-running 3+ full-canvas drawImage calls into a
-  // snapshot nobody will read during active drag burned ~110 ms/frame at
-  // 892×512 on Skia, so we skip the compose when
-  // `skipMainComposeDuringSplit_` is on and the split cache is populated.
-  //
-  // The `skipMainCompose` path also skips `beginFrame`/`endFrame`
-  // entirely: `beginFrame` recreates the renderer's pixmap as a fully
-  // transparent buffer, so calling it and then NOT drawing anything would
-  // leave a transparent CPU snapshot. Skipping both begin and end preserves
-  // the last full-canvas render as the source for any later full-canvas
-  // composited tile.
-  // The post-drag settle render runs with `skipMainComposeDuringSplit_`
-  // effectively off (via the settling-render path in AsyncRenderer), so
-  // the full-canvas snapshot is refreshed before it can seed a tile.
-  //
-  // The skip is ALSO gated on "an ActiveDrag is in flight": selection-
-  // only prewarm renders (e.g., mouse-hovering a selected element before
-  // any drag) must still produce a fresh full-canvas snapshot. Check
-  // `activeHints_` for a kind-ActiveDrag entry, not just "split layers
-  // present" - a Selection-only promote produces split layers too.
-  const bool hasActiveDrag = [this]() {
-    for (const auto& [entity, hint] : activeHints_) {
-      if (hint.interactionKind() == InteractionHint::ActiveDrag) {
-        return true;
-      }
-    }
-    return false;
-  }();
-  // First-frame guard: if the main renderer has no cached frame yet,
-  // we MUST run the full compose so callers that read `takeSnapshot`
-  // (full-canvas tile creation, unit tests) get valid pixels. After the
-  // first full compose lands, subsequent drag frames can safely skip because
-  // `frame_` retains the prior pixmap.
-  const bool skipMainCompose = skipMainComposeDuringSplit_ && hasActiveDrag &&
-                               hasSplitStaticLayers() && mainRendererHasCachedFrame_;
+  // Tile-only callers do not consume the main frame. Keep the cold-frame guard and force
+  // composition when pixel verification reads the main renderer as its actual image.
+  const bool skipMainCompose = skipMainComposeDuringSplit_ && hasSplitStaticLayers() &&
+                               mainRendererHasCachedFrame_ && !config_.verifyPixelIdentity;
   if (skipMainCompose) {
     return;
   }
 
+  const auto composeStart = std::chrono::steady_clock::now();
+  ++lastRenderFrameStats_.mainComposeCount;
   renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
@@ -1022,9 +991,9 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   }
 
   renderer().endFrame();
-  // Record that the main renderer's framebuffer now holds a full
-  // compose - future drag frames can safely skip `composeLayers` and
-  // `takeSnapshot` will still return a valid full-canvas snapshot.
+  lastRenderFrameStats_.mainComposeMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - composeStart)
+          .count();
   mainRendererHasCachedFrame_ = true;
 }
 

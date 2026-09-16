@@ -29,7 +29,7 @@ runs:
           mkdir -p "$(dirname "${dest}")"
           cp "${file}" "${dest}"
         done < <(
-          find -L bazel-testlogs \
+          find -H bazel-testlogs \
             \( -name test.log -o -name test.xml -o -path '*/test.outputs/*' \) \
             -type f -print0
         )

@@ -986,4 +986,39 @@ TEST(BrowserDevice, WritesTexelRowsThroughTheBridge) {
               "destination=(0,0) size=4x4");
 }
 
+TEST(BrowserDevice, WritesTexelRowsAtTheRequestedDestination) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> texture = fixture.device->createTexture(SimpleTexture(TextureUsage::CopyDst));
+  ASSERT_THAT(texture, HasResult());
+
+  const std::vector<uint8_t> payload(256 * 3, 0u);
+  const TexelCopyBufferLayout layout{256, 256, 2};
+  ASSERT_THAT(fixture.device->writeTexture(texture.result(), payload, layout, Extent2d{2, 2},
+                                           Origin2d{1, 2}),
+              IsOk());
+  EXPECT_THAT(fixture.bridge->calls->back(),
+              "writeTexture texture=1 bytes=768 offset=256 bytesPerRow=256 rowsPerImage=2 "
+              "destination=(1,2) size=2x2");
+}
+
+TEST(BrowserDevice, RejectsOutOfBoundsTextureWriteBeforeTheBridge) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> texture = fixture.device->createTexture(SimpleTexture(TextureUsage::CopyDst));
+  ASSERT_THAT(texture, HasResult());
+
+  const std::vector<uint8_t> payload(256 * 2, 0u);
+  const TexelCopyBufferLayout layout{0, 256, 2};
+  const std::vector<std::string> callsBefore = *fixture.bridge->calls;
+  for (const Origin2d origin : {Origin2d{3, 0}, Origin2d{0, 3}}) {
+    EXPECT_THAT(
+        fixture.device->writeTexture(texture.result(), payload, layout, Extent2d{2, 2}, origin),
+        IsGpuError(GpuErrorType::OutOfBounds));
+    EXPECT_THAT(*fixture.bridge->calls, testing::ElementsAreArray(callsBefore));
+  }
+}
+
 }  // namespace donner::gpu::browser

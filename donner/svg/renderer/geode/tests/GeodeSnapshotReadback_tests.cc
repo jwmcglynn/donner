@@ -187,6 +187,39 @@ TEST_F(GeodeSnapshotReadbackTest, SnapshotOnLostDeviceFailsFast) {
   EXPECT_LT(elapsed, std::chrono::seconds(2));
 }
 
+/// A device lost while the mapping is open must end the capture there. The mapped range can never
+/// be filled by work that will not complete, so the capture reports nothing rather than reading
+/// whatever the abandoned copy left in the buffer.
+TEST_F(GeodeSnapshotReadbackTest, DeviceLostWhileTheMappingIsOpenEndsTheCapture) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+
+  wgpu::Texture texture = createTestTexture(
+      device->device(), wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
+  const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
+  RendererGeodeTextureSnapshot snapshot(device, std::move(texture), dimensions,
+                                        wgpu::TextureFormat::RGBA8Unorm);
+
+  // Declaring the loss from the MapRequested phase puts the device into the lost state while this
+  // capture's mapping is open, rather than before it ever started.
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+      device->markDeviceLost("test-injected loss while the mapping was open");
+    }
+  });
+
+  const RendererBitmap bitmap = snapshot.takeSnapshot();
+  device->setSnapshotReadbackHookForTesting({});
+
+  EXPECT_TRUE(bitmap.empty())
+      << "A capture whose device died mid-map must report nothing, not partial bytes";
+  EXPECT_TRUE(device->isDeviceLost());
+  const geode::GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+  EXPECT_TRUE(stats.deviceLost);
+  EXPECT_EQ(stats.poolEntries, 0u)
+      << "The readback set of a capture that died mid-map must not be pooled for reuse";
+}
+
 /// RendererGeode surfaces the device-lost condition of its backing device.
 TEST_F(GeodeSnapshotReadbackTest, RendererGeodeReportsDeviceLost) {
   std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());

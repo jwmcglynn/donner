@@ -5363,6 +5363,81 @@ TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWitho
   EXPECT_THAT(device->isDeviceLost(), testing::IsFalse());
 }
 
+/// A capture that is abandoned while its mapping is still open must not put the readback set back
+/// into the pool. Abandoning a pending map leaves the buffer unusable, so pooling it would hand
+/// the next capture a buffer whose backing is gone. The deadline path leaves through the same
+/// branch as cancellation, so this covers both ways a capture gives up mid-map.
+TEST_F(RendererGeodeTest, ACancelledMappingDoesNotReturnItsBufferToTheReadbackPool) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  renderer.endFrame();
+  ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
+                             "cancelled_mapping_pool_warm");
+  const auto warm = device->consumeReadbackStats();
+  ASSERT_THAT(warm.poolEntries, testing::Eq(1u)) << "the successful capture pools its set";
+
+  // Cancelling from the MapRequested phase stops the capture after the map has been requested and
+  // while it is still pending, which is the state the pool must refuse to accept.
+  std::atomic<bool> cancel{false};
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+      cancel.store(true, std::memory_order_relaxed);
+    }
+  });
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(
+      renderer.takeSnapshotInterruptibly([&] { return cancel.load(std::memory_order_relaxed); })
+          .empty(),
+      testing::IsTrue());
+  device->setSnapshotReadbackHookForTesting({});
+
+  const auto cancelled = device->consumeReadbackStats();
+  EXPECT_THAT(cancelled.captureCancellations, testing::Eq(1u));
+  EXPECT_THAT(cancelled.poolEntries, testing::Eq(0u))
+      << "A capture abandoned with its mapping still open must drop its readback set instead of "
+         "pooling it for the next caller";
+  EXPECT_THAT(device->isDeviceLost(), testing::IsFalse())
+      << "Giving up on a capture is not a device failure";
+}
+
+/// The pooled readback buffer is mapped again by the next capture, which is only possible because
+/// the previous capture released its mapping: one buffer carries one mapping at a time, so a
+/// mapping the renderer failed to release would make the second capture's map fail outright.
+TEST_F(RendererGeodeTest, APooledReadbackBufferIsMappableAgainOnceItsMappingIsReleased) {
+  auto device = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  renderer.endFrame();
+  ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {64, 64}, {0, 0, 255, 255},
+                             "remapped_pooled_buffer_first");
+  const auto first = device->consumeReadbackStats();
+  ASSERT_THAT(first.poolEntries, testing::Eq(1u));
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  renderer.endFrame();
+  ExpectSolidRuntimeSnapshot(renderer.takeSnapshot(), {64, 64}, {0, 255, 0, 255},
+                             "remapped_pooled_buffer_second");
+
+  const auto second = device->consumeReadbackStats();
+  EXPECT_THAT(second.count, testing::Eq(1));
+  EXPECT_THAT(second.bufferCreates, testing::Eq(0u))
+      << "The second capture must reuse the pooled buffer, so it is the same buffer being mapped "
+         "a second time";
+  EXPECT_THAT(second.poolEntries, testing::Eq(1u));
+}
+
 TEST_F(RendererGeodeTest, IsolatedReadbackPoolRemainsBoundedAcrossSizes) {
   auto device = CreateSharedBackendContext(sharedDevice());
   ASSERT_THAT(device, testing::NotNull());
