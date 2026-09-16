@@ -151,7 +151,7 @@ export interface CompositedProbeOptions {
   /** Channel spread at or above which a pixel counts as chromatic. */
   minColorSpread?: number;
   /** Optional fixture-specific content mask applied after the default alpha/chroma gates. */
-  colorMask?: "yellow-content";
+  colorMask?: "yellow-content" | "basic-blue";
   /**
    * Restrict the read-back to this viewport-CSS rectangle, intersected with
    * the visible surface region. Defaults to the whole visible region.

@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { readEditorPixelBounds } from "./canvas-color-stats";
+import { readEditorPixelBounds, readEditorPixelBoundsFromPng } from "./canvas-color-stats";
 import {
   attachCompositedReadbacks,
   blackFrameStats,
@@ -261,6 +261,100 @@ function letterTravelRegion(
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+const kOrderingDrag = {
+  dx: -140,
+  dy: -70,
+  reversals: 3,
+  reversalAmplitudePx: 90,
+} as const;
+
+const kBlueRectOffset = { x: 408, y: 353 };
+const kOldOrderingCssPerSample = { x: 320 / 96, y: 250 / 96 };
+
+function orderingTrajectoryRegion(initial: Rect): Rect & { sampleWidth: number; sampleHeight: number } {
+  let minDx = 0;
+  let maxDx = 0;
+  let minDy = 0;
+  let maxDy = 0;
+  // Bound the exact continuous path used by dragStream. 4096 subdivisions put the largest
+  // unsampled gap below 0.25 CSS px; the 4px AA/selection margin dominates that gap.
+  for (let step = 0; step <= 4096; ++step) {
+    const fraction = step / 4096;
+    const swing = Math.sin(fraction * Math.PI * kOrderingDrag.reversals);
+    const dx = kOrderingDrag.dx * fraction + kOrderingDrag.reversalAmplitudePx * swing;
+    const dy = kOrderingDrag.dy * fraction + kOrderingDrag.reversalAmplitudePx * 0.5 * swing;
+    minDx = Math.min(minDx, dx); maxDx = Math.max(maxDx, dx);
+    minDy = Math.min(minDy, dy); maxDy = Math.max(maxDy, dy);
+  }
+  const margin = 4;
+  const region = {
+    x: initial.x + minDx - margin,
+    y: initial.y + minDy - margin,
+    width: initial.width + maxDx - minDx + margin * 2,
+    height: initial.height + maxDy - minDy + margin * 2,
+  };
+  return {
+    ...region,
+    sampleWidth: Math.ceil(region.width / kOldOrderingCssPerSample.x),
+    sampleHeight: Math.ceil(region.height / kOldOrderingCssPerSample.y),
+  };
+}
+
+async function openBasicShapes(page: Page): Promise<{
+  editorBounds: Rect; documentRect: Rect; blueBounds: Rect;
+}> {
+  const editorCanvas = page.locator("canvas#canvas");
+  const editorBounds = await editorCanvas.boundingBox();
+  expect(editorBounds, "the editor canvas is missing").not.toBeNull();
+  if (editorBounds === null) throw new Error("editor canvas is missing");
+  await expect.poll(() => page.evaluate(() => {
+    const stats = (window as unknown as { __donnerSampleThumbnailStats?: {
+      completed?: number; ready?: number; active?: boolean; pending?: boolean;
+    } }).__donnerSampleThumbnailStats;
+    return !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
+      && !stats.active && !stats.pending;
+  }), { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] }).toBe(true);
+  const before = await page.evaluate(() =>
+    (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
+      .__donnerWorkerStats?.completedResults ?? 0
+  );
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
+  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
+  await expect.poll(() => page.evaluate((prior) =>
+    ((window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
+      .__donnerWorkerStats?.completedResults ?? 0) > prior, before
+  ), { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] }).toBe(true);
+  // The debounced canvas-size commit lands after the first worker result. Bind the measured blue
+  // bounds and trajectory ROI only after that geometry has settled.
+  await page.waitForTimeout(scaledMs(1_500));
+  const settled = await readSettledViewportStats(page);
+  const documentRect = {
+    x: settled.documentX, y: settled.documentY,
+    width: settled.documentWidth, height: settled.documentHeight,
+  };
+  let blueBounds: Rect | null = null;
+  await expect.poll(async () => {
+    const shot = await page.screenshot({ clip: documentRect });
+    const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentRect, {
+      minX: 0, minY: 0, maxX: documentRect.width, maxY: documentRect.height,
+    });
+    blueBounds = bounds === null ? null : {
+      x: documentRect.x + bounds.minX,
+      y: documentRect.y + bounds.minY,
+      width: bounds.maxX - bounds.minX,
+      height: bounds.maxY - bounds.minY,
+    };
+    return bounds?.pixels ?? 0;
+  }, {
+    message: "Basic Shapes must present its unique blue rectangle before the drag probe starts",
+    timeout: scaledMs(10_000), intervals: [16, 25, 50, 100],
+  }).toBeGreaterThan(0);
+  if (blueBounds === null) throw new Error("Basic Shapes blue rectangle is missing");
+  return { editorBounds, documentRect: {
+    ...documentRect,
+  }, blueBounds };
+}
+
 /** Confirm the editor really has a selection, so a drag drags something. */
 async function selectedCount(page: Page): Promise<number> {
   return page.evaluate(() =>
@@ -305,12 +399,13 @@ test.describe("composited drag invariants", () => {
     // Preserve same-frame images while the aggregate drag-ordering candidates are investigated.
     test.setTimeout(scaledMs(120_000));
     const failures = await openEditor(page);
-    const { documentRect } = await openDonnerSplash(page);
-    const stem = splashLetterStem(documentRect);
+    const { editorBounds, blueBounds } = await openBasicShapes(page);
+    const target = { x: editorBounds.x + kBlueRectOffset.x, y: editorBounds.y + kBlueRectOffset.y };
+    const measurement = orderingTrajectoryRegion(blueBounds);
 
-    await pointerClick(page, stem);
+    await pointerClick(page, target);
     await expect.poll(() => selectedCount(page), {
-      message: "the click must select the Splash letter before dragging it",
+      message: "the click must select the Basic Shapes blue rectangle before dragging it",
       timeout: scaledMs(5_000),
       intervals: [16, 25, 50, 100],
     }).toBeGreaterThan(0);
@@ -319,39 +414,27 @@ test.describe("composited drag invariants", () => {
     // and the drag never starts.
     await page.waitForTimeout(scaledMs(800));
 
-    // Sample a window around the dragged letter, with (j)'s thresholds and for
-    // (j)'s reason: a centroid over the whole canvas is dominated by everything
-    // that is not moving. The letter travels 140 CSS px out of a 1600 px canvas
-    // sampled into 64 read-back columns, which is two columns of motion against
-    // an editor's worth of stationary chrome, so the presented position
-    // quantized to whole read-back pixels barely changes and the ordering check
-    // has almost nothing to order. Measured across the same working drag: 15
-    // distinct presented positions out of 537 samples over the whole canvas,
-    // 68 with this window.
+    // Measure the fixture's only blue object inside one fixed region that bounds the complete
+    // sinusoidal trajectory. The fixed crop cannot follow the pointer and hide a stale frame.
+    // Resolution remains at least as fine as the prior 320x250 CSS / 96x96 readback contract.
     await installCompositedProbe(page, {
       captureReadbacks: true,
-      sampleRegionCss: letterTravelRegion(stem, -140, -70),
-      sampleWidth: 96,
-      sampleHeight: 96,
-      // The Splash artboard background is #10131e, whose channel spread is 14 -
-      // just above the probe's default chromatic threshold of 12. With the
-      // default the background counts as content, outnumbers the letter, and
-      // pins the centroid at the window's center. Strongly chromatic pixels still include other
-      // artwork in this crop, so a candidate requires inspection of its retained images.
+      sampleRegionCss: measurement,
+      sampleWidth: measurement.sampleWidth,
+      sampleHeight: measurement.sampleHeight,
       minColorAlpha: 64,
       minColorSpread: 60,
-      // Track the yellow Splash glyph while excluding cyan selection chrome. Other yellow artwork
-      // remains in the crop, so this is a fixture-specific content mask, not object identity.
-      colorMask: "yellow-content",
+      // Basic Shapes contains exactly one pixel population matching this established predicate.
+      colorMask: "basic-blue",
     });
     await startCompositedProbe(page);
-    const stream = await dragStream(page, stem, {
+    const stream = await dragStream(page, target, {
       durationMs: scaledMs(1_800),
-      dx: -140,
-      dy: -70,
+      dx: kOrderingDrag.dx,
+      dy: kOrderingDrag.dy,
       hz: 90,
-      reversals: 3,
-      reversalAmplitudePx: 90,
+      reversals: kOrderingDrag.reversals,
+      reversalAmplitudePx: kOrderingDrag.reversalAmplitudePx,
     });
     await page.waitForTimeout(scaledMs(400));
     const result = await stopCompositedProbe(page, test.info(), stream);
@@ -782,6 +865,26 @@ test.describe("dragRegressions classifier (pure)", () => {
     );
     expect(dragRegressions(maskedSamples, pointer, 1.0, 2.0, 150).map((item) => item.sampleIndex))
       .toEqual([3]);
+  });
+
+  test("ordering ROI covers every reversal at the prior spatial resolution", () => {
+    const initial = { x: 400, y: 300, width: 180, height: 120 };
+    const region = orderingTrajectoryRegion(initial);
+    expect(region.width / region.sampleWidth).toBeLessThanOrEqual(kOldOrderingCssPerSample.x);
+    expect(region.height / region.sampleHeight).toBeLessThanOrEqual(kOldOrderingCssPerSample.y);
+    for (let step = 0; step <= 4096; ++step) {
+      const fraction = step / 4096;
+      const swing = Math.sin(fraction * Math.PI * kOrderingDrag.reversals);
+      const dx = kOrderingDrag.dx * fraction + kOrderingDrag.reversalAmplitudePx * swing;
+      const dy = kOrderingDrag.dy * fraction + kOrderingDrag.reversalAmplitudePx * 0.5 * swing;
+      expect(initial.x + dx).toBeGreaterThanOrEqual(region.x);
+      expect(initial.y + dy).toBeGreaterThanOrEqual(region.y);
+      expect(initial.x + initial.width + dx).toBeLessThanOrEqual(region.x + region.width);
+      expect(initial.y + initial.height + dy).toBeLessThanOrEqual(region.y + region.height);
+    }
+    // At the guaranteed resolution, a real 5 CSS px backstep remains larger than the unchanged
+    // one-readback-pixel ordering threshold.
+    expect(5 / (region.width / region.sampleWidth)).toBeGreaterThan(1);
   });
 
   /** Pointer trace moving +3 css px per 10 ms until `reverseAt`, then -3. */

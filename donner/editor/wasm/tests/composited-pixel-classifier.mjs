@@ -9,6 +9,9 @@ export function installCompositedPixelClassifier(config) {
     if (config.colorMask === "yellow-content") {
       return red - blue >= 60 && green - blue >= 60;
     }
+    if (config.colorMask === "basic-blue") {
+      return alpha >= 180 && blue > 170 && blue > green + 45 && green > red + 25;
+    }
     return true;
   };
 }
