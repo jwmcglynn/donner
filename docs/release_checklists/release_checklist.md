@@ -86,6 +86,13 @@ concern; the tag never moves retroactively.
 
 ## Release
 
+- [ ] **Release approved**. Obtain explicit maintainer approval for the intended release. A main
+      merge, tag or green preflight is not release approval.
+- [ ] **BCR preflight qualified**. Root and consumer module versions match. The exact final commit
+      has a successful `BCR Preflight` run and its retained `donner-bcr-qualified-<attempt>` artifact.
+      Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a read-only manual dispatch can
+      supply missing preflight evidence without changing the commit.
+
 - [ ] **Create release tag**. Run `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the build-report commit.
 - [ ] **Push tag**. Run `git push origin vX.Y.Z`.
 - [ ] **Create GitHub Release**. Use `gh release create`:
@@ -96,9 +103,13 @@ concern; the tag never moves retroactively.
   - Title: `Donner SVG vX.Y.Z`
   - Body: copy from the RELEASE_NOTES.md entry
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
-    (built by the release CI workflow that the tag push triggers)
+    (built by the Release workflow when the GitHub release is published)
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
-      binaries are attached, and the release body renders correctly.
+      binaries and `donner-X.Y.Z.tar.gz` with its checksum/provenance are attached, uploaded digests
+      match the qualified artifacts, and the release body renders correctly.
+- [ ] **BCR submission checked**. For a stable release, the separate `Publish to BCR` workflow opens
+      or identifies the matching PR. Track admission, maintainer review, builds and registry
+      availability separately; PR creation is not publication in the registry.
 
 ## Post-Release
 

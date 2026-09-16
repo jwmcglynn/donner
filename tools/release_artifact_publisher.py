@@ -89,7 +89,8 @@ class Publisher:
                 print(f"release asset {path.name} already has the expected digest")
                 continue
             for attempt in range(1, maximum_attempts + 1):
-                if self.upload_once(path) or self.existing_asset_matches(path):
+                self.upload_once(path)
+                if self.existing_asset_matches(path):
                     break
                 print(
                     f"release asset {path.name} upload attempt {attempt} failed",

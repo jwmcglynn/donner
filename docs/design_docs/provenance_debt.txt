@@ -14,7 +14,6 @@ docs/design_docs/0013-coverage_improvement.md
 docs/design_docs/0014-filter_performance.md
 docs/design_docs/0015-skia_filter_conformance.md
 docs/design_docs/0017-geode_renderer.md
-docs/design_docs/0018-bcr_release.md
 docs/design_docs/0020-editor.md
 docs/design_docs/0021-resvg_feature_gaps.md
 docs/design_docs/0022-resvg_test_suite_upgrade.md
