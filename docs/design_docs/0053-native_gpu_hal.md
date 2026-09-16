@@ -1,9 +1,10 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
-**Status:** Implementing. Every production shader now compiles from authored WGSL into per-backend
-artifacts (#1195), and indexed drawing is merged. Production cutover remains open across native
-artifact linkage, resource ownership, UI rendering, native mapping and surfaces, and the browser
-bridge. The implementation plan below contains the work required to complete that cutover.\
+**Status:** Implementing. Compile-time shader artifacts, indexed drawing, texture-write origins,
+native buffer mapping, Metal surfaces, the browser backend, and the first filter-resource slice are
+merged. UI rendering, shader linkage, and Vulkan surfaces are implemented in open pull requests and
+remain subject to their outstanding qualification. The production bridge and final ownership and
+dependency cutover remain open.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-15\
 **Author:** Claude Fable 5.1\
@@ -29,6 +30,37 @@ The target is an original C++20 runtime serving Donner's own rendering requireme
 WebGPU C ABI implementation, and its shader compiler accepts a documented WGSL profile at build time
 rather than arbitrary shader text at runtime.
 
+## Current Delivery State
+
+Merged work now includes checked destination origins across the runtime and browser backend
+([#1262](https://github.com/jwmcglynn/donner/pull/1262) and
+[#1274](https://github.com/jwmcglynn/donner/pull/1274)), Metal and Vulkan host-buffer mapping
+([#1264](https://github.com/jwmcglynn/donner/pull/1264)), Metal surface presentation
+([#1265](https://github.com/jwmcglynn/donner/pull/1265)), the Donner browser backend and JavaScript
+bridge ([#1266](https://github.com/jwmcglynn/donner/pull/1266)), and runtime texture handles for the
+first filter-intermediate slice ([#1268](https://github.com/jwmcglynn/donner/pull/1268)). These
+capabilities are integrated foundations; they do not by themselves complete the editor cutover.
+
+| Active unit | Current state | Remaining gate |
+| --- | --- | --- |
+| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) | Implemented and published. Affected native tests pass 241 cases across eight targets; Linux Vulkan execution passes its pixel and synchronization case; browser presentation passes ten applicable cases plus the Chromium smoke test; all nine size checks pass. The selector-contract repair passes all 40 cases. Its prior parent passed 675 remote targets, an offline Metal shader target with 44 cases, and the five explicit editor targets. | Complete the current-head full and hosted CI run and resolve any resulting actionable review or integration failure. |
+| [Native shader artifact linkage #1279](https://github.com/jwmcglynn/donner/pull/1279) | Implemented and published. The reviewed code candidate passes 673 full-suite targets and the five explicit editor targets; documentation review findings are resolved. | Complete Linux execution and coverage CI, then resolve any resulting actionable review or integration failure. |
+| [Vulkan surfaces #1272](https://github.com/jwmcglynn/donner/pull/1272) | The earlier surface implementation is published. The owner-lifetime, acquisition-wait, maintenance-fence, device-loss, and quarantine repair is implemented and independently reviewed in a local validation candidate; its two causal regressions were established against the earlier repair base. The affected Vulkan surface target now passes 69 cases with no skips or validation diagnostics under the Khronos validation layer. | Complete the adjacent native checks, publish the repair to the existing pull request, and complete full CI and review. |
+
+### Remaining work
+
+| Order | Unit | Completion boundary |
+| --- | --- | --- |
+| 1 | Active UI, shader-linkage, and Vulkan-surface units above | Finish qualification and review without expanding their scope. |
+| 2 | Filter resource migration, slices 2 and 3 | Move the remaining shared pipeline resources, frame recording, source/result ownership, copies, clears, and allocator return path to runtime handles. |
+| 3 | Texture-cache upload migration | Move bitmap and thumbnail uploads, border replication, clears, allocation reuse, and deferred retirement to runtime resources. |
+| 4 | Snapshot, target, and readback identity | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation. |
+| 5 | Device ownership plumbing | Make the selected runtime device the backend owner and move shared renderer services behind backend-neutral ownership before platform presentation callers switch. |
+| 6 | `EditorWindow` surface integration | Connect platform windows to acquired runtime textures and cover resize, minimized, outdated/lost, timeout, device-loss, and invalidation behavior. |
+| 7 | Browser production bridge cutover | Select the merged browser backend in the WebAssembly editor path and remove the C WebGPU wrapper only after its final consumer moves. |
+| 8 | Final platform selection | Select Metal, Vulkan, or browser as the default through one production path only after resources, UI, surfaces and browser presentation qualify together. |
+| 9 | Dependency removal and final audits | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits. |
+
 ## Goals
 
 - Run native Geode/editor rendering through Metal on macOS and Vulkan on Linux.
@@ -52,14 +84,13 @@ rather than arbitrary shader text at runtime.
 
 ## Next Steps
 
-1. Link the native artifact of every production shader family into the Geode libraries for the
-   Metal and Vulkan platforms, as the checkerboard pipeline already does, switch the remaining
-   hard-coded WGSL descriptors in `GeodeShaders.cc` to `Device::shaderSourceKind()`, and qualify
-   each family through the selected backend with strict pixel acceptance.
-2. Replace concrete adapter resource and encoder access in production callers, preserving the
-   compiled shader artifacts, checkerboard, indexed drawing, and snapshot ownership paths.
-3. Develop mapping, native surfaces, and the browser bridge against the existing runtime contracts
-   while resource and UI migration proceeds. Switch platform ownership after those paths qualify.
+1. Finish qualification and review for the three active units in the table above without expanding
+   their scope.
+2. Complete filter resource slices 2 and 3, then migrate texture-cache uploads and the remaining
+   snapshot, target and readback identity boundaries.
+3. Establish backend-neutral device ownership, then connect `EditorWindow` and the browser editor
+   to their runtime surfaces. Select each default platform path only after the complete resource,
+   UI and presentation paths qualify.
 
 ## Implementation Plan
 
@@ -100,32 +131,28 @@ commits and their fixes together in a focused reviewable change.
       SPIR-V words, and a device refuses a descriptor whose projection is absent from the linked
       artifact instead of compiling nothing. The filter engine, the shared render pipeline and the
       checkerboard pipeline pass the device's kind, and so do the Slug fill, gradient, mask and
-      image-blit module constructors in `GeodeShaders.cc`. Passing the kind is not the whole
-      selection: the filter engine and the shared render pipeline still name the WGSL view, so
-      they pass a kind their chosen artifact cannot satisfy.
+      image-blit module constructors in `GeodeShaders.cc`. On the merged base, passing the kind is
+      not the whole selection because the filter engine and shared render pipeline still name the
+      WGSL view. PR #1279 changes both sites to select the device projection; that correction is
+      implemented but not yet merged.
 - [ ] The native artifact library (`<family>_native_artifact`, MSL on Apple platforms and SPIR-V
       on Linux) is linked into the Geode libraries for every production family, and every site
-      that builds a shader module selects the projection its device consumes. Linking is done:
-      the shared platform `select()` the checkerboard pipeline established now covers the Geode
-      device, the module constructors and the geometry encoder, while the WebAssembly package
-      contributes no native artifact and keeps linking the WGSL artifacts only. A probe binary
-      names both accessors of every production family, so linkage is enforced at link time: the
-      probe cannot link unless each family's WGSL and native artifact is present. The
-      `//donner/gpu/shader/artifact_tests:geode_linkage_isolation_tests` target inspects the linked
-      probe to verify that the authored WGSL is present and the other platform's projection is
-      absent. Selection is done in the `GeodeShaders.cc` constructors, which
-      `//donner/svg/renderer/geode:geode_shader_projection_tests` covers against a device reporting
-      each source kind, including refusal of a kind the linked artifact does not carry. The item
-      stays open on the rest of the selection: the filter engine and the
-      shared render pipeline still name the WGSL view, so the native objects for their families
-      are linked but dropped by the linker.
+      that builds a shader module selects the projection its device consumes. This is implemented
+      in [PR #1279](https://github.com/jwmcglynn/donner/pull/1279): platform selection covers the
+      Geode device, module constructors, geometry encoder, filter engine and shared render
+      pipeline, while WebAssembly links WGSL-only artifacts.
+      `//donner/gpu/shader/artifact_tests:geode_linkage_isolation_tests` proves the linked native
+      projection is present and the other platform projection is absent;
+      `//donner/svg/renderer/geode:geode_shader_projection_tests` covers per-device selection and
+      refusal of unavailable projections. The item remains open until Linux execution and coverage
+      CI complete and the pull request merges.
 - [ ] Qualify each family through the selected native backend with strict pixel acceptance:
       resvg filter cases, chained filters, fractional alpha, nonzero subregions, refusal paths and
       DPR2. The native Metal and Vulkan execution suites establish per-shader correctness today; they
       do not close this item on their own. The artifacts are linked everywhere, and the Slug
-      fill, gradient, mask and image-blit modules already select the native projection, so those
-      four are ready to qualify through a native production device. The filter families need
-      their selection corrected before they can be qualified at all.
+      fill, gradient, mask and image-blit modules already select the native projection. Filter and
+      shared-pipeline selection is implemented in PR #1279, but its remaining qualification must
+      complete before this item can close.
 - [ ] Shader profile additions follow the compiler's rules: a construct the v1 profile rejects is
       added to the compiler with tests across all three projections rather than worked around, and
       the UI renderer's shaders are authored as WGSL sources under the same contract.
@@ -151,45 +178,65 @@ commits and their fixes together in a focused reviewable change.
       transparent clears, tile copies and the graph's result are runtime handles, with no backend
       export or reimport left between primitives. `execute` takes the source graphic as a runtime
       texture and returns an explicit outcome whose output the caller owns and releases through the
-      same allocator that issued it; `RendererGeode` passes its pooled captures straight in.
+      same allocator that issued it; `RendererGeode` passes its pooled captures straight in. The
+      first slice is merged in [PR #1268](https://github.com/jwmcglynn/donner/pull/1268), moving
+      filter intermediates to runtime texture handles. Allocation reuse, remaining copies and
+      clears, frame recording, source/result ownership and final raw export/reimport removal remain
+      in slices 2 and 3.
 - [ ] Convert the shared Geode pipeline resources and filter frame recording to runtime handles and
       encoders. Remove the remaining raw export/reimport cycles and concrete host-encoder access as
       their callers migrate.
-- [ ] Add a checked destination origin to `Device::writeTexture` and implement the same subrectangle
-      semantics in each backend. Preserve extent, row-stride, data-size, and overflow validation.
+- [x] Add a checked destination origin to `Device::writeTexture` and implement the same
+      subrectangle semantics in each backend. Extent, row-stride, data-size and overflow validation
+      are shared across Metal, Vulkan and browser execution.
+      [PR #1262](https://github.com/jwmcglynn/donner/pull/1262) and
+      [PR #1274](https://github.com/jwmcglynn/donner/pull/1274) are merged.
 - [ ] Move `GlTextureCache` bitmap/thumbnail uploads, border replication, clear operations, and
       allocation reuse onto runtime resources. Retire resources only after their consuming frames.
 
 ### Native mapping and completion
 
-- [ ] Implement native Metal and Vulkan hooks for `mapBufferAsync`, mapping readiness, `mappedBytes`,
-      and unmap/invalidation using the existing public runtime contract.
+- [x] Implement native Metal and Vulkan hooks for `mapBufferAsync`, mapping readiness,
+      `mappedBytes`, and unmap/invalidation using the existing public runtime contract. Both
+      backends use the shared mapping table for readiness, bounds, invalidation and error handling.
+      [PR #1264](https://github.com/jwmcglynn/donner/pull/1264) is merged.
 - [ ] Route renderer readback and completion through those hooks, with the relevant submission
       serial, bounded waits, cancellation, and device-loss outcomes.
 - [ ] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
-      and that unmap, retirement, and loss invalidate access at the documented boundary.
+      and that unmap, retirement, and loss invalidate access at the documented boundary. Native
+      cancellation, device-loss and invalidation tests pass with the merged mapping hooks; the
+      production readback-pool integration remains part of the deferred ownership cutover.
 
 ### UI rendering
 
 - [ ] Replace raw WebGPU texture-view IDs in `GlTextureCache` and `CompositorDebugPanel` with runtime
       UI texture registrations carrying device identity, alpha mode, and frame lifetime.
+      Implemented in [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), including bounded
+      registration, exact-generation retirement and retained backing lifetime; qualification is
+      still running.
 - [ ] Implement the ImGui renderer over compiled WGSL shaders, indexed draws, bounded vertex/index uploads,
-      texture/sampler bindings, scissors, and renderer-state reset operations.
+      texture/sampler bindings, scissors, and renderer-state reset operations. Implemented in
+      [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), with native, Vulkan, browser and
+      package-size evidence recorded above; the item remains open until CI completes and it merges.
 - [ ] Migrate frame composition and remove `imgui_wgpu_backend` dependencies, registration calls,
       and obsolete patches when their final consumers move.
 
 ### Native surfaces
 
-- [ ] Implement Metal surface creation/configuration, drawable acquisition, presentation, and
+- [x] Implement Metal surface creation/configuration, drawable acquisition, presentation, and
       abandonment through `Device` surface hooks.
+      [PR #1265](https://github.com/jwmcglynn/donner/pull/1265) is merged.
 - [ ] Implement Vulkan platform surface and swapchain support, required queue/extension selection,
-      acquisition/presentation synchronization, and recreation through the same hooks.
+      acquisition/presentation synchronization, and recreation through the same hooks. The base
+      implementation is published in [PR #1272](https://github.com/jwmcglynn/donner/pull/1272);
+      the owner-lifetime and synchronization repair is implemented and awaiting native validation
+      before the pull request is updated.
 - [ ] Update `EditorWindow` to use acquired runtime textures directly. Exercise resize, minimized
       windows, outdated/lost surfaces, timeout, device loss, and frame-handle invalidation.
 
 ### Browser bridge
 
-- [ ] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
+- [x] Implement checked browser object IDs, worker ownership, asynchronous device requests, surface
       configuration, completion, mapping, and device-loss propagation behind the runtime contract.
       `donner/gpu/browser` supplies a `gpu::Device` whose hooks express validated operations to
       `navigator.gpu` through `library_donner_gpu.js`. Browser objects are named by identifiers
@@ -198,7 +245,8 @@ commits and their fixes together in a focused reviewable change.
       loop, so an explicit present is refused and a frame ends by abandoning its acquired texture.
       The backend and its bridge contract carry no Emscripten dependency, so `browser_tests` covers
       identifier reuse, ownership, request outcomes, mapping, device loss and command-stream
-      mirroring on every host.
+      mirroring on every host. [PR #1266](https://github.com/jwmcglynn/donner/pull/1266) is merged;
+      selecting it in the production editor remains the next item.
 - [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
       renderer and editor Wasm targets reach WebGPU through `GeodeDevice` and the transitional
       adapter, so selecting the browser backend is part of making the selected `gpu::Device` the
@@ -354,14 +402,22 @@ command tests and backend fault injection; do not rely on driver errors or optio
 assertions to enforce the contract. Capture output must not contain pointers, native handles, private paths, or
 process addresses. Backend failures must propagate without corrupting editor/DOM ownership.
 
+The Vulkan surface failure contract requires the swapchain-maintenance extension and its matching
+feature, separate fences for presentation and runtime submissions, and completion proof for the
+whole owner graph before any teardown releases shared prerequisites. If a proof fails, the runtime
+retains that complete graph and refuses future Vulkan device creation until restart. This contract
+is implemented in the repair for PR #1272 and remains unmerged pending native validation; it does
+not use a process-abort path.
+
 The required owning tests and missing enforcement surfaces are listed below. Optional diagnostics
 and physical-hardware observations are evidence with their stated limits, not universal guarantees.
 
 ## Testing and Validation
 
-Extend existing targets where they own the changed behavior. Add focused native surface/browser
-bridge targets for new hooks; their existence and actual execution are outstanding work. The GPU
-operation and shader manifests must use the complete repository input set, with
+Extend existing targets where they own the changed behavior. The mapping, Metal-surface and browser
+backend targets now own their merged hooks; Vulkan surface execution and the production browser
+cutover remain active qualification work. The GPU operation and shader manifests must use the
+complete repository input set, with
 `//tools/gpu_inventory:manifest_freshness_tests` as the freshness gate.
 
 | Contract / remaining work | Owning verification |
@@ -372,7 +428,7 @@ operation and shader manifests must use the complete repository input set, with
 | Snapshot/target lifetime, alpha, cropping, refusal | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates. |
 | Filter resource ordering, scratch and working sets | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites. |
 | Upload reuse, UI texture lifetime and thumbnails | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources. |
-| Mapping, loss, cancellation and native surfaces | Shared `gpu_tests` plus new owning native-hook tests and actual editor surface execution; current default unsupported hooks do not qualify a backend. `//donner/gpu/browser:browser_tests` owns the browser backend's identifier, ownership, mapping and device-loss behavior; browser execution of that backend joins the browser lanes with the production cutover. |
+| Mapping, loss, cancellation and native surfaces | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; actual editor surface execution remains required. `//donner/gpu/browser:browser_tests` owns the browser backend's identifier, ownership, mapping and device-loss behavior; browser execution of that backend joins the browser lanes with the production cutover. |
 | Editor ordering and presentation | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge. |
 | Structural counters, memory, timing and size | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates. |
 | Dependency closure | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking verifier invocation, generated CMake validation, and analyzed/source-archive/artifact evidence. |
