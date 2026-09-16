@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
+import { installCompositedPixelClassifier } from "./composited-pixel-classifier.mjs";
 
+export { installCompositedPixelClassifier } from "./composited-pixel-classifier.mjs";
 export { attachCompositedReadbacks, stopCompositedProbe } from "./composited-probe-evidence.mjs";
 
 /**
@@ -148,6 +150,8 @@ export interface CompositedProbeOptions {
   minColorAlpha?: number;
   /** Channel spread at or above which a pixel counts as chromatic. */
   minColorSpread?: number;
+  /** Optional fixture-specific content mask applied after the default alpha/chroma gates. */
+  colorMask?: "yellow-content";
   /**
    * Restrict the read-back to this viewport-CSS rectangle, intersected with
    * the visible surface region. Defaults to the whole visible region.
@@ -251,9 +255,12 @@ export async function installCompositedProbe(
     sampleHeight: options.sampleHeight ?? 48,
     minColorAlpha: options.minColorAlpha ?? 16,
     minColorSpread: options.minColorSpread ?? 12,
+    colorMask: options.colorMask ?? null,
     sampleRegionCss: options.sampleRegionCss ?? null,
     captureReadbacks: options.captureReadbacks ?? false,
   };
+
+  await page.evaluate(installCompositedPixelClassifier, config);
 
   await page.evaluate((config) => {
     const readback = document.createElement("canvas");
@@ -271,6 +278,17 @@ export async function installCompositedProbe(
       __donnerWorkerStats?: { completedResults?: number };
       __donnerViewportStats?: { documentWidth?: number };
     };
+    const matchesContentPixel = (window as unknown as {
+      __donnerMatchesCompositedContentPixel?: (
+        red: number,
+        green: number,
+        blue: number,
+        alpha: number,
+      ) => boolean;
+    }).__donnerMatchesCompositedContentPixel;
+    if (matchesContentPixel === undefined) {
+      throw new Error("composited probe: pixel classifier was not installed");
+    }
 
     type CapturedSample = CompositedSample & {
       attempts: number;
@@ -418,20 +436,17 @@ export async function installCompositedProbe(
         const a = pixels[index + 3];
         alphaSum += a;
         lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        if (a >= config.minColorAlpha) {
-          const spread = Math.max(r, g, b) - Math.min(r, g, b);
-          if (spread >= config.minColorSpread) {
-            colored += 1;
-            const pixel = index / 4;
-            const x = pixel % readback.width;
-            const y = Math.floor(pixel / readback.width);
-            coloredX += x;
-            coloredY += y;
-            minX = Math.min(minX, x);
-            maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y);
-            maxY = Math.max(maxY, y);
-          }
+        if (matchesContentPixel(r, g, b, a)) {
+          colored += 1;
+          const pixel = index / 4;
+          const x = pixel % readback.width;
+          const y = Math.floor(pixel / readback.width);
+          coloredX += x;
+          coloredY += y;
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y);
+          maxY = Math.max(maxY, y);
         }
       }
 

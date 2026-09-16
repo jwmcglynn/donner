@@ -231,6 +231,7 @@ playwright_bin.playwright_test(
         "canvas-color-stats.ts",
         "composited-drag-invariants.spec.ts",
         "composited-invariants.spec.ts",
+        "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
         "gesture-streams.ts",
@@ -281,6 +282,15 @@ js_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "composited_pixel_classifier_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["composited-pixel-classifier.mjs"],
+    entry_point = "composited-pixel-classifier.spec.mjs",
+    node_options = ["--test"],
 )
 
 js_test(

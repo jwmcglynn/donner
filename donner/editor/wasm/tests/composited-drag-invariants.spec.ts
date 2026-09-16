@@ -8,6 +8,7 @@ import {
   type CompositedSample,
   contentMotionFraction,
   dragRegressions,
+  installCompositedPixelClassifier,
   installCompositedProbe,
   readDocumentArtWidth,
   readViewportStats,
@@ -339,6 +340,9 @@ test.describe("composited drag invariants", () => {
       // artwork in this crop, so a candidate requires inspection of its retained images.
       minColorAlpha: 64,
       minColorSpread: 60,
+      // Track the yellow Splash glyph while excluding cyan selection chrome. Other yellow artwork
+      // remains in the crop, so this is a fixture-specific content mask, not object identity.
+      colorMask: "yellow-content",
     });
     await startCompositedProbe(page);
     const stream = await dragStream(page, stem, {
@@ -718,6 +722,67 @@ test.describe("dragRegressions classifier (pure)", () => {
       coloredCentroidY: 50,
     } as unknown as CompositedSample;
   }
+
+  function classifiedCentroid(
+    yellowXs: readonly number[],
+    cyanXs: readonly number[],
+    colorMask: "yellow-content" | null,
+  ): number {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const classifierWindow: {
+      __donnerMatchesCompositedContentPixel?: (
+        red: number,
+        green: number,
+        blue: number,
+        alpha: number,
+      ) => boolean;
+    } = {};
+    Object.defineProperty(globalThis, "window", { configurable: true, value: classifierWindow });
+    try {
+      installCompositedPixelClassifier({
+        minColorAlpha: 64,
+        minColorSpread: 60,
+        colorMask,
+      });
+      const matches = classifierWindow.__donnerMatchesCompositedContentPixel!;
+      const matched = [
+        ...yellowXs.filter(() => matches(240, 190, 10, 255)),
+        ...cyanXs.filter(() => matches(10, 190, 220, 255)),
+      ];
+      return matched.reduce((sum, x) => sum + x, 0) / matched.length;
+    } finally {
+      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  }
+
+  test("yellow content motion excludes the legacy cyan-overlay false pop-back", () => {
+    const backgroundYellow = 9;
+    const legacySamples = [
+      sampleAt(0, classifiedCentroid([1, 2, 3, backgroundYellow], [10, 11, 12, 13], null)),
+      sampleAt(30, classifiedCentroid([1, 2, 3, backgroundYellow], [], null)),
+      sampleAt(60, classifiedCentroid([3, 4, 5, backgroundYellow], [], null)),
+    ];
+    const pointer = [[0, 100, 200], [30, 103, 200], [60, 106, 200], [90, 109, 200]] as const;
+    expect(dragRegressions(legacySamples, pointer, 1.0, 2.0, 150).map((item) => item.sampleIndex))
+      .toEqual([1]);
+
+    const maskedSamples = [
+      sampleAt(
+        0,
+        classifiedCentroid([1, 2, 3, backgroundYellow], [10, 11, 12, 13], "yellow-content"),
+      ),
+      sampleAt(30, classifiedCentroid([1, 2, 3, backgroundYellow], [], "yellow-content")),
+      sampleAt(60, classifiedCentroid([3, 4, 5, backgroundYellow], [], "yellow-content")),
+    ];
+    expect(dragRegressions(maskedSamples, pointer, 1.0, 2.0, 150)).toEqual([]);
+
+    maskedSamples.push(
+      sampleAt(90, classifiedCentroid([1, 2, 3, backgroundYellow], [], "yellow-content")),
+    );
+    expect(dragRegressions(maskedSamples, pointer, 1.0, 2.0, 150).map((item) => item.sampleIndex))
+      .toEqual([3]);
+  });
 
   /** Pointer trace moving +3 css px per 10 ms until `reverseAt`, then -3. */
   function reversingTrace(
