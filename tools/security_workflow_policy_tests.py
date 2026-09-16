@@ -220,7 +220,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("actions/download-artifact@", release)
         self.assertIn("actions/attest-build-provenance@", release)
         self.assertIn("sha256sum --check --strict", release)
-        self.assertGreaterEqual(release.count("if: github.run_attempt == 1"), 3)
+        self.assertEqual(release.count("if: github.run_attempt == 1"), 2)
+        publication = release.split("  publish-release-artifacts:", 1)[1]
+        self.assertNotIn("if: github.run_attempt == 1", publication)
+        self.assertIn("needs.resolve-source.result == 'success'", publication)
+        self.assertIn("tools.bcr_source verify", publication)
+        self.assertIn("release/source/*", publication)
+        self.assertIn("retention-days: 90", release)
         self.assertEqual(release.count("--lockfile_mode=off"), 2)
         self.assertIn("cmp --silent expected.provenance release/linux/", release)
         self.assertIn("cmp --silent expected.provenance release/macos/", release)
@@ -232,6 +238,32 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("svenstaro/upload-release-action", release)
         for body in _run_bodies(release):
             self.assertNotIn("${{", body, "release run blocks must use quoted environment values")
+
+    def test_bcr_preflight_has_no_publication_credentials(self):
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        self.assertIn("workflow_dispatch:", preflight)
+        self.assertNotIn("secrets.", preflight)
+        self.assertNotIn("contents: write", preflight)
+        self.assertIn("tools.bcr_admission", preflight)
+        self.assertIn("needs: [prepare, consumer]", preflight)
+        self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
+        self.assertIn("tools.bcr_source qualify", preflight)
+
+    def test_bcr_publication_revalidates_a_successful_release(self):
+        workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
+        self.assertIn("workflows: [Release]", workflow)
+        self.assertIn("github.event.workflow_run.event == 'release'", workflow)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("tools.bcr_release plan-submission", workflow)
+        validate, publish = workflow.split("\n  publish:\n", 1)
+        self.assertNotIn("secrets.", validate)
+        self.assertIn("needs.validate.outputs.publish == 'true'", publish)
+        self.assertIn("secrets.BCR_PUBLISH_TOKEN", publish)
+        self.assertIn("cancel-in-progress: false", workflow)
+        for path in (".github/workflows/bcr_preflight.yml", ".github/workflows/publish_bcr.yml"):
+            for body in _run_bodies(self.supply_chain_files[path]):
+                self.assertNotIn("${{", body, "run blocks must quote environment values")
 
     def test_git_dependencies_use_release_tags_or_explicit_commits(self):
         deps = _read("third_party/bazel/non_bcr_deps.bzl")

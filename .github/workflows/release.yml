@@ -7,9 +7,36 @@ on:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
 
 jobs:
+  resolve-source:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_id: ${{ steps.source.outputs.run_id }}
+      attempt: ${{ steps.source.outputs.attempt }}
+      artifact: ${{ steps.source.outputs.artifact }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require preflight for the exact release source
+        id: source
+        run: |
+          python3 -B -m tools.bcr_release select-preflight \
+            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+
   linux:
+    needs: resolve-source
     if: github.run_attempt == 1
     runs-on: ubuntu-24.04
     env:
@@ -29,6 +56,10 @@ jobs:
       - name: Install Clang dependencies
         run: |
           sudo apt-get install -y libncurses-dev
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
 
       - name: Cache Bazel
         uses: actions/cache@v6
@@ -57,9 +88,10 @@ jobs:
           name: donner-svg-linux-x86-64-${{ github.sha }}
           path: release/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   macos:
+    needs: resolve-source
     if: github.run_attempt == 1
     runs-on: macos-26
     env:
@@ -75,6 +107,10 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
 
       - name: Cache Bazel
         uses: actions/cache@v6
@@ -103,20 +139,28 @@ jobs:
           name: donner-svg-darwin-arm64-${{ github.sha }}
           path: release/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   publish-release-artifacts:
-    if: github.run_attempt == 1
-    needs: [linux, macos]
+    if: >-
+      !cancelled() && needs.resolve-source.result == 'success' &&
+      (needs.linux.result == 'success' ||
+       (github.run_attempt > 1 && needs.linux.result == 'skipped')) &&
+      (needs.macos.result == 'success' ||
+       (github.run_attempt > 1 && needs.macos.result == 'skipped'))
+    needs: [resolve-source, linux, macos]
     runs-on: ubuntu-24.04
     env:
       RELEASE_ID: ${{ github.event.release.id }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_UPLOAD_URL: ${{ github.event.release.upload_url }}
+      SOURCE_RUN_ID: ${{ needs.resolve-source.outputs.run_id }}
+      SOURCE_ATTEMPT: ${{ needs.resolve-source.outputs.attempt }}
     permissions:
       contents: write
       id-token: write
       attestations: write
+      actions: read
     steps:
       - name: Checkout verified release source
         uses: actions/checkout@v7
@@ -142,6 +186,19 @@ jobs:
           name: donner-svg-darwin-arm64-${{ github.sha }}
           path: release/macos
 
+      - name: Download qualified source archive
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.resolve-source.outputs.artifact }}
+          run-id: ${{ needs.resolve-source.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release/source
+
+      - name: Verify source artifact provenance and contents
+        run: |
+          python3 -B -m tools.bcr_source verify --artifacts release/source \
+            --commit "$GITHUB_SHA" --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
+
       - name: Verify immutable artifacts
         run: |
           (cd release/linux && sha256sum --check --strict donner-svg_linux_x86_64.sha256)
@@ -160,6 +217,7 @@ jobs:
           subject-path: |
             release/linux/donner-svg_linux_x86_64
             release/macos/donner-svg_darwin_arm64
+            release/source/*.tar.gz
 
       - name: Upload verified release artifacts without replacement
         env:
@@ -171,4 +229,5 @@ jobs:
             release/linux/donner-svg_linux_x86_64.provenance \
             release/macos/donner-svg_darwin_arm64 \
             release/macos/donner-svg_darwin_arm64.sha256 \
-            release/macos/donner-svg_darwin_arm64.provenance
+            release/macos/donner-svg_darwin_arm64.provenance \
+            release/source/*

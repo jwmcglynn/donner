@@ -1,0 +1,65 @@
+name: Publish to BCR
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Release workflow run to resume
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bcr-${{ github.event.workflow_run.id || inputs.release_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      github.repository == 'jwmcglynn/donner' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'release' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      tag: ${{ steps.plan.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_RUN_ID: ${{ github.event.workflow_run.id || inputs.release_run_id }}
+    steps:
+      - name: Checkout trusted publisher
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the release and plan its registry submission
+        id: plan
+        run: |
+          python3 -B -m tools.bcr_release plan-submission \
+            --release-run-id "$RELEASE_RUN_ID" --github-output "$GITHUB_OUTPUT"
+
+  publish:
+    needs: validate
+    if: needs.validate.outputs.publish == 'true'
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.5.0
+    with:
+      tag_name: ${{ needs.validate.outputs.tag }}
+      registry_fork: jwmcglynn/bazel-central-registry
+      module_roots: .
+      attest: false
+      download_default_release_artifacts: false
+      open_pull_request: true
+      draft: false
+      author_name: Jeff McGlynn
+      author_email: jeff@mcglynn.dev
+    secrets:
+      publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
