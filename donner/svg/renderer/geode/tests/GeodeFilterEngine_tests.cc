@@ -440,6 +440,29 @@ TEST_F(GeodeFilterEngineTest, FinalAcceptedChunkLossReturnsNoReusableOutput) {
   EXPECT_THAT(allocator.reissued, testing::IsEmpty());
 }
 
+TEST_F(GeodeFilterEngineTest, VulkanFinalChunkTimeoutRetainsEveryAcceptedTexture) {
+  if (!device_->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  device_->setQueueWaitResultForTesting(GpuWaitResult::TimedOut);
+  const uint64_t before = device_->adapterDevice().lastSubmittedSerial();
+  PoolingTextureAllocator allocator(device_->adapterDevice());
+
+  const ExecutedFilter result = execute(MakeGraph(false), allocator);
+
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
+  EXPECT_THAT(result.identity, testing::Eq(TextureIdentity{}));
+  EXPECT_EQ(device_->adapterDevice().lastSubmittedSerial() - before, 1u);
+  EXPECT_THAT(device_->isDeviceLost(), testing::IsTrue());
+  EXPECT_EQ(allocator.retainedFailedCount(), allocator.issued.size());
+  allocator.endFrame();
+  gpu::Texture probe = allocator.acquireReleasedOnly(gpu::TextureDescriptor{
+      "post-timeout probe",
+      {4, 4},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  EXPECT_THAT(probe.isValid(), testing::IsFalse());
+  EXPECT_THAT(allocator.reissued, testing::IsEmpty());
+}
+
 TEST_F(GeodeFilterEngineTest, RefusedMergeOutputStopsBeforeClipping) {
   runGraph(MakeDirectGraph(false), "FilterMergeOutput");
 }

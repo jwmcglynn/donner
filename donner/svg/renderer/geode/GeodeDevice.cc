@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include "donner/base/AsyncifySuspendProbe.h"
 #ifdef __EMSCRIPTEN__
@@ -475,6 +476,16 @@ void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
 GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) const {
   if (isDeviceLost()) {
     return GpuWaitResult::DeviceLost;
+  }
+  if (queueWaitResultForTesting_.has_value()) {
+    const GpuWaitResult result = *std::exchange(queueWaitResultForTesting_, std::nullopt);
+    if (result == GpuWaitResult::TimedOut) {
+      markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, std::chrono::milliseconds{0},
+                                     "injected GPU queue timeout");
+    } else if (result == GpuWaitResult::DeviceLost) {
+      markDeviceLost("injected GPU queue device loss");
+    }
+    return result;
   }
   if (!device_) {
     return GpuWaitResult::Complete;
