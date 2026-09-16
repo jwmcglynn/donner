@@ -16,7 +16,7 @@ function evaluateConfig(filename, baseConfig, environment, temporary) {
     module,
     require: (specifier) =>
       specifier.startsWith("./playwright.")
-        ? baseConfig
+        ? (baseConfig[specifier] ?? baseConfig)
         : require(specifier),
     process: { env: environment, cwd: () => temporary, execPath: process.execPath },
   };
@@ -123,4 +123,45 @@ test("Boot config inherits the crash directory without changing its launch deadl
   );
   assert.equal(bootConfig.use.launchOptions.timeout, 15000);
   assert.equal(bootConfig.timeout, 60000);
+});
+
+test("Composited Chromium Bazel config keeps headed Metal and enables its specs", (t) => {
+  const { temporary, environment, baseConfig } = fixture(t);
+  baseConfig.testIgnore = [/composited/];
+  const bazelConfig = evaluateConfig(
+    "playwright.bazel.config.js",
+    baseConfig,
+    environment,
+    temporary,
+  );
+  const chromiumConfig = {
+    testIgnore: [/composited/],
+    use: {
+      channel: "chromium",
+      headless: false,
+      launchOptions: { args: ["--enable-unsafe-webgpu", "--use-angle=metal"] },
+    },
+  };
+  const config = evaluateConfig(
+    "playwright.composited-chromium.bazel.config.js",
+    {
+      "./playwright.bazel.config.js": bazelConfig,
+      "./playwright.composited-chromium.config.js": chromiumConfig,
+    },
+    environment,
+    temporary,
+  );
+  // The adapter is evaluated against its Bazel base in production; pin the behavior it must add.
+  assert.deepEqual(Array.from(config.testIgnore), []);
+  assert.equal(config.use.channel, "chromium");
+  assert.equal(config.use.headless, false);
+  assert.deepEqual(Array.from(config.use.launchOptions.args), [
+    "--enable-unsafe-webgpu",
+    "--use-angle=metal",
+  ]);
+  assert.deepEqual(config.webServer, bazelConfig.webServer);
+  assert.equal(
+    config.use.launchOptions.env.BREAKPAD_DUMP_LOCATION,
+    path.join(temporary, "chromium-crashpad"),
+  );
 });

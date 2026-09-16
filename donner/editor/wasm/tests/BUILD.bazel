@@ -255,6 +255,55 @@ playwright_bin.playwright_test(
     },
     tags = [
         "manual",
+        # Firefox cannot initialize its macOS sandbox inside Bazel's sandbox.
+        "no-sandbox",
+        "no-local",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+playwright_bin.playwright_test(
+    name = "chromium_composited_invariants_test",
+    size = "large",
+    timeout = "long",
+    args = [
+        "test",
+        "$(rootpath :composited-invariants.spec.ts)",
+        "$(rootpath :composited-drag-invariants.spec.ts)",
+        "--config=$(rootpath :playwright.composited-chromium.bazel.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "canvas-color-stats.ts",
+        "composited-drag-invariants.spec.ts",
+        "composited-invariants.spec.ts",
+        "composited-pixel-classifier.mjs",
+        "composited-probe.ts",
+        "composited-probe-evidence.mjs",
+        "gesture-streams.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.composited-chromium.bazel.config.js",
+        "playwright.composited-chromium.config.js",
+        "playwright.config.js",
+        "remote-webserver.mjs",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_REQUIRE_WEBGPU": "1",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    tags = [
+        "manual",
         "no-local",
     ],
     target_compatible_with = [
@@ -300,6 +349,8 @@ js_test(
     data = [
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",
+        "playwright.composited-chromium.bazel.config.js",
+        "playwright.composited-chromium.config.js",
     ],
     entry_point = "playwright-bazel-config.spec.mjs",
     node_options = ["--test"],
