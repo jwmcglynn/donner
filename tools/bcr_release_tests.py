@@ -74,6 +74,25 @@ class QualificationTest(unittest.TestCase):
                 release.check_release(data, "v1.0.0")
 
 
+class BinaryRetryTest(unittest.TestCase):
+    @mock.patch.object(release, "gh_json")
+    def test_only_missing_platforms_build_on_retry(self, gh):
+        gh.return_value = [{"artifacts": []}]
+        self.assertEqual(release.binary_build_plan(SHA, "12"), {"build_linux": "true", "build_macos": "true"})
+        gh.return_value = [{"artifacts": [{"name": f"donner-svg-linux-x86-64-{SHA}", "expired": False}]}]
+        self.assertEqual(release.binary_build_plan(SHA, "12"), {"build_linux": "false", "build_macos": "true"})
+        gh.return_value.append({"artifacts": [{"name": f"donner-svg-darwin-arm64-{SHA}", "expired": False}]})
+        self.assertEqual(release.binary_build_plan(SHA, "12"), {"build_linux": "false", "build_macos": "false"})
+
+    @mock.patch.object(release, "gh_json")
+    def test_expired_and_ambiguous_artifacts_require_manual_recovery(self, gh):
+        artifact = {"name": f"donner-svg-linux-x86-64-{SHA}", "expired": False}
+        for artifacts in [[dict(artifact, expired=True)], [artifact, artifact]]:
+            gh.return_value = [{"artifacts": artifacts}]
+            with self.subTest(artifacts=artifacts), self.assertRaisesRegex(ValueError, "recovery manually"):
+                release.binary_build_plan(SHA, "12")
+
+
 class PublishedSourceTest(unittest.TestCase):
     def setUp(self):
         self.receipt = {"sha256": "c" * 64, "verified_run_id": "12", "verified_run_attempt": "2"}

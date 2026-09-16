@@ -96,10 +96,11 @@ archive/provenance rejection paths and the validator's download boundary.
 
 ### Retry without replacing a release
 
-- For a transient asset upload failure, rerun the failed Release publication job. It reuses retained
-  source and binary artifacts; binary build jobs run only on the first attempt. If a binary build
-  itself failed or artifacts expired, stop and diagnose recovery before publishing. Do not retag or
-  silently rebuild an already-published artifact.
+- For a transient failure, rerun failed Release jobs. The source gate checks retained binary artifacts
+  in the same workflow run. A platform builds only when its artifact is absent, so recovery also
+  works when preflight or one platform failed before producing an artifact. Existing platform
+  artifacts are reused and verified; expired or ambiguous artifacts require manual recovery. Do not
+  retag or rebuild a retained artifact.
 - For a transient BCR publisher failure, rerun `Publish to BCR` or dispatch it with the successful
   Release workflow run ID. It validates that run through GitHub; dispatch does not create a release.
 - A matching existing fork branch and open/merged PR is a successful no-op. A conflicting branch,

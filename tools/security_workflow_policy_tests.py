@@ -220,7 +220,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("actions/download-artifact@", release)
         self.assertIn("actions/attest-build-provenance@", release)
         self.assertIn("sha256sum --check --strict", release)
-        self.assertEqual(release.count("if: github.run_attempt == 1"), 2)
+        self.assertNotIn("if: github.run_attempt == 1", release)
+        self.assertIn("if: needs.resolve-source.outputs.build_linux == 'true'", release)
+        self.assertIn("if: needs.resolve-source.outputs.build_macos == 'true'", release)
         publication = release.split("  publish-release-artifacts:", 1)[1]
         self.assertNotIn("if: github.run_attempt == 1", publication)
         self.assertIn("needs.resolve-source.result == 'success'", publication)

@@ -20,6 +20,8 @@ jobs:
       run_id: ${{ steps.source.outputs.run_id }}
       attempt: ${{ steps.source.outputs.attempt }}
       artifact: ${{ steps.source.outputs.artifact }}
+      build_linux: ${{ steps.source.outputs.build_linux }}
+      build_macos: ${{ steps.source.outputs.build_macos }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -32,12 +34,13 @@ jobs:
       - name: Require preflight for the exact release source
         id: source
         run: |
-          python3 -B -m tools.bcr_release select-preflight \
-            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+          python3 -B -m tools.bcr_release plan-release \
+            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" \
+            --release-run-id "$GITHUB_RUN_ID" --github-output "$GITHUB_OUTPUT"
 
   linux:
     needs: resolve-source
-    if: github.run_attempt == 1
+    if: needs.resolve-source.outputs.build_linux == 'true'
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -92,7 +95,7 @@ jobs:
 
   macos:
     needs: resolve-source
-    if: github.run_attempt == 1
+    if: needs.resolve-source.outputs.build_macos == 'true'
     runs-on: macos-26
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -145,9 +148,9 @@ jobs:
     if: >-
       !cancelled() && needs.resolve-source.result == 'success' &&
       (needs.linux.result == 'success' ||
-       (github.run_attempt > 1 && needs.linux.result == 'skipped')) &&
+       (needs.resolve-source.outputs.build_linux == 'false' && needs.linux.result == 'skipped')) &&
       (needs.macos.result == 'success' ||
-       (github.run_attempt > 1 && needs.macos.result == 'skipped'))
+       (needs.resolve-source.outputs.build_macos == 'false' && needs.macos.result == 'skipped'))
     needs: [resolve-source, linux, macos]
     runs-on: ubuntu-24.04
     env:

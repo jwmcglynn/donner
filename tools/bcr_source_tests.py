@@ -172,9 +172,11 @@ class SourceFixtureTest(unittest.TestCase):
         self.write("examples/bazel_consumer/MODULE.bazel", 'bazel_dep(name="donner", version="0.9.0")')
         with self.assertRaisesRegex(ValueError, "version does not match"):
             source.verify_templates("1.0.0")
-        self.write("examples/bazel_consumer/MODULE.bazel", 'bazel_dep(name="donner", version="1.0.0")\nlocal_path_override(module_name="donner", path="../..")')
-        with self.assertRaisesRegex(ValueError, "must not override"):
-            source.verify_templates("1.0.0")
+        for override in ["local_path_override", "git_override", "archive_override", "single_version_override"]:
+            self.write("examples/bazel_consumer/MODULE.bazel",
+                       f'bazel_dep(name="donner", version="1.0.0")\n{override}(module_name="donner")')
+            with self.subTest(override=override), self.assertRaisesRegex(ValueError, "must not override"):
+                source.verify_templates("1.0.0")
 
     def test_registry_regeneration_preserves_other_versions_and_upstream(self):
         upstream = self.base / "upstream"

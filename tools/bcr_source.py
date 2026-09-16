@@ -98,8 +98,8 @@ def consumer_calls(contents: str):
 def verify_consumer(version: str) -> None:
     found = False
     for name, values in consumer_calls(Path("examples/bazel_consumer/MODULE.bazel").read_text()):
-        if name == "local_path_override" and values.get("module_name") == "donner":
-            raise ValueError("registry consumer must not override donner with a local checkout")
+        if name.endswith("_override") and values.get("module_name") == "donner":
+            raise ValueError("registry consumer must not override donner")
         if name == "bazel_dep" and values.get("name") == "donner":
             if values.get("version") != version:
                 raise ValueError("consumer version does not match the source module")

@@ -62,6 +62,22 @@ def select_preflight(commit: str, tag: str) -> dict[str, object]:
             "artifact": f"donner-bcr-qualified-{run['run_attempt']}"}
 
 
+def binary_build_plan(commit: str, run_id: str) -> dict[str, str]:
+    if not re.fullmatch(r"[1-9][0-9]*", run_id):
+        raise ValueError("release workflow run ID must be numeric")
+    pages = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts",
+                    "--paginate", "--slurp")
+    artifacts = [artifact for page in pages for artifact in page["artifacts"]]
+    result = {}
+    for platform, suffix in [("linux", "linux-x86-64"), ("macos", "darwin-arm64")]:
+        name = f"donner-svg-{suffix}-{commit}"
+        matching = [artifact for artifact in artifacts if artifact["name"] == name]
+        if len(matching) > 1 or any(artifact.get("expired") is not False for artifact in matching):
+            raise ValueError("retained binary artifact is ambiguous or expired; inspect recovery manually")
+        result[f"build_{platform}"] = "false" if matching else "true"
+    return result
+
+
 def check_release(release: dict, tag: str) -> None:
     if (release.get("tagName") != tag or release.get("isDraft") is not False
             or type(release.get("isPrerelease")) is not bool):
@@ -160,16 +176,18 @@ def plan_submission(release_run_id: str) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    select = commands.add_parser("select-preflight")
+    select = commands.add_parser("plan-release")
     select.add_argument("--commit", required=True)
     select.add_argument("--tag", required=True)
+    select.add_argument("--release-run-id", required=True)
     select.add_argument("--github-output")
     plan = commands.add_parser("plan-submission")
     plan.add_argument("--release-run-id", required=True)
     plan.add_argument("--github-output")
     args = parser.parse_args()
-    if args.command == "select-preflight":
+    if args.command == "plan-release":
         result = select_preflight(args.commit, args.tag)
+        result.update(binary_build_plan(args.commit, args.release_run_id))
     else:
         result = plan_submission(args.release_run_id)
     bcr_source.outputs(result, args.github_output)
