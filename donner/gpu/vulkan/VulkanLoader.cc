@@ -170,6 +170,8 @@ Status VulkanLoader::loadInstance(VkInstance instance, bool debugUtilsEnabled) {
                 resolve("vkGetPhysicalDeviceProperties"));
   missing.store(api_.vkGetPhysicalDeviceFeatures, "vkGetPhysicalDeviceFeatures",
                 resolve("vkGetPhysicalDeviceFeatures"));
+  missing.store(api_.vkGetPhysicalDeviceFeatures2, "vkGetPhysicalDeviceFeatures2",
+                resolve("vkGetPhysicalDeviceFeatures2"));
   missing.store(api_.vkGetPhysicalDeviceMemoryProperties, "vkGetPhysicalDeviceMemoryProperties",
                 resolve("vkGetPhysicalDeviceMemoryProperties"));
   missing.store(api_.vkGetPhysicalDeviceQueueFamilyProperties,
@@ -189,6 +191,57 @@ Status VulkanLoader::loadInstance(VkInstance instance, bool debugUtilsEnabled) {
         resolve("vkCreateDebugUtilsMessengerEXT"));
     api_.vkDestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
         resolve("vkDestroyDebugUtilsMessengerEXT"));
+  }
+  return OkStatus();
+}
+
+Status VulkanLoader::loadPresentationInstance(VkInstance instance, bool headlessSurfaceEnabled) {
+  const auto resolve = [this, instance](const char* name) {
+    return api_.vkGetInstanceProcAddr(instance, name);
+  };
+  MissingEntryPoint missing;
+  missing.store(api_.vkEnumerateDeviceExtensionProperties, "vkEnumerateDeviceExtensionProperties",
+                resolve("vkEnumerateDeviceExtensionProperties"));
+  missing.store(api_.vkDestroySurfaceKHR, "vkDestroySurfaceKHR", resolve("vkDestroySurfaceKHR"));
+  missing.store(api_.vkGetPhysicalDeviceSurfaceSupportKHR, "vkGetPhysicalDeviceSurfaceSupportKHR",
+                resolve("vkGetPhysicalDeviceSurfaceSupportKHR"));
+  missing.store(api_.vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
+                "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+                resolve("vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+  missing.store(api_.vkGetPhysicalDeviceSurfaceFormatsKHR, "vkGetPhysicalDeviceSurfaceFormatsKHR",
+                resolve("vkGetPhysicalDeviceSurfaceFormatsKHR"));
+  missing.store(api_.vkGetPhysicalDeviceSurfacePresentModesKHR,
+                "vkGetPhysicalDeviceSurfacePresentModesKHR",
+                resolve("vkGetPhysicalDeviceSurfacePresentModesKHR"));
+  if (headlessSurfaceEnabled) {
+    missing.store(api_.vkCreateHeadlessSurfaceEXT, "vkCreateHeadlessSurfaceEXT",
+                  resolve("vkCreateHeadlessSurfaceEXT"));
+  }
+  if (!missing.complete()) {
+    return GpuError{GpuErrorType::Unsupported,
+                    std::format("the Vulkan instance does not provide {}", missing.name())};
+  }
+  return OkStatus();
+}
+
+Status VulkanLoader::loadPresentationDevice(VkDevice device) {
+  const auto resolve = [this, device](const char* name) {
+    return api_.vkGetDeviceProcAddr(device, name);
+  };
+  MissingEntryPoint missing;
+  missing.store(api_.vkCreateSemaphore, "vkCreateSemaphore", resolve("vkCreateSemaphore"));
+  missing.store(api_.vkDestroySemaphore, "vkDestroySemaphore", resolve("vkDestroySemaphore"));
+  missing.store(api_.vkCreateSwapchainKHR, "vkCreateSwapchainKHR", resolve("vkCreateSwapchainKHR"));
+  missing.store(api_.vkDestroySwapchainKHR, "vkDestroySwapchainKHR",
+                resolve("vkDestroySwapchainKHR"));
+  missing.store(api_.vkGetSwapchainImagesKHR, "vkGetSwapchainImagesKHR",
+                resolve("vkGetSwapchainImagesKHR"));
+  missing.store(api_.vkAcquireNextImageKHR, "vkAcquireNextImageKHR",
+                resolve("vkAcquireNextImageKHR"));
+  missing.store(api_.vkQueuePresentKHR, "vkQueuePresentKHR", resolve("vkQueuePresentKHR"));
+  if (!missing.complete()) {
+    return GpuError{GpuErrorType::Unsupported,
+                    std::format("the Vulkan device does not provide {}", missing.name())};
   }
   return OkStatus();
 }
@@ -258,6 +311,7 @@ Status VulkanLoader::loadDevice(VkDevice device) {
   missing.store(api_.vkDestroyFence, "vkDestroyFence", resolve("vkDestroyFence"));
   missing.store(api_.vkGetFenceStatus, "vkGetFenceStatus", resolve("vkGetFenceStatus"));
   missing.store(api_.vkWaitForFences, "vkWaitForFences", resolve("vkWaitForFences"));
+  missing.store(api_.vkResetFences, "vkResetFences", resolve("vkResetFences"));
   missing.store(api_.vkCmdBeginRenderPass, "vkCmdBeginRenderPass", resolve("vkCmdBeginRenderPass"));
   missing.store(api_.vkCmdEndRenderPass, "vkCmdEndRenderPass", resolve("vkCmdEndRenderPass"));
   missing.store(api_.vkCmdBindPipeline, "vkCmdBindPipeline", resolve("vkCmdBindPipeline"));

@@ -46,6 +46,7 @@ struct VulkanApi {
   PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices = nullptr;
   PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties = nullptr;
   PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures = nullptr;
+  PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2 = nullptr;
   PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties = nullptr;
   PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties = nullptr;
   PFN_vkCreateDevice vkCreateDevice = nullptr;
@@ -104,6 +105,7 @@ struct VulkanApi {
   PFN_vkDestroyFence vkDestroyFence = nullptr;
   PFN_vkGetFenceStatus vkGetFenceStatus = nullptr;
   PFN_vkWaitForFences vkWaitForFences = nullptr;
+  PFN_vkResetFences vkResetFences = nullptr;
   PFN_vkCmdBeginRenderPass vkCmdBeginRenderPass = nullptr;
   PFN_vkCmdEndRenderPass vkCmdEndRenderPass = nullptr;
   PFN_vkCmdBindPipeline vkCmdBindPipeline = nullptr;
@@ -120,6 +122,35 @@ struct VulkanApi {
   PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
   PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
   PFN_vkCmdCopyImage vkCmdCopyImage = nullptr;
+  /// @}
+
+  /// @name Presentation entry points
+  ///
+  /// Null unless the device was created with presentation support: they come from extensions
+  /// (VK_KHR_surface and its platform companions at instance level, VK_KHR_swapchain at device
+  /// level), so a headless instance never resolves them and a backend without presentation
+  /// never calls one.
+  /// @{
+  /// Core rather than an extension entry point, resolved here for the same reason as the two
+  /// semaphore functions below: only presentation needs it, so the headless path is unchanged.
+  PFN_vkEnumerateDeviceExtensionProperties vkEnumerateDeviceExtensionProperties = nullptr;
+  PFN_vkDestroySurfaceKHR vkDestroySurfaceKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR = nullptr;
+  PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
+  /// Optional even among these: present only when VK_EXT_headless_surface was enabled.
+  PFN_vkCreateHeadlessSurfaceEXT vkCreateHeadlessSurfaceEXT = nullptr;
+  /// Core entry points rather than extension ones, resolved here because presentation is the
+  /// only thing in this backend that needs a semaphore; keeping them in this group leaves the
+  /// headless path resolving exactly what it did before.
+  PFN_vkCreateSemaphore vkCreateSemaphore = nullptr;
+  PFN_vkDestroySemaphore vkDestroySemaphore = nullptr;
+  PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR = nullptr;
+  PFN_vkDestroySwapchainKHR vkDestroySwapchainKHR = nullptr;
+  PFN_vkGetSwapchainImagesKHR vkGetSwapchainImagesKHR = nullptr;
+  PFN_vkAcquireNextImageKHR vkAcquireNextImageKHR = nullptr;
+  PFN_vkQueuePresentKHR vkQueuePresentKHR = nullptr;
   /// @}
 };
 
@@ -172,6 +203,28 @@ public:
    * @param device Device the entry points are resolved for.
    */
   Status loadDevice(VkDevice device);
+
+  /**
+   * Resolves the instance-level presentation entry points against \p instance.
+   *
+   * Separate from \ref loadInstance because presentation is opt in: a headless instance has no
+   * surface extension to resolve them from, and leaving them null is what makes a backend
+   * without presentation refuse rather than call into nothing.
+   *
+   * @param instance Instance the entry points are resolved for; must have been created with
+   *   VK_KHR_surface enabled.
+   * @param headlessSurfaceEnabled True when VK_EXT_headless_surface was enabled on \p instance,
+   *   in which case its entry point is resolved as well; it stays null otherwise.
+   */
+  Status loadPresentationInstance(VkInstance instance, bool headlessSurfaceEnabled);
+
+  /**
+   * Resolves the device-level swapchain entry points against \p device.
+   *
+   * @param device Device the entry points are resolved for; must have been created with
+   *   VK_KHR_swapchain enabled.
+   */
+  Status loadPresentationDevice(VkDevice device);
 
 private:
   /// Constructs an empty loader holding \p library. @param library Opened loader handle.
