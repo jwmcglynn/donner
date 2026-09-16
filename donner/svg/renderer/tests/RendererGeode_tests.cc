@@ -734,20 +734,52 @@ TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
       renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
       renderer.popFilterLayer();
     };
+    struct PendingHostCopy {
+      gpu::Texture source;
+      gpu::Texture destination;
+      uint64_t serial = 0;
+    };
+    const auto registerPendingHostCopy = [&]() {
+      gpu::Device& adapter = device->adapterDevice();
+      PendingHostCopy pending{
+          .source = gpu::GetResultOrFail(adapter.createTexture(
+              gpu::TextureDescriptor{"pending host copy source", gpu::Extent2d{1, 1},
+                                     gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopySrc})),
+          .destination = gpu::GetResultOrFail(adapter.createTexture(
+              gpu::TextureDescriptor{"pending host copy destination", gpu::Extent2d{1, 1},
+                                     gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopyDst})),
+      };
+      std::unique_ptr<gpu::CommandEncoder> commands =
+          gpu::GetResultOrFail(adapter.createCommandEncoder());
+      EXPECT_THAT(
+          commands->copyTextureToTexture(pending.source, pending.destination, gpu::Extent2d{1, 1}),
+          gpu::IsOk());
+      pending.serial =
+          gpu::GetResultOrFail(adapter.submit(gpu::GetResultOrFail(commands->finish())));
+      return pending;
+    };
     beginFrame(*parent);
     drawFlood(*parent, css::RGBA(255, 0, 0, 255));
-    const uint64_t parentSerial = device->adapterDevice().lastSubmittedSerial();
+    const uint64_t parentFilterSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
+    const PendingHostCopy parentPending = registerPendingHostCopy();
+    ASSERT_THAT(parentPending.serial, testing::Gt(parentFilterSerial));
     beginFrame(sibling);
     drawFlood(sibling, css::RGBA(0, 0, 255, 255));
-    const uint64_t siblingSerial = device->adapterDevice().lastSubmittedSerial();
-    ASSERT_THAT(siblingSerial, testing::Gt(parentSerial));
+    const uint64_t siblingFilterSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
+    const PendingHostCopy siblingPending = registerPendingHostCopy();
+    ASSERT_THAT(siblingFilterSerial, testing::Gt(parentPending.serial));
+    ASSERT_THAT(siblingPending.serial, testing::Gt(siblingFilterSerial));
     if (destroy) {
       parent.reset();
     } else {
       beginFrame(*parent);
     }
-    ASSERT_THAT(device->adapterDevice().waitForSerial(parentSerial, 2.0), testing::IsTrue());
-    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingSerial));
+    ASSERT_THAT(device->adapterDevice().waitForSerial(parentPending.serial, 2.0),
+                testing::IsTrue());
+    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingPending.serial));
     sibling.endFrame();
     const RendererBitmap pixels = sibling.takeSnapshot();
     ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
