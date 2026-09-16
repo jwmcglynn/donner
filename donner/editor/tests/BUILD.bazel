@@ -34,6 +34,12 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "async_test_polling",
+    testonly = 1,
+    hdrs = ["AsyncTestPolling.h"],
+)
+
 donner_cc_test(
     name = "viewport_geometry_tests",
     srcs = ["ViewportGeometry_tests.cc"],
@@ -190,6 +196,7 @@ donner_cc_test(
     name = "sample_thumbnail_async_tests",
     srcs = ["SampleThumbnailAsync_tests.cc"],
     deps = [
+        ":async_test_polling",
         "//donner/base",
         "//donner/editor:async_renderer",
         "//donner/editor:editor_sample_catalog",
@@ -544,6 +551,7 @@ donner_cc_test(
     shard_count = 4,
     variants = ["geode"],
     deps = [
+        ":async_test_polling",
         ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
@@ -592,6 +600,7 @@ donner_cc_test(
         "perf",
     ],
     deps = [
+        ":async_test_polling",
         ":bitmap_golden_compare",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
