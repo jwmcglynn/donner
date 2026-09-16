@@ -366,6 +366,37 @@ TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
   }
 }
 
+TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
+  using namespace components;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  ASSERT_GT(renderer.resourceStats().filterRetainedBytes, 0u);
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectFilterFrameSuspensionAndRestoreFailureForTesting();
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.filterFrameFailureInjectionPendingForTesting(), testing::IsFalse());
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);

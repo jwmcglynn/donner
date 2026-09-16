@@ -1380,6 +1380,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool verbose = false;
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
+  bool failFilterFrameSuspensionForTesting = false;
+  bool failFilterFrameRestoreForTesting = false;
 
   // Per-frame perf counters. Reset at `beginFrame`, read via
   // `lastFrameTimings()`; `GeodePerf_tests.cc` pins their ceilings.
@@ -1657,6 +1659,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Submits all source rendering and disables host replay before standalone filter execution.
   [[nodiscard]] bool suspendFrameForFilter() {
+    if (std::exchange(failFilterFrameSuspensionForTesting, false)) {
+      discardFrameGpuEncoder();
+      return false;
+    }
     if (!frameCommandEncoder || !flushFrameGpuEncoder()) {
       discardFrameGpuEncoder();
       return false;
@@ -1676,6 +1682,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Opens the fresh raw/runtime encoder pair that records the post-filter composite.
   [[nodiscard]] bool restoreFrameAfterFilter() {
+    if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
     wgpu::CommandEncoderDescriptor descriptor = {};
     descriptor.label = wgpuLabel("RendererGeodePostFilterCE");
     frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
@@ -7682,6 +7689,23 @@ void RendererGeode::injectDeviceLossForTesting() {
   if (impl_->device) {
     impl_->device->markDeviceLost("test-injected device loss");
   }
+}
+
+void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
+  impl_->failFilterFrameSuspensionForTesting = true;
+  impl_->failFilterFrameRestoreForTesting = true;
+}
+
+size_t RendererGeode::failedFilterTextureCountForTesting() const {
+  return impl_->failedFilterTextures.size();
+}
+
+bool RendererGeode::hasActiveDrawingEncoderForTesting() const {
+  return impl_->encoder != nullptr;
+}
+
+bool RendererGeode::filterFrameFailureInjectionPendingForTesting() const {
+  return impl_->failFilterFrameSuspensionForTesting || impl_->failFilterFrameRestoreForTesting;
 }
 
 bool RendererGeode::deviceLost() const {
