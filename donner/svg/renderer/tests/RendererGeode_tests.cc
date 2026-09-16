@@ -372,6 +372,7 @@ TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
   ASSERT_THAT(device, testing::NotNull());
   RendererGeode renderer(device);
   beginFrame(renderer);
+  renderer.pushIsolatedLayer(0.8, MixBlendMode::Normal);
   FilterGraph graph;
   FilterNode blur;
   blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
@@ -393,6 +394,62 @@ TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
   EXPECT_THAT(renderer.filterFrameFailureInjectionPendingForTesting(), testing::IsFalse());
   EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  const size_t retainedAfterFilter = renderer.failedFilterTextureCountForTesting();
+  renderer.popIsolatedLayer();
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(retainedAfterFilter));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  const size_t retainedAfterUnwind = renderer.failedFilterTextureCountForTesting();
+  EXPECT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+              testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterUnwind));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+
+  const size_t retainedAfterFailedFrame = renderer.failedFilterTextureCountForTesting();
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  renderer.drawRect(Box2d({0, 0}, {32, 32}), StrokeParams{});
+  EXPECT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+              testing::IsFalse());
+  renderer.endFrame();
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterFailedFrame));
+  EXPECT_THAT(device->counters()->textureCreates, testing::Eq(0u));
+  EXPECT_THAT(device->counters()->drawCalls, testing::Eq(0u));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(0u));
+}
+
+TEST_F(RendererGeodeTest, TransformedFilterFailureUnwindsAnOpenPatternTile) {
+  using namespace components;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()), testing::IsTrue());
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {32, 32}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {32, 32}), StrokeParams{});
+  renderer.injectFilterFrameSuspensionAndRestoreFailureForTesting();
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+
+  renderer.popFilterLayer();
+  const size_t retainedAfterFilter = renderer.failedFilterTextureCountForTesting();
+  renderer.endPatternTile(/*forStroke=*/false);
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(retainedAfterFilter));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
   renderer.endFrame();
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
 }

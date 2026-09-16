@@ -419,6 +419,53 @@ TEST_F(GeodeFilterEngineTest, LaterChunkLossDetachesNothingFromAcceptedWork) {
   EXPECT_THAT(allocator.reissued, testing::IsEmpty());
 }
 
+TEST_F(GeodeFilterEngineTest, HealthyRefusalAfterCompletedChunkRetiresExecutionTextures) {
+  using namespace svg::components;
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  for (size_t index = 0; index != 5; ++index) {
+    FilterNode morphology;
+    morphology.primitive = filter_primitive::Morphology{
+        .op = filter_primitive::Morphology::Operator::Dilate, .radiusX = 256, .radiusY = 256};
+    graph.nodes.push_back(std::move(morphology));
+  }
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  for (size_t iteration = 0; iteration != 3; ++iteration) {
+    SCOPED_TRACE(iteration);
+    size_t acceptedChunks = 0;
+    ScopedWgpuHandle<wgpu::CommandEncoder> siblingHost;
+    engine_->setChunkSubmittedHookForTesting([&](size_t chunk) {
+      acceptedChunks = chunk;
+      if (chunk == 1) {
+        siblingHost.reset(device_->device().createCommandEncoder());
+        ASSERT_THAT(static_cast<bool>(siblingHost), testing::IsTrue());
+        device_->adapterDevice().setHostCommandEncoder(siblingHost.get());
+      }
+    });
+
+    const ExecutedFilter result = execute(graph, allocator);
+
+    EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
+    EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+    EXPECT_THAT(device_->isDeviceLost(), testing::IsFalse());
+    EXPECT_THAT(device_->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
+    EXPECT_THAT(allocator.retainedFailed, testing::IsEmpty());
+    EXPECT_THAT(allocator.retired, testing::SizeIs(allocator.allocations));
+    device_->adapterDevice().notifyHostDiscarded(siblingHost.get());
+  }
+}
+
+TEST_F(GeodeFilterEngineTest, LostDeviceRefusesAnotherExecutionBeforeAllocation) {
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  device_->markDeviceLost("injected loss before filter execution");
+
+  const ExecutedFilter result = execute(MakeGraph(false), allocator);
+
+  EXPECT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Failed));
+  EXPECT_THAT(allocator.requests, testing::Eq(0u));
+  EXPECT_THAT(allocator.allocations, testing::Eq(0u));
+}
+
 TEST_F(GeodeFilterEngineTest, FinalAcceptedChunkLossReturnsNoReusableOutput) {
   engine_->setChunkSubmittedHookForTesting([&](size_t chunk) {
     if (chunk == 1) device_->markDeviceLost("injected final filter chunk loss");
