@@ -89,9 +89,12 @@ TEST(LayerThumbnailGoldenTest, DonnerSplashLayerThumbnailsMatchGoldens) {
   // The Geode arm therefore compares at the renderer suite's perceptual threshold with
   // antialiased pixels excluded, still allowing no pixel to exceed it. A bit-exact GPU golden is
   // not portable across rasterizers and cannot gate CI.
+  // Pixelmatch 2.0 OKLab tips one documented ≤3-LSB pixel over the 0.02 threshold where 1.x YIQ
+  // held it under (measured: 35 sub-threshold pixels, 1 counted). The 2px allowance covers that
+  // single comparator-metric pixel with one spare for GPU rounding (PR #1285).
   const BitmapGoldenCompareParams compareParams =
       renderer.requiresTextureSnapshotPresentation()
-          ? ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/false)
+          ? ApprovedPixelToleranceParams(0.02f, 2, /*includeAntiAliasing=*/false)
           : PixelmatchIdentityParams();
 
   for (const LayerGoldenCase& testCase : kDonnerSplashLayerCases) {
