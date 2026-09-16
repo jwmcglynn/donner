@@ -174,6 +174,16 @@ void TextureSyncStateTable::forget(uint32_t textureSlot) {
   staged_.erase(textureSlot);
 }
 
+TextureSyncState TextureSyncStateTable::committedStateOf(uint32_t textureSlot) const {
+  const auto it = committed_.find(textureSlot);
+  return it == committed_.end() ? TextureSyncState{} : it->second;
+}
+
+void TextureSyncStateTable::reset(uint32_t textureSlot, const TextureSyncState& state) {
+  staged_.erase(textureSlot);
+  committed_[textureSlot] = state;
+}
+
 bool TextureSyncStateTable::hasStagedChanges() const {
   return !staged_.empty();
 }
