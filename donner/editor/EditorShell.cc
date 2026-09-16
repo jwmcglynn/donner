@@ -476,33 +476,8 @@ constexpr ImWchar kEditorGlyphRanges[] = {
     0,
 };
 
-constexpr std::string_view kEditorUiRegularFontName = "Donner UI Regular";
-constexpr std::string_view kEditorUiBoldFontName = "Donner UI Bold";
-constexpr std::string_view kEditorCodeFontName = "Donner Code";
-constexpr std::string_view kEditorCodeSymbolFontName = "Donner Code Symbols";
 constexpr int kFontPreviewWidth = 196;
 constexpr int kFontPreviewHeight = 24;
-
-void SetImGuiFontConfigName(ImFontConfig& config, std::string_view name) {
-  const std::size_t size = std::min(name.size(), sizeof(config.Name) - 1u);
-  std::copy_n(name.data(), size, config.Name);
-  config.Name[size] = '\0';
-}
-
-ImFont* FindImGuiFontByConfigName(const ImFontAtlas& atlas, std::string_view name) {
-  for (ImFont* font : atlas.Fonts) {
-    if (font == nullptr || font->ConfigData == nullptr) {
-      continue;
-    }
-
-    for (int configIndex = 0; configIndex < font->ConfigDataCount; ++configIndex) {
-      if (name == font->ConfigData[configIndex].Name) {
-        return font;
-      }
-    }
-  }
-  return nullptr;
-}
 
 std::string EscapeXmlText(std::string_view text) {
   std::string escaped;
@@ -1279,45 +1254,42 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     return response;
   });
   ImGuiIO& io = ImGui::GetIO();
-  const double displayScale = window_.displayScale();
-  if (FindImGuiFontByConfigName(*io.Fonts, kEditorUiRegularFontName) == nullptr) {
-    ImFontConfig regularFontConfig;
-    regularFontConfig.FontDataOwnedByAtlas = false;
-    SetImGuiFontConfigName(regularFontConfig, kEditorUiRegularFontName);
-    std::ignore = io.Fonts->AddFontFromMemoryTTF(
+  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
+  if (existingFonts.complete()) {
+    // Multiple EditorShell instances can share one EditorWindow in tests and
+    // document-replacement workflows. Re-adding fonts after the WGPU backend
+    // has uploaded the atlas clears its texture id, leaving the next draw with
+    // a null texture view. Reuse the window-owned context-local pointers
+    // without changing the fonts' ImGui debug names.
+    uiFontBold_ = existingFonts.uiBold;
+    codeFont_ = existingFonts.code;
+  } else {
+    ImFontConfig fontCfg;
+    fontCfg.FontDataOwnedByAtlas = false;
+    const double displayScale = window_.displayScale();
+    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(15.0 * displayScale), &regularFontConfig, kEditorGlyphRanges);
-  }
-
-  uiFontBold_ = FindImGuiFontByConfigName(*io.Fonts, kEditorUiBoldFontName);
-  if (uiFontBold_ == nullptr) {
-    ImFontConfig boldFontConfig;
-    boldFontConfig.FontDataOwnedByAtlas = false;
-    SetImGuiFontConfigName(boldFontConfig, kEditorUiBoldFontName);
+        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
         static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-        &boldFontConfig, kEditorGlyphRanges);
-  }
-
-  codeFont_ = FindImGuiFontByConfigName(*io.Fonts, kEditorCodeFontName);
-  if (codeFont_ == nullptr) {
-    ImFontConfig codeFontConfig;
-    codeFontConfig.FontDataOwnedByAtlas = false;
-    SetImGuiFontConfigName(codeFontConfig, kEditorCodeFontName);
+        &fontCfg, kEditorGlyphRanges);
     codeFont_ = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
         static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &codeFontConfig, kEditorGlyphRanges);
-
-    ImFontConfig codeSymbolFontConfig = codeFontConfig;
-    codeSymbolFontConfig.MergeMode = true;
-    SetImGuiFontConfigName(codeSymbolFontConfig, kEditorCodeSymbolFontName);
+        static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
+    ImFontConfig codeSymbolFontCfg = fontCfg;
+    codeSymbolFontCfg.MergeMode = true;
     std::ignore = io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
         static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &codeSymbolFontConfig, kEditorSymbolGlyphRanges);
+        static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
+    window_.setEditorFonts({
+        .uiRegular = uiFontRegular,
+        .uiBold = uiFontBold_,
+        .code = codeFont_,
+    });
   }
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.

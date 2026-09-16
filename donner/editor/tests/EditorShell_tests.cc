@@ -886,6 +886,9 @@ public:
   static TextEditor& Source(EditorShell& shell) { return shell.textEditor_; }
   static const TextEditor& Source(const EditorShell& shell) { return shell.textEditor_; }
 
+  static ImFont* UiBoldFont(const EditorShell& shell) { return shell.uiFontBold_; }
+  static ImFont* CodeFont(const EditorShell& shell) { return shell.codeFont_; }
+
   static void RequestFontPreviews(EditorShell& shell, std::vector<std::string> families) {
     shell.visibleFontPreviewFamilies_.insert(families.begin(), families.end());
     shell.requestFontPreviews(families);
@@ -3525,6 +3528,42 @@ TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
 
   EXPECT_TRUE(shell.valid());
   EXPECT_TRUE(invalidShell.valid());
+}
+
+TEST(EditorShellTest, SecondShellReusesAtlasFontsWithoutRenaming) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  ImFontAtlas& atlas = *ImGui::GetIO().Fonts;
+  const int fontCount = atlas.Fonts.size();
+  ASSERT_GT(fontCount, 0);
+  ImFont* const codeFont = EditorShellTestAccess::CodeFont(shell);
+  ASSERT_NE(codeFont, nullptr);
+
+  EditorShell second(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(second.valid());
+  EXPECT_EQ(atlas.Fonts.size(), fontCount)
+      << "A second shell must reuse the atlas fonts, not insert duplicates";
+  EXPECT_EQ(EditorShellTestAccess::CodeFont(second), codeFont);
+  EXPECT_EQ(EditorShellTestAccess::UiBoldFont(second), EditorShellTestAccess::UiBoldFont(shell));
+
+  for (ImFont* font : atlas.Fonts) {
+    ASSERT_NE(font, nullptr);
+    ASSERT_NE(font->ConfigData, nullptr);
+    for (int i = 0; i < font->ConfigDataCount; ++i) {
+      const std::string name = font->ConfigData[i].Name;
+      EXPECT_EQ(name.find("Donner"), std::string::npos)
+          << "Editor fonts must keep their original ImGui names, found: " << name;
+    }
+  }
+
+  ASSERT_EQ(codeFont->ConfigDataCount, 2);
+  EXPECT_TRUE(codeFont->ConfigData[1].MergeMode)
+      << "The code font must keep its merged symbol range";
 }
 
 TEST(EditorShellTest, SourcePaneSplitterDragCollapsesPane) {
