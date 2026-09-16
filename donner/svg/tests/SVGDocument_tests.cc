@@ -19,6 +19,7 @@
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 
 using testing::Eq;
 using testing::Optional;
@@ -1338,6 +1339,70 @@ TEST(SVGDocument, SourceBackedMoveElementBetweenParentsMarksOldParentRemoved) {
   ASSERT_THAT(targetParent.firstChild(), Optional(ElementIdEq("moved")));
   EXPECT_THAT(document.source(), testing::HasSubstr(R"(<g id="a"></g>)"));
   EXPECT_THAT(document.source(), testing::HasSubstr(R"(<g id="b"><rect id="moved"/></g>)"));
+}
+
+constexpr std::string_view kRenderedShadowSource = R"(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="100" height="100">
+  <defs><g id="shape"><rect width="10" height="10"/></g></defs>
+  <use id="host" xlink:href="#shape"/>
+  <g id="ordinary"><rect id="old"/></g>
+  <g id="destination"></g>
+</svg>)";
+
+void InstantiateRenderedShadowTree(SVGDocument& document) {
+  document.setCanvasSize(100, 100);
+  Renderer renderer;
+  renderer.draw(document);
+  ASSERT_FALSE(renderer.takeSnapshot().empty());
+}
+
+TEST(SVGDocument, SourceBackedInsertIgnoresRenderedShadowNodes) {
+  SVGDocument document = ParseSVG(kRenderedShadowSource);
+  InstantiateRenderedShadowTree(document);
+  SVGRectElement inserted = SVGRectElement::Create(document);
+  inserted.setId("inserted");
+
+  xml::ApplySourceEditResult result =
+      document.insertElement(*document.querySelector("#destination"), inserted);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#inserted"), Optional(ElementIdEq("inserted")));
+  EXPECT_THAT(document.source(), testing::HasSubstr(R"(<rect id="inserted"/>)"));
+}
+
+TEST(SVGDocument, SourceBackedSubtreeEditIgnoresRenderedShadowNodes) {
+  SVGDocument document = ParseSVG(kRenderedShadowSource);
+  InstantiateRenderedShadowTree(document);
+  const std::size_t oldOffset = document.source().find(R"(<rect id="old"/>)");
+  ASSERT_NE(oldOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(oldOffset), FileOffset::Offset(oldOffset + 16)},
+      .replacement = R"(<circle id="edited"/>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#old"), Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#edited"), Optional(ElementIdEq("edited")));
+}
+
+TEST(SVGDocument, SourceBackedMoveOfRenderedShadowHostIgnoresComputedChildren) {
+  SVGDocument document = ParseSVG(kRenderedShadowSource);
+  InstantiateRenderedShadowTree(document);
+  SVGElement host = *document.querySelector("#host");
+  SVGElement destination = *document.querySelector("#destination");
+
+  xml::ApplySourceEditResult result = document.insertElement(destination, host);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(destination.firstChild(), Optional(ElementIdEq("host")));
+  const std::string_view source = document.source();
+  EXPECT_LT(source.find(R"(id="destination")"), source.find(R"(id="host")"));
 }
 
 TEST(SVGDocument, SourceBackedInsertInvalidElementReportsProjectionDiagnostic) {

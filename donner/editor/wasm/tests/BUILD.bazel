@@ -155,21 +155,25 @@ playwright_bin.playwright_test(
         "playwright.bazel.config.js",
         "playwright.config.js",
         "playwright.responsiveness.bazel.config.js",
+        "prepare-browser-archives.js",
         "remote-webserver.mjs",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:chromium",
-        "@playwright//:firefox",
+        "@playwright-firefox-mac14-arm64//file",
+        "@playwright_chromium_mac_arm64//file",
     ],
     env = {
         "CI": "1",
         "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
         "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
         "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+        "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
+        "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
     tags = [
         "manual",
+        # Firefox cannot initialize its macOS sandbox inside Bazel's sandbox.
+        "no-sandbox",
         "perf",
     ],
     target_compatible_with = [
@@ -252,6 +256,27 @@ playwright_bin.playwright_test(
         "manual",
         "no-local",
     ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+js_test(
+    name = "browser_archive_setup_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "prepare-browser-archives.js",
+        "@playwright-firefox-mac14-arm64//file",
+        "@playwright_chromium_mac_arm64//file",
+    ],
+    entry_point = "browser-archive-setup.spec.mjs",
+    env = {
+        "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
+        "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
+    },
+    node_options = ["--test"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",

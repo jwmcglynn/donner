@@ -110,6 +110,25 @@ void ExpectSourceRangeOffsets(const SourceRange& range, std::size_t expectedStar
   EXPECT_EQ(*range.end.offset, expectedEnd);
 }
 
+void ExpectRejectedInsert(XMLDocument& doc, XMLNode parent, XMLNode node,
+                          std::string_view diagnostic) {
+  const std::string sourceBefore(doc.source());
+  const RcString treeBefore = doc.root().serializeToString();
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  const std::optional<XMLNode> parentBefore = node.parentElement();
+  const std::optional<SourceRange> locationBefore = node.getNodeLocation();
+  ApplySourceEditResult result = doc.insertNode(parent, node);
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains(diagnostic));
+  EXPECT_THAT(result.mutations, IsEmpty());
+  EXPECT_THAT(result.sourceDeltas, IsEmpty());
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_EQ(doc.root().serializeToString(), treeBefore);
+  EXPECT_THAT(node.parentElement(), Eq(parentBefore));
+  EXPECT_THAT(node.getNodeLocation(), Eq(locationBefore));
+}
+
 }  // namespace
 
 class XMLDocumentTests : public testing::Test {};
@@ -785,6 +804,30 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagUpdatesAttributeSet) {
                                                           XMLMutation::Kind::AttributeSet));
 }
 
+TEST_F(XMLDocumentTests, OpeningTagPreflightRejectsZeroNodeBudgetTransactionally) {
+  XMLDocument doc = ParseDocument("<svg><rect/></svg>");
+  XMLNode rect = *doc.root().firstChild()->firstChild();
+  doc.setSourceEditTreeLimits(0, 10);
+  const std::string sourceBefore(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  const std::optional<SourceRange> locationBefore = rect.getNodeLocation();
+  const std::size_t insertion = doc.source().find("/>");
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertion), FileOffset::Offset(insertion)},
+      .replacement = R"( fill="red")",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result, DiagnosticReasonContains("tree-node limit"));
+  EXPECT_THAT(result.sourceDeltas, IsEmpty());
+  EXPECT_THAT(result.mutations, IsEmpty());
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_THAT(rect.getNodeLocation(), Eq(locationBefore));
+  EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
+}
+
 TEST_F(XMLDocumentTests, ParsedLimitsRejectRepeatedOpeningTagAttributeGrowthTransactionally) {
   XMLParser::Options options;
   options.maxElements = 2;
@@ -902,6 +945,186 @@ TEST_F(XMLDocumentTests, ParsedDepthLimitRejectsSubtreeGrowthTransactionally) {
   XMLNode level = doc.root().firstChild()->firstChild()->firstChild().value();
   EXPECT_EQ(level.tagName(), XMLQualifiedNameRef("level"));
   EXPECT_THAT(level.firstChild(), Eq(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, SubtreeReparseUsesRaisedDocumentNodeLimit) {
+  XMLParser::Options options;
+  options.maxElements = 9'000;
+  const std::string_view initialGroup = R"(<g id="group"/>)";
+  XMLDocument doc = ParseDocument("<svg>" + std::string(initialGroup) + "</svg>", options);
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  std::string replacement = R"(<g id="group">)";
+  for (std::size_t i = 0; i < XMLParser::Options::kDefaultMaximumElements; ++i) {
+    replacement += "<leaf/>";
+  }
+  replacement += "</g>";
+
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(5 + initialGroup.size())},
+      .replacement = replacement,
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(doc.source(), "<svg>" + replacement + "</svg>");
+  ASSERT_THAT(doc.root().firstChild()->firstChild(), Optional(Eq(group)));
+  EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::SubtreeReplaced));
+  const std::size_t firstLeafOffset = doc.source().find("<leaf/>");
+  std::size_t count = 0;
+  for (std::optional<XMLNode> child = group.firstChild(); child; child = child->nextSibling()) {
+    ASSERT_THAT(child->getNodeLocation(), testing::Ne(std::nullopt));
+    ExpectSourceRangeOffsets(*child->getNodeLocation(), firstLeafOffset + 7 * count,
+                             firstLeafOffset + 7 * (count + 1));
+    ++count;
+  }
+  EXPECT_EQ(count, XMLParser::Options::kDefaultMaximumElements);
+
+  const std::string sourceBefore(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  std::string excess;
+  for (std::size_t i = 0; i < 900; ++i) {
+    excess += "<extra/>";
+  }
+  const std::size_t insertion = doc.source().find("</g>");
+  ApplySourceEditResult rejected = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertion), FileOffset::Offset(insertion)},
+      .replacement = excess,
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("tree-node limit"));
+  EXPECT_THAT(rejected.mutations, IsEmpty());
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  ASSERT_THAT(group.lastChild(), testing::Ne(std::nullopt));
+  EXPECT_THAT(group.lastChild()->tagName(), Eq(XMLQualifiedNameRef("leaf")));
+}
+
+TEST_F(XMLDocumentTests, SubtreeReparseUsesRaisedDocumentDepthLimit) {
+  XMLParser::Options options;
+  options.maxNestingDepth = 300;
+  XMLDocument doc = ParseDocument("<svg><g/></svg>", options);
+  std::string replacement = "<g>";
+  for (int i = 0; i < 256; ++i) {
+    replacement += "<n>";
+  }
+  for (int i = 0; i < 256; ++i) {
+    replacement += "</n>";
+  }
+  replacement += "</g>";
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(9)},
+      .replacement = replacement,
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  std::size_t depth = 0;
+  for (std::optional<XMLNode> node = doc.root().firstChild(); node; node = node->firstChild()) {
+    ++depth;
+  }
+  EXPECT_EQ(depth, 258u);
+}
+
+TEST_F(XMLDocumentTests, SubtreeReparsePreservesCommentsInSourceOrder) {
+  XMLDocument doc = ParseDocument("<svg><g><old/></g></svg>");
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(8), FileOffset::Offset(14)},
+      .replacement = "<!--before--><new/><!--after-->",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  ASSERT_THAT(group.firstChild(), testing::Ne(std::nullopt));
+  XMLNode before = *group.firstChild();
+  EXPECT_EQ(before.type(), XMLNode::Type::Comment);
+  EXPECT_THAT(before.value(), Optional(Eq("before")));
+  ASSERT_THAT(before.nextSibling(), testing::Ne(std::nullopt));
+  XMLNode element = *before.nextSibling();
+  EXPECT_EQ(element.tagName(), XMLQualifiedNameRef("new"));
+  ASSERT_THAT(element.nextSibling(), testing::Ne(std::nullopt));
+  XMLNode after = *element.nextSibling();
+  EXPECT_EQ(after.type(), XMLNode::Type::Comment);
+  EXPECT_THAT(after.value(), Optional(Eq("after")));
+  EXPECT_THAT(after.nextSibling(), Eq(std::nullopt));
+  ASSERT_THAT(before.getNodeLocation(), testing::Ne(std::nullopt));
+  ASSERT_THAT(after.getNodeLocation(), testing::Ne(std::nullopt));
+  ExpectSourceRangeOffsets(*before.getNodeLocation(), 8, 21);
+  ExpectSourceRangeOffsets(*after.getNodeLocation(), 27, 39);
+  EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::SubtreeReplaced));
+}
+
+TEST_F(XMLDocumentTests, SubtreeCommentGrowthRespectsDocumentNodeLimit) {
+  XMLParser::Options options;
+  options.maxElements = 4;
+  XMLDocument doc = ParseDocument("<svg><g/></svg>", options);
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  const std::string sourceBefore(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(9)},
+      .replacement = "<g><!--one--><!--two--><!--three--></g>",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("tree-node limit"));
+  EXPECT_THAT(result.mutations, IsEmpty());
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_THAT(group.firstChild(), Eq(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, SubtreeReparsePreservesProcessingInstructionsInSourceOrder) {
+  XMLDocument doc = ParseDocument("<svg><g><old/></g></svg>");
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(8), FileOffset::Offset(14)},
+      .replacement = "<?before x?><new/><?after x?>",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  ASSERT_THAT(group.firstChild(), testing::Ne(std::nullopt));
+  XMLNode before = *group.firstChild();
+  EXPECT_EQ(before.type(), XMLNode::Type::ProcessingInstruction);
+  EXPECT_THAT(before.value(), Optional(Eq("x")));
+  ASSERT_THAT(before.nextSibling(), testing::Ne(std::nullopt));
+  XMLNode element = *before.nextSibling();
+  EXPECT_EQ(element.tagName(), XMLQualifiedNameRef("new"));
+  ASSERT_THAT(element.nextSibling(), testing::Ne(std::nullopt));
+  XMLNode after = *element.nextSibling();
+  EXPECT_EQ(after.type(), XMLNode::Type::ProcessingInstruction);
+  EXPECT_THAT(after.value(), Optional(Eq("x")));
+  EXPECT_THAT(after.nextSibling(), Eq(std::nullopt));
+  ASSERT_THAT(before.getNodeLocation(), testing::Ne(std::nullopt));
+  ASSERT_THAT(after.getNodeLocation(), testing::Ne(std::nullopt));
+  ExpectSourceRangeOffsets(*before.getNodeLocation(), 8, 20);
+  ExpectSourceRangeOffsets(*after.getNodeLocation(), 26, 37);
+  EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::SubtreeReplaced));
+}
+
+TEST_F(XMLDocumentTests, SubtreeProcessingInstructionGrowthRespectsDocumentNodeLimit) {
+  XMLParser::Options options;
+  options.maxElements = 4;
+  XMLDocument doc = ParseDocument("<svg><g/></svg>", options);
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  const std::string sourceBefore(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(9)},
+      .replacement = "<g><?one x?><?two x?><?three x?></g>",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("tree-node limit"));
+  EXPECT_THAT(result.mutations, IsEmpty());
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_THAT(group.firstChild(), Eq(std::nullopt));
 }
 
 TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameReportsDiagnostic) {
@@ -3401,26 +3624,177 @@ TEST_F(XMLDocumentTests, InsertNodeMoveReplacesDomOnlyChildrenFromSource) {
   EXPECT_FALSE(m.firstChild()->nextSibling().has_value());
 }
 
-TEST_F(XMLDocumentTests, InsertNodeReconcilesCommentChildDroppedByReparse) {
-  XMLDocument doc = ParseDocument(R"(<svg></svg>)");
-  XMLNode svg = doc.root().firstChild().value();
+TEST_F(XMLDocumentTests, InsertNodePreservesAuthoredCommentChildrenAndOrder) {
+  XMLDocument doc = ParseDocument("<svg><left/><right/></svg>");
+  XMLNode svg = *doc.root().firstChild();
+  XMLNode left = *svg.firstChild();
+  XMLNode right = *left.nextSibling();
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  XMLNode before = XMLNode::CreateCommentNode(doc, "before");
+  XMLNode instruction = XMLNode::CreateProcessingInstructionNode(doc, "target", "data");
   XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
-  rect.appendChild(XMLNode::CreateCommentNode(doc, "note"));
+  XMLNode after = XMLNode::CreateCommentNode(doc, "after");
+  group.appendChild(before);
+  group.appendChild(instruction);
+  group.appendChild(rect);
+  group.appendChild(after);
 
-  ApplySourceEditResult result = doc.insertNode(svg, rect);
+  ApplySourceEditResult inserted = doc.insertNode(left, group);
+  ASSERT_TRUE(inserted.applied);
+  ASSERT_THAT(inserted.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(MutationKinds(inserted), testing::ElementsAre(XMLMutation::Kind::NodeInserted));
+  EXPECT_THAT(group.firstChild(), Optional(Eq(before)));
+  EXPECT_THAT(before.nextSibling(), Optional(Eq(instruction)));
+  EXPECT_THAT(instruction.nextSibling(), Optional(Eq(rect)));
+  EXPECT_THAT(rect.nextSibling(), Optional(Eq(after)));
+  EXPECT_THAT(after.nextSibling(), Eq(std::nullopt));
 
-  EXPECT_TRUE(result.applied);
-  EXPECT_THAT(std::string(doc.source()), testing::HasSubstr("<!--note-->"));
-  ASSERT_TRUE(svg.firstChild().has_value());
-  EXPECT_EQ(*svg.firstChild(), rect);
-  // KNOWN DIVERGENCE (characterization, not endorsement): the serialized
-  // source keeps the comment child, but XMLIncrementalParser::ParseElement
-  // parses with default options that drop Comment nodes, so reconciliation
-  // removes the DOM-only comment child and the DOM disagrees with the source
-  // until the next full reparse. The product-side fix is for the subtree
-  // reparse to preserve comment nodes; when that lands, flip this assertion
-  // to expect the comment child to survive.
-  EXPECT_FALSE(rect.firstChild().has_value());
+  ApplySourceEditResult moved = doc.insertNode(right, group);
+  ASSERT_TRUE(moved.applied);
+  ASSERT_THAT(moved.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(MutationKinds(moved), testing::ElementsAre(XMLMutation::Kind::NodeRemoved,
+                                                         XMLMutation::Kind::NodeInserted));
+  EXPECT_THAT(left.firstChild(), Eq(std::nullopt));
+  EXPECT_THAT(right.firstChild(), Optional(Eq(group)));
+  EXPECT_THAT(group.firstChild(), Optional(Eq(before)));
+  EXPECT_THAT(before.nextSibling(), Optional(Eq(instruction)));
+  EXPECT_THAT(instruction.nextSibling(), Optional(Eq(rect)));
+  EXPECT_THAT(rect.nextSibling(), Optional(Eq(after)));
+  for (const auto& [node, text] :
+       std::vector<std::pair<XMLNode, std::string_view>>{{before, "<!--before-->"},
+                                                         {instruction, "<?target data?>"},
+                                                         {rect, "<rect/>"},
+                                                         {after, "<!--after-->"}}) {
+    const std::size_t offset = doc.source().find(text);
+    ASSERT_NE(offset, std::string_view::npos);
+    ASSERT_THAT(node.getNodeLocation(), testing::Ne(std::nullopt));
+    ExpectSourceRangeOffsets(*node.getNodeLocation(), offset, offset + text.size());
+  }
+}
+
+TEST_F(XMLDocumentTests, InsertNodeUsesRaisedDocumentNodeLimit) {
+  XMLParser::Options options;
+  options.maxElements = 9'000;
+  XMLDocument doc = ParseDocument("<svg/>", options);
+  XMLNode svg = *doc.root().firstChild();
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  for (std::size_t i = 0; i < XMLParser::Options::kDefaultMaximumElements; ++i) {
+    group.appendChild(XMLNode::CreateElementNode(doc, "leaf"));
+  }
+  XMLNode last = *group.lastChild();
+  ApplySourceEditResult result = doc.insertNode(svg, group);
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(svg.firstChild(), Optional(Eq(group)));
+  EXPECT_THAT(group.lastChild(), Optional(Eq(last)));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeInserted));
+  ASSERT_THAT(last.getNodeLocation(), testing::Ne(std::nullopt));
+  const std::size_t offset = doc.source().rfind("<leaf/>");
+  ExpectSourceRangeOffsets(*last.getNodeLocation(), offset, offset + 7);
+}
+
+TEST_F(XMLDocumentTests, MoveNodeUsesRaisedDocumentNodeLimit) {
+  XMLParser::Options options;
+  options.maxElements = 9'000;
+  std::string source = "<svg><left><g>";
+  for (std::size_t i = 0; i < XMLParser::Options::kDefaultMaximumElements; ++i) {
+    source += "<leaf/>";
+  }
+  source += "</g></left><right/></svg>";
+  XMLDocument doc = ParseDocument(source, options);
+  XMLNode left = *doc.root().firstChild()->firstChild();
+  XMLNode right = *left.nextSibling();
+  XMLNode group = *left.firstChild();
+  XMLNode last = *group.lastChild();
+  ApplySourceEditResult result = doc.insertNode(right, group);
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(left.firstChild(), Eq(std::nullopt));
+  EXPECT_THAT(right.firstChild(), Optional(Eq(group)));
+  EXPECT_THAT(group.lastChild(), Optional(Eq(last)));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeRemoved,
+                                                          XMLMutation::Kind::NodeInserted));
+  ASSERT_THAT(last.getNodeLocation(), testing::Ne(std::nullopt));
+  const std::size_t offset = doc.source().rfind("<leaf/>");
+  ExpectSourceRangeOffsets(*last.getNodeLocation(), offset, offset + 7);
+}
+
+TEST_F(XMLDocumentTests, InsertNodeRejectsDocumentNodeBudgetOverflow) {
+  XMLParser::Options options;
+  options.maxElements = 5;
+  XMLDocument doc = ParseDocument("<svg><host/><spare/></svg>", options);
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  group.appendChild(XMLNode::CreateElementNode(doc, "a"));
+  group.appendChild(XMLNode::CreateElementNode(doc, "b"));
+  ExpectRejectedInsert(doc, *doc.root().firstChild()->firstChild(), group, "tree-node limit");
+}
+
+TEST_F(XMLDocumentTests, InsertNodeRejectsDocumentAttributeBudgetOverflow) {
+  XMLParser::Options options;
+  options.maxTotalAttributes = 2;
+  XMLDocument doc = ParseDocument(R"(<svg a="1"><host b="2"/></svg>)", options);
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  group.setAttribute("c", "3");
+  ExpectRejectedInsert(doc, *doc.root().firstChild()->firstChild(), group, "total-attribute limit");
+}
+
+TEST_F(XMLDocumentTests, InsertNodeRejectsCombinedDestinationDepthOverflow) {
+  XMLParser::Options options;
+  options.maxNestingDepth = 3;
+  XMLDocument doc = ParseDocument("<svg><host/></svg>", options);
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  group.appendChild(XMLNode::CreateElementNode(doc, "child"));
+  ExpectRejectedInsert(doc, *doc.root().firstChild()->firstChild(), group, "tree-depth limit");
+}
+
+TEST_F(XMLDocumentTests, MoveNodeRejectsCombinedDestinationDepthOverflow) {
+  XMLParser::Options options;
+  options.maxNestingDepth = 3;
+  XMLDocument doc = ParseDocument("<svg><left><g/></left><right><deep/></right></svg>", options);
+  XMLNode left = *doc.root().firstChild()->firstChild();
+  XMLNode group = *left.firstChild();
+  XMLNode deep = *left.nextSibling()->firstChild();
+  ExpectRejectedInsert(doc, deep, group, "tree-depth limit");
+}
+
+TEST_F(XMLDocumentTests, MoveNodeChargesReconciliationClonesAgainstLiveNodeBudget) {
+  XMLParser::Options options;
+  options.maxElements = 6;
+  XMLDocument doc = ParseDocument("<svg><left><g><child/></g></left><right/></svg>", options);
+  XMLNode left = *doc.root().firstChild()->firstChild();
+  XMLNode group = *left.firstChild();
+  group.removeChild(*group.firstChild());
+  group.appendChild(XMLNode::CreateDataNode(doc, "changed"));
+  ExpectRejectedInsert(doc, *left.nextSibling(), group, "tree-node limit");
+}
+
+TEST_F(XMLDocumentTests, MoveNodeChargesReconciliationClonesAgainstLiveAttributeBudget) {
+  XMLParser::Options options;
+  options.maxTotalAttributes = 1;
+  XMLDocument doc =
+      ParseDocument(R"(<svg><left><g><child a="1"/></g></left><right/></svg>)", options);
+  XMLNode left = *doc.root().firstChild()->firstChild();
+  XMLNode group = *left.firstChild();
+  group.removeChild(*group.firstChild());
+  group.appendChild(XMLNode::CreateDataNode(doc, "changed"));
+  ExpectRejectedInsert(doc, *left.nextSibling(), group, "total-attribute limit");
+}
+
+TEST_F(XMLDocumentTests, SubtreeReparseDoesNotEnableCustomEntityExpansion) {
+  XMLDocument doc = ParseDocument("<svg><g/></svg>");
+  const std::string replacement =
+      R"(<g><!DOCTYPE x [<!ENTITY example "expanded">]><text>&example;</text></g>)";
+  XMLDocument expanded = ParseDocument(replacement, XMLParser::Options::ParseAll());
+  EXPECT_THAT(ElementChild(*expanded.root().firstChild(), 0).value(), Optional(Eq("expanded")));
+  ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(9)},
+      .replacement = replacement,
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+  ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+  XMLNode group = *doc.root().firstChild()->firstChild();
+  EXPECT_THAT(ElementChild(group, 0).value(), Optional(Eq("&example;")));
 }
 
 TEST_F(XMLDocumentTests, InsertNodeOfDataNodeReportsDiagnostic) {

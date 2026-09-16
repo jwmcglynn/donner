@@ -427,15 +427,44 @@ SourceRange FallbackRange() {
   return SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)};
 }
 
+std::optional<xml::XMLNode> XmlSiblingAtOrAfter(Registry& registry, Entity entity) {
+  while (entity != entt::null) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    if (tree == nullptr) {
+      return std::nullopt;
+    }
+    if (std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(EntityHandle(registry, entity))) {
+      return node;
+    }
+    entity = tree->nextSibling();
+  }
+  return std::nullopt;
+}
+
+std::optional<xml::XMLNode> FirstXmlChild(const xml::XMLNode& node) {
+  Registry& registry = *node.entityHandle().registry();
+  const Entity first = node.entityHandle().get<donner::components::TreeComponent>().firstChild();
+  return XmlSiblingAtOrAfter(registry, first);
+}
+
+std::optional<xml::XMLNode> NextXmlSibling(const xml::XMLNode& node) {
+  Registry& registry = *node.entityHandle().registry();
+  const Entity next = node.entityHandle().get<donner::components::TreeComponent>().nextSibling();
+  return XmlSiblingAtOrAfter(registry, next);
+}
+
 xml::XMLNode EnsureXMLSubtreeForSVGElement(xml::XMLDocument& document, const SVGElement& element) {
   std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(element.entityHandle());
+  const bool createMissingDescendants = !node.has_value();
   if (!node.has_value()) {
     node = xml::XMLNode::CreateElementNodeOn(document, element.entityHandle(), element.tagName());
   }
 
   for (std::optional<SVGElement> child = element.firstChild(); child.has_value();
        child = child->nextSibling()) {
-    (void)EnsureXMLSubtreeForSVGElement(document, *child);
+    if (createMissingDescendants || xml::XMLNode::TryCast(child->entityHandle()).has_value()) {
+      (void)EnsureXMLSubtreeForSVGElement(document, *child);
+    }
   }
 
   return *node;
@@ -451,8 +480,8 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   bool foundContentChild = false;
   const std::size_t maximumChunks =
       handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
+       child = NextXmlSibling(*child)) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundContentChild = true;
       ++chunkCount;
@@ -498,8 +527,8 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   combined.reserve(contentBytes);
   SmallVector<RcString, 1> textChunks;
 
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
+       child = NextXmlSibling(*child)) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       const RcString value = child->value().value_or(RcString(""));
       combined.append(value.data(), value.size());
@@ -554,8 +583,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   bool foundContentChild = false;
   const std::size_t maximumChunks =
       handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
+       child = NextXmlSibling(*child)) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundContentChild = true;
       ++chunkCount;
@@ -599,8 +628,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   combined.reserve(contentBytes);
   components::StylesheetSourceMap sourceMap;
   bool foundTextChild = false;
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
+       child = NextXmlSibling(*child)) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundTextChild = true;
       if (std::optional<RcString> value = child->value()) {
@@ -1513,8 +1542,8 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     return diagnostic;
   }
 
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
+       child = NextXmlSibling(*child)) {
     if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child)) {
       return diagnostic;
     }
