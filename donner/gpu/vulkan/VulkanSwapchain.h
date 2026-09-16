@@ -5,9 +5,11 @@
 
 #include <vulkan/vulkan.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/gpu/Descriptors.h"
@@ -18,6 +20,16 @@
 namespace donner::gpu::vulkan {
 
 class VulkanSwapchainTestAccess;
+
+/// Preallocated owner/child teardown state shared by every surface of one device.
+///
+/// A child whose native completion cannot be proved poisons the state without allocating. The
+/// owner observes that poison and retains the complete device graph, including every prerequisite
+/// of leaked native handles. The live count catches a child that escaped the owner's containers.
+struct VulkanSurfaceLifetime {
+  std::atomic<bool> unproven{false};
+  std::atomic<size_t> liveChildren{0};
+};
 
 /// Converts native surface formats into the formats the runtime can present.
 /// Exposed for deterministic capability tests whose driver cannot advertise the wildcard.
@@ -35,6 +47,7 @@ struct VulkanSurfaceContext {
   VkQueue queue = VK_NULL_HANDLE;                    //!< Queue frames are presented on.
   uint32_t queueFamilyIndex = 0;                     //!< Family of \ref queue.
   VkCommandPool commandPool = VK_NULL_HANDLE;        //!< Pool the present barrier is recorded in.
+  std::shared_ptr<VulkanSurfaceLifetime> lifetime;   //!< Shared owner-retention state.
 };
 
 /// The stage an acquisition wait applies to, and therefore the earliest stage at which a frame
@@ -104,12 +117,29 @@ public:
   static Result<std::unique_ptr<VulkanSwapchain>> Create(const VulkanSurfaceContext& context,
                                                          const SurfaceDescriptor& descriptor);
 
-  /// Destructor; waits for the device to go idle, then destroys the swapchain, and the surface
-  /// too when this object created it.
+  /// Destructor; proves this surface's native work complete, then destroys the swapchain and the
+  /// surface too when this object created it. A failed proof poisons the shared lifetime state so
+  /// the owner retains all native prerequisites fail-closed.
   ~VulkanSwapchain();
 
   VulkanSwapchain(const VulkanSwapchain&) = delete;
   VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
+
+  /// Proves that every native object owned by this surface is no longer in use.
+  ///
+  /// This is the first phase of teardown: it may enqueue and wait for the submission needed to
+  /// consume an outstanding acquisition semaphore, but it does not destroy or reset native
+  /// objects. The owner can therefore prepare every sibling before destroying any of them.
+  Status prepareForDestruction();
+
+  /// Retains \p next behind this surface while failed teardown quarantines a whole owner.
+  void retainBefore(std::unique_ptr<VulkanSwapchain> next) { retainedNext_ = std::move(next); }
+
+  /// Unlinks and returns the next retained surface.
+  std::unique_ptr<VulkanSwapchain> retainedNext() { return std::move(retainedNext_); }
+
+  /// Borrows the next retained surface while the owner prepares the complete chain.
+  VulkanSwapchain* retainedNextForPreparation() const { return retainedNext_.get(); }
 
   /// What this surface supports, read from the physical device. Every value reported is accepted
   /// by \ref configure, and every value absent from it is refused.
@@ -153,7 +183,10 @@ public:
 
   /// Records the texture slot the runtime gave the current frame.
   /// @param textureSlot Slot the frame occupies.
-  void setFrameTextureSlot(uint32_t textureSlot) { frameTextureSlot_ = textureSlot; }
+  void setFrameTextureSlot(uint32_t textureSlot) {
+    preparedForDestruction_ = false;
+    frameTextureSlot_ = textureSlot;
+  }
 
   /**
    * Presents the frame currently held and releases it.
@@ -279,6 +312,12 @@ private:
   /// Waits for every submission this swapchain made, then releases their objects.
   Status drainPendingSubmissions();
 
+  /// Waits for all pending submissions without releasing or resetting their native objects.
+  Status provePendingSubmissionsComplete();
+
+  /// Releases submission objects after completion has already been proved.
+  void releasePreparedSubmissions();
+
   /// Releases the swapchain, its per-image semaphores, and the acquire ring.
   void destroySwapchain();
 
@@ -325,6 +364,9 @@ private:
   bool needsRecreation_ = false;
 
   std::vector<PendingSubmission> pending_;  //!< Submissions awaiting their fences.
+  bool preparationBlocked_ = false;      //!< An ambiguous native result prevents safe destruction.
+  bool preparedForDestruction_ = false;  //!< Every native use has completion proof.
+  std::unique_ptr<VulkanSwapchain> retainedNext_;  //!< Quarantined sibling chain.
 };
 
 }  // namespace donner::gpu::vulkan

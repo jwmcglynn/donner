@@ -13,12 +13,20 @@
 #include <gtest/gtest.h>
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -37,18 +45,28 @@ struct TeardownRecorder {
   std::vector<VkResult> fenceResults;
   size_t fenceWait = 0;
   std::vector<std::string_view> calls;
+  VkResult submissionResult = VK_SUCCESS;
+  VkResult idleResult = VK_SUCCESS;
+  void (*onWait)() = nullptr;
+  VkResult presentResult = VK_SUCCESS;
+  VkResult acquireResult = VK_SUCCESS;
+  std::vector<VkSemaphore> submittedWaits;
+  std::vector<VkPipelineStageFlags> submittedStages;
+  VkFence submittedFence = VK_NULL_HANDLE;
+  VkFence presentedFence = VK_NULL_HANDLE;
 };
 
 TeardownRecorder* gTeardownRecorder = nullptr;
 
 VKAPI_ATTR VkResult VKAPI_CALL RecordDeviceWaitIdle(VkDevice) {
   gTeardownRecorder->calls.push_back("wait-idle");
-  return VK_SUCCESS;
+  return gTeardownRecorder->idleResult;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL RecordWaitForFences(VkDevice, uint32_t, const VkFence*, VkBool32,
                                                    uint64_t) {
   gTeardownRecorder->calls.push_back("wait-fences");
+  if (gTeardownRecorder->onWait) gTeardownRecorder->onWait();
   const size_t index = gTeardownRecorder->fenceWait++;
   return index < gTeardownRecorder->fenceResults.size() ? gTeardownRecorder->fenceResults[index]
                                                         : VK_SUCCESS;
@@ -104,6 +122,242 @@ T FakeHandle(uint64_t value) {
   return result;
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL RecordAllocateCommandBuffers(VkDevice,
+                                                            const VkCommandBufferAllocateInfo*,
+                                                            VkCommandBuffer* commandBuffer) {
+  gTeardownRecorder->calls.push_back("allocate-command-buffer");
+  *commandBuffer = FakeHandle<VkCommandBuffer>(40);
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordBeginCommandBuffer(VkCommandBuffer,
+                                                        const VkCommandBufferBeginInfo*) {
+  gTeardownRecorder->calls.push_back("begin-command-buffer");
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordEndCommandBuffer(VkCommandBuffer) {
+  gTeardownRecorder->calls.push_back("end-command-buffer");
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordCreateFence(VkDevice, const VkFenceCreateInfo*,
+                                                 const VkAllocationCallbacks*, VkFence* fence) {
+  gTeardownRecorder->calls.push_back("create-fence");
+  *fence = FakeHandle<VkFence>(41);
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordQueueSubmit(VkQueue, uint32_t count, const VkSubmitInfo* infos,
+                                                 VkFence fence) {
+  gTeardownRecorder->calls.push_back("queue-submit");
+  gTeardownRecorder->submittedFence = fence;
+  gTeardownRecorder->submittedWaits.clear();
+  gTeardownRecorder->submittedStages.clear();
+  if (count == 1 && infos[0].waitSemaphoreCount != 0) {
+    gTeardownRecorder->submittedWaits.assign(
+        infos[0].pWaitSemaphores, infos[0].pWaitSemaphores + infos[0].waitSemaphoreCount);
+    gTeardownRecorder->submittedStages.assign(
+        infos[0].pWaitDstStageMask, infos[0].pWaitDstStageMask + infos[0].waitSemaphoreCount);
+  }
+  return gTeardownRecorder->submissionResult;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordQueuePresent(VkQueue, const VkPresentInfoKHR* info) {
+  gTeardownRecorder->calls.push_back("queue-present");
+  const auto* fenceInfo = static_cast<const VkSwapchainPresentFenceInfoEXT*>(info->pNext);
+  if (fenceInfo && fenceInfo->swapchainCount == 1) {
+    gTeardownRecorder->presentedFence = fenceInfo->pFences[0];
+  }
+  return gTeardownRecorder->presentResult;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL RecordAcquireNextImage(VkDevice, VkSwapchainKHR, uint64_t,
+                                                      VkSemaphore, VkFence, uint32_t* imageIndex) {
+  gTeardownRecorder->calls.push_back("acquire-image");
+  *imageIndex = 0;
+  return gTeardownRecorder->acquireResult;
+}
+
+VKAPI_ATTR void VKAPI_CALL RecordPipelineBarrier(VkCommandBuffer, VkPipelineStageFlags,
+                                                 VkPipelineStageFlags, VkDependencyFlags, uint32_t,
+                                                 const VkMemoryBarrier*, uint32_t,
+                                                 const VkBufferMemoryBarrier*, uint32_t,
+                                                 const VkImageMemoryBarrier*) {}
+
+struct CreationRecorder {
+  std::vector<const char*> instanceOffers;
+  std::vector<const char*> deviceOffers;
+  bool maintenanceSupported = true;
+  bool instanceCreated = false;
+  bool deviceCreated = false;
+  bool maintenanceEnabled = false;
+  std::vector<std::string> enabledInstanceExtensions;
+  std::vector<std::string> enabledDeviceExtensions;
+  std::vector<VkStructureType> queriedFeatureTypes;
+  std::vector<VkStructureType> enabledFeatureTypes;
+  std::vector<std::string_view> cleanup;
+};
+CreationRecorder* gCreationRecorder = nullptr;
+
+VkResult CopyExtensionOffers(const std::vector<const char*>& offers, uint32_t* count,
+                             VkExtensionProperties* properties) {
+  if (!properties) {
+    *count = static_cast<uint32_t>(offers.size());
+    return VK_SUCCESS;
+  }
+  const size_t copied = std::min<size_t>(*count, offers.size());
+  for (size_t index = 0; index < copied; ++index) {
+    std::snprintf(properties[index].extensionName, VK_MAX_EXTENSION_NAME_SIZE, "%s", offers[index]);
+  }
+  *count = static_cast<uint32_t>(copied);
+  return copied == offers.size() ? VK_SUCCESS : VK_INCOMPLETE;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureInstanceVersion(uint32_t* version) {
+  *version = VK_API_VERSION_1_1;
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureLayers(uint32_t* count, VkLayerProperties*) {
+  *count = 0;
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureInstanceExtensions(const char*, uint32_t* count,
+                                                         VkExtensionProperties* properties) {
+  return CopyExtensionOffers(gCreationRecorder->instanceOffers, count, properties);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureDeviceExtensions(VkPhysicalDevice, const char*,
+                                                       uint32_t* count,
+                                                       VkExtensionProperties* properties) {
+  return CopyExtensionOffers(gCreationRecorder->deviceOffers, count, properties);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateInstance(const VkInstanceCreateInfo* info,
+                                                     const VkAllocationCallbacks*,
+                                                     VkInstance* instance) {
+  gCreationRecorder->instanceCreated = true;
+  for (uint32_t index = 0; index < info->enabledExtensionCount; ++index) {
+    gCreationRecorder->enabledInstanceExtensions.emplace_back(info->ppEnabledExtensionNames[index]);
+  }
+  *instance = FakeHandle<VkInstance>(80);
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CapturePhysicalDevices(VkInstance, uint32_t* count,
+                                                      VkPhysicalDevice* devices) {
+  *count = 1;
+  if (devices) devices[0] = FakeHandle<VkPhysicalDevice>(81);
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL CapturePhysicalProperties(VkPhysicalDevice,
+                                                     VkPhysicalDeviceProperties* properties) {
+  properties->apiVersion = VK_API_VERSION_1_1;
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureQueueFamilies(VkPhysicalDevice, uint32_t* count,
+                                                VkQueueFamilyProperties* properties) {
+  *count = 1;
+  if (properties) properties[0].queueFlags = VK_QUEUE_GRAPHICS_BIT;
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureFeatures(VkPhysicalDevice, VkPhysicalDeviceFeatures* features) {
+  features->robustBufferAccess = VK_TRUE;
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureFeatures2(VkPhysicalDevice, VkPhysicalDeviceFeatures2* features) {
+  for (auto* item = static_cast<VkBaseOutStructure*>(features->pNext); item; item = item->pNext) {
+    gCreationRecorder->queriedFeatureTypes.push_back(item->sType);
+    if (item->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT) {
+      reinterpret_cast<VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT*>(item)
+          ->swapchainMaintenance1 = gCreationRecorder->maintenanceSupported ? VK_TRUE : VK_FALSE;
+    }
+  }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateDevice(VkPhysicalDevice, const VkDeviceCreateInfo* info,
+                                                   const VkAllocationCallbacks*, VkDevice* device) {
+  gCreationRecorder->deviceCreated = true;
+  for (uint32_t index = 0; index < info->enabledExtensionCount; ++index) {
+    gCreationRecorder->enabledDeviceExtensions.emplace_back(info->ppEnabledExtensionNames[index]);
+  }
+  for (const auto* item = static_cast<const VkBaseInStructure*>(info->pNext); item;
+       item = item->pNext) {
+    gCreationRecorder->enabledFeatureTypes.push_back(item->sType);
+    if (item->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT) {
+      gCreationRecorder->maintenanceEnabled =
+          reinterpret_cast<const VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT*>(item)
+              ->swapchainMaintenance1 == VK_TRUE;
+    }
+  }
+  *device = FakeHandle<VkDevice>(82);
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureDestroyDevice(VkDevice, const VkAllocationCallbacks*) {
+  gCreationRecorder->cleanup.push_back("device");
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureDestroyInstance(VkInstance, const VkAllocationCallbacks*) {
+  gCreationRecorder->cleanup.push_back("instance");
+}
+
+VulkanApi MakeCreationApi() {
+  VulkanApi api;
+  api.vkEnumerateInstanceVersion = CaptureInstanceVersion;
+  api.vkEnumerateInstanceLayerProperties = CaptureLayers;
+  api.vkEnumerateInstanceExtensionProperties = CaptureInstanceExtensions;
+  api.vkEnumerateDeviceExtensionProperties = CaptureDeviceExtensions;
+  api.vkCreateInstance = CaptureCreateInstance;
+  api.vkEnumeratePhysicalDevices = CapturePhysicalDevices;
+  api.vkGetPhysicalDeviceProperties = CapturePhysicalProperties;
+  api.vkGetPhysicalDeviceQueueFamilyProperties = CaptureQueueFamilies;
+  api.vkGetPhysicalDeviceFeatures = CaptureFeatures;
+  api.vkGetPhysicalDeviceFeatures2 = CaptureFeatures2;
+  api.vkCreateDevice = CaptureCreateDevice;
+  api.vkDestroyDevice = CaptureDestroyDevice;
+  api.vkDestroyInstance = CaptureDestroyInstance;
+  return api;
+}
+
+CreationRecorder MaintenanceOffers(bool khr) {
+  CreationRecorder recorder;
+  recorder.instanceOffers = {VK_KHR_SURFACE_EXTENSION_NAME,
+                             VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+                             khr ? VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME
+                                 : VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME};
+  recorder.deviceOffers = {VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+                           khr ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+                               : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME};
+  return recorder;
+}
+
+struct AdmissionRace {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool teardownReachedWait = false;
+  bool releaseTeardown = false;
+  size_t queuedCreators = 0;
+  std::atomic<size_t> admissions = 0;
+};
+AdmissionRace* gAdmissionRace = nullptr;
+
+void RecordRaceWait() {
+  std::unique_lock lock(gAdmissionRace->mutex);
+  gAdmissionRace->teardownReachedWait = true;
+  gAdmissionRace->changed.notify_all();
+  EXPECT_THAT(gAdmissionRace->changed.wait_for(lock, std::chrono::seconds(2),
+                                               [] { return gAdmissionRace->releaseTeardown; }),
+              testing::IsTrue());
+}
+
+void RecordAdmission(void* context) {
+  static_cast<AdmissionRace*>(context)->admissions.fetch_add(1);
+}
+
 }  // namespace
 
 class VulkanSwapchainTestAccess {
@@ -121,15 +375,29 @@ public:
     api.vkDestroyCommandPool = RecordDestroyCommandPool;
     api.vkDestroyDevice = RecordDestroyDevice;
     api.vkDestroyInstance = RecordDestroyInstance;
+    api.vkAllocateCommandBuffers = RecordAllocateCommandBuffers;
+    api.vkBeginCommandBuffer = RecordBeginCommandBuffer;
+    api.vkEndCommandBuffer = RecordEndCommandBuffer;
+    api.vkCreateFence = RecordCreateFence;
+    api.vkQueueSubmit = RecordQueueSubmit;
+    api.vkQueuePresentKHR = RecordQueuePresent;
+    api.vkAcquireNextImageKHR = RecordAcquireNextImage;
+    api.vkCmdPipelineBarrier = RecordPipelineBarrier;
     return api;
   }
 
-  static std::unique_ptr<VulkanSwapchain> MakeSurface(const VulkanApi* api) {
+  static std::unique_ptr<VulkanSwapchain> MakeSurface(const VulkanApi* api,
+                                                      VulkanDevice* owner = nullptr) {
     VulkanSurfaceContext context;
-    context.api = api;
-    context.instance = FakeHandle<VkInstance>(1);
-    context.device = FakeHandle<VkDevice>(2);
-    context.commandPool = FakeHandle<VkCommandPool>(3);
+    if (owner) {
+      context = owner->surfaceContextForTeardownTest();
+    } else {
+      context.api = api;
+      context.instance = FakeHandle<VkInstance>(1);
+      context.device = FakeHandle<VkDevice>(2);
+      context.commandPool = FakeHandle<VkCommandPool>(3);
+      context.lifetime = std::make_shared<VulkanSurfaceLifetime>();
+    }
     auto swapchain = std::unique_ptr<VulkanSwapchain>(
         new VulkanSwapchain(context, FakeHandle<VkSurfaceKHR>(4), true));
     swapchain->swapchain_ = FakeHandle<VkSwapchainKHR>(5);
@@ -150,12 +418,80 @@ public:
     gTeardownRecorder = nullptr;
   }
 
+  static std::unique_ptr<VulkanSwapchain> MakeAcquireOnlySurface(const VulkanApi* api) {
+    VulkanSurfaceContext context{};
+    context.api = api;
+    context.instance = FakeHandle<VkInstance>(1);
+    context.device = FakeHandle<VkDevice>(2);
+    context.queue = FakeHandle<VkQueue>(3);
+    context.commandPool = FakeHandle<VkCommandPool>(4);
+    context.lifetime = std::make_shared<VulkanSurfaceLifetime>();
+    auto surface = std::unique_ptr<VulkanSwapchain>(
+        new VulkanSwapchain(context, FakeHandle<VkSurfaceKHR>(5), true));
+    surface->swapchain_ = FakeHandle<VkSwapchainKHR>(6);
+    surface->acquireSemaphores_ = {FakeHandle<VkSemaphore>(7)};
+    surface->acquireRingFences_ = {VK_NULL_HANDLE};
+    surface->pendingAcquireWait_ = surface->acquireSemaphores_[0];
+    surface->frameRingSlot_ = 0;
+    return surface;
+  }
+
+  static std::unique_ptr<VulkanSwapchain> MakePresentableSurface(const VulkanApi* api) {
+    auto surface = MakeAcquireOnlySurface(api);
+    surface->images_ = {FakeHandle<VkImage>(8)};
+    surface->handoverSemaphores_ = {FakeHandle<VkSemaphore>(9)};
+    surface->presentFences_ = {FakeHandle<VkFence>(10)};
+    surface->presentFencePending_ = {false};
+    surface->imageIndex_ = 0;
+    surface->hasFrame_ = true;
+    return surface;
+  }
+
+  static std::unique_ptr<VulkanSwapchain> MakeAcquirableSurface(const VulkanApi* api) {
+    auto surface = MakePresentableSurface(api);
+    surface->configuration_ = SurfaceConfiguration{};
+    surface->pendingAcquireWait_ = VK_NULL_HANDLE;
+    surface->hasFrame_ = false;
+    return surface;
+  }
+
+  static std::unique_ptr<VulkanSwapchain> MakePartiallyConstructedSurface(const VulkanApi* api) {
+    auto surface = MakeAcquireOnlySurface(api);
+    surface->pendingAcquireWait_ = VK_NULL_HANDLE;
+    surface->swapchain_ = VK_NULL_HANDLE;
+    surface->acquireSemaphores_ = {VK_NULL_HANDLE, FakeHandle<VkSemaphore>(7)};
+    surface->handoverSemaphores_ = {FakeHandle<VkSemaphore>(9), VK_NULL_HANDLE};
+    surface->presentFences_ = {VK_NULL_HANDLE, FakeHandle<VkFence>(10)};
+    surface->presentFencePending_ = {false, false};
+    return surface;
+  }
+
+  static Status Prepare(VulkanSwapchain& surface) { return surface.prepareForDestruction(); }
+  static Result<SurfaceStatus> Present(VulkanSwapchain& surface) {
+    return surface.present(
+        TextureSyncState{VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0});
+  }
+  static bool PresentFencePending(const VulkanSwapchain& surface) {
+    return surface.presentFencePending_[0];
+  }
+  static bool PreparationBlocked(const VulkanSwapchain& surface) {
+    return surface.preparationBlocked_;
+  }
+  static size_t PendingCount(const VulkanSwapchain& surface) { return surface.pending_.size(); }
+
+  static Status Submit(VulkanDevice& device) { return device.onSubmit(1, 0, {}); }
+
+  static void RetireSurface(VulkanDevice& device, uint32_t index) {
+    device.onDestroySurface(index);
+  }
+
   static void RunOwnerTeardown(TeardownRecorder& recorder, size_t surfaceCount = 1) {
     VulkanApi api = MakeApi();
     gTeardownRecorder = &recorder;
     std::unique_ptr<VulkanDevice> device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+    ASSERT_THAT(device, testing::NotNull());
     for (size_t i = 0; i < surfaceCount; ++i) {
-      device->attachSurfaceForTeardownTest(MakeSurface(&api));
+      device->attachSurfaceForTeardownTest(MakeSurface(&api, device.get()));
     }
     device.reset();
     gTeardownRecorder = nullptr;
@@ -321,12 +657,159 @@ TEST_F(VulkanSurfaceTest, EnablesAnEmbedderRequiredInstanceExtension) {
 TEST(VulkanPresentationCreationTest, ForwardsARequiredPlatformCompanionExtension) {
   static constexpr const char* kXcbSurfaceExtension = "VK_KHR_xcb_surface";
   static constexpr const char* kOffered[] = {
-      VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, kXcbSurfaceExtension};
+      VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+      VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
+      kXcbSurfaceExtension};
   static constexpr const char* kRequired[] = {kXcbSurfaceExtension};
   EXPECT_THAT(SelectPresentationExtensionsForTest(kOffered, kRequired),
               testing::ElementsAre(testing::StrEq(VK_KHR_SURFACE_EXTENSION_NAME),
+                                   testing::StrEq(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME),
+                                   testing::StrEq(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
                                    testing::StrEq(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME),
                                    testing::StrEq(kXcbSurfaceExtension)));
+}
+
+class MaintenanceDependencyTest : public testing::TestWithParam<bool> {};
+
+TEST_P(MaintenanceDependencyTest, CreatesWithMatchingInstanceDeviceExtensionsAndFeature) {
+  CreationRecorder recorder = MaintenanceOffers(GetParam());
+  const char* instanceAlias = recorder.instanceOffers.back();
+  const char* deviceAlias = recorder.deviceOffers.back();
+  recorder.instanceOffers.push_back("VK_KHR_xcb_surface");
+  gCreationRecorder = &recorder;
+  const char* required[] = {"VK_KHR_xcb_surface", VK_KHR_SURFACE_EXTENSION_NAME, instanceAlias,
+                            "VK_KHR_xcb_surface"};
+  EXPECT_THAT(
+      VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, required),
+      testing::IsTrue());
+  EXPECT_THAT(recorder.enabledInstanceExtensions,
+              testing::ElementsAre(VK_KHR_SURFACE_EXTENSION_NAME,
+                                   VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME, instanceAlias,
+                                   "VK_KHR_xcb_surface"));
+  EXPECT_THAT(recorder.enabledDeviceExtensions,
+              testing::ElementsAre(VK_KHR_SWAPCHAIN_EXTENSION_NAME, deviceAlias));
+  EXPECT_THAT(
+      recorder.queriedFeatureTypes,
+      testing::ElementsAre(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT));
+  EXPECT_THAT(
+      recorder.enabledFeatureTypes,
+      testing::ElementsAre(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT));
+  EXPECT_THAT(recorder.maintenanceEnabled, testing::IsTrue());
+  EXPECT_THAT(recorder.cleanup, testing::ElementsAre("device", "instance"));
+  gCreationRecorder = nullptr;
+}
+
+TEST_P(MaintenanceDependencyTest, MissingInstanceDependencyRefusesBeforeNativeCreation) {
+  for (size_t missing = 0; missing < 3; ++missing) {
+    CreationRecorder recorder = MaintenanceOffers(GetParam());
+    SCOPED_TRACE(recorder.instanceOffers[missing]);
+    recorder.instanceOffers.erase(recorder.instanceOffers.begin() + missing);
+    gCreationRecorder = &recorder;
+    EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true),
+                testing::IsFalse());
+    EXPECT_THAT(recorder.instanceCreated, testing::IsFalse());
+    EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+    EXPECT_THAT(recorder.cleanup, testing::IsEmpty());
+  }
+  gCreationRecorder = nullptr;
+}
+
+TEST_P(MaintenanceDependencyTest, MissingDeviceDependencyRefusesBeforeLogicalDeviceCreation) {
+  for (size_t missing = 0; missing < 2; ++missing) {
+    CreationRecorder recorder = MaintenanceOffers(GetParam());
+    SCOPED_TRACE(recorder.deviceOffers[missing]);
+    recorder.deviceOffers.erase(recorder.deviceOffers.begin() + missing);
+    gCreationRecorder = &recorder;
+    EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true),
+                testing::IsFalse());
+    EXPECT_THAT(recorder.instanceCreated, testing::IsTrue());
+    EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+    EXPECT_THAT(recorder.cleanup, testing::ElementsAre("instance"));
+  }
+  gCreationRecorder = nullptr;
+}
+
+TEST_P(MaintenanceDependencyTest, MissingFeatureRefusesBeforeLogicalDeviceCreation) {
+  CreationRecorder recorder = MaintenanceOffers(GetParam());
+  recorder.maintenanceSupported = false;
+  gCreationRecorder = &recorder;
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true),
+              testing::IsFalse());
+  EXPECT_THAT(
+      recorder.queriedFeatureTypes,
+      testing::ElementsAre(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT));
+  EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+  EXPECT_THAT(recorder.cleanup, testing::ElementsAre("instance"));
+  gCreationRecorder = nullptr;
+}
+
+TEST_P(MaintenanceDependencyTest, MismatchedAliasesDoNotSatisfyDependencies) {
+  CreationRecorder recorder = MaintenanceOffers(GetParam());
+  recorder.deviceOffers.back() = GetParam() ? VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+                                            : VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+  gCreationRecorder = &recorder;
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true),
+              testing::IsFalse());
+  EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+  EXPECT_THAT(recorder.cleanup, testing::ElementsAre("instance"));
+  gCreationRecorder = nullptr;
+}
+
+TEST_P(MaintenanceDependencyTest, InvalidRequiredPlatformExtensionRefusesBeforeNativeCreation) {
+  for (const char* required :
+       {static_cast<const char*>(nullptr), "VK_DONNER_unavailable_surface"}) {
+    CreationRecorder recorder = MaintenanceOffers(GetParam());
+    gCreationRecorder = &recorder;
+    const std::array<const char*, 1> requiredExtensions = {required};
+    EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true,
+                                                                     requiredExtensions),
+                testing::IsFalse());
+    EXPECT_THAT(recorder.instanceCreated, testing::IsFalse());
+    EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+    EXPECT_THAT(recorder.cleanup, testing::IsEmpty());
+  }
+  gCreationRecorder = nullptr;
+}
+
+INSTANTIATE_TEST_SUITE_P(KhrAndExt, MaintenanceDependencyTest, testing::Bool());
+
+TEST(VulkanPresentationCreationTest, EnablesBothOfferedInstanceAliasesBeforeChoosingDeviceAlias) {
+  for (const bool deviceOffersKhr : {false, true}) {
+    CreationRecorder recorder = MaintenanceOffers(deviceOffersKhr);
+    recorder.instanceOffers = {
+        VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+        VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME};
+    if (deviceOffersKhr)
+      recorder.deviceOffers.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    gCreationRecorder = &recorder;
+    EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true),
+                testing::IsTrue());
+    EXPECT_THAT(recorder.enabledInstanceExtensions,
+                testing::ElementsAre(VK_KHR_SURFACE_EXTENSION_NAME,
+                                     VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+                                     VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
+                                     VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+    EXPECT_THAT(
+        recorder.enabledDeviceExtensions,
+        testing::ElementsAre(VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+                             deviceOffersKhr ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+                                             : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME));
+  }
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest,
+     NonPresentationCreationNeedsNoMaintenanceExtensionsOrFeatures) {
+  CreationRecorder recorder;
+  gCreationRecorder = &recorder;
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), false),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.enabledInstanceExtensions, testing::IsEmpty());
+  EXPECT_THAT(recorder.enabledDeviceExtensions, testing::IsEmpty());
+  EXPECT_THAT(recorder.queriedFeatureTypes, testing::IsEmpty());
+  EXPECT_THAT(recorder.enabledFeatureTypes, testing::IsEmpty());
+  EXPECT_THAT(recorder.cleanup, testing::ElementsAre("device", "instance"));
+  gCreationRecorder = nullptr;
 }
 
 TEST(VulkanPresentationCreationTest, ExpandsTheUndefinedSurfaceFormatWildcard) {
@@ -339,11 +822,10 @@ TEST(VulkanPresentationCreationTest, ExpandsTheUndefinedSurfaceFormatWildcard) {
 TEST(VulkanPresentationCreationTest, TeardownWaitsForPresentAndSubmissionBeforeDestroying) {
   TeardownRecorder recorder;
   VulkanSwapchainTestAccess::RunTeardown(recorder);
-  EXPECT_THAT(
-      recorder.calls,
-      testing::ElementsAre("wait-fences", "reset-fences", "wait-fences", "free-command-buffer",
-                           "destroy-fence", "destroy-semaphore", "destroy-fence",
-                           "destroy-semaphore", "destroy-swapchain", "destroy-surface"));
+  EXPECT_THAT(recorder.calls,
+              testing::ElementsAre("wait-fences", "wait-fences", "free-command-buffer",
+                                   "destroy-fence", "destroy-semaphore", "destroy-fence",
+                                   "destroy-semaphore", "destroy-swapchain", "destroy-surface"));
 }
 
 TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhilePresentMayStillBePending) {
@@ -357,23 +839,467 @@ TEST(VulkanPresentationCreationTest, TeardownRetainsEverythingWhenFenceCompletio
   TeardownRecorder recorder;
   recorder.fenceResults = {VK_SUCCESS, VK_TIMEOUT};
   VulkanSwapchainTestAccess::RunTeardown(recorder);
-  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences", "reset-fences", "wait-fences"));
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences", "wait-fences"));
 }
 
 TEST(VulkanPresentationCreationTest, OwnerRetainsEveryNativePrerequisiteAfterPresentTimeout) {
-  TeardownRecorder recorder;
-  recorder.fenceResults = {VK_TIMEOUT};
-  VulkanSwapchainTestAccess::RunOwnerTeardown(recorder);
-  EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_TIMEOUT};
+                VulkanSwapchainTestAccess::RunOwnerTeardown(recorder);
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
 }
 
 TEST(VulkanPresentationCreationTest, LaterSurfaceFailureRetainsAnAlreadyPreparedSibling) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_SUCCESS, VK_SUCCESS, VK_TIMEOUT};
+                VulkanSwapchainTestAccess::RunOwnerTeardown(recorder, 2);
+                EXPECT_THAT(recorder.calls,
+                            testing::ElementsAre("wait-fences", "wait-fences", "wait-fences"));
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
+
+TEST(VulkanPresentationCreationTest, OwnerProvesAllWorkBeforeNativeDestruction) {
   TeardownRecorder recorder;
-  recorder.fenceResults = {VK_SUCCESS, VK_SUCCESS, VK_TIMEOUT};
-  VulkanSwapchainTestAccess::RunOwnerTeardown(recorder, 2);
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+  ASSERT_THAT(device, testing::NotNull());
+  device->attachWorkForTeardownTest(false, 11, 12);
+  device->attachWorkForTeardownTest(true, 13, 14);
+  device->attachSurfaceForTeardownTest(VulkanSwapchainTestAccess::MakeSurface(&api, device.get()));
+  device.reset();
   EXPECT_THAT(recorder.calls,
-              testing::ElementsAre("wait-fences", "reset-fences", "wait-fences",
-                                   "free-command-buffer", "destroy-fence", "wait-fences"));
+              testing::ElementsAre("wait-fences", "wait-fences", "wait-fences", "wait-fences",
+                                   "free-command-buffer", "destroy-fence", "destroy-fence",
+                                   "free-command-buffer", "free-command-buffer", "destroy-fence",
+                                   "destroy-semaphore", "destroy-fence", "destroy-semaphore",
+                                   "destroy-swapchain", "destroy-surface", "destroy-command-pool",
+                                   "destroy-device", "destroy-instance"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, PendingOrdinarySubmissionRetainsTheWholeOwnerWithoutIdle) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_TIMEOUT};
+                VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                gTeardownRecorder = &recorder;
+                auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+                device->attachWorkForTeardownTest(false, 11, 12);
+                device->attachSurfaceForTeardownTest(
+                    VulkanSwapchainTestAccess::MakeSurface(&api, device.get()));
+                device.reset();
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
+
+TEST(VulkanPresentationCreationTest, PendingUploadRetainsTheWholeOwnerWithoutIdle) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_TIMEOUT};
+                VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                gTeardownRecorder = &recorder;
+                auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+                device->attachWorkForTeardownTest(true, 13, 14);
+                device.reset();
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
+
+TEST(VulkanPresentationCreationTest, QuarantineIrreversiblyRefusesEveryDeviceFactory) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_TIMEOUT};
+                VulkanSwapchainTestAccess::RunOwnerTeardown(recorder);
+                VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                EXPECT_THAT(VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3), testing::IsNull());
+                EXPECT_THAT(VulkanDevice::Create(), testing::IsNull());
+                EXPECT_THAT(VulkanDevice::CreateWithPresentationSupport(), testing::IsNull());
+                EXPECT_THAT(VulkanDevice::CreateWithTimelineSemaphoreForTest(), testing::IsNull());
+                EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(VulkanApi{}, true),
+                            testing::IsFalse());
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
+
+TEST(VulkanPresentationCreationTest, QueuedFactoriesAreRefusedAfterShutdownFailure) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_TIMEOUT};
+                recorder.onWait = RecordRaceWait;
+                AdmissionRace race;
+                gAdmissionRace = &race;
+                gTeardownRecorder = &recorder;
+                VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                constexpr size_t kCreatorCount = 4;
+                std::array<std::unique_ptr<VulkanDevice>, kCreatorCount> admitted;
+                std::thread owner([&] {
+                  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+                  device->attachWorkForTeardownTest(false, 11, 12);
+                  device.reset();
+                });
+                {
+                  std::unique_lock lock(race.mutex);
+                  EXPECT_THAT(race.changed.wait_for(lock, std::chrono::seconds(2),
+                                                    [&] { return race.teardownReachedWait; }),
+                              testing::IsTrue());
+                }
+                std::array<std::thread, kCreatorCount> creators;
+                for (size_t index = 0; index < kCreatorCount; ++index) {
+                  creators[index] = std::thread([&, index] {
+                    {
+                      const std::lock_guard lock(race.mutex);
+                      ++race.queuedCreators;
+                      race.changed.notify_all();
+                    }
+                    admitted[index] =
+                        VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, RecordAdmission, &race);
+                  });
+                }
+                {
+                  std::unique_lock lock(race.mutex);
+                  EXPECT_THAT(
+                      race.changed.wait_for(lock, std::chrono::seconds(2),
+                                            [&] { return race.queuedCreators == kCreatorCount; }),
+                      testing::IsTrue());
+                  race.releaseTeardown = true;
+                  race.changed.notify_all();
+                }
+                for (std::thread& creator : creators) creator.join();
+                owner.join();
+                EXPECT_THAT(admitted, testing::Each(testing::IsNull()));
+                EXPECT_EQ(race.admissions.load(), 0u);
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                EXPECT_THAT(VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3), testing::IsNull());
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
+
+TEST(VulkanPresentationCreationTest, RetainedSurfaceChainIsPreparedAndDestroyedIteratively) {
+  TeardownRecorder recorder;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+  constexpr size_t kCount = 4096;
+  recorder.fenceResults.assign(kCount, VK_TIMEOUT);
+  for (size_t index = 0; index < kCount; ++index) {
+    device->attachSurfaceForTeardownTest(
+        VulkanSwapchainTestAccess::MakeSurface(&api, device.get()));
+    VulkanSwapchainTestAccess::RetireSurface(*device, static_cast<uint32_t>(index));
+  }
+  EXPECT_THAT(recorder.calls, testing::Each("wait-fences"));
+  recorder.calls.clear();
+  recorder.fenceResults.clear();
+  device.reset();
+  ASSERT_GE(recorder.calls.size(), 2 * kCount);
+  EXPECT_THAT(std::span(recorder.calls).first(2 * kCount), testing::Each("wait-fences"));
+  EXPECT_EQ(std::ranges::count(recorder.calls, "destroy-surface"), kCount);
+  EXPECT_THAT(std::span(recorder.calls).last(3),
+              testing::ElementsAre("destroy-command-pool", "destroy-device", "destroy-instance"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, SubmissionOomFreesOnlyUnsubmittedObjects) {
+  for (const VkResult result : {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY}) {
+    TeardownRecorder recorder;
+    recorder.submissionResult = result;
+    VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+    gTeardownRecorder = &recorder;
+    auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+    EXPECT_THAT(VulkanSwapchainTestAccess::Submit(*device), IsGpuError(GpuErrorType::InvalidState));
+    EXPECT_THAT(recorder.calls,
+                testing::ElementsAre("allocate-command-buffer", "begin-command-buffer",
+                                     "end-command-buffer", "create-fence", "queue-submit",
+                                     "destroy-fence", "free-command-buffer"));
+    recorder.submissionResult = VK_SUCCESS;
+    EXPECT_THAT(VulkanSwapchainTestAccess::Submit(*device), IsOk());
+    device.reset();
+  }
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, AmbiguousSubmissionRetainsObjectsAndRefusesReuse) {
+  for (const VkResult result : {VK_ERROR_UNKNOWN, VK_ERROR_VALIDATION_FAILED_EXT}) {
+    ASSERT_EXIT(([&] {
+                  TeardownRecorder recorder;
+                  recorder.submissionResult = result;
+                  recorder.fenceResults = {VK_TIMEOUT};
+                  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                  gTeardownRecorder = &recorder;
+                  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+                  EXPECT_THAT(VulkanSwapchainTestAccess::Submit(*device),
+                              IsGpuError(GpuErrorType::InvalidState));
+                  EXPECT_THAT(VulkanSwapchainTestAccess::Submit(*device),
+                              IsGpuError(GpuErrorType::InvalidState));
+                  device.reset();
+                  EXPECT_THAT(recorder.calls,
+                              testing::ElementsAre("allocate-command-buffer",
+                                                   "begin-command-buffer", "end-command-buffer",
+                                                   "create-fence", "queue-submit", "wait-fences"));
+                  std::exit(testing::Test::HasFailure() ? 1 : 0);
+                }()),
+                testing::ExitedWithCode(0), "");
+  }
+}
+
+TEST(VulkanPresentationCreationTest, SubmitDeviceLossDrainsBeforeFreeingObjects) {
+  TeardownRecorder recorder;
+  recorder.submissionResult = VK_ERROR_DEVICE_LOST;
+  recorder.idleResult = VK_ERROR_DEVICE_LOST;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+  EXPECT_THAT(VulkanSwapchainTestAccess::Submit(*device), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(recorder.calls,
+              testing::ElementsAre("allocate-command-buffer", "begin-command-buffer",
+                                   "end-command-buffer", "create-fence", "queue-submit",
+                                   "wait-idle", "destroy-fence", "free-command-buffer"));
+  device.reset();
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, AcquireOnlyPrepareConsumesWaitBeforeDestroying) {
+  TeardownRecorder recorder;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakeAcquireOnlySurface(&api);
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Prepare(*surface), IsOk());
+  EXPECT_THAT(recorder.submittedWaits, testing::ElementsAre(FakeHandle<VkSemaphore>(7)));
+  EXPECT_THAT(recorder.submittedStages, testing::ElementsAre(kAcquireWaitStage));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-semaphore")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-swapchain")));
+
+  surface.reset();
+  EXPECT_THAT(recorder.calls, Contains("destroy-semaphore"));
+  EXPECT_THAT(recorder.calls, Contains("destroy-swapchain"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, SubmitOomRestoresAcquireWaitForOneRetry) {
+  TeardownRecorder recorder;
+  recorder.submissionResult = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakeAcquireOnlySurface(&api);
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Prepare(*surface), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_TRUE(surface->owesAcquireWaitForTest());
+  EXPECT_THAT(recorder.calls, Contains("free-command-buffer"));
+  EXPECT_THAT(recorder.calls, Contains("destroy-fence"));
+
+  recorder.submissionResult = VK_SUCCESS;
+  EXPECT_THAT(VulkanSwapchainTestAccess::Prepare(*surface), IsOk());
+  EXPECT_FALSE(surface->owesAcquireWaitForTest());
+  EXPECT_EQ(std::count(recorder.calls.begin(), recorder.calls.end(), "queue-submit"), 2);
+  surface.reset();
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, AmbiguousSubmitRetainsEveryNativeObject) {
+  TeardownRecorder recorder;
+  recorder.submissionResult = VK_ERROR_VALIDATION_FAILED_EXT;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakeAcquireOnlySurface(&api);
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Prepare(*surface), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_TRUE(VulkanSwapchainTestAccess::PreparationBlocked(*surface));
+  EXPECT_EQ(VulkanSwapchainTestAccess::PendingCount(*surface), 1u);
+  recorder.calls.clear();
+  surface.reset();
+  EXPECT_THAT(recorder.calls, Not(Contains("free-command-buffer")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-fence")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-semaphore")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-swapchain")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-surface")));
+  gTeardownRecorder = nullptr;
+}
+
+class PresentResultOwnershipTest : public testing::TestWithParam<VkResult> {};
+TEST_P(PresentResultOwnershipTest, AssociatesMaintenanceFenceForEveryPossiblyEnqueuedResult) {
+  TeardownRecorder recorder;
+  recorder.presentResult = GetParam();
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakePresentableSurface(&api);
+
+  (void)VulkanSwapchainTestAccess::Present(*surface);
+  EXPECT_TRUE(VulkanSwapchainTestAccess::PresentFencePending(*surface));
+  EXPECT_EQ(recorder.presentedFence, FakeHandle<VkFence>(10));
+  surface.reset();
+  EXPECT_THAT(recorder.calls, Contains("destroy-swapchain"));
+  gTeardownRecorder = nullptr;
+}
+INSTANTIATE_TEST_SUITE_P(EnqueuedResults, PresentResultOwnershipTest,
+                         testing::Values(VK_SUCCESS, VK_SUBOPTIMAL_KHR, VK_ERROR_OUT_OF_DATE_KHR,
+                                         VK_ERROR_SURFACE_LOST_KHR,
+                                         VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT,
+                                         VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT,
+                                         VK_ERROR_DEVICE_LOST));
+
+class PresentOomOwnershipTest : public testing::TestWithParam<VkResult> {};
+TEST_P(PresentOomOwnershipTest, LeavesMaintenanceFenceUnassociated) {
+  TeardownRecorder recorder;
+  recorder.presentResult = GetParam();
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakePresentableSurface(&api);
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Present(*surface), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_FALSE(VulkanSwapchainTestAccess::PresentFencePending(*surface));
+  // The successful handover remains tracked until its fence proves completion.
+  EXPECT_EQ(VulkanSwapchainTestAccess::PendingCount(*surface), 1u);
+  surface.reset();
+  gTeardownRecorder = nullptr;
+}
+INSTANTIATE_TEST_SUITE_P(PreEnqueueResults, PresentOomOwnershipTest,
+                         testing::Values(VK_ERROR_OUT_OF_HOST_MEMORY,
+                                         VK_ERROR_OUT_OF_DEVICE_MEMORY));
+
+TEST(VulkanPresentationCreationTest, UnknownPresentAssociationBlocksPreparation) {
+  TeardownRecorder recorder;
+  recorder.presentResult = VK_ERROR_VALIDATION_FAILED_EXT;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakePresentableSurface(&api);
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Present(*surface), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_TRUE(VulkanSwapchainTestAccess::PresentFencePending(*surface));
+  EXPECT_TRUE(VulkanSwapchainTestAccess::PreparationBlocked(*surface));
+  EXPECT_THAT(VulkanSwapchainTestAccess::Prepare(*surface), IsGpuError(GpuErrorType::InvalidState));
+  recorder.calls.clear();
+  surface.reset();
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-fence")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-semaphore")));
+  EXPECT_THAT(recorder.calls, Not(Contains("destroy-swapchain")));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, DeviceLostSubmitNeedsAndAcceptsLaterLossProof) {
+  TeardownRecorder recorder;
+  recorder.submissionResult = VK_ERROR_DEVICE_LOST;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakeAcquireOnlySurface(&api);
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Prepare(*surface), IsOk());
+  EXPECT_THAT(recorder.calls, Contains("wait-fences"));
+  EXPECT_EQ(VulkanSwapchainTestAccess::PendingCount(*surface), 1u);
+  surface.reset();
+  EXPECT_THAT(recorder.calls, Contains("free-command-buffer"));
+  EXPECT_THAT(recorder.calls, Contains("destroy-fence"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, PartialConstructionDestroysOnlyCreatedNativeHandles) {
+  TeardownRecorder recorder;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakePartiallyConstructedSurface(&api);
+  EXPECT_THAT(surface->prepareForDestruction(), IsOk());
+  EXPECT_THAT(recorder.calls, testing::IsEmpty());
+  surface.reset();
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("destroy-semaphore", "destroy-fence",
+                                                   "destroy-semaphore", "destroy-surface"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, AcquisitionLossRetainsWaitUntilLaterCompletionProof) {
+  TeardownRecorder recorder;
+  recorder.acquireResult = VK_ERROR_DEVICE_LOST;
+  recorder.submissionResult = VK_ERROR_DEVICE_LOST;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto surface = VulkanSwapchainTestAccess::MakeAcquirableSurface(&api);
+  const Result<SurfaceStatus> acquired = surface->acquire();
+  ASSERT_THAT(acquired, IsOk());
+  EXPECT_EQ(acquired.result(), SurfaceStatus::DeviceLost);
+  EXPECT_THAT(surface->owesAcquireWaitForTest(), testing::IsTrue());
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("acquire-image"));
+  EXPECT_THAT(surface->prepareForDestruction(), IsOk());
+  EXPECT_THAT(recorder.calls, testing::ElementsAre("acquire-image", "allocate-command-buffer",
+                                                   "begin-command-buffer", "end-command-buffer",
+                                                   "create-fence", "queue-submit", "wait-fences"));
+  surface.reset();
+  EXPECT_THAT(recorder.calls, Contains("destroy-surface"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, OwnerAcceptsDeviceLossFromEveryCompletionWait) {
+  TeardownRecorder recorder;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST, VK_ERROR_DEVICE_LOST, VK_ERROR_DEVICE_LOST,
+                           VK_ERROR_DEVICE_LOST};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+  device->attachWorkForTeardownTest(false, 11, 12);
+  device->attachWorkForTeardownTest(true, 13, 14);
+  device->attachSurfaceForTeardownTest(VulkanSwapchainTestAccess::MakeSurface(&api, device.get()));
+  device.reset();
+  ASSERT_GE(recorder.calls.size(), 4u);
+  EXPECT_THAT(std::span(recorder.calls).first(4), testing::Each("wait-fences"));
+  EXPECT_THAT(recorder.calls, Not(Contains("wait-idle")));
+  EXPECT_THAT(std::span(recorder.calls).last(3),
+              testing::ElementsAre("destroy-command-pool", "destroy-device", "destroy-instance"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, FailedChildDestructionPoisonsAndRetainsTheActualOwner) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                recorder.fenceResults = {VK_TIMEOUT};
+                VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                gTeardownRecorder = &recorder;
+                auto owner = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+                auto child = VulkanSwapchainTestAccess::MakeSurface(&api, owner.get());
+                child.reset();
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                EXPECT_THAT(VulkanSwapchainTestAccess::Submit(*owner),
+                            IsGpuError(GpuErrorType::InvalidState));
+                EXPECT_THAT(owner->createBuffer({"refused", 16, BufferUsage::CopyDst}),
+                            IsGpuError(GpuErrorType::InvalidState));
+                owner.reset();
+                EXPECT_THAT(recorder.calls, testing::ElementsAre("wait-fences"));
+                EXPECT_THAT(VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3), testing::IsNull());
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
+
+TEST(VulkanPresentationCreationTest, UnregisteredLiveChildPreventsOwnerPrerequisiteDestruction) {
+  ASSERT_EXIT(([&] {
+                TeardownRecorder recorder;
+                VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+                gTeardownRecorder = &recorder;
+                auto owner = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3);
+                auto child = VulkanSwapchainTestAccess::MakeSurface(&api, owner.get());
+                owner.reset();
+                EXPECT_THAT(recorder.calls, testing::IsEmpty());
+                EXPECT_THAT(VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3), testing::IsNull());
+                child.reset();
+                EXPECT_THAT(recorder.calls, Not(Contains("destroy-command-pool")));
+                EXPECT_THAT(recorder.calls, Not(Contains("destroy-device")));
+                EXPECT_THAT(recorder.calls, Not(Contains("destroy-instance")));
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
 }
 
 TEST_F(VulkanSurfaceTest, PointsAWindowSystemKindAtTheEmbedderPath) {

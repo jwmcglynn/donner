@@ -14,6 +14,7 @@
 namespace donner::gpu::vulkan {
 
 struct VulkanApi;
+struct VulkanSurfaceContext;
 class VulkanSwapchain;
 
 /// Selects presentation instance extensions from the names a loader offers.
@@ -41,9 +42,10 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * Targets Vulkan 1.1 core only: classic VkRenderPass + VkFramebuffer (no dynamic rendering),
  * per-submission VkFence completion tracking, and the core negative-viewport-height feature
  * (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU clip-space semantics - identical
- * SPIR-V positions land on identical pixels as the wgpu baseline. No device extension is
- * enabled on any production path; the sole exception is VK_KHR_timeline_semaphore, which
- * \ref CreateWithTimelineSemaphoreForTest requests so a test can hold a submission open.
+ * SPIR-V positions land on identical pixels as the wgpu baseline. Presentation additionally
+ * requires swapchain maintenance1 and its matching instance extension dependencies. The headless
+ * path needs no device extension; \ref CreateWithTimelineSemaphoreForTest optionally requests
+ * VK_KHR_timeline_semaphore so a test can hold a submission open.
  *
  * Every buffer lives in HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped.
  * Idle queue writes copy directly. Four-byte-aligned writes to busy buffers copy their payload
@@ -89,7 +91,9 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no
- * cross-thread callbacks.
+ * cross-thread callbacks. Creation is serialized against failed shutdown: if a bounded completion
+ * wait cannot prove native work finished, the complete device graph is retained until process exit
+ * and every later Vulkan device creation returns nullptr. Restart the process to retry Vulkan.
  *
  * The header is pure C++ (Vulkan state lives behind a pimpl) so it is includable without the
  * Vulkan headers on any platform; the implementation compiles against the hermetic
@@ -278,10 +282,31 @@ public:
   NativeContextForTest nativeContextForTest() const;
 
   /// Builds an otherwise-empty device owner around fake native handles for teardown tests.
+  /// @param api Copied native callbacks. @param instanceHandle Fake instance.
+  /// @param deviceHandle Fake device. @param commandPoolHandle Fake command pool.
+  /// @param onAdmission Optional callback invoked while holding the creation gate.
+  /// @param admissionContext Opaque argument for the admission callback.
   static std::unique_ptr<VulkanDevice> CreateForTeardownTest(const VulkanApi* api,
                                                              uint64_t instanceHandle,
                                                              uint64_t deviceHandle,
-                                                             uint64_t commandPoolHandle);
+                                                             uint64_t commandPoolHandle,
+                                                             void (*onAdmission)(void*) = nullptr,
+                                                             void* admissionContext = nullptr);
+
+  /// Exercises native instance/device creation through a fake API and immediately destroys them.
+  /// @param api Fake Vulkan callbacks. @param enablePresentation Whether to enable presentation.
+  /// @param requiredInstanceExtensions Embedder-required extension names.
+  static bool CreateNativeObjectsForPresentationTest(
+      const VulkanApi& api, bool enablePresentation,
+      std::span<const char* const> requiredInstanceExtensions = {});
+
+  /// Adds fake pending native work to the real ownership graph, without submitting to a GPU.
+  /// @param upload Whether this is an internal texture upload instead of an ordinary submission.
+  /// @param fenceHandle Nonzero fake fence. @param commandBufferHandle Nonzero fake command buffer.
+  void attachWorkForTeardownTest(bool upload, uint64_t fenceHandle, uint64_t commandBufferHandle);
+
+  /// Returns the fake device's borrowed native context and shared child lifetime token.
+  VulkanSurfaceContext surfaceContextForTeardownTest() const;
 
   /// Attaches a real swapchain owner to the fake device teardown graph.
   void attachSurfaceForTeardownTest(std::unique_ptr<VulkanSwapchain> surface);
@@ -385,6 +410,8 @@ protected:
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 
 private:
+  friend class VulkanSwapchainTestAccess;
+
   /// Waits for a buffer's last use and reports timeout or device error before host access.
   /// @param serial Last submitted use of this buffer.
   /// @param operation Operation name included in a timeout diagnostic.
