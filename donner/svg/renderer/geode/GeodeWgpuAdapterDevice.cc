@@ -1675,8 +1675,95 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
       command);
 }
 
-void GeodeWgpuAdapterDevice::setHostCommandEncoder(wgpu::CommandEncoder encoder) {
+GeodeWgpuAdapterDevice::HostEncoderLease GeodeWgpuAdapterDevice::setHostCommandEncoder(
+    wgpu::CommandEncoder encoder) {
+  if (hostCommandEncoderIs(encoder) && hostCommandEncoderLease_) {
+    return hostCommandEncoderLease_;
+  }
+  const auto existing = std::find_if(hostLeaseRecords_.begin(), hostLeaseRecords_.end(),
+                                     [&](const HostLeaseRecord& record) {
+                                       return static_cast<WGPUCommandEncoder>(record.encoder) ==
+                                              static_cast<WGPUCommandEncoder>(encoder);
+                                     });
   hostCommandEncoder_ = std::move(encoder);
+  if (existing != hostLeaseRecords_.end()) {
+    hostCommandEncoderLease_ = existing->lease;
+  } else if (hostCommandEncoder_) {
+    hostCommandEncoderLease_ = HostEncoderLease(deviceId(), nextHostOwner_++, 1);
+    hostLeaseRecords_.push_back({hostCommandEncoderLease_, hostCommandEncoder_});
+  } else {
+    hostCommandEncoderLease_ = {};
+  }
+  hostEncoderRotation_ = {};
+  hostRotationLease_ = {};
+  return hostCommandEncoderLease_;
+}
+
+std::optional<GeodeWgpuAdapterDevice::HostEncoderLease>
+GeodeWgpuAdapterDevice::replaceHostCommandEncoder(HostEncoderLease expected,
+                                                  wgpu::CommandEncoder encoder) {
+  if (!expected || expected != hostCommandEncoderLease_ || !hostCommandEncoder_ || !encoder) {
+    return std::nullopt;
+  }
+  if (hostCommandEncoderIs(encoder)) {
+    return hostCommandEncoderLease_;
+  }
+  hostCommandEncoder_ = std::move(encoder);
+  hostCommandEncoderLease_ =
+      HostEncoderLease(deviceId(), expected.owner_, expected.generation_ + 1);
+  hostLeaseRecords_.push_back({hostCommandEncoderLease_, hostCommandEncoder_});
+  return hostCommandEncoderLease_;
+}
+
+std::optional<GeodeWgpuAdapterDevice::HostEncoderLease>
+GeodeWgpuAdapterDevice::hostCommandEncoderLease() const {
+  if (!hostCommandEncoderLease_) return std::nullopt;
+  return hostCommandEncoderLease_;
+}
+
+gpu::Result<GeodeWgpuAdapterDevice::RuntimeSubmitResult>
+GeodeWgpuAdapterDevice::submitForCurrentFrame(gpu::CommandBuffer&& commands,
+                                              std::optional<HostEncoderLease> expectedHost) {
+  const bool hasHost = static_cast<bool>(hostCommandEncoder_);
+  if ((expectedHost.has_value() && (!hasHost || *expectedHost != hostCommandEncoderLease_)) ||
+      (!expectedHost.has_value() && hasHost)) {
+    return RuntimeSubmitResult{0, RuntimeSubmitDisposition::RefusedBeforeReplay};
+  }
+  const RuntimeSubmitDisposition disposition =
+      hasHost ? RuntimeSubmitDisposition::HostRecorded : RuntimeSubmitDisposition::QueueSubmitted;
+  gpu::Result<uint64_t> submitted = submit(std::move(commands));
+  if (!submitted.hasResult()) return std::move(submitted).error();
+  return RuntimeSubmitResult{submitted.result(), disposition};
+}
+
+GeodeWgpuAdapterDevice::HostEncoderLease GeodeWgpuAdapterDevice::setHostCommandEncoderRotation(
+    HostEncoderLease expected, HostEncoderRotation rotate) {
+  if (!expected || expected != hostCommandEncoderLease_ || !hostCommandEncoder_) return {};
+  hostRotationLease_ = expected;
+  hostEncoderRotation_ = std::move(rotate);
+  return expected;
+}
+
+bool GeodeWgpuAdapterDevice::clearHostCommandEncoderRotation(HostEncoderLease expected) {
+  if (!expected || expected != hostRotationLease_) return false;
+  hostEncoderRotation_ = {};
+  hostRotationLease_ = {};
+  return true;
+}
+
+GeodeWgpuAdapterDevice::HostRotationResult
+GeodeWgpuAdapterDevice::rotateHostCommandEncoderForFilterChunk(HostEncoderLease expected) {
+  if (!expected || expected != hostCommandEncoderLease_ || expected != hostRotationLease_ ||
+      !hostEncoderRotation_) {
+    return {};
+  }
+  HostEncoderRotation rotation = hostEncoderRotation_;
+  HostRotationResult result = rotation(expected);
+  if (hostRotationLease_ == expected && result.replacementLease.has_value() &&
+      *result.replacementLease == hostCommandEncoderLease_) {
+    hostRotationLease_ = *result.replacementLease;
+  }
+  return result;
 }
 
 bool GeodeWgpuAdapterDevice::hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const {
@@ -1686,6 +1773,15 @@ bool GeodeWgpuAdapterDevice::hostCommandEncoderIs(const wgpu::CommandEncoder& en
 
 void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
   hostCommandEncoder_ = wgpu::CommandEncoder();
+  hostCommandEncoderLease_ = {};
+  hostEncoderRotation_ = {};
+  hostRotationLease_ = {};
+}
+
+bool GeodeWgpuAdapterDevice::clearHostCommandEncoder(HostEncoderLease expected) {
+  if (!expected || expected != hostCommandEncoderLease_) return false;
+  clearHostCommandEncoder();
+  return true;
 }
 
 bool GeodeWgpuAdapterDevice::hasHostCommandEncoder() const {
@@ -1737,10 +1833,23 @@ void GeodeWgpuAdapterDevice::CompletionState::complete(uint64_t ticket) {
 }
 
 void GeodeWgpuAdapterDevice::notifyHostSubmitted(wgpu::CommandEncoder encoder) {
+  const WGPUCommandEncoder raw = static_cast<WGPUCommandEncoder>(encoder);
   const uint64_t ticket = completionState_->closeHost(static_cast<WGPUCommandEncoder>(encoder));
   if (ticket != 0) {
     completeWhenQueueDrains(ticket);
   }
+  std::erase_if(hostLeaseRecords_, [&](const HostLeaseRecord& record) {
+    return static_cast<WGPUCommandEncoder>(record.encoder) == raw;
+  });
+}
+
+bool GeodeWgpuAdapterDevice::notifyHostSubmitted(HostEncoderLease expected) {
+  const auto record =
+      std::find_if(hostLeaseRecords_.begin(), hostLeaseRecords_.end(),
+                   [&](const HostLeaseRecord& entry) { return entry.lease == expected; });
+  if (record == hostLeaseRecords_.end()) return false;
+  notifyHostSubmitted(record->encoder);
+  return true;
 }
 
 void GeodeWgpuAdapterDevice::notifyHostDiscarded(wgpu::CommandEncoder encoder) {
@@ -1749,6 +1858,16 @@ void GeodeWgpuAdapterDevice::notifyHostDiscarded(wgpu::CommandEncoder encoder) {
   if (hostCommandEncoderIs(encoder)) {
     clearHostCommandEncoder();
   }
+}
+
+bool GeodeWgpuAdapterDevice::notifyHostDiscarded(HostEncoderLease expected) {
+  const auto record =
+      std::find_if(hostLeaseRecords_.begin(), hostLeaseRecords_.end(),
+                   [&](const HostLeaseRecord& entry) { return entry.lease == expected; });
+  if (record == hostLeaseRecords_.end()) return false;
+  wgpu::CommandEncoder encoder = record->encoder;
+  notifyHostDiscarded(std::move(encoder));
+  return true;
 }
 
 void GeodeWgpuAdapterDevice::completeWhenQueueDrains(uint64_t ticket) {

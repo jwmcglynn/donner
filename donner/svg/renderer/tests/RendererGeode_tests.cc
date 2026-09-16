@@ -481,10 +481,12 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
     acceptedChunks = chunk;
     if (chunk == 1) device->markDeviceLost("injected ordinary filter chunk loss");
   });
+  const uint64_t submitsBeforeBoundary = device->counters()->submits;
 
   renderer.popFilterLayer();
 
   EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
@@ -514,10 +516,12 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
     acceptedChunks = chunk;
     if (chunk == 1) device->markDeviceLost("injected transformed filter chunk loss");
   });
+  const uint64_t submitsBeforeBoundary = device->counters()->submits;
 
   renderer.popFilterLayer();
 
   EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
@@ -945,9 +949,14 @@ TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
     }
     ASSERT_THAT(device->adapterDevice().waitForSerial(parentPending.serial, 2.0),
                 testing::IsTrue());
-    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+    EXPECT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 0.05),
+                testing::IsFalse());
+    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingFilterSerial));
     EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingPending.serial));
     sibling.endFrame();
+    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingPending.serial, 2.0),
+                testing::IsTrue());
     const RendererBitmap pixels = sibling.takeSnapshot();
     ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
     EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(0, 0, 255, 255));

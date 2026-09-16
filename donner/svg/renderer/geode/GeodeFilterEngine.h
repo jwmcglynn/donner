@@ -22,6 +22,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/gpu/Device.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {
@@ -276,13 +277,13 @@ public:
    *   failed execution-time budgets fail the execution instead of bypassing the filter.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
-  FilterExecutionResult execute(const svg::components::FilterGraph& graph,
-                                const gpu::Texture& sourceGraphic,
-                                const gpu::TextureDescriptor& sourceGraphicDesc,
-                                const Box2d& filterRegion, const Transform2d& deviceFromFilter,
-                                FilterTextureAllocator& textureAllocator,
-                                svg::components::FilterExecutionBudget* executionBudget = nullptr,
-                                std::optional<FilterTilePlan> admittedPlan = std::nullopt);
+  FilterExecutionResult execute(
+      const svg::components::FilterGraph& graph, const gpu::Texture& sourceGraphic,
+      const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
+      const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
+      svg::components::FilterExecutionBudget* executionBudget = nullptr,
+      std::optional<FilterTilePlan> admittedPlan = std::nullopt,
+      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease = std::nullopt);
 
   /**
    * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.
@@ -314,6 +315,11 @@ public:
 
   /// Invokes p hook after each accepted command chunk. Test seam for later-chunk failures.
   void setChunkSubmittedHookForTesting(std::function<void(size_t)> hook);
+
+  /// Records exactly p passCount transparent-clear passes through the chunking state machine.
+  bool recordPassesForTesting(
+      size_t passCount, FilterTextureAllocator& textureAllocator,
+      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease = std::nullopt);
 
   /// Observed allocation footprint of the most recent execution; does not own resources.
   FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }

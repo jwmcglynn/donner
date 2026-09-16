@@ -1481,6 +1481,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // command-buffer size for pathological filter graphs; the final
   // encoder in the slot is the one endFrame submits.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
+  std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> frameHostEncoderLease;
 
   // Runtime command encoder for the frame. It records into `frameCommandEncoder`
   // rather than owning a command buffer of its own: filter passes are still
@@ -1607,10 +1608,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return gpu::Extent2d{texture.getWidth(), texture.getHeight()};
   }
 
+  [[nodiscard]] bool publishFrameHostEncoder() {
+    frameHostEncoderLease =
+        device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    return frameHostEncoderLease.has_value() &&
+           device->adapterDevice().setHostCommandEncoderRotation(
+               *frameHostEncoderLease,
+               [this](geode::GeodeWgpuAdapterDevice::HostEncoderLease expected) {
+                 return rotateFrameCommandEncoderForFilter(expected);
+               });
+  }
+
   /// Point the runtime device at the current frame command encoder and open a runtime encoder
   /// that records into it. Returns false when the runtime refuses the encoder.
   [[nodiscard]] bool openFrameGpuEncoder() {
-    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    if (!publishFrameHostEncoder()) return false;
     gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
         device->adapterDevice().createCommandEncoder();
     if (!created.hasResult()) {
@@ -1624,19 +1636,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Replay what the runtime encoder has recorded into the frame command encoder and open a fresh
   /// one. Call before recording on the frame command encoder directly and before finishing it, so
   /// the two streams reach the backend in the order they were written.
-  [[nodiscard]] bool flushFrameGpuEncoder() {
+  [[nodiscard]] bool flushFrameGpuEncoder() { return replayFrameGpuEncoder(true); }
+
+  [[nodiscard]] bool replayFrameGpuEncoder(bool reopen) {
     if (frameGpuEncoder == nullptr) {
       return true;
     }
-    // A sibling renderer may have replaced the shared adapter's host encoder.
-    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    if (!publishFrameHostEncoder()) {
+      return false;
+    }
     gpu::Result<gpu::CommandBuffer> commandBuffer = frameGpuEncoder->finish();
     if (!commandBuffer.hasError()) {
-      gpu::Result<uint64_t> submitted =
-          device->adapterDevice().submit(std::move(commandBuffer).result());
-      if (submitted.hasError()) {
+      gpu::Result<geode::GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
+          device->adapterDevice().submitForCurrentFrame(std::move(commandBuffer).result(),
+                                                        frameHostEncoderLease);
+      if (submitted.hasError() ||
+          submitted.result().disposition !=
+              geode::GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded) {
         std::fprintf(stderr, "[Geode] replaying the frame's recorded draws failed: %s\n",
-                     submitted.error().message.c_str());
+                     submitted.hasError() ? submitted.error().message.c_str()
+                                          : "host replay was refused before encoding");
         return false;
       }
     } else {
@@ -1644,7 +1663,55 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                    commandBuffer.error().message.c_str());
       return false;
     }
-    return openFrameGpuEncoder();
+    frameGpuEncoder = nullptr;
+    return !reopen || openFrameGpuEncoder();
+  }
+
+  void clearAcceptedFrameHost(geode::GeodeWgpuAdapterDevice::HostEncoderLease acceptedLease) {
+    device->adapterDevice().clearHostCommandEncoderRotation(acceptedLease);
+    device->adapterDevice().clearHostCommandEncoder(acceptedLease);
+    frameCommandEncoder.reset();
+    frameHostEncoderLease.reset();
+  }
+
+  std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> publishFilterChunkReplacement(
+      geode::GeodeWgpuAdapterDevice::HostEncoderLease acceptedLease) {
+    wgpu::CommandEncoderDescriptor descriptor = {};
+    descriptor.label = wgpuLabel("RendererGeodeFilterChunkCE");
+    geode::ScopedWgpuHandle<wgpu::CommandEncoder> replacement(
+        device->device().createCommandEncoder(descriptor));
+    if (!replacement || device->isDeviceLost()) return std::nullopt;
+    frameCommandEncoder = std::move(replacement);
+    return device->adapterDevice().replaceHostCommandEncoder(acceptedLease,
+                                                             frameCommandEncoder.get());
+  }
+
+  geode::GeodeWgpuAdapterDevice::HostRotationResult rotateFrameCommandEncoderForFilter(
+      geode::GeodeWgpuAdapterDevice::HostEncoderLease expected) {
+    using RotationResult = geode::GeodeWgpuAdapterDevice::HostRotationResult;
+    using RotationStage = geode::GeodeWgpuAdapterDevice::HostRotationStage;
+    if (!frameHostEncoderLease.has_value() || *frameHostEncoderLease != expected ||
+        !frameCommandEncoder ||
+        !device->adapterDevice().hostCommandEncoderIs(frameCommandEncoder.get())) {
+      return {};
+    }
+    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(frameCommandEncoder.get().finish());
+    if (!commands) return {};
+    device->queue().submit(1, &commands.get());
+    device->countSubmit();
+    device->adapterDevice().notifyHostSubmitted(expected);
+    frameFinishedEncoders.clear();
+    frameGpuEncoders.clear();
+    frameGpuEncoder = nullptr;
+
+    std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> replacementLease =
+        publishFilterChunkReplacement(expected);
+    if (!replacementLease.has_value()) {
+      clearAcceptedFrameHost(expected);
+      return RotationResult{RotationStage::QueueAcceptedReplacementFailed, std::nullopt};
+    }
+    frameHostEncoderLease = *replacementLease;
+    return RotationResult{RotationStage::QueueAcceptedAndReplaced, replacementLease};
   }
 
   /// Close the runtime encoder after the frame command encoder it recorded into has been
@@ -1652,10 +1719,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void closeFrameGpuEncoderAfterSubmit() {
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
-    device->adapterDevice().notifyHostSubmitted(frameCommandEncoder.get());
-    if (device->adapterDevice().hostCommandEncoderIs(frameCommandEncoder.get())) {
-      device->adapterDevice().clearHostCommandEncoder();
+    if (frameHostEncoderLease.has_value()) {
+      device->adapterDevice().notifyHostSubmitted(*frameHostEncoderLease);
+      device->adapterDevice().clearHostCommandEncoderRotation(*frameHostEncoderLease);
+      device->adapterDevice().clearHostCommandEncoder(*frameHostEncoderLease);
     }
+    frameHostEncoderLease.reset();
   }
 
   /// Submits all source rendering and disables host replay before standalone filter execution.
@@ -1664,32 +1733,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       discardFrameGpuEncoder();
       return false;
     }
-    if (!frameCommandEncoder || !flushFrameGpuEncoder()) {
+    if (!frameCommandEncoder || !replayFrameGpuEncoder(false)) {
       discardFrameGpuEncoder();
       return false;
     }
-    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(frameCommandEncoder.get().finish());
-    if (!commands) {
-      discardFrameGpuEncoder();
-      return false;
-    }
-    device->queue().submit(1, &commands.get());
-    device->countSubmit();
-    closeFrameGpuEncoderAfterSubmit();
-    frameCommandEncoder.reset();
-    frameFinishedEncoders.clear();
-    return !device->adapterDevice().hasHostCommandEncoder();
+    return true;
   }
 
   /// Opens the fresh raw/runtime encoder pair that records the post-filter composite.
   [[nodiscard]] bool restoreFrameAfterFilter() {
     if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
     if (!device || device->isDeviceLost()) return false;
-    wgpu::CommandEncoderDescriptor descriptor = {};
-    descriptor.label = wgpuLabel("RendererGeodePostFilterCE");
-    frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
-    if (!frameCommandEncoder || device->isDeviceLost() || !openFrameGpuEncoder() ||
-        device->isDeviceLost()) {
+    if (!frameCommandEncoder || !frameHostEncoderLease.has_value() || device->isDeviceLost() ||
+        !openFrameGpuEncoder() || device->isDeviceLost()) {
       discardFrameGpuEncoder();
       return false;
     }
@@ -1698,9 +1754,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Abandon this frame without completing any other renderer's recorded work.
   void discardFrameGpuEncoder() {
-    if (device && frameCommandEncoder) {
-      device->adapterDevice().notifyHostDiscarded(frameCommandEncoder.get());
+    if (device && frameHostEncoderLease.has_value()) {
+      device->adapterDevice().clearHostCommandEncoderRotation(*frameHostEncoderLease);
+      device->adapterDevice().notifyHostDiscarded(*frameHostEncoderLease);
     }
+    frameHostEncoderLease.reset();
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandEncoder.reset();
@@ -2363,15 +2421,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       retainFailedFilterTexture(std::move(localTexture), localDesc);
       retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
       frame.localRasterRequiredForBudget = true;
-      if (!frameCommandEncoder && !restoreFrameAfterFilter()) {
+      if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
         device->markDeviceLost("frame encoder could not be restored after filter suspension");
       }
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return TransformedFilterResult::FrameAbandoned;
     }
-    geode::FilterExecutionResult localFiltered =
-        filterEngine->execute(frame.filterGraph, localTexture, localDesc, localFilterRegion,
-                              localDeviceFromFilter, *this, nullptr, frame.localFilterPlan);
+    geode::FilterExecutionResult localFiltered = filterEngine->execute(
+        frame.filterGraph, localTexture, localDesc, localFilterRegion, localDeviceFromFilter, *this,
+        nullptr, frame.localFilterPlan, frameHostEncoderLease);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
@@ -2431,9 +2489,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     } else {
       filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
                                        frame.filterRegion, bufferDeviceFromFilter, *this, nullptr,
-                                       frame.fullFilterPlan);
+                                       frame.fullFilterPlan, frameHostEncoderLease);
     }
-    if (!frameCommandEncoder && !restoreFrameAfterFilter()) {
+    if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       filterExecutionBudget->release(frame.filterReservation);
       retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);

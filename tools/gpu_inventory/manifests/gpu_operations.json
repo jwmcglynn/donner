@@ -991,9 +991,12 @@
     "donner/svg/renderer/geode/tests/GeodeFilterEngine_tests.cc": {
       "operations": [
         "createCommandEncoder",
-        "createTexture"
+        "createTexture",
+        "finish",
+        "submit"
       ],
       "wgpuCppTokens": [
+        "CommandBuffer",
         "CommandEncoder"
       ]
     },
