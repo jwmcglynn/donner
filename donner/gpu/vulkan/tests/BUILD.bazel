@@ -393,4 +393,25 @@ donner_cc_test(
     ],
 )
 
+# The Vulkan presentation slice: a headless surface and its swapchain driven through the runtime's
+# surface hooks. Headless because presentation is the part of the runtime a machine with no display
+# cannot otherwise exercise, and the part whose synchronization is easiest to get wrong; a loader
+# without VK_EXT_headless_surface skips, naming it.
+donner_cc_test(
+    name = "vulkan_surface_tests",
+    srcs = ["VulkanSurface_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+        "@vulkan_headers",
+    ],
+)
+
 donner_package()

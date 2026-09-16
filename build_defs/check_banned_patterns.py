@@ -228,6 +228,11 @@ _BANNED_CHARACTERS: List[_BannedCharacter] = [
         "em dash",
         "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
     ),
+    _BannedCharacter(
+        "\u2015",
+        "horizontal bar",
+        "Use ASCII '-' in source text; spell intentional Unicode as an escaped code point.",
+    ),
 ]
 
 _BANNED_CHARACTERS += [
