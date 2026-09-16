@@ -454,6 +454,83 @@ TEST_F(RendererGeodeTest, TransformedFilterFailureUnwindsAnOpenPatternTile) {
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
 }
 
+components::FilterGraph MultiChunkMorphologyGraph() {
+  using namespace components;
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  for (size_t index = 0; index != 5; ++index) {
+    FilterNode node;
+    node.primitive = filter_primitive::Morphology{
+        .op = filter_primitive::Morphology::Operator::Dilate, .radiusX = 256, .radiusY = 256};
+    graph.nodes.push_back(std::move(node));
+  }
+  return graph;
+}
+
+TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  const components::FilterGraph graph = MultiChunkMorphologyGraph();
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  size_t acceptedChunks = 0;
+  device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
+    acceptedChunks = chunk;
+    if (chunk == 1) device->markDeviceLost("injected ordinary filter chunk loss");
+  });
+
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  const size_t retainedAfterLoss = renderer.failedFilterTextureCountForTesting();
+  const uint64_t submitsAfterLoss = device->counters()->submits;
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.popFilterLayer();
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterLoss));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsAfterLoss));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  const components::FilterGraph graph = MultiChunkMorphologyGraph();
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  size_t acceptedChunks = 0;
+  device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
+    acceptedChunks = chunk;
+    if (chunk == 1) device->markDeviceLost("injected transformed filter chunk loss");
+  });
+
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  const size_t retainedAfterLoss = renderer.failedFilterTextureCountForTesting();
+  const uint64_t submitsAfterLoss = device->counters()->submits;
+  EXPECT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+              testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterLoss));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsAfterLoss));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
