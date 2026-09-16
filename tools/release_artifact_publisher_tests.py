@@ -89,6 +89,17 @@ class PublishAssetsTest(unittest.TestCase):
         self.assertIn("POST", run.call_args.args[0])
 
     @mock.patch("tools.release_artifact_publisher.subprocess.run")
+    def test_successful_upload_with_wrong_published_digest_fails(self, run):
+        run.side_effect = [
+            self.completed(stdout="[]"),
+            self.completed(),
+            self.completed(stdout=self.assets({"name": self.path.name, "digest": "sha256:wrong"})),
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "different digest"):
+            self.publisher.publish([self.path])
+
+    @mock.patch("tools.release_artifact_publisher.subprocess.run")
     def test_lost_success_response_is_recovered_from_published_digest(self, run):
         digest = publisher.sha256_digest(self.path)
         run.side_effect = [
