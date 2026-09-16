@@ -20,8 +20,6 @@ jobs:
       run_id: ${{ steps.source.outputs.run_id }}
       attempt: ${{ steps.source.outputs.attempt }}
       artifact: ${{ steps.source.outputs.artifact }}
-      build_linux: ${{ steps.source.outputs.build_linux }}
-      build_macos: ${{ steps.source.outputs.build_macos }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -34,13 +32,11 @@ jobs:
       - name: Require preflight for the exact release source
         id: source
         run: |
-          python3 -B -m tools.bcr_release plan-release \
-            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" \
-            --release-run-id "$GITHUB_RUN_ID" --github-output "$GITHUB_OUTPUT"
+          python3 -B -m tools.bcr_release select-preflight \
+            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
 
   linux:
     needs: resolve-source
-    if: needs.resolve-source.outputs.build_linux == 'true'
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -56,15 +52,26 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
 
+      - name: Resolve retained platform artifacts
+        id: binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B -m tools.bcr_release plan-binaries --commit "$GITHUB_SHA" \
+            --release-run-id "$GITHUB_RUN_ID" --github-output "$GITHUB_OUTPUT"
+
       - name: Install Clang dependencies
+        if: steps.binary.outputs.build_linux == 'true'
         run: |
           sudo apt-get install -y libncurses-dev
 
       - uses: bazel-contrib/setup-bazel@0.19.0
+        if: steps.binary.outputs.build_linux == 'true'
         with:
           bazelisk-cache: true
 
       - name: Cache Bazel
+        if: steps.binary.outputs.build_linux == 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -74,6 +81,7 @@ jobs:
             ${{ runner.os }}-bazel-
 
       - name: Build Binaries
+        if: steps.binary.outputs.build_linux == 'true'
         run: |
           mkdir release
           bazelisk build --lockfile_mode=off -c opt //tools/ci:release_svg
@@ -86,6 +94,7 @@ jobs:
           } > release/donner-svg_linux_x86_64.provenance
 
       - name: Upload immutable build artifact
+        if: steps.binary.outputs.build_linux == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: donner-svg-linux-x86-64-${{ github.sha }}
@@ -95,7 +104,6 @@ jobs:
 
   macos:
     needs: resolve-source
-    if: needs.resolve-source.outputs.build_macos == 'true'
     runs-on: macos-26
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -111,11 +119,21 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
 
+      - name: Resolve retained platform artifacts
+        id: binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B -m tools.bcr_release plan-binaries --commit "$GITHUB_SHA" \
+            --release-run-id "$GITHUB_RUN_ID" --github-output "$GITHUB_OUTPUT"
+
       - uses: bazel-contrib/setup-bazel@0.19.0
+        if: steps.binary.outputs.build_macos == 'true'
         with:
           bazelisk-cache: true
 
       - name: Cache Bazel
+        if: steps.binary.outputs.build_macos == 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -125,6 +143,7 @@ jobs:
             ${{ runner.os }}-bazel-
 
       - name: Build Binaries
+        if: steps.binary.outputs.build_macos == 'true'
         run: |
           mkdir release
           bazelisk build --lockfile_mode=off -c opt //tools/ci:release_svg
@@ -137,6 +156,7 @@ jobs:
           } > release/donner-svg_darwin_arm64.provenance
 
       - name: Upload immutable build artifact
+        if: steps.binary.outputs.build_macos == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: donner-svg-darwin-arm64-${{ github.sha }}
@@ -145,12 +165,6 @@ jobs:
           retention-days: 90
 
   publish-release-artifacts:
-    if: >-
-      !cancelled() && needs.resolve-source.result == 'success' &&
-      (needs.linux.result == 'success' ||
-       (needs.resolve-source.outputs.build_linux == 'false' && needs.linux.result == 'skipped')) &&
-      (needs.macos.result == 'success' ||
-       (needs.resolve-source.outputs.build_macos == 'false' && needs.macos.result == 'skipped'))
     needs: [resolve-source, linux, macos]
     runs-on: ubuntu-24.04
     env:

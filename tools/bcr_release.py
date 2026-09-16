@@ -176,18 +176,22 @@ def plan_submission(release_run_id: str) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    select = commands.add_parser("plan-release")
+    select = commands.add_parser("select-preflight")
     select.add_argument("--commit", required=True)
     select.add_argument("--tag", required=True)
-    select.add_argument("--release-run-id", required=True)
     select.add_argument("--github-output")
+    binaries = commands.add_parser("plan-binaries")
+    binaries.add_argument("--commit", required=True)
+    binaries.add_argument("--release-run-id", required=True)
+    binaries.add_argument("--github-output")
     plan = commands.add_parser("plan-submission")
     plan.add_argument("--release-run-id", required=True)
     plan.add_argument("--github-output")
     args = parser.parse_args()
-    if args.command == "plan-release":
+    if args.command == "select-preflight":
         result = select_preflight(args.commit, args.tag)
-        result.update(binary_build_plan(args.commit, args.release_run_id))
+    elif args.command == "plan-binaries":
+        result = binary_build_plan(args.commit, args.release_run_id)
     else:
         result = plan_submission(args.release_run_id)
     bcr_source.outputs(result, args.github_output)

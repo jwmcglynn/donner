@@ -96,8 +96,8 @@ archive/provenance rejection paths and the validator's download boundary.
 
 ### Retry without replacing a release
 
-- For a transient failure, rerun failed Release jobs. The source gate checks retained binary artifacts
-  in the same workflow run. A platform builds only when its artifact is absent, so recovery also
+- For a transient failure, rerun failed Release jobs. Each platform job checks retained binary artifacts
+  in the same workflow run, including when only failed jobs are rerun. A platform builds only when its artifact is absent, so recovery also
   works when preflight or one platform failed before producing an artifact. Existing platform
   artifacts are reused and verified; expired or ambiguous artifacts require manual recovery. Do not
   retag or rebuild a retained artifact.
