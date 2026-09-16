@@ -350,7 +350,7 @@ js_test(
         "//third_party/emdawnwebgpu:webgpu/src/library_webgpu.js",
         "//tools:run-browser-ci.sh",
     ],
-    entry_point = "selector.spec.mjs",
+    entry_point = "selector-tests.mjs",
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
 )
