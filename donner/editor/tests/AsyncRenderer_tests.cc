@@ -140,8 +140,6 @@ std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int 
   return elements;
 }
 
-// Polling/wait helpers (PollForResult, PollUntil, WaitUntil, kPollInterval) are
-// shared across the async suites via AsyncTestPolling.h (issue #1218).
 std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
   // Poll up to 30s. The expensive cases (splash high-zoom render) finish in a
   // few seconds on a fast machine but can take longer on a loaded self-hosted
