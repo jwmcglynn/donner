@@ -110,8 +110,9 @@ archive/provenance rejection paths and the validator's download boundary.
 ### Maintainer setup
 
 1. Maintain the fork `jwmcglynn/bazel-central-registry`.
-2. Store `BCR_PUBLISH_TOKEN` as a repository Actions secret. Use a fine-grained token for that fork
-   with Contents and Pull requests read/write permissions, as required by Publish-to-BCR. Track its
+2. Store `BCR_PUBLISH_TOKEN` as a repository Actions secret. Use a classic token with
+   `public_repo` scope, as required by Publish-to-BCR to open upstream public pull requests. A
+   fine-grained token can push the fork but is not supported by this workflow for opening the PR. Track its
    expiry. The secret appears only in the separate BCR publication job, never preflight or Release.
 3. `.bcr/config.yml` declares the module root. `.bcr/metadata.template.json` records the maintainer's
    GitHub login and numeric ID. `.bcr/source.template.json` names the stable asset and strip prefix.

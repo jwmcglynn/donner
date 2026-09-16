@@ -16,7 +16,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: bcr-${{ github.event.workflow_run.id || inputs.release_run_id }}
+  group: bcr-publication
   cancel-in-progress: false
 
 jobs:
