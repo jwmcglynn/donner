@@ -30,6 +30,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -54,6 +55,10 @@ using ::testing::Contains;
 using ::testing::DoubleNear;
 using ::testing::Field;
 using ::testing::Gt;
+using tests::kPollInterval;
+using tests::PollForResult;
+using tests::PollUntil;
+using tests::WaitUntil;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -135,69 +140,8 @@ std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int 
   return elements;
 }
 
-// Every wait in this file is the same loop: poll, stop when it yields, sleep a
-// millisecond, give up at a bound. Only the bound and the predicate differed,
-// and the loop was written out ~40 times.
-constexpr auto kPollInterval = std::chrono::milliseconds(1);
-
-// Polls until `poll()` yields a value, or `maxPolls` intervals elapse.
-//
-// Iteration-bounded rather than clock-bounded on purpose. The callers this
-// replaced counted iterations, and each iteration also spends the poll's own
-// time, so a wall-clock deadline of `maxPolls * kPollInterval` would be
-// strictly TIGHTER than what they had - a silent timeout reduction is exactly
-// the kind of change that turns into a flake on a loaded runner months later.
-template <typename PollFn>
-auto PollForResult(PollFn&& poll, int maxPolls) -> decltype(poll()) {
-  for (int i = 0; i < maxPolls; ++i) {
-    if (auto result = poll(); result.has_value()) {
-      return result;
-    }
-    std::this_thread::sleep_for(kPollInterval);
-  }
-  return std::nullopt;
-}
-
-// Polls until `poll()` yields a value, or `deadline` passes.
-template <typename PollFn>
-auto PollForResult(PollFn&& poll, std::chrono::steady_clock::time_point deadline)
-    -> decltype(poll()) {
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (auto result = poll(); result.has_value()) {
-      return result;
-    }
-    std::this_thread::sleep_for(kPollInterval);
-  }
-  return std::nullopt;
-}
-
-// Waits until `isDone()` holds or `deadline` passes, without polling anything.
-// Returns whether it finished rather than timed out.
-template <typename DoneFn>
-bool WaitUntil(DoneFn&& isDone, std::chrono::steady_clock::time_point deadline) {
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (isDone()) {
-      return true;
-    }
-    std::this_thread::sleep_for(kPollInterval);
-  }
-  return isDone();
-}
-
-// Runs `poll()` for its side effects until `isDone()` holds or `deadline`
-// passes. Returns whether it finished rather than timed out.
-template <typename PollFn, typename DoneFn>
-bool PollUntil(PollFn&& poll, DoneFn&& isDone, std::chrono::steady_clock::time_point deadline) {
-  while (std::chrono::steady_clock::now() < deadline) {
-    poll();
-    if (isDone()) {
-      return true;
-    }
-    std::this_thread::sleep_for(kPollInterval);
-  }
-  return false;
-}
-
+// Polling/wait helpers (PollForResult, PollUntil, WaitUntil, kPollInterval) are
+// shared across the async suites via AsyncTestPolling.h (issue #1218).
 std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
   // Poll up to 30s. The expensive cases (splash high-zoom render) finish in a
   // few seconds on a fast machine but can take longer on a loaded self-hosted

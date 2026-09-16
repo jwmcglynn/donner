@@ -18,6 +18,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/EditorSampleCatalog.h"
+#include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
@@ -34,6 +35,8 @@ using testing::ByMove;
 using testing::Invoke;
 using testing::NiceMock;
 using testing::Return;
+using tests::PollForResult;
+using tests::WaitUntil;
 
 struct BlockingSnapshotState {
   std::atomic<bool> entered{false};
@@ -101,26 +104,8 @@ constexpr std::string_view kFilteredSvg = R"svg(
 
 std::optional<SampleThumbnailRenderResult> WaitForThumbnailResult(
     AsyncRenderer& renderer, std::chrono::seconds timeout = 5s) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (std::optional<SampleThumbnailRenderResult> result = renderer.pollSampleThumbnailResult()) {
-      return result;
-    }
-    std::this_thread::sleep_for(1ms);
-  }
-  return std::nullopt;
-}
-
-template <typename Predicate>
-bool WaitUntil(Predicate&& predicate, std::chrono::seconds timeout = 5s) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (predicate()) {
-      return true;
-    }
-    std::this_thread::sleep_for(1ms);
-  }
-  return false;
+  return PollForResult([&] { return renderer.pollSampleThumbnailResult(); },
+                       std::chrono::steady_clock::now() + timeout);
 }
 
 std::array<std::uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
@@ -184,7 +169,8 @@ TEST(SampleThumbnailAsyncTest, MainDocumentPreemptsThumbnailDuringSnapshotReadba
 
   AsyncRenderer renderer;
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(51u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return snapshotState->entered.load(std::memory_order_acquire); }))
+  ASSERT_TRUE(WaitUntil([&] { return snapshotState->entered.load(std::memory_order_acquire); },
+                        std::chrono::steady_clock::now() + 5s))
       << "Expected the thumbnail to reach its snapshot/readback phase";
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
@@ -240,7 +226,8 @@ TEST(SampleThumbnailAsyncTest, FirstOffscreenCreationCompletesBeforeForegroundHa
 
   AsyncRenderer renderer;
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(52u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return gate->entered.load(std::memory_order_acquire); }));
+  ASSERT_TRUE(WaitUntil([&] { return gate->entered.load(std::memory_order_acquire); },
+                        std::chrono::steady_clock::now() + 5s));
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
@@ -261,17 +248,20 @@ TEST(SampleThumbnailAsyncTest, FirstOffscreenCreationCompletesBeforeForegroundHa
   renderer.cancelSampleThumbnailWork();
   renderer.requestRender(mainRequest);
   gate->release.store(true, std::memory_order_release);
-  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().completed == 1u; }));
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().completed == 1u; },
+                        std::chrono::steady_clock::now() + 5s));
 
   const SampleThumbnailRenderStats stats = renderer.sampleThumbnailRenderStats();
   EXPECT_EQ(stats.foregroundHandoffWaits, 1u);
   EXPECT_TRUE(stats.firstAttemptCompleted);
 
   std::optional<RenderResult> mainResult;
-  ASSERT_TRUE(WaitUntil([&] {
-    mainResult = renderer.pollResult();
-    return mainResult.has_value();
-  }));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        mainResult = renderer.pollResult();
+        return mainResult.has_value();
+      },
+      std::chrono::steady_clock::now() + 5s));
   EXPECT_EQ(mainResult->version, 3u);
 }
 
@@ -306,7 +296,8 @@ TEST(SampleThumbnailAsyncTest, ShutdownCancelsActiveThumbnailJoinsPromptlyAndSup
   renderer.setWakeCallback([&] { wakeCount.fetch_add(1, std::memory_order_relaxed); });
   renderer.setSampleThumbnailRenderDelayForTesting(5s);
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(62u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; }));
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; },
+                        std::chrono::steady_clock::now() + 5s));
 
   const auto start = std::chrono::steady_clock::now();
   renderer.shutdown();
@@ -413,7 +404,8 @@ TEST(SampleThumbnailAsyncTest, MainDocumentRenderPreemptsAndStaysAheadOfLowPrior
   AsyncRenderer renderer;
   renderer.setSampleThumbnailRenderDelayForTesting(250ms);
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(31u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; }))
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; },
+                        std::chrono::steady_clock::now() + 5s))
       << "Expected the first thumbnail to enter the worker before posting main-document work";
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
@@ -475,7 +467,8 @@ TEST(SampleThumbnailAsyncTest, CompletionWakesOnceThenWorkerRemainsQuiescent) {
 
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(41u, kRedSvg, thumbnailRoot)));
   ASSERT_TRUE(WaitForThumbnailResult(renderer).has_value());
-  ASSERT_TRUE(WaitUntil([&] { return wakeCount.load(std::memory_order_relaxed) > 0; }));
+  ASSERT_TRUE(WaitUntil([&] { return wakeCount.load(std::memory_order_relaxed) > 0; },
+                        std::chrono::steady_clock::now() + 5s));
   EXPECT_EQ(wakeCount.load(std::memory_order_relaxed), 1)
       << "Each completed thumbnail must issue exactly one host wake";
 
@@ -496,7 +489,9 @@ TEST(SampleThumbnailAsyncTest, FontAdoptionWaitsForHeldAuxiliaryResult) {
   request.fontWakeRevision = 12;
   ASSERT_EQ(renderer.requestSampleThumbnail(std::move(request)), true);
   EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
-  ASSERT_EQ(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().resultReady; }), true);
+  ASSERT_EQ(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().resultReady; },
+                      std::chrono::steady_clock::now() + 5s),
+            true);
   EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
   const auto result = renderer.pollSampleThumbnailResult();
   ASSERT_EQ(result.has_value(), true);
