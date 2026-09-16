@@ -1382,6 +1382,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::function<void()> offscreenCreationHookForTesting;
   bool failFilterFrameSuspensionForTesting = false;
   bool failFilterFrameRestoreForTesting = false;
+  bool frameRecordingAbandoned = false;
 
   // Per-frame perf counters. Reset at `beginFrame`, read via
   // `lastFrameTimings()`; `GeodePerf_tests.cc` pins their ceilings.
@@ -1704,6 +1705,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+  void abandonFrameRecordingAfterFilterFailure(const wgpu::Texture& savedTarget) {
+    target = savedTarget;
+    encoder.reset();
+    discardFrameGpuEncoder();
+    retainPendingFrameReleasesAfterFailure();
+    frameRecordingAbandoned = true;
+  }
+
   std::unique_ptr<geode::GeoEncoder> encoder;
   std::vector<std::unique_ptr<geode::GeoEncoder>> frameFinishedEncoders;
 
@@ -1797,6 +1806,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::optional<PatternPaintSlot> savedPatternStrokePaint;
   };
   std::vector<PatternStackFrame> patternStack;
+
+  void promotePatternTile(PatternStackFrame& frame, bool forStroke) {
+    PatternPaintSlot slot;
+    slot.tile = std::move(frame.tileTexture);
+    slot.tileHandle =
+        &importTexture(slot.tile.get(), textureFormat,
+                       wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                           wgpu::TextureUsage::CopySrc);
+    slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
+    slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
+
+    patternFillPaint = std::move(frame.savedPatternFillPaint);
+    patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    std::optional<PatternPaintSlot>& targetSlot = forStroke ? patternStrokePaint : patternFillPaint;
+    if (targetSlot.has_value() && targetSlot->tile) {
+      device->deferDestroy(targetSlot->tile.take());
+    }
+    targetSlot = std::move(slot);
+  }
 
   // --------------------------------------------------------------------
   // Transient-texture pool.
@@ -1948,6 +1976,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   };
   std::vector<PendingRelease> framePendingReleases;
   std::vector<PendingRelease> failedFilterTextures;
+  std::vector<geode::ScopedWgpuHandle<wgpu::Texture>> failedRawTextures;
 
   void releaseTextureAtFrameEnd(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
@@ -1964,6 +1993,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void retainFailedFilterTexture(gpu::Texture texture,
                                  const gpu::TextureDescriptor& desc) override {
     if (texture.isValid()) failedFilterTextures.push_back({std::move(texture), desc});
+  }
+
+  void retainPendingFrameReleasesAfterFailure() {
+    for (PendingRelease& pending : framePendingReleases) {
+      failedFilterTextures.push_back(std::move(pending));
+    }
+    framePendingReleases.clear();
   }
 
   void drainPendingReleases() {
@@ -2268,10 +2304,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  bool tryCompositeTransformedFilter(FilterStackFrame& frame) {
+  enum class TransformedFilterResult { NotApplicable, Composited, FrameAbandoned };
+
+  TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
     if (!frame.transformedCaptureReserved || !frame.localFilterPlan || !filterEngine ||
         frame.filterGraph.empty()) {
-      return false;
+      return TransformedFilterResult::NotApplicable;
     }
     const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
@@ -2280,7 +2318,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         frame.filterGraph, frame.filterRegion, frame.deviceFromFilter, buffer,
         !frame.localRasterRequiredForBudget);
     if (!geometry.has_value()) {
-      return false;
+      return TransformedFilterResult::NotApplicable;
     }
 
     const gpu::TextureDescriptor localDesc{
@@ -2290,7 +2328,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
             gpu::TextureUsage::CopySrc};
     gpu::Texture localTexture = acquireTexture(localDesc);
     if (!localTexture.isValid()) {
-      return false;
+      return TransformedFilterResult::NotApplicable;
     }
 
     const Transform2d filterFromDevice = frame.deviceFromFilter.inverse();
@@ -2322,7 +2360,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (!frameCommandEncoder && !restoreFrameAfterFilter()) {
         device->markDeviceLost("frame encoder could not be restored after filter suspension");
       }
-      return false;
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      return TransformedFilterResult::FrameAbandoned;
     }
     geode::FilterExecutionResult localFiltered =
         filterEngine->execute(frame.filterGraph, localTexture, localDesc, localFilterRegion,
@@ -2332,7 +2371,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
       retainFailedFilterTexture(std::move(localTexture), localDesc);
       retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
-      return true;
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      return TransformedFilterResult::FrameAbandoned;
     }
 
     const Transform2d deviceFromLocal =
@@ -2359,7 +2399,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
     frame.localRasterRequiredForBudget = false;
-    return true;
+    return TransformedFilterResult::Composited;
   }
 
   /// Executes one ordinary filter graph between the submitted source and following frame encoder.
@@ -2392,8 +2432,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       filterExecutionBudget->release(frame.filterReservation);
       retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);
       retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
-      target = frame.savedTarget;
-      encoder.reset();
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return std::nullopt;
     }
     return filtered;
@@ -4621,6 +4660,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     discardFrameGpuEncoder();
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
+    frameRecordingAbandoned = false;
     if (frameResourceScopeDepth == 0) {
       resetOwnedFrameBudgets();
     }
@@ -4665,8 +4705,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   bool prepareFrameTarget() {
-    if (!device || !pipeline || !gradientPipeline || !imagePipeline || pixelWidth <= 0 ||
-        pixelHeight <= 0) {
+    if (!device || device->isDeviceLost() || !pipeline || !gradientPipeline || !imagePipeline ||
+        pixelWidth <= 0 || pixelHeight <= 0) {
       retireOwnedTargetAtFrameBoundary();
       return false;
     }
@@ -5493,7 +5533,11 @@ void RendererGeode::popClip() {
     // before the submit.
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
-      impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+      if (impl_->frameRecordingAbandoned) {
+        impl_->retainFailedFilterTexture(std::move(release.texture), release.desc);
+      } else {
+        impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+      }
     }
     entry.maskLayerTextures.clear();
     impl_->clipStack.pop_back();
@@ -5569,6 +5613,12 @@ void RendererGeode::popIsolatedLayer() {
 
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
+  }
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->encoder.reset();
+    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    return;
   }
 
   // Finish the layer's render pass so the texture contents are ready.
@@ -5716,6 +5766,13 @@ void RendererGeode::popFilterLayer() {
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
   }
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->encoder.reset();
+    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->filterExecutionBudget->release(frame.filterReservation);
+    return;
+  }
 
   // Finish the filter layer's render pass so the texture is ready.
   if (impl_->encoder) {
@@ -5731,9 +5788,15 @@ void RendererGeode::popFilterLayer() {
                 Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
           : frame.deviceFromFilter;
 
-  if (impl_->tryCompositeTransformedFilter(frame)) {
+  const Impl::TransformedFilterResult transformed = impl_->tryCompositeTransformedFilter(frame);
+  if (transformed == Impl::TransformedFilterResult::Composited) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    return;
+  }
+  if (transformed == Impl::TransformedFilterResult::FrameAbandoned) {
+    impl_->filterExecutionBudget->release(frame.filterReservation);
+    impl_->retainPendingFrameReleasesAfterFailure();
     return;
   }
 
@@ -5898,6 +5961,13 @@ void RendererGeode::popMask() {
     // Placeholder frame from the headless path - nothing to do.
     return;
   }
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->encoder.reset();
+    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
+    return;
+  }
 
   // Finish the content encoder so its target is ready to sample.
   if (impl_->encoder) {
@@ -5938,7 +6008,8 @@ void RendererGeode::popMask() {
 }
 
 bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
-  if (impl_->rejectedFilterDepth != 0 || !impl_->device || !impl_->pipeline) {
+  if (impl_->frameRecordingAbandoned || impl_->frameGpuEncoder == nullptr ||
+      impl_->rejectedFilterDepth != 0 || !impl_->device || !impl_->pipeline) {
     return false;
   }
 
@@ -6081,6 +6152,14 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // filter region again.
   impl_->clipStack = std::move(frame.savedClipStack);
 
+  if (impl_->frameRecordingAbandoned) {
+    impl_->encoder.reset();
+    impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
+    impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    if (frame.tileTexture) impl_->failedRawTextures.push_back(std::move(frame.tileTexture));
+    return;
+  }
+
   // Create a fresh encoder for the outer target. The old outer encoder was
   // finished in `beginPatternTile`; the new one loads the current contents
   // of the target (no clear), since we don't want to wipe previously-drawn
@@ -6131,26 +6210,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->encoder.reset();
   }
 
-  // Stash the completed tile in raster-pixel space, matching the texture sampled by the shader.
-  Impl::PatternPaintSlot slot;
-  slot.tile = std::move(frame.tileTexture);
-  slot.tileHandle =
-      &impl_->importTexture(slot.tile.get(), impl_->textureFormat,
-                            wgpu::TextureUsage::RenderAttachment |
-                                wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
-  slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
-  slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
-
-  // Restore the pattern slots pending at `beginPatternTile`, then overwrite the slot this tile
-  // was recorded for (releasing any stale tile texture it held).
-  impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
-  impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-  std::optional<Impl::PatternPaintSlot>& targetSlot =
-      forStroke ? impl_->patternStrokePaint : impl_->patternFillPaint;
-  if (targetSlot.has_value() && targetSlot->tile) {
-    impl_->device->deferDestroy(targetSlot->tile.take());
-  }
-  targetSlot = std::move(slot);
+  impl_->promotePatternTile(frame, forStroke);
 }
 
 void RendererGeode::setPaint(const PaintParams& paint) {
@@ -7697,7 +7757,7 @@ void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
 }
 
 size_t RendererGeode::failedFilterTextureCountForTesting() const {
-  return impl_->failedFilterTextures.size();
+  return impl_->failedFilterTextures.size() + impl_->failedRawTextures.size();
 }
 
 bool RendererGeode::hasActiveDrawingEncoderForTesting() const {

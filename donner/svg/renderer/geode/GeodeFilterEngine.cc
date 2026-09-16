@@ -122,7 +122,8 @@ struct FilterResourceArena {
     for (auto& owned : textures_) {
       // A detached output left its record behind with a null handle; the caller owns it now.
       if (owned.texture.isValid()) {
-        if (executionFailed_ && (submittedChunks_ != 0 || submissionUncertain_)) {
+        if (executionFailed_ && (submissionUncertain_ ||
+                                 (submittedChunks_ != 0 && completedChunks_ != submittedChunks_))) {
           textureAllocator_.retainFailedFilterTexture(std::move(owned.texture), owned.desc);
         } else {
           textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
@@ -371,7 +372,21 @@ struct FilterResourceArena {
 
   FilterExecutionMemory memory() const { return {textureBytes, 0}; }
 
-  void markExecutionFailed() { executionFailed_ = true; }
+  void markExecutionFailed() {
+    executionFailed_ = true;
+    if (submissionUncertain_ || submittedChunks_ == completedChunks_ || device_.isDeviceLost()) {
+      return;
+    }
+#ifdef __EMSCRIPTEN__
+    // The browser implementation of waitForQueueIdle only yields once; it cannot prove that
+    // accepted work stopped referencing this arena's backing.
+    device_.markDeviceLost("failed browser filter execution has unproven accepted work");
+#else
+    if (device_.waitForQueueIdle() == GpuWaitResult::Complete) {
+      completedChunks_ = submittedChunks_;
+    }
+#endif
+  }
 
   /// Maximum compute/render passes recorded into one execution-owned command buffer before the
   /// arena finishes and submits it. Pathological filter graphs must not grow a single command
@@ -432,6 +447,7 @@ struct FilterResourceArena {
     // or accepted-work backing can be detached or returned to a reusable pool.
     if (device_.isVulkan()) {
       if (device_.waitForQueueIdle() != GpuWaitResult::Complete) return false;
+      completedChunks_ = submittedChunks_;
     }
     return true;
   }
@@ -451,6 +467,7 @@ private:
   size_t passesInCommandBuffer_ = 0;
   const std::function<void(size_t)>& chunkSubmittedHook_;
   size_t submittedChunks_ = 0;
+  size_t completedChunks_ = 0;
   bool executionFailed_ = false;
   bool submissionUncertain_ = false;
   /// Deques rather than vectors: the accessors above hand out references into these, and a
@@ -1923,6 +1940,11 @@ FilterExecutionResult GeodeFilterEngine::execute(
     const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
     svg::components::FilterExecutionBudget* executionBudget,
     std::optional<FilterTilePlan> admittedPlan) {
+  // Loss is terminal for this runtime. Refuse before the graph can allocate textures or record
+  // another chunk, which also bounds backing retained by an earlier uncertain execution.
+  if (device_.isDeviceLost()) {
+    return {};
+  }
   // Borrowed for the call: the caller owns the source graphic and its descriptor, and both
   // outlive the execution.
   const FilterTexture source{&sourceGraphic, &sourceGraphicDesc};
