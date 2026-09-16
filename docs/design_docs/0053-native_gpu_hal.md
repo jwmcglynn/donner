@@ -1,11 +1,11 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
 **Status:** Implementing. The shader compiler, native drawing and mapping, Metal and Vulkan
-surfaces, browser backend, and first filter-resource migration are merged. UI rendering and native
-shader linkage await integration; filter command recording has reviewed failure-path repairs and
-is completing qualification. Production ownership, presentation and dependency cutover remain open.\
+surfaces, browser backend, first filter-resource migration, and runtime UI renderer are merged.
+Native shader linkage and filter command recording are completing qualification. Production device
+ownership, frame-composition cleanup, presentation cutover and dependency removal remain open.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-15\
+**Updated:** 2026-09-16\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -42,29 +42,34 @@ first filter-intermediate slice ([#1268](https://github.com/jwmcglynn/donner/pul
 capabilities are integrated foundations; they do not by themselves complete the editor cutover.
 
 Results belong to the named source revisions. Later source changes need affected qualification;
-documentation-only updates need their own current-head checks. Vulkan surfaces are merged; UI and
-shader linkage remain open.
+documentation-only updates need their own current-head checks. Vulkan surfaces and the runtime UI
+renderer are merged. The UI follow-up, native shader linkage and filter command recording remain
+active delivery units.
 
-| Active unit | Current state | Remaining gate |
-| --- | --- | --- |
-| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) | Published `b6669a3e` resolves the Vulkan test-registration conflict while preserving both suites. All 678 runnable full-suite targets, five editor targets, graph and static checks, and independent source review pass. Current-head hosted CI is running. | Complete exact-candidate Vulkan UI execution, verify current CI/review/conflict state and obtain merge approval. |
-| [Native shader artifact linkage #1279](https://github.com/jwmcglynn/donner/pull/1279) | At `b7bcf145`, all 676 runnable full-suite targets, five editor targets, and all hosted checks pass, including the repaired Firefox pixel-classification test. Review threads are resolved and the source checkpoint has no textual conflicts. | Obtain merge approval and verify the current head/base and subsequent documentation checks before integration. Native production pixel qualification remains part of the later ownership cutover. |
-| Filter runtime command recording | Implemented but unpublished. Reviewed repairs abandon failed renderer frames safely, refuse later allocation on a lost device, and retire failed accepted work only after positive native completion. Causal red/green tests cover nested unwinding, next-frame refusal and repeated healthy post-submit refusal without retained growth. | Complete affected renderer/browser qualification and the Vulkan final-chunk timeout regression with its causal control, then publish the atomic unit. |
+| Active unit                                                                                                                                                               | Current state                                                                                                                                                                                                                                                                                                                                                | Remaining gate                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) and follow-up [#1284](https://github.com/jwmcglynn/donner/pull/1284) | PR #1267 is merged. Follow-up `8ab7a7b7` repairs invalidated font-atlas uploads and preserves retired backing and bindings through exact release. All 678 runnable full-suite targets, five editor targets, 78 affected macOS cases and the Vulkan UI case pass.                                                                                             | Complete hosted CI and review/conflict checks for #1284 before approved integration. Frame-composition migration and final dependency cleanup remain separate items below.                                                                                      |
+| [Native shader artifact linkage #1279](https://github.com/jwmcglynn/donner/pull/1279)                                                                                     | Native artifact selection and linkage are implemented. The Chromium drag oracle now isolates its unique moving target; all 18 composited tests pass. The browser target inventory correction passes all 61 affected contract subtests.                                                                                                                       | Complete full and hosted qualification. Firefox composited validation stopped at browser launch and provides no page-test evidence; the hosted browser workflow remains required. Native production pixel qualification depends on the later ownership cutover. |
+| Filter runtime command recording                                                                                                                                          | Integrated candidate `2a31336` passes 471 Linux cases with synchronization validation, ten applicable browser cases with three existing platform skips, and the exact emitted revision. A causal control proves that ignoring the final completion wait incorrectly returns output and reuses accepted backing. Source, failure-path and merge reviews pass. | Publish the reviewed unit, finish full/hosted qualification and review/conflict checks, and integrate after merge approval.                                                                                                                                     |
 
 ### Remaining work
 
-| Order | Unit | Completion boundary |
-| --- | --- | --- |
-| 1 | Active UI and shader-linkage pull requests | Complete current-head platform qualification, CI and review/conflict checks, and integrate only after merge approval. |
-| 2 | Filter runtime command recording | Qualify the reviewed failure-path repairs and native completion/timeout proof while preserving the 64-pass boundary and source-render/filter/composite order. |
-| 3 | Checkerboard target boundary | Accept a validated borrowed runtime texture and extent in the checkerboard pass; move raw external-target import to its presentation caller and preserve lifetime, device identity, format, usage, and host-encoder isolation. |
-| 4 | Texture-cache upload migration | Move bitmap and thumbnail uploads, border replication, clears, allocation reuse, and deferred retirement to runtime resources. |
-| 5 | Snapshot, target, and readback identity | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation. |
-| 6 | Device ownership plumbing | Make the selected runtime device the backend owner and move shared renderer services behind backend-neutral ownership before platform presentation callers switch. |
-| 7 | `EditorWindow` surface integration | Connect platform windows to acquired runtime textures and cover resize, minimized, outdated/lost, timeout, device-loss, and invalidation behavior. |
-| 8 | Browser production bridge cutover | Select the merged browser backend in the WebAssembly editor path and remove the C WebGPU wrapper only after its final consumer moves. |
-| 9 | Final platform selection | Select Metal, Vulkan, or browser as the default through one production path only after resources, UI, surfaces and browser presentation qualify together. |
-| 10 | Dependency removal and final audits | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits. |
+| Order | Unit                                                 | Completion boundary                                                                                                                                                                                                            |
+| ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | Active UI follow-up and shader-linkage pull requests | Complete current-head platform qualification, CI and review/conflict checks, and integrate only after merge approval.                                                                                                          |
+| 2     | Filter runtime command recording                     | Publish the qualified command-recording unit and complete full/hosted qualification while preserving the 64-pass boundary and source-render/filter/composite order.                                                            |
+| 3     | Checkerboard target boundary - **paused**            | Accept a validated borrowed runtime texture and extent in the checkerboard pass; move raw external-target import to its presentation caller and preserve lifetime, device identity, format, usage, and host-encoder isolation. |
+| 4     | Texture-cache upload migration - **paused**          | Move bitmap and thumbnail uploads, border replication, clears, allocation reuse, and deferred retirement to runtime resources.                                                                                                 |
+| 5     | Snapshot, target, and readback identity - **paused** | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation.                                                                                |
+| 6     | Device ownership plumbing - **paused**               | Make the selected runtime device the backend owner and move shared renderer services behind backend-neutral ownership before platform presentation callers switch.                                                             |
+| 7     | `EditorWindow` surface integration - **paused**      | Connect platform windows to acquired runtime textures and cover resize, minimized, outdated/lost, timeout, device-loss, and invalidation behavior.                                                                             |
+| 8     | Browser production bridge cutover - **paused**       | Select the merged browser backend in the WebAssembly editor path and remove the C WebGPU wrapper only after its final consumer moves.                                                                                          |
+| 9     | Final platform selection - **paused**                | Select Metal, Vulkan, or browser as the default through one production path only after resources, UI, surfaces and browser presentation qualify together.                                                                      |
+| 10    | Dependency removal and final audits - **paused**     | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits.                                                         |
+
+Rows 3-10 are paused. Current execution is limited to finishing the existing UI follow-up,
+shader-linkage and filter command-recording units. Remaining snapshot/readback migration depends on
+the unstarted device-ownership boundary and does not proceed independently.
 
 The shared fill, gradient, mask, image, and snapshot pipelines and `GeoEncoder` already use runtime
 resources. The checkerboard target caller is the next remaining shared-pipeline boundary.
@@ -92,15 +97,10 @@ resources. The checkerboard target caller is the next remaining shared-pipeline 
 
 ## Next Steps
 
-1. Keep the published source checkpoints, current-head CI, review threads and conflicts verified
-   until their separately approved integration.
-2. Complete qualification of repaired filter abandonment and failed-work retirement, including
-   native timeout proof, and publish that unit. Then move the checkerboard target boundary,
-   texture-cache uploads, and the remaining
-   snapshot, target and readback identity boundaries.
-3. Establish backend-neutral device ownership, then connect `EditorWindow` and the browser editor
-   to their runtime surfaces. Select each default platform path only after the complete resource,
-   UI and presentation paths qualify.
+1. Complete qualification, CI and review for the UI follow-up and native shader-linkage units.
+2. Publish the qualified filter command-recording unit and finish its full qualification and CI.
+3. Keep the remaining migration rows paused until a later decision resumes backend-neutral device
+   ownership and its dependent snapshot, presentation and cleanup work.
 
 ## Implementation Plan
 
@@ -189,9 +189,9 @@ commits and their fixes together in a focused reviewable change.
       issuing allocator. SourceGraphic and output ownership remain distinct.
 - [ ] Replace the filter engine's borrowed raw WebGPU command encoder with an owned runtime
       encoder. Preserve the existing 64-pass chunk boundary, submission failure handling, and
-      source-render/filter/composite queue order. This slice is implemented but unpublished; the
-      failure-path repairs are reviewed, and the native timeout proof in the delivery table remains
-      open.
+      source-render/filter/composite queue order. This slice is implemented and its
+      failure-path repairs, native timeout proof and exact integrated affected qualification pass;
+      publication, full qualification and approved integration remain open.
       An abandoned frame must not construct a drawing encoder or return possibly accepted textures
       to the pool. Failed accepted work requires positive completion before ordinary retirement;
       otherwise retain its backing and refuse new allocation/recording on the lost device. A browser
@@ -236,16 +236,17 @@ commits and their fixes together in a focused reviewable change.
 
 ### UI rendering
 
-- [ ] Replace raw WebGPU texture-view IDs in `GlTextureCache` and `CompositorDebugPanel` with runtime
+- [x] Replace raw WebGPU texture-view IDs in `GlTextureCache` and `CompositorDebugPanel` with runtime
       UI texture registrations carrying device identity, alpha mode, and frame lifetime.
-      Implemented in [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), including bounded
-      registration, exact-generation retirement and retained backing lifetime. Full and browser
-      qualification pass; the conflict repair has fresh hosted checks running and integration
-      remains open.
-- [ ] Implement the ImGui renderer over compiled WGSL shaders, indexed draws, bounded vertex/index uploads,
-      texture/sampler bindings, scissors, and renderer-state reset operations. Implemented in
-      [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), with native, Vulkan, browser and
-      package-size evidence recorded above; the item remains open until CI completes and it merges.
+      Integrated in [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), including bounded
+      registration, exact-generation retirement and retained backing lifetime. Follow-up
+      [#1284](https://github.com/jwmcglynn/donner/pull/1284) repairs font-atlas invalidation within
+      the same ownership contract.
+- [x] Implement the ImGui renderer over compiled WGSL shaders, indexed draws, bounded vertex/index uploads,
+      texture/sampler bindings, scissors, and renderer-state reset operations. Integrated in
+      [PR #1267](https://github.com/jwmcglynn/donner/pull/1267); follow-up
+      [#1284](https://github.com/jwmcglynn/donner/pull/1284) preserves retired atlas backing and
+      bindings until exact release.
 - [ ] Migrate frame composition and remove `imgui_wgpu_backend` dependencies, registration calls,
       and obsolete patches when their final consumers move.
 
@@ -340,11 +341,11 @@ resources referenced by submitted work require retirement through completion ser
 
 The remaining migration must preserve three distinct texture roles:
 
-| Role | Required ownership and validity |
-| --- | --- |
-| Detached renderer snapshot | Own backing through sampling/readback and producer teardown; keep content extent distinct from allocation extent. |
-| Borrowed frame texture | Borrow without taking backing ownership; validity ends at the documented frame boundary. |
-| Acquired surface texture | Belong to one surface acquisition; present, abandon, reconfigure, or surface destruction invalidates the acquisition. |
+| Role                       | Required ownership and validity                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Detached renderer snapshot | Own backing through sampling/readback and producer teardown; keep content extent distinct from allocation extent.     |
+| Borrowed frame texture     | Borrow without taking backing ownership; validity ends at the documented frame boundary.                              |
+| Acquired surface texture   | Belong to one surface acquisition; present, abandon, reconfigure, or surface destruction invalidates the acquisition. |
 
 Host-provided native objects enter through a trusted embedding boundary with explicit ownership.
 An imported registration does not imply ownership of its backing. Device, generation, format, usage,
@@ -449,18 +450,18 @@ cutover remain active qualification work. The GPU operation and shader manifests
 complete repository input set, with
 `//tools/gpu_inventory:manifest_freshness_tests` as the freshness gate.
 
-| Contract / remaining work | Owning verification |
-| --- | --- |
-| Indexed draws, resource identity, command/lifetime validation | `//donner/gpu:gpu_tests`; extend native Metal/Vulkan execution tests and browser contract tests for indexed draws. |
+| Contract / remaining work                                      | Owning verification                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Indexed draws, resource identity, command/lifetime validation  | `//donner/gpu:gpu_tests`; extend native Metal/Vulkan execution tests and browser contract tests for indexed draws.                                                                                                                                                                                                                                                                                             |
 | Compiled shader artifacts, reflection and projection isolation | `//donner/gpu/shader/wgsl:wgsl_tests` and `wgsl_diagnostics_tests`, `//donner/gpu/shader:shader_tests`, `generated_program_descriptor_tests`, `msl_xcrun_validation_tests`, `spirv_val_validation_tests`, `wgsl_emitter_geode_validation_tests` (each shipped WGSL projection through the Geode WebGPU device), the linked isolation probes under `//donner/gpu/shader/artifact_tests`, and the parser fuzzer. |
-| Native vertex layouts and pixels | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests`; add the matching browser execution cases. |
-| Snapshot/target lifetime, alpha, cropping, refusal | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates. |
-| Filter resource ordering, scratch and working sets | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites. |
-| Upload reuse, UI texture lifetime and thumbnails | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources. |
-| Mapping, loss, cancellation and native surfaces | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; actual editor surface execution remains required. `//donner/gpu/browser:browser_tests` owns the browser backend's identifier, ownership, mapping and device-loss behavior; browser execution of that backend joins the browser lanes with the production cutover. |
-| Editor ordering and presentation | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge. |
-| Structural counters, memory, timing and size | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates. |
-| Dependency closure | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking verifier invocation, generated CMake validation, and analyzed/source-archive/artifact evidence. |
+| Native vertex layouts and pixels                               | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests`; add the matching browser execution cases.                                                                                                                                                                                                                                                              |
+| Snapshot/target lifetime, alpha, cropping, refusal             | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates.                                                                                                                                                                                                                                                                       |
+| Filter resource ordering, scratch and working sets             | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites.                                                                                                                                                                                                                                                               |
+| Upload reuse, UI texture lifetime and thumbnails               | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources.                                                                                                                                                                                                                                                                |
+| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; actual editor surface execution remains required. `//donner/gpu/browser:browser_tests` owns the browser backend's identifier, ownership, mapping and device-loss behavior; browser execution of that backend joins the browser lanes with the production cutover.                                                             |
+| Editor ordering and presentation                               | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                                                                                    |
+| Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                                                    |
+| Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking verifier invocation, generated CMake validation, and analyzed/source-archive/artifact evidence.                                                                                                                                                                                                                                         |
 
 Run the full `bazel test //...` gate and, separately, these targets with `--config=geode`:
 

@@ -104,6 +104,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
       "catalog_font_loading_test",
+      "chromium_composited_invariants_test",
       "chromium_remote_smoke",
       "firefox_composited_invariants_test",
       "font_reference_probe",
@@ -132,11 +133,14 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       assert.match(lane, /"DONNER_CHROMIUM_ARCHIVE":/);
       assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
       assert.ok(lane.includes("\"prepare-browser-archives.js\""));
-    } else if (laneName === "firefox_composited_invariants_test") {
+    } else if (
+      laneName === "chromium_composited_invariants_test"
+      || laneName === "firefox_composited_invariants_test"
+    ) {
       assert.deepEqual(
         tags.sort(),
         ["manual", "no-local"],
-        "extended Firefox diagnostics are opt-in",
+        "extended composited browser diagnostics are opt-in and remote-only",
       );
     } else if (laneName === "font_reference_probe") {
       assert.deepEqual(
@@ -166,6 +170,24 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
         /--config=\$\(rootpath :playwright\.composited-firefox\.bazel\.config\.js\)/,
       );
       assert.ok(lane.includes("\"@playwright//:firefox\""));
+      assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
+      assert.ok(tags.includes("no-local"), "the composited browser gate must use remote execution");
+      assert.doesNotMatch(
+        lane,
+        /--grep/,
+        "the composited lane must include the classifier controls",
+      );
+    }
+    if (laneName === "chromium_composited_invariants_test") {
+      assert.deepEqual(specFiles, [
+        "composited-invariants.spec.ts",
+        "composited-drag-invariants.spec.ts",
+      ]);
+      assert.match(
+        lane,
+        /--config=\$\(rootpath :playwright\.composited-chromium\.bazel\.config\.js\)/,
+      );
+      assert.ok(lane.includes("\"@playwright//:chromium\""));
       assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
       assert.ok(tags.includes("no-local"), "the composited browser gate must use remote execution");
       assert.doesNotMatch(
