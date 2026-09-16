@@ -4149,7 +4149,9 @@ TEST(EditorShellTest, ConvertMultipleTextElementsToOutlinesUsesOneUndoEntry) {
   <text id="second" x="10" y="65">Second</text>
 </svg>)svg";
   gui::EditorWindow window = MakeHiddenWindow();
-  ASSERT_EQ(window.valid(), true);
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(source, "multiple-text.svg"));
   ASSERT_EQ(shell.valid(), true);
   auto& app = EditorShellTestAccess::App(shell);
