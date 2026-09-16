@@ -47,7 +47,7 @@ shader linkage remain open.
 
 | Active unit | Current state | Remaining gate |
 | --- | --- | --- |
-| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) | Published `222fa157` has green qualification but conflicts with the merged Vulkan-surface test registration. The local repair preserves both suites and passes all 678 runnable full-suite targets, five editor targets, graph and static checks, and independent review. | Execute the repaired candidate's Vulkan UI target, publish the conflict repair, then verify current CI/review/conflict state and obtain merge approval. |
+| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) | Published `b6669a3e` resolves the Vulkan test-registration conflict while preserving both suites. All 678 runnable full-suite targets, five editor targets, graph and static checks, and independent source review pass. Current-head hosted CI is running. | Complete exact-candidate Vulkan UI execution, verify current CI/review/conflict state and obtain merge approval. |
 | [Native shader artifact linkage #1279](https://github.com/jwmcglynn/donner/pull/1279) | At `b7bcf145`, all 676 runnable full-suite targets, five editor targets, and all hosted checks pass, including the repaired Firefox pixel-classification test. Review threads are resolved and the source checkpoint has no textual conflicts. | Obtain merge approval and verify the current head/base and subsequent documentation checks before integration. Native production pixel qualification remains part of the later ownership cutover. |
 | Filter runtime command recording | Implemented but unpublished. Reviewed repairs abandon failed renderer frames safely, refuse later allocation on a lost device, and retire failed accepted work only after positive native completion. Causal red/green tests cover nested unwinding, next-frame refusal and repeated healthy post-submit refusal without retained growth. | Complete affected renderer/browser qualification and the Vulkan final-chunk timeout regression with its causal control, then publish the atomic unit. |
 
@@ -55,7 +55,7 @@ shader linkage remain open.
 
 | Order | Unit | Completion boundary |
 | --- | --- | --- |
-| 1 | Active UI and shader-linkage pull requests | Publish the reviewed UI conflict repair after its native gate, verify current-head CI and review/conflict state, and integrate only after merge approval. |
+| 1 | Active UI and shader-linkage pull requests | Complete current-head platform qualification, CI and review/conflict checks, and integrate only after merge approval. |
 | 2 | Filter runtime command recording | Qualify the reviewed failure-path repairs and native completion/timeout proof while preserving the 64-pass boundary and source-render/filter/composite order. |
 | 3 | Checkerboard target boundary | Accept a validated borrowed runtime texture and extent in the checkerboard pass; move raw external-target import to its presentation caller and preserve lifetime, device identity, format, usage, and host-encoder isolation. |
 | 4 | Texture-cache upload migration | Move bitmap and thumbnail uploads, border replication, clears, allocation reuse, and deferred retirement to runtime resources. |
@@ -240,7 +240,8 @@ commits and their fixes together in a focused reviewable change.
       UI texture registrations carrying device identity, alpha mode, and frame lifetime.
       Implemented in [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), including bounded
       registration, exact-generation retirement and retained backing lifetime. Full and browser
-      qualification and hosted checks pass; integration remains open.
+      qualification pass; the conflict repair has fresh hosted checks running and integration
+      remains open.
 - [ ] Implement the ImGui renderer over compiled WGSL shaders, indexed draws, bounded vertex/index uploads,
       texture/sampler bindings, scissors, and renderer-state reset operations. Implemented in
       [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), with native, Vulkan, browser and
