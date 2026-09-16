@@ -259,12 +259,23 @@ private:
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;  //!< Command buffer to free afterwards.
   };
 
+  /// One native acquisition attempt after any out-of-date rebuild and retry.
+  struct AcquireAttempt {
+    VkResult result = VK_SUCCESS;
+    uint32_t imageIndex = 0;
+    size_t ringSlot = 0;
+    bool outgrown = false;
+  };
+
   /// Creates or replaces the swapchain from \ref configuration_, leaving the surface
   /// unconfigured if anything fails once the previous swapchain has been let go.
   Status createSwapchain();
 
   /// The body of \ref createSwapchain, whose failures it turns into an unconfigured surface.
   Status createSwapchainUnguarded();
+
+  /// Proves the current generation idle and releases its submission objects before replacement.
+  Status retireSwapchainGeneration();
 
   /// Whether a frame is held and its index addresses this swapchain's images and semaphores.
   /// Every index of either is guarded by this, so no path assumes what another checks.
@@ -290,6 +301,9 @@ private:
   /// @param ringSlot Acquisition ring slot about to be reused.
   Status waitForAcquireRingSlot(size_t ringSlot);
 
+  /// Acquires once, rebuilding and retrying once when the presentation engine is out of date.
+  Result<AcquireAttempt> acquireImage();
+
   /// Recreates the swapchain, reclaiming any stranded frame. Waits for the device to go idle
   /// first, because the images being released may still be named by submitted work.
   Status recreateSwapchain();
@@ -300,6 +314,16 @@ private:
   ///   state, or nothing for a discard.
   void recordHandoverBarrier(VkCommandBuffer commandBuffer,
                              const std::optional<TextureSyncState>& state);
+
+  /// Records a handover command buffer and creates the fence that will own its completion.
+  Result<PendingSubmission> recordHandoverSubmission(const std::optional<TextureSyncState>& state);
+
+  /// Associates a possibly accepted handover submission with its acquisition-ring slot.
+  void associateHandoverWithAcquireRing(VkFence fence);
+
+  /// Applies queue-result ownership rules to a recorded handover submission.
+  Status finishHandoverSubmission(VkResult result, const SurfaceWaitSync& wait,
+                                  PendingSubmission submission);
 
   /// Records and submits the barrier into the presentation engine's layout, plus whatever wait
   /// this frame still owes. @param state Source synchronization state, or nothing for a discard.

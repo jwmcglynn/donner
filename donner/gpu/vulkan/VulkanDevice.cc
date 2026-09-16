@@ -484,6 +484,34 @@ bool ContainsExtension(std::span<const char* const> extensions, const char* name
   });
 }
 
+/// Selects a device maintenance alias whose complete instance dependencies are enabled.
+const char* SelectMaintenanceExtension(const VulkanApi& api,
+                                       std::span<const char* const> instanceExtensions,
+                                       VkPhysicalDevice physicalDevice) {
+  if (!ContainsExtension(instanceExtensions, VK_KHR_SURFACE_EXTENSION_NAME) ||
+      !ContainsExtension(instanceExtensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
+      !DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+    return nullptr;
+  }
+  const char* maintenanceExtension = nullptr;
+  if (ContainsExtension(instanceExtensions, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME) &&
+      DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+    maintenanceExtension = VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+  } else if (ContainsExtension(instanceExtensions, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME) &&
+             DeviceOffersExtension(api, physicalDevice,
+                                   VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+    maintenanceExtension = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+  }
+  return maintenanceExtension;
+}
+
+bool HasPresentationDependencyClosure(std::span<const char* const> extensions) {
+  return ContainsExtension(extensions, VK_KHR_SURFACE_EXTENSION_NAME) &&
+         ContainsExtension(extensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) &&
+         (ContainsExtension(extensions, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME) ||
+          ContainsExtension(extensions, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+}
+
 /// Collects the device extensions to enable and chains the feature structs they need.
 ///
 /// Accumulates rather than assigns, so enabling a second extension or chaining a second features
@@ -515,20 +543,8 @@ bool CollectDeviceExtensions(const VulkanApi& api, std::span<const char* const> 
     deviceInfo.pNext = &timelineFeatures;
   }
   if (enablePresentation) {
-    if (!ContainsExtension(instanceExtensions, VK_KHR_SURFACE_EXTENSION_NAME) ||
-        !ContainsExtension(instanceExtensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
-        !DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
-      return false;
-    }
-    const char* maintenanceExtension = nullptr;
-    if (ContainsExtension(instanceExtensions, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME) &&
-        DeviceOffersExtension(api, physicalDevice, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
-      maintenanceExtension = VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
-    } else if (ContainsExtension(instanceExtensions, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME) &&
-               DeviceOffersExtension(api, physicalDevice,
-                                     VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
-      maintenanceExtension = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
-    }
+    const char* maintenanceExtension =
+        SelectMaintenanceExtension(api, instanceExtensions, physicalDevice);
     if (maintenanceExtension == nullptr) return false;
     deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     deviceExtensions.push_back(maintenanceExtension);
@@ -934,14 +950,9 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
     std::span<const char* const> offeredExtensions,
     std::span<const char* const> requiredExtensions) {
   const auto offers = [offeredExtensions](const char* name) {
-    return std::ranges::any_of(offeredExtensions, [name](const char* offered) {
-      return offered != nullptr && std::strcmp(offered, name) == 0;
-    });
+    return ContainsExtension(offeredExtensions, name);
   };
-  if (!offers(VK_KHR_SURFACE_EXTENSION_NAME) ||
-      !offers(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
-      (!offers(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME) &&
-       !offers(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME))) {
+  if (!HasPresentationDependencyClosure(offeredExtensions)) {
     return {};
   }
   std::vector<const char*> enabledExtensions = {VK_KHR_SURFACE_EXTENSION_NAME,
@@ -1472,10 +1483,8 @@ struct VulkanDevice::Impl {
     return surfaceLifetime->liveChildren.load(std::memory_order_acquire) == owned;
   }
 
-  /// Proves every native user complete before any part of the ownership graph is released.
-  bool prepareForDestruction() {
-    if (!ownsEverySurface()) return false;
-    if (device == VK_NULL_HANDLE) return true;
+  /// Proves ordinary submissions and internal uploads complete without releasing their objects.
+  bool prepareSubmissionsForDestruction() {
     for (const InFlightSubmission& submission : inFlight) {
       if (!CompletionWasProven(api->vkWaitForFences(device, 1, &submission.fence, VK_TRUE,
                                                     kTeardownFenceTimeoutNs))) {
@@ -1488,6 +1497,14 @@ struct VulkanDevice::Impl {
         return false;
       }
     }
+    return true;
+  }
+
+  /// Proves every native user complete before any part of the ownership graph is released.
+  bool prepareForDestruction() {
+    if (!ownsEverySurface()) return false;
+    if (device == VK_NULL_HANDLE) return true;
+    if (!prepareSubmissionsForDestruction()) return false;
     for (const std::unique_ptr<VulkanSwapchain>& surface : surfaces) {
       if (surface && surface->prepareForDestruction().hasError()) return false;
     }
@@ -1496,6 +1513,32 @@ struct VulkanDevice::Impl {
       if (surface->prepareForDestruction().hasError()) return false;
     }
     return ownsEverySurface();
+  }
+
+  /// Releases graphics and compute pipelines before their shared layouts.
+  void destroyPipelines() {
+    for (std::optional<RenderPipelineRecord>& record : renderPipelines) {
+      if (record.has_value()) {
+        if (record->pipeline != VK_NULL_HANDLE) {
+          api->vkDestroyPipeline(device, record->pipeline, nullptr);
+        }
+        if (record->compatRenderPass != VK_NULL_HANDLE) {
+          api->vkDestroyRenderPass(device, record->compatRenderPass, nullptr);
+        }
+        record.reset();  // Releases the retained pipeline layout.
+      }
+    }
+    renderPipelines.clear();
+    for (std::optional<ComputePipelineRecord>& record : computePipelines) {
+      if (record.has_value()) {
+        if (record->pipeline != VK_NULL_HANDLE) {
+          api->vkDestroyPipeline(device, record->pipeline, nullptr);
+        }
+        record.reset();  // Releases the retained pipeline layout.
+      }
+    }
+    computePipelines.clear();
+    pipelineLayouts.clear();  // Releases the remaining VkPipelineLayout handles.
   }
 
   /// Destroys every remaining native object after the complete graph passed preparation.
@@ -1519,28 +1562,7 @@ struct VulkanDevice::Impl {
     }
     pendingUploads.clear();
 
-    for (std::optional<RenderPipelineRecord>& record : renderPipelines) {
-      if (record.has_value()) {
-        if (record->pipeline != VK_NULL_HANDLE) {
-          api->vkDestroyPipeline(device, record->pipeline, nullptr);
-        }
-        if (record->compatRenderPass != VK_NULL_HANDLE) {
-          api->vkDestroyRenderPass(device, record->compatRenderPass, nullptr);
-        }
-        record.reset();  // Releases the retained pipeline layout.
-      }
-    }
-    renderPipelines.clear();
-    for (std::optional<ComputePipelineRecord>& record : computePipelines) {
-      if (record.has_value()) {
-        if (record->pipeline != VK_NULL_HANDLE) {
-          api->vkDestroyPipeline(device, record->pipeline, nullptr);
-        }
-        record.reset();  // Releases the retained pipeline layout.
-      }
-    }
-    computePipelines.clear();
-    pipelineLayouts.clear();  // Releases the remaining VkPipelineLayout handles.
+    destroyPipelines();
     for (VkShaderModule module : shaderModules) {
       if (module != VK_NULL_HANDLE) {
         api->vkDestroyShaderModule(device, module, nullptr);
@@ -1751,6 +1773,16 @@ struct VulkanDevice::Impl {
   /// @param state Encoding state.
   void destroyTransientEncodingObjects(EncodingState& state);
 
+  /// Releases an encoding whose queue ownership has been excluded or drained.
+  void discardEncoding(EncodingState& state) {
+    syncStates.discardStaged();
+    destroyTransientEncodingObjects(state);
+    destroyBufferRecord(state.bufferWriteStaging);
+  }
+
+  /// Transfers encoded objects to queue ownership or frees a proven rejected submission.
+  Status finishSubmission(uint64_t submissionSerial, EncodingState& state, VkFence fence);
+
   /// Transitions the textures in one bind group to their descriptor layouts.
   /// @param state Encoding state.
   /// @param group Bind group whose textures are about to be used.
@@ -1903,18 +1935,26 @@ struct VulkanDevice::Impl {
                                const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
                                const Origin2d& destinationOrigin);
 
-  /// Creates \p fence, submits \p commandBuffer on it, and waits for completion. On timeout the
-  /// submission is still pending, so \p objectsStillInUse is set and the caller must not destroy
-  /// the fence, the command buffer, or the staging buffer.
-  /// @param commandBuffer Recorded upload command buffer.
-  /// @param fence Set to the created fence.
-  /// @param objectsStillInUse Set when the submission is still pending after the timeout.
+  /// Retains accepted upload objects on an unproven wait, otherwise releases them.
+  /// @param slotIndex Destination texture slot. @param commandBuffer Recorded upload.
+  /// @param fence Receives the upload fence. @param staging Upload staging allocation.
+  /// @param reachedQueue Receives whether committed image transitions must be preserved.
+  Status finishTextureUpload(uint32_t slotIndex, VkCommandBuffer commandBuffer, VkFence& fence,
+                             BufferRecord& staging, bool& reachedQueue);
+
+  /// Creates \p fence, submits \p commandBuffer on it, and waits for completion.
+  /// @param commandBuffer Recorded upload command buffer. @param fence Receives the created fence.
+  /// @param objectsStillInUse Receives whether upload objects must remain alive.
+  /// @param reachedQueue Receives whether the queue accepted the upload.
   Status submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
                                     bool& objectsStillInUse, bool& reachedQueue);
 
   /// Destroys the Vulkan buffer backing \p slotIndex, if any.
   /// @param slotIndex Buffer slot.
   void destroyBufferSlot(uint32_t slotIndex);
+
+  /// Dispatches native resource destruction after the caller proves ownership permits it.
+  void destroyResourceSlot(std::string_view resourceName, uint32_t slotIndex);
   /// Destroys the Vulkan image backing \p slotIndex, if any.
   /// @param slotIndex Texture slot.
   void destroyTextureSlot(uint32_t slotIndex);
@@ -3000,31 +3040,35 @@ void VulkanDevice::onRetireBuffer(uint32_t slotIndex) {
   }
 }
 
+void VulkanDevice::Impl::destroyResourceSlot(std::string_view resourceName, uint32_t slotIndex) {
+  // Buffer slots also retain destinations used only by queued uploads, outside the public stream.
+  if (resourceName == "buffer") {
+    destroyBufferSlot(slotIndex);
+  } else if (resourceName == "texture") {
+    destroyTextureSlot(slotIndex);
+  } else if (resourceName == "textureView") {
+    destroyTextureViewSlot(slotIndex);
+  } else if (resourceName == "sampler") {
+    destroySamplerSlot(slotIndex);
+  } else if (resourceName == "bindGroupLayout") {
+    destroyBindGroupLayoutSlot(slotIndex);
+  } else if (resourceName == "bindGroup") {
+    destroyBindGroupSlot(slotIndex);
+  } else if (resourceName == "pipelineLayout") {
+    destroyPipelineLayoutSlot(slotIndex);
+  } else if (resourceName == "shaderModule") {
+    destroyShaderModuleSlot(slotIndex);
+  } else if (resourceName == "renderPipeline") {
+    destroyRenderPipelineSlot(slotIndex);
+  } else if (resourceName == "computePipeline") {
+    destroyComputePipelineSlot(slotIndex);
+  }
+}
+
 void VulkanDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   if (impl_->executionUncertain || impl_->surfaceLifetimeUnproven()) return;
   Impl& impl = *impl_;
-  // Buffer slots also retain destinations used only by queued uploads, outside the public stream.
-  if (resourceName == "buffer") {
-    impl.destroyBufferSlot(slotIndex);
-  } else if (resourceName == "texture") {
-    impl.destroyTextureSlot(slotIndex);
-  } else if (resourceName == "textureView") {
-    impl.destroyTextureViewSlot(slotIndex);
-  } else if (resourceName == "sampler") {
-    impl.destroySamplerSlot(slotIndex);
-  } else if (resourceName == "bindGroupLayout") {
-    impl.destroyBindGroupLayoutSlot(slotIndex);
-  } else if (resourceName == "bindGroup") {
-    impl.destroyBindGroupSlot(slotIndex);
-  } else if (resourceName == "pipelineLayout") {
-    impl.destroyPipelineLayoutSlot(slotIndex);
-  } else if (resourceName == "shaderModule") {
-    impl.destroyShaderModuleSlot(slotIndex);
-  } else if (resourceName == "renderPipeline") {
-    impl.destroyRenderPipelineSlot(slotIndex);
-  } else if (resourceName == "computePipeline") {
-    impl.destroyComputePipelineSlot(slotIndex);
-  }
+  impl.destroyResourceSlot(resourceName, slotIndex);
 }
 
 Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
@@ -3189,6 +3233,26 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
   return OkStatus();
 }
 
+Status VulkanDevice::Impl::finishTextureUpload(uint32_t slotIndex, VkCommandBuffer commandBuffer,
+                                               VkFence& fence, BufferRecord& staging,
+                                               bool& reachedQueue) {
+  const auto cleanup = [&] { destroyUploadObjects(fence, commandBuffer, staging); };
+  bool objectsStillInUse = false;
+  const Status submitStatus =
+      submitAndWaitTextureUpload(commandBuffer, fence, objectsStillInUse, reachedQueue);
+  if (submitStatus.hasError()) {
+    if (objectsStillInUse) {
+      pendingUploads.push_back({fence, commandBuffer, staging, slotIndex, std::nullopt});
+    } else {
+      cleanup();
+    }
+    return submitStatus;
+  }
+
+  cleanup();
+  return OkStatus();
+}
+
 Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                     const TexelCopyBufferLayout& dataLayout,
                                     const Extent2d& writeSize, const Origin2d& destinationOrigin) {
@@ -3276,22 +3340,8 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return GpuError{GpuErrorType::InvalidState, "writeTexture: injected pre-submit failure"};
   }
 
-  bool objectsStillInUse = false;
-  const Status submitStatus = impl.submitAndWaitTextureUpload(
-      commandBuffer, fence, objectsStillInUse, stagedUploadGuard.reachedQueue);
-  if (submitStatus.hasError()) {
-    if (objectsStillInUse) {
-      impl.pendingUploads.push_back({fence, commandBuffer, staging, slotIndex, std::nullopt});
-    } else {
-      cleanup();
-    }
-    return submitStatus;
-  }
-
-  // The guard commits on the way out: the queue took this submission, so its transitions are
-  // the texture's real state.
-  cleanup();
-  return OkStatus();
+  return impl.finishTextureUpload(slotIndex, commandBuffer, fence, staging,
+                                  stagedUploadGuard.reachedQueue);
 }
 
 void VulkanDevice::Impl::transitionTexture(VkCommandBuffer commandBuffer, uint32_t textureSlot,
@@ -3881,6 +3931,46 @@ Status VulkanDevice::Impl::encodeCommands(EncodingState& state, std::span<const 
   return OkStatus();
 }
 
+Status VulkanDevice::Impl::finishSubmission(uint64_t submissionSerial, EncodingState& state,
+                                            VkFence fence) {
+  const auto failEncoding = [&](Status error) -> Status {
+    discardEncoding(state);
+    return error;
+  };
+  // A frame acquired from a surface comes back before the presentation engine has finished
+  // reading it, so the first submission that writes that frame carries its wait.
+  const ClaimedSurfaceWaits claimed = claimSurfaceWaits(encodedTextureSlots);
+  const VkResult submitResult = submitToQueue(state.commandBuffer, fence, claimed.sync);
+  if (SubmissionWasRejected(submitResult)) {
+    returnSurfaceWaits(claimed);
+    api->vkDestroyFence(device, fence, nullptr);
+    return failEncoding(VkError("vkQueueSubmit", submitResult));
+  }
+  if (submitResult == VK_ERROR_DEVICE_LOST && drainAfterDeviceLoss(submitResult, "vkQueueSubmit")) {
+    api->vkDestroyFence(device, fence, nullptr);
+    return failEncoding(VkError("vkQueueSubmit", submitResult));
+  }
+  if (submitResult != VK_SUCCESS) {
+    executionUncertain = true;
+    recordError(
+        std::format("vkQueueSubmit completion unknown: {}", VkResultToString(submitResult)));
+    syncStates.discardStaged();
+  } else {
+    syncStates.commitStaged();
+  }
+
+  InFlightSubmission submission;
+  submission.serial = submissionSerial;
+  submission.fence = fence;
+  submission.commandBuffer = state.commandBuffer;
+  submission.renderPasses = std::move(state.transientRenderPasses);
+  submission.framebuffers = std::move(state.transientFramebuffers);
+  submission.bufferWriteStaging = state.bufferWriteStaging;
+  commitPendingBufferWrites(submissionSerial);
+  inFlight.push_back(std::move(submission));
+  return submitResult == VK_SUCCESS ? OkStatus() : Status(VkError("vkQueueSubmit", submitResult));
+}
+
 Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                               std::span<const Command> commands) {
   (void)commandBufferSlotIndex;
@@ -3899,9 +3989,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   const auto failEncoding = [&](Status error) -> Status {
     // Recoverable failures leave the queue unchanged. Device loss can execute work, but its
     // layouts are undefined and the error latch prevents any later submission from using them.
-    impl.syncStates.discardStaged();
-    impl.destroyTransientEncodingObjects(state);
-    impl.destroyBufferRecord(state.bufferWriteStaging);
+    impl.discardEncoding(state);
     return error;
   };
 
@@ -3940,39 +4028,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     return failEncoding(VkError("vkCreateFence", result));
   }
 
-  // A frame acquired from a surface comes back before the presentation engine has finished
-  // reading it, so the first submission that writes that frame carries its wait.
-  const Impl::ClaimedSurfaceWaits claimed = impl.claimSurfaceWaits(impl.encodedTextureSlots);
-  const VkResult submitResult = impl.submitToQueue(state.commandBuffer, fence, claimed.sync);
-  if (SubmissionWasRejected(submitResult)) {
-    impl.returnSurfaceWaits(claimed);
-    impl.api->vkDestroyFence(impl.device, fence, nullptr);
-    return failEncoding(VkError("vkQueueSubmit", submitResult));
-  }
-  if (submitResult == VK_ERROR_DEVICE_LOST &&
-      impl.drainAfterDeviceLoss(submitResult, "vkQueueSubmit")) {
-    impl.api->vkDestroyFence(impl.device, fence, nullptr);
-    return failEncoding(VkError("vkQueueSubmit", submitResult));
-  }
-  if (submitResult != VK_SUCCESS) {
-    impl.executionUncertain = true;
-    impl.recordError(
-        std::format("vkQueueSubmit completion unknown: {}", VkResultToString(submitResult)));
-    impl.syncStates.discardStaged();
-  } else {
-    impl.syncStates.commitStaged();
-  }
-
-  Impl::InFlightSubmission submission;
-  submission.serial = submissionSerial;
-  submission.fence = fence;
-  submission.commandBuffer = state.commandBuffer;
-  submission.renderPasses = std::move(state.transientRenderPasses);
-  submission.framebuffers = std::move(state.transientFramebuffers);
-  submission.bufferWriteStaging = state.bufferWriteStaging;
-  impl.commitPendingBufferWrites(submissionSerial);
-  impl.inFlight.push_back(std::move(submission));
-  return submitResult == VK_SUCCESS ? OkStatus() : Status(VkError("vkQueueSubmit", submitResult));
+  return impl.finishSubmission(submissionSerial, state, fence);
 }
 
 // ---------------------------------------------------------------------------

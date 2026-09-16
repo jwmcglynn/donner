@@ -599,20 +599,7 @@ Status VulkanSwapchain::createSwapchainUnguarded() {
   const SurfaceConfiguration& configuration = *configuration_;
 
   if (swapchain_ != VK_NULL_HANDLE) {
-    // A refused handover submit can leave the acquisition semaphore signalled after the public
-    // frame has been invalidated. Consume it before replacing the generation that owns it.
-    if (pendingAcquireWait_ != VK_NULL_HANDLE) {
-      if (Status submitted = submitFrameHandover(std::nullopt, VK_NULL_HANDLE);
-          submitted.hasError()) {
-        return submitted;
-      }
-    }
-    // The semaphores and images about to be released may still be named by submitted work, and a
-    // discarded frame certainly is, so nothing is destroyed while the device could be reading it.
-    if (Status presented = drainPresentFences(); presented.hasError()) return presented;
-    if (Status drained = drainPendingSubmissions(); drained.hasError()) {
-      return drained;
-    }
+    if (Status retired = retireSwapchainGeneration(); retired.hasError()) return retired;
   }
 
   VkSurfaceCapabilitiesKHR native = {};
@@ -669,6 +656,21 @@ Status VulkanSwapchain::createSwapchainUnguarded() {
     return status;
   }
   return createSyncObjects();
+}
+
+Status VulkanSwapchain::retireSwapchainGeneration() {
+  // A refused handover submit can leave the acquisition semaphore signalled after the public
+  // frame has been invalidated. Consume it before replacing the generation that owns it.
+  if (pendingAcquireWait_ != VK_NULL_HANDLE) {
+    if (Status submitted = submitFrameHandover(std::nullopt, VK_NULL_HANDLE);
+        submitted.hasError()) {
+      return submitted;
+    }
+  }
+  // The semaphores and images about to be released may still be named by submitted work, and a
+  // discarded frame certainly is, so nothing is destroyed while the device could be reading it.
+  if (Status presented = drainPresentFences(); presented.hasError()) return presented;
+  return drainPendingSubmissions();
 }
 
 Status VulkanSwapchain::fetchSwapchainImages() {
@@ -794,72 +796,81 @@ Status VulkanSwapchain::waitForAcquireRingSlot(size_t ringSlot) {
   return OkStatus();
 }
 
-Result<SurfaceStatus> VulkanSwapchain::acquire() {
-  preparedForDestruction_ = false;
+Result<VulkanSwapchain::AcquireAttempt> VulkanSwapchain::acquireImage() {
   if (Status ready = prepareForAcquire(); ready.hasError()) {
     return std::move(ready).error();
   }
 
   const VulkanApi& api = *context_.api;
-  size_t ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
-  if (Status ready = waitForAcquireRingSlot(ringSlot); ready.hasError()) {
+  AcquireAttempt attempt;
+  attempt.ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
+  if (Status ready = waitForAcquireRingSlot(attempt.ringSlot); ready.hasError()) {
     return std::move(ready).error();
   }
 
-  uint32_t imageIndex = 0;
-  VkResult result =
+  attempt.result =
       std::exchange(forceNextAcquireOutOfDate_, false)
           ? VK_ERROR_OUT_OF_DATE_KHR
           : api.vkAcquireNextImageKHR(context_.device, swapchain_, kAcquireTimeoutNanoseconds,
-                                      acquireSemaphores_[ringSlot], VK_NULL_HANDLE, &imageIndex);
+                                      acquireSemaphores_[attempt.ringSlot], VK_NULL_HANDLE,
+                                      &attempt.imageIndex);
 
-  bool outgrown = result == VK_SUBOPTIMAL_KHR;
-  if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+  attempt.outgrown = attempt.result == VK_SUBOPTIMAL_KHR;
+  if (attempt.result == VK_ERROR_OUT_OF_DATE_KHR) {
     // No frame came with this result, and the contract's Outdated still carries one, so the
     // swapchain is rebuilt and the acquisition retried once. A caller that gets Outdated can
     // draw this frame and reconfigure at its own pace.
     if (Status rebuilt = recreateSwapchain(); rebuilt.hasError()) {
       return std::move(rebuilt).error();
     }
-    outgrown = true;
+    attempt.outgrown = true;
     // The rebuild replaced the ring and restarted its counter, so the slot computed against the
     // ring that has just been destroyed names nothing here: a smaller new ring would be indexed
     // out of bounds, and an equal one would file this acquisition's fence under a slot whose
     // semaphore was never waited on.
-    ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
-    if (Status ready = waitForAcquireRingSlot(ringSlot); ready.hasError()) {
+    attempt.ringSlot = static_cast<size_t>(acquireCount_ % acquireSemaphores_.size());
+    if (Status ready = waitForAcquireRingSlot(attempt.ringSlot); ready.hasError()) {
       return std::move(ready).error();
     }
-    result = api.vkAcquireNextImageKHR(context_.device, swapchain_, kAcquireTimeoutNanoseconds,
-                                       acquireSemaphores_[ringSlot], VK_NULL_HANDLE, &imageIndex);
+    attempt.result = api.vkAcquireNextImageKHR(
+        context_.device, swapchain_, kAcquireTimeoutNanoseconds,
+        acquireSemaphores_[attempt.ringSlot], VK_NULL_HANDLE, &attempt.imageIndex);
   }
+  return attempt;
+}
 
-  if (result == VK_ERROR_DEVICE_LOST) {
+Result<SurfaceStatus> VulkanSwapchain::acquire() {
+  preparedForDestruction_ = false;
+  Result<AcquireAttempt> acquired = acquireImage();
+  if (acquired.hasError()) return std::move(acquired).error();
+  const AcquireAttempt attempt = acquired.result();
+
+  if (attempt.result == VK_ERROR_DEVICE_LOST) {
     // Device loss does not say whether the presentation engine signalled the semaphore. Keep the
     // obligation so teardown retains or proves completion rather than destroying it optimistically.
-    frameRingSlot_ = ringSlot;
-    pendingAcquireWait_ = acquireSemaphores_[ringSlot];
+    frameRingSlot_ = attempt.ringSlot;
+    pendingAcquireWait_ = acquireSemaphores_[attempt.ringSlot];
     ++acquireCount_;
   }
 
-  const std::optional<SurfaceStatus> status = RuntimeStatus(result);
+  const std::optional<SurfaceStatus> status = RuntimeStatus(attempt.result);
   if (!status.has_value()) {
-    return VkError("vkAcquireNextImageKHR", result);
+    return VkError("vkAcquireNextImageKHR", attempt.result);
   }
-  if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+  if (attempt.result == VK_ERROR_OUT_OF_DATE_KHR) {
     return SurfaceStatus::Timeout;  // Still moving; the caller retries on the next frame.
   }
   if (CarriesNoFrame(*status)) {
     return *status;
   }
 
-  imageIndex_ = imageIndex;
+  imageIndex_ = attempt.imageIndex;
   hasFrame_ = true;
   frameTextureSlot_.reset();
-  frameRingSlot_ = ringSlot;
-  pendingAcquireWait_ = acquireSemaphores_[ringSlot];
+  frameRingSlot_ = attempt.ringSlot;
+  pendingAcquireWait_ = acquireSemaphores_[attempt.ringSlot];
   ++acquireCount_;
-  return outgrown ? SurfaceStatus::Outdated : SurfaceStatus::Success;
+  return attempt.outgrown ? SurfaceStatus::Outdated : SurfaceStatus::Success;
 }
 
 bool VulkanSwapchain::hasAddressableFrame() const {
@@ -914,8 +925,8 @@ void VulkanSwapchain::recordHandoverBarrier(VkCommandBuffer commandBuffer,
                                      nullptr, 1, &barrier);
 }
 
-Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState>& state,
-                                            VkSemaphore signalSemaphore) {
+Result<VulkanSwapchain::PendingSubmission> VulkanSwapchain::recordHandoverSubmission(
+    const std::optional<TextureSyncState>& state) {
   const VulkanApi& api = *context_.api;
 
   VkCommandBufferAllocateInfo allocateInfo = {};
@@ -954,6 +965,49 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
     api.vkFreeCommandBuffers(context_.device, context_.commandPool, 1, &commandBuffer);
     return VkError("vkCreateFence (present)", result);
   }
+  return PendingSubmission{fence, commandBuffer};
+}
+
+void VulkanSwapchain::associateHandoverWithAcquireRing(VkFence fence) {
+  if (frameRingSlot_ < acquireRingFences_.size()) {
+    acquireRingFences_[frameRingSlot_] = fence;
+    lastFencedRingSlot_ = frameRingSlot_;
+  }
+}
+
+Status VulkanSwapchain::finishHandoverSubmission(VkResult result, const SurfaceWaitSync& wait,
+                                                 PendingSubmission submission) {
+  const VulkanApi& api = *context_.api;
+  if (result == VK_SUCCESS) {
+    associateHandoverWithAcquireRing(submission.fence);
+    pending_.push_back(submission);
+    return OkStatus();
+  }
+  if (IsDefinitePreEnqueueFailure(result)) {
+    for (VkSemaphore semaphore : wait.semaphores) {
+      restoreAcquireWait(semaphore);
+    }
+    api.vkDestroyFence(context_.device, submission.fence, nullptr);
+    api.vkFreeCommandBuffers(context_.device, context_.commandPool, 1, &submission.commandBuffer);
+    return VkError("vkQueueSubmit (present)", result);
+  }
+
+  // Device loss does not prove rejection, but a later fence/status/idle DEVICE_LOST result is
+  // completion proof. Other errors have ambiguous queue ownership and block preparation.
+  if (result == VK_ERROR_DEVICE_LOST) {
+    associateHandoverWithAcquireRing(submission.fence);
+  } else {
+    preparationBlocked_ = true;
+  }
+  pending_.push_back(submission);
+  return VkError("vkQueueSubmit (present)", result);
+}
+
+Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState>& state,
+                                            VkSemaphore signalSemaphore) {
+  Result<PendingSubmission> recorded = recordHandoverSubmission(state);
+  if (recorded.hasError()) return std::move(recorded).error();
+  PendingSubmission submission = recorded.result();
 
   // Whatever is left of this frame's acquisition wait rides here: if no submission ever drew
   // into the frame, this is the one that consumes the semaphore, so it is never left signalled.
@@ -965,44 +1019,13 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
   submitInfo.pWaitSemaphores = wait.semaphores.empty() ? nullptr : wait.semaphores.data();
   submitInfo.pWaitDstStageMask = wait.stages.empty() ? nullptr : wait.stages.data();
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &commandBuffer;
+  submitInfo.pCommandBuffers = &submission.commandBuffer;
   submitInfo.signalSemaphoreCount = signalSemaphore == VK_NULL_HANDLE ? 0u : 1u;
   submitInfo.pSignalSemaphores = signalSemaphore == VK_NULL_HANDLE ? nullptr : &signalSemaphore;
 
-  const VkResult submitResult = api.vkQueueSubmit(context_.queue, 1, &submitInfo, fence);
-  if (submitResult != VK_SUCCESS) {
-    if (IsDefinitePreEnqueueFailure(submitResult)) {
-      for (VkSemaphore semaphore : wait.semaphores) {
-        restoreAcquireWait(semaphore);
-      }
-      api.vkDestroyFence(context_.device, fence, nullptr);
-      api.vkFreeCommandBuffers(context_.device, context_.commandPool, 1, &commandBuffer);
-    } else if (submitResult == VK_ERROR_DEVICE_LOST) {
-      // Device loss does not prove rejection, but a later fence/status/idle DEVICE_LOST result is
-      // completion proof. Preserve the possibly submitted objects and their ring ownership.
-      if (frameRingSlot_ < acquireRingFences_.size()) {
-        acquireRingFences_[frameRingSlot_] = fence;
-        lastFencedRingSlot_ = frameRingSlot_;
-      }
-      pending_.push_back(PendingSubmission{fence, commandBuffer});
-    } else {
-      // The driver did not prove rejection. The semaphore may have been consumed and the command
-      // buffer/fence may be queue-owned, so retain every object and make teardown fail closed.
-      pending_.push_back(PendingSubmission{fence, commandBuffer});
-      preparationBlocked_ = true;
-    }
-    return VkError("vkQueueSubmit (present)", submitResult);
-  }
-
-  // The ring slot whose semaphore this submission waited on is reusable once this fence signals.
-  // Taken from the frame rather than recomputed, so a rebuild that restarted the acquisition
-  // counter cannot file this fence against a slot that was never signalled for this frame.
-  if (frameRingSlot_ < acquireRingFences_.size()) {
-    acquireRingFences_[frameRingSlot_] = fence;
-    lastFencedRingSlot_ = frameRingSlot_;
-  }
-  pending_.push_back(PendingSubmission{fence, commandBuffer});
-  return OkStatus();
+  const VkResult result =
+      context_.api->vkQueueSubmit(context_.queue, 1, &submitInfo, submission.fence);
+  return finishHandoverSubmission(result, wait, submission);
 }
 
 Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
