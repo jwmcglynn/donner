@@ -117,6 +117,30 @@ def fork_contents(path: str, commit: str) -> bytes:
     return base64.b64decode(value["content"], validate=False)
 
 
+def verify_submission_metadata(head: str, commit: str, version: str) -> None:
+    metadata = json.loads(fork_contents("modules/donner/metadata.json", head))
+    template = json.loads(subprocess.check_output(
+        ["git", "show", f"{commit}:.bcr/metadata.template.json"]))
+    versions = metadata.pop("versions", None)
+    yanked = metadata.pop("yanked_versions", None)
+    template.pop("versions", None)
+    expected_yanked = template.pop("yanked_versions", {})
+    if metadata != template:
+        raise ValueError("existing registry metadata has different project or maintainer fields")
+    if (not isinstance(versions, list) or not all(isinstance(item, str) for item in versions)
+            or len(set(versions)) != len(versions) or versions.count(version) != 1):
+        raise ValueError("existing registry metadata has a missing or invalid version list")
+    verify_yanked_metadata(yanked, expected_yanked, version)
+
+
+def verify_yanked_metadata(yanked, expected_yanked: dict, version: str) -> None:
+    if (not isinstance(yanked, dict)
+            or any(not isinstance(value, str) for value in yanked.values())
+            or any(yanked.get(key) != value for key, value in expected_yanked.items())
+            or yanked.get(version) != expected_yanked.get(version)):
+        raise ValueError("existing registry metadata has different yanked versions")
+
+
 def existing_submission(tag: str, commit: str, receipt: dict) -> str | None:
     branch = f"donner-{tag}"
     refs = gh_json("api", f"repos/{REGISTRY_FORK}/git/matching-refs/heads/{branch}")
@@ -141,6 +165,7 @@ def existing_submission(tag: str, commit: str, receipt: dict) -> str | None:
         expected_bytes = subprocess.check_output(["git", "show", f"{commit}:{original}"])
         if fork_contents(f"{root}/{file}", head) != expected_bytes:
             raise ValueError("existing registry branch has different module or test files")
+    verify_submission_metadata(head, commit, receipt["version"])
     query = urlencode({"head": f"jwmcglynn:{branch}", "state": "all"})
     prs = gh_json("api", f"repos/bazelbuild/bazel-central-registry/pulls?{query}")
     matching = [pr for pr in prs if pr["head"]["sha"] == head

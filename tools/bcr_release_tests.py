@@ -154,8 +154,10 @@ class SubmissionTest(unittest.TestCase):
     @mock.patch.object(release, "fork_contents")
     @mock.patch.object(release, "gh_json")
     def test_matching_existing_submission_is_idempotent(self, gh, contents, git):
+        git.return_value = b'{}'
         gh.side_effect = [[self.ref], [self.pr]]
-        contents.side_effect = [json.dumps(self.source).encode(), b"expected", b"expected"]
+        contents.side_effect = [json.dumps(self.source).encode(), b"{}", b"{}",
+                                b'{"versions": ["0.9.0", "1.0.0"], "yanked_versions": {"0.9.0": "old"}}']
         self.assertEqual(release.existing_submission("v1.0.0", SHA, self.receipt), self.pr["html_url"])
         self.assertFalse(any("POST" in str(call) or "PATCH" in str(call) for call in gh.call_args_list))
 
@@ -172,8 +174,10 @@ class SubmissionTest(unittest.TestCase):
     @mock.patch.object(release, "fork_contents")
     @mock.patch.object(release, "gh_json")
     def test_orphan_submission_branch_requires_manual_recovery(self, gh, contents, git):
+        git.return_value = b'{}'
         gh.side_effect = [[self.ref], []]
-        contents.side_effect = [json.dumps(self.source).encode(), b"expected", b"expected"]
+        contents.side_effect = [json.dumps(self.source).encode(), b"{}", b"{}",
+                                b'{"versions": ["0.9.0", "1.0.0"], "yanked_versions": {"0.9.0": "old"}}']
         with self.assertRaisesRegex(ValueError, "manual PR recovery"):
             release.existing_submission("v1.0.0", SHA, self.receipt)
 
@@ -187,7 +191,8 @@ class SubmissionTest(unittest.TestCase):
                                        if args[-1].endswith("metadata.template.json") else b"expected")
         valid = dict(template, versions=["0.9.0", "1.0.0"])
         for change in [{"maintainers": []}, {"versions": ["0.9.0"]},
-                       {"versions": ["1.0.0", "1.0.0"]}, {"yanked_versions": {"1.0.0": "withdrawn"}}]:
+                       {"versions": ["1.0.0", "1.0.0"]}, {"yanked_versions": {"1.0.0": "withdrawn"}},
+                       {"yanked_versions": {"0.9.0": []}}]:
             metadata = dict(valid, **change)
             gh.side_effect = [[self.ref], [self.pr]]
             def file_contents(path, head):

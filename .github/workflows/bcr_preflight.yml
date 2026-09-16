@@ -144,7 +144,7 @@ jobs:
           cd "$RUNNER_TEMP/donner-bcr/consumer-test/consumer"
           bazelisk test --lockfile_mode=off \
             --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
-            --registry=https://bcr.bazel.build //:render_svg
+            --registry=https://bcr.bazel.build //:all
           bazelisk build --lockfile_mode=off \
             --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
             --registry=https://bcr.bazel.build \
