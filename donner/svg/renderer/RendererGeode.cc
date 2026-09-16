@@ -1655,6 +1655,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+  /// Submits all source rendering and disables host replay before standalone filter execution.
+  [[nodiscard]] bool suspendFrameForFilter() {
+    if (!frameCommandEncoder || !flushFrameGpuEncoder()) {
+      discardFrameGpuEncoder();
+      return false;
+    }
+    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(frameCommandEncoder.get().finish());
+    if (!commands) {
+      discardFrameGpuEncoder();
+      return false;
+    }
+    device->queue().submit(1, &commands.get());
+    device->countSubmit();
+    closeFrameGpuEncoderAfterSubmit();
+    frameCommandEncoder.reset();
+    frameFinishedEncoders.clear();
+    return !device->adapterDevice().hasHostCommandEncoder();
+  }
+
+  /// Opens the fresh raw/runtime encoder pair that records the post-filter composite.
+  [[nodiscard]] bool restoreFrameAfterFilter() {
+    wgpu::CommandEncoderDescriptor descriptor = {};
+    descriptor.label = wgpuLabel("RendererGeodePostFilterCE");
+    frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
+    return frameCommandEncoder && openFrameGpuEncoder();
+  }
+
   /// Abandon this frame without completing any other renderer's recorded work.
   void discardFrameGpuEncoder() {
     if (device && frameCommandEncoder) {
@@ -1913,6 +1940,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     gpu::TextureDescriptor desc;
   };
   std::vector<PendingRelease> framePendingReleases;
+  std::vector<PendingRelease> failedFilterTextures;
 
   void releaseTextureAtFrameEnd(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
@@ -1924,6 +1952,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                       const gpu::TextureDescriptor& desc) override {
     releaseTextureAtFrameEnd(std::move(texture), desc);
+  }
+
+  void retainFailedFilterTexture(gpu::Texture texture,
+                                 const gpu::TextureDescriptor& desc) override {
+    if (texture.isValid()) failedFilterTextures.push_back({std::move(texture), desc});
   }
 
   void drainPendingReleases() {
@@ -2274,13 +2307,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
                                   Vector2d(geometry->blurPadding + frame.filterRegion.width(),
                                            geometry->blurPadding + frame.filterRegion.height()));
-    if (!flushFrameGpuEncoder()) {
-      releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
+    if (!suspendFrameForFilter()) {
+      device->markDeviceLost("frame commands could not be submitted before filter execution");
+      retainFailedFilterTexture(std::move(localTexture), localDesc);
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      frame.localRasterRequiredForBudget = true;
+      if (!frameCommandEncoder && !restoreFrameAfterFilter()) {
+        device->markDeviceLost("frame encoder could not be restored after filter suspension");
+      }
       return false;
     }
-    geode::FilterExecutionResult localFiltered = filterEngine->execute(
-        frame.filterGraph, localTexture, localDesc, localFilterRegion, localDeviceFromFilter, *this,
-        frameCommandEncoder, nullptr, frame.localFilterPlan);
+    geode::FilterExecutionResult localFiltered =
+        filterEngine->execute(frame.filterGraph, localTexture, localDesc, localFilterRegion,
+                              localDeviceFromFilter, *this, nullptr, frame.localFilterPlan);
+    if (!restoreFrameAfterFilter()) {
+      device->markDeviceLost("frame encoder could not be restored after filter execution");
+      retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
+      retainFailedFilterTexture(std::move(localTexture), localDesc);
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      return true;
+    }
 
     const Transform2d deviceFromLocal =
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
@@ -2307,6 +2353,43 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
     frame.localRasterRequiredForBudget = false;
     return true;
+  }
+
+  /// Executes one ordinary filter graph between the submitted source and following frame encoder.
+  std::optional<geode::FilterExecutionResult> executeFilterGraph(
+      FilterStackFrame& frame, const Transform2d& bufferDeviceFromFilter) {
+    geode::FilterExecutionResult filtered;
+    filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
+    if (frame.localRasterRequiredForBudget) {
+      filterExecutionBudget->reject();
+      filtered.kind = geode::FilterExecutionResult::Kind::Failed;
+      return filtered;
+    }
+    if (!filterEngine || frame.filterGraph.empty() ||
+        static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height >
+            components::kMaximumFilterSurfacePixels) {
+      return filtered;
+    }
+
+    if (!suspendFrameForFilter()) {
+      device->markDeviceLost("frame commands could not be submitted before filter execution");
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      filtered.kind = geode::FilterExecutionResult::Kind::Failed;
+    } else {
+      filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
+                                       frame.filterRegion, bufferDeviceFromFilter, *this, nullptr,
+                                       frame.fullFilterPlan);
+    }
+    if (!frameCommandEncoder && !restoreFrameAfterFilter()) {
+      device->markDeviceLost("frame encoder could not be restored after filter execution");
+      filterExecutionBudget->release(frame.filterReservation);
+      retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      target = frame.savedTarget;
+      encoder.reset();
+      return std::nullopt;
+    }
+    return filtered;
   }
 
   /// Recompute the intersection of every rectangular clip entry on
@@ -5649,20 +5732,10 @@ void RendererGeode::popFilterLayer() {
 
   // Run the filter graph on the captured layer texture. Nothing runs it when the graph is empty,
   // in which case the capture itself is what gets composited back.
-  geode::FilterExecutionResult filtered;
-  filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
-  if (frame.localRasterRequiredForBudget) {
-    impl_->filterExecutionBudget->reject();
-    filtered.kind = geode::FilterExecutionResult::Kind::Failed;
-  } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
-             static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
-                 components::kMaximumFilterSurfacePixels) {
-    UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
-                             "Failed to replay recorded draws before the filter passes");
-    filtered = impl_->filterEngine->execute(
-        frame.filterGraph, frame.layerTexture, frame.layerDesc, frame.filterRegion,
-        bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder, nullptr, frame.fullFilterPlan);
-  }
+  std::optional<geode::FilterExecutionResult> execution =
+      impl_->executeFilterGraph(frame, bufferDeviceFromFilter);
+  if (!execution.has_value()) return;
+  geode::FilterExecutionResult filtered = std::move(*execution);
   const gpu::Texture* filteredTexture = Impl::filterOutput(filtered, frame.layerTexture);
   const gpu::TextureDescriptor& filteredDesc = Impl::filterOutputDesc(filtered, frame.layerDesc);
 

@@ -13,6 +13,7 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -98,6 +99,13 @@ public:
   ///   that descriptor misses its bucket.
   virtual void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                               const gpu::TextureDescriptor& desc) = 0;
+
+  /// Retains a texture whose commands may have been accepted but lack completion proof.
+  ///
+  /// The texture must not return to a reusable pool. The allocator keeps its backing alive until
+  /// the owning device is torn down or another backend-specific completion proof exists.
+  virtual void retainFailedFilterTexture(gpu::Texture texture,
+                                         const gpu::TextureDescriptor& desc) = 0;
 };
 
 /**
@@ -258,12 +266,9 @@ public:
    *   derive per-axis scale factors and to project directional parameters
    *   (e.g. feOffset dx/dy) through rotation/skew.
    * @param textureAllocator Renderer-owned filter texture pool boundary.
-   * @param commandEncoder The frame command encoder slot. Filter compute passes are recorded after
-   *   the source render pass and before the filtered result is composited. Pathological filter
-   *   graphs (for example a huge-radius feMorphology decomposing into thousands of passes) chunk
-   *   this slot: the current command buffer is submitted and a fresh encoder is installed in the
-   *   slot every 64 passes, so no single command buffer grows without bound while small filters
-   *   keep the two-submissions-per-frame shape.
+   * Filter compute, copy and clear commands are recorded into encoder chunks owned and submitted
+   * by this execution. The caller submits source rendering first, leaves host replay disabled
+   * during execution, then restores its following frame encoder before compositing the result.
    * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
    *   only the graph-local limit.
    * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
@@ -276,15 +281,11 @@ public:
                                 const gpu::TextureDescriptor& sourceGraphicDesc,
                                 const Box2d& filterRegion, const Transform2d& deviceFromFilter,
                                 FilterTextureAllocator& textureAllocator,
-                                ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
                                 svg::components::FilterExecutionBudget* executionBudget = nullptr,
                                 std::optional<FilterTilePlan> admittedPlan = std::nullopt);
 
   /**
-   * Begin a new frame for this engine: reset the frame-scoped chunk pass
-   * counter (so the 64-pass command-buffer bound covers every filter graph
-   * recorded into the frame's shared encoder, not just one execute() call)
-   * and reset the per-frame uniform scratch cursor.
+   * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.
    *
    * The renderer calls this once per frame from its own beginFrame, BEFORE
    * the filter texture pool runs its stale-bucket eviction, and before any
@@ -310,6 +311,9 @@ public:
   /// Lower the working extent for deterministic tile-boundary tests.
   /// @param extent Maximum dimension, between 16 and 512 pixels.
   void setMaximumTileExtentForTesting(uint32_t extent);
+
+  /// Invokes p hook after each accepted command chunk. Test seam for later-chunk failures.
+  void setChunkSubmittedHookForTesting(std::function<void(size_t)> hook);
 
   /// Observed allocation footprint of the most recent execution; does not own resources.
   FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
@@ -628,12 +632,6 @@ private:
 
   bool verbose_ = false;
 
-  /// Frame-scoped count of filter passes recorded into the shared frame
-  /// command encoder, across every execute() call in the frame. Reset by
-  /// beginFrame(); read and advanced by each execute() call's arena to
-  /// bound command-buffer size (see FilterResourceArena).
-  size_t framePassesInCommandBuffer_ = 0;
-
   /// Per-frame parameter scratch buffer and bump-allocated slot cursor (see
   /// FilterResourceCache). Pass bind groups are still created per pass:
   /// the pooled textures a pass binds rotate across frames, so their
@@ -642,6 +640,7 @@ private:
   FilterExecutionMemory lastExecutionMemory_;
   uint32_t preferredTileExtent_ = 512;
   bool adaptiveTiles_ = true;
+  std::function<void(size_t)> chunkSubmittedHookForTesting_;
 };
 
 }  // namespace donner::geode
