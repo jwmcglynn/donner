@@ -26,7 +26,9 @@
 #include "donner/editor/LayerInspectorDiagnostics.h"
 
 // The browser tier is Geode-only, so the OpenGL debug-texture path is desktop-only.
-#ifndef DONNER_EDITOR_WGPU
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/gui/UiTextureRegistration.h"
+#else
 #include "glad/glad.h"
 #endif
 
@@ -138,17 +140,30 @@ private:
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
 
-  static ThumbnailTextureHandle ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+  /// Registers \p textureSnapshot's runtime texture and returns the identifier UI draw data
+  /// carries for it, or zero when it has none.
+  /// @param textureSnapshot Snapshot whose runtime texture is registered.
+  ThumbnailTextureHandle registerSnapshotTexture(
+      const svg::RendererTextureSnapshot* textureSnapshot);
+
+  /// Registers \p uploaded's texture as a straight-alpha UI texture and returns its identifier.
+  /// @param uploaded Texture this panel uploaded. @param dimensions Sampled extent in pixels.
+  ThumbnailTextureHandle registerUploadedTexture(const WgpuUploadedTexture& uploaded,
+                                                 const Vector2i& dimensions);
   std::shared_ptr<WgpuUploadedTexture> uploadThumbnailPixelsToWgpu(
       const std::vector<uint8_t>& pixels, const Vector2i& dimensions);
   static RetiredSnapshot RetireSnapshot(
       ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot,
       std::shared_ptr<WgpuUploadedTexture> uploadedTexture);
-  static void ReleaseImGuiTexture(ThumbnailTextureHandle texture);
+  /// Retires \p texture's registration and drops the runtime handles that backed it. Runs at the
+  /// same frame boundary the panel already released a retired snapshot at.
+  /// @param texture Identifier to retire.
+  [[gnu::noinline]] void releaseImGuiTexture(ThumbnailTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
 
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
+  std::unordered_map<ImTextureID, UiTextureBacking> registeredBackings_;
 #endif
 
   std::array<char, 4096> telemetryPathBuffer_{};

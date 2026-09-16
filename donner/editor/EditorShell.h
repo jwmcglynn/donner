@@ -407,6 +407,11 @@ private:
   void requestHistoryAction(HistoryAction action);
   void applyPendingHistoryActions();
   void applyMenuActions(const MenuBarActions& menuActions);
+  [[gnu::noinline]] void applyOverlayStateChanges(bool compositorTileOverlayBefore,
+                                                  bool geometryDebugOverlayBefore);
+#ifdef __EMSCRIPTEN__
+  void applyBrowserOverlayStateRequest();
+#endif
   /// Build the contextual text-formatting bar's state for this frame: whether
   /// it is visible (single `<text>` selected or an active editing session), the
   /// current family/size/B/I/U values read from that element, and the embedded

@@ -10,9 +10,6 @@
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
-      "wgpuCTypes": [
-        "WGPUTextureView"
-      ],
       "wgpuCppTokens": [
         "Extent3D",
         "TexelCopyBufferLayout",
@@ -54,9 +51,6 @@
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ],
-      "wgpuCTypes": [
-        "WGPUTextureView"
-      ],
       "wgpuCppTokens": [
         "Extent3D",
         "TexelCopyBufferLayout",
@@ -66,8 +60,7 @@
         "TextureDescriptor",
         "TextureDimension",
         "TextureFormat",
-        "TextureUsage",
-        "TextureView"
+        "TextureUsage"
       ]
     },
     "donner/editor/GlTextureCache.h": {
@@ -223,6 +216,16 @@
         "TextureUsage"
       ]
     },
+    "donner/editor/gui/UiTextureRegistration.cc": {
+      "wgpuCppTokens": [
+        "Texture"
+      ]
+    },
+    "donner/editor/gui/UiTextureRegistration.h": {
+      "wgpuCppTokens": [
+        "Texture"
+      ]
+    },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -243,8 +246,7 @@
         "draw"
       ],
       "wgpuCTypes": [
-        "WGPUTexture",
-        "WGPUTextureView"
+        "WGPUTexture"
       ],
       "wgpuCppTokens": [
         "Adapter",
