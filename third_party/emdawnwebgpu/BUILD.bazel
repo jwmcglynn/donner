@@ -18,15 +18,26 @@ Layout:
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
-package(default_visibility = ["//third_party/webgpu-cpp:__pkg__", "//donner/svg/renderer/wasm:__pkg__"])
-
-exports_files([
-    "webgpu/src/library_webgpu_enum_tables.js",
-    "webgpu/src/library_webgpu_generated_sig_info.js",
-    "webgpu/src/library_webgpu_generated_struct_info.js",
-    "webgpu/src/library_webgpu.js",
-    "webgpu/src/webgpu-externs.js",
+package(default_visibility = [
+    "//donner/svg/renderer/wasm:__pkg__",
+    "//third_party/webgpu-cpp:__pkg__",
 ])
+
+exports_files(
+    [
+        "webgpu/src/library_webgpu_enum_tables.js",
+        "webgpu/src/library_webgpu_generated_sig_info.js",
+        "webgpu/src/library_webgpu_generated_struct_info.js",
+        "webgpu/src/library_webgpu.js",
+        "webgpu/src/webgpu-externs.js",
+    ],
+    visibility = [
+        "//donner/editor/wasm:__pkg__",
+        "//donner/editor/wasm/tests:__pkg__",
+        "//donner/svg/renderer/wasm:__pkg__",
+        "//third_party/webgpu-cpp:__pkg__",
+    ],
+)
 
 # C header for <webgpu/webgpu.h>.
 cc_library(
@@ -62,10 +73,10 @@ cc_library(
 filegroup(
     name = "js_libraries",
     srcs = [
+        "webgpu/src/library_webgpu.js",
         "webgpu/src/library_webgpu_enum_tables.js",
         "webgpu/src/library_webgpu_generated_sig_info.js",
         "webgpu/src/library_webgpu_generated_struct_info.js",
-        "webgpu/src/library_webgpu.js",
     ],
 )
 

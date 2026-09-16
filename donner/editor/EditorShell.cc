@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cfloat>
 #include <chrono>
@@ -120,6 +121,24 @@ bool ShouldRequestSaveShortcut(bool allowed, bool anyPopupOpen, bool command, bo
 }  // namespace
 
 #ifdef __EMSCRIPTEN__
+namespace {
+
+std::atomic<int> gBrowserOverlayStateRequest{0};
+std::atomic<bool> gBrowserOverlayControlEnabled{false};
+
+}  // namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE int donner_set_overlay_state(int key, int enabled) {
+  if (!gBrowserOverlayControlEnabled.load(std::memory_order_acquire) || (key != 0 && key != 1) ||
+      (enabled != 0 && enabled != 1)) {
+    return 0;
+  }
+
+  const int request = 1 + key * 2 + enabled;
+  gBrowserOverlayStateRequest.store(request, std::memory_order_release);
+  return 1;
+}
+
 int SampleThumbnailRendererCreationRequestForTesting() {
   return MAIN_THREAD_EM_ASM_INT({
     const raw =
@@ -136,6 +155,12 @@ int SampleThumbnailRendererCreationDelayMsForTesting() {
     const value = Number(raw || 0);
     return Number.isFinite(value) ? Math.max(0, Math.min(5000, Math.floor(value))) : 0;
   });
+}
+
+bool BrowserOverlayControlEnabledForTesting() {
+  return MAIN_THREAD_EM_ASM_INT({
+           return new URLSearchParams(window.location.search).get('testControl') == 'overlay';
+         }) != 0;
 }
 
 // The app runs on a pthread in the browser build, where `window` and
@@ -1216,6 +1241,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
 #ifdef __EMSCRIPTEN__
+  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+  gBrowserOverlayControlEnabled.store(BrowserOverlayControlEnabledForTesting(),
+                                      std::memory_order_release);
   renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
       SampleThumbnailRendererCreationRequestForTesting(),
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
@@ -1395,6 +1423,10 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#ifdef __EMSCRIPTEN__
+  gBrowserOverlayControlEnabled.store(false, std::memory_order_release);
+  gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+#endif
   if (catalogFontWakeTarget_) {
     std::lock_guard lock(catalogFontWakeTarget_->mutex);
     catalogFontWakeTarget_->window = nullptr;
@@ -2568,28 +2600,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     renderCoordinator_.requestPresentationRefresh();
     requestRenderAtEndOfFrame_ = true;
   }
-  if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
-    // Push the new overlay state to the worker and post a render. Geometry
-    // debug uses a flat full-document pass while enabled; disabling it resets
-    // that state and restores normal retained selection promotion.
-    renderCoordinator_.asyncRenderer().setGeometryDebugOverlayEnabled(geometryDebugOverlay_);
-    // A composited tile's uploaded texture is keyed on the document frame version, on the
-    // assumption that identical version plus identical dimensions means identical pixels. This
-    // toggle breaks that assumption: it repaints the same document version with a renderer-side
-    // wireframe pass, so the refreshed full-canvas tile arrives with an identity the cache has
-    // already seen and the stale pre-toggle texture keeps being presented. Drop the uploaded
-    // textures the same way a document load does, so the next render's pixels are the ones that
-    // reach the canvas.
-    textures_.resetComposited();
-    renderCoordinator_.requestPresentationRefresh();
-    requestRenderAtEndOfFrame_ = true;
-  }
-  if (compositorTileOverlay_ && compositorTileOverlay_ != compositorTileOverlayBeforeMenu) {
-    // The first direct-surface frame can land before deferred compositor cache warmup. Request one
-    // metadata-publishing frame so the UI-side overlay has tile geometry to draw.
-    renderCoordinator_.requestPresentationRefresh();
-    requestRenderAtEndOfFrame_ = true;
-  }
+  applyOverlayStateChanges(compositorTileOverlayBeforeMenu, geometryDebugOverlayBeforeMenu);
   // DockSpace layout controls: toggle the lock or request a rebuild of the
   // default layout. renderDockSpaceHost consumes the reset request next frame.
   if (menuActions.toggleLayoutLock) {
@@ -2613,6 +2624,60 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     window_.wakeEventLoop();
   }
 }
+
+void EditorShell::applyOverlayStateChanges(bool compositorTileOverlayBefore,
+                                           bool geometryDebugOverlayBefore) {
+  if (geometryDebugOverlay_ != geometryDebugOverlayBefore) {
+    // Push the new overlay state to the worker and post a render. Geometry
+    // debug uses a flat full-document pass while enabled; disabling it resets
+    // that state and restores normal retained selection promotion.
+    renderCoordinator_.asyncRenderer().setGeometryDebugOverlayEnabled(geometryDebugOverlay_);
+    // A composited tile's uploaded texture is keyed on the document frame version, on the
+    // assumption that identical version plus identical dimensions means identical pixels. This
+    // toggle breaks that assumption: it repaints the same document version with a renderer-side
+    // wireframe pass, so the refreshed full-canvas tile arrives with an identity the cache has
+    // already seen and the stale pre-toggle texture keeps being presented. Drop the uploaded
+    // textures the same way a document load does, so the next render's pixels are the ones that
+    // reach the canvas.
+    textures_.resetComposited();
+    renderCoordinator_.requestPresentationRefresh();
+    requestRenderAtEndOfFrame_ = true;
+  }
+  if (compositorTileOverlay_ && compositorTileOverlay_ != compositorTileOverlayBefore) {
+    // The first direct-surface frame can land before deferred compositor cache warmup. Request one
+    // metadata-publishing frame so the UI-side overlay has tile geometry to draw.
+    renderCoordinator_.requestPresentationRefresh();
+    requestRenderAtEndOfFrame_ = true;
+  }
+  if (compositorTileOverlay_ != compositorTileOverlayBefore ||
+      geometryDebugOverlay_ != geometryDebugOverlayBefore) {
+    window_.wakeEventLoop();
+  }
+}
+
+#ifdef __EMSCRIPTEN__
+void EditorShell::applyBrowserOverlayStateRequest() {
+  if (!gBrowserOverlayControlEnabled.load(std::memory_order_acquire)) {
+    gBrowserOverlayStateRequest.store(0, std::memory_order_release);
+    return;
+  }
+  const int request = gBrowserOverlayStateRequest.exchange(0, std::memory_order_acq_rel);
+  if (request == 0) {
+    return;
+  }
+
+  const bool compositorTileOverlayBefore = compositorTileOverlay_;
+  const bool geometryDebugOverlayBefore = geometryDebugOverlay_;
+  switch (request) {
+    case 1: compositorTileOverlay_ = false; break;
+    case 2: compositorTileOverlay_ = true; break;
+    case 3: geometryDebugOverlay_ = false; break;
+    case 4: geometryDebugOverlay_ = true; break;
+    default: return;
+  }
+  applyOverlayStateChanges(compositorTileOverlayBefore, geometryDebugOverlayBefore);
+}
+#endif
 
 void EditorShell::handleFileShortcuts(bool anyPopupOpen, bool cmd, bool shift) {
   if (anyPopupOpen || !cmd) {
@@ -7205,6 +7270,9 @@ void EditorShell::snapshotReproFrame() {
 #endif
 
 void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
+#ifdef __EMSCRIPTEN__
+  applyBrowserOverlayStateRequest();
+#endif
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
   MenuBarState menuState{
       .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),

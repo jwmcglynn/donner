@@ -269,6 +269,21 @@ test("default browser discovery excludes the manual font reference probe", () =>
   assert.match(referenceConfig, /testMatch: "font-reference\.spec\.ts"/);
 });
 
+test("default browser discovery excludes the Node selector aggregator", () => {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const selectorTarget = buildFile.match(
+    /name = "selector_tests"[\s\S]*?entry_point = "([^"]+)"/,
+  );
+  assert.ok(selectorTarget, "selector_tests must keep an explicit Node entry point");
+  assert.equal(selectorTarget[1], "selector-tests.mjs");
+  assert.doesNotMatch(
+    selectorTarget[1],
+    /\.spec\.[cm]?[jt]s$/,
+    "the Node aggregator must not match Playwright's default test-file discovery",
+  );
+  assert.ok(existsSync(path.join(testDirectory, selectorTarget[1])));
+});
+
 test("browser diagnostics do not manufacture fatal adapter failures", () => {
   const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
   assert.doesNotMatch(

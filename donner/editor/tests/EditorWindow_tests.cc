@@ -21,13 +21,13 @@
 #include <thread>
 
 #if defined(DONNER_EDITOR_WGPU)
-#include "backends/imgui_impl_wgpu.h"
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/Color.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/GlTextureCache.h"
@@ -37,12 +37,16 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
+#include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/StrokeParams.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #endif
@@ -334,15 +338,78 @@ svg::RendererBitmap CropLogicalRect(const svg::RendererBitmap& source,
   return CropBitmap(source, x, y, width, height);
 }
 
-ImTextureID TextureIdFromGeodeSnapshot(const svg::RendererTextureSnapshot& texture) {
-  if (texture.backend() != svg::RendererTextureSnapshotBackend::Geode) {
-    return 0;
+/// Registers a Geode snapshot's runtime texture as a UI texture for this object's lifetime, so a
+/// test draws it the way editor code does: through an identifier the renderer resolves, never a
+/// backend address.
+class ScopedUiTexture {
+public:
+  /// Registers \p texture with \p alphaMode on the device the UI renderer draws with.
+  /// @param texture Snapshot to register; must be a Geode snapshot.
+  /// @param alphaMode Alpha interpretation of the sampled texels.
+  ScopedUiTexture(const svg::RendererTextureSnapshot& texture, UiTextureAlphaMode alphaMode)
+      : registry_(CurrentUiTextureRegistry()) {
+    if (registry_ == nullptr || CurrentImGuiRuntimeRenderer() == nullptr ||
+        texture.backend() != svg::RendererTextureSnapshotBackend::Geode) {
+      return;
+    }
+    // Registrations belong to the device the UI is drawn on, which is not necessarily the device
+    // the snapshot's pixels were rendered on.
+    gpu::Device& device = CurrentImGuiRuntimeRenderer()->device();
+    const auto& geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot&>(texture);
+    const Vector2i dimensions = geodeTexture.dimensions();
+    const gpu::Texture* runtimeTexture = geodeTexture.runtimeTexture();
+    // A snapshot that owns a runtime texture is registered directly; one that still carries only
+    // a backend texture enters the runtime as an import whose backing it does not own.
+    if (runtimeTexture == nullptr || runtimeTexture->deviceId() != device.deviceId()) {
+      if (!geodeTexture.runtimeFormat().has_value()) {
+        return;
+      }
+      gpu::Result<gpu::Texture> imported =
+          static_cast<geode::GeodeWgpuAdapterDevice&>(device).importExternalTexture(
+              geodeTexture.texture(),
+              {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y)},
+              *geodeTexture.runtimeFormat(), gpu::TextureUsage::Sampled);
+      if (imported.hasError()) {
+        return;
+      }
+      imported_ = std::move(imported).result();
+      runtimeTexture = &imported_;
+    }
+    gpu::Result<gpu::TextureView> view =
+        device.createTextureView(*runtimeTexture, gpu::TextureViewDescriptor{"testUiTexture"});
+    if (view.hasError()) {
+      return;
+    }
+    gpu::Result<UiTextureId> registered = registry_->registerTexture(UiTextureDescriptor{
+        view.result(),
+        {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y)},
+        alphaMode});
+    if (registered.hasError()) {
+      return;
+    }
+    view_ = std::move(view).result();
+    id_ = registered.result();
   }
 
-  const auto& geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot&>(texture);
-  const WGPUTextureView textureView = geodeTexture.textureView();
-  return static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(textureView));
-}
+  ~ScopedUiTexture() {
+    if (registry_ != nullptr && id_.isValid()) {
+      const gpu::Status retired = registry_->retire(id_);
+      (void)retired;
+    }
+  }
+
+  ScopedUiTexture(const ScopedUiTexture&) = delete;
+  ScopedUiTexture& operator=(const ScopedUiTexture&) = delete;
+
+  /// The identifier draw data carries for this texture, zero when registration failed.
+  ImTextureID id() const { return id_.imTextureId(); }
+
+private:
+  UiTextureRegistry* registry_ = nullptr;
+  gpu::Texture imported_;
+  gpu::TextureView view_;
+  UiTextureId id_;
+};
 
 std::optional<RenderResult::CompositedPreview> RenderCompositedPreview(
     const std::shared_ptr<geode::GeodeDevice>& device, svg::SVGDocument& document,
@@ -1615,11 +1682,9 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   std::shared_ptr<const svg::RendererTextureSnapshot> texture = source.takeTextureSnapshot();
   ASSERT_TRUE(texture != nullptr);
   ASSERT_EQ(texture->backend(), svg::RendererTextureSnapshotBackend::Geode);
-  const auto* geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot*>(texture.get());
-  const WGPUTextureView textureView = geodeTexture->textureView();
-  const ImTextureID textureId =
-      static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(textureView));
-  ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(textureId);
+  ScopedUiTexture uiTexture(*texture, UiTextureAlphaMode::Premultiplied);
+  const ImTextureID textureId = uiTexture.id();
+  ASSERT_NE(textureId, 0);
 
   window.beginFrame();
   ImGui::GetBackgroundDrawList()->AddImage(textureId, ImVec2(16.0f, 16.0f), ImVec2(80.0f, 80.0f));
@@ -1630,8 +1695,74 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "A premultiplied red texture should not be multiplied by alpha again during ImGui "
          "presentation.";
-  ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(textureId);
-  ImGui_ImplWGPU_RemoveTexture(textureId);
+}
+
+TEST(EditorWindowTest, CompositorDebugPanelReusesAnUnchangedSnapshotRegistration) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor Debug Panel Registration Reuse Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid() || window.geodeDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+  svg::RendererGeode source(window.geodeDevice());
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(32.0, 32.0);
+  viewport.devicePixelRatio = 1.0;
+  source.beginFrame(viewport);
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid{css::Color(css::RGBA(0, 255, 0, 255))};
+  source.setPaint(paint);
+  source.drawRect(Box2d({0.0, 0.0}, {32.0, 32.0}), svg::StrokeParams{});
+  source.endFrame();
+
+  const std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot =
+      source.takeTextureSnapshot();
+  ASSERT_TRUE(textureSnapshot != nullptr);
+
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  ASSERT_TRUE(registry != nullptr);
+
+  using CompositeTileSnapshot = svg::compositor::CompositorController::CompositeTileSnapshot;
+  CompositeTileSnapshot tile;
+  tile.kind = CompositeTileSnapshot::Kind::Segment;
+  tile.id = "seg:reuse";
+  tile.label = "segment reuse";
+  tile.generation = 1;
+  tile.bitmapDims = Vector2i(32, 32);
+  tile.textureSnapshot = textureSnapshot;
+  const std::vector<CompositeTileSnapshot> tiles{tile};
+
+  CompositorDebugPanel panel(window.geodeDevice());
+  const auto renderPanelFrame = [&]() {
+    window.beginFrame();
+    ImGui::Begin("##registration_reuse_host");
+    panel.render(tiles, svg::compositor::CompositorController::StateSnapshot{}, entt::null,
+                 /*viewportZoom=*/1.0, /*viewportDpr=*/1.0, Vector2i(96, 96), Vector2i(96, 96),
+                 PresentationCoverageDiagnostics{},
+                 svg::compositor::CompositorController::FastPathCounters{},
+                 svg::compositor::CompositorController::RenderFrameStats{});
+    ImGui::End();
+    window.endFrame();
+  };
+
+  renderPanelFrame();
+  const size_t afterFirstFrame = registry->liveCount();
+  EXPECT_GT(afterFirstFrame, 0u) << "the tile's snapshot should have been registered once";
+
+  renderPanelFrame();
+
+  // Deriving the identifier used to be an address cast, so calling it every frame cost nothing.
+  // Resolving through the registry allocates, and the unchanged-snapshot branch keeps the
+  // identifier the entry already published, so a second registration would be attached to no
+  // entry and retired by nobody: one leaked slot and backing per visible tile per frame.
+  EXPECT_EQ(registry->liveCount(), afterFirstFrame)
+      << "a tile whose snapshot did not change must reuse its registration";
 }
 
 TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend) {
@@ -1957,9 +2088,9 @@ TEST(EditorWindowTest, WgpuPresentsZoomedBlurredPremultipliedTextureWithoutDarke
   std::shared_ptr<const svg::RendererTextureSnapshot> texture =
       RenderBlurredGlowTexture(window.geodeDevice());
   ASSERT_TRUE(texture != nullptr);
-  const ImTextureID textureId = TextureIdFromGeodeSnapshot(*texture);
+  ScopedUiTexture uiTexture(*texture, UiTextureAlphaMode::Premultiplied);
+  const ImTextureID textureId = uiTexture.id();
   ASSERT_NE(textureId, 0);
-  ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(textureId);
 
   window.beginFrame();
   ImDrawList* drawList = ImGui::GetBackgroundDrawList();
@@ -1987,8 +2118,6 @@ TEST(EditorWindowTest, WgpuPresentsZoomedBlurredPremultipliedTextureWithoutDarke
       << "A zoomed premultiplied blurred texture should preserve the same transparent-edge "
          "intensity as the 1x presentation. reference="
       << referenceEdgeLuma << " zoomed=" << zoomedEdgeLuma;
-  ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(textureId);
-  ImGui_ImplWGPU_RemoveTexture(textureId);
 }
 
 TEST(EditorWindowTest, WgpuPresentsZoomedCompositedBlurredLayerWithoutDarkening) {

@@ -352,8 +352,12 @@ py_test(
         # Measured catalog-delivery package: Wasm 9,105,242 raw / 3,026,849 gzip;
         # JS 175,960 raw / 49,695 gzip; complete package 11,156,939 raw bytes.
         # Keep about one percent growth room around the approximately 3 MB module goal.
+        # The raw budgets are temporarily wider while the editor carries both the
+        # transitional WebGPU adapter and the runtime-native UI path (measured
+        # 9,228,288 raw / 11,279,902 total at the cutover). TODO: return them to
+        # 9,200,000 / 11,270,000 once the transitional adapter is removed.
         "--max-wasm-raw-bytes",
-        "9200000",
+        "9240000",
         "--max-wasm-gzip-bytes",
         "3060000",
         "--max-wasm-function-body-bytes",
@@ -365,7 +369,7 @@ py_test(
         "--max-js-gzip-bytes",
         "50200",
         "--max-total-raw-bytes",
-        "11270000",
+        "11290000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
