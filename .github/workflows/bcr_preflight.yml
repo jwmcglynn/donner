@@ -69,6 +69,7 @@ jobs:
         with:
           tag: v${{ steps.archive.outputs.version }}
           module-version: ${{ steps.archive.outputs.version }}
+          # Select the root template set; MODULE.bazel is read from the archive.
           module-roots: .
           templates-dir: donner/.bcr
           local-registry: ${{ runner.temp }}/donner-bcr/registry
