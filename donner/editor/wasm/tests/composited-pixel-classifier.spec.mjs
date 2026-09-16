@@ -26,6 +26,14 @@ test("yellow content excludes cyan selection chrome after the default gates", ()
   assert.equal(matches(240, 190, 10, 63), false);
 });
 
+test("basic blue isolates the authored rectangle from every other fixture color", () => {
+  const matches = classifier({ minColorAlpha: 64, minColorSpread: 60, colorMask: "basic-blue" });
+  assert.equal(matches(47, 111, 237, 255), true);
+  assert.equal(matches(240, 180, 41, 255), false);
+  assert.equal(matches(53, 161, 107, 255), false);
+  assert.equal(matches(47, 111, 237, 179), false);
+});
+
 test("the default classifier remains alpha and channel-spread based", () => {
   const matches = classifier({ minColorAlpha: 16, minColorSpread: 12, colorMask: null });
   assert.equal(matches(30, 45, 30, 16), true);
