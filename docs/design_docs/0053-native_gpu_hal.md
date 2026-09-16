@@ -2,8 +2,8 @@
 
 **Status:** Implementing. Compile-time shader artifacts, indexed drawing, texture-write origins,
 native buffer mapping, Metal surfaces, the browser backend, and the first filter-resource slice are
-merged. UI rendering, shader linkage, and Vulkan surfaces are published: shader linkage and Vulkan
-surfaces have green source checkpoints; UI awaits coverage CI. Filter command recording is
+merged. UI rendering, shader linkage, and Vulkan surfaces are published with green source
+checkpoints, including all hosted checks. Filter command recording is
 implemented but unpublished, with two blocking failure-path repairs. The production bridge and final
 ownership and dependency cutover remain open.\
 **Created:** 2026-07-05\
@@ -42,13 +42,13 @@ bridge ([#1266](https://github.com/jwmcglynn/donner/pull/1266)), and runtime tex
 first filter-intermediate slice ([#1268](https://github.com/jwmcglynn/donner/pull/1268)). These
 capabilities are integrated foundations; they do not by themselves complete the editor cutover.
 
-Evidence checkpoint: 2026-09-16 04:41 UTC. Results below belong to the named source revisions;
+Evidence checkpoint: 2026-09-16 04:48 UTC. Results below belong to the named source revisions;
 subsequent documentation-only updates require their own current-head CI check. None of the three
 open pull requests has been merged.
 
 | Active unit | Current state | Remaining gate |
 | --- | --- | --- |
-| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) | Published at `222fa157`, including the test-discovery repair over runtime `ec42699b`. All 678 runnable full-suite targets and five editor targets pass. The runtime follow-up passes 42 native cases, ten browser presentation cases plus Chromium smoke, and all nine unchanged package limits. Hosted browser and Linux jobs pass; coverage remains running. | Complete coverage CI and recheck review/conflict state before an approved merge. Earlier Linux UI pixel/synchronization evidence remains bound to `9b51067f`. |
+| [UI renderer and runtime texture registrations #1267](https://github.com/jwmcglynn/donner/pull/1267) | Published at `222fa157`, including the test-discovery repair over runtime `ec42699b`. All 678 runnable full-suite targets and five editor targets pass. The runtime follow-up passes 42 native cases, ten browser presentation cases plus Chromium smoke, and all nine unchanged package limits. All hosted checks pass, including coverage. | Obtain merge approval and verify current head/base and review/conflict state before integration. Earlier Linux UI pixel/synchronization evidence remains bound to `9b51067f`. |
 | [Native shader artifact linkage #1279](https://github.com/jwmcglynn/donner/pull/1279) | At `b7bcf145`, all 676 runnable full-suite targets, five editor targets, and all hosted checks pass, including the repaired Firefox pixel-classification test. Review threads are resolved and the source checkpoint has no textual conflicts. | Obtain merge approval and verify the current head/base and subsequent documentation checks before integration. Native production pixel qualification remains part of the later ownership cutover. |
 | [Vulkan surfaces #1272](https://github.com/jwmcglynn/donner/pull/1272) | Published at `587ad274`. All 674 runnable full-suite targets and five editor targets pass. The native matrix passes 674 cases across 12 targets, including 69 surface cases, with no case skips or Khronos synchronization diagnostics. All hosted checks pass; five review threads are resolved and there are no textual conflicts. | Obtain merge approval and verify the current head/base before integration. |
 | Filter runtime command recording | Implemented but unpublished. The prior candidate passes 463 Mac cases with one Vulkan-only skip, and eight browser presentation cases with four existing platform skips. Final review blocks publication on invalid drawing-encoder state after failed frame restoration and unbounded retention after recoverable post-submit refusal. A deterministic regression now reproduces the first defect. | Repair both failure paths, prove bounded retirement/admission, execute the Vulkan final-chunk timeout regression and its causal control, then complete independent review and publish the atomic unit. |
@@ -57,7 +57,7 @@ open pull requests has been merged.
 
 | Order | Unit | Completion boundary |
 | --- | --- | --- |
-| 1 | Active UI, shader-linkage, and Vulkan-surface pull requests | Finish the remaining UI coverage check, maintain current review/conflict evidence, and integrate only after merge approval. |
+| 1 | Active UI, shader-linkage, and Vulkan-surface pull requests | Preserve the green source checkpoints, verify current-head CI and review/conflict state, and integrate only after merge approval. |
 | 2 | Filter runtime command recording | Finish the two reviewed failure-path repairs and native completion/timeout proof while preserving the 64-pass boundary and source-render/filter/composite order. |
 | 3 | Checkerboard target boundary | Accept a validated borrowed runtime texture and extent in the checkerboard pass; move raw external-target import to its presentation caller and preserve lifetime, device identity, format, usage, and host-encoder isolation. |
 | 4 | Texture-cache upload migration | Move bitmap and thumbnail uploads, border replication, clears, allocation reuse, and deferred retirement to runtime resources. |
@@ -69,8 +69,7 @@ open pull requests has been merged.
 | 10 | Dependency removal and final audits | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits. |
 
 The shared fill, gradient, mask, image, and snapshot pipelines and `GeoEncoder` already use runtime
-resources. The remaining checkerboard import boundary is a specific caller migration, not a rewrite
-of those completed resources.
+resources. The checkerboard target caller is the next remaining shared-pipeline boundary.
 
 ## Goals
 
@@ -95,8 +94,8 @@ of those completed resources.
 
 ## Next Steps
 
-1. Close UI coverage CI and keep the published source checkpoints, review threads and conflicts
-   current until their separately approved integration.
+1. Keep the published source checkpoints, current-head CI, review threads and conflicts verified
+   until their separately approved integration.
 2. Repair filter abandonment and failed-work retirement, complete native timeout proof, and publish
    that unit. Then move the checkerboard target boundary, texture-cache uploads, and the remaining
    snapshot, target and readback identity boundaries.
@@ -241,7 +240,7 @@ commits and their fixes together in a focused reviewable change.
       UI texture registrations carrying device identity, alpha mode, and frame lifetime.
       Implemented in [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), including bounded
       registration, exact-generation retirement and retained backing lifetime. Full and browser
-      qualification pass; hosted coverage and integration remain open.
+      qualification and hosted checks pass; integration remains open.
 - [ ] Implement the ImGui renderer over compiled WGSL shaders, indexed draws, bounded vertex/index uploads,
       texture/sampler bindings, scissors, and renderer-state reset operations. Implemented in
       [PR #1267](https://github.com/jwmcglynn/donner/pull/1267), with native, Vulkan, browser and
