@@ -5377,4 +5377,75 @@ TEST(EditorShellTest, CompactSheetHeaderCloseButtonHidesPanel) {
       << "Clicking the sheet header's close button must hide the compact panel.";
 }
 
+TEST(EditorShellTest, ToolbarSwapUpdatesEverySelectedElementInOneUndoStep) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  const std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)"
+      R"(<rect id="first" x="4" y="4" width="24" height="24" style="opacity: 0.5" )"
+      R"(fill="red" stroke="blue" stroke-width="2"/>)"
+      R"(<rect id="second" x="36" y="4" width="24" height="24" )"
+      R"(fill="green" stroke="black" stroke-width="2"/>)"
+      R"(</svg>)";
+  EditorShell shell(window, OptionsWithSource(source, "paint_swap_multi.svg"));
+  ASSERT_EQ(shell.valid(), true);
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  app.setSelection(std::vector<svg::SVGElement>{*first, *second});
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  const svg::PaintServer firstFill = first->getComputedStyle().fill.get().value();
+  const svg::PaintServer firstStroke = first->getComputedStyle().stroke.get().value();
+  const std::string before(document.source());
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  const auto layout = internal::ComputeFillStrokeWidgetLayout(kCursor, ImVec2(138.0f, 70.0f));
+  const ImVec2 swapCenter((layout.swapMin.x + layout.swapMax.x) * 0.5f,
+                          (layout.swapMin.y + layout.swapMax.y) * 0.5f);
+  ClickToolbar(window, shell, kCursor, swapCenter);
+
+  // Every selected element receives the swapped paints from the first element through one merged
+  // style write per element, with unrelated declarations preserved.
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    EXPECT_THAT(element.getComputedStyle().fill.get(), testing::Optional(firstStroke));
+    EXPECT_THAT(element.getComputedStyle().stroke.get(), testing::Optional(firstFill));
+  }
+  const auto firstStyle = first->getAttribute("style");
+  ASSERT_TRUE(firstStyle.has_value());
+  EXPECT_THAT(std::string(*firstStyle), testing::HasSubstr("opacity: 0.5"));
+  const std::string afterFirstSwap(document.source());
+  EXPECT_NE(afterFirstSwap, before);
+  ASSERT_TRUE(app.canUndo());
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Swap fill and stroke");
+
+  // A second swap restores the original values on the source element.
+  ClickToolbar(window, shell, kCursor, swapCenter);
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    EXPECT_THAT(element.getComputedStyle().fill.get(), testing::Optional(firstFill));
+    EXPECT_THAT(element.getComputedStyle().stroke.get(), testing::Optional(firstStroke));
+  }
+  const std::string afterSecondSwap(document.source());
+  EXPECT_NE(afterSecondSwap, afterFirstSwap);
+
+  // Each swap is one coherent undo step for the whole selection.
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), afterFirstSwap);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), before);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), afterFirstSwap);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), afterSecondSwap);
+}
 }  // namespace donner::editor
