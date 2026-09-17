@@ -18,6 +18,11 @@ def _routing(path):
     return result
 
 
+def _function_body(source, signature):
+    start = source.index(signature)
+    return source[start : source.index("\n}\n", start)]
+
+
 class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
     def test_asan_and_ubsan_select_the_exact_corpus_target(self):
         routing = _routing(sys.argv[1])
@@ -42,16 +47,19 @@ class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
         # the timeout on the empty-input smoke test before any input is actually slow. Creation
         # belongs in LLVMFuzzerInitialize, which runs before the timer is armed.
         source = Path(sys.argv[2]).read_text(encoding="utf-8")
+        initialize_signature = 'extern "C" int LLVMFuzzerInitialize('
+        self.assertIn(initialize_signature, source, "the harness must warm its device in init")
         self.assertIn(
-            "LLVMFuzzerInitialize",
-            source,
-            "the harness must create its device outside the per-input timeout",
+            "SharedDevice()",
+            _function_body(source, initialize_signature),
+            "LLVMFuzzerInitialize must touch the shared device before the timer is armed",
         )
-        initialize = source.index("LLVMFuzzerInitialize")
-        timed = source.index("LLVMFuzzerTestOneInput")
-        self.assertLess(initialize, timed)
-        self.assertIn("CreateHeadless", source[initialize:timed])
-        self.assertNotIn("CreateHeadless", source[timed:])
+        timed = _function_body(source, 'extern "C" int LLVMFuzzerTestOneInput(')
+        self.assertNotIn(
+            "CreateHeadless",
+            timed,
+            "creating the device inside the timed callback charges its cost to the first input",
+        )
 
 
 if __name__ == "__main__":
