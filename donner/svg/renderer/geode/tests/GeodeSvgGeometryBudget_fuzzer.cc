@@ -14,6 +14,14 @@ namespace {
 
 constexpr std::string_view kBoundaryMarker = "GEODE_GEOMETRY_BUDGET_BOUNDARY\n";
 
+/// The process-wide headless device. `LLVMFuzzerInitialize` touches it before libFuzzer arms
+/// `-timeout`, so device and pipeline creation (seconds on a loaded software-Vulkan runner) is not
+/// charged to the first input.
+const std::shared_ptr<geode::GeodeDevice>& SharedDevice() {
+  static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  return device;
+}
+
 SVGDocument ParseRequiredDocument(std::string_view source) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
@@ -47,8 +55,13 @@ void RunBoundaryOracle(const std::shared_ptr<geode::GeodeDevice>& device) {
 
 }  // namespace
 
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** /*argv*/) {
+  SharedDevice();
+  return 0;
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  static const std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  const std::shared_ptr<geode::GeodeDevice>& device = SharedDevice();
   if (!device) return 0;
 
   const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
