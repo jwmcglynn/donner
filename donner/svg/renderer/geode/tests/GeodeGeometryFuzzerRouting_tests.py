@@ -36,6 +36,23 @@ class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
         self.assertIn("GeodeDevice::CreateHeadless()", source)
         self.assertIn("if (!device)", source)
 
+    def test_device_creation_is_not_charged_to_a_per_input_timeout(self):
+        # The soak lanes pass -timeout=2. libFuzzer arms that timeout inside the input callback,
+        # so a device created there (it takes seconds on a loaded software-Vulkan runner) trips
+        # the timeout on the empty-input smoke test before any input is actually slow. Creation
+        # belongs in LLVMFuzzerInitialize, which runs before the timer is armed.
+        source = Path(sys.argv[2]).read_text(encoding="utf-8")
+        self.assertIn(
+            "LLVMFuzzerInitialize",
+            source,
+            "the harness must create its device outside the per-input timeout",
+        )
+        initialize = source.index("LLVMFuzzerInitialize")
+        timed = source.index("LLVMFuzzerTestOneInput")
+        self.assertLess(initialize, timed)
+        self.assertIn("CreateHeadless", source[initialize:timed])
+        self.assertNotIn("CreateHeadless", source[timed:])
+
 
 if __name__ == "__main__":
     unittest.main(argv=[sys.argv[0]])
