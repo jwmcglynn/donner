@@ -99,9 +99,9 @@ to fail one step lower, on both CPU and Geode artifacts where both exist.
 | `text/textPath/with-path-and-xlink-href.svg`                                |      0.89 |                      0 |         no Geode variant |       100 |
 | `text/textPath/with-path.svg`                                               |      0.89 |                      0 |         no Geode variant |       100 |
 
-## Identity-test allowances (5)
+## Identity-test allowances (7)
 
-One-to-two-pixel 1-LSB-class diffs proven pre-existing by byte comparison of
+One-to-three-pixel 1-LSB-class diffs proven pre-existing by byte comparison of
 committed goldens/oracles against fresh renders (the renderer is unchanged, so
 the bytes were always like this; 1.x was structurally blind to them):
 
@@ -109,7 +109,9 @@ the bytes were always like this; 1.x was structurally blind to them):
 | ------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------: |
 | `MetalColorMatrixTest.GaussianAndBoxBlurPreservePixelsAndFoldedClip`           | 2 px, RGB identical, alpha 127 vs 128 (GPU float vs CPU oracle)       |  2 at threshold 0.0 |
 | `MetalColorMatrixTest.SlugGradientClipMask`                                    | 2 px, RGB identical, alpha 127 vs 128                                 |  2 at threshold 0.0 |
+| `MetalColorMatrixTest.ComponentTransfer*` (gamma case)                         | 3 px, blue 127 vs 128 from the reciprocal-exponent gamma path         |  3 at threshold 0.0 |
 | `VulkanColorMatrixTest.GaussianAndBoxBlurPreservePixelsAndFoldedClip`          | same 2 bytes as Metal (shared helper)                                 |   shared with Metal |
+| `VulkanColorMatrixTest.ComponentTransfer*` (gamma case)                        | same slice; 0 measured at base `6bc353b16`                            |   shared with Metal |
 | `RnrReplayTest.FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp`           | 2 counted of 51,665 1-LSB dark-background pixels at 0.01              | 2 at threshold 0.01 |
 | `LayerThumbnailGoldenTest.DonnerSplashLayerThumbnailsMatchGoldens` (Geode arm) | 1 counted of 35 ≤3-LSB pixels at 0.02, inside documented GPU variance | 2 at threshold 0.02 |
 
@@ -120,6 +122,7 @@ the bytes were always like this; 1.x was structurally blind to them):
 - resvg default-text and full-text suites: all 41 previously failing cases pass
   locally with the landed thresholds; Geode variants verified with the exact
   comparator against CI artifacts and re-verified on Metal-backed Geode.
-- `metal_color_matrix_tests` blur and slug cases pass locally with the 2px
-  allowance; Vulkan shares the helper and is covered by CI.
+- `metal_color_matrix_tests` blur, slug, and component-transfer cases pass
+  locally with the reviewed allowances; Vulkan shares the helpers and is covered
+  by CI.
 - Full CI on PR #1285 is the final gate (Linux/macOS, CPU/Geode, CMake, lint).
