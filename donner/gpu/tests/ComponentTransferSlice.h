@@ -40,6 +40,8 @@ struct Function {
 struct Case {
   std::string_view name;
   std::array<Function, 4> functions;
+  /// Measured GPU-vs-oracle LSB ties this case may carry; 0 requires identity.
+  int allowedMismatchedPixels = 0;
 };
 
 /// Packs four eight-float records followed by a bounded concatenated table.
@@ -133,7 +135,14 @@ inline Case MixedFunctions() {
 
 /// Ordinary gamma, negative-exponent zero input, and exponent-zero behavior.
 inline Case GammaFunctions() {
-  Case result{"gamma_functions", {}};
+  // The reciprocal-exponent channel lands three pixels on an exact 127.5/255
+  // boundary on Metal: the GPU's `pow(x, -1)` rounds one ULP below the CPU
+  // oracle, so the 8-bit conversion gives 127 where the oracle gives 128 (RGB
+  // bit-identical elsewhere, blue off by one LSB). Pixelmatch 1.x masked this
+  // through uint8 blend quantization; 2.0 compares at full precision
+  // (PR #1285), so this case carries the measured three-pixel allowance and
+  // every other pixel stays bit-exact.
+  Case result{"gamma_functions", {}, /*allowedMismatchedPixels=*/3};
   result.functions[0] = Function{.kind = 4, .amplitude = 0.5f, .exponent = 2, .offset = 0.125f};
   result.functions[1] = Function{.kind = 3, .slope = 0.75f, .intercept = 0.125f};
   result.functions[2] = Function{.kind = 4, .amplitude = 0.5f, .exponent = -1};
@@ -280,6 +289,11 @@ void CheckComponentTransferStorage(DeviceType& device, const shader::CompiledSha
                 testing::Each(testing::Truly([](float value) { return std::isfinite(value); })));
     const auto actualPixels = actual->toPixmap();
     const auto expectedPixels = expected->toPixmap();
+    const editor::tests::BitmapGoldenCompareParams compareParams =
+        test.allowedMismatchedPixels > 0
+            ? editor::tests::ApprovedPixelToleranceParams(0.0f, test.allowedMismatchedPixels,
+                                                          /*includeAntiAliasing=*/true)
+            : editor::tests::PixelmatchIdentityParams();
     editor::tests::CompareBitmapToBitmap(
         svg::RendererBitmap{
             Vector2i(4, 4),
@@ -289,7 +303,7 @@ void CheckComponentTransferStorage(DeviceType& device, const shader::CompiledSha
             std::vector<uint8_t>(expectedPixels.data().begin(), expectedPixels.data().end()), 16},
         "component_transfer_" + std::string(test.name) + "_" +
             std::string(shader.entryPoints.front().name.view()),
-        editor::tests::PixelmatchIdentityParams());
+        compareParams);
   }
 }
 
