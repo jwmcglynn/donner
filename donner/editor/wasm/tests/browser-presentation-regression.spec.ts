@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import {
   captureSplashPresentationFrame,
   type CssRegion,
@@ -1127,8 +1128,10 @@ test(
           }, { message: `circle path outline at drag offset ${offset}` }).not.toBeNull();
         } finally {
           if (capture.length > 0) {
+            const capturePath = testInfo.outputPath(`circle-path-${offset}.png`);
+            await writeFile(capturePath, capture);
             await testInfo.attach(`circle-path-${offset}`, {
-              body: capture,
+              path: capturePath,
               contentType: "image/png",
             });
           }
