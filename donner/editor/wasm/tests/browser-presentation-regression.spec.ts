@@ -1115,16 +1115,24 @@ test(
           height: 10 * scaleY,
         };
         let capture = Buffer.alloc(0);
-        await expect.poll(async () => {
-          capture = await page.screenshot({ clip: curveClip });
-          return readEditorPixelBoundsFromPng(capture, "selection-teal", curveClip, {
-            minX: 0,
-            minY: 0,
-            maxX: curveClip.width,
-            maxY: curveClip.height,
-          });
-        }, { message: `circle path outline at drag offset ${offset}` }).not.toBeNull();
-        await testInfo.attach(`circle-path-${offset}`, { body: capture, contentType: "image/png" });
+        try {
+          await expect.poll(async () => {
+            capture = await page.screenshot({ clip: curveClip });
+            return readEditorPixelBoundsFromPng(capture, "selection-teal", curveClip, {
+              minX: 0,
+              minY: 0,
+              maxX: curveClip.width,
+              maxY: curveClip.height,
+            });
+          }, { message: `circle path outline at drag offset ${offset}` }).not.toBeNull();
+        } finally {
+          if (capture.length > 0) {
+            await testInfo.attach(`circle-path-${offset}`, {
+              body: capture,
+              contentType: "image/png",
+            });
+          }
+        }
       }
     } finally {
       await page.mouse.up();
