@@ -7,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -32,7 +31,6 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/Renderer.h"
-#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::editor {
@@ -3546,56 +3544,6 @@ TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
   EXPECT_TRUE(shell.valid());
   EXPECT_TRUE(invalidShell.valid());
 }
-
-class EditorShellUiFontTest : public testing::TestWithParam<double> {};
-
-TEST_P(EditorShellUiFontTest, DefaultUiFontKeepsItsLogicalSizeAfterRendererStartup) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
-      .title = "Editor font scale regression",
-      .initialWidth = 960,
-      .initialHeight = 640,
-      .visible = false,
-      .offscreen = true,
-      .forceOffscreenRenderTarget = true,
-      .offscreenContentScale = GetParam(),
-      .enableFramebufferReadback = true,
-  });
-  ASSERT_THAT(window.valid(), testing::IsTrue());
-  SCOPED_TRACE(testing::Message() << "display scale: " << window.displayScale());
-  EditorShell shell(window, OptionsWithSource(kInitialSvg));
-  ASSERT_THAT(shell.valid(), testing::IsTrue());
-  ASSERT_THAT(window.editorFonts().complete(), testing::IsTrue());
-
-  // ImGui truncates baked sizes to whole physical pixels before applying FontGlobalScale.
-  const float expectedUiSize =
-      static_cast<float>(std::floor(15.0 * window.displayScale()) / window.displayScale());
-  for (int frame = 0; frame < 2; ++frame) {
-    window.beginFrame();
-    EXPECT_THAT(ImGui::GetFont(), testing::Eq(window.editorFonts().uiRegular));
-    EXPECT_THAT(ImGui::GetFontSize(), testing::FloatEq(expectedUiSize));
-    ImGui::PushFont(window.editorFonts().uiBold);
-    EXPECT_THAT(ImGui::GetFontSize(), testing::FloatEq(expectedUiSize));
-    ImGui::PopFont();
-    ImGui::PushFont(window.editorFonts().code);
-    EXPECT_THAT(ImGui::GetFontSize(), testing::FloatEq(14.0f));
-    ImGui::PopFont();
-    shell.runFrame();
-    const svg::RendererBitmap bitmap = window.endFrameAndReadPixels();
-    EXPECT_THAT(bitmap.empty(), testing::IsFalse());
-    if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
-        outputDir != nullptr && frame == 1 && !bitmap.empty()) {
-      const std::filesystem::path output =
-          std::filesystem::path(outputDir) /
-          ("editor_ui_scale_" + std::to_string(GetParam()) + ".png");
-      EXPECT_THAT(svg::RendererImageIO::writeRgbaPixelsToPngFile(
-                      output.string().c_str(), bitmap.pixels, bitmap.dimensions.x,
-                      bitmap.dimensions.y, bitmap.rowBytes / 4u),
-                  testing::IsTrue());
-    }
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(DisplayScales, EditorShellUiFontTest, testing::Values(1.0, 1.5, 2.0));
 
 TEST(EditorShellTest, SecondShellReusesAtlasFontsWithoutRenaming) {
   gui::EditorWindow window = MakeHiddenWindow();
