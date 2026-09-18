@@ -558,3 +558,30 @@ test.describe("composited output invariants", () => {
     expect(failures).toEqual([]);
   });
 });
+
+test("sample readiness does not depend on sidebar thumbnail diagnostics", async ({ page }) => {
+  test.setTimeout(scaledMs(30_000));
+  const failures = await openEditor(page);
+  // Sidebar diagnostics can lag the document worker and are not a document-readiness signal.
+  await page.evaluate(() => {
+    const state = window as unknown as {
+      __donnerLayerThumbnailStats?: Record<string, unknown>;
+    };
+    let latest = state.__donnerLayerThumbnailStats;
+    Object.defineProperty(window, "__donnerLayerThumbnailStats", {
+      configurable: true,
+      get: () => ({ ...latest, rowCount: 0 }),
+      set: (value: Record<string, unknown>) => {
+        latest = value;
+      },
+    });
+  });
+  await openDonnerSplash(page);
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { __donnerLayerThumbnailStats: { rowCount: number } })
+        .__donnerLayerThumbnailStats.rowCount
+    ),
+  ).toBe(0);
+  expect(failures).toEqual([]);
+});

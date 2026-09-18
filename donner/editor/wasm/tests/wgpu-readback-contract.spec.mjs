@@ -31,6 +31,10 @@ const compositedDragSource = await readFile(
   new URL("./composited-drag-invariants.spec.ts", import.meta.url),
   "utf8",
 );
+const compositedViewportSource = await readFile(
+  new URL("composited-invariants.spec.ts", import.meta.url),
+  "utf8",
+);
 const geodeDeviceSource = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.cc", import.meta.url),
   "utf8",
@@ -392,6 +396,18 @@ test("the composited drag gate does not cancel first-use offscreen WebGPU work",
   assert.match(helper, /!stats\.active/);
   assert.match(helper, /!stats\.pending/);
   assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
+});
+
+test("the composited viewport sample gate waits for settled thumbnails and the document worker", () => {
+  const helper = extractAsyncFunction(compositedViewportSource, "openDonnerSplash");
+  const sampleClick = helper.indexOf("page.mouse.click");
+  const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
+  assert.ok(
+    thumbnailPrecondition >= 0 && thumbnailPrecondition < sampleClick,
+    "viewport gestures must not replace an active first-use thumbnail render",
+  );
+  assert.match(helper, /__donnerWorkerStats/);
+  assert.doesNotMatch(helper, /__donnerLayerThumbnailStats/);
 });
 
 test("shared Basic Shapes visual gates settle first-use thumbnails before replacement", () => {
