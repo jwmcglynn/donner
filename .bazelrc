@@ -421,6 +421,14 @@ test --test_output=errors
 # explicitly selects them in place of that target.
 test --test_tag_filters=-ci-remote-gpu
 
+# Share byte-identical compiler/archive results across renderer and text configurations.
+# Opt native C++ actions into Bazel's configuration-path normalization.
+build:ci-reuse --experimental_output_paths=strip
+# Emscripten response-file paths are not remapped; pass its arguments directly.
+build:ci-reuse --features=-compiler_param_file
+build:ci-reuse --features=-archive_param_file
+build:ci-reuse --modify_execution_info=CppCompile=+supports-path-mapping,CppArchive=+supports-path-mapping,CppModuleMap=+supports-path-mapping
+
 # CI-specific optimizations — use `--config=ci` in GitHub Actions workflows.
 # NOTE: do NOT set --jobs / --local_test_jobs here. Trusted self-hosted Linux
 # runners route `--config=ci` through Bazel RE (bazel-re1) and cap concurrency
