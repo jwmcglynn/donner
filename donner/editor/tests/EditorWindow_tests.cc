@@ -30,6 +30,7 @@
 #include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayersPanel.h"
@@ -1018,6 +1019,50 @@ TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
          "framebuffer path needs a separate wrapper to isolate mutable counters and deferred "
          "destroy queues.";
 #endif
+}
+
+TEST(EditorWindowTest, WgpuCheckerboardRejectsAStaleFramebufferExtent) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Stale WGPU Framebuffer Extent Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+  });
+  if (!window.valid() || window.geodeFramebufferDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+  FramebufferCheckerboardRenderer checkerboard(window.geodeFramebufferDevice());
+  int callbackCount = 0;
+  window.setWgpuUnderlayRenderCallback(
+      [&checkerboard, &callbackCount](const EditorWindowWgpuRenderTarget& target) {
+        ++callbackCount;
+        if (callbackCount == 1) {
+          EXPECT_EQ(checkerboard.draw(target,
+                                      Box2d(Vector2d::Zero(), Vector2d(target.framebufferSizePx.x,
+                                                                       target.framebufferSizePx.y)),
+                                      target.framebufferFromLogicalScale),
+                    1)
+              << "The live frame extent must exercise a successful checkerboard draw before the "
+                 "stale-size refusal is tested";
+          return;
+        }
+        EditorWindowWgpuRenderTarget stale = target;
+        ASSERT_GT(stale.framebufferSizePx.x, 1);
+        --stale.framebufferSizePx.x;
+        EXPECT_EQ(checkerboard.draw(stale,
+                                    Box2d(Vector2d::Zero(), Vector2d(stale.framebufferSizePx.x,
+                                                                     stale.framebufferSizePx.y)),
+                                    stale.framebufferFromLogicalScale),
+                  0)
+            << "A resize-stale frame extent must be refused before the raw target is imported";
+      });
+
+  window.beginFrame();
+  window.endFrame();
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(callbackCount, 2);
 }
 
 TEST(EditorWindowTest, WgpuDirectRenderCallbackDrawsBelowImGuiChrome) {

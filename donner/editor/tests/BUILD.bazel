@@ -236,6 +236,7 @@ donner_cc_test(
             "//donner/editor:compositor_debug_panel",
             "//donner/editor:document_sync_controller",
             "//donner/editor:editor_app",
+            "//donner/editor:editor_shell_presentation",
             "//donner/editor:gl_texture_cache",
             "//donner/editor:layers_panel",
             "//donner/editor:pen_tool",
