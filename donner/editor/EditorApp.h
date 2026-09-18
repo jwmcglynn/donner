@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -395,6 +396,16 @@ public:
    * @return true if commands were queued.
    */
   bool setStylePropertyOnSelection(std::string_view propertyName, std::string_view propertyValue);
+
+  /**
+   * Merge related CSS declarations into one queued style write per selected element.
+   *
+   * @param properties Property name/value pairs applied together. An unparseable declaration
+   * prevents the entire write for that element.
+   * @return true if commands were queued.
+   */
+  bool setStylePropertiesOnSelection(
+      std::span<const std::pair<std::string_view, std::string_view>> properties);
 
   /**
    * Queue a `stroke-width` style-property write for every selected element.

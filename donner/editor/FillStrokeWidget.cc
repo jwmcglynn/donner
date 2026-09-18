@@ -115,7 +115,12 @@ std::string SvgPaintStringForSlot(const ToolbarPaintSlotState& slot) {
     return "none";
   }
   if (slot.reference.has_value()) {
-    return "url(" + slot.reference->href + ")";
+    std::string paint = "url(" + slot.reference->href + ")";
+    if (slot.reference->fallback) {
+      const css::Color& fallback = *slot.reference->fallback;
+      paint += fallback.isCurrentColor() ? " currentColor" : " " + fallback.asRGBA().toHexString();
+    }
+    return paint;
   }
   if (slot.isCustom) {
     return slot.customLabel.empty() ? std::string("currentColor") : slot.customLabel;
@@ -123,7 +128,9 @@ std::string SvgPaintStringForSlot(const ToolbarPaintSlotState& slot) {
   return slot.color.toHexString();
 }
 
-void SwapActivePaint(ActivePaintStyle& style) { std::swap(style.fill, style.stroke); }
+void SwapActivePaint(ActivePaintStyle& style) {
+  std::swap(style.fill, style.stroke);
+}
 
 void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
                           const ToolbarPaintSlotState& state, bool front) {
@@ -138,8 +145,9 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     // when they carry the same color.
     constexpr float kRing = 4.0f;
     drawList->AddRectFilled(min, max, color, kRounding);
-    drawList->AddRectFilled(ImVec2(min.x + kRing, min.y + kRing), ImVec2(max.x - kRing, max.y - kRing),
-                            IM_COL32(32, 34, 38, 255), kRounding * 0.5f);
+    drawList->AddRectFilled(ImVec2(min.x + kRing, min.y + kRing),
+                            ImVec2(max.x - kRing, max.y - kRing), IM_COL32(32, 34, 38, 255),
+                            kRounding * 0.5f);
   }
 
   if (state.isCustom) {
@@ -187,8 +195,8 @@ void DrawSwapAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
   drawList->AddLine(rightTip, ImVec2(rightTip.x - arm, rightTip.y + arm), tint, 1.4f);
 }
 
-void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, bool fillVariant,
-                        bool active) {
+void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
+                        bool fillVariant, bool active) {
   const ImU32 border = active ? IM_COL32(232, 236, 242, 255) : IM_COL32(150, 156, 164, 255);
   if (fillVariant) {
     // Solid (fill) motif: filled white square.

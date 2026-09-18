@@ -284,8 +284,8 @@ _MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, str, str]] = {
     "pixelmatch-cpp17": (
         "pixelmatch-cpp17",
         "https://github.com/jwmcglynn/pixelmatch-cpp17.git",
-        "v1.0.3",
-        "220b3bcf08919e8045033bc4cb1e6e6ba2a1cfa3",
+        "v2.0.0",
+        "25b82299cbedc24b61af3f440c83f9b64cf18ce9",
     ),
 }
 

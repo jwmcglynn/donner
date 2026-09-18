@@ -307,8 +307,12 @@ class RealTreeParityReportTests(unittest.TestCase):
         # budget source. Two more drop out with clip-path and mask on a tspan applied.
         self.assertEqual(summary["skip_cases"], 123)
         self.assertEqual(summary["render_only_cases"], 78)
-        self.assertEqual(summary["pixel_budget_sources"], 99)
-        self.assertEqual(summary["effective_pixel_budget_cases"], 121)
+        # The pixelmatch-cpp17 2.0 migration (checkerboard transparency, OKLab metric) added 32
+        # threshold sources: 10 recalibrated modest cases plus 22 large-diff cases that expose
+        # pre-existing filter-math and background-convention alpha deltas; see
+        # donner/svg/renderer/tests/README_pixelmatch_2.md.
+        self.assertEqual(summary["pixel_budget_sources"], 131)
+        self.assertEqual(summary["effective_pixel_budget_cases"], 153)
         # Two text/font-family cases carry a simple-text-only budget: Source Sans Pro kerns through
         # GPOS, which the stb_truetype backend does not read, so only that tier needs an allowance.
         self.assertEqual(summary["simple_text_pixel_budget_cases"], 4)

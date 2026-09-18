@@ -35,6 +35,7 @@ namespace donner::editor::internal {
 /// Source range for a referenced paint server shown by the toolbar.
 struct ToolbarPaintReferenceState {
   std::string href;
+  std::optional<css::Color> fallback;  //!< Unresolved authored fallback, including currentColor.
   bool external = false;
   std::optional<SourceByteRange> sourceRange;
 };
