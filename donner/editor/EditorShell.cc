@@ -1320,6 +1320,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
         .code = codeFont_,
     });
   }
+  // Renderer startup may have inserted an unscaled fallback font before the editor fonts.
+  io.FontDefault = window_.editorFonts().uiRegular;
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
