@@ -336,17 +336,43 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotRegex(self.codeql, r"(?m)^  pull_request:")
         self.assertNotRegex(self.fuzz, r"(?m)^  pull_request:")
 
-    def test_codeql_builds_are_selected_by_bazel_tags(self):
-        build = _step_body(self.codeql, "Build tagged C++ entry points")
-        for tag in (
-            "codeql_default",
-            "codeql_text_full",
-            "codeql_geode",
-            "codeql_wasm",
-            "codeql_wasm_geode",
-        ):
-            self.assertIn("--build_tag_filters=%s" % tag, build)
-        self.assertNotRegex(build.replace("//...", ""), r"//[^\s]+")
+    def test_codeql_builds_preserve_standalone_tracing_and_tag_lanes(self):
+        body = _step_body(self.codeql, "Build tagged C++ entry points")
+        script = textwrap.dedent(_run_bodies(body)[0])
+        tags = ("codeql_default", "codeql_text_full", "codeql_geode",
+                "codeql_wasm", "codeql_wasm_geode")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt = root / "arguments"
+            bazel = root / "bazel"
+            bazel.write_text(
+                '#!/bin/bash\nprintf "%s\\n" "$@" >> "$ARGUMENT_RECEIPT"\n'
+                'printf "\\0" >> "$ARGUMENT_RECEIPT"\n'
+                'exit "${FAKE_BAZEL_EXIT:-0}"\n')
+            bazel.chmod(0o755)
+            env = {"PATH": directory + os.pathsep + os.defpath,
+                   "ARGUMENT_RECEIPT": str(receipt)}
+            command = ["/bin/bash", "-e", "-o", "pipefail", "-c", script]
+            result = subprocess.run(command, cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            calls = [part.splitlines() for part in receipt.read_text().split("\0") if part]
+            self.assertEqual(len(tags), len(calls))
+            for args, tag in zip(calls, tags):
+                with self.subTest(tag=tag):
+                    self.assertEqual("build", args[0])
+                    self.assertEqual("//...", args[-1])
+                    for required in ("--spawn_strategy=local", "--experimental_output_paths=off",
+                                     "--nouse_action_cache", "--noremote_accept_cached",
+                                     "--noremote_upload_local_results", "--disk_cache=",
+                                     "--build_tag_filters=" + tag):
+                        self.assertIn(required, args)
+            receipt.write_text("")
+            result = subprocess.run(command, cwd=root, env={**env, "FAKE_BAZEL_EXIT": "17"},
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(17, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(1, receipt.read_text().count("\0"))
+        self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
 
     def test_fuzz_variants_are_selected_by_bazel_tags(self):
         expected = {
