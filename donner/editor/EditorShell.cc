@@ -1171,7 +1171,11 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
 
 /// Device whose runtime state is owned by the presentation thread.
 std::shared_ptr<geode::GeodeDevice> UiGeodeDevice(gui::EditorWindow& window) {
+#ifdef DONNER_EDITOR_WGPU
   return window.geodeFramebufferDevice();
+#else
+  return window.geodeDevice();
+#endif
 }
 
 /// Rasterize every embedded UI icon in one batched pass before the first frame.
