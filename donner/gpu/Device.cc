@@ -742,6 +742,14 @@ Result<Texture> Device::createTexture(const TextureDescriptor& descriptor) {
   return handle;
 }
 
+Result<Extent2d> Device::textureExtent(const Texture& texture) const {
+  Result<const TextureRecord*> record = resolve(textures_, texture, TextureTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return record.result()->descriptor.size;
+}
+
 Result<const Device::TextureRecord*> Device::resolveViewedTexture(
     const TextureViewRecord& viewRecord) const {
   const TextureRecord* record =
