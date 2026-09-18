@@ -54,6 +54,7 @@ interface Diagnostics extends Window {
   __donnerMemoryStats?: unknown;
   __donnerImGuiDrawStats?: unknown;
   __donnerResponsivenessInput?: { type: string; atMs: number; x: number; y: number };
+  __donnerResponsivenessEvents?: unknown[];
 }
 
 async function snapshot(page: Page, detailed = false) {
@@ -73,6 +74,7 @@ async function snapshot(page: Page, detailed = false) {
       memory: detailed ? state.__donnerMemoryStats : undefined,
       draw: state.__donnerImGuiDrawStats,
       input: state.__donnerResponsivenessInput,
+      inputEvents: detailed ? state.__donnerResponsivenessEvents : undefined,
     };
   }, detailed);
 }
@@ -132,6 +134,26 @@ function phaseReport(before: Snapshot, after: Snapshot, inputToFrameMs: number[]
   };
 }
 
+async function dispatchPointer(page: Page, point: { x: number; y: number }, click = false) {
+  // Headed Firefox on macOS can offset native automation moves but not button events.
+  await page.evaluate(({ x, y, click }) => {
+    const canvas = document.querySelector("canvas#canvas")!;
+    for (const type of click ? ["mousemove", "mousedown", "mouseup"] : ["mousemove"]) {
+      canvas.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          button: 0,
+          buttons: type === "mousedown" ? 1 : 0,
+        }),
+      );
+    }
+  }, { ...point, click });
+}
+
 async function waitForIdle(page: Page) {
   await expect.poll(async () => (await snapshot(page)).interaction, {
     message: "the editor must consume pending input and finish its foreground render",
@@ -152,15 +174,32 @@ test(
       }
     });
     await page.addInitScript(() => {
-      for (const type of ["mousemove", "mousedown", "wheel"]) {
+      (window as Diagnostics).__donnerResponsivenessEvents = [];
+      for (const type of ["mousemove", "mousedown", "mouseup", "wheel"]) {
         window.addEventListener(type, (event) => {
           const pointer = event as MouseEvent;
-          (window as Diagnostics).__donnerResponsivenessInput = {
-            type,
-            atMs: performance.now(),
-            x: pointer.clientX,
-            y: pointer.clientY,
-          };
+          const state = window as Diagnostics;
+          if (type !== "mouseup") {
+            state.__donnerResponsivenessInput = {
+              type,
+              atMs: performance.now(),
+              x: pointer.clientX,
+              y: pointer.clientY,
+            };
+          }
+          const events = state.__donnerResponsivenessEvents;
+          if (events && events.length < 32) {
+            events.push({
+              type,
+              clientX: pointer.clientX,
+              clientY: pointer.clientY,
+              screenX: pointer.screenX,
+              screenY: pointer.screenY,
+              target: (event.target as Element | null)?.id,
+              applied: state.__donnerInteractionStats,
+              atMs: performance.now(),
+            });
+          }
         }, { capture: true, passive: true });
       }
     });
@@ -201,7 +240,12 @@ test(
       const canvas = page.locator("canvas#canvas");
       const bounds = await canvas.boundingBox();
       expect(bounds).not.toBeNull();
-      await page.mouse.click(bounds!.x + bounds!.width * 0.24, bounds!.y + 282);
+      report.sampleBounds = bounds;
+      await dispatchPointer(
+        page,
+        { x: bounds!.x + bounds!.width * 0.24, y: bounds!.y + 282 },
+        true,
+      );
       await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
       await expect.poll(async () => {
         const state = await snapshot(page);
@@ -210,6 +254,12 @@ test(
       }, { timeout: 20000, message: "the clicked sample must reach a presenting frame" }).toBe(
         true,
       );
+      report.sampleInputEvents = await page.evaluate(() => {
+        const state = window as Diagnostics;
+        const events = state.__donnerResponsivenessEvents;
+        delete state.__donnerResponsivenessEvents;
+        return events;
+      });
       const loaded = await snapshot(page);
       const worker = loaded.worker!;
       const inputAtMs = loaded.input!.atMs;
@@ -253,7 +303,7 @@ test(
           const prior = await snapshot(page);
           const point = { x: center.x + step * 3, y: center.y + step * 2 };
           if (kind === "pointer") {
-            await page.mouse.move(point.x, point.y);
+            await dispatchPointer(page, point);
           } else {
             await page.evaluate(({ x, y, deltaY }) => {
               document.querySelector("canvas#canvas")!.dispatchEvent(
