@@ -569,6 +569,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "runtime_bitmap_upload",
+    srcs = ["RuntimeBitmapUpload.cc"],
+    hdrs = ["RuntimeBitmapUpload.h"],
+    deps = [
+        "//donner/base",
+        "//donner/gpu",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+)
+
+donner_cc_library(
     name = "gl_texture_cache",
     srcs = ["GlTextureCache.cc"],
     hdrs = ["GlTextureCache.h"],
@@ -586,11 +598,13 @@ donner_cc_library(
         "//donner/svg",
     ] + select({
         ":wasm_geode_enabled": [
+            ":runtime_bitmap_upload",
             "//donner/editor/gui:ui_texture_registration",
             "//donner/svg/renderer:renderer_geode",
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
+            ":runtime_bitmap_upload",
             "//donner/editor/gui:ui_texture_registration",
             "//donner/svg/renderer:renderer_geode",
         ],
@@ -855,6 +869,7 @@ donner_cc_library(
         "@imgui",
     ] + select({
         ":wasm_geode_enabled": [
+            ":runtime_bitmap_upload",
             "//donner/editor/gui:imgui_runtime_renderer",
             "//donner/editor/gui:ui_texture_registration",
             "//donner/editor/gui:ui_texture_registry",
@@ -862,6 +877,7 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
+            ":runtime_bitmap_upload",
             "//donner/editor/gui:imgui_runtime_renderer",
             "//donner/editor/gui:ui_texture_registration",
             "//donner/editor/gui:ui_texture_registry",

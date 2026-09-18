@@ -53,6 +53,18 @@
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #endif
 
+#ifdef DONNER_EDITOR_WGPU
+namespace donner::editor {
+struct CompositorDebugPanelTestAccess {
+  static ImTextureID upload(
+      CompositorDebugPanel& panel,
+      const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+    return panel.uploadThumbnail(tile);
+  }
+};
+}  // namespace donner::editor
+#endif
+
 namespace donner::editor::gui {
 namespace {
 
@@ -1810,6 +1822,160 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "A premultiplied red texture should not be multiplied by alpha again during ImGui "
          "presentation.";
+}
+
+svg::compositor::CompositorController::CompositeTileSnapshot CpuDebugThumbnail() {
+  svg::compositor::CompositorController::CompositeTileSnapshot tile;
+  tile.kind = decltype(tile)::Kind::Segment;
+  tile.id = "seg:cpu-upload";
+  tile.generation = 1;
+  tile.thumbnailDims = Vector2i(3, 2);
+  tile.thumbnailPixels = {255, 0, 0, 128, 255, 0, 0, 128, 255, 0, 0, 128,
+                          255, 0, 0, 128, 255, 0, 0, 128, 255, 0, 0, 128};
+  return tile;
+}
+
+TEST(EditorWindowTest, CompositorDebugPanelUploadsCpuThumbnailThroughRuntime) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor CPU Thumbnail Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  const std::shared_ptr<geode::GeodeDevice> device = window.geodeFramebufferDevice();
+  ASSERT_NE(device, nullptr);
+  CompositorDebugPanel panel(device);
+  auto tile = CpuDebugThumbnail();
+
+  const uint64_t submittedBefore = device->adapterDevice().lastSubmittedSerial();
+  geode::GeodeCounters counters;
+  device->setCounters(&counters);
+  const ImTextureID texture = CompositorDebugPanelTestAccess::upload(panel, tile);
+  device->setCounters(nullptr);
+  ASSERT_NE(texture, 0u);
+  EXPECT_EQ(counters.textureCreates, 1u);
+  EXPECT_EQ(counters.textureWriteBytes, 256u * 2u);
+  EXPECT_EQ(counters.submits, 0u);
+  EXPECT_EQ(device->adapterDevice().lastSubmittedSerial(), submittedBefore);
+
+  window.beginFrame();
+  ImGui::GetBackgroundDrawList()->AddImage(texture, ImVec2(16, 16), ImVec2(48, 48));
+  const svg::RendererBitmap actual = window.endFrameAndReadPixels();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAt(actual, 32, 32),
+              Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
+}
+
+TEST(EditorWindowTest, CompositorDebugPanelReusesUnchangedCpuThumbnail) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor CPU Thumbnail Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  const std::shared_ptr<geode::GeodeDevice> device = window.geodeFramebufferDevice();
+  ASSERT_NE(device, nullptr);
+  CompositorDebugPanel panel(device);
+  auto tile = CpuDebugThumbnail();
+
+  const ImTextureID first = CompositorDebugPanelTestAccess::upload(panel, tile);
+  ASSERT_NE(first, 0u);
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  ASSERT_NE(registry, nullptr);
+  const size_t liveBefore = registry->liveCount();
+  geode::GeodeCounters counters;
+  device->setCounters(&counters);
+  const ImTextureID second = CompositorDebugPanelTestAccess::upload(panel, tile);
+  device->setCounters(nullptr);
+  EXPECT_EQ(second, first);
+  EXPECT_EQ(registry->liveCount(), liveBefore);
+  EXPECT_EQ(counters.textureCreates, 0u);
+  EXPECT_EQ(counters.textureWriteBytes, 0u);
+  EXPECT_EQ(counters.submits, 0u);
+}
+
+TEST(EditorWindowTest, CompositorDebugPanelFailedReplacementKeepsPreviousPreview) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor CPU Thumbnail Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  const std::shared_ptr<geode::GeodeDevice> device = window.geodeFramebufferDevice();
+  ASSERT_NE(device, nullptr);
+  CompositorDebugPanel panel(device);
+  auto tile = CpuDebugThumbnail();
+
+  const ImTextureID first = CompositorDebugPanelTestAccess::upload(panel, tile);
+  ASSERT_NE(first, 0u);
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  ASSERT_NE(registry, nullptr);
+  const size_t liveBefore = registry->liveCount();
+  ++tile.generation;
+  tile.thumbnailPixels.pop_back();
+  geode::GeodeCounters counters;
+  device->setCounters(&counters);
+  const ImTextureID refused = CompositorDebugPanelTestAccess::upload(panel, tile);
+  device->setCounters(nullptr);
+  EXPECT_EQ(refused, first);
+  EXPECT_EQ(registry->liveCount(), liveBefore);
+  EXPECT_EQ(counters.textureCreates, 0u);
+  EXPECT_EQ(counters.textureWriteBytes, 0u);
+  EXPECT_EQ(counters.submits, 0u);
+  for (int frame = 0; frame < 5; ++frame) {
+    panel.advancePresentationFrame();
+  }
+  EXPECT_TRUE(registry->lookup(UiTextureId::FromImTextureId(first)).hasResult());
+  window.beginFrame();
+  ImGui::GetBackgroundDrawList()->AddImage(first, ImVec2(16, 16), ImVec2(48, 48));
+  const svg::RendererBitmap actual = window.endFrameAndReadPixels();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAt(actual, 32, 32),
+              Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
+}
+
+TEST(EditorWindowTest, CompositorDebugPanelRetiresReplacedUploadAfterPresentationWindow) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor CPU Thumbnail Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  const std::shared_ptr<geode::GeodeDevice> device = window.geodeFramebufferDevice();
+  ASSERT_NE(device, nullptr);
+  CompositorDebugPanel panel(device);
+  auto tile = CpuDebugThumbnail();
+
+  const ImTextureID first = CompositorDebugPanelTestAccess::upload(panel, tile);
+  ASSERT_NE(first, 0u);
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  ASSERT_NE(registry, nullptr);
+  const size_t liveBefore = registry->liveCount();
+  ++tile.generation;
+  const ImTextureID second = CompositorDebugPanelTestAccess::upload(panel, tile);
+  ASSERT_NE(second, 0u);
+  EXPECT_NE(second, first);
+  EXPECT_EQ(registry->liveCount(), liveBefore + 1u);
+  for (int frame = 0; frame < 3; ++frame) {
+    panel.advancePresentationFrame();
+    EXPECT_TRUE(registry->lookup(UiTextureId::FromImTextureId(first)).hasResult());
+  }
+  panel.advancePresentationFrame();
+  EXPECT_TRUE(registry->lookup(UiTextureId::FromImTextureId(first)).hasError());
+  EXPECT_TRUE(registry->lookup(UiTextureId::FromImTextureId(second)).hasResult());
+  EXPECT_EQ(registry->liveCount(), liveBefore);
 }
 
 TEST(EditorWindowTest, CompositorDebugPanelReusesAnUnchangedSnapshotRegistration) {

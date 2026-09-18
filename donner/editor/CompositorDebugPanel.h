@@ -91,9 +91,10 @@ public:
   void advancePresentationFrame();
 
 private:
+  friend struct CompositorDebugPanelTestAccess;
+
 #ifdef DONNER_EDITOR_WGPU
   using ThumbnailTextureHandle = ImTextureID;
-  struct WgpuUploadedTexture;
 #else
   using ThumbnailTextureHandle = GLuint;
 #endif
@@ -102,7 +103,7 @@ private:
     ThumbnailTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
 #ifdef DONNER_EDITOR_WGPU
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedTexture;
 #endif
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
@@ -135,7 +136,7 @@ private:
   struct RetiredSnapshot {
     ThumbnailTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedTexture;
   };
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
@@ -146,15 +147,11 @@ private:
   ThumbnailTextureHandle registerSnapshotTexture(
       const svg::RendererTextureSnapshot* textureSnapshot);
 
-  /// Registers \p uploaded's texture as a straight-alpha UI texture and returns its identifier.
-  /// @param uploaded Texture this panel uploaded. @param dimensions Sampled extent in pixels.
-  ThumbnailTextureHandle registerUploadedTexture(const WgpuUploadedTexture& uploaded,
-                                                 const Vector2i& dimensions);
-  std::shared_ptr<WgpuUploadedTexture> uploadThumbnailPixelsToWgpu(
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadThumbnailPixelsToRuntime(
       const std::vector<uint8_t>& pixels, const Vector2i& dimensions);
   static RetiredSnapshot RetireSnapshot(
       ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot,
-      std::shared_ptr<WgpuUploadedTexture> uploadedTexture);
+      std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedTexture);
   /// Retires \p texture's registration and drops the runtime handles that backed it. Runs at the
   /// same frame boundary the panel already released a retired snapshot at.
   /// @param texture Identifier to retire.
