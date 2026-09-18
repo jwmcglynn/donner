@@ -43,8 +43,8 @@ capabilities are integrated foundations; they do not by themselves complete the 
 
 Results belong to the named source revisions. Later source changes need affected qualification;
 documentation-only updates need their own current-head checks. The UI font-atlas follow-up and
-native shader linkage are merged. Filter recording, texture-cache upload, and the checkerboard
-target boundary are published for review; the remaining production migrations continue in
+native shader linkage and the checkerboard target boundary are merged. Filter recording and
+texture-cache upload are published for review; the remaining production migrations continue in
 dependency order.
 
 | Unit | Current state | Remaining gate |
@@ -53,7 +53,7 @@ dependency order.
 | [Native shader artifact linkage #1279](https://github.com/jwmcglynn/donner/pull/1279) | Merged as `559cb1fb`. Production shader constructors select the device projection, native libraries link MSL or SPIR-V, and WebAssembly keeps WGSL-only artifacts. | Native production pixel qualification still depends on the ownership cutover; linkage completion does not establish a native editor. |
 | [Filter runtime command recording #1298](https://github.com/jwmcglynn/donner/pull/1298) | Published. Runtime-owned filter command encoders preserve frame batching, exact host generations, the 64-pass boundary, completion-aware retirement, and terminal device-loss behavior. | Hosted CI and review are in progress; full qualification and merge-readiness gates remain. Wasm payload-size acceptance is deferred until removal of the transitional Rust WebGPU dependency. |
 | [Texture-cache upload migration #1299](https://github.com/jwmcglynn/donner/pull/1299) | Published. Editor bitmap uploads create, update, reuse, and retire textures through validated runtime handles with bounded staging and cleared reusable backing. | Hosted CI and review are in progress; manifest freshness, full qualification, and merge-readiness gates remain. |
-| [Checkerboard target boundary #1300](https://github.com/jwmcglynn/donner/pull/1300) | Published. The shared pass accepts a validated borrowed runtime texture and extent; raw surface import remains at presentation, with device, generation, format, usage, extent, lifetime, and host-stream checks. | Hosted CI and review are in progress; full qualification and merge-readiness gates remain. |
+| [Checkerboard target boundary #1300](https://github.com/jwmcglynn/donner/pull/1300) | Merged as `15364179`. The shared pass accepts a validated borrowed runtime texture and extent; raw surface import remains at presentation, with device, generation, format, usage, extent, lifetime, and host-stream checks. | Device ownership, remaining presentation bridges, and final dependency cleanup continue below. |
 
 ### Remaining work
 
@@ -61,7 +61,7 @@ dependency order.
 | ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1     | Existing UI and shader-linkage pull requests - **complete** | UI #1267, font-atlas follow-up #1284 and native shader linkage #1279 are merged.                                                                                                          |
 | 2     | Filter runtime command recording - **published** | Complete hosted CI, review, full qualification, and merge-readiness gates for #1298 while preserving the 64-pass boundary and source-render/filter/composite order. |
-| 3     | Checkerboard target boundary - **published** | Complete hosted CI, review, full qualification, and merge-readiness gates for #1300. |
+| 3     | Checkerboard target boundary - **complete** | Merged in #1300; preserve its validated target and presentation-boundary contracts through later ownership work. |
 | 4     | Texture-cache upload migration - **published** | Complete hosted CI, manifest freshness, review, full qualification, and merge-readiness gates for #1299. |
 | 5     | Snapshot, target, and readback identity | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation.                                                                                |
 | 6     | Device ownership plumbing               | Make the selected runtime device the backend owner and move shared renderer services behind backend-neutral ownership before platform presentation callers switch.                                                             |
@@ -70,9 +70,9 @@ dependency order.
 | 9     | Final platform selection                | Select Metal, Vulkan, or browser as the default through one production path only after resources, UI, surfaces and browser presentation qualify together.                                                                      |
 | 10    | Dependency removal and final audits     | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits.                                                         |
 
-Row 1 is complete. Rows 2-4 are published but not merged. Rows 5-10 remain active scope, sequenced
-by dependency. The remaining snapshot/readback migration depends on device ownership. Each unit
-needs its own affected validation and review.
+Rows 1 and 3 are complete. Rows 2 and 4 are published but not merged. Rows 5-10 remain active
+scope, sequenced by dependency. The remaining snapshot/readback migration depends on device
+ownership. Each unit needs its own affected validation and review.
 
 The shared fill, gradient, mask, image, and snapshot pipelines and `GeoEncoder` already use runtime
 resources. The checkerboard target caller is the next remaining shared-pipeline boundary.
