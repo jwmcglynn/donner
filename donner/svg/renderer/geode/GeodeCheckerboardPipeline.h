@@ -5,7 +5,6 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Vector2.h"
 #include "donner/gpu/Device.h"
@@ -192,16 +191,17 @@ public:
    * partial alpha blends as `destination-over` does.
    *
    * @param device Device that owns @p target and the shared pipeline.
-   * @param target Render target owned by the embedding surface. Needs
+   * @param target Validated borrowed runtime target owned by the embedding surface. Needs
    *   `RenderAttachment` usage and the device's texture format.
-   * @param targetSizePx Target size in device pixels.
+   * @param targetSizePx Exact backing extent in device pixels. A mismatch with @p target is
+   *   rejected before recording.
    * @param params Checkerboard placement and appearance.
    * @param blendMode How the checkerboard combines with the target's contents.
    * @return True when the pass was submitted. Degenerate parameters and a
    *   failed pipeline or resource creation return false and leave @p target
    *   untouched.
    */
-  [[nodiscard]] bool draw(GeodeDevice& device, const wgpu::Texture& target, Vector2i targetSizePx,
+  [[nodiscard]] bool draw(GeodeDevice& device, const gpu::Texture& target, Vector2i targetSizePx,
                           const CheckerboardUnderlayParams& params,
                           GeodeCheckerboardPipeline::BlendMode blendMode);
 

@@ -528,32 +528,6 @@
         "QueueWorkDoneCallbackInfo"
       ]
     },
-    "donner/svg/renderer/geode/GeodeCheckerboardPass.cc": {
-      "operations": [
-        "beginRenderPass",
-        "createBindGroup",
-        "createBuffer",
-        "createCommandEncoder",
-        "draw",
-        "finish",
-        "setBindGroup",
-        "setPipeline",
-        "setScissorRect",
-        "submit",
-        "writeBuffer"
-      ],
-      "wgpuCppTokens": [
-        "Texture"
-      ]
-    },
-    "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h": {
-      "operations": [
-        "draw"
-      ],
-      "wgpuCppTokens": [
-        "Texture"
-      ]
-    },
     "donner/svg/renderer/geode/GeodeCounters.h": {
       "wgpuCppTokens": [
         "Device",
