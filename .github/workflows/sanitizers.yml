@@ -102,7 +102,6 @@ jobs:
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:asan_exclusions -- \
             bazelisk test \
             --config=asan \
-            --config=ci-reuse \
             --test_output=errors \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
@@ -112,7 +111,6 @@ jobs:
 
           bazelisk test \
             --config=asan \
-            --config=ci-reuse \
             --test_output=errors \
             --test_env=ASAN_OPTIONS=detect_leaks=0 \
             --test_tag_filters=-fuzz_target \
@@ -170,7 +168,6 @@ jobs:
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:sanitizer_allocator_exclusions -- \
             bazelisk test \
             --config=ubsan \
-            --config=ci-reuse \
             --test_output=errors \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
@@ -181,7 +178,6 @@ jobs:
         run: |
           bazelisk test \
             --config=ubsan \
-            --config=ci-reuse \
             --test_output=errors \
             --test_tag_filters=fuzz_ubsan \
             --build_tag_filters=fuzz_ubsan \
@@ -189,7 +185,6 @@ jobs:
 
           bazelisk test \
             --config=ubsan \
-            --config=ci-reuse \
             --config=text-full \
             --test_output=errors \
             --test_tag_filters=fuzz_ubsan_text_full \
@@ -198,7 +193,6 @@ jobs:
 
           bazelisk test \
             --config=ubsan \
-            --config=ci-reuse \
             --config=geode \
             --test_output=errors \
             --test_tag_filters=fuzz_ubsan_geode \
