@@ -15,6 +15,7 @@
 
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 
 namespace donner::editor {
@@ -344,9 +345,23 @@ int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarge
   params.originOffsetPx = Vector2d::Zero();
   params.scissorPx = scissor;
 
+  const Vector2i attachmentSizePx(static_cast<int>(target.texture.getWidth()),
+                                  static_cast<int>(target.texture.getHeight()));
+  if (attachmentSizePx != target.framebufferSizePx) {
+    return 0;
+  }
+  geode::GeodeWgpuAdapterDevice& adapterDevice = device_->adapterDevice();
+  gpu::Result<gpu::Texture> runtimeTarget = adapterDevice.importExternalTexture(
+      target.texture, gpu::Extent2d{target.texture.getWidth(), target.texture.getHeight()},
+      geode::GpuTextureFormatFromWgpu(target.texture.getFormat()),
+      geode::GpuTextureUsageFromWgpu(target.texture.getUsage()));
+  if (runtimeTarget.hasError()) {
+    return 0;
+  }
+
   // The document tiles are drawn on top of this in the same frame, so the
   // checkerboard overwrites the scissored region rather than blending under it.
-  return checkerboardPass_.draw(*device_, target.texture, target.framebufferSizePx, params,
+  return checkerboardPass_.draw(*device_, runtimeTarget.result(), attachmentSizePx, params,
                                 geode::GeodeCheckerboardPipeline::BlendMode::Replace)
              ? 1
              : 0;

@@ -283,8 +283,9 @@ protected:
                         geode::GeodeCheckerboardPipeline::BlendMode blendMode =
                             geode::GeodeCheckerboardPipeline::BlendMode::DestinationOver) {
     const auto& geodeFrame = static_cast<const RendererGeodeTextureSnapshot&>(frame);
-    return checkerboardPass_.draw(*sharedDevice(), geodeFrame.texture(), geodeFrame.dimensions(),
-                                  params, blendMode);
+    const gpu::Texture* target = geodeFrame.runtimeTexture();
+    return target != nullptr && checkerboardPass_.draw(*sharedDevice(), *target,
+                                                       geodeFrame.dimensions(), params, blendMode);
   }
 
   RendererBitmap renderFlatSourceThroughFilter(const components::FilterGraph& graph,
@@ -1123,9 +1124,18 @@ TEST_F(RendererGeodeTest, CheckerboardFillsTransparentPixelsWithAlternatingCells
   const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
   ASSERT_NE(frame, nullptr);
   ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
+  const uint64_t checkerboardSerial = sharedDevice()->adapterDevice().lastSubmittedSerial();
 
   const RendererBitmap snapshot = frame->takeSnapshot();
   ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(sharedDevice()->adapterDevice().completedSerial(), testing::Ge(checkerboardSerial))
+      << "Readback completion must cover the checkerboard submission while the frame owner keeps "
+         "the borrowed target backing alive";
+  const auto& geodeFrame = static_cast<const RendererGeodeTextureSnapshot&>(*frame);
+  ASSERT_THAT(geodeFrame.runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(sharedDevice()->adapterDevice().wgpuTextureOf(*geodeFrame.runtimeTexture()),
+              testing::NotNull())
+      << "Completing a pass over a borrowed target must not retire its owner-held backing";
   // Two horizontally adjacent cells: (0,0) is light, (1,0) is dark.
   EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2),
               RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
@@ -1355,6 +1365,62 @@ TEST_F(RendererGeodeTest, CheckerboardRejectsDegenerateParameters) {
   ASSERT_FALSE(snapshot.empty());
   EXPECT_THAT(pixelAt(snapshot, kCheckerCell / 2, kCheckerCell / 2), IsTransparent())
       << "A rejected checkerboard pass must leave the target untouched";
+}
+
+TEST_F(RendererGeodeTest, CheckerboardRejectsInvalidTargetsWithoutUniformWorkOrSubmission) {
+  const auto expectRefusedWithoutWork = [&](const gpu::Texture& target,
+                                            Vector2i extent = Vector2i(8, 8)) {
+    geode::GeodeCounters counters;
+    sharedDevice()->setCounters(&counters);
+    geode::GeodeCheckerboardPass pass;
+    EXPECT_FALSE(pass.draw(*sharedDevice(), target, extent, geode::CheckerboardUnderlayParams{},
+                           geode::GeodeCheckerboardPipeline::BlendMode::Replace));
+    sharedDevice()->setCounters(nullptr);
+    EXPECT_THAT(counters.bufferCreates, testing::Eq(0u));
+    EXPECT_THAT(counters.bindgroupCreates, testing::Eq(0u));
+    EXPECT_THAT(counters.submits, testing::Eq(0u));
+  };
+
+  std::shared_ptr<geode::GeodeDevice> foreignDevice = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(foreignDevice, testing::NotNull());
+  gpu::Result<gpu::Texture> foreignResult = foreignDevice->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"foreignCheckerboardTarget", gpu::Extent2d{8, 8},
+                             gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::RenderAttachment});
+  ASSERT_FALSE(foreignResult.hasError());
+  const gpu::Texture foreign = std::move(foreignResult).result();
+  expectRefusedWithoutWork(foreign);
+
+  geode::GeodeWgpuAdapterDevice& adapter = sharedDevice()->adapterDevice();
+  gpu::Result<gpu::Texture> staleResult = adapter.createTexture(
+      gpu::TextureDescriptor{"staleCheckerboardTarget", gpu::Extent2d{8, 8},
+                             gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::RenderAttachment});
+  ASSERT_FALSE(staleResult.hasError());
+  gpu::Texture stale = std::move(staleResult).result();
+  const gpu::Texture staleHandle =
+      gpu::Texture::CreateForBackend(stale.slotIndex(), stale.generation(), stale.deviceId());
+  ASSERT_FALSE(adapter.destroyTexture(std::move(stale)).hasError());
+  expectRefusedWithoutWork(staleHandle);
+
+  gpu::Result<gpu::Texture> wrongFormatResult = adapter.createTexture(
+      gpu::TextureDescriptor{"wrongFormatCheckerboardTarget", gpu::Extent2d{8, 8},
+                             gpu::TextureFormat::R8Unorm, gpu::TextureUsage::RenderAttachment});
+  ASSERT_FALSE(wrongFormatResult.hasError());
+  const gpu::Texture wrongFormat = std::move(wrongFormatResult).result();
+  expectRefusedWithoutWork(wrongFormat);
+
+  gpu::Result<gpu::Texture> wrongUsageResult = adapter.createTexture(
+      gpu::TextureDescriptor{"wrongUsageCheckerboardTarget", gpu::Extent2d{8, 8},
+                             gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(wrongUsageResult.hasError());
+  const gpu::Texture wrongUsage = std::move(wrongUsageResult).result();
+  expectRefusedWithoutWork(wrongUsage);
+
+  gpu::Result<gpu::Texture> wrongExtentResult = adapter.createTexture(
+      gpu::TextureDescriptor{"wrongExtentCheckerboardTarget", gpu::Extent2d{8, 8},
+                             gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::RenderAttachment});
+  ASSERT_FALSE(wrongExtentResult.hasError());
+  const gpu::Texture wrongExtent = std::move(wrongExtentResult).result();
+  expectRefusedWithoutWork(wrongExtent, Vector2i(7, 8));
 }
 
 /// Width/height should reflect the viewport's device-pixel size after

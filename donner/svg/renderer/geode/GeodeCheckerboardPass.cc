@@ -26,9 +26,9 @@ GeodeCheckerboardPipeline& PipelineForBlendMode(GeodeDevice& device,
 
 /// True when the requested pass has a target to draw into and an appearance that produces
 /// visible cells. A degenerate request is not an error; the caller simply draws nothing.
-bool CheckerboardRequestIsDrawable(const wgpu::Texture& target, Vector2i targetSizePx,
+bool CheckerboardRequestIsDrawable(const gpu::Texture& target, Vector2i targetSizePx,
                                    const CheckerboardUnderlayParams& params) {
-  if (!target || targetSizePx.x <= 0 || targetSizePx.y <= 0) {
+  if (!target.isValid() || targetSizePx.x <= 0 || targetSizePx.y <= 0) {
     return false;
   }
   if (!(params.devicePixelRatio > 0.0) || !(params.cellSizeLogicalPx > 0.0)) {
@@ -59,69 +59,43 @@ bool DeviceCommandStreamIsFree(GeodeDevice& device) {
   return false;
 }
 
-/// A surface-owned render target named for the runtime, plus the view a pass attaches.
-struct NamedTarget {
-  gpu::Texture texture;   //!< Runtime name for the borrowed target; owns no backing.
-  gpu::TextureView view;  //!< Whole-texture view used as the pass attachment.
+/// Validated recording state for one target. The view and encoder retain every runtime handle
+/// needed by the borrowed attachment until the command buffer is finished.
+struct PreparedTargetPass {
+  gpu::TextureView targetView;
+  std::unique_ptr<gpu::CommandEncoder> encoder;
+  gpu::RenderPassEncoder* renderPass = nullptr;
+  const GeodeCheckerboardPipeline* pipeline = nullptr;
 };
 
-/// Names @p target for the runtime so a pass can attach it. The target belongs to the embedding
-/// surface, so its capabilities are read from the texture itself and cannot be described wrongly.
-/// Returns nothing when the runtime refuses either handle.
-std::optional<NamedTarget> NameTargetForPass(GeodeWgpuAdapterDevice& adapterDevice,
-                                             const wgpu::Texture& target) {
-  gpu::Result<gpu::Texture> texture = adapterDevice.importExternalTexture(
-      target, gpu::Extent2d{target.getWidth(), target.getHeight()},
-      GpuTextureFormatFromWgpu(target.getFormat()), GpuTextureUsageFromWgpu(target.getUsage()));
-  if (texture.hasError()) {
-    return std::nullopt;
-  }
-  gpu::Result<gpu::TextureView> view = adapterDevice.createTextureView(
-      texture.result(), gpu::TextureViewDescriptor{"GeodeCheckerboardTargetView"});
-  if (view.hasError()) {
-    return std::nullopt;
-  }
-  return NamedTarget{std::move(texture).result(), std::move(view).result()};
-}
-
-/// Records the fullscreen-triangle pass into its own command buffer and submits it. The pass
-/// encoder latches its first error and reports it from `finish`, so the individual pass
-/// operations are checked once there rather than one at a time.
-bool RecordAndSubmitCheckerboardPass(GeodeDevice& device,
-                                     const GeodeCheckerboardPipeline& checkerboard,
-                                     const gpu::TextureView& targetView,
-                                     const gpu::BindGroup& bindGroup,
-                                     const std::optional<CheckerboardScissorPx>& scissorPx) {
+/// Validate the borrowed target and begin its pass before per-consumer resources are allocated.
+std::optional<PreparedTargetPass> PrepareTargetPass(
+    GeodeDevice& device, const gpu::Texture& target,
+    GeodeCheckerboardPipeline::BlendMode blendMode) {
   GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
+  gpu::Result<gpu::TextureView> targetView = adapterDevice.createTextureView(
+      target, gpu::TextureViewDescriptor{"GeodeCheckerboardTargetView"});
+  if (targetView.hasError()) {
+    return std::nullopt;
+  }
   gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = adapterDevice.createCommandEncoder();
   if (encoder.hasError()) {
-    return false;
+    return std::nullopt;
   }
-  gpu::CommandEncoder& commands = *encoder.result();
-
-  gpu::Result<gpu::RenderPassEncoder*> pass = commands.beginRenderPass(gpu::RenderPassDescriptor{
-      "GeodeCheckerboardPass",
-      {gpu::RenderPassColorAttachment{targetView, gpu::LoadOp::Load, gpu::StoreOp::Store}}});
+  gpu::Result<gpu::RenderPassEncoder*> pass = encoder.result()->beginRenderPass(
+      gpu::RenderPassDescriptor{"GeodeCheckerboardPass",
+                                {gpu::RenderPassColorAttachment{
+                                    targetView.result(), gpu::LoadOp::Load, gpu::StoreOp::Store}}});
   if (pass.hasError()) {
-    return false;
+    return std::nullopt;
   }
-
-  gpu::RenderPassEncoder& renderPass = *pass.result();
-  if (scissorPx.has_value()) {
-    (void)renderPass.setScissorRect(scissorPx->x, scissorPx->y, scissorPx->width,
-                                    scissorPx->height);
+  const GeodeCheckerboardPipeline& pipeline = PipelineForBlendMode(device, blendMode);
+  if (!pipeline.valid() || pass.result()->setPipeline(pipeline.pipeline()).hasError()) {
+    return std::nullopt;
   }
-  (void)renderPass.setPipeline(checkerboard.pipeline());
   device.countPipelineSwitch();
-  (void)renderPass.setBindGroup(0, bindGroup);
-  (void)renderPass.draw(3, 1, 0, 0);
-  (void)renderPass.end();
-
-  gpu::Result<gpu::CommandBuffer> commandBuffer = commands.finish();
-  if (commandBuffer.hasError()) {
-    return false;
-  }
-  return !adapterDevice.submit(std::move(commandBuffer).result()).hasError();
+  return PreparedTargetPass{std::move(targetView).result(), std::move(encoder).result(),
+                            pass.result(), &pipeline};
 }
 
 }  // namespace
@@ -160,7 +134,7 @@ bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
   return true;
 }
 
-bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& target,
+bool GeodeCheckerboardPass::draw(GeodeDevice& device, const gpu::Texture& target,
                                  Vector2i targetSizePx, const CheckerboardUnderlayParams& params,
                                  GeodeCheckerboardPipeline::BlendMode blendMode) {
   if (!CheckerboardRequestIsDrawable(target, targetSizePx, params) ||
@@ -168,11 +142,16 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& targe
     return false;
   }
 
-  const GeodeCheckerboardPipeline& checkerboard = PipelineForBlendMode(device, blendMode);
-  if (!checkerboard.valid() || !ensureResources(device, checkerboard, blendMode)) {
+  const gpu::Result<gpu::Extent2d> targetExtent = device.adapterDevice().textureExtent(target);
+  if (targetExtent.hasError() ||
+      targetExtent.result() != gpu::Extent2d{static_cast<std::uint32_t>(targetSizePx.x),
+                                             static_cast<std::uint32_t>(targetSizePx.y)}) {
     return false;
   }
-
+  std::optional<PreparedTargetPass> prepared = PrepareTargetPass(device, target, blendMode);
+  if (!prepared.has_value() || !ensureResources(device, *prepared->pipeline, blendMode)) {
+    return false;
+  }
   const GeodeCheckerboardPipeline::Uniforms uniforms{
       .targetSize = {static_cast<float>(targetSizePx.x), static_cast<float>(targetSizePx.y)},
       .devicePixelRatio = static_cast<float>(params.devicePixelRatio),
@@ -185,7 +164,6 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& targe
                          static_cast<float>(params.originOffsetPx.y)},
       .padding = {0.0f, 0.0f},
   };
-
   GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
   if (adapterDevice
           .writeBuffer(uniformBuffer_, 0,
@@ -194,12 +172,18 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& targe
     return false;
   }
 
-  const std::optional<NamedTarget> named = NameTargetForPass(adapterDevice, target);
-  if (!named.has_value()) {
+  if (params.scissorPx.has_value()) {
+    (void)prepared->renderPass->setScissorRect(params.scissorPx->x, params.scissorPx->y,
+                                               params.scissorPx->width, params.scissorPx->height);
+  }
+  (void)prepared->renderPass->setBindGroup(0, bindGroup_);
+  (void)prepared->renderPass->draw(3, 1, 0, 0);
+  (void)prepared->renderPass->end();
+  gpu::Result<gpu::CommandBuffer> commandBuffer = prepared->encoder->finish();
+  if (commandBuffer.hasError()) {
     return false;
   }
-  return RecordAndSubmitCheckerboardPass(device, checkerboard, named->view, bindGroup_,
-                                         params.scissorPx);
+  return !adapterDevice.submit(std::move(commandBuffer).result()).hasError();
 }
 
 }  // namespace donner::geode

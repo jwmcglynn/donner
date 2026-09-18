@@ -71,6 +71,28 @@ TEST_F(DeviceValidationTests, CreateTextureAcceptsValidDescriptor) {
       HasResult());
 }
 
+TEST_F(DeviceValidationTests, TextureExtentReturnsLiveExtentByValue) {
+  const Texture texture = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "target", Extent2d{16, 9}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  EXPECT_EQ(GetResultOrFail(device_.textureExtent(texture)), (Extent2d{16, 9}));
+}
+
+TEST_F(DeviceValidationTests, TextureExtentRejectsNullStaleAndForeignHandles) {
+  EXPECT_THAT(device_.textureExtent(Texture()), IsGpuError(GpuErrorType::InvalidHandle));
+
+  Texture stale = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "stale", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const Texture staleHandle =
+      Texture::CreateForBackend(stale.slotIndex(), stale.generation(), stale.deviceId());
+  ASSERT_THAT(device_.destroyTexture(std::move(stale)), IsOk());
+  EXPECT_THAT(device_.textureExtent(staleHandle), IsGpuError(GpuErrorType::InvalidHandle));
+
+  RecordingDevice other;
+  const Texture foreign = GetResultOrFail(other.createTexture(TextureDescriptor{
+      "foreign", Extent2d{5, 3}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  EXPECT_THAT(device_.textureExtent(foreign), IsGpuError(GpuErrorType::DeviceMismatch));
+}
+
 TEST_F(DeviceValidationTests, CreateTextureRejectsZeroDimension) {
   EXPECT_THAT(device_.createTexture(TextureDescriptor{
                   "flat", Extent2d{16, 0}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}),
