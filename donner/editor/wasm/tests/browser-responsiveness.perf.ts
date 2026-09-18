@@ -54,6 +54,7 @@ interface Diagnostics extends Window {
   __donnerMemoryStats?: unknown;
   __donnerImGuiDrawStats?: unknown;
   __donnerResponsivenessInput?: { type: string; atMs: number; x: number; y: number };
+  __donnerResponsivenessEvents?: unknown[];
 }
 
 async function snapshot(page: Page, detailed = false) {
@@ -73,6 +74,7 @@ async function snapshot(page: Page, detailed = false) {
       memory: detailed ? state.__donnerMemoryStats : undefined,
       draw: state.__donnerImGuiDrawStats,
       input: state.__donnerResponsivenessInput,
+      inputEvents: detailed ? state.__donnerResponsivenessEvents : undefined,
     };
   }, detailed);
 }
@@ -152,15 +154,32 @@ test(
       }
     });
     await page.addInitScript(() => {
-      for (const type of ["mousemove", "mousedown", "wheel"]) {
+      (window as Diagnostics).__donnerResponsivenessEvents = [];
+      for (const type of ["mousemove", "mousedown", "mouseup", "wheel"]) {
         window.addEventListener(type, (event) => {
           const pointer = event as MouseEvent;
-          (window as Diagnostics).__donnerResponsivenessInput = {
-            type,
-            atMs: performance.now(),
-            x: pointer.clientX,
-            y: pointer.clientY,
-          };
+          const state = window as Diagnostics;
+          if (type !== "mouseup") {
+            state.__donnerResponsivenessInput = {
+              type,
+              atMs: performance.now(),
+              x: pointer.clientX,
+              y: pointer.clientY,
+            };
+          }
+          const events = state.__donnerResponsivenessEvents;
+          if (events && events.length < 32) {
+            events.push({
+              type,
+              clientX: pointer.clientX,
+              clientY: pointer.clientY,
+              screenX: pointer.screenX,
+              screenY: pointer.screenY,
+              target: (event.target as Element | null)?.id,
+              applied: state.__donnerInteractionStats,
+              atMs: performance.now(),
+            });
+          }
         }, { capture: true, passive: true });
       }
     });
@@ -201,6 +220,7 @@ test(
       const canvas = page.locator("canvas#canvas");
       const bounds = await canvas.boundingBox();
       expect(bounds).not.toBeNull();
+      report.sampleBounds = bounds;
       await page.mouse.click(bounds!.x + bounds!.width * 0.24, bounds!.y + 282);
       await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
       await expect.poll(async () => {
@@ -210,6 +230,12 @@ test(
       }, { timeout: 20000, message: "the clicked sample must reach a presenting frame" }).toBe(
         true,
       );
+      report.sampleInputEvents = await page.evaluate(() => {
+        const state = window as Diagnostics;
+        const events = state.__donnerResponsivenessEvents;
+        delete state.__donnerResponsivenessEvents;
+        return events;
+      });
       const loaded = await snapshot(page);
       const worker = loaded.worker!;
       const inputAtMs = loaded.input!.atMs;
