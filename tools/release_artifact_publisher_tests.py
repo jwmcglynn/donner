@@ -81,12 +81,29 @@ class PublishAssetsTest(unittest.TestCase):
 
     @mock.patch("tools.release_artifact_publisher.subprocess.run")
     def test_absent_asset_uploads_once(self, run):
-        run.side_effect = [self.completed(stdout="[]"), self.completed()]
+        digest = publisher.sha256_digest(self.path)
+        run.side_effect = [
+            self.completed(stdout="[]"),
+            self.completed(),
+            self.completed(stdout=self.assets({"name": self.path.name, "digest": digest})),
+        ]
 
         self.publisher.publish([self.path])
 
-        self.assertEqual(run.call_count, 2)
-        self.assertIn("POST", run.call_args.args[0])
+        self.assertEqual(run.call_count, 3)
+        self.assertIn("POST", run.call_args_list[1].args[0])
+        self.assertEqual(run.call_args.args[0], ["gh", "api", self.publisher.assets_endpoint])
+
+    @mock.patch("tools.release_artifact_publisher.subprocess.run")
+    def test_successful_upload_with_wrong_published_digest_fails(self, run):
+        run.side_effect = [
+            self.completed(stdout="[]"),
+            self.completed(),
+            self.completed(stdout=self.assets({"name": self.path.name, "digest": "sha256:wrong"})),
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "different digest"):
+            self.publisher.publish([self.path])
 
     @mock.patch("tools.release_artifact_publisher.subprocess.run")
     def test_lost_success_response_is_recovered_from_published_digest(self, run):

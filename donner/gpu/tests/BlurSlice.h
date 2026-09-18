@@ -195,6 +195,11 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
               testing::Each(testing::Truly([](float value) { return std::isfinite(value); })));
   const auto actualPixels = actual->toPixmap();
   const auto expectedPixels = expected->toPixmap();
+  // Two pixels may differ by one alpha LSB between the GPU float pipeline and
+  // the CPU oracle (measured: RGB bit-identical, alpha 127 vs 128, on Metal,
+  // Vulkan, and the macOS repro). Pixelmatch 1.x masked this through uint8
+  // blend quantization; 2.0 compares at full precision (PR #1285). The 2px
+  // allowance at threshold 0.0 keeps every other pixel bit-exact.
   editor::tests::CompareBitmapToBitmap(
       svg::RendererBitmap{
           Vector2i(4, 4),
@@ -204,7 +209,7 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
           std::vector<uint8_t>(expectedPixels.data().begin(), expectedPixels.data().end()), 16},
       "blur_axis_" + std::to_string(axis) + "_kernel_" + std::to_string(kernelType) + "_sigma_" +
           std::to_string(sigma) + "_edge_" + std::to_string(edgeMode),
-      editor::tests::PixelmatchIdentityParams());
+      editor::tests::ApprovedPixelToleranceParams(0.0f, 2, /*includeAntiAliasing=*/true));
 }
 
 }  // namespace donner::gpu::tests

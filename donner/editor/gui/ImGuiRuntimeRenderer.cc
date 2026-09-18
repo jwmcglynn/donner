@@ -383,25 +383,35 @@ gpu::Status ImGuiRuntimeRenderer::buildFontAtlas(ImFontAtlas& atlas) {
   if (view.hasError()) {
     return std::move(view).error();
   }
+  gpu::TextureView replacementView = std::move(view).result();
 
   gpu::Result<UiTextureId> registered = registry_->registerTexture(
-      UiTextureDescriptor{view.result(), size, UiTextureAlphaMode::Straight});
+      UiTextureDescriptor{replacementView, size, UiTextureAlphaMode::Straight});
   if (registered.hasError()) {
     return std::move(registered).error();
   }
+  const UiTextureId replacementId = registered.result();
 
   if (fontAtlasTexture_.isValid()) {
+    const UiTextureId oldId = fontAtlasTexture_;
     gpu::Status retired = registry_->retire(fontAtlasTexture_);
     if (retired.hasError()) {
+      // The replacement registration is already visible to the registry. Retire it before
+      // returning the original failure, and retain its backing even if that rollback itself
+      // fails, so no live registration can observe destroyed local handles.
+      std::ignore = registry_->retire(replacementId);
+      retainTextureBackingUntilReleased(replacementId, std::move(texture),
+                                        std::move(replacementView));
       return retired;
     }
+    retainTextureBackingUntilReleased(oldId, std::move(fontAtlasTextureResource_),
+                                      std::move(fontAtlasView_));
   }
 
   fontAtlasTextureResource_ = std::move(texture);
-  fontAtlasView_ = std::move(view).result();
-  fontAtlasTexture_ = registered.result();
+  fontAtlasView_ = std::move(replacementView);
+  fontAtlasTexture_ = replacementId;
   atlas.SetTexID(fontAtlasTexture_.imTextureId());
-  resetRendererState();
   return gpu::OkStatus();
 }
 

@@ -46,6 +46,10 @@ public:
   /// Minimum drag extent (document units, at zoom 1) that turns a click into
   /// a text-box drag instead of point text.
   static constexpr double kBoxDragScreenTolerance = 4.0;
+  /// Minimum height of a newly created text box (document units). The first
+  /// baseline sits one default font size below the box top, so a shorter box
+  /// would leave the baseline outside the frame.
+  static constexpr double kMinBoxHeight = kDefaultFontSize;
   /// Caret blink cadence: visible for this long, then hidden for the same,
   /// repeating. The phase resets to visible on every caret-affecting edit so
   /// the caret never blinks away right after input.

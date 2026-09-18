@@ -1671,23 +1671,31 @@ bool EditorApp::setAttributeOnSelection(std::string_view attrName, std::string_v
 
 bool EditorApp::setStylePropertyOnSelection(std::string_view propertyName,
                                             std::string_view propertyValue) {
-  if (selection_.empty()) {
+  const std::pair<std::string_view, std::string_view> property{propertyName, propertyValue};
+  return setStylePropertiesOnSelection(std::span(&property, 1));
+}
+
+bool EditorApp::setStylePropertiesOnSelection(
+    std::span<const std::pair<std::string_view, std::string_view>> properties) {
+  if (selection_.empty() || properties.empty()) {
     return false;
   }
 
   bool queuedMutation = false;
   for (const svg::SVGElement& element : selection_) {
     const std::optional<RcString> styleAttribute = element.getAttribute("style");
-    const std::string_view existingStyle =
-        styleAttribute.has_value() ? std::string_view(*styleAttribute) : std::string_view();
-    const std::optional<std::string> mergedStyle =
-        MergeStyleProperty(existingStyle, propertyName, propertyValue);
-    if (!mergedStyle.has_value()) {
-      continue;
+    std::optional<std::string> mergedStyle =
+        styleAttribute ? std::string(*styleAttribute) : std::string();
+    for (const auto& [name, value] : properties) {
+      mergedStyle = MergeStyleProperty(*mergedStyle, name, value);
+      if (!mergedStyle) {
+        break;
+      }
     }
-
-    applyMutation(EditorCommand::SetAttributeCommand(element, "style", *mergedStyle));
-    queuedMutation = true;
+    if (mergedStyle) {
+      applyMutation(EditorCommand::SetAttributeCommand(element, "style", *mergedStyle));
+      queuedMutation = true;
+    }
   }
   return queuedMutation;
 }

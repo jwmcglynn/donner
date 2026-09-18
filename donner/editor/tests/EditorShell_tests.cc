@@ -29,6 +29,7 @@
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproFile.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/resources/FontManager.h"
 
@@ -644,6 +645,20 @@ TEST(EditorShellInternalTest, SvgPaintStringForSlotCoversNoneSolidAndReference) 
   context.isCustom = true;
   context.customLabel = "context-fill";
   EXPECT_EQ(internal::SvgPaintStringForSlot(context), "context-fill");
+}
+
+TEST(EditorShellInternalTest, ReferencedPaintSerializerRetainsUnresolvedFallbackColors) {
+  const css::RGBA currentColor = css::RGBA::RGB(0x33, 0x66, 0x99);
+  for (const auto& [color, expected] : std::vector<std::pair<css::Color, std::string>>{
+           {css::Color(css::RGBA::RGB(255, 0, 0)), "url(#missing) #ff0000"},
+           {css::Color(css::RGBA(0x33, 0x66, 0x99, 0x80)), "url(#missing) #33669980"},
+           {css::Color(css::Color::CurrentColor()), "url(#missing) currentColor"}}) {
+    SCOPED_TRACE(expected);
+    const svg::PaintServer paint(svg::PaintServer::ElementReference("#missing", color));
+    const auto state =
+        internal::ToolbarPaintSlotStateForPaintServer(paint, currentColor, nullptr, std::nullopt);
+    EXPECT_EQ(internal::SvgPaintStringForSlot(state), expected);
+  }
 }
 
 TEST(EditorShellInternalTest, FillStrokeWidgetLayoutAndHitTestClassifyRegions) {
@@ -3682,6 +3697,89 @@ TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTool
   EXPECT_TRUE(shell.valid());
 }
 
+struct PaintSwapFallbackCase {
+  const char* name;
+  const char* value;
+  const char* reference = "#missing";
+};
+
+class PaintSwapFallbackTest : public testing::TestWithParam<PaintSwapFallbackCase> {};
+
+TEST_P(PaintSwapFallbackTest, ToolbarSwapPreservesPaintAndSourceRoundTrip) {
+  const PaintSwapFallbackCase testCase = GetParam();
+  const auto sourceFor = [](std::string_view fill, std::string_view stroke) {
+    return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" )") +
+           R"(color="#336699"><defs><linearGradient id="paint">)" +
+           R"(<stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>)" +
+           R"(</linearGradient></defs><rect id="target" x="12" y="12" width="40" height="40" )" +
+           R"(stroke-width="4" fill=")" + std::string(fill) + R"(" stroke=")" +
+           std::string(stroke) + R"("/></svg>)";
+  };
+  const std::string referencedPaint =
+      std::string("url(") + testCase.reference + ")" +
+      (std::string_view(testCase.value).empty() ? "" : std::string(" ") + testCase.value);
+  const std::string initialSource = sourceFor(referencedPaint, "blue");
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(initialSource, "paint_fallback.svg"));
+  ASSERT_EQ(shell.valid(), true);
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  app.setSelection(*target);
+  svg::Renderer actualRenderer;
+  actualRenderer.draw(document);
+  const svg::RendererBitmap before = actualRenderer.takeSnapshot();
+  const svg::PaintServer initialFill = target->getComputedStyle().fill.get().value();
+  const svg::PaintServer initialStroke = target->getComputedStyle().stroke.get().value();
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  const auto layout = internal::ComputeFillStrokeWidgetLayout(kCursor, ImVec2(138.0f, 70.0f));
+  const ImVec2 swapCenter((layout.swapMin.x + layout.swapMax.x) * 0.5f,
+                          (layout.swapMin.y + layout.swapMax.y) * 0.5f);
+  ClickToolbar(window, shell, kCursor, swapCenter);
+  actualRenderer.draw(document);
+  EXPECT_THAT(target->getComputedStyle().fill.get(), testing::Optional(initialStroke));
+  EXPECT_THAT(target->getComputedStyle().stroke.get(), testing::Optional(initialFill));
+
+  EditorApp expected;
+  ASSERT_EQ(expected.loadFromString(sourceFor("blue", referencedPaint)), true);
+  svg::Renderer expectedRenderer;
+  expectedRenderer.draw(expected.document().document());
+  tests::CompareBitmapToBitmap(actualRenderer.takeSnapshot(), expectedRenderer.takeSnapshot(),
+                               std::string("paint_swap_") + testCase.name,
+                               tests::PixelmatchIdentityParams());
+
+  EditorApp roundTrip;
+  ASSERT_EQ(roundTrip.loadFromString(document.source()), true);
+  const auto reparsed = roundTrip.document().document().querySelector("#target");
+  ASSERT_THAT(reparsed, testing::Ne(std::nullopt));
+  EXPECT_THAT(reparsed->getComputedStyle().fill.get(), testing::Optional(initialStroke));
+  EXPECT_THAT(reparsed->getComputedStyle().stroke.get(), testing::Optional(initialFill));
+
+  ClickToolbar(window, shell, kCursor, swapCenter);
+  actualRenderer.draw(document);
+  EXPECT_THAT(target->getComputedStyle().fill.get(), testing::Optional(initialFill));
+  EXPECT_THAT(target->getComputedStyle().stroke.get(), testing::Optional(initialStroke));
+  tests::CompareBitmapToBitmap(actualRenderer.takeSnapshot(), before,
+                               std::string("paint_swap_back_") + testCase.name,
+                               tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(UnresolvedPaint, PaintSwapFallbackTest,
+                         testing::Values(PaintSwapFallbackCase{"red", "red"},
+                                         PaintSwapFallbackCase{"alpha", "#33669980"},
+                                         PaintSwapFallbackCase{"currentColor", "currentColor"},
+                                         PaintSwapFallbackCase{"none", "none"},
+                                         PaintSwapFallbackCase{"referenceOnly", "", "#paint"}),
+                         [](const testing::TestParamInfo<PaintSwapFallbackCase>& info) {
+                           return info.param.name;
+                         });
+
 TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBusy) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -4149,7 +4247,9 @@ TEST(EditorShellTest, ConvertMultipleTextElementsToOutlinesUsesOneUndoEntry) {
   <text id="second" x="10" y="65">Second</text>
 </svg>)svg";
   gui::EditorWindow window = MakeHiddenWindow();
-  ASSERT_EQ(window.valid(), true);
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(source, "multiple-text.svg"));
   ASSERT_EQ(shell.valid(), true);
   auto& app = EditorShellTestAccess::App(shell);
@@ -5277,4 +5377,75 @@ TEST(EditorShellTest, CompactSheetHeaderCloseButtonHidesPanel) {
       << "Clicking the sheet header's close button must hide the compact panel.";
 }
 
+TEST(EditorShellTest, ToolbarSwapUpdatesEverySelectedElementInOneUndoStep) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  const std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)"
+      R"(<rect id="first" x="4" y="4" width="24" height="24" style="opacity: 0.5" )"
+      R"(fill="red" stroke="blue" stroke-width="2"/>)"
+      R"(<rect id="second" x="36" y="4" width="24" height="24" )"
+      R"(fill="green" stroke="black" stroke-width="2"/>)"
+      R"(</svg>)";
+  EditorShell shell(window, OptionsWithSource(source, "paint_swap_multi.svg"));
+  ASSERT_EQ(shell.valid(), true);
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  app.setSelection(std::vector<svg::SVGElement>{*first, *second});
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  const svg::PaintServer firstFill = first->getComputedStyle().fill.get().value();
+  const svg::PaintServer firstStroke = first->getComputedStyle().stroke.get().value();
+  const std::string before(document.source());
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  const auto layout = internal::ComputeFillStrokeWidgetLayout(kCursor, ImVec2(138.0f, 70.0f));
+  const ImVec2 swapCenter((layout.swapMin.x + layout.swapMax.x) * 0.5f,
+                          (layout.swapMin.y + layout.swapMax.y) * 0.5f);
+  ClickToolbar(window, shell, kCursor, swapCenter);
+
+  // Every selected element receives the swapped paints from the first element through one merged
+  // style write per element, with unrelated declarations preserved.
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    EXPECT_THAT(element.getComputedStyle().fill.get(), testing::Optional(firstStroke));
+    EXPECT_THAT(element.getComputedStyle().stroke.get(), testing::Optional(firstFill));
+  }
+  const auto firstStyle = first->getAttribute("style");
+  ASSERT_TRUE(firstStyle.has_value());
+  EXPECT_THAT(std::string(*firstStyle), testing::HasSubstr("opacity: 0.5"));
+  const std::string afterFirstSwap(document.source());
+  EXPECT_NE(afterFirstSwap, before);
+  ASSERT_TRUE(app.canUndo());
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Swap fill and stroke");
+
+  // A second swap restores the original values on the source element.
+  ClickToolbar(window, shell, kCursor, swapCenter);
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    EXPECT_THAT(element.getComputedStyle().fill.get(), testing::Optional(firstFill));
+    EXPECT_THAT(element.getComputedStyle().stroke.get(), testing::Optional(firstStroke));
+  }
+  const std::string afterSecondSwap(document.source());
+  EXPECT_NE(afterSecondSwap, afterFirstSwap);
+
+  // Each swap is one coherent undo step for the whole selection.
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), afterFirstSwap);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), before);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), afterFirstSwap);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(document.source(), afterSecondSwap);
+}
 }  // namespace donner::editor

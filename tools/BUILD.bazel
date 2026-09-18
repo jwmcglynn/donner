@@ -227,6 +227,47 @@ py_test(
     deps = [":release_artifact_publisher"],
 )
 
+py_library(
+    name = "bcr_source",
+    srcs = ["bcr_source.py"],
+)
+
+py_test(
+    name = "bcr_source_tests",
+    size = "small",
+    srcs = ["bcr_source_tests.py"],
+    deps = [":bcr_source"],
+)
+
+py_library(
+    name = "bcr_release",
+    srcs = ["bcr_release.py"],
+    deps = [
+        ":bcr_source",
+        ":release_artifact_publisher",
+    ],
+)
+
+py_test(
+    name = "bcr_release_tests",
+    size = "small",
+    srcs = ["bcr_release_tests.py"],
+    deps = [":bcr_release"],
+)
+
+py_library(
+    name = "bcr_admission",
+    srcs = ["bcr_admission.py"],
+    deps = [":bcr_source"],
+)
+
+py_test(
+    name = "bcr_admission_tests",
+    size = "small",
+    srcs = ["bcr_admission_tests.py"],
+    deps = [":bcr_admission"],
+)
+
 py_test(
     name = "coverage_selection_decision_tests",
     size = "small",

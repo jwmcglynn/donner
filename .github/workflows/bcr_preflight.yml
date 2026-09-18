@@ -1,0 +1,178 @@
+name: BCR Preflight
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .bcr/**
+      - .gitattributes
+      - .github/workflows/bcr_preflight.yml
+      - .github/workflows/publish_bcr.yml
+      - .github/workflows/release.yml
+      - MODULE.bazel
+      - build_defs/**
+      - config/**
+      - donner/**
+      - examples/bazel_consumer/**
+      - third_party/**
+      - tools/bcr_*.py
+      - tools/release_artifact_publisher*.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: donner
+    outputs:
+      source_commit: ${{ steps.archive.outputs.source_commit }}
+      source_artifact: donner-bcr-source-${{ steps.archive.outputs.producer_run_attempt }}
+      entry_artifact: donner-bcr-entry-${{ steps.archive.outputs.producer_run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: donner
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare committed source archive
+        id: archive
+        run: |
+          python3 -B -m tools.bcr_source archive \
+            --output "$RUNNER_TEMP/donner-bcr/artifacts" --github-output "$GITHUB_OUTPUT"
+
+      - name: Checkout current BCR admission tools and registry metadata
+        uses: actions/checkout@v7
+        with:
+          repository: bazelbuild/bazel-central-registry
+          path: upstream-bcr
+          persist-credentials: false
+
+      - name: Prepare a disposable registry
+        env:
+          VERSION: ${{ steps.archive.outputs.version }}
+        run: |
+          python3 -B -m tools.bcr_source registry --upstream ../upstream-bcr \
+            --output "$RUNNER_TEMP/donner-bcr/registry" --version "$VERSION"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Generate the candidate BCR entry without publishing
+        uses: bazel-contrib/publish-to-bcr@v1.5.0
+        with:
+          tag: v${{ steps.archive.outputs.version }}
+          module-version: ${{ steps.archive.outputs.version }}
+          # Select the root template set; MODULE.bazel is read from the archive.
+          module-roots: .
+          templates-dir: donner/.bcr
+          local-registry: ${{ runner.temp }}/donner-bcr/registry
+          local-artifact-path: ${{ runner.temp }}/donner-bcr/artifacts
+          attest: false
+
+      - name: Validate registry admission against the candidate bytes
+        env:
+          SOURCE_COMMIT: ${{ steps.archive.outputs.source_commit }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/bcr-validator"
+          "$RUNNER_TEMP/bcr-validator/bin/pip" install --require-hashes \
+            -r ../upstream-bcr/tools/requirements_lock.txt
+          "$RUNNER_TEMP/bcr-validator/bin/python" -B -m tools.bcr_admission \
+            --upstream ../upstream-bcr --registry "$RUNNER_TEMP/donner-bcr/registry" \
+            --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" --commit "$SOURCE_COMMIT" \
+            --report "$RUNNER_TEMP/donner-bcr/admission.json"
+
+      - name: Preserve candidate source bytes
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-bcr-source-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-bcr/artifacts/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Preserve admission evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-bcr-entry-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/donner-bcr/registry/
+            ${{ runner.temp }}/donner-bcr/admission.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  consumer:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+        bazel: ['7.x', '8.x']
+    runs-on: ${{ matrix.os }}
+    env:
+      USE_BAZEL_VERSION: ${{ matrix.bazel }}
+      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: bcr-${{ matrix.os }}-${{ matrix.bazel }}
+          repository-cache: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.source_artifact }}
+          path: ${{ runner.temp }}/donner-bcr/artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.entry_artifact }}
+          path: ${{ runner.temp }}/donner-bcr/entry
+      - name: Exercise the archive through registry resolution
+        run: |
+          python3 -B -m tools.bcr_source consumer --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" \
+            --registry "$RUNNER_TEMP/donner-bcr/entry/registry" \
+            --output "$RUNNER_TEMP/donner-bcr/consumer-test" --commit "$SOURCE_COMMIT"
+          cd "$RUNNER_TEMP/donner-bcr/consumer-test/consumer"
+          bazelisk test --lockfile_mode=off \
+            --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
+            --registry=https://bcr.bazel.build //:all
+          bazelisk build --lockfile_mode=off \
+            --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
+            --registry=https://bcr.bazel.build \
+            @donner//donner/base:base @donner//donner/css:css \
+            @donner//donner/svg:svg @donner//donner/svg/renderer:renderer
+
+  qualify:
+    needs: [prepare, consumer]
+    runs-on: ubuntu-24.04
+    env:
+      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.source_artifact }}
+          path: ${{ runner.temp }}/donner-bcr/artifacts
+      - name: Bind the source archive to the completed test matrix
+        run: |
+          python3 -B -m tools.bcr_source qualify --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" \
+            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: donner-bcr-qualified-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-bcr/artifacts/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

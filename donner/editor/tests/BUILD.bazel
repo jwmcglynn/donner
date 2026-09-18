@@ -137,6 +137,7 @@ donner_cc_test(
     # actions instead of one ~18 s serial critical-path action.
     shard_count = 4,
     deps = [
+        ":bitmap_golden_compare",
         "//donner/editor:clipboard_interface",
         "//donner/editor:editor_shell",
         "//donner/editor/gui:editor_window",

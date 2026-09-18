@@ -502,13 +502,18 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
   // Exact GPU endpoint probes guard shared-vertex winding independently of the full-frame
   // comparison's existing allowance for filtered-image rounding differences.
   constexpr int kGeodeCrossRasterizerEdgePixelBudget = 64;
+  // The TinySkia arm allows 2 pixels: the replayed frame carries pre-existing
+  // 1-LSB dark-background rounding vs the committed golden (51,665 sub-threshold
+  // pixels, 2 counted at 0.01). Pixelmatch 1.x YIQ scored all of them at zero;
+  // 2.0 OKLab tips 2 over threshold (PR #1285).
+  constexpr int kTinySkiaComparatorRoundingBudget = 2;
   const std::string_view goldenPath =
       snapshot.usesTexturePresentation ? kGeodeGoldenPath : kTinySkiaGoldenPath;
   tests::CompareBitmapToGolden(
       snapshot.bitmap, goldenPath, "rnr_replay_repro3_after_mup2",
       snapshot.usesTexturePresentation
           ? tests::ApprovedPixelToleranceParams(0.02f, kGeodeCrossRasterizerEdgePixelBudget, false)
-          : tests::ApprovedPixelToleranceParams(0.01f, 0, true));
+          : tests::ApprovedPixelToleranceParams(0.01f, kTinySkiaComparatorRoundingBudget, true));
 }
 
 // Structural remaps must preserve the compositor across drag-release source

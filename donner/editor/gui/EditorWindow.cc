@@ -1418,7 +1418,7 @@ void BeginUiFrame(UiTextureRegistry* registry, ImGuiRuntimeRenderer* renderer) {
   // Advancing through the renderer releases the registrations whose retirement frames have passed
   // and drops the bind group cached for each, so neither outlives the other.
   renderer->advanceFrame();
-  if (ImGui::GetIO().Fonts->IsBuilt()) {
+  if (ImGui::GetIO().Fonts->IsBuilt() && ImGui::GetIO().Fonts->TexID != 0u) {
     return;
   }
   if (const gpu::Status rebuilt = renderer->buildFontAtlas(*ImGui::GetIO().Fonts);

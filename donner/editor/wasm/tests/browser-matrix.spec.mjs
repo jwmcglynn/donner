@@ -56,6 +56,138 @@ test("Playwright version stays synchronized across package locks and browser met
   );
 });
 
+function parseBrowserLane(lane) {
+  const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
+  const performanceLane = laneName === "browser_responsiveness_perf_test";
+  const tags = [...(/tags = \[([\s\S]*?)\]/.exec(lane)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
+    .map(([, tag]) => tag);
+  const specPattern = performanceLane
+    ? /\$\(rootpath :([^)]+\.perf\.ts)\)/g
+    : /\$\(rootpath :([^)]+\.spec\.ts)\)/g;
+  const specFiles = [...lane.matchAll(specPattern)].map(([, spec]) => spec);
+  return { lane, laneName, performanceLane, tags, specFiles };
+}
+
+function assertCommonBrowserLane({ lane, laneName, specFiles }) {
+  assert.ok(laneName, "every browser lane must be named");
+  assert.ok(specFiles.length > 0, `${laneName} must run a named spec`);
+  for (const specFile of specFiles) {
+    assert.ok(
+      lane.includes(`"${specFile}"`),
+      `${laneName} must list ${specFile} in its data`,
+    );
+    const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
+    for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
+      assert.ok(
+        lane.includes(`"${importedModule}.ts"`),
+        `${laneName} is missing ${specFile} dependency ${importedModule}.ts`,
+      );
+    }
+  }
+  assert.match(
+    lane,
+    /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
+    "every browser lane must allow only macOS ARM64 execution",
+  );
+}
+
+function assertPerformanceLane({ lane, tags, specFiles }) {
+  assert.deepEqual(
+    tags.sort(),
+    ["manual", "no-sandbox", "perf"],
+    "responsiveness timing must remain opt-in while allowing Firefox's own sandbox",
+  );
+  assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
+  assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
+  assert.doesNotMatch(
+    lane,
+    /"@playwright\/\/:(?:chromium|firefox)"/,
+    "macOS application symlinks must not travel inside Bazel tree artifacts",
+  );
+  assert.match(lane, /"DONNER_CHROMIUM_ARCHIVE":/);
+  assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
+  assert.ok(lane.includes("\"prepare-browser-archives.js\""));
+  assert.deepEqual(specFiles, ["browser-responsiveness.perf.ts"]);
+}
+
+function assertCompositedLane({ lane, tags, specFiles }, browser) {
+  assert.deepEqual(
+    tags.sort(),
+    ["manual", "no-local"],
+    "extended composited browser diagnostics are opt-in and remote-only",
+  );
+  assert.deepEqual(specFiles, [
+    "composited-invariants.spec.ts",
+    "composited-drag-invariants.spec.ts",
+  ]);
+  assert.match(
+    lane,
+    browser === "firefox"
+      ? /--config=\$\(rootpath :playwright\.composited-firefox\.bazel\.config\.js\)/
+      : /--config=\$\(rootpath :playwright\.composited-chromium\.bazel\.config\.js\)/,
+  );
+  assert.ok(lane.includes(`"@playwright//:${browser}"`));
+  assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
+  assert.ok(tags.includes("no-local"), "the composited browser gate must use remote execution");
+  assert.doesNotMatch(
+    lane,
+    /--grep/,
+    "the composited lane must include the classifier controls",
+  );
+}
+
+function assertFontReferenceLane({ lane, tags, specFiles }) {
+  assert.deepEqual(
+    tags.sort(),
+    ["manual", "no-local"],
+    "native font reference evidence must remain opt-in and remote-only",
+  );
+  assert.deepEqual(specFiles, ["font-reference.spec.ts"]);
+  assert.match(lane, /--config=\$\(rootpath :playwright\.font-reference\.config\.js\)/);
+  for (
+    const dependency of [
+      "playwright.font-reference.config.js",
+      "//third_party/resvg-test-suite:fonts",
+      "@playwright//:chromium",
+      "@playwright//:firefox",
+    ]
+  ) {
+    assert.ok(
+      lane.includes(`"${dependency}"`),
+      `font reference probe is missing ${dependency}`,
+    );
+  }
+  assert.match(
+    lane,
+    /"DONNER_REFERENCE_FONT": "third_party\/resvg-test-suite\/fonts\/NotoSans-Regular\.ttf"/,
+  );
+  assert.match(lane, /"NODE_OPTIONS": ""/);
+  assert.match(
+    lane,
+    /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
+  );
+}
+
+function assertBrowserLane(lane) {
+  const contract = parseBrowserLane(lane);
+  assertCommonBrowserLane(contract);
+  const { laneName, performanceLane, tags } = contract;
+  if (performanceLane) {
+    assertPerformanceLane(contract);
+  } else if (laneName === "firefox_composited_invariants_test") {
+    assertCompositedLane(contract, "firefox");
+  } else if (laneName === "chromium_composited_invariants_test") {
+    assertCompositedLane(contract, "chromium");
+  } else if (laneName === "font_reference_probe") {
+    assertFontReferenceLane(contract);
+  } else {
+    assert.ok(
+      !tags.includes("manual") && !tags.includes("perf"),
+      `${laneName} must remain a regression gate`,
+    );
+  }
+}
+
 test("Bazel owns hermetic browser regression and manual performance lanes", () => {
   const moduleFile = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
   assert.match(
@@ -104,6 +236,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
       "catalog_font_loading_test",
+      "chromium_composited_invariants_test",
       "chromium_remote_smoke",
       "firefox_composited_invariants_test",
       "font_reference_probe",
@@ -111,108 +244,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     "every playwright_test lane must be named and checked; update this contract when one is added",
   );
   for (const lane of lanes) {
-    const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
-    assert.ok(laneName, "every browser lane must be named");
-    const performanceLane = laneName === "browser_responsiveness_perf_test";
-    const tags = [...(/tags = \[([\s\S]*?)\]/.exec(lane)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
-      .map(([, tag]) => tag);
-    if (performanceLane) {
-      assert.deepEqual(
-        tags.sort(),
-        ["manual", "no-sandbox", "perf"],
-        "responsiveness timing must remain opt-in while allowing Firefox's own sandbox",
-      );
-      assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
-      assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
-      assert.doesNotMatch(
-        lane,
-        /"@playwright\/\/:(?:chromium|firefox)"/,
-        "macOS application symlinks must not travel inside Bazel tree artifacts",
-      );
-      assert.match(lane, /"DONNER_CHROMIUM_ARCHIVE":/);
-      assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
-      assert.ok(lane.includes("\"prepare-browser-archives.js\""));
-    } else if (laneName === "firefox_composited_invariants_test") {
-      assert.deepEqual(
-        tags.sort(),
-        ["manual", "no-local"],
-        "extended Firefox diagnostics are opt-in",
-      );
-    } else if (laneName === "font_reference_probe") {
-      assert.deepEqual(
-        tags.sort(),
-        ["manual", "no-local"],
-        "native font reference evidence must remain opt-in and remote-only",
-      );
-    } else {
-      assert.ok(
-        !tags.includes("manual") && !tags.includes("perf"),
-        `${laneName} must remain a regression gate`,
-      );
-    }
-    const specPattern = performanceLane
-      ? /\$\(rootpath :([^)]+\.perf\.ts)\)/g
-      : /\$\(rootpath :([^)]+\.spec\.ts)\)/g;
-    const specFiles = [...lane.matchAll(specPattern)].map(([, spec]) => spec);
-    assert.ok(specFiles.length > 0, `${laneName} must run a named spec`);
-    if (performanceLane) assert.deepEqual(specFiles, ["browser-responsiveness.perf.ts"]);
-    if (laneName === "firefox_composited_invariants_test") {
-      assert.deepEqual(specFiles, [
-        "composited-invariants.spec.ts",
-        "composited-drag-invariants.spec.ts",
-      ]);
-      assert.match(
-        lane,
-        /--config=\$\(rootpath :playwright\.composited-firefox\.bazel\.config\.js\)/,
-      );
-      assert.ok(lane.includes("\"@playwright//:firefox\""));
-      assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
-      assert.ok(tags.includes("no-local"), "the composited browser gate must use remote execution");
-      assert.doesNotMatch(
-        lane,
-        /--grep/,
-        "the composited lane must include the classifier controls",
-      );
-    }
-    if (laneName === "font_reference_probe") {
-      assert.deepEqual(specFiles, ["font-reference.spec.ts"]);
-      assert.match(lane, /--config=\$\(rootpath :playwright\.font-reference\.config\.js\)/);
-      for (
-        const dependency of [
-          "playwright.font-reference.config.js",
-          "//third_party/resvg-test-suite:fonts",
-          "@playwright//:chromium",
-          "@playwright//:firefox",
-        ]
-      ) {
-        assert.ok(
-          lane.includes(`"${dependency}"`),
-          `font reference probe is missing ${dependency}`,
-        );
-      }
-      assert.match(
-        lane,
-        /"DONNER_REFERENCE_FONT": "third_party\/resvg-test-suite\/fonts\/NotoSans-Regular\.ttf"/,
-      );
-      assert.match(lane, /"NODE_OPTIONS": ""/);
-      assert.match(
-        lane,
-        /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
-      );
-    }
-    for (const specFile of specFiles) {
-      assert.ok(
-        lane.includes(`"${specFile}"`),
-        `${laneName} must list ${specFile} in its data`,
-      );
-      const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
-      for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
-        assert.ok(
-          lane.includes(`"${importedModule}.ts"`),
-          `${laneName} is missing ${specFile} dependency ${importedModule}.ts`,
-        );
-      }
-    }
+    assertBrowserLane(lane);
   }
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
   assert.match(
@@ -230,13 +262,6 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     buildFile,
     /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
   );
-  for (const lane of lanes) {
-    assert.match(
-      lane,
-      /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
-      "every browser lane must allow only macOS ARM64 execution",
-    );
-  }
   // Linux is excluded deliberately, not by omission: headless Chromium there
   // cannot present a WebGPU OffscreenCanvas swapchain on the SwiftShader
   // adapter, so the presented-pixel assertions can never pass. Restoring the

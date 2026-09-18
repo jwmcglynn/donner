@@ -1,3 +1,6 @@
 # Preserve upstream notices and patch context byte-for-byte.
 third_party/google_fonts/licenses/*.txt -text -whitespace
 third_party/woff2_bounded_decode.patch -text -whitespace
+
+# Keep the local Bazel convenience symlink out of source releases.
+/external export-ignore
