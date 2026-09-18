@@ -17,7 +17,6 @@ cc_test(
     srcs = ["Reflection_tests.cc"],
     deps = [
         ":reflection",
-        "@googletest//:gmock",
         "@googletest//:gtest_main",
     ],
 )

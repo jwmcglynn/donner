@@ -6,3 +6,12 @@ test --test_output=errors
 
 build:gcc16 --extra_toolchains=@gcc16//:cc_toolchain
 build:gcc16 --linkopt=-lstdc++
+
+build:macos-gcc16 --repo_env=BAZEL_USE_CPP_ONLY_TOOLCHAIN=1
+build:macos-gcc16 --repo_env=CC=gcc-16
+build:macos-gcc16 --repo_env=CXX=g++-16
+build:macos-gcc16 --repo_env=BAZEL_LINKLIBS=-lstdc++:-lm
+build:macos-gcc16 --macos_minimum_os=26.0
+# These rules_cc defaults assume Clang and its Objective-C driver.
+build:macos-gcc16 --features=-macos_reproducible
+build:macos-gcc16 --features=-macos_default_link_flags

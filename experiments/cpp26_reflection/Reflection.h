@@ -29,7 +29,7 @@ enum class PaintMode { Fill, Stroke };
 /// @param object Object whose fields are visited.
 /// @param visitor Callable receiving the reflected name and a field reference.
 template <typename T, typename Visitor>
-void ForEachMember(T& object, Visitor visitor) {
+void ForEachMember(T& object, [[maybe_unused]] Visitor visitor) {
   using Object = std::remove_cv_t<T>;
   static constexpr auto members = std::define_static_array(
       std::meta::nonstatic_data_members_of(^^Object, std::meta::access_context::current()));
