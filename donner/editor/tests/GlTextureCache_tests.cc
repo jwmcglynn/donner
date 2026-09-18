@@ -9,6 +9,7 @@
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
@@ -397,15 +398,21 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBo
   GlTextureCache cache(device);
   const std::uint64_t createsBefore = device->lifetimeTextureCreates();
   const uint64_t submittedBefore = device->adapterDevice().lastSubmittedSerial();
+  geode::GeodeCounters counters;
+  device->setCounters(&counters);
 
   const svg::RendererBitmap bitmap =
       MakeBitmap(Vector2i(257, 513), /*rowBytes=*/1032u, /*seed=*/7u);
   cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/1, bitmap));
+  device->setCounters(nullptr);
   std::shared_ptr<const svg::RendererGeodeTextureSnapshot> snapshot = UploadedSnapshot(cache);
   ASSERT_NE(snapshot, nullptr);
   EXPECT_THAT(snapshot->allocationDimensions(), testing::Eq(Vector2i(512, 1024)));
   EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsBefore + 1u));
   EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(submittedBefore));
+  EXPECT_THAT(counters.textureCreates, testing::Eq(1u));
+  EXPECT_THAT(counters.textureWriteBytes, testing::Eq(512u * 1024u * 4u));
+  EXPECT_THAT(counters.submits, testing::Eq(0u));
 
   auto* mutableSnapshot = const_cast<svg::RendererGeodeTextureSnapshot*>(snapshot.get());
   ASSERT_TRUE(mutableSnapshot->setDimensions(Vector2i(512, 1024)));
