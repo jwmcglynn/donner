@@ -18,7 +18,7 @@ Rules enforced:
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
-  - No new or worsened supported out-of-line C++ method definition above the local
+  - No new or worsened supported C++ function or method definition above the local
     decision-point complexity limit
 
 Usage:
@@ -376,7 +376,7 @@ _METHOD_DEFINITION_RE = re.compile(
     r"""
     ^[ \t]*
     (?:[A-Za-z_][A-Za-z0-9_:<>,~*&\[\] ]*[ \t]+)?
-    (?P<name>(?:[A-Za-z_][A-Za-z0-9_]*::)+~?[A-Za-z_][A-Za-z0-9_]*)
+    (?P<name>(?:(?:[A-Za-z_][A-Za-z0-9_]*::)+)?~?[A-Za-z_][A-Za-z0-9_]*)
     \s*\((?P<params>[^;{}]*)\)
     \s*(?P<cv>(?:(?:const|volatile)\s*)*)(?P<ref>&&?)?\s*
     (?:noexcept(?:\s*\([^)]*\))?\s*)?(?:override\s*)?(?:final\s*)?
@@ -387,6 +387,15 @@ _METHOD_DEFINITION_RE = re.compile(
 _METHOD_DECISION_RE = re.compile(
     r"\b(?:if|for|while|catch)\s*\(|\bcase\b|&&|\|\||(?<!\?)\?(?!\?)"
 )
+_NON_FUNCTION_DEFINITION_NAMES = {"if", "for", "while", "switch", "catch"}
+
+
+def _method_definitions(stripped: str):
+    """Yield supported definitions, including methods defined inside a class body."""
+    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+        if match.group("name") in _NON_FUNCTION_DEFINITION_NAMES:
+            continue
+        yield match
 
 
 def _method_body_end(stripped: str, opening_brace: int) -> int:
@@ -412,9 +421,9 @@ def _method_signature(match: re.Match) -> str:
 
 
 def _method_complexities(stripped: str) -> Dict[str, int]:
-    """Return decision-point counts for supported out-of-line method definitions."""
+    """Return decision-point counts for supported function and method definitions."""
     result: Dict[str, int] = {}
-    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+    for match in _method_definitions(stripped):
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
@@ -429,7 +438,7 @@ def _check_method_complexity(
     """Flag supported out-of-line C++ method definitions with too many decision points."""
     baseline = _method_complexities(baseline_stripped) if baseline_stripped is not None else {}
     errors: List[Tuple[int, str, str]] = []
-    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+    for match in _method_definitions(stripped):
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))

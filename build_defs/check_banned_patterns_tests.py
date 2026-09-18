@@ -139,6 +139,40 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertIn("complex method (11 decision points; limit 10)", descriptions)
 
+    def test_blocks_inline_methods_above_the_local_complexity_limit(self):
+        branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        descriptions = self._descriptions_for(
+            "struct Example {\n  void run(int value) {\n" + branches + "\n  }\n};\n",
+            check_method_complexity=True,
+        )
+
+        self.assertIn("complex method (11 decision points; limit 10)", descriptions)
+
+    def test_blocks_inline_method_that_worsens_baseline_debt(self):
+        baseline_branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        current_branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(12)
+        )
+        baseline = "struct Example {\n  void run(int value) {\n" + baseline_branches + "\n  }\n};\n"
+        current = "struct Example {\n  void run(int value) {\n" + current_branches + "\n  }\n};\n"
+        source_path = self._write_source(current)
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    baseline
+                ),
+            )
+        ]
+
+        self.assertIn("complex method (12 decision points; limit 10)", descriptions)
+
     def test_allows_methods_at_the_local_complexity_limit(self):
         branches = "\n".join(
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(10)
