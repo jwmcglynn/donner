@@ -30,6 +30,15 @@ build --enable_platform_specific_config
 build --rewind_lost_inputs
 build --experimental_remote_cache_eviction_retries=1
 
+# Reuse identical compile/archive actions across renderer and text configurations.
+build --experimental_output_paths=strip
+# Add mapping support without replacing other caller execution requirements.
+build --incompatible_modify_execution_info_additive
+build --modify_execution_info=CppCompile=+supports-path-mapping,CppArchive=+supports-path-mapping,CppModuleMap=+supports-path-mapping
+# Emscripten response-file paths are not remapped; pass its arguments directly.
+build --features=-compiler_param_file
+build --features=-archive_param_file
+
 ##
 ## Build config
 ##
@@ -257,6 +266,8 @@ build --config=c++20
 
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
+# Standalone execution cannot run path-mapped actions.
+build:debug --experimental_output_paths=off
 
 # Compile-time deep dive (see tools/time_trace_report.py). Clang writes a
 # <object>.json trace next to each .o. Those are undeclared outputs, so
@@ -266,6 +277,7 @@ build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linko
 #   bazel build --config=time-trace //donner/svg/...
 #   python3 tools/time_trace_report.py
 build:time-trace --copt=-ftime-trace
+build:time-trace --experimental_output_paths=off
 build:time-trace --strategy=CppCompile=standalone --spawn_strategy=standalone
 build:time-trace --remote_executor= --remote_cache= --noremote_upload_local_results
 
