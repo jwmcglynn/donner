@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import {
   captureSplashPresentationFrame,
   type CssRegion,
@@ -1076,6 +1077,72 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   ).toBe(0);
   expect(failures).toEqual([]);
 });
+
+test(
+  "dragging a circle retains its curved path outline inside the selection bounds",
+  async ({ page }, testInfo) => {
+    const failures = await openEditor(page);
+    await openBasicShapes(page);
+    const viewport = await readViewportStats(page);
+    const scaleX = viewport.documentWidth / 640;
+    const scaleY = viewport.documentHeight / 400;
+    const start = {
+      x: viewport.documentX + 320 * scaleX,
+      y: viewport.documentY + 92 * scaleY,
+    };
+    await page.mouse.move(start.x, start.y);
+    await waitForAppliedPointer(page, start, {
+      message: "circle selection press",
+      timeoutMs: scaledMs(4_000),
+    });
+    await waitForPressReadiness(page, "circle selection press");
+    await page.mouse.down();
+    await expect.poll(() => page.evaluate(() => window.__donnerInteractionStats?.selectedCount))
+      .toBe(1);
+    try {
+      for (const offset of [0, 24, 48]) {
+        const pointer = { x: start.x + offset * scaleX, y: start.y + offset * scaleY };
+        await page.mouse.move(pointer.x, pointer.y);
+        await waitForAppliedPointer(page, pointer, {
+          message: `circle drag at ${offset}`,
+          timeoutMs: scaledMs(4_000),
+        });
+        // At 45 degrees the curve is well inside the AABB: bounds and handles cannot pass this probe.
+        const radiusAtDiagonal = 60 / Math.sqrt(2);
+        const curveClip = {
+          x: pointer.x + (radiusAtDiagonal - 5) * scaleX,
+          y: pointer.y - (radiusAtDiagonal + 5) * scaleY,
+          width: 10 * scaleX,
+          height: 10 * scaleY,
+        };
+        let capture = Buffer.alloc(0);
+        try {
+          await expect.poll(async () => {
+            capture = await page.screenshot({ clip: curveClip });
+            return readEditorPixelBoundsFromPng(capture, "selection-teal", curveClip, {
+              minX: 0,
+              minY: 0,
+              maxX: curveClip.width,
+              maxY: curveClip.height,
+            });
+          }, { message: `circle path outline at drag offset ${offset}` }).not.toBeNull();
+        } finally {
+          if (capture.length > 0) {
+            const capturePath = testInfo.outputPath(`circle-path-${offset}.png`);
+            await writeFile(capturePath, capture);
+            await testInfo.attach(`circle-path-${offset}`, {
+              path: capturePath,
+              contentType: "image/png",
+            });
+          }
+        }
+      }
+    } finally {
+      await page.mouse.up();
+    }
+    expect(failures).toEqual([]);
+  },
+);
 
 test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({ browserName, page }) => {
   // The single-canvas replacement removed the two-surface epoch handoff that used to let a drag

@@ -2976,6 +2976,8 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
       << "pendingClick=" << EditorShellTestAccess::HasPendingClick(shell)
       << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell);
   ASSERT_EQ(EditorShellTestAccess::App(shell).selectedElement()->id(), "target");
+  EXPECT_THAT(EditorShellTestAccess::SelectionChromePathCount(shell), ::testing::Gt(0u))
+      << "The held drag must present the selected path alongside its bounds.";
   const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
   ASSERT_TRUE(status.activeDragPreview.has_value())
       << "The full desktop frame loop must retain a live drag preview";
@@ -3013,7 +3015,7 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
 }
 
-TEST(EditorShellTest, SelectPressKeepsFullChromeUntilDragMoves) {
+TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -3040,7 +3042,8 @@ TEST(EditorShellTest, SelectPressKeepsFullChromeUntilDragMoves) {
   });
   EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
   EXPECT_EQ(EditorShellTestAccess::SelectionChromeDetailForActiveTool(shell),
-            SelectionChromeDetail::CombinedBoundsOnly);
+            SelectionChromeDetail::Full);
+  EXPECT_THAT(EditorShellTestAccess::SelectionChromePathCount(shell), ::testing::Gt(0u));
 }
 
 TEST(EditorShellTest, SelectDoubleClickOnTextSwitchesToTextEditingAtClick) {

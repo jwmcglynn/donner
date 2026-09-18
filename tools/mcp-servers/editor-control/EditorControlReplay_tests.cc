@@ -53,6 +53,51 @@ TEST(EditorControlSessionTest, HighDpiEditorStartupCapture) {
   EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1)) << result.body.dump(2);
 }
 
+TEST(EditorControlSessionTest, DragPathOverlayCapture) {
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "drag_path.svg";
+  replay.metadata.svgSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400">
+<path id="target" d="M100 260 L200 80 L300 260 Z" fill="#f97316"/>
+</svg>)svg";
+  replay.metadata.windowWidth = 960;
+  replay.metadata.windowHeight = 640;
+  replay.metadata.displayScale = 1.0;
+  for (std::uint64_t index = 0; index <= 36; ++index) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseDocX = index < 16 ? 200.0 : 250.0;
+    frame.mouseDocY = index < 16 ? 180.0 : 210.0;
+    if (index >= 10) {
+      frame.mouseButtonMask = 1;
+    }
+    if (index == 10) {
+      frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseDown});
+    }
+    replay.frames.push_back(std::move(frame));
+  }
+  const std::filesystem::path rnrPath = TestTempDir() / "drag_path.rnr";
+  ASSERT_THAT(repro::WriteReproFile(rnrPath, replay), testing::IsTrue());
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
+  EditorControlSession session;
+  for (const int frame : {14, 36}) {
+    const ToolCallResult result =
+        session.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},
+                                                  {"gl_readback", true},
+                                                  {"gl_capture_frame", frame},
+                                                  {"gl_crop", "document-canvas"},
+                                                  {"gl_output_dir", outputDir.string()},
+                                                  {"gl_drive_document_input", true},
+                                                  {"gl_pace", true},
+                                                  {"include_gl_images", false}});
+    ASSERT_THAT(result.isError, testing::IsFalse()) << result.body.dump(2);
+    EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1)) << result.body.dump(2);
+  }
+}
+
 TEST(EditorControlSessionTest, InspectorTextInputReplay) {
   repro::ReproFile replay;
   replay.metadata.svgPath = "inspector.svg";
