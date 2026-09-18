@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
+import { installCompositedPixelClassifier } from "./composited-pixel-classifier.mjs";
 
+export { installCompositedPixelClassifier } from "./composited-pixel-classifier.mjs";
 export { attachCompositedReadbacks, stopCompositedProbe } from "./composited-probe-evidence.mjs";
 
 /**
@@ -148,6 +150,8 @@ export interface CompositedProbeOptions {
   minColorAlpha?: number;
   /** Channel spread at or above which a pixel counts as chromatic. */
   minColorSpread?: number;
+  /** Optional fixture-specific content mask applied after the default alpha/chroma gates. */
+  colorMask?: "yellow-content" | "basic-blue";
   /**
    * Restrict the read-back to this viewport-CSS rectangle, intersected with
    * the visible surface region. Defaults to the whole visible region.
@@ -251,9 +255,12 @@ export async function installCompositedProbe(
     sampleHeight: options.sampleHeight ?? 48,
     minColorAlpha: options.minColorAlpha ?? 16,
     minColorSpread: options.minColorSpread ?? 12,
+    colorMask: options.colorMask ?? null,
     sampleRegionCss: options.sampleRegionCss ?? null,
     captureReadbacks: options.captureReadbacks ?? false,
   };
+
+  await page.evaluate(installCompositedPixelClassifier, config);
 
   await page.evaluate((config) => {
     const readback = document.createElement("canvas");
@@ -271,17 +278,132 @@ export async function installCompositedProbe(
       __donnerWorkerStats?: { completedResults?: number };
       __donnerViewportStats?: { documentWidth?: number };
     };
+    const matchesContentPixel = (window as unknown as {
+      __donnerMatchesCompositedContentPixel?: (
+        red: number,
+        green: number,
+        blue: number,
+        alpha: number,
+      ) => boolean;
+    }).__donnerMatchesCompositedContentPixel;
+    if (matchesContentPixel === undefined) {
+      throw new Error("composited probe: pixel classifier was not installed");
+    }
 
     type CapturedSample = CompositedSample & {
       attempts: number;
       rawReadback?: Uint8ClampedArray;
+    };
+    const failedSample = (
+      base: Pick<
+        CapturedSample,
+        | "t"
+        | "canvasPresent"
+        | "visibleX"
+        | "visibleY"
+        | "cssWidth"
+        | "cssHeight"
+        | "backingWidth"
+        | "backingHeight"
+        | "completedResults"
+        | "presentedDocumentWidth"
+      >,
+    ): CapturedSample => ({
+      ...base,
+      meanAlpha: 0,
+      meanLuma: 0,
+      coloredPixels: 0,
+      coloredCentroidX: -1,
+      coloredCentroidY: -1,
+      coloredWidth: 0,
+      coloredHeight: 0,
+      sampledPixels: 0,
+      drawOk: false,
+      attempts: 1,
+    });
+    const resolveBounds = (
+      elementBox: DOMRect,
+    ): {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      insetLeft: number;
+      insetTop: number;
+    } => {
+      const full = {
+        x: elementBox.left,
+        y: elementBox.top,
+        width: elementBox.width,
+        height: elementBox.height,
+        insetLeft: 0,
+        insetTop: 0,
+      };
+      if (config.sampleRegionCss === null) return full;
+      const wanted = config.sampleRegionCss;
+      const left = Math.max(full.x, wanted.x);
+      const top = Math.max(full.y, wanted.y);
+      const right = Math.min(full.x + full.width, wanted.x + wanted.width);
+      const bottom = Math.min(full.y + full.height, wanted.y + wanted.height);
+      return {
+        x: left,
+        y: top,
+        width: Math.max(0, right - left),
+        height: Math.max(0, bottom - top),
+        insetLeft: full.insetLeft + (left - full.x),
+        insetTop: full.insetTop + (top - full.y),
+      };
+    };
+    const measurePixels = (pixels: Uint8ClampedArray): {
+      meanAlpha: number;
+      meanLuma: number;
+      coloredPixels: number;
+      coloredCentroidX: number;
+      coloredCentroidY: number;
+      coloredWidth: number;
+      coloredHeight: number;
+      sampledPixels: number;
+    } => {
+      const count = pixels.length / 4;
+      let alphaSum = 0, lumaSum = 0, colored = 0, coloredX = 0, coloredY = 0;
+      let minX = Number.POSITIVE_INFINITY, maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY, maxY = Number.NEGATIVE_INFINITY;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const r = pixels[index],
+          g = pixels[index + 1],
+          b = pixels[index + 2],
+          a = pixels[index + 3];
+        alphaSum += a;
+        lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (!matchesContentPixel(r, g, b, a)) continue;
+        colored += 1;
+        const pixel = index / 4;
+        const x = pixel % readback.width;
+        const y = Math.floor(pixel / readback.width);
+        coloredX += x;
+        coloredY += y;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+      return {
+        meanAlpha: alphaSum / count,
+        meanLuma: lumaSum / count,
+        coloredPixels: colored,
+        coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
+        coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
+        coloredWidth: colored === 0 ? 0 : maxX - minX + 1,
+        coloredHeight: colored === 0 ? 0 : maxY - minY + 1,
+        sampledPixels: count,
+      };
     };
     const sampleOnce = (): CapturedSample => {
       const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
       const completedResults = diagnostics.__donnerWorkerStats?.completedResults || 0;
       const presentedDocumentWidth = diagnostics.__donnerViewportStats?.documentWidth || 0;
       if (surface === null) {
-        return {
+        return failedSample({
           t: performance.now(),
           canvasPresent: false,
           visibleX: 0,
@@ -292,46 +414,11 @@ export async function installCompositedProbe(
           backingHeight: 0,
           completedResults,
           presentedDocumentWidth,
-          meanAlpha: 0,
-          meanLuma: 0,
-          coloredPixels: 0,
-          coloredCentroidX: -1,
-          coloredCentroidY: -1,
-          coloredWidth: 0,
-          coloredHeight: 0,
-          sampledPixels: 0,
-          drawOk: false,
-          attempts: 1,
-        };
+        });
       }
 
       const elementBox = surface.getBoundingClientRect();
-      let bounds = {
-        x: elementBox.left,
-        y: elementBox.top,
-        width: elementBox.width,
-        height: elementBox.height,
-        insetLeft: 0,
-        insetTop: 0,
-      };
-      if (config.sampleRegionCss !== null) {
-        // Intersect the requested window with the canvas box, keeping the
-        // offsets expressed relative to that box so the source rect below
-        // stays correct.
-        const wanted = config.sampleRegionCss;
-        const left = Math.max(bounds.x, wanted.x);
-        const top = Math.max(bounds.y, wanted.y);
-        const right = Math.min(bounds.x + bounds.width, wanted.x + wanted.width);
-        const bottom = Math.min(bounds.y + bounds.height, wanted.y + wanted.height);
-        bounds = {
-          x: left,
-          y: top,
-          width: Math.max(0, right - left),
-          height: Math.max(0, bottom - top),
-          insetLeft: bounds.insetLeft + (left - bounds.x),
-          insetTop: bounds.insetTop + (top - bounds.y),
-        };
-      }
+      const bounds = resolveBounds(elementBox);
       const elementRect = surface.getBoundingClientRect();
       // Backing pixels per CSS pixel of the ELEMENT box. The visible region is
       // a sub-rectangle of that box, so its source rect scales the same way.
@@ -356,19 +443,7 @@ export async function installCompositedProbe(
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {
-        return {
-          ...base,
-          meanAlpha: 0,
-          meanLuma: 0,
-          coloredPixels: 0,
-          coloredCentroidX: -1,
-          coloredCentroidY: -1,
-          coloredWidth: 0,
-          coloredHeight: 0,
-          sampledPixels: 0,
-          drawOk: false,
-          attempts: 1,
-        };
+        return failedSample(base);
       }
 
       context.clearRect(0, 0, readback.width, readback.height);
@@ -385,66 +460,13 @@ export async function installCompositedProbe(
           readback.height,
         );
       } catch {
-        return {
-          ...base,
-          meanAlpha: 0,
-          meanLuma: 0,
-          coloredPixels: 0,
-          coloredCentroidX: -1,
-          coloredCentroidY: -1,
-          coloredWidth: 0,
-          coloredHeight: 0,
-          sampledPixels: 0,
-          drawOk: false,
-          attempts: 1,
-        };
+        return failedSample(base);
       }
 
       const pixels = context.getImageData(0, 0, readback.width, readback.height).data;
-      const count = pixels.length / 4;
-      let alphaSum = 0;
-      let lumaSum = 0;
-      let colored = 0;
-      let coloredX = 0;
-      let coloredY = 0;
-      let minX = Number.POSITIVE_INFINITY;
-      let maxX = Number.NEGATIVE_INFINITY;
-      let minY = Number.POSITIVE_INFINITY;
-      let maxY = Number.NEGATIVE_INFINITY;
-      for (let index = 0; index < pixels.length; index += 4) {
-        const r = pixels[index];
-        const g = pixels[index + 1];
-        const b = pixels[index + 2];
-        const a = pixels[index + 3];
-        alphaSum += a;
-        lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        if (a >= config.minColorAlpha) {
-          const spread = Math.max(r, g, b) - Math.min(r, g, b);
-          if (spread >= config.minColorSpread) {
-            colored += 1;
-            const pixel = index / 4;
-            const x = pixel % readback.width;
-            const y = Math.floor(pixel / readback.width);
-            coloredX += x;
-            coloredY += y;
-            minX = Math.min(minX, x);
-            maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y);
-            maxY = Math.max(maxY, y);
-          }
-        }
-      }
-
       const sample: CapturedSample = {
         ...base,
-        meanAlpha: alphaSum / count,
-        meanLuma: lumaSum / count,
-        coloredPixels: colored,
-        coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
-        coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
-        coloredWidth: colored === 0 ? 0 : maxX - minX + 1,
-        coloredHeight: colored === 0 ? 0 : maxY - minY + 1,
-        sampledPixels: count,
+        ...measurePixels(pixels),
         drawOk: true,
         attempts: 1,
       };
