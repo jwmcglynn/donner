@@ -2,6 +2,7 @@
 /// Native editor-control replay tests using the editor's product configuration.
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -19,6 +20,38 @@ namespace donner::editor::mcp {
 namespace {
 
 using nlohmann::json;
+
+TEST(EditorControlSessionTest, HighDpiEditorStartupCapture) {
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "font_scale.svg";
+  replay.metadata.svgSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"/>)svg";
+  replay.metadata.windowWidth = 960;
+  replay.metadata.windowHeight = 640;
+  replay.metadata.displayScale = 2.0;
+  for (std::uint64_t index = 0; index <= 2; ++index) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    replay.frames.push_back(std::move(frame));
+  }
+  const std::filesystem::path rnrPath = TestTempDir() / "font_scale.rnr";
+  ASSERT_THAT(repro::WriteReproFile(rnrPath, replay), testing::IsTrue());
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
+  EditorControlSession session;
+  const ToolCallResult result =
+      session.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},
+                                                {"gl_readback", true},
+                                                {"gl_capture_frame", 2},
+                                                {"gl_crop", "full"},
+                                                {"gl_output_dir", outputDir.string()},
+                                                {"gl_pace", true},
+                                                {"include_gl_images", false}});
+  ASSERT_THAT(result.isError, testing::IsFalse()) << result.body.dump(2);
+  EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1)) << result.body.dump(2);
+}
 
 TEST(EditorControlSessionTest, InspectorTextInputReplay) {
   repro::ReproFile replay;
