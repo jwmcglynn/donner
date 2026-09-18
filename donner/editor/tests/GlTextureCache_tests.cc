@@ -1,5 +1,6 @@
 #include "donner/editor/GlTextureCache.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 
@@ -11,6 +12,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -306,6 +308,148 @@ std::unique_ptr<ImGuiRuntimeRenderer> InstallTestUiRenderer(
   renderer->install();
   renderer->setImportDevice(&device);
   return renderer;
+}
+
+svg::RendererBitmap MakeBitmap(Vector2i dimensions, std::size_t rowBytes, uint8_t seed) {
+  svg::RendererBitmap bitmap;
+  bitmap.dimensions = dimensions;
+  bitmap.rowBytes = rowBytes;
+  bitmap.pixels.assign(rowBytes * static_cast<std::size_t>(dimensions.y), 0xEEu);
+  for (int y = 0; y < dimensions.y; ++y) {
+    for (int x = 0; x < dimensions.x; ++x) {
+      uint8_t* pixel = bitmap.pixels.data() + static_cast<std::size_t>(y) * rowBytes +
+                       static_cast<std::size_t>(x) * 4u;
+      pixel[0] = static_cast<uint8_t>(seed + x);
+      pixel[1] = static_cast<uint8_t>(seed + y);
+      pixel[2] = static_cast<uint8_t>(seed + x + y);
+      pixel[3] = 0xFFu;
+    }
+  }
+  return bitmap;
+}
+
+RenderResult::CompositedPreview SingleBitmapTilePreview(std::uint64_t generation,
+                                                        svg::RendererBitmap bitmap) {
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile =
+      MetadataTile(RenderResult::CompositedTile::Kind::Segment, generation, bitmap.dimensions,
+                   bitmap.dimensions);
+  tile.id = "bitmap:0";
+  tile.bitmapDimsDoc = Vector2d(bitmap.dimensions.x, bitmap.dimensions.y);
+  tile.bitmap = std::move(bitmap);
+  preview.tiles.push_back(std::move(tile));
+  return preview;
+}
+
+std::shared_ptr<const svg::RendererGeodeTextureSnapshot> UploadedSnapshot(
+    const GlTextureCache& cache) {
+  if (cache.tiles().size() != 1u) {
+    return nullptr;
+  }
+  return std::static_pointer_cast<const svg::RendererGeodeTextureSnapshot>(
+      cache.tiles().front().textureSnapshot);
+}
+
+std::array<uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
+  const uint8_t* pixel = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes +
+                         static_cast<std::size_t>(x) * 4u;
+  return {pixel[0], pixel[1], pixel[2], pixel[3]};
+}
+
+TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesPixelsAndClearsUnusedAllocationOnReuse) {
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+
+  const svg::RendererBitmap first = MakeBitmap(Vector2i(7, 7), /*rowBytes=*/32u, /*seed=*/10u);
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/1, first));
+  std::shared_ptr<const svg::RendererGeodeTextureSnapshot> firstSnapshot = UploadedSnapshot(cache);
+  ASSERT_NE(firstSnapshot, nullptr);
+  ASSERT_THAT(firstSnapshot->allocationDimensions(), testing::Eq(Vector2i(8, 8)));
+  const std::uint64_t createsAfterFirstUpload = device->lifetimeTextureCreates();
+
+  const svg::RendererBitmap second = MakeBitmap(Vector2i(5, 5), /*rowBytes=*/24u, /*seed=*/40u);
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/2, second));
+  std::shared_ptr<const svg::RendererGeodeTextureSnapshot> secondSnapshot = UploadedSnapshot(cache);
+  ASSERT_NE(secondSnapshot, nullptr);
+  EXPECT_THAT(secondSnapshot.get(), testing::Eq(firstSnapshot.get()));
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsAfterFirstUpload));
+  EXPECT_THAT(secondSnapshot->dimensions(), testing::Eq(Vector2i(5, 5)));
+  EXPECT_THAT(secondSnapshot->allocationDimensions(), testing::Eq(Vector2i(8, 8)));
+
+  auto* mutableSnapshot = const_cast<svg::RendererGeodeTextureSnapshot*>(secondSnapshot.get());
+  ASSERT_TRUE(mutableSnapshot->setDimensions(Vector2i(8, 8)));
+  const svg::RendererBitmap allocation = mutableSnapshot->takeSnapshot();
+  ASSERT_THAT(allocation.dimensions, testing::Eq(Vector2i(8, 8)));
+  EXPECT_THAT(PixelAt(allocation, 0, 0), testing::ElementsAre(40u, 40u, 40u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 4, 4), testing::ElementsAre(44u, 44u, 48u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 5, 4), testing::ElementsAre(44u, 44u, 48u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 6, 4), testing::ElementsAre(0u, 0u, 0u, 0u));
+  EXPECT_THAT(PixelAt(allocation, 0, 5), testing::ElementsAre(40u, 44u, 44u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 5, 5), testing::ElementsAre(44u, 44u, 48u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 6, 5), testing::ElementsAre(0u, 0u, 0u, 0u));
+  EXPECT_THAT(PixelAt(allocation, 0, 6), testing::ElementsAre(0u, 0u, 0u, 0u));
+}
+
+TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBoundary) {
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+  const std::uint64_t createsBefore = device->lifetimeTextureCreates();
+  const uint64_t submittedBefore = device->adapterDevice().lastSubmittedSerial();
+
+  const svg::RendererBitmap bitmap =
+      MakeBitmap(Vector2i(257, 513), /*rowBytes=*/1032u, /*seed=*/7u);
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/1, bitmap));
+  std::shared_ptr<const svg::RendererGeodeTextureSnapshot> snapshot = UploadedSnapshot(cache);
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_THAT(snapshot->allocationDimensions(), testing::Eq(Vector2i(512, 1024)));
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsBefore + 1u));
+  EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(submittedBefore));
+
+  auto* mutableSnapshot = const_cast<svg::RendererGeodeTextureSnapshot*>(snapshot.get());
+  ASSERT_TRUE(mutableSnapshot->setDimensions(Vector2i(512, 1024)));
+  const svg::RendererBitmap allocation = mutableSnapshot->takeSnapshot();
+  ASSERT_THAT(allocation.dimensions, testing::Eq(Vector2i(512, 1024)));
+  EXPECT_THAT(PixelAt(allocation, 0, 511), testing::ElementsAre(7u, 6u, 6u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 0, 512), testing::ElementsAre(7u, 7u, 7u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 256, 512), testing::ElementsAre(7u, 7u, 7u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 257, 512), testing::ElementsAre(7u, 7u, 7u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 258, 512), testing::ElementsAre(0u, 0u, 0u, 0u));
+  EXPECT_THAT(PixelAt(allocation, 0, 513), testing::ElementsAre(7u, 7u, 7u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 257, 513), testing::ElementsAre(7u, 7u, 7u, 255u));
+  EXPECT_THAT(PixelAt(allocation, 258, 513), testing::ElementsAre(0u, 0u, 0u, 0u));
+  EXPECT_THAT(PixelAt(allocation, 0, 514), testing::ElementsAre(0u, 0u, 0u, 0u));
+}
+
+TEST(GlTextureCacheTest, RuntimeBitmapUploadRejectsShortStrideAndStorage) {
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+
+  svg::RendererBitmap shortStride = MakeBitmap(Vector2i(3, 2), /*rowBytes=*/12u, /*seed=*/1u);
+  shortStride.rowBytes = 11u;
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/1, std::move(shortStride)));
+  EXPECT_THAT(cache.tiles(), testing::IsEmpty());
+
+  svg::RendererBitmap shortStorage = MakeBitmap(Vector2i(3, 2), /*rowBytes=*/12u, /*seed=*/1u);
+  shortStorage.pixels.pop_back();
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/2, std::move(shortStorage)));
+  EXPECT_THAT(cache.tiles(), testing::IsEmpty());
+}
+
+TEST(GlTextureCacheTest, RuntimeBitmapUploadRejectsUnsupportedDimensionWithoutBackendAllocation) {
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+
+  svg::RendererBitmap oversized =
+      MakeBitmap(Vector2i(1 << 20, 1), /*rowBytes=*/4u << 20, /*seed=*/1u);
+  const std::uint64_t createsBefore = device->lifetimeTextureCreates();
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/1, std::move(oversized)));
+
+  EXPECT_THAT(cache.tiles(), testing::IsEmpty());
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsBefore));
 }
 
 std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSnapshot(
