@@ -9,12 +9,10 @@
 
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/RuntimeBitmapUpload.h"
 #include "donner/editor/gui/UiTextureRegistration.h"
-#include "donner/gpu/Device.h"
-#include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 
 namespace donner::editor {
@@ -23,136 +21,6 @@ namespace {
 
 #ifdef DONNER_EDITOR_WGPU
 constexpr std::size_t kRetiredSnapshotFrameLimit = 3;
-constexpr uint32_t kWgpuBytesPerRowAlignment = 256u;
-
-uint32_t AlignWgpuBytesPerRow(uint32_t value) {
-  return (value + kWgpuBytesPerRowAlignment - 1u) & ~(kWgpuBytesPerRowAlignment - 1u);
-}
-
-/// Backing allocation of an uploaded snapshot, which can exceed its content extent.
-Vector2i SnapshotAllocationDimensions(const svg::RendererGeodeTextureSnapshot& snapshot) {
-  return snapshot.allocationDimensions();
-}
-
-struct RuntimeBitmapUploadLayout {
-  uint32_t allocationWidth = 0;
-  uint32_t allocationHeight = 0;
-  uint32_t bytesPerRow = 0;
-  uint32_t payloadBytesPerRow = 0;
-};
-
-bool BitmapStorageCoversExtent(const svg::RendererBitmap& bitmap, uint32_t tightBytesPerRow,
-                               uint32_t height) {
-  if (bitmap.rowBytes < tightBytesPerRow) {
-    return false;
-  }
-  if (height > 0u && bitmap.rowBytes > std::numeric_limits<std::size_t>::max() / height) {
-    return false;
-  }
-  return bitmap.pixels.size() >= bitmap.rowBytes * static_cast<std::size_t>(height);
-}
-
-std::optional<RuntimeBitmapUploadLayout> ValidateRuntimeBitmapUpload(
-    const svg::RendererBitmap& bitmap, Vector2i allocationDimensions) {
-  constexpr uint32_t kBytesPerPixel = 4u;
-  const uint32_t width = static_cast<uint32_t>(bitmap.dimensions.x);
-  const uint32_t height = static_cast<uint32_t>(bitmap.dimensions.y);
-  const uint32_t allocationWidth = static_cast<uint32_t>(allocationDimensions.x);
-  const uint32_t allocationHeight = static_cast<uint32_t>(allocationDimensions.y);
-  if (width > std::numeric_limits<uint32_t>::max() / kBytesPerPixel ||
-      allocationWidth > std::numeric_limits<uint32_t>::max() / kBytesPerPixel) {
-    return std::nullopt;
-  }
-  const uint32_t tightBytesPerRow = width * kBytesPerPixel;
-  const uint32_t allocationTightBytesPerRow = allocationWidth * kBytesPerPixel;
-  if (allocationTightBytesPerRow >
-      std::numeric_limits<uint32_t>::max() - (kWgpuBytesPerRowAlignment - 1u)) {
-    return std::nullopt;
-  }
-  const uint32_t bytesPerRow = AlignWgpuBytesPerRow(allocationTightBytesPerRow);
-  if (!BitmapStorageCoversExtent(bitmap, tightBytesPerRow, height) ||
-      (allocationHeight > 0u &&
-       bytesPerRow > std::numeric_limits<std::size_t>::max() / allocationHeight)) {
-    return std::nullopt;
-  }
-
-  return RuntimeBitmapUploadLayout{.allocationWidth = allocationWidth,
-                                   .allocationHeight = allocationHeight,
-                                   .bytesPerRow = bytesPerRow,
-                                   .payloadBytesPerRow = tightBytesPerRow};
-}
-
-bool WriteRuntimeBitmapUpload(gpu::Device& device, const gpu::Texture& texture,
-                              const svg::RendererBitmap& bitmap,
-                              const RuntimeBitmapUploadLayout& layout) {
-  constexpr uint32_t kBytesPerPixel = 4u;
-  constexpr std::size_t kMaxStagingBytes = 1024u * 1024u;
-  static_assert(kMaxStagingBytes >=
-                static_cast<std::size_t>(gpu::kMaxTextureDimension) * kBytesPerPixel);
-  const uint32_t width = static_cast<uint32_t>(bitmap.dimensions.x);
-  const uint32_t height = static_cast<uint32_t>(bitmap.dimensions.y);
-  const uint32_t maxChunkRows = std::max<uint32_t>(1u, kMaxStagingBytes / layout.bytesPerRow);
-  for (uint32_t firstRow = 0; firstRow < layout.allocationHeight;) {
-    const uint32_t rowCount = std::min(maxChunkRows, layout.allocationHeight - firstRow);
-    std::vector<uint8_t> staging(static_cast<std::size_t>(layout.bytesPerRow) * rowCount, 0u);
-    for (uint32_t chunkRow = 0; chunkRow < rowCount; ++chunkRow) {
-      const uint32_t destinationY = firstRow + chunkRow;
-      if (destinationY > height) {
-        continue;
-      }
-      const uint32_t sourceY = std::min(destinationY, height - 1u);
-      const uint8_t* sourceRow =
-          bitmap.pixels.data() + static_cast<std::size_t>(sourceY) * bitmap.rowBytes;
-      uint8_t* destinationRow =
-          staging.data() + static_cast<std::size_t>(chunkRow) * layout.bytesPerRow;
-      std::memcpy(destinationRow, sourceRow, layout.payloadBytesPerRow);
-      if (layout.allocationWidth > width) {
-        std::memcpy(destinationRow + layout.payloadBytesPerRow,
-                    sourceRow + static_cast<std::size_t>(width - 1u) * kBytesPerPixel,
-                    kBytesPerPixel);
-      }
-    }
-    // Device::writeTexture consumes the byte span during the call, so the next chunk can reuse
-    // this bounded staging allocation without extending its lifetime through submission.
-    if (device
-            .writeTexture(
-                texture, staging, gpu::TexelCopyBufferLayout{0u, layout.bytesPerRow, rowCount},
-                gpu::Extent2d{layout.allocationWidth, rowCount}, gpu::Origin2d{0u, firstRow})
-            .hasError()) {
-      return false;
-    }
-    firstRow += rowCount;
-  }
-  return true;
-}
-
-std::shared_ptr<svg::RendererGeodeTextureSnapshot> AcquireRuntimeUploadSnapshot(
-    const std::shared_ptr<geode::GeodeDevice>& device, const svg::RendererBitmap& bitmap,
-    Vector2i allocationDimensions,
-    const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot) {
-  if (reusableSnapshot != nullptr && reusableSnapshot->runtimeTexture() != nullptr &&
-      SnapshotAllocationDimensions(*reusableSnapshot) == allocationDimensions &&
-      reusableSnapshot->alphaType() == bitmap.alphaType) {
-    return reusableSnapshot;
-  }
-  gpu::Result<gpu::Texture> texture = device->adapterDevice().createTexture(gpu::TextureDescriptor{
-      "EditorUploadedBitmap",
-      {static_cast<uint32_t>(allocationDimensions.x),
-       static_cast<uint32_t>(allocationDimensions.y)},
-      gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc});
-  if (texture.hasError()) {
-    return nullptr;
-  }
-  svg::RendererGeodeTextureSnapshot snapshot =
-      svg::RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-          device, std::move(texture).result(), bitmap.dimensions, wgpu::TextureFormat::RGBA8Unorm,
-          bitmap.alphaType);
-  if (!snapshot.isValid()) {
-    return nullptr;
-  }
-  return std::make_shared<svg::RendererGeodeTextureSnapshot>(std::move(snapshot));
-}
 #endif
 
 Vector2i PayloadDimensionsForTile(const RenderResult::CompositedTile& tile) {
@@ -432,7 +300,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
         reusedTexture = uploadedSnapshot == entry->uploadedSnapshot;
         textureId = textureIdForUpload(*uploadedSnapshot, reusedTexture, entry->texture);
         textureDims = tile.bitmap.dimensions;
-        allocationDims = SnapshotAllocationDimensions(*uploadedSnapshot);
+        allocationDims = uploadedSnapshot->allocationDimensions();
         uvBottomRight = TextureUvBottomRightForPayload(textureDims, allocationDims);
         textureSnapshot = uploadedSnapshot;
       }
@@ -670,7 +538,7 @@ void GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
         reusedTexture = uploadedSnapshot == entry->uploadedSnapshot;
         textureId = textureIdForUpload(*uploadedSnapshot, reusedTexture, entry->texture);
         textureDims = tile.bitmap.dimensions;
-        allocationDims = SnapshotAllocationDimensions(*uploadedSnapshot);
+        allocationDims = uploadedSnapshot->allocationDimensions();
         uvBottomRight = TextureUvBottomRightForPayload(textureDims, allocationDims);
         textureSnapshot = uploadedSnapshot;
       }
@@ -868,7 +736,7 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::uploadThumbnail(
     });
     retireSnapshots(std::move(retiredSnapshots));
   }
-  const Vector2i allocationDimensions = SnapshotAllocationDimensions(*uploadedSnapshot);
+  const Vector2i allocationDimensions = uploadedSnapshot->allocationDimensions();
   entry.textureSnapshot = uploadedSnapshot;
   entry.uploadedSnapshot = std::move(uploadedSnapshot);
   entry.texture = textureId;
@@ -1105,34 +973,9 @@ GlTextureCache::NativeTextureHandle GlTextureCache::registerSnapshotTexture(
 std::shared_ptr<svg::RendererGeodeTextureSnapshot> GlTextureCache::uploadBitmapToWgpu(
     const svg::RendererBitmap& bitmap,
     const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot) {
-  if (geodeDevice_ == nullptr || bitmap.empty() || bitmap.rowBytes == 0u) {
-    return nullptr;
-  }
-
-  const Vector2i allocationDimensions = PowerOfTwoTextureDimensionsForPayload(bitmap.dimensions);
-  if (allocationDimensions.x <= 0 || allocationDimensions.y <= 0) {
-    return nullptr;
-  }
-  const std::optional<RuntimeBitmapUploadLayout> layout =
-      ValidateRuntimeBitmapUpload(bitmap, allocationDimensions);
-  if (!layout.has_value()) {
-    return nullptr;
-  }
-
-  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploaded =
-      AcquireRuntimeUploadSnapshot(geodeDevice_, bitmap, allocationDimensions, reusableSnapshot);
-  if (uploaded == nullptr) {
-    return nullptr;
-  }
-  const gpu::Texture* runtimeTexture = uploaded->runtimeTexture();
-  if (runtimeTexture == nullptr ||
-      !WriteRuntimeBitmapUpload(geodeDevice_->adapterDevice(), *runtimeTexture, bitmap, *layout)) {
-    return nullptr;
-  }
-  if (!uploaded->setDimensions(bitmap.dimensions)) {
-    return nullptr;
-  }
-  return uploaded;
+  return UploadRuntimeBitmap(
+      geodeDevice_, bitmap.pixels, bitmap.dimensions, bitmap.rowBytes, bitmap.alphaType,
+      PowerOfTwoTextureDimensionsForPayload(bitmap.dimensions), reusableSnapshot);
 }
 
 void GlTextureCache::retireSnapshots(RetiredSnapshotBatch snapshots) {

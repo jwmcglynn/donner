@@ -1,5 +1,9 @@
 #include "donner/editor/CompositorDebugPanel.h"
 
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/RuntimeBitmapUpload.h"
+#endif
+
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
@@ -21,8 +25,6 @@
 #include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
 namespace donner::editor {
@@ -33,11 +35,6 @@ constexpr float kThumbnailDisplayHeight = 48.0f;
 constexpr std::size_t kTelemetryHistoryLimit = 4096u;
 #ifdef DONNER_EDITOR_WGPU
 constexpr std::size_t kRetiredSnapshotFrameLimit = 3;
-constexpr uint32_t kWgpuBytesPerRowAlignment = 256u;
-
-uint32_t AlignWgpuBytesPerRow(uint32_t value) {
-  return (value + kWgpuBytesPerRowAlignment - 1u) & ~(kWgpuBytesPerRowAlignment - 1u);
-}
 
 #endif
 
@@ -132,13 +129,6 @@ std::string TelemetrySampleKey(
 
 }  // namespace
 
-#ifdef DONNER_EDITOR_WGPU
-struct CompositorDebugPanel::WgpuUploadedTexture {
-  donner::geode::ScopedWgpuHandle<wgpu::Texture> texture;
-  donner::geode::ScopedWgpuHandle<wgpu::TextureView> view;
-};
-#endif
-
 CompositorDebugPanel::CompositorDebugPanel(
     std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
 #ifdef DONNER_EDITOR_WGPU
@@ -215,8 +205,7 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
 #ifdef DONNER_EDITOR_WGPU
   const bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
-  const bool hasCpuThumbnail =
-      !tile.thumbnailPixels.empty() && tile.thumbnailDims.x > 0 && tile.thumbnailDims.y > 0;
+  const bool hasCpuThumbnail = !tile.thumbnailPixels.empty();
 
   if (!hasTextureSnapshot && !hasCpuThumbnail) {
     auto it = textures_.find(tile.id);
@@ -283,19 +272,16 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
     return entry.texture;
   }
 
-  std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
-      uploadThumbnailPixelsToWgpu(tile.thumbnailPixels, tile.thumbnailDims);
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedTexture =
+      uploadThumbnailPixelsToRuntime(tile.thumbnailPixels, tile.thumbnailDims);
   const ThumbnailTextureHandle texture =
-      uploadedTexture != nullptr ? registerUploadedTexture(*uploadedTexture, tile.thumbnailDims)
-                                 : 0;
+      uploadedTexture != nullptr ? registerSnapshotTexture(uploadedTexture.get()) : 0;
   if (texture == 0) {
-    if (entry.texture != 0) {
-      retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
-                                                std::move(entry.uploadedTexture)));
+    const ThumbnailTextureHandle previous = entry.texture;
+    if (previous == 0) {
+      textures_.erase(tile.id);
     }
-    textures_.erase(tile.id);
-    retireSnapshots(std::move(retiredSnapshots));
-    return 0;
+    return previous;
   }
 
   if (entry.texture != 0) {
@@ -664,88 +650,17 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::registerSnaps
   return handle;
 }
 
-CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::registerUploadedTexture(
-    const WgpuUploadedTexture& uploaded, const Vector2i& dimensions) {
-  UiTextureBacking backing;
-  // A thumbnail this panel uploaded holds straight-alpha bitmap pixels.
-  const ThumbnailTextureHandle handle =
-      RegisterUiImportedTexture(uploaded.texture.get(), dimensions, gpu::TextureFormat::RGBA8Unorm,
-                                UiTextureAlphaMode::Straight, &backing);
-  if (handle != 0) {
-    registeredBackings_[handle] = std::move(backing);
-  }
-  return handle;
-}
-
-std::shared_ptr<CompositorDebugPanel::WgpuUploadedTexture>
-CompositorDebugPanel::uploadThumbnailPixelsToWgpu(const std::vector<uint8_t>& pixels,
-                                                  const Vector2i& dimensions) {
-  if (geodeDevice_ == nullptr || pixels.empty() || dimensions.x <= 0 || dimensions.y <= 0) {
-    return nullptr;
-  }
-
-  const uint32_t width = static_cast<uint32_t>(dimensions.x);
-  const uint32_t height = static_cast<uint32_t>(dimensions.y);
-  const uint32_t tightBytesPerRow = width * 4u;
-  const uint32_t paddedBytesPerRow = AlignWgpuBytesPerRow(tightBytesPerRow);
-  if (pixels.size() < static_cast<std::size_t>(tightBytesPerRow) * height) {
-    return nullptr;
-  }
-
-  wgpu::TextureDescriptor textureDesc = {};
-  textureDesc.label = donner::geode::wgpuLabel("EditorLayerThumbnail");
-  textureDesc.size = {width, height, 1};
-  textureDesc.mipLevelCount = 1;
-  textureDesc.sampleCount = 1;
-  textureDesc.dimension = wgpu::TextureDimension::_2D;
-  textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-  textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-
-  auto uploaded = std::make_shared<WgpuUploadedTexture>();
-  uploaded->texture.reset(geodeDevice_->device().createTexture(textureDesc));
-  if (!uploaded->texture) {
-    return nullptr;
-  }
-  geodeDevice_->countTexture();
-
-  std::vector<uint8_t> uploadPixels;
-  const uint8_t* uploadData = pixels.data();
-  std::size_t uploadSize = pixels.size();
-  if (tightBytesPerRow != paddedBytesPerRow) {
-    uploadPixels.assign(static_cast<std::size_t>(paddedBytesPerRow) * height, 0u);
-    for (uint32_t y = 0; y < height; ++y) {
-      const uint8_t* src = pixels.data() + static_cast<std::size_t>(y) * tightBytesPerRow;
-      uint8_t* dst = uploadPixels.data() + static_cast<std::size_t>(y) * paddedBytesPerRow;
-      std::memcpy(dst, src, tightBytesPerRow);
-    }
-    uploadData = uploadPixels.data();
-    uploadSize = uploadPixels.size();
-  }
-
-  wgpu::TexelCopyTextureInfo dst = {};
-  dst.texture = uploaded->texture.get();
-  dst.mipLevel = 0;
-  dst.origin = {0, 0, 0};
-  dst.aspect = wgpu::TextureAspect::All;
-
-  wgpu::TexelCopyBufferLayout layout = {};
-  layout.offset = 0;
-  layout.bytesPerRow = paddedBytesPerRow;
-  layout.rowsPerImage = height;
-
-  wgpu::Extent3D writeSize = {width, height, 1};
-  geodeDevice_->queue().writeTexture(dst, uploadData, uploadSize, layout, writeSize);
-
-  uploaded->view.reset(uploaded->texture.get().createView());
-  if (!uploaded->view) {
-    return nullptr;
-  }
-  return uploaded;
+std::shared_ptr<svg::RendererGeodeTextureSnapshot>
+CompositorDebugPanel::uploadThumbnailPixelsToRuntime(const std::vector<uint8_t>& pixels,
+                                                     const Vector2i& dimensions) {
+  return UploadRuntimeBitmap(geodeDevice_, pixels, dimensions,
+                             static_cast<std::size_t>(dimensions.x) * 4u,
+                             svg::AlphaType::Unpremultiplied, dimensions);
 }
 
 CompositorDebugPanel::RetiredSnapshot CompositorDebugPanel::RetireSnapshot(
     ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot,
-    std::shared_ptr<WgpuUploadedTexture> uploadedTexture) {
+    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedTexture) {
   return RetiredSnapshot{
       .texture = texture,
       .snapshot = std::move(snapshot),
