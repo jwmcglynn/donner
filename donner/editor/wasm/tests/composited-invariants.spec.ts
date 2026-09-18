@@ -99,25 +99,7 @@ async function openEditor(page: Page): Promise<string[]> {
   return failures;
 }
 
-/**
- * Open the Donner Splash from the carousel and wait until it is really open.
- *
- * "Really open" is three separate facts and every one of them has bitten:
- *
- *  - `data-active-sample-id` only says the carousel accepted the click.
- *  - The document model has to be live. Until it is, the sample carousel is
- *    still the modal on top and the render pane ignores every gesture: a pinch
- *    dispatched here reaches the app, is correctly discarded as modal-captured
- *    input, and the test then measures a load in progress. The layers panel
- *    row count is the page-visible form of "the editor has a document" (it
- *    reads "(no document)" until then).
- *  - The document's pixels have to be on screen, which is what the invariants
- *    below actually sample.
- *
- * The old version polled a whole-canvas chromatic extent, which the editor's
- * own chrome satisfies before the document exists, so all three checks passed
- * vacuously and every gesture below raced the load.
- */
+/** Open the sample after thumbnail initialization and wait for a fresh document render. */
 async function openDonnerSplash(page: Page): Promise<{
   editorBounds: { x: number; y: number; width: number; height: number };
   viewport: ViewportStats;
@@ -128,23 +110,66 @@ async function openDonnerSplash(page: Page): Promise<{
   if (editorBounds === null) {
     throw new Error("editor canvas is missing");
   }
+  // Replacing first-use offscreen work can stall the foreground render on loaded browsers.
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const stats = (window as unknown as {
+        __donnerSampleThumbnailStats?: {
+          completed?: number;
+          ready?: number;
+          active?: boolean;
+          pending?: boolean;
+        };
+      }).__donnerSampleThumbnailStats;
+      return {
+        settled: !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
+          && !stats.active && !stats.pending,
+        sampleThumbnail: stats ?? null,
+      };
+    }), {
+    message: "the first offscreen thumbnail must settle before the viewport sample replaces it",
+    timeout: scaledMs(20_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({ settled: true }));
+  const beforeSampleResults = await page.evaluate(() =>
+    (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
+      .__donnerWorkerStats?.completedResults ?? 0
+  );
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
   await expect(editorCanvas).toBeVisible();
   await expect
     .poll(
       () =>
-        page.evaluate(() =>
-          (window as unknown as { __donnerLayerThumbnailStats?: { rowCount?: number } })
-            .__donnerLayerThumbnailStats?.rowCount ?? 0
-        ),
+        page.evaluate((before) => {
+          const diagnostics = window as unknown as {
+            __donnerWorkerStats?: {
+              completedResults?: number;
+              acceptedForPresentation?: boolean;
+              presentedAtMs?: number;
+            };
+            __donnerSampleThumbnailStats?: unknown;
+            __donnerFrameLoopStats?: unknown;
+            __donnerInteractionStats?: unknown;
+          };
+          const worker = diagnostics.__donnerWorkerStats ?? null;
+          return {
+            reached: (worker?.completedResults ?? 0) > before
+              && worker?.acceptedForPresentation === true
+              && typeof worker.presentedAtMs === "number",
+            worker,
+            sampleThumbnail: diagnostics.__donnerSampleThumbnailStats ?? null,
+            frameLoop: diagnostics.__donnerFrameLoopStats ?? null,
+            interaction: diagnostics.__donnerInteractionStats ?? null,
+          };
+        }, beforeSampleResults),
       {
         message: "Donner Splash must become the editor's live document",
         timeout: scaledMs(20_000),
         intervals: [16, 25, 50, 100],
       },
     )
-    .toBeGreaterThan(0);
+    .toEqual(expect.objectContaining({ reached: true }));
   const viewport = await readSettledViewportStats(page);
   await expect
     .poll(() => readDocumentArtWidth(page, visibleDocumentRegion(viewport)), {

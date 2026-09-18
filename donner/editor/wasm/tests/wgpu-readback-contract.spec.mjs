@@ -407,6 +407,8 @@ test("the composited viewport sample gate waits for settled thumbnails and the d
     "viewport gestures must not replace an active first-use thumbnail render",
   );
   assert.match(helper, /__donnerWorkerStats/);
+  assert.match(helper, /acceptedForPresentation === true/);
+  assert.match(helper, /typeof worker\.presentedAtMs === "number"/);
   assert.doesNotMatch(helper, /__donnerLayerThumbnailStats/);
 });
 
