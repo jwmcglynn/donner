@@ -173,6 +173,52 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertIn("complex method (12 decision points; limit 10)", descriptions)
 
+    def test_inline_baseline_debt_does_not_exempt_another_class(self):
+        branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        baseline = "struct A {\n  void run(int value) {\n" + branches + "\n  }\n};\n"
+        current = baseline + "struct B {\n  void run(int value) {\n" + branches + "\n  }\n};\n"
+        source_path = self._write_source(current)
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    baseline
+                ),
+            )
+        ]
+
+        self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
+
+    def test_inline_baseline_debt_uses_complete_scope_chain(self):
+        branches = "\n".join(
+            f"      if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        method = "    void run(int value) {\n" + branches + "\n    }\n"
+        baseline = "namespace n1 { struct Outer { struct Nested {\n" + method + "}; }; }\n"
+        current = (
+            baseline
+            + "namespace n2 { struct Outer { struct Nested {\n"
+            + method
+            + "}; }; }\n"
+        )
+        source_path = self._write_source(current)
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    baseline
+                ),
+            )
+        ]
+
+        self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
+
     def test_allows_methods_at_the_local_complexity_limit(self):
         branches = "\n".join(
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(10)

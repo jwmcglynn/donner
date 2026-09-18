@@ -11,6 +11,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
+DEFAULT_PAYLOAD_BUDGET_MODE = "strict"
+
+
+def _add_payload_budget_mode_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--payload-budget-mode",
+        choices=(DEFAULT_PAYLOAD_BUDGET_MODE, "measure"),
+        default=DEFAULT_PAYLOAD_BUDGET_MODE,
+    )
+
 
 def _compressed_size(path: Path) -> int:
     return len(gzip.compress(path.read_bytes(), compresslevel=9, mtime=0))
@@ -102,7 +112,13 @@ def _wasm_section_vector_count(path: Path, expected_section_id: int) -> int:
 
 class PackageSizeAccountingTest(unittest.TestCase):
     def test_payload_budget_is_strict_by_default(self) -> None:
-        self.assertEqual(WasmPackageSizeTest.payload_budget_mode, "strict")
+        parser = argparse.ArgumentParser()
+        _add_payload_budget_mode_argument(parser)
+        self.assertEqual(parser.parse_args([]).payload_budget_mode, "strict")
+        self.assertEqual(
+            parser.parse_args(["--payload-budget-mode=measure"]).payload_budget_mode,
+            "measure",
+        )
 
     def test_strict_payload_budget_rejects_overage(self) -> None:
         with self.assertRaises(AssertionError):
@@ -152,7 +168,7 @@ class WasmPackageSizeTest(unittest.TestCase):
     max_total_raw_bytes: int
     expected_js_properties: list[str]
     forbidden_js_tokens: list[str]
-    payload_budget_mode = "strict"
+    payload_budget_mode = DEFAULT_PAYLOAD_BUDGET_MODE
 
     def test_total_package_fits_raw_size_budget(self) -> None:
         total_raw_bytes = _package_raw_size(self.package_dir)
@@ -264,9 +280,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-js-raw-bytes", type=int, required=True)
     parser.add_argument("--max-js-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-total-raw-bytes", type=int, required=True)
-    parser.add_argument(
-        "--payload-budget-mode", choices=("strict", "measure"), default="strict"
-    )
+    _add_payload_budget_mode_argument(parser)
     parser.add_argument("--expected-js-property", action="append", default=[])
     parser.add_argument("--forbidden-js-token", action="append", default=[])
     args, unittest_args = parser.parse_known_args()

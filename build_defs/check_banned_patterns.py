@@ -390,10 +390,33 @@ _METHOD_DECISION_RE = re.compile(
 _NON_FUNCTION_DEFINITION_NAMES = {"if", "for", "while", "switch", "catch"}
 
 
+def _enclosing_scopes(stripped: str, match: re.Match) -> list[tuple[int, str, str]]:
+    """Return containing namespace/class scopes ordered by their source position."""
+    enclosing = []
+    for scope_match in _SCOPE_DEFINITION_RE.finditer(stripped, 0, match.start()):
+        opening_brace = stripped.find("{", scope_match.start(), scope_match.end())
+        if match.start() >= _method_body_end(stripped, opening_brace):
+            continue
+        class_name = scope_match.group("class")
+        name = class_name or scope_match.group("namespace")
+        kind = "class" if class_name else "namespace"
+        # Anonymous scopes cannot safely share baseline debt with another scope. Their source
+        # offset is intentionally part of the identity, so ambiguity fails closed.
+        enclosing.append(
+            (scope_match.start(), kind, name or f"<anonymous@{scope_match.start()}>")
+        )
+    return sorted(enclosing)
+
+
 def _method_definitions(stripped: str):
-    """Yield supported definitions, including methods defined inside a class body."""
+    """Yield out-of-line methods and methods defined inside a class body."""
     for match in _METHOD_DEFINITION_RE.finditer(stripped):
-        if match.group("name") in _NON_FUNCTION_DEFINITION_NAMES:
+        name = match.group("name")
+        if name in _NON_FUNCTION_DEFINITION_NAMES:
+            continue
+        if "::" not in name and not any(
+            kind == "class" for _, kind, _ in _enclosing_scopes(stripped, match)
+        ):
             continue
         yield match
 
@@ -420,6 +443,24 @@ def _method_signature(match: re.Match) -> str:
     return f"{match.group('name')}({params})" + (f" {suffix}" if suffix else "")
 
 
+_SCOPE_DEFINITION_RE = re.compile(
+    r"\b(?:(?:class|struct)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)[^;{}]*|"
+    r"namespace(?:\s+(?P<namespace>[A-Za-z_][A-Za-z0-9_:]*))?\s*)\{"
+)
+
+
+def _qualified_method_signature(stripped: str, match: re.Match) -> str:
+    """Return a signature qualified by its enclosing inline class when needed."""
+    signature = _method_signature(match)
+    if "::" in match.group("name"):
+        return signature
+    enclosing = _enclosing_scopes(stripped, match)
+    if not enclosing:
+        return signature
+    scope = "::".join(name for _, _, name in enclosing)
+    return f"{scope}::{signature}"
+
+
 def _method_complexities(stripped: str) -> Dict[str, int]:
     """Return decision-point counts for supported function and method definitions."""
     result: Dict[str, int] = {}
@@ -427,7 +468,7 @@ def _method_complexities(stripped: str) -> Dict[str, int]:
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
-        signature = _method_signature(match)
+        signature = _qualified_method_signature(stripped, match)
         result[signature] = max(result.get(signature, 0), decision_points)
     return result
 
@@ -442,7 +483,7 @@ def _check_method_complexity(
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
-        baseline_decision_points = baseline.get(_method_signature(match), 0)
+        baseline_decision_points = baseline.get(_qualified_method_signature(stripped, match), 0)
         if decision_points <= max(_MAX_METHOD_DECISION_POINTS, baseline_decision_points):
             continue
         line = stripped.count("\n", 0, match.start("name")) + 1
