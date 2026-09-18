@@ -35,6 +35,15 @@ bazel build //donner/...
 
 All other dependencies will be downloaded on-demand.
 
+With a disk or remote cache configured, builds reuse equivalent C++ compilation and archive
+results across renderer and text configurations by default. Bazel normalizes configuration-specific
+output paths for these actions. Cache keys still distinguish compiler flags, toolchains, and input
+contents.
+
+The `debug` and `time-trace` configurations and CodeQL builds preserve ordinary output paths for
+standalone execution and diagnostics. When selecting `--spawn_strategy=local` or `standalone`
+explicitly, also pass `--experimental_output_paths=off`.
+
 The first build downloads LLVM and the other external dependencies and builds them from source. Once the dependencies are downloaded, a clean build with the default tiny-skia backend takes:
 
 - **Apple Silicon M1**: ~2 minutes
@@ -183,13 +192,13 @@ for the external-consumer setup.
 
 ### Bazel configuration options
 
-| Config / Flag          | Description                                                                                                                                   |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config / Flag          | Description                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `--config=geode`       | Use the Geode GPU backend (the editor's default renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
-| `--config=text-full`   | Enable HarfBuzz text shaping + WOFF2 (advanced text layout)                                                                                   |
-| `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer                                                                                                           |
-| `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                                         |
-| `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)                                    |
+| `--config=text-full`   | Enable HarfBuzz text shaping + WOFF2 (advanced text layout)                                                               |
+| `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer                                                                                       |
+| `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                     |
+| `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)                |
 
 ## Continuous integration remote cache
 
