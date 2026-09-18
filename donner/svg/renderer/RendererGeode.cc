@@ -2370,17 +2370,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   enum class TransformedFilterResult { NotApplicable, Composited, FrameAbandoned };
 
-  TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
+  std::optional<GeodeLocalRasterGeometry> transformedFilterGeometry(
+      const FilterStackFrame& frame) const {
     if (!frame.transformedCaptureReserved || !frame.localFilterPlan || !filterEngine ||
         frame.filterGraph.empty()) {
-      return TransformedFilterResult::NotApplicable;
+      return std::nullopt;
     }
     const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
                                    frame.filterBufferOffsetX, frame.filterBufferOffsetY};
-    const std::optional<GeodeLocalRasterGeometry> geometry = ComputeGeodeLocalRasterGeometry(
+    return ComputeGeodeLocalRasterGeometry(
         frame.filterGraph, frame.filterRegion, frame.deviceFromFilter, buffer,
         !frame.localRasterRequiredForBudget);
+  }
+
+  TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
+    const std::optional<GeodeLocalRasterGeometry> geometry = transformedFilterGeometry(frame);
     if (!geometry.has_value()) {
       return TransformedFilterResult::NotApplicable;
     }
@@ -4768,47 +4773,41 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  bool prepareFrameTarget() {
-    if (!device || device->isDeviceLost() || !pipeline || !gradientPipeline || !imagePipeline ||
-        pixelWidth <= 0 || pixelHeight <= 0) {
-      retireOwnedTargetAtFrameBoundary();
+  bool prepareHostFrameTarget() {
+    retireOwnedTargetAtFrameBoundary();
+    if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+      (void)surfaceBudget->reserve(-1, -1);
+      target = wgpu::Texture();
       return false;
     }
-    device->setCounters(&counters);
-    if (hostTarget) {
-      retireOwnedTargetAtFrameBoundary();
-      if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-          hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        (void)surfaceBudget->reserve(-1, -1);
-        target = wgpu::Texture();
-        return false;
-      }
-      pixelWidth = static_cast<int>(hostTarget.getWidth());
-      pixelHeight = static_cast<int>(hostTarget.getHeight());
-      if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
-        target = wgpu::Texture();
-        return false;
-      }
-      // The embedder owns this texture, so the runtime only names it. That name is refreshed
-      // every frame because the embedder is free to hand over a different texture at any time.
-      hostTargetHandle = gpu::Texture();
-      gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
-          hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()},
-          geode::GpuTextureFormatFromWgpu(textureFormat),
-          geode::GpuTextureUsageFromWgpu(wgpu::TextureUsage::RenderAttachment |
-                                         wgpu::TextureUsage::TextureBinding |
-                                         wgpu::TextureUsage::CopySrc));
-      if (!named.hasResult()) {
-        target = wgpu::Texture();
-        return false;
-      }
-      hostTargetHandle = std::move(named).result();
-      targetHandle = &hostTargetHandle;
-      target = hostTarget;
-      targetHandleTexture = static_cast<WGPUTexture>(target);
-      return true;
+    pixelWidth = static_cast<int>(hostTarget.getWidth());
+    pixelHeight = static_cast<int>(hostTarget.getHeight());
+    if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
+      target = wgpu::Texture();
+      return false;
     }
+    // The embedder owns this texture, so the runtime only names it. That name is refreshed
+    // every frame because the embedder is free to hand over a different texture at any time.
+    hostTargetHandle = gpu::Texture();
+    gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
+        hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()},
+        geode::GpuTextureFormatFromWgpu(textureFormat),
+        geode::GpuTextureUsageFromWgpu(wgpu::TextureUsage::RenderAttachment |
+                                       wgpu::TextureUsage::TextureBinding |
+                                       wgpu::TextureUsage::CopySrc));
+    if (!named.hasResult()) {
+      target = wgpu::Texture();
+      return false;
+    }
+    hostTargetHandle = std::move(named).result();
+    targetHandle = &hostTargetHandle;
+    target = hostTarget;
+    targetHandleTexture = static_cast<WGPUTexture>(target);
+    return true;
+  }
 
+  bool prepareOwnedFrameTarget() {
     if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
       target = wgpu::Texture();
       return false;
@@ -4821,7 +4820,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       gpu::Result<gpu::Texture> created =
           device->adapterDevice().createTexture(gpu::TextureDescriptor{
               "RendererGeodeTarget",
-              gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
+              gpu::Extent2d{static_cast<uint32_t>(pixelWidth),
+                            static_cast<uint32_t>(pixelHeight)},
               geode::GpuTextureFormatFromWgpu(textureFormat),
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                   gpu::TextureUsage::Sampled});
@@ -4840,6 +4840,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     target = device->adapterDevice().wgpuTextureOf(ownedTarget);
     targetHandleTexture = static_cast<WGPUTexture>(target);
     return true;
+  }
+
+  bool prepareFrameTarget() {
+    if (!device || device->isDeviceLost() || !pipeline || !gradientPipeline || !imagePipeline ||
+        pixelWidth <= 0 || pixelHeight <= 0) {
+      retireOwnedTargetAtFrameBoundary();
+      return false;
+    }
+    device->setCounters(&counters);
+    if (hostTarget) {
+      return prepareHostFrameTarget();
+    }
+    return prepareOwnedFrameTarget();
   }
 
   void createFrameEncoder() {
