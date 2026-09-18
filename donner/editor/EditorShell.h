@@ -503,6 +503,7 @@ private:
   void invalidateChangedFontPreviews();
   void advanceVisiblePreviews();
   void installCatalogFonts();
+  void initializePresentationRenderers();
   void retryPendingFontPreviews();
   void updateVisiblePreviewTasks();
   void adoptCatalogFontResources();
