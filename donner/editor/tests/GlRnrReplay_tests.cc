@@ -3559,7 +3559,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
-TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFrame) {
+TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDPathAndBoundsEveryPresentedFrame) {
   constexpr std::uint64_t kFirstZoomFrame = 31;
   constexpr std::uint64_t kLastZoomFrame = 40;
 
@@ -3603,12 +3603,10 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
     ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.selectedElementCount, 1)
         << "Selection overlay was not rebuilt for presented zoom frame " << frame;
-    EXPECT_TRUE(diagnostics->frameCost.overlay.selectionBoundsOnly)
-        << "Active drag should use gesture-owned bounds chrome on presented zoom frame " << frame;
-    // Gesture-owned bounds chrome skips live path and text traversal while the worker may hold the
-    // document. The oriented bounds and handles still advance with the presented object.
-    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 0)
-        << "Active drag traversed selection paths on presented zoom frame " << frame;
+    EXPECT_THAT(diagnostics->frameCost.overlay.selectionBoundsOnly, ::testing::IsFalse())
+        << "Active drag must retain full path chrome on presented zoom frame " << frame;
+    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 1)
+        << "Selected path outline disappeared on presented zoom frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
     EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)
