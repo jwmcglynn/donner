@@ -47,20 +47,11 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
-        "wgpuLabel",
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
       ],
       "wgpuCppTokens": [
-        "Extent3D",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
-        "Texture",
-        "TextureAspect",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/editor/GlTextureCache.h": {

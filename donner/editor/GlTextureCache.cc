@@ -4,14 +4,17 @@
 #include <chrono>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <utility>
 
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/editor/gui/UiTextureRegistration.h"
+#include "donner/gpu/Device.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 
 namespace donner::editor {
@@ -28,11 +31,127 @@ uint32_t AlignWgpuBytesPerRow(uint32_t value) {
 
 /// Backing allocation of an uploaded snapshot, which can exceed its content extent.
 Vector2i SnapshotAllocationDimensions(const svg::RendererGeodeTextureSnapshot& snapshot) {
-  if (!snapshot.texture()) {
-    return Vector2i::Zero();
+  return snapshot.allocationDimensions();
+}
+
+struct RuntimeBitmapUploadLayout {
+  uint32_t allocationWidth = 0;
+  uint32_t allocationHeight = 0;
+  uint32_t bytesPerRow = 0;
+  uint32_t payloadBytesPerRow = 0;
+};
+
+bool BitmapStorageCoversExtent(const svg::RendererBitmap& bitmap, uint32_t tightBytesPerRow,
+                               uint32_t height) {
+  if (bitmap.rowBytes < tightBytesPerRow) {
+    return false;
   }
-  return Vector2i(static_cast<int>(snapshot.texture().getWidth()),
-                  static_cast<int>(snapshot.texture().getHeight()));
+  if (height > 0u && bitmap.rowBytes > std::numeric_limits<std::size_t>::max() / height) {
+    return false;
+  }
+  return bitmap.pixels.size() >= bitmap.rowBytes * static_cast<std::size_t>(height);
+}
+
+std::optional<RuntimeBitmapUploadLayout> ValidateRuntimeBitmapUpload(
+    const svg::RendererBitmap& bitmap, Vector2i allocationDimensions) {
+  constexpr uint32_t kBytesPerPixel = 4u;
+  const uint32_t width = static_cast<uint32_t>(bitmap.dimensions.x);
+  const uint32_t height = static_cast<uint32_t>(bitmap.dimensions.y);
+  const uint32_t allocationWidth = static_cast<uint32_t>(allocationDimensions.x);
+  const uint32_t allocationHeight = static_cast<uint32_t>(allocationDimensions.y);
+  if (width > std::numeric_limits<uint32_t>::max() / kBytesPerPixel ||
+      allocationWidth > std::numeric_limits<uint32_t>::max() / kBytesPerPixel) {
+    return std::nullopt;
+  }
+  const uint32_t tightBytesPerRow = width * kBytesPerPixel;
+  const uint32_t allocationTightBytesPerRow = allocationWidth * kBytesPerPixel;
+  if (allocationTightBytesPerRow >
+      std::numeric_limits<uint32_t>::max() - (kWgpuBytesPerRowAlignment - 1u)) {
+    return std::nullopt;
+  }
+  const uint32_t bytesPerRow = AlignWgpuBytesPerRow(allocationTightBytesPerRow);
+  if (!BitmapStorageCoversExtent(bitmap, tightBytesPerRow, height) ||
+      (allocationHeight > 0u &&
+       bytesPerRow > std::numeric_limits<std::size_t>::max() / allocationHeight)) {
+    return std::nullopt;
+  }
+
+  return RuntimeBitmapUploadLayout{.allocationWidth = allocationWidth,
+                                   .allocationHeight = allocationHeight,
+                                   .bytesPerRow = bytesPerRow,
+                                   .payloadBytesPerRow = tightBytesPerRow};
+}
+
+bool WriteRuntimeBitmapUpload(gpu::Device& device, const gpu::Texture& texture,
+                              const svg::RendererBitmap& bitmap,
+                              const RuntimeBitmapUploadLayout& layout) {
+  constexpr uint32_t kBytesPerPixel = 4u;
+  constexpr std::size_t kMaxStagingBytes = 1024u * 1024u;
+  static_assert(kMaxStagingBytes >=
+                static_cast<std::size_t>(gpu::kMaxTextureDimension) * kBytesPerPixel);
+  const uint32_t width = static_cast<uint32_t>(bitmap.dimensions.x);
+  const uint32_t height = static_cast<uint32_t>(bitmap.dimensions.y);
+  const uint32_t maxChunkRows = std::max<uint32_t>(1u, kMaxStagingBytes / layout.bytesPerRow);
+  for (uint32_t firstRow = 0; firstRow < layout.allocationHeight;) {
+    const uint32_t rowCount = std::min(maxChunkRows, layout.allocationHeight - firstRow);
+    std::vector<uint8_t> staging(static_cast<std::size_t>(layout.bytesPerRow) * rowCount, 0u);
+    for (uint32_t chunkRow = 0; chunkRow < rowCount; ++chunkRow) {
+      const uint32_t destinationY = firstRow + chunkRow;
+      if (destinationY > height) {
+        continue;
+      }
+      const uint32_t sourceY = std::min(destinationY, height - 1u);
+      const uint8_t* sourceRow =
+          bitmap.pixels.data() + static_cast<std::size_t>(sourceY) * bitmap.rowBytes;
+      uint8_t* destinationRow =
+          staging.data() + static_cast<std::size_t>(chunkRow) * layout.bytesPerRow;
+      std::memcpy(destinationRow, sourceRow, layout.payloadBytesPerRow);
+      if (layout.allocationWidth > width) {
+        std::memcpy(destinationRow + layout.payloadBytesPerRow,
+                    sourceRow + static_cast<std::size_t>(width - 1u) * kBytesPerPixel,
+                    kBytesPerPixel);
+      }
+    }
+    // Device::writeTexture consumes the byte span during the call, so the next chunk can reuse
+    // this bounded staging allocation without extending its lifetime through submission.
+    if (device
+            .writeTexture(
+                texture, staging, gpu::TexelCopyBufferLayout{0u, layout.bytesPerRow, rowCount},
+                gpu::Extent2d{layout.allocationWidth, rowCount}, gpu::Origin2d{0u, firstRow})
+            .hasError()) {
+      return false;
+    }
+    firstRow += rowCount;
+  }
+  return true;
+}
+
+std::shared_ptr<svg::RendererGeodeTextureSnapshot> AcquireRuntimeUploadSnapshot(
+    const std::shared_ptr<geode::GeodeDevice>& device, const svg::RendererBitmap& bitmap,
+    Vector2i allocationDimensions,
+    const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot) {
+  if (reusableSnapshot != nullptr && reusableSnapshot->runtimeTexture() != nullptr &&
+      SnapshotAllocationDimensions(*reusableSnapshot) == allocationDimensions &&
+      reusableSnapshot->alphaType() == bitmap.alphaType) {
+    return reusableSnapshot;
+  }
+  gpu::Result<gpu::Texture> texture = device->adapterDevice().createTexture(gpu::TextureDescriptor{
+      "EditorUploadedBitmap",
+      {static_cast<uint32_t>(allocationDimensions.x),
+       static_cast<uint32_t>(allocationDimensions.y)},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc});
+  if (texture.hasError()) {
+    return nullptr;
+  }
+  svg::RendererGeodeTextureSnapshot snapshot =
+      svg::RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          device, std::move(texture).result(), bitmap.dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          bitmap.alphaType);
+  if (!snapshot.isValid()) {
+    return nullptr;
+  }
+  return std::make_shared<svg::RendererGeodeTextureSnapshot>(std::move(snapshot));
 }
 #endif
 
@@ -990,137 +1109,27 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> GlTextureCache::uploadBitmapT
     return nullptr;
   }
 
-  const uint32_t width = static_cast<uint32_t>(bitmap.dimensions.x);
-  const uint32_t height = static_cast<uint32_t>(bitmap.dimensions.y);
   const Vector2i allocationDimensions = PowerOfTwoTextureDimensionsForPayload(bitmap.dimensions);
   if (allocationDimensions.x <= 0 || allocationDimensions.y <= 0) {
     return nullptr;
   }
-  const uint32_t allocationWidth = static_cast<uint32_t>(allocationDimensions.x);
-  const uint32_t allocationHeight = static_cast<uint32_t>(allocationDimensions.y);
-  const uint32_t tightBytesPerRow = width * 4u;
-  const uint32_t paddedBytesPerRow = AlignWgpuBytesPerRow(tightBytesPerRow);
-
-  if (bitmap.rowBytes < tightBytesPerRow ||
-      bitmap.pixels.size() < bitmap.rowBytes * static_cast<std::size_t>(height)) {
+  const std::optional<RuntimeBitmapUploadLayout> layout =
+      ValidateRuntimeBitmapUpload(bitmap, allocationDimensions);
+  if (!layout.has_value()) {
     return nullptr;
   }
 
-  // The snapshot is the single owner of the uploaded texture: it is what the Geode
-  // presentation pass samples and what destroys the backing when the cache retires it.
-  // Reuse keeps an oversized allocation across payload resizes, so the snapshot's content
-  // extent is re-pointed at the new payload instead of a new texture being allocated.
-  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploaded = reusableSnapshot;
-  if (uploaded == nullptr || !uploaded->texture() ||
-      SnapshotAllocationDimensions(*uploaded) != allocationDimensions ||
-      uploaded->alphaType() != bitmap.alphaType) {
-    wgpu::TextureDescriptor textureDesc = {};
-    textureDesc.label = donner::geode::wgpuLabel("EditorUploadedBitmap");
-    textureDesc.size = {allocationWidth, allocationHeight, 1};
-    textureDesc.mipLevelCount = 1;
-    textureDesc.sampleCount = 1;
-    textureDesc.dimension = wgpu::TextureDimension::_2D;
-    textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-    // CopySrc keeps `RendererTextureSnapshot::takeSnapshot()` usable on the result, which
-    // replay and diagnostics harnesses call on whatever snapshot a tile carries.
-    textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst |
-                        wgpu::TextureUsage::CopySrc;
-
-    wgpu::Texture texture = geodeDevice_->device().createTexture(textureDesc);
-    if (!texture) {
-      return nullptr;
-    }
-    geodeDevice_->countTexture();
-    // Editor tile and thumbnail bitmaps come back from a renderer readback as straight
-    // alpha, so the snapshot must not claim premultiplied storage.
-    uploaded = std::make_shared<svg::RendererGeodeTextureSnapshot>(
-        geodeDevice_, std::move(texture), bitmap.dimensions, wgpu::TextureFormat::RGBA8Unorm,
-        bitmap.alphaType);
-  } else {
-    uploaded->setDimensions(bitmap.dimensions);
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploaded =
+      AcquireRuntimeUploadSnapshot(geodeDevice_, bitmap, allocationDimensions, reusableSnapshot);
+  if (uploaded == nullptr) {
+    return nullptr;
   }
-
-  std::vector<uint8_t> uploadPixels;
-  const uint8_t* uploadData = bitmap.pixels.data();
-  std::size_t uploadSize = bitmap.rowBytes * static_cast<std::size_t>(height);
-  if (bitmap.rowBytes != tightBytesPerRow || tightBytesPerRow != paddedBytesPerRow) {
-    uploadPixels.assign(static_cast<std::size_t>(paddedBytesPerRow) * height, 0u);
-    for (uint32_t y = 0; y < height; ++y) {
-      const uint8_t* src = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
-      uint8_t* dst = uploadPixels.data() + static_cast<std::size_t>(y) * paddedBytesPerRow;
-      std::memcpy(dst, src, tightBytesPerRow);
-    }
-    uploadData = uploadPixels.data();
-    uploadSize = uploadPixels.size();
+  const gpu::Texture* runtimeTexture = uploaded->runtimeTexture();
+  if (runtimeTexture == nullptr ||
+      !WriteRuntimeBitmapUpload(geodeDevice_->adapterDevice(), *runtimeTexture, bitmap, *layout)) {
+    return nullptr;
   }
-
-  wgpu::TexelCopyTextureInfo dst = {};
-  dst.texture = uploaded->texture();
-  dst.mipLevel = 0;
-  dst.origin = {0, 0, 0};
-  dst.aspect = wgpu::TextureAspect::All;
-
-  wgpu::TexelCopyBufferLayout layout = {};
-  layout.offset = 0;
-  layout.bytesPerRow = paddedBytesPerRow;
-  layout.rowsPerImage = height;
-
-  wgpu::Extent3D writeSize = {width, height, 1};
-  geodeDevice_->queue().writeTexture(dst, uploadData, uploadSize, layout, writeSize);
-
-  const auto pixelAt = [&](uint32_t x, uint32_t y) {
-    return bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes +
-           static_cast<std::size_t>(x) * 4u;
-  };
-
-  if (allocationWidth > width) {
-    constexpr uint32_t kColumnBytesPerRow = kWgpuBytesPerRowAlignment;
-    std::vector<uint8_t> edgeColumn(static_cast<std::size_t>(kColumnBytesPerRow) * height, 0u);
-    for (uint32_t y = 0; y < height; ++y) {
-      std::memcpy(edgeColumn.data() + static_cast<std::size_t>(y) * kColumnBytesPerRow,
-                  pixelAt(width - 1u, y), 4u);
-    }
-
-    wgpu::TexelCopyTextureInfo edgeDst = dst;
-    edgeDst.origin = {width, 0, 0};
-    wgpu::TexelCopyBufferLayout edgeLayout = {};
-    edgeLayout.offset = 0;
-    edgeLayout.bytesPerRow = kColumnBytesPerRow;
-    edgeLayout.rowsPerImage = height;
-    geodeDevice_->queue().writeTexture(edgeDst, edgeColumn.data(), edgeColumn.size(), edgeLayout,
-                                       wgpu::Extent3D{1, height, 1});
-  }
-
-  if (allocationHeight > height) {
-    std::vector<uint8_t> edgeRow(static_cast<std::size_t>(paddedBytesPerRow), 0u);
-    std::memcpy(edgeRow.data(), pixelAt(0, height - 1u), tightBytesPerRow);
-
-    wgpu::TexelCopyTextureInfo edgeDst = dst;
-    edgeDst.origin = {0, height, 0};
-    wgpu::TexelCopyBufferLayout edgeLayout = {};
-    edgeLayout.offset = 0;
-    edgeLayout.bytesPerRow = paddedBytesPerRow;
-    edgeLayout.rowsPerImage = 1;
-    geodeDevice_->queue().writeTexture(edgeDst, edgeRow.data(), edgeRow.size(), edgeLayout,
-                                       wgpu::Extent3D{width, 1, 1});
-  }
-
-  if (allocationWidth > width && allocationHeight > height) {
-    constexpr uint32_t kPixelBytesPerRow = kWgpuBytesPerRowAlignment;
-    std::vector<uint8_t> edgePixel(kPixelBytesPerRow, 0u);
-    std::memcpy(edgePixel.data(), pixelAt(width - 1u, height - 1u), 4u);
-
-    wgpu::TexelCopyTextureInfo edgeDst = dst;
-    edgeDst.origin = {width, height, 0};
-    wgpu::TexelCopyBufferLayout edgeLayout = {};
-    edgeLayout.offset = 0;
-    edgeLayout.bytesPerRow = kPixelBytesPerRow;
-    edgeLayout.rowsPerImage = 1;
-    geodeDevice_->queue().writeTexture(edgeDst, edgePixel.data(), edgePixel.size(), edgeLayout,
-                                       wgpu::Extent3D{1, 1, 1});
-  }
-
-  if (!uploaded->textureView()) {
+  if (!uploaded->setDimensions(bitmap.dimensions)) {
     return nullptr;
   }
   return uploaded;

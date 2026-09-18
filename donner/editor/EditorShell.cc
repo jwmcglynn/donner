@@ -1169,6 +1169,15 @@ std::optional<SelectionChromeSnapshot::TextBoxDragPreview> TextBoxDragPreviewFro
   };
 }
 
+/// Device whose runtime state is owned by the presentation thread.
+std::shared_ptr<geode::GeodeDevice> UiGeodeDevice(gui::EditorWindow& window) {
+#ifdef DONNER_EDITOR_WGPU
+  return window.geodeFramebufferDevice();
+#else
+  return window.geodeDevice();
+#endif
+}
+
 /// Rasterize every embedded UI icon in one batched pass before the first frame.
 ///
 /// Each icon used to be rasterized lazily at its first draw, and each
@@ -1204,6 +1213,26 @@ void EditorShell::installCatalogFonts() {
   }
 }
 
+void EditorShell::initializePresentationRenderers() {
+#ifdef DONNER_EDITOR_WGPU
+  const std::shared_ptr<geode::GeodeDevice> framebufferDevice = UiGeodeDevice(window_);
+  if (framebufferDevice == nullptr) {
+    return;
+  }
+  directCheckerboardRenderer_ =
+      std::make_unique<FramebufferCheckerboardRenderer>(framebufferDevice);
+  directDocumentRenderer_ = std::make_unique<svg::RendererGeode>(framebufferDevice);
+  directOverlayRenderer_ = std::make_unique<svg::RendererGeode>(framebufferDevice);
+  // Embedded UI icons are rasterized on the UI thread. Borrow this existing
+  // UI-only renderer so icon startup creates neither another renderer nor a
+  // headless WebGPU device. The matching destructor reset runs before the
+  // unique_ptr is released.
+  ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
+#else
+  documentPresentationCompositor_ = std::make_unique<DocumentPresentationCompositor>();
+#endif
+}
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1211,12 +1240,12 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       selectTool_(),
       penTool_(),
       textEditor_(),
-      textures_(window.geodeDevice()),
-      thumbnailTextures_(window.geodeDevice()),
-      sampleThumbnailTextures_(window.geodeDevice()),
-      fontPreviewTextures_(window.geodeDevice()),
-      toolbarIconTextures_(window.geodeDevice()),
-      layerThumbnailRenderer_(window.geodeDevice()),
+      textures_(UiGeodeDevice(window)),
+      thumbnailTextures_(UiGeodeDevice(window)),
+      sampleThumbnailTextures_(UiGeodeDevice(window)),
+      fontPreviewTextures_(UiGeodeDevice(window)),
+      toolbarIconTextures_(UiGeodeDevice(window)),
+      layerThumbnailRenderer_(UiGeodeDevice(window)),
       fontCatalog_(),
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
       // The raster thread owns its own headless device: tiles cross the
@@ -1233,7 +1262,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
-      compositorDebugPanel_(window.geodeDevice()),
+      compositorDebugPanel_(UiGeodeDevice(window)),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
   configureClipboardCapability();
   // One presenter owns where document pixels land for the whole session.
@@ -1338,22 +1367,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     documentViewBoxCache_ = ResolveDocumentViewBox(document);
   }
   textures_.initialize();
-#ifdef DONNER_EDITOR_WGPU
-  if (window_.geodeFramebufferDevice() != nullptr) {
-    directCheckerboardRenderer_ =
-        std::make_unique<FramebufferCheckerboardRenderer>(window_.geodeFramebufferDevice());
-    directDocumentRenderer_ =
-        std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
-    directOverlayRenderer_ = std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
-    // Embedded UI icons are rasterized on the UI thread. Borrow this existing
-    // UI-only renderer so icon startup creates neither another renderer nor a
-    // headless WebGPU device. The matching destructor reset runs before the
-    // unique_ptr is released.
-    ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
-  }
-#else
-  documentPresentationCompositor_ = std::make_unique<DocumentPresentationCompositor>();
-#endif
+  initializePresentationRenderers();
   PrewarmEditorIcons();
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
     std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");

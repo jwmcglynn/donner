@@ -31,6 +31,11 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/Renderer.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#endif
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::editor {
@@ -1541,6 +1546,49 @@ public:
   static bool FrameMissTelemetryWriteErrorLogged(const EditorShell& shell) {
     return shell.frameMissTelemetryWriteErrorLogged_;
   }
+
+#ifdef DONNER_EDITOR_WGPU
+  static std::uint64_t UploadPresentationBitmapDeviceId(EditorShell& shell) {
+    svg::RendererBitmap bitmap;
+    bitmap.dimensions = Vector2i(1, 1);
+    bitmap.rowBytes = 4u;
+    bitmap.pixels = {0x11u, 0x22u, 0x33u, 0xFFu};
+    RenderResult::CompositedTile tile;
+    tile.id = "ui-device-probe";
+    tile.kind = RenderResult::CompositedTile::Kind::Immediate;
+    tile.generation = 1;
+    tile.bitmapDimsPx = bitmap.dimensions;
+    tile.rasterCanvasSize = bitmap.dimensions;
+    tile.bitmapDimsDoc = Vector2d(1.0, 1.0);
+    tile.bitmap = std::move(bitmap);
+    RenderResult::CompositedPreview preview;
+    preview.tiles.push_back(std::move(tile));
+    shell.textures_.uploadComposited(preview);
+    if (shell.textures_.tiles().size() != 1u ||
+        shell.textures_.tiles().front().textureSnapshot == nullptr) {
+      return 0;
+    }
+    const auto* snapshot = static_cast<const svg::RendererGeodeTextureSnapshot*>(
+        shell.textures_.tiles().front().textureSnapshot.get());
+    return snapshot->deviceId();
+  }
+
+  static std::uint64_t RenderLayerThumbnailDeviceId(EditorShell& shell) {
+    const std::optional<svg::SVGElement> element =
+        shell.app_.document().document().querySelector("#background");
+    if (!element.has_value()) {
+      return 0;
+    }
+    const svg::RendererImage image =
+        shell.layerThumbnailRenderer_.renderElement(*element, Vector2i(8, 8));
+    if (image.textureSnapshot() == nullptr) {
+      return 0;
+    }
+    const auto* snapshot =
+        static_cast<const svg::RendererGeodeTextureSnapshot*>(image.textureSnapshot().get());
+    return snapshot->deviceId();
+  }
+#endif
 };
 
 void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
@@ -1872,6 +1920,31 @@ TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
 
   EXPECT_TRUE(shell.valid());
 }
+
+#ifdef DONNER_EDITOR_WGPU
+TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  const std::shared_ptr<geode::GeodeDevice> primary = window.geodeDevice();
+  const std::shared_ptr<geode::GeodeDevice> framebuffer = window.geodeFramebufferDevice();
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(framebuffer, nullptr);
+  const std::uint64_t primaryDeviceId = primary->adapterDevice().deviceId();
+  const std::uint64_t framebufferDeviceId = framebuffer->adapterDevice().deviceId();
+  ASSERT_NE(primaryDeviceId, framebufferDeviceId);
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  const std::uint64_t uploadDeviceId =
+      EditorShellTestAccess::UploadPresentationBitmapDeviceId(shell);
+  EXPECT_THAT(uploadDeviceId, testing::Eq(framebufferDeviceId));
+  EXPECT_THAT(uploadDeviceId, testing::Ne(primaryDeviceId));
+  EXPECT_THAT(EditorShellTestAccess::RenderLayerThumbnailDeviceId(shell),
+              testing::Eq(framebufferDeviceId));
+}
+#endif
 
 TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
   gui::EditorWindow window = MakeHiddenWindow();
