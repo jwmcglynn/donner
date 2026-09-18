@@ -6527,15 +6527,6 @@ SelectionChromeDetail EditorShell::selectionChromeDetailForActiveTool() const {
   if (activeTool_ == ActiveTool::Pen) {
     return SelectionChromeDetail::PathOutlinesOnly;
   }
-  if (activeTool_ == ActiveTool::Select && selectTool_.isDragging()) {
-    // Drag chrome is projected from the immutable gesture bounds. Avoid
-    // rebuilding every selected path (notably one path per outlined glyph)
-    // while the compositor and DOM are advancing asynchronously.
-    const std::optional<SelectTool::ActiveGesturePreview> preview =
-        selectTool_.activeGesturePreview();
-    return preview.has_value() && preview->hasMoved ? SelectionChromeDetail::CombinedBoundsOnly
-                                                    : SelectionChromeDetail::Full;
-  }
   if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
     // The caret, range highlights, and oriented session frame are pushed
     // explicitly through setTextEditingChrome. Retain only the generic text
