@@ -134,6 +134,26 @@ function phaseReport(before: Snapshot, after: Snapshot, inputToFrameMs: number[]
   };
 }
 
+async function dispatchPointer(page: Page, point: { x: number; y: number }, click = false) {
+  // Headed Firefox on macOS can offset native automation moves but not button events.
+  await page.evaluate(({ x, y, click }) => {
+    const canvas = document.querySelector("canvas#canvas")!;
+    for (const type of click ? ["mousemove", "mousedown", "mouseup"] : ["mousemove"]) {
+      canvas.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          button: 0,
+          buttons: type === "mousedown" ? 1 : 0,
+        }),
+      );
+    }
+  }, { ...point, click });
+}
+
 async function waitForIdle(page: Page) {
   await expect.poll(async () => (await snapshot(page)).interaction, {
     message: "the editor must consume pending input and finish its foreground render",
@@ -221,7 +241,11 @@ test(
       const bounds = await canvas.boundingBox();
       expect(bounds).not.toBeNull();
       report.sampleBounds = bounds;
-      await page.mouse.click(bounds!.x + bounds!.width * 0.24, bounds!.y + 282);
+      await dispatchPointer(
+        page,
+        { x: bounds!.x + bounds!.width * 0.24, y: bounds!.y + 282 },
+        true,
+      );
       await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
       await expect.poll(async () => {
         const state = await snapshot(page);
@@ -279,7 +303,7 @@ test(
           const prior = await snapshot(page);
           const point = { x: center.x + step * 3, y: center.y + step * 2 };
           if (kind === "pointer") {
-            await page.mouse.move(point.x, point.y);
+            await dispatchPointer(page, point);
           } else {
             await page.evaluate(({ x, y, deltaY }) => {
               document.querySelector("canvas#canvas")!.dispatchEvent(
