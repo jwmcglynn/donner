@@ -297,6 +297,16 @@ public:
   Result<Texture> createTexture(const TextureDescriptor& descriptor);
 
   /**
+   * Returns the validated extent of \p texture by value.
+   *
+   * Null, foreign-device, and stale handles fail with the same resource errors as other texture
+   * operations.
+   *
+   * @param texture Live texture owned by this device.
+   */
+  Result<Extent2d> textureExtent(const Texture& texture) const;
+
+  /**
    * Creates a view of \p texture covering the whole texture.
    *
    * @param texture Texture to view; must be a live handle of this device.
