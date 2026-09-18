@@ -254,6 +254,7 @@
       "operations": [
         "draw"
       ],
+      "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
