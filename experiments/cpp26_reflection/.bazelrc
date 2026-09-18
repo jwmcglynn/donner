@@ -1,0 +1,8 @@
+build --cxxopt=-std=c++26
+build --cxxopt=-freflection
+build --copt=-fno-exceptions
+build --copt=-fno-rtti
+test --test_output=errors
+
+build:gcc16 --extra_toolchains=@gcc16//:cc_toolchain
+build:gcc16 --linkopt=-lstdc++

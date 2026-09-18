@@ -1,0 +1,23 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
+cc_library(
+    name = "reflection",
+    hdrs = ["Reflection.h"],
+)
+
+cc_binary(
+    name = "reflection_demo",
+    srcs = ["ReflectionDemo.cc"],
+    deps = [":reflection"],
+)
+
+cc_test(
+    name = "reflection_tests",
+    size = "small",
+    srcs = ["Reflection_tests.cc"],
+    deps = [
+        ":reflection",
+        "@googletest//:gmock",
+        "@googletest//:gtest_main",
+    ],
+)

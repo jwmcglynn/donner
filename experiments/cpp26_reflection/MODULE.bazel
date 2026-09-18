@@ -1,0 +1,14 @@
+module(name = "donner_cpp26_reflection")
+
+bazel_dep(name = "gcc_toolchain", version = "0.12.0")
+bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "googletest", version = "1.17.0")
+
+gcc = use_extension("@gcc_toolchain//toolchain:module_extensions.bzl", "gcc_toolchains")
+gcc.toolchain(
+    name = "gcc16",
+    enable_fortran = False,
+    gcc_version = "16.2.0",
+    target_arch = "x86_64",
+)
+use_repo(gcc, "gcc16")
