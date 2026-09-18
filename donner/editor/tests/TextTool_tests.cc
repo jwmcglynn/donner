@@ -164,6 +164,115 @@ TEST_F(TextToolTest, DragOpensBoxTextSessionWithBoxAttributes) {
   EXPECT_THAT(attr(inserted, "data-donner-text-box-height"), Eq("100"));
 }
 
+TEST_F(TextToolTest, HorizontalDragCreatesNothing) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(210.0, 20.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(210.0, 20.0));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_FALSE(hasTextElement());
+}
+
+TEST_F(TextToolTest, NearHorizontalDragCreatesNothing) {
+  // Height 2 stays below the 4-unit drag tolerance: not a box.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(210.0, 22.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(210.0, 22.0));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_FALSE(hasTextElement());
+}
+
+TEST_F(TextToolTest, VerticalDragCreatesNothing) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(10.0, 220.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(10.0, 220.0));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_FALSE(hasTextElement());
+}
+
+TEST_F(TextToolTest, NearVerticalDragCreatesNothing) {
+  // Width 2 stays below the 4-unit drag tolerance: not a box.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(12.0, 220.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(12.0, 220.0));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_FALSE(hasTextElement());
+}
+
+TEST_F(TextToolTest, ShallowDragGrowsToMinimumBoxHeight) {
+  // Height 10 clears the drag tolerance but not the 32-unit minimum box
+  // height, so the frame grows down and the first baseline lands on its
+  // bottom edge instead of outside it.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(210.0, 30.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(210.0, 30.0));
+
+  EXPECT_TRUE(tool.isEditing());
+  ASSERT_TRUE(hasTextElement());
+  svg::SVGTextElement inserted = text();
+  EXPECT_THAT(attr(inserted, "x"), Eq("10"));
+  EXPECT_THAT(attr(inserted, "y"), Eq("52"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-x"), Eq("10"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-y"), Eq("20"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-width"), Eq("200"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-height"), Eq("32"));
+}
+
+TEST_F(TextToolTest, UpwardShallowDragClampsFromNormalizedTop) {
+  // An upward drag normalizes before the minimum-height clamp, so the frame
+  // still grows down from its top edge.
+  tool.onMouseDown(app, Vector2d(210.0, 120.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(10.0, 110.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(10.0, 110.0));
+
+  EXPECT_TRUE(tool.isEditing());
+  ASSERT_TRUE(hasTextElement());
+  svg::SVGTextElement inserted = text();
+  EXPECT_THAT(attr(inserted, "x"), Eq("10"));
+  EXPECT_THAT(attr(inserted, "y"), Eq("142"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-x"), Eq("10"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-y"), Eq("110"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-width"), Eq("200"));
+  EXPECT_THAT(attr(inserted, "data-donner-text-box-height"), Eq("32"));
+}
+
+TEST_F(TextToolTest, DoubleClickHorizontalDragPlacesPointText) {
+  // A horizontal drag carries no box intent, so the double-click fallback
+  // still places point text at the press point.
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  tool.onMouseDown(app, Vector2d(20.0, 30.0), modifiers);
+  tool.onMouseMove(app, Vector2d(220.0, 30.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(220.0, 30.0));
+
+  EXPECT_TRUE(tool.isEditing());
+  ASSERT_TRUE(hasTextElement());
+  EXPECT_THAT(attr(text(), "x"), Eq("20"));
+  EXPECT_THAT(attr(text(), "y"), Eq("30"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-x"), Eq(""));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-y"), Eq(""));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-width"), Eq(""));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-height"), Eq(""));
+}
+
+TEST_F(TextToolTest, DoubleClickLargeDragStillCreatesBox) {
+  // Box intent wins over the double-click fallback: a genuine two-dimensional
+  // drag creates box text even when the press was a double-click.
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), modifiers);
+  tool.onMouseMove(app, Vector2d(210.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(210.0, 120.0));
+
+  EXPECT_TRUE(tool.isEditing());
+  ASSERT_TRUE(hasTextElement());
+  EXPECT_THAT(attr(text(), "data-donner-text-box-width"), Eq("200"));
+  EXPECT_THAT(attr(text(), "data-donner-text-box-height"), Eq("100"));
+}
+
 TEST_F(TextToolTest, PlainClickOnEmptyCanvasCreatesNothing) {
   clickAt(Vector2d(20.0, 30.0));
 

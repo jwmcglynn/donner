@@ -194,6 +194,23 @@ TextVerticalMetrics ResolveTextVerticalMetrics(const svg::SVGTextElement& text,
   });
 }
 
+/// Creation box for a text-box drag release, or nullopt for a click or a
+/// degenerate horizontal/vertical drag. Short boxes grow to the minimum
+/// height so the first baseline stays inside the frame.
+std::optional<Box2d> CreationBoxForDrag(const Vector2d& dragDelta,
+                                        const std::optional<Box2d>& dragBox, double tolerance) {
+  const bool isBox = std::hypot(dragDelta.x, dragDelta.y) > tolerance && dragBox.has_value() &&
+                     dragBox->size().x > tolerance && dragBox->size().y > tolerance;
+  if (!isBox) {
+    return std::nullopt;
+  }
+  Box2d box = *dragBox;
+  if (box.size().y < TextTool::kMinBoxHeight) {
+    box.bottomRight.y = box.topLeft.y + TextTool::kMinBoxHeight;
+  }
+  return box;
+}
+
 }  // namespace
 
 void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -332,14 +349,14 @@ void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
   }
 
   const Vector2d dragDelta = documentPoint - dragStartDoc_;
-  const bool isBox = std::hypot(dragDelta.x, dragDelta.y) > dragToleranceDoc_ &&
-                     dragBoxDoc_.has_value() && dragBoxDoc_->size().x > dragToleranceDoc_;
+  const std::optional<Box2d> creationBox =
+      CreationBoxForDrag(dragDelta, dragBoxDoc_, dragToleranceDoc_);
   const bool wantsPointText = pendingDoubleClick_;
   pendingDoubleClick_ = false;
-  if (isBox) {
+  if (creationBox.has_value()) {
     // Box text: the origin is the box's top-left with the first baseline one
     // font-size below the top.
-    const Box2d box = *dragBoxDoc_;
+    const Box2d& box = *creationBox;
     beginEditingSession(editor, Vector2d(box.topLeft.x, box.topLeft.y + kDefaultFontSize), box);
   } else if (wantsPointText) {
     // Double-click on empty canvas: the click point is the first baseline
