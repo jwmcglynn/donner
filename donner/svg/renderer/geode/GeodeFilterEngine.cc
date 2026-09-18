@@ -113,18 +113,23 @@ private:
 struct FilterResourceArena {
   FilterResourceArena(GeodeDevice& device, FilterTextureAllocator& textureAllocator,
                       FilterResourceCache& resourceCache,
-                      ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                      size_t& passesInCommandBuffer)
+                      const std::function<void(size_t)>& chunkSubmittedHook,
+                      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease)
       : device_(device),
         textureAllocator_(textureAllocator),
         resourceCache_(resourceCache),
-        encoderSlot_(&commandEncoder),
-        passesInCommandBuffer_(passesInCommandBuffer) {}
+        chunkSubmittedHook_(chunkSubmittedHook),
+        hostLease_(hostLease) {}
   ~FilterResourceArena() {
     for (auto& owned : textures_) {
       // A detached output left its record behind with a null handle; the caller owns it now.
       if (owned.texture.isValid()) {
-        textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
+        if (executionFailed_ && (submissionUncertain_ || forceRetain_ || hostPendingChunks_ != 0 ||
+                                 completedQueueChunks_ != queueSubmittedChunks_)) {
+          textureAllocator_.retainFailedFilterTexture(std::move(owned.texture), owned.desc);
+        } else {
+          textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
+        }
       }
     }
   }
@@ -300,8 +305,7 @@ struct FilterResourceArena {
     return &bindGroups_.back();
   }
 
-  /// Records one compute dispatch through the runtime and replays it into the encoder the next
-  /// pass belongs in, keeping it in order with the passes recorded there directly.
+  /// Records one compute dispatch into this execution's runtime-owned command encoder.
   ///
   /// @param label Debug label for the pass.
   /// @param pipeline Compute pipeline to dispatch.
@@ -310,27 +314,11 @@ struct FilterResourceArena {
   [[nodiscard]] bool dispatchComputePass(RcString label, const gpu::ComputePipeline& pipeline,
                                          const gpu::BindGroup& bindGroup, uint32_t workgroupsX,
                                          uint32_t workgroupsY) {
-    // Counting the pass here, before anything is recorded, is what keeps a runtime pass under the
-    // same command-buffer bound as the wgpu ones and re-points the runtime when that bound splits
-    // the encoder.
-    (void)commandEncoder();
-
-    // The submit below replays into the installed host encoder, and this pass belongs in the
-    // arena's own. A foreign one would put it in a command buffer nothing here submits, and no
-    // host encoder at all would send it to the queue ahead of the passes recorded here before it.
-    UTILS_RELEASE_ASSERT_MSG(
-        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
-        "filter pass replayed into a command encoder the arena does not own");
-
-    gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder =
-        device_.adapterDevice().createCommandEncoder();
-    if (!encoder.hasResult()) {
-      return false;
-    }
-    gpu::CommandEncoder& commands = *encoder.result();
+    gpu::CommandEncoder* commands = commandEncoder();
+    if (commands == nullptr) return false;
 
     gpu::Result<gpu::ComputePassEncoder*> pass =
-        commands.beginComputePass(gpu::ComputePassDescriptor{std::move(label)});
+        commands->beginComputePass(gpu::ComputePassDescriptor{std::move(label)});
     if (!pass.hasResult()) {
       return false;
     }
@@ -342,65 +330,40 @@ struct FilterResourceArena {
       return false;
     }
 
-    gpu::Result<gpu::CommandBuffer> commandBuffer = commands.finish();
-    if (!commandBuffer.hasResult()) {
-      return false;
-    }
-    // Submitting here is what replays the pass: with a host encoder installed the runtime records
-    // into it rather than reaching the queue, so the pass lands at this point in the frame's
-    // command buffer instead of ahead of everything recorded before it.
-    return !device_.adapterDevice().submit(std::move(commandBuffer).result()).hasError();
+    return true;
   }
 
-  /// Copies through the runtime into the owning host encoder, preserving order with filter passes.
+  /// Copies through the runtime into the execution's command encoder.
   bool copyTexture(FilterTexture source, FilterTexture destination, gpu::Extent2d size,
                    gpu::Origin2d sourceOrigin, gpu::Origin2d destinationOrigin) {
-    (void)commandEncoder();
-    UTILS_RELEASE_ASSERT_MSG(
-        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
-        "filter copy replayed into a command encoder the arena does not own");
     if (!source || !destination) {
       return false;
     }
-    auto encoder = device_.adapterDevice().createCommandEncoder();
-    if (!encoder.hasResult() || encoder.result()
-                                    ->copyTextureToTexture(*source.texture, *destination.texture,
-                                                           size, sourceOrigin, destinationOrigin)
-                                    .hasError()) {
-      return false;
-    }
-    auto commands = encoder.result()->finish();
-    return commands.hasResult() &&
-           !device_.adapterDevice().submit(std::move(commands).result()).hasError();
+    gpu::CommandEncoder* commands = commandEncoder();
+    return commands != nullptr && !commands
+                                       ->copyTextureToTexture(*source.texture, *destination.texture,
+                                                              size, sourceOrigin, destinationOrigin)
+                                       .hasError();
   }
 
   /// Records a clear of \p value to transparent black through the runtime, in order with the
   /// filter passes around it. False when the runtime refuses any step.
   /// @param value Render-attachment-capable value to clear.
   [[nodiscard]] bool clearTexture(FilterTexture value) {
-    (void)commandEncoder();
-    UTILS_RELEASE_ASSERT_MSG(
-        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
-        "filter clear replayed into a command encoder the arena does not own");
     const gpu::TextureView* view =
         createRuntimeTextureView(*value.texture, RcString("FilterTransparentClearPass"));
     if (view == nullptr) {
       return false;
     }
-    auto encoder = device_.adapterDevice().createCommandEncoder();
-    if (!encoder.hasResult()) {
-      return false;
-    }
-    gpu::Result<gpu::RenderPassEncoder*> pass =
-        encoder.result()->beginRenderPass(gpu::RenderPassDescriptor{
-            RcString("FilterTransparentClearPass"),
-            {gpu::RenderPassColorAttachment{*view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {}}}});
+    gpu::CommandEncoder* commands = commandEncoder();
+    if (commands == nullptr) return false;
+    gpu::Result<gpu::RenderPassEncoder*> pass = commands->beginRenderPass(gpu::RenderPassDescriptor{
+        RcString("FilterTransparentClearPass"),
+        {gpu::RenderPassColorAttachment{*view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {}}}});
     if (!pass.hasResult() || pass.result()->end().hasError()) {
       return false;
     }
-    auto commands = encoder.result()->finish();
-    return commands.hasResult() &&
-           !device_.adapterDevice().submit(std::move(commands).result()).hasError();
+    return true;
   }
 
   /// A rewritten tile source is a new logical value even though its storage is unchanged.
@@ -411,61 +374,62 @@ struct FilterResourceArena {
 
   FilterExecutionMemory memory() const { return {textureBytes, 0}; }
 
-  /// Maximum compute/render passes recorded into one shared command buffer
-  /// before the arena finishes + submits it and starts a fresh encoder on the
-  /// same slot. The shared-encoder design keeps small filters at two queue
-  /// submissions per frame; pathological filter graphs must not grow a single
-  /// command buffer without bound. For example, an feMorphology with a
+  void markExecutionFailed() {
+    executionFailed_ = true;
+    if (submissionUncertain_ || forceRetain_ || hostPendingChunks_ != 0 ||
+        queueSubmittedChunks_ == completedQueueChunks_ || device_.isDeviceLost()) {
+      return;
+    }
+#ifdef __EMSCRIPTEN__
+    // The browser implementation of waitForQueueIdle only yields once; it cannot prove that
+    // accepted work stopped referencing this arena's backing.
+    device_.markDeviceLost("failed browser filter execution has unproven accepted work");
+#else
+    if (device_.waitForQueueIdle() == GpuWaitResult::Complete) {
+      completedQueueChunks_ = queueSubmittedChunks_;
+    }
+#endif
+  }
+
+  /// Maximum compute/render passes recorded into one execution-owned command buffer before the
+  /// arena finishes and submits it. Pathological filter graphs must not grow a single command
+  /// buffer without bound. For example, an feMorphology with a
   /// 24,998-device-pixel radius decomposes into 1,614 passes, and wgpu-native
   /// v24's Metal completion path has been observed to stall on a single
   /// command buffer of that size. Chunked submits preserve program order, so
   /// passes recorded after the chunk still execute after the earlier chunk.
-  /// The pass count lives on the engine and is reset once per frame, so the
-  /// bound covers the whole frame's command buffer even when a document runs
-  /// many filter graphs (one arena per execute call).
+  /// Each execution submits its final partial chunk before returning.
   static constexpr size_t kMaxPassesPerCommandBuffer = 64;
 
-  /// Returns the encoder to record the NEXT pass into, counting one pass per
-  /// call. Call it immediately before beginning each pass, and never cache
-  /// the returned reference across another commandEncoder() call: a later
-  /// call may chunk (submit + replace) the encoder in the slot.
-  wgpu::CommandEncoder& commandEncoder() {
+  /// Returns the runtime encoder for the next pass, submitting the prior bounded chunk first.
+  gpu::CommandEncoder* commandEncoder() {
     if (passesInCommandBuffer_ >= kMaxPassesPerCommandBuffer) {
-      chunkCommandBuffer();
+      if (!submitCommandBuffer(true)) return nullptr;
+    }
+    if (!commandEncoder_) {
+      gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
+          device_.adapterDevice().createCommandEncoder();
+      if (!created.hasResult()) return nullptr;
+      commandEncoder_ = std::move(created).result();
     }
     ++passesInCommandBuffer_;
-    return encoderSlot_->get();
+    return commandEncoder_.get();
   }
 
-  /// Finish the current chunk, submit it to the queue, and replace the
-  /// encoder slot with a fresh command encoder. Callers holding their own
-  /// handle copies of the old encoder (for example a finished GeoEncoder)
-  /// keep it alive through reference counting, but it must not be used to
-  /// record again: it has already been submitted.
-  void chunkCommandBuffer() {
-    passesInCommandBuffer_ = 0;
-    if (!*encoderSlot_) {
-      return;
+  /// Finishes and submits the current standalone runtime chunk, if one was recorded.
+  bool accountSubmittedChunk(const GeodeWgpuAdapterDevice::RuntimeSubmitResult& submitted,
+                             bool boundary) {
+    switch (submitted.disposition) {
+      case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::RefusedBeforeReplay: return false;
+      case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded:
+        ++hostPendingChunks_;
+        if (!boundary) return true;
+        return rotateHostAfterBoundary();
+      case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::QueueSubmitted: break;
     }
-    // Identity, not "some host encoder is installed": the report and the re-point below describe
-    // this encoder, and claiming them for one the runtime is not replaying into would retire work
-    // that has not reached the queue.
-    const bool replayingIntoThisEncoder =
-        device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get());
-    {
-      ScopedWgpuHandle<wgpu::CommandBuffer> cmd(encoderSlot_->get().finish());
-      if (cmd) {
-        device_.queue().submit(1, &cmd.get());
-        device_.countSubmit();
-        device_.adapterDevice().notifyHostSubmitted(encoderSlot_->get());
-      } else {
-        // Nothing recorded into this encoder can reach the queue now, so the frame's output is
-        // undefined and the pending serials must not be reported as submitted. Declaring the loss
-        // is what makes that observable and what stops later waits, rather than continuing as if
-        // the chunk had been submitted.
-        device_.markDeviceLost("filter chunk command encoder could not be finished");
-      }
-    }
+    ++queueSubmittedChunks_;
+    if (chunkSubmittedHook_) chunkSubmittedHook_(queueSubmittedChunks_);
+    if (device_.isDeviceLost()) return false;
     // A chunk boundary is a cross-submit edge inside one filter graph: pass
     // N writes a storage texture in the submitted buffer while pass N+1
     // samples it from the next buffer. On hardware Vulkan the automatic
@@ -475,20 +439,68 @@ struct FilterResourceArena {
     // in-buffer path (no chunking) relies on WebGPU's implicit inter-pass
     // barriers and needs no wait.
     //
-    // The wait is bounded: a driver hang here would otherwise block the
-    // rendering thread forever mid-frame. On timeout the device is declared
-    // lost and recording continues without the barrier; output for the
-    // frame is undefined, but the caller can observe the loss and tear the
-    // renderer down without further blocking.
+    // The wait is bounded: a timeout declares device loss and fails this execution, so no output
+    // or accepted-work backing can be detached or returned to a reusable pool.
     if (device_.isVulkan()) {
-      device_.waitForQueueIdle();
+      if (device_.waitForQueueIdle() != GpuWaitResult::Complete) return false;
+      completedQueueChunks_ = queueSubmittedChunks_;
     }
-    wgpu::CommandEncoderDescriptor desc = {};
-    desc.label = wgpuLabel("GeodeFilterChunkCE");
-    encoderSlot_->reset(device_.device().createCommandEncoder(desc));
-    if (replayingIntoThisEncoder) {
-      device_.adapterDevice().setHostCommandEncoder(encoderSlot_->get());
+    return true;
+  }
+
+  bool submitCommandBuffer(bool boundary = false) {
+    if (!commandEncoder_) return true;
+    passesInCommandBuffer_ = 0;
+    gpu::Result<gpu::CommandBuffer> commands = commandEncoder_->finish();
+    commandEncoder_.reset();
+    if (!commands.hasResult()) {
+      submissionUncertain_ = true;
+      device_.markDeviceLost("filter command buffer could not be finished safely");
+      return false;
     }
+    gpu::Result<GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
+        device_.adapterDevice().submitForCurrentFrame(std::move(commands).result(), hostLease_);
+    if (!submitted.hasResult()) {
+      forceRetain_ = true;
+      device_.markDeviceLost("filter command buffer submission failed");
+      return false;
+    }
+    return accountSubmittedChunk(submitted.result(), boundary);
+  }
+
+  bool rotateHostAfterBoundary() {
+    if (!hostLease_.has_value()) {
+      device_.markDeviceLost("filter host command encoder lease was unavailable");
+      return false;
+    }
+    GeodeWgpuAdapterDevice::HostRotationResult rotation =
+        device_.adapterDevice().rotateHostCommandEncoderForFilterChunk(*hostLease_);
+    if (rotation.stage ==
+        GeodeWgpuAdapterDevice::HostRotationStage::RejectedBeforeQueueAcceptance) {
+      device_.markDeviceLost("filter host command encoder rotation was rejected");
+      return false;
+    }
+    queueSubmittedChunks_ += hostPendingChunks_;
+    hostPendingChunks_ = 0;
+    if (chunkSubmittedHook_) chunkSubmittedHook_(queueSubmittedChunks_);
+    if (device_.isDeviceLost()) return false;
+    if (rotation.stage ==
+        GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedReplacementFailed) {
+      forceRetain_ = true;
+      device_.markDeviceLost("filter host command encoder replacement failed");
+      return false;
+    }
+    if (!rotation.replacementLease.has_value()) {
+      forceRetain_ = true;
+      device_.markDeviceLost("filter host command encoder replacement lease was unavailable");
+      return false;
+    }
+    hostLease_ = *rotation.replacementLease;
+    if (device_.isVulkan()) {
+      if (device_.waitForQueueIdle() != GpuWaitResult::Complete) return false;
+      completedQueueChunks_ = queueSubmittedChunks_;
+    }
+    return true;
   }
 
 private:
@@ -501,9 +513,17 @@ private:
   GeodeDevice& device_;
   FilterTextureAllocator& textureAllocator_;
   FilterResourceCache& resourceCache_;
-  ScopedWgpuHandle<wgpu::CommandEncoder>* encoderSlot_;
-  /// Engine-owned frame-scoped pass count (see kMaxPassesPerCommandBuffer).
-  size_t& passesInCommandBuffer_;
+  std::unique_ptr<gpu::CommandEncoder> commandEncoder_;
+  /// Passes in the currently open execution-owned chunk.
+  size_t passesInCommandBuffer_ = 0;
+  const std::function<void(size_t)>& chunkSubmittedHook_;
+  size_t hostPendingChunks_ = 0;
+  size_t queueSubmittedChunks_ = 0;
+  size_t completedQueueChunks_ = 0;
+  std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease_;
+  bool executionFailed_ = false;
+  bool submissionUncertain_ = false;
+  bool forceRetain_ = false;
   /// Deques rather than vectors: the accessors above hand out references into these, and a
   /// vector would move them on growth.
   std::deque<OwnedTexture> textures_;
@@ -1342,7 +1362,6 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 GeodeFilterEngine::~GeodeFilterEngine() = default;
 
 void GeodeFilterEngine::beginFrame() {
-  framePassesInCommandBuffer_ = 0;
   if (resourceCache_) {
     resourceCache_->beginFrame();
   }
@@ -1597,16 +1616,16 @@ struct FilterGraphExecution {
                        FilterTexture sourceGraphic, const Box2d& filterRegion,
                        const Transform2d& deviceFromFilter,
                        FilterTextureAllocator& textureAllocator,
-                       ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
                        svg::components::FilterExecutionBudget* executionBudget,
-                       std::optional<FilterTilePlan> admittedPlan)
+                       std::optional<FilterTilePlan> admittedPlan,
+                       std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease)
       : engine(engine),
         graph(graph),
         sourceGraphic(sourceGraphic),
         executionBudget(executionBudget),
         admittedPlan(admittedPlan),
-        arena(engine.device_, textureAllocator, *engine.resourceCache_, commandEncoder,
-              engine.framePassesInCommandBuffer_),
+        arena(engine.device_, textureAllocator, *engine.resourceCache_,
+              engine.chunkSubmittedHookForTesting_, hostLease),
         coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter),
         currentBuffer(sourceGraphic),
         axisAligned(NearZero(deviceFromFilter.data[1], 1e-6) &&
@@ -1960,6 +1979,34 @@ void GeodeFilterEngine::setMaximumTileExtentForTesting(uint32_t extent) {
   adaptiveTiles_ = false;
 }
 
+void GeodeFilterEngine::setChunkSubmittedHookForTesting(std::function<void(size_t)> hook) {
+  chunkSubmittedHookForTesting_ = std::move(hook);
+}
+
+bool GeodeFilterEngine::recordPassesForTesting(
+    size_t passCount, FilterTextureAllocator& textureAllocator,
+    std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease) {
+  FilterResourceArena arena(device_, textureAllocator, *resourceCache_,
+                            chunkSubmittedHookForTesting_, hostLease);
+  const FilterTexture texture = arena.createRuntimeTexture(
+      gpu::TextureDescriptor{"FilterPassCountTest",
+                             {1, 1},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled});
+  if (!texture) return false;
+  for (size_t pass = 0; pass != passCount; ++pass) {
+    if (!arena.clearTexture(texture)) {
+      arena.markExecutionFailed();
+      return false;
+    }
+  }
+  if (!arena.submitCommandBuffer()) {
+    arena.markExecutionFailed();
+    return false;
+  }
+  return true;
+}
+
 uint64_t GeodeFilterEngine::retainedBufferBytes() const {
   std::lock_guard<std::mutex> lock(resourceCache_->mutex);
   return resourceCache_->retainedBytes +
@@ -1970,14 +2017,19 @@ FilterExecutionResult GeodeFilterEngine::execute(
     const svg::components::FilterGraph& graph, const gpu::Texture& sourceGraphic,
     const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
     const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
-    ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
     svg::components::FilterExecutionBudget* executionBudget,
-    std::optional<FilterTilePlan> admittedPlan) {
+    std::optional<FilterTilePlan> admittedPlan,
+    std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease) {
+  // Loss is terminal for this runtime. Refuse before the graph can allocate textures or record
+  // another chunk, which also bounds backing retained by an earlier uncertain execution.
+  if (device_.isDeviceLost()) {
+    return {};
+  }
   // Borrowed for the call: the caller owns the source graphic and its descriptor, and both
   // outlive the execution.
   const FilterTexture source{&sourceGraphic, &sourceGraphicDesc};
   FilterGraphExecution execution(*this, graph, source, filterRegion, deviceFromFilter,
-                                 textureAllocator, commandEncoder, executionBudget, admittedPlan);
+                                 textureAllocator, executionBudget, admittedPlan, hostLease);
   const FilterTexture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
@@ -1986,6 +2038,11 @@ FilterExecutionResult GeodeFilterEngine::execute(
 
   FilterExecutionResult result;
   if (!output) {
+    execution.arena.markExecutionFailed();
+    return result;
+  }
+  if (!execution.arena.submitCommandBuffer()) {
+    execution.arena.markExecutionFailed();
     return result;
   }
   if (output == source) {

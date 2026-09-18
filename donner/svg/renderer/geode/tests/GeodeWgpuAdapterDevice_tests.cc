@@ -78,6 +78,10 @@ struct GeodeWgpuAdapterDeviceTestAccess {
       adapter.onUnmapBuffer(index);
     }
   }
+
+  static size_t hostLeaseRecordCount(const GeodeWgpuAdapterDevice& adapter) {
+    return adapter.hostLeaseRecords_.size();
+  }
 };
 
 namespace {
@@ -593,6 +597,135 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplayInterleavesInOneBufferAndDe
   EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
 
   geodeDevice_->setCounters(nullptr);
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, SubmitForCurrentFrameRejectsAStaleLeaseBeforeReplay) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> first(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(sibling), testing::IsTrue());
+  const GeodeWgpuAdapterDevice::HostEncoderLease firstLease =
+      adapter_->setHostCommandEncoder(first.get());
+  const GeodeWgpuAdapterDevice::HostEncoderLease siblingLease =
+      adapter_->setHostCommandEncoder(sibling.get());
+  ASSERT_THAT(firstLease == siblingLease, testing::IsFalse());
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  const uint64_t before = adapter_->lastSubmittedSerial();
+
+  gpu::Result<GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
+      adapter_->submitForCurrentFrame(gpu::GetResultOrFail(encoder->finish()), firstLease);
+
+  ASSERT_THAT(submitted.hasResult(), testing::IsTrue());
+  EXPECT_THAT(submitted.result().disposition,
+              testing::Eq(GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::RefusedBeforeReplay));
+  EXPECT_THAT(adapter_->lastSubmittedSerial(), testing::Eq(before));
+  EXPECT_THAT(adapter_->hostCommandEncoderLease(), testing::Optional(siblingLease));
+  EXPECT_THAT(adapter_->clearHostCommandEncoder(firstLease), testing::IsFalse());
+  EXPECT_THAT(adapter_->clearHostCommandEncoder(siblingLease), testing::IsTrue());
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, ClearedLeaseCanStillReportItsLaterPhysicalSubmission) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> host(geodeDevice_->device().createCommandEncoder());
+  ASSERT_THAT(static_cast<bool>(host), testing::IsTrue());
+  const GeodeWgpuAdapterDevice::HostEncoderLease lease =
+      adapter_->setHostCommandEncoder(host.get());
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  const GeodeWgpuAdapterDevice::RuntimeSubmitResult recorded = gpu::GetResultOrFail(
+      adapter_->submitForCurrentFrame(gpu::GetResultOrFail(encoder->finish()), lease));
+  ASSERT_THAT(recorded.disposition,
+              testing::Eq(GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded));
+  ASSERT_THAT(adapter_->clearHostCommandEncoder(lease), testing::IsTrue());
+  ScopedWgpuHandle<wgpu::CommandBuffer> commands(host.get().finish());
+  ASSERT_THAT(static_cast<bool>(commands), testing::IsTrue());
+  geodeDevice_->queue().submit(1, &commands.get());
+
+  EXPECT_THAT(adapter_->notifyHostSubmitted(lease), testing::IsTrue());
+  EXPECT_THAT(adapter_->waitForSerial(recorded.serial, 2.0), testing::IsTrue());
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, RawNotificationConsumesOnlyMatchingInactiveLeaseRecords) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> first(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> second(geodeDevice_->device().createCommandEncoder());
+  ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(second), testing::IsTrue());
+  adapter_->setHostCommandEncoder(first.get());
+  const GeodeWgpuAdapterDevice::HostEncoderLease secondLease =
+      adapter_->setHostCommandEncoder(second.get());
+  ASSERT_THAT(GeodeWgpuAdapterDeviceTestAccess::hostLeaseRecordCount(*adapter_), testing::Eq(2u));
+
+  adapter_->notifyHostSubmitted(first.get());
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::hostLeaseRecordCount(*adapter_), testing::Eq(1u));
+  adapter_->notifyHostSubmitted(first.get());
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::hostLeaseRecordCount(*adapter_), testing::Eq(1u));
+  EXPECT_THAT(adapter_->notifyHostDiscarded(secondLease), testing::IsTrue());
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::hostLeaseRecordCount(*adapter_), testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, LeaseFromAnotherRuntimeDeviceIsRefusedBeforeReplay) {
+  std::unique_ptr<GeodeDevice> otherDevice = GeodeDevice::CreateHeadless();
+  ASSERT_THAT(otherDevice, testing::NotNull());
+  ScopedWgpuHandle<wgpu::CommandEncoder> firstHost(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> otherHost(otherDevice->device().createCommandEncoder());
+  const GeodeWgpuAdapterDevice::HostEncoderLease foreignLease =
+      adapter_->setHostCommandEncoder(firstHost.get());
+  const GeodeWgpuAdapterDevice::HostEncoderLease localLease =
+      otherDevice->adapterDevice().setHostCommandEncoder(otherHost.get());
+  ASSERT_THAT(foreignLease == localLease, testing::IsFalse());
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(otherDevice->adapterDevice().createCommandEncoder());
+  const uint64_t before = otherDevice->adapterDevice().lastSubmittedSerial();
+
+  const GeodeWgpuAdapterDevice::RuntimeSubmitResult refused =
+      gpu::GetResultOrFail(otherDevice->adapterDevice().submitForCurrentFrame(
+          gpu::GetResultOrFail(encoder->finish()), foreignLease));
+
+  EXPECT_THAT(refused.disposition,
+              testing::Eq(GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::RefusedBeforeReplay));
+  EXPECT_THAT(otherDevice->adapterDevice().lastSubmittedSerial(), testing::Eq(before));
+  EXPECT_THAT(otherDevice->adapterDevice().hostCommandEncoderLease(),
+              testing::Optional(localLease));
+  otherDevice->adapterDevice().notifyHostDiscarded(localLease);
+  adapter_->notifyHostDiscarded(foreignLease);
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, RotationAdvancesGenerationAndStaleOwnerCannotClearIt) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> first(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> replacement(geodeDevice_->device().createCommandEncoder());
+  ASSERT_THAT(static_cast<bool>(first), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(replacement), testing::IsTrue());
+  const GeodeWgpuAdapterDevice::HostEncoderLease firstLease =
+      adapter_->setHostCommandEncoder(first.get());
+  size_t replacementRotations = 0;
+  adapter_->setHostCommandEncoderRotation(
+      firstLease, [&](GeodeWgpuAdapterDevice::HostEncoderLease expected) {
+        std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> replacementLease =
+            adapter_->replaceHostCommandEncoder(expected, replacement.get());
+        EXPECT_THAT(replacementLease.has_value(), testing::IsTrue());
+        adapter_->setHostCommandEncoderRotation(
+            *replacementLease, [&](GeodeWgpuAdapterDevice::HostEncoderLease) {
+              ++replacementRotations;
+              return GeodeWgpuAdapterDevice::HostRotationResult{};
+            });
+        return GeodeWgpuAdapterDevice::HostRotationResult{
+            GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedAndReplaced, replacementLease};
+      });
+
+  const GeodeWgpuAdapterDevice::HostRotationResult rotated =
+      adapter_->rotateHostCommandEncoderForFilterChunk(firstLease);
+
+  ASSERT_THAT(rotated.replacementLease.has_value(), testing::IsTrue());
+  EXPECT_THAT(rotated.stage,
+              testing::Eq(GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedAndReplaced));
+  EXPECT_THAT(*rotated.replacementLease == firstLease, testing::IsFalse());
+  EXPECT_THAT(adapter_->clearHostCommandEncoderRotation(firstLease), testing::IsFalse());
+  EXPECT_THAT(adapter_->clearHostCommandEncoder(firstLease), testing::IsFalse());
+  EXPECT_THAT(
+      adapter_->rotateHostCommandEncoderForFilterChunk(*rotated.replacementLease).stage,
+      testing::Eq(GeodeWgpuAdapterDevice::HostRotationStage::RejectedBeforeQueueAcceptance));
+  EXPECT_THAT(replacementRotations, testing::Eq(1u));
+  EXPECT_THAT(adapter_->clearHostCommandEncoder(*rotated.replacementLease), testing::IsTrue());
 }
 
 /// A host upload at a nonzero destination origin must reach wgpu with that origin intact. The

@@ -411,6 +411,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(3, build.count("bazelisk test"))
         self.assertNotIn("continue-on-error", build)
+        self.assertEqual(1, build.count("--test_arg=--payload-budget-mode=measure"))
+        self.assertIn("//tools/ci:editor_wasm_size_tests", build)
+        self.assertIn("Remove only this test_arg", build)
 
     def test_editor_wasm_handoff_resolves_artifact_and_provenance_from_metadata(self):
         stage = self.editor_wasm.split("- name: Stage package for handoff", 1)[1].split(

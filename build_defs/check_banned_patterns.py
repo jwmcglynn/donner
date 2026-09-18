@@ -18,7 +18,7 @@ Rules enforced:
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
-  - No new or worsened supported out-of-line C++ method definition above the local
+  - No new or worsened supported C++ function or method definition above the local
     decision-point complexity limit
 
 Usage:
@@ -376,7 +376,7 @@ _METHOD_DEFINITION_RE = re.compile(
     r"""
     ^[ \t]*
     (?:[A-Za-z_][A-Za-z0-9_:<>,~*&\[\] ]*[ \t]+)?
-    (?P<name>(?:[A-Za-z_][A-Za-z0-9_]*::)+~?[A-Za-z_][A-Za-z0-9_]*)
+    (?P<name>(?:(?:[A-Za-z_][A-Za-z0-9_]*::)+)?~?[A-Za-z_][A-Za-z0-9_]*)
     \s*\((?P<params>[^;{}]*)\)
     \s*(?P<cv>(?:(?:const|volatile)\s*)*)(?P<ref>&&?)?\s*
     (?:noexcept(?:\s*\([^)]*\))?\s*)?(?:override\s*)?(?:final\s*)?
@@ -387,6 +387,38 @@ _METHOD_DEFINITION_RE = re.compile(
 _METHOD_DECISION_RE = re.compile(
     r"\b(?:if|for|while|catch)\s*\(|\bcase\b|&&|\|\||(?<!\?)\?(?!\?)"
 )
+_NON_FUNCTION_DEFINITION_NAMES = {"if", "for", "while", "switch", "catch"}
+
+
+def _enclosing_scopes(stripped: str, match: re.Match) -> list[tuple[int, str, str]]:
+    """Return containing namespace/class scopes ordered by their source position."""
+    enclosing = []
+    for scope_match in _SCOPE_DEFINITION_RE.finditer(stripped, 0, match.start()):
+        opening_brace = stripped.find("{", scope_match.start(), scope_match.end())
+        if match.start() >= _method_body_end(stripped, opening_brace):
+            continue
+        class_name = scope_match.group("class")
+        name = class_name or scope_match.group("namespace")
+        kind = "class" if class_name else "namespace"
+        # Anonymous scopes cannot safely share baseline debt with another scope. Their source
+        # offset is intentionally part of the identity, so ambiguity fails closed.
+        enclosing.append(
+            (scope_match.start(), kind, name or f"<anonymous@{scope_match.start()}>")
+        )
+    return sorted(enclosing)
+
+
+def _method_definitions(stripped: str):
+    """Yield out-of-line methods and methods defined inside a class body."""
+    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+        name = match.group("name")
+        if name in _NON_FUNCTION_DEFINITION_NAMES:
+            continue
+        if "::" not in name and not any(
+            kind == "class" for _, kind, _ in _enclosing_scopes(stripped, match)
+        ):
+            continue
+        yield match
 
 
 def _method_body_end(stripped: str, opening_brace: int) -> int:
@@ -411,14 +443,32 @@ def _method_signature(match: re.Match) -> str:
     return f"{match.group('name')}({params})" + (f" {suffix}" if suffix else "")
 
 
+_SCOPE_DEFINITION_RE = re.compile(
+    r"\b(?:(?:class|struct)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)[^;{}]*|"
+    r"namespace(?:\s+(?P<namespace>[A-Za-z_][A-Za-z0-9_:]*))?\s*)\{"
+)
+
+
+def _qualified_method_signature(stripped: str, match: re.Match) -> str:
+    """Return a signature qualified by its enclosing inline class when needed."""
+    signature = _method_signature(match)
+    if "::" in match.group("name"):
+        return signature
+    enclosing = _enclosing_scopes(stripped, match)
+    if not enclosing:
+        return signature
+    scope = "::".join(name for _, _, name in enclosing)
+    return f"{scope}::{signature}"
+
+
 def _method_complexities(stripped: str) -> Dict[str, int]:
-    """Return decision-point counts for supported out-of-line method definitions."""
+    """Return decision-point counts for supported function and method definitions."""
     result: Dict[str, int] = {}
-    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+    for match in _method_definitions(stripped):
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
-        signature = _method_signature(match)
+        signature = _qualified_method_signature(stripped, match)
         result[signature] = max(result.get(signature, 0), decision_points)
     return result
 
@@ -429,11 +479,11 @@ def _check_method_complexity(
     """Flag supported out-of-line C++ method definitions with too many decision points."""
     baseline = _method_complexities(baseline_stripped) if baseline_stripped is not None else {}
     errors: List[Tuple[int, str, str]] = []
-    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+    for match in _method_definitions(stripped):
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
-        baseline_decision_points = baseline.get(_method_signature(match), 0)
+        baseline_decision_points = baseline.get(_qualified_method_signature(stripped, match), 0)
         if decision_points <= max(_MAX_METHOD_DECISION_POINTS, baseline_decision_points):
             continue
         line = stripped.count("\n", 0, match.start("name")) + 1

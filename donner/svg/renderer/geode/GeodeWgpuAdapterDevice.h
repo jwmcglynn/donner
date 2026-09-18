@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -44,6 +45,45 @@ class GeodeDevice;
  */
 class GeodeWgpuAdapterDevice final : public gpu::Device {
 public:
+  /// Physical outcome of one runtime command-buffer handoff.
+  enum class RuntimeSubmitDisposition : uint8_t {
+    RefusedBeforeReplay,  //!< Exact host validation failed before any command was encoded.
+    HostRecorded,         //!< Commands were replayed into the exact leased host.
+    QueueSubmitted,       //!< Commands were physically accepted by the queue.
+  };
+
+  struct RuntimeSubmitResult {
+    uint64_t serial = 0;
+    RuntimeSubmitDisposition disposition = RuntimeSubmitDisposition::RefusedBeforeReplay;
+  };
+
+  class HostEncoderLease {
+  public:
+    HostEncoderLease() = default;
+    explicit operator bool() const { return owner_ != 0; }
+    bool operator==(const HostEncoderLease&) const = default;
+
+  private:
+    friend class GeodeWgpuAdapterDevice;
+    HostEncoderLease(uint64_t runtimeDeviceId, uint64_t owner, uint64_t generation)
+        : runtimeDeviceId_(runtimeDeviceId), owner_(owner), generation_(generation) {}
+    uint64_t runtimeDeviceId_ = 0;
+    uint64_t owner_ = 0;
+    uint64_t generation_ = 0;
+  };
+
+  enum class HostRotationStage : uint8_t {
+    RejectedBeforeQueueAcceptance,
+    QueueAcceptedReplacementFailed,
+    QueueAcceptedAndReplaced,
+  };
+
+  struct HostRotationResult {
+    HostRotationStage stage = HostRotationStage::RejectedBeforeQueueAcceptance;
+    std::optional<HostEncoderLease> replacementLease;
+  };
+
+  using HostEncoderRotation = std::function<HostRotationResult(HostEncoderLease)>;
   /**
    * Constructs the adapter over \p geodeDevice.
    *
@@ -167,12 +207,34 @@ public:
    *
    * @param encoder Host-owned command encoder to replay into.
    */
-  void setHostCommandEncoder(wgpu::CommandEncoder encoder);
+  HostEncoderLease setHostCommandEncoder(wgpu::CommandEncoder encoder);
+
+  /// Replaces the exact leased host while retaining its owner and advancing its generation.
+  std::optional<HostEncoderLease> replaceHostCommandEncoder(HostEncoderLease expected,
+                                                            wgpu::CommandEncoder encoder);
+
+  /// Returns the exact lease of the installed host, if any.
+  std::optional<HostEncoderLease> hostCommandEncoderLease() const;
+
+  /**
+   * Submits or host-replays commands after validating the exact runtime-device lease.
+   * A known lease mismatch returns the `RefusedBeforeReplay` disposition with serial zero;
+   * errors are reserved for failures after validation begins the ordinary submit path.
+   */
+  gpu::Result<RuntimeSubmitResult> submitForCurrentFrame(
+      gpu::CommandBuffer&& commands, std::optional<HostEncoderLease> expectedHost);
+
+  HostEncoderLease setHostCommandEncoderRotation(HostEncoderLease expected,
+                                                 HostEncoderRotation rotate);
+  bool clearHostCommandEncoderRotation(HostEncoderLease expected);
+  HostRotationResult rotateHostCommandEncoderForFilterChunk(HostEncoderLease expected);
 
   /// Uninstalls the host command encoder, returning this adapter to owning and submitting the
   /// encoders it records into. Serials already replayed into a host encoder stay incomplete
   /// until \ref notifyHostSubmitted reports their submit.
+  /// Uninstalls the active host binding. Pending lease records remain valid for later notification.
   void clearHostCommandEncoder();
+  bool clearHostCommandEncoder(HostEncoderLease expected);
 
   /// True while a host command encoder is installed, i.e. while submissions are replayed into
   /// it instead of reaching the queue.
@@ -204,6 +266,7 @@ public:
    * @param encoder Host encoder whose finished command buffer was submitted.
    */
   void notifyHostSubmitted(wgpu::CommandEncoder encoder);
+  bool notifyHostSubmitted(HostEncoderLease expected);
 
   /**
    * Discards every unsubmitted stream replayed into \p encoder. Retires those serials only once
@@ -212,6 +275,7 @@ public:
    * @param encoder Host encoder being abandoned before submission.
    */
   void notifyHostDiscarded(wgpu::CommandEncoder encoder);
+  bool notifyHostDiscarded(HostEncoderLease expected);
 
   /**
    * Submits \p commands straight to the queue, even while a host command encoder is installed.
@@ -440,6 +504,15 @@ private:
 
   /// Host-owned command encoder to replay into, or null when this adapter owns its encoders.
   wgpu::CommandEncoder hostCommandEncoder_;
+  HostEncoderLease hostCommandEncoderLease_;
+  struct HostLeaseRecord {
+    HostEncoderLease lease;
+    wgpu::CommandEncoder encoder;
+  };
+  std::vector<HostLeaseRecord> hostLeaseRecords_;
+  uint64_t nextHostOwner_ = 1;
+  HostEncoderLease hostRotationLease_;
+  HostEncoderRotation hostEncoderRotation_;
   /// Set for the duration of one \ref submitStandalone so the submit below takes the
   /// adapter-owned encoder path even while a host encoder is installed.
   bool bypassHostEncoderForSubmit_ = false;

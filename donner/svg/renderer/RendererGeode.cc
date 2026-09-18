@@ -1380,6 +1380,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool verbose = false;
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
+  bool failFilterFrameSuspensionForTesting = false;
+  bool failFilterFrameRestoreForTesting = false;
+  bool frameRecordingAbandoned = false;
 
   // Per-frame perf counters. Reset at `beginFrame`, read via
   // `lastFrameTimings()`; `GeodePerf_tests.cc` pins their ceilings.
@@ -1478,6 +1481,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // command-buffer size for pathological filter graphs; the final
   // encoder in the slot is the one endFrame submits.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
+  std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> frameHostEncoderLease;
 
   // Runtime command encoder for the frame. It records into `frameCommandEncoder`
   // rather than owning a command buffer of its own: filter passes are still
@@ -1604,10 +1608,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return gpu::Extent2d{texture.getWidth(), texture.getHeight()};
   }
 
+  [[nodiscard]] bool publishFrameHostEncoder() {
+    frameHostEncoderLease =
+        device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    return frameHostEncoderLease.has_value() &&
+           device->adapterDevice().setHostCommandEncoderRotation(
+               *frameHostEncoderLease,
+               [this](geode::GeodeWgpuAdapterDevice::HostEncoderLease expected) {
+                 return rotateFrameCommandEncoderForFilter(expected);
+               });
+  }
+
   /// Point the runtime device at the current frame command encoder and open a runtime encoder
   /// that records into it. Returns false when the runtime refuses the encoder.
   [[nodiscard]] bool openFrameGpuEncoder() {
-    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    if (!publishFrameHostEncoder()) return false;
     gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
         device->adapterDevice().createCommandEncoder();
     if (!created.hasResult()) {
@@ -1621,19 +1636,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Replay what the runtime encoder has recorded into the frame command encoder and open a fresh
   /// one. Call before recording on the frame command encoder directly and before finishing it, so
   /// the two streams reach the backend in the order they were written.
-  [[nodiscard]] bool flushFrameGpuEncoder() {
+  [[nodiscard]] bool flushFrameGpuEncoder() { return replayFrameGpuEncoder(true); }
+
+  [[nodiscard]] bool replayFrameGpuEncoder(bool reopen) {
     if (frameGpuEncoder == nullptr) {
       return true;
     }
-    // A sibling renderer may have replaced the shared adapter's host encoder.
-    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    if (!publishFrameHostEncoder()) {
+      return false;
+    }
     gpu::Result<gpu::CommandBuffer> commandBuffer = frameGpuEncoder->finish();
     if (!commandBuffer.hasError()) {
-      gpu::Result<uint64_t> submitted =
-          device->adapterDevice().submit(std::move(commandBuffer).result());
-      if (submitted.hasError()) {
+      gpu::Result<geode::GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
+          device->adapterDevice().submitForCurrentFrame(std::move(commandBuffer).result(),
+                                                        frameHostEncoderLease);
+      if (submitted.hasError() ||
+          submitted.result().disposition !=
+              geode::GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded) {
         std::fprintf(stderr, "[Geode] replaying the frame's recorded draws failed: %s\n",
-                     submitted.error().message.c_str());
+                     submitted.hasError() ? submitted.error().message.c_str()
+                                          : "host replay was refused before encoding");
         return false;
       }
     } else {
@@ -1641,7 +1663,55 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                    commandBuffer.error().message.c_str());
       return false;
     }
-    return openFrameGpuEncoder();
+    frameGpuEncoder = nullptr;
+    return !reopen || openFrameGpuEncoder();
+  }
+
+  void clearAcceptedFrameHost(geode::GeodeWgpuAdapterDevice::HostEncoderLease acceptedLease) {
+    device->adapterDevice().clearHostCommandEncoderRotation(acceptedLease);
+    device->adapterDevice().clearHostCommandEncoder(acceptedLease);
+    frameCommandEncoder.reset();
+    frameHostEncoderLease.reset();
+  }
+
+  std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> publishFilterChunkReplacement(
+      geode::GeodeWgpuAdapterDevice::HostEncoderLease acceptedLease) {
+    wgpu::CommandEncoderDescriptor descriptor = {};
+    descriptor.label = wgpuLabel("RendererGeodeFilterChunkCE");
+    geode::ScopedWgpuHandle<wgpu::CommandEncoder> replacement(
+        device->device().createCommandEncoder(descriptor));
+    if (!replacement || device->isDeviceLost()) return std::nullopt;
+    frameCommandEncoder = std::move(replacement);
+    return device->adapterDevice().replaceHostCommandEncoder(acceptedLease,
+                                                             frameCommandEncoder.get());
+  }
+
+  geode::GeodeWgpuAdapterDevice::HostRotationResult rotateFrameCommandEncoderForFilter(
+      geode::GeodeWgpuAdapterDevice::HostEncoderLease expected) {
+    using RotationResult = geode::GeodeWgpuAdapterDevice::HostRotationResult;
+    using RotationStage = geode::GeodeWgpuAdapterDevice::HostRotationStage;
+    if (!frameHostEncoderLease.has_value() || *frameHostEncoderLease != expected ||
+        !frameCommandEncoder ||
+        !device->adapterDevice().hostCommandEncoderIs(frameCommandEncoder.get())) {
+      return {};
+    }
+    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(frameCommandEncoder.get().finish());
+    if (!commands) return {};
+    device->queue().submit(1, &commands.get());
+    device->countSubmit();
+    device->adapterDevice().notifyHostSubmitted(expected);
+    frameFinishedEncoders.clear();
+    frameGpuEncoders.clear();
+    frameGpuEncoder = nullptr;
+
+    std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> replacementLease =
+        publishFilterChunkReplacement(expected);
+    if (!replacementLease.has_value()) {
+      clearAcceptedFrameHost(expected);
+      return RotationResult{RotationStage::QueueAcceptedReplacementFailed, std::nullopt};
+    }
+    frameHostEncoderLease = *replacementLease;
+    return RotationResult{RotationStage::QueueAcceptedAndReplaced, replacementLease};
   }
 
   /// Close the runtime encoder after the frame command encoder it recorded into has been
@@ -1649,17 +1719,46 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void closeFrameGpuEncoderAfterSubmit() {
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
-    device->adapterDevice().notifyHostSubmitted(frameCommandEncoder.get());
-    if (device->adapterDevice().hostCommandEncoderIs(frameCommandEncoder.get())) {
-      device->adapterDevice().clearHostCommandEncoder();
+    if (frameHostEncoderLease.has_value()) {
+      device->adapterDevice().notifyHostSubmitted(*frameHostEncoderLease);
+      device->adapterDevice().clearHostCommandEncoderRotation(*frameHostEncoderLease);
+      device->adapterDevice().clearHostCommandEncoder(*frameHostEncoderLease);
     }
+    frameHostEncoderLease.reset();
+  }
+
+  /// Submits all source rendering and disables host replay before standalone filter execution.
+  [[nodiscard]] bool suspendFrameForFilter() {
+    if (std::exchange(failFilterFrameSuspensionForTesting, false)) {
+      discardFrameGpuEncoder();
+      return false;
+    }
+    if (!frameCommandEncoder || !replayFrameGpuEncoder(false)) {
+      discardFrameGpuEncoder();
+      return false;
+    }
+    return true;
+  }
+
+  /// Opens the fresh raw/runtime encoder pair that records the post-filter composite.
+  [[nodiscard]] bool restoreFrameAfterFilter() {
+    if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
+    if (!device || device->isDeviceLost()) return false;
+    if (!frameCommandEncoder || !frameHostEncoderLease.has_value() || device->isDeviceLost() ||
+        !openFrameGpuEncoder() || device->isDeviceLost()) {
+      discardFrameGpuEncoder();
+      return false;
+    }
+    return true;
   }
 
   /// Abandon this frame without completing any other renderer's recorded work.
   void discardFrameGpuEncoder() {
-    if (device && frameCommandEncoder) {
-      device->adapterDevice().notifyHostDiscarded(frameCommandEncoder.get());
+    if (device && frameHostEncoderLease.has_value()) {
+      device->adapterDevice().clearHostCommandEncoderRotation(*frameHostEncoderLease);
+      device->adapterDevice().notifyHostDiscarded(*frameHostEncoderLease);
     }
+    frameHostEncoderLease.reset();
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandEncoder.reset();
@@ -1668,6 +1767,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (device) {
       device->drainDeferredTextureBackings();
     }
+  }
+
+  void abandonFrameRecordingAfterFilterFailure(const wgpu::Texture& savedTarget) {
+    target = savedTarget;
+    encoder.reset();
+    discardFrameGpuEncoder();
+    retainPendingFrameReleasesAfterFailure();
+    frameRecordingAbandoned = true;
   }
 
   std::unique_ptr<geode::GeoEncoder> encoder;
@@ -1763,6 +1870,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::optional<PatternPaintSlot> savedPatternStrokePaint;
   };
   std::vector<PatternStackFrame> patternStack;
+
+  void promotePatternTile(PatternStackFrame& frame, bool forStroke) {
+    PatternPaintSlot slot;
+    slot.tile = std::move(frame.tileTexture);
+    slot.tileHandle =
+        &importTexture(slot.tile.get(), textureFormat,
+                       wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                           wgpu::TextureUsage::CopySrc);
+    slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
+    slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
+
+    patternFillPaint = std::move(frame.savedPatternFillPaint);
+    patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    std::optional<PatternPaintSlot>& targetSlot = forStroke ? patternStrokePaint : patternFillPaint;
+    if (targetSlot.has_value() && targetSlot->tile) {
+      device->deferDestroy(targetSlot->tile.take());
+    }
+    targetSlot = std::move(slot);
+  }
 
   // --------------------------------------------------------------------
   // Transient-texture pool.
@@ -1913,6 +2039,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     gpu::TextureDescriptor desc;
   };
   std::vector<PendingRelease> framePendingReleases;
+  std::vector<PendingRelease> failedFilterTextures;
+  std::vector<geode::ScopedWgpuHandle<wgpu::Texture>> failedRawTextures;
 
   void releaseTextureAtFrameEnd(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
@@ -1924,6 +2052,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                       const gpu::TextureDescriptor& desc) override {
     releaseTextureAtFrameEnd(std::move(texture), desc);
+  }
+
+  void retainFailedFilterTexture(gpu::Texture texture,
+                                 const gpu::TextureDescriptor& desc) override {
+    if (texture.isValid()) failedFilterTextures.push_back({std::move(texture), desc});
+  }
+
+  void retainPendingFrameReleasesAfterFailure() {
+    for (PendingRelease& pending : framePendingReleases) {
+      failedFilterTextures.push_back(std::move(pending));
+    }
+    framePendingReleases.clear();
   }
 
   void drainPendingReleases() {
@@ -2228,19 +2368,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  bool tryCompositeTransformedFilter(FilterStackFrame& frame) {
+  enum class TransformedFilterResult { NotApplicable, Composited, FrameAbandoned };
+
+  std::optional<GeodeLocalRasterGeometry> transformedFilterGeometry(
+      const FilterStackFrame& frame) const {
     if (!frame.transformedCaptureReserved || !frame.localFilterPlan || !filterEngine ||
         frame.filterGraph.empty()) {
-      return false;
+      return std::nullopt;
     }
     const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
                                    frame.filterBufferOffsetX, frame.filterBufferOffsetY};
-    const std::optional<GeodeLocalRasterGeometry> geometry = ComputeGeodeLocalRasterGeometry(
+    return ComputeGeodeLocalRasterGeometry(
         frame.filterGraph, frame.filterRegion, frame.deviceFromFilter, buffer,
         !frame.localRasterRequiredForBudget);
+  }
+
+  TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
+    const std::optional<GeodeLocalRasterGeometry> geometry = transformedFilterGeometry(frame);
     if (!geometry.has_value()) {
-      return false;
+      return TransformedFilterResult::NotApplicable;
     }
 
     const gpu::TextureDescriptor localDesc{
@@ -2250,7 +2397,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
             gpu::TextureUsage::CopySrc};
     gpu::Texture localTexture = acquireTexture(localDesc);
     if (!localTexture.isValid()) {
-      return false;
+      return TransformedFilterResult::NotApplicable;
     }
 
     const Transform2d filterFromDevice = frame.deviceFromFilter.inverse();
@@ -2274,13 +2421,28 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
                                   Vector2d(geometry->blurPadding + frame.filterRegion.width(),
                                            geometry->blurPadding + frame.filterRegion.height()));
-    if (!flushFrameGpuEncoder()) {
-      releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
-      return false;
+    if (!suspendFrameForFilter()) {
+      device->markDeviceLost("frame commands could not be submitted before filter execution");
+      retainFailedFilterTexture(std::move(localTexture), localDesc);
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      frame.localRasterRequiredForBudget = true;
+      if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
+        device->markDeviceLost("frame encoder could not be restored after filter suspension");
+      }
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      return TransformedFilterResult::FrameAbandoned;
     }
     geode::FilterExecutionResult localFiltered = filterEngine->execute(
         frame.filterGraph, localTexture, localDesc, localFilterRegion, localDeviceFromFilter, *this,
-        frameCommandEncoder, nullptr, frame.localFilterPlan);
+        nullptr, frame.localFilterPlan, frameHostEncoderLease);
+    if (!restoreFrameAfterFilter()) {
+      device->markDeviceLost("frame encoder could not be restored after filter execution");
+      retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
+      retainFailedFilterTexture(std::move(localTexture), localDesc);
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      return TransformedFilterResult::FrameAbandoned;
+    }
 
     const Transform2d deviceFromLocal =
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
@@ -2306,7 +2468,43 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
     frame.localRasterRequiredForBudget = false;
-    return true;
+    return TransformedFilterResult::Composited;
+  }
+
+  /// Executes one ordinary filter graph between the submitted source and following frame encoder.
+  std::optional<geode::FilterExecutionResult> executeFilterGraph(
+      FilterStackFrame& frame, const Transform2d& bufferDeviceFromFilter) {
+    geode::FilterExecutionResult filtered;
+    filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
+    if (frame.localRasterRequiredForBudget) {
+      filterExecutionBudget->reject();
+      filtered.kind = geode::FilterExecutionResult::Kind::Failed;
+      return filtered;
+    }
+    if (!filterEngine || frame.filterGraph.empty() ||
+        static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height >
+            components::kMaximumFilterSurfacePixels) {
+      return filtered;
+    }
+
+    if (!suspendFrameForFilter()) {
+      device->markDeviceLost("frame commands could not be submitted before filter execution");
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      filtered.kind = geode::FilterExecutionResult::Kind::Failed;
+    } else {
+      filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
+                                       frame.filterRegion, bufferDeviceFromFilter, *this, nullptr,
+                                       frame.fullFilterPlan, frameHostEncoderLease);
+    }
+    if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
+      device->markDeviceLost("frame encoder could not be restored after filter execution");
+      filterExecutionBudget->release(frame.filterReservation);
+      retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);
+      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      return std::nullopt;
+    }
+    return filtered;
   }
 
   /// Recompute the intersection of every rectangular clip entry on
@@ -4531,6 +4729,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     discardFrameGpuEncoder();
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
+    frameRecordingAbandoned = false;
     if (frameResourceScopeDepth == 0) {
       resetOwnedFrameBudgets();
     }
@@ -4574,47 +4773,41 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  bool prepareFrameTarget() {
-    if (!device || !pipeline || !gradientPipeline || !imagePipeline || pixelWidth <= 0 ||
-        pixelHeight <= 0) {
-      retireOwnedTargetAtFrameBoundary();
+  bool prepareHostFrameTarget() {
+    retireOwnedTargetAtFrameBoundary();
+    if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+      (void)surfaceBudget->reserve(-1, -1);
+      target = wgpu::Texture();
       return false;
     }
-    device->setCounters(&counters);
-    if (hostTarget) {
-      retireOwnedTargetAtFrameBoundary();
-      if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-          hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        (void)surfaceBudget->reserve(-1, -1);
-        target = wgpu::Texture();
-        return false;
-      }
-      pixelWidth = static_cast<int>(hostTarget.getWidth());
-      pixelHeight = static_cast<int>(hostTarget.getHeight());
-      if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
-        target = wgpu::Texture();
-        return false;
-      }
-      // The embedder owns this texture, so the runtime only names it. That name is refreshed
-      // every frame because the embedder is free to hand over a different texture at any time.
-      hostTargetHandle = gpu::Texture();
-      gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
-          hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()},
-          geode::GpuTextureFormatFromWgpu(textureFormat),
-          geode::GpuTextureUsageFromWgpu(wgpu::TextureUsage::RenderAttachment |
-                                         wgpu::TextureUsage::TextureBinding |
-                                         wgpu::TextureUsage::CopySrc));
-      if (!named.hasResult()) {
-        target = wgpu::Texture();
-        return false;
-      }
-      hostTargetHandle = std::move(named).result();
-      targetHandle = &hostTargetHandle;
-      target = hostTarget;
-      targetHandleTexture = static_cast<WGPUTexture>(target);
-      return true;
+    pixelWidth = static_cast<int>(hostTarget.getWidth());
+    pixelHeight = static_cast<int>(hostTarget.getHeight());
+    if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
+      target = wgpu::Texture();
+      return false;
     }
+    // The embedder owns this texture, so the runtime only names it. That name is refreshed
+    // every frame because the embedder is free to hand over a different texture at any time.
+    hostTargetHandle = gpu::Texture();
+    gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
+        hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()},
+        geode::GpuTextureFormatFromWgpu(textureFormat),
+        geode::GpuTextureUsageFromWgpu(wgpu::TextureUsage::RenderAttachment |
+                                       wgpu::TextureUsage::TextureBinding |
+                                       wgpu::TextureUsage::CopySrc));
+    if (!named.hasResult()) {
+      target = wgpu::Texture();
+      return false;
+    }
+    hostTargetHandle = std::move(named).result();
+    targetHandle = &hostTargetHandle;
+    target = hostTarget;
+    targetHandleTexture = static_cast<WGPUTexture>(target);
+    return true;
+  }
 
+  bool prepareOwnedFrameTarget() {
     if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
       target = wgpu::Texture();
       return false;
@@ -4627,7 +4820,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       gpu::Result<gpu::Texture> created =
           device->adapterDevice().createTexture(gpu::TextureDescriptor{
               "RendererGeodeTarget",
-              gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
+              gpu::Extent2d{static_cast<uint32_t>(pixelWidth),
+                            static_cast<uint32_t>(pixelHeight)},
               geode::GpuTextureFormatFromWgpu(textureFormat),
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                   gpu::TextureUsage::Sampled});
@@ -4646,6 +4840,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     target = device->adapterDevice().wgpuTextureOf(ownedTarget);
     targetHandleTexture = static_cast<WGPUTexture>(target);
     return true;
+  }
+
+  bool prepareFrameTarget() {
+    if (!device || device->isDeviceLost() || !pipeline || !gradientPipeline || !imagePipeline ||
+        pixelWidth <= 0 || pixelHeight <= 0) {
+      retireOwnedTargetAtFrameBoundary();
+      return false;
+    }
+    device->setCounters(&counters);
+    if (hostTarget) {
+      return prepareHostFrameTarget();
+    }
+    return prepareOwnedFrameTarget();
   }
 
   void createFrameEncoder() {
@@ -5403,7 +5610,11 @@ void RendererGeode::popClip() {
     // before the submit.
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
-      impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+      if (impl_->frameRecordingAbandoned) {
+        impl_->retainFailedFilterTexture(std::move(release.texture), release.desc);
+      } else {
+        impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+      }
     }
     entry.maskLayerTextures.clear();
     impl_->clipStack.pop_back();
@@ -5479,6 +5690,12 @@ void RendererGeode::popIsolatedLayer() {
 
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
+  }
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->encoder.reset();
+    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    return;
   }
 
   // Finish the layer's render pass so the texture contents are ready.
@@ -5626,6 +5843,13 @@ void RendererGeode::popFilterLayer() {
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
   }
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->encoder.reset();
+    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->filterExecutionBudget->release(frame.filterReservation);
+    return;
+  }
 
   // Finish the filter layer's render pass so the texture is ready.
   if (impl_->encoder) {
@@ -5641,28 +5865,24 @@ void RendererGeode::popFilterLayer() {
                 Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
           : frame.deviceFromFilter;
 
-  if (impl_->tryCompositeTransformedFilter(frame)) {
+  const Impl::TransformedFilterResult transformed = impl_->tryCompositeTransformedFilter(frame);
+  if (transformed == Impl::TransformedFilterResult::Composited) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    return;
+  }
+  if (transformed == Impl::TransformedFilterResult::FrameAbandoned) {
+    impl_->filterExecutionBudget->release(frame.filterReservation);
+    impl_->retainPendingFrameReleasesAfterFailure();
     return;
   }
 
   // Run the filter graph on the captured layer texture. Nothing runs it when the graph is empty,
   // in which case the capture itself is what gets composited back.
-  geode::FilterExecutionResult filtered;
-  filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
-  if (frame.localRasterRequiredForBudget) {
-    impl_->filterExecutionBudget->reject();
-    filtered.kind = geode::FilterExecutionResult::Kind::Failed;
-  } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
-             static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
-                 components::kMaximumFilterSurfacePixels) {
-    UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
-                             "Failed to replay recorded draws before the filter passes");
-    filtered = impl_->filterEngine->execute(
-        frame.filterGraph, frame.layerTexture, frame.layerDesc, frame.filterRegion,
-        bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder, nullptr, frame.fullFilterPlan);
-  }
+  std::optional<geode::FilterExecutionResult> execution =
+      impl_->executeFilterGraph(frame, bufferDeviceFromFilter);
+  if (!execution.has_value()) return;
+  geode::FilterExecutionResult filtered = std::move(*execution);
   const gpu::Texture* filteredTexture = Impl::filterOutput(filtered, frame.layerTexture);
   const gpu::TextureDescriptor& filteredDesc = Impl::filterOutputDesc(filtered, frame.layerDesc);
 
@@ -5818,6 +6038,13 @@ void RendererGeode::popMask() {
     // Placeholder frame from the headless path - nothing to do.
     return;
   }
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->encoder.reset();
+    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
+    return;
+  }
 
   // Finish the content encoder so its target is ready to sample.
   if (impl_->encoder) {
@@ -5858,7 +6085,8 @@ void RendererGeode::popMask() {
 }
 
 bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
-  if (impl_->rejectedFilterDepth != 0 || !impl_->device || !impl_->pipeline) {
+  if (impl_->frameRecordingAbandoned || impl_->frameGpuEncoder == nullptr ||
+      impl_->rejectedFilterDepth != 0 || !impl_->device || !impl_->pipeline) {
     return false;
   }
 
@@ -6001,6 +6229,14 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // filter region again.
   impl_->clipStack = std::move(frame.savedClipStack);
 
+  if (impl_->frameRecordingAbandoned) {
+    impl_->encoder.reset();
+    impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
+    impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    if (frame.tileTexture) impl_->failedRawTextures.push_back(std::move(frame.tileTexture));
+    return;
+  }
+
   // Create a fresh encoder for the outer target. The old outer encoder was
   // finished in `beginPatternTile`; the new one loads the current contents
   // of the target (no clear), since we don't want to wipe previously-drawn
@@ -6051,26 +6287,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->encoder.reset();
   }
 
-  // Stash the completed tile in raster-pixel space, matching the texture sampled by the shader.
-  Impl::PatternPaintSlot slot;
-  slot.tile = std::move(frame.tileTexture);
-  slot.tileHandle =
-      &impl_->importTexture(slot.tile.get(), impl_->textureFormat,
-                            wgpu::TextureUsage::RenderAttachment |
-                                wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
-  slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
-  slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
-
-  // Restore the pattern slots pending at `beginPatternTile`, then overwrite the slot this tile
-  // was recorded for (releasing any stale tile texture it held).
-  impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
-  impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-  std::optional<Impl::PatternPaintSlot>& targetSlot =
-      forStroke ? impl_->patternStrokePaint : impl_->patternFillPaint;
-  if (targetSlot.has_value() && targetSlot->tile) {
-    impl_->device->deferDestroy(targetSlot->tile.take());
-  }
-  targetSlot = std::move(slot);
+  impl_->promotePatternTile(frame, forStroke);
 }
 
 void RendererGeode::setPaint(const PaintParams& paint) {
@@ -7609,6 +7826,23 @@ void RendererGeode::injectDeviceLossForTesting() {
   if (impl_->device) {
     impl_->device->markDeviceLost("test-injected device loss");
   }
+}
+
+void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
+  impl_->failFilterFrameSuspensionForTesting = true;
+  impl_->failFilterFrameRestoreForTesting = true;
+}
+
+size_t RendererGeode::failedFilterTextureCountForTesting() const {
+  return impl_->failedFilterTextures.size() + impl_->failedRawTextures.size();
+}
+
+bool RendererGeode::hasActiveDrawingEncoderForTesting() const {
+  return impl_->encoder != nullptr;
+}
+
+bool RendererGeode::filterFrameFailureInjectionPendingForTesting() const {
+  return impl_->failFilterFrameSuspensionForTesting || impl_->failFilterFrameRestoreForTesting;
 }
 
 bool RendererGeode::deviceLost() const {

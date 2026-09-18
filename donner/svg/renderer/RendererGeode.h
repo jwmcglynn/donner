@@ -501,6 +501,18 @@ public:
   /// Inject a sticky device loss so tests can verify renderer recovery and pooled-device disposal.
   void injectDeviceLossForTesting();
 
+  /// Inject transformed-filter suspension and following encoder-restoration failure once.
+  void injectFilterFrameSuspensionAndRestoreFailureForTesting();
+
+  /// Number of filter textures retained outside reusable pools after an uncertain failure.
+  [[nodiscard]] size_t failedFilterTextureCountForTesting() const;
+
+  /// Whether a drawing encoder remains active for the current frame.
+  [[nodiscard]] bool hasActiveDrawingEncoderForTesting() const;
+
+  /// Whether either one-shot transformed-filter failure remains pending.
+  [[nodiscard]] bool filterFrameFailureInjectionPendingForTesting() const;
+
   /// Fail one scene preparation after the requested number of successful preparations.
   void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
 

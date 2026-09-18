@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <tuple>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -265,6 +266,11 @@ public:
    *   was already lost and no wait was performed.
    */
   GpuWaitResult waitForQueueIdle(std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout) const;
+
+  /// Overrides one queue-idle result while preserving its loss side effects. Test seam.
+  void setQueueWaitResultForTesting(std::optional<GpuWaitResult> result) {
+    queueWaitResultForTesting_ = result;
+  }
 
   /// True once this device has been declared lost, either by the WebGPU
   /// device-lost callback (driver-reported) or by a bounded GPU wait
@@ -870,6 +876,7 @@ private:
   std::atomic<uint64_t> readbackTextureCreates_{0};
   std::atomic<uint64_t> readbackBindgroupCreates_{0};
   std::atomic<uint64_t> readbackSubmits_{0};
+  mutable std::optional<GpuWaitResult> queueWaitResultForTesting_;
   std::atomic<uint64_t> readbackPoolEntries_{0};
   std::atomic<uint64_t> readbackPoolBytes_{0};
   std::atomic<uint64_t> readbackLifetimeBufferCreates_{0};

@@ -633,37 +633,8 @@
         "TextureFormat"
       ]
     },
-    "donner/svg/renderer/geode/GeodeFilterEngine.cc": {
-      "operations": [
-        "beginComputePass",
-        "createBindGroup",
-        "createBindGroupLayout",
-        "createBuffer",
-        "createCommandEncoder",
-        "createComputePipeline",
-        "createPipelineLayout",
-        "createShaderModule",
-        "dispatchWorkgroups",
-        "finish",
-        "release",
-        "setBindGroup",
-        "setPipeline",
-        "submit",
-        "writeBuffer",
-        "writeTexture"
-      ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCppTokens": [
-        "CommandBuffer",
-        "CommandEncoder",
-        "CommandEncoderDescriptor"
-      ]
-    },
     "donner/svg/renderer/geode/GeodeFilterEngine.h": {
       "wgpuCppTokens": [
-        "CommandEncoder",
         "Device"
       ]
     },
@@ -1142,8 +1113,10 @@
     },
     "donner/svg/renderer/tests/RendererGeode_tests.cc": {
       "operations": [
+        "createCommandEncoder",
         "createTexture",
         "draw",
+        "submit",
         "writeTexture"
       ],
       "wgpuCFunctions": [

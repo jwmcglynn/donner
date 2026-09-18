@@ -24,6 +24,8 @@
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -363,6 +365,175 @@ TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
     EXPECT_FALSE(renderer.resourceStats().surfaceBudgetRejected);
     EXPECT_FALSE(renderer.takeSnapshot().empty());
   }
+}
+
+TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
+  using namespace components;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.pushIsolatedLayer(0.8, MixBlendMode::Normal);
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  ASSERT_GT(renderer.resourceStats().filterRetainedBytes, 0u);
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectFilterFrameSuspensionAndRestoreFailureForTesting();
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.filterFrameFailureInjectionPendingForTesting(), testing::IsFalse());
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  const size_t retainedAfterFilter = renderer.failedFilterTextureCountForTesting();
+  renderer.popIsolatedLayer();
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(retainedAfterFilter));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  const size_t retainedAfterUnwind = renderer.failedFilterTextureCountForTesting();
+  EXPECT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+              testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterUnwind));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+
+  const size_t retainedAfterFailedFrame = renderer.failedFilterTextureCountForTesting();
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  renderer.drawRect(Box2d({0, 0}, {32, 32}), StrokeParams{});
+  EXPECT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+              testing::IsFalse());
+  renderer.endFrame();
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterFailedFrame));
+  EXPECT_THAT(device->counters()->textureCreates, testing::Eq(0u));
+  EXPECT_THAT(device->counters()->drawCalls, testing::Eq(0u));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(0u));
+}
+
+TEST_F(RendererGeodeTest, TransformedFilterFailureUnwindsAnOpenPatternTile) {
+  using namespace components;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()), testing::IsTrue());
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {32, 32}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {32, 32}), StrokeParams{});
+  renderer.injectFilterFrameSuspensionAndRestoreFailureForTesting();
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+
+  renderer.popFilterLayer();
+  const size_t retainedAfterFilter = renderer.failedFilterTextureCountForTesting();
+  renderer.endPatternTile(/*forStroke=*/false);
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(retainedAfterFilter));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+components::FilterGraph MultiChunkMorphologyGraph() {
+  using namespace components;
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  for (size_t index = 0; index != 5; ++index) {
+    FilterNode node;
+    node.primitive = filter_primitive::Morphology{
+        .op = filter_primitive::Morphology::Operator::Dilate, .radiusX = 256, .radiusY = 256};
+    graph.nodes.push_back(std::move(node));
+  }
+  return graph;
+}
+
+TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  const components::FilterGraph graph = MultiChunkMorphologyGraph();
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  size_t acceptedChunks = 0;
+  device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
+    acceptedChunks = chunk;
+    if (chunk == 1) device->markDeviceLost("injected ordinary filter chunk loss");
+  });
+  const uint64_t submitsBeforeBoundary = device->counters()->submits;
+
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  const size_t retainedAfterLoss = renderer.failedFilterTextureCountForTesting();
+  const uint64_t submitsAfterLoss = device->counters()->submits;
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.popFilterLayer();
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterLoss));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsAfterLoss));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  const components::FilterGraph graph = MultiChunkMorphologyGraph();
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  size_t acceptedChunks = 0;
+  device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
+    acceptedChunks = chunk;
+    if (chunk == 1) device->markDeviceLost("injected transformed filter chunk loss");
+  });
+  const uint64_t submitsBeforeBoundary = device->counters()->submits;
+
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(acceptedChunks, testing::Eq(1u));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  const size_t retainedAfterLoss = renderer.failedFilterTextureCountForTesting();
+  const uint64_t submitsAfterLoss = device->counters()->submits;
+  EXPECT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+              testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterLoss));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsAfterLoss));
+  renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
 }
 
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
@@ -735,21 +906,58 @@ TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
       renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
       renderer.popFilterLayer();
     };
+    struct PendingHostCopy {
+      gpu::Texture source;
+      gpu::Texture destination;
+      uint64_t serial = 0;
+    };
+    const auto registerPendingHostCopy = [&]() {
+      gpu::Device& adapter = device->adapterDevice();
+      PendingHostCopy pending{
+          .source = gpu::GetResultOrFail(adapter.createTexture(
+              gpu::TextureDescriptor{"pending host copy source", gpu::Extent2d{1, 1},
+                                     gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopySrc})),
+          .destination = gpu::GetResultOrFail(adapter.createTexture(
+              gpu::TextureDescriptor{"pending host copy destination", gpu::Extent2d{1, 1},
+                                     gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopyDst})),
+      };
+      std::unique_ptr<gpu::CommandEncoder> commands =
+          gpu::GetResultOrFail(adapter.createCommandEncoder());
+      EXPECT_THAT(
+          commands->copyTextureToTexture(pending.source, pending.destination, gpu::Extent2d{1, 1}),
+          gpu::IsOk());
+      pending.serial =
+          gpu::GetResultOrFail(adapter.submit(gpu::GetResultOrFail(commands->finish())));
+      return pending;
+    };
     beginFrame(*parent);
     drawFlood(*parent, css::RGBA(255, 0, 0, 255));
-    const uint64_t parentSerial = device->adapterDevice().lastSubmittedSerial();
+    const uint64_t parentFilterSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
+    const PendingHostCopy parentPending = registerPendingHostCopy();
+    ASSERT_THAT(parentPending.serial, testing::Gt(parentFilterSerial));
     beginFrame(sibling);
     drawFlood(sibling, css::RGBA(0, 0, 255, 255));
-    const uint64_t siblingSerial = device->adapterDevice().lastSubmittedSerial();
-    ASSERT_THAT(siblingSerial, testing::Gt(parentSerial));
+    const uint64_t siblingFilterSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
+    const PendingHostCopy siblingPending = registerPendingHostCopy();
+    ASSERT_THAT(siblingFilterSerial, testing::Gt(parentPending.serial));
+    ASSERT_THAT(siblingPending.serial, testing::Gt(siblingFilterSerial));
     if (destroy) {
       parent.reset();
     } else {
       beginFrame(*parent);
     }
-    ASSERT_THAT(device->adapterDevice().waitForSerial(parentSerial, 2.0), testing::IsTrue());
-    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingSerial));
+    ASSERT_THAT(device->adapterDevice().waitForSerial(parentPending.serial, 2.0),
+                testing::IsTrue());
+    EXPECT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 0.05),
+                testing::IsFalse());
+    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingFilterSerial));
+    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingPending.serial));
     sibling.endFrame();
+    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingPending.serial, 2.0),
+                testing::IsTrue());
     const RendererBitmap pixels = sibling.takeSnapshot();
     ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
     EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(0, 0, 255, 255));
