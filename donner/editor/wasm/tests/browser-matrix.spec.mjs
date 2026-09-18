@@ -401,7 +401,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   const normalizedWorkflow = workflow.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
   assert.match(
     normalizedWorkflow,
-    /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \/\/tools\/ci:editor_wasm_size_tests/,
+    /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all --test_arg=--payload-budget-mode=measure \/\/tools\/ci:editor_wasm_size_tests/,
   );
   assert.match(
     normalizedWorkflow,
