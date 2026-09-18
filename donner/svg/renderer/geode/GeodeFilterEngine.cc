@@ -417,24 +417,9 @@ struct FilterResourceArena {
   }
 
   /// Finishes and submits the current standalone runtime chunk, if one was recorded.
-  bool submitCommandBuffer(bool boundary = false) {
-    if (!commandEncoder_) return true;
-    passesInCommandBuffer_ = 0;
-    gpu::Result<gpu::CommandBuffer> commands = commandEncoder_->finish();
-    commandEncoder_.reset();
-    if (!commands.hasResult()) {
-      submissionUncertain_ = true;
-      device_.markDeviceLost("filter command buffer could not be finished safely");
-      return false;
-    }
-    gpu::Result<GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
-        device_.adapterDevice().submitForCurrentFrame(std::move(commands).result(), hostLease_);
-    if (!submitted.hasResult()) {
-      forceRetain_ = true;
-      device_.markDeviceLost("filter command buffer submission failed");
-      return false;
-    }
-    switch (submitted.result().disposition) {
+  bool accountSubmittedChunk(const GeodeWgpuAdapterDevice::RuntimeSubmitResult& submitted,
+                             bool boundary) {
+    switch (submitted.disposition) {
       case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::RefusedBeforeReplay: return false;
       case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded:
         ++hostPendingChunks_;
@@ -461,6 +446,26 @@ struct FilterResourceArena {
       completedQueueChunks_ = queueSubmittedChunks_;
     }
     return true;
+  }
+
+  bool submitCommandBuffer(bool boundary = false) {
+    if (!commandEncoder_) return true;
+    passesInCommandBuffer_ = 0;
+    gpu::Result<gpu::CommandBuffer> commands = commandEncoder_->finish();
+    commandEncoder_.reset();
+    if (!commands.hasResult()) {
+      submissionUncertain_ = true;
+      device_.markDeviceLost("filter command buffer could not be finished safely");
+      return false;
+    }
+    gpu::Result<GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
+        device_.adapterDevice().submitForCurrentFrame(std::move(commands).result(), hostLease_);
+    if (!submitted.hasResult()) {
+      forceRetain_ = true;
+      device_.markDeviceLost("filter command buffer submission failed");
+      return false;
+    }
+    return accountSubmittedChunk(submitted.result(), boundary);
   }
 
   bool rotateHostAfterBoundary() {
