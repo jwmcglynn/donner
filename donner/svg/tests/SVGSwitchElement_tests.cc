@@ -446,4 +446,58 @@ TEST(SVGSwitchElementTests, SystemLanguageHonorsConfiguredLanguages) {
   }
 }
 
+/**
+ * `<switch>` honors the priority order of the configured user languages: with `{fr, en}`, the
+ * French child wins even though the English child appears first in document order.
+ */
+TEST(SVGSwitchElementTests, SystemLanguageHonorsUserLanguagePriority) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg width="16" height="16">
+      <switch>
+        <rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="en"/>
+        <rect x="0" y="0" width="8" height="16" fill="black" systemLanguage="fr"/>
+      </switch>
+    </svg>
+  )");
+  document.setUserLanguages({RcString("fr"), RcString("en")});
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kLeftHalfFilled));
+}
+
+/**
+ * A `systemLanguage` match beats an unconditional child regardless of document order: the
+ * unconditional child is a fallback, selected only when no language-conditioned child matches.
+ */
+TEST(SVGSwitchElementTests, SystemLanguageMatchBeatsUnconditionalFallback) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg width="16" height="16">
+      <switch>
+        <rect x="0" y="0" width="16" height="16" fill="black"/>
+        <rect x="0" y="0" width="8" height="16" fill="black" systemLanguage="fr"/>
+      </switch>
+    </svg>
+  )");
+  document.setUserLanguages({RcString("fr")});
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kLeftHalfFilled));
+}
+
+/**
+ * Children matching the same highest-priority user language tie-break by document order: the
+ * first one wins.
+ */
+TEST(SVGSwitchElementTests, SystemLanguageSamePrioritySelectsFirstInDocumentOrder) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg width="16" height="16">
+      <switch>
+        <rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="fr"/>
+        <rect x="0" y="0" width="8" height="16" fill="black" systemLanguage="fr"/>
+      </switch>
+    </svg>
+  )");
+  document.setUserLanguages({RcString("fr"), RcString("en")});
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kAllFilled));
+}
+
 }  // namespace donner::svg
