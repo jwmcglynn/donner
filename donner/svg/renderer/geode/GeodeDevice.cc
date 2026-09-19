@@ -117,6 +117,53 @@ void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
   userdata = nullptr;
 }
 
+}  // namespace
+
+GeodePhysicalDeviceOwner::GeodePhysicalDeviceOwner(bool ownsRootHandles,
+                                                   std::shared_ptr<GeodeDeviceLostState> lostState)
+    : ownsRootHandles_(ownsRootHandles),
+      lostState_(lostState ? std::move(lostState) : std::make_shared<GeodeDeviceLostState>()) {}
+
+std::shared_ptr<GeodePhysicalDeviceOwner> GeodePhysicalDeviceOwner::CreateOwned(
+    std::shared_ptr<GeodeDeviceLostState> lostState) {
+  return std::shared_ptr<GeodePhysicalDeviceOwner>(
+      new GeodePhysicalDeviceOwner(true, std::move(lostState)));
+}
+
+std::shared_ptr<GeodePhysicalDeviceOwner> GeodePhysicalDeviceOwner::CreateBorrowed(
+    wgpu::Instance instance, wgpu::Adapter adapter, wgpu::Device device, wgpu::Queue queue,
+    std::shared_ptr<GeodeDeviceLostState> lostState) {
+  auto result = std::shared_ptr<GeodePhysicalDeviceOwner>(
+      new GeodePhysicalDeviceOwner(false, std::move(lostState)));
+  result->instance_ = instance;
+  result->adapter_ = adapter;
+  result->device_ = device;
+  result->queue_ = queue;
+  return result;
+}
+
+GeodePhysicalDeviceOwner::~GeodePhysicalDeviceOwner() {
+  if (!ownsRootHandles_) {
+    instance_ = wgpu::Instance();
+    adapter_ = wgpu::Adapter();
+    device_ = wgpu::Device();
+    queue_ = wgpu::Queue();
+    return;
+  }
+  if (lostState_->lost.load(std::memory_order_acquire)) {
+    ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/false);
+    return;
+  }
+  ReleaseWgpuHandle(queue_);
+  if (device_) device_.destroy();
+  ReleaseWgpuHandle(device_);
+  ReleaseWgpuHandle(adapter_);
+  ReleaseWgpuHandle(instance_);
+  ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/true);
+}
+
+namespace {
+
 /// Error callback wired onto the WebGPU device via
 /// `DeviceDescriptor::uncapturedErrorCallbackInfo`. Any driver-level
 /// validation errors (missing bindings, bad draw parameters, etc.)
@@ -155,6 +202,19 @@ void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGP
     DeclareDeviceLost(*state);
   }
 }
+
+}  // namespace
+
+void GeodePhysicalDeviceOwner::configureDeviceLostCallback(wgpu::DeviceDescriptor& descriptor) {
+  UTILS_RELEASE_ASSERT(ownsRootHandles_ && deviceLostCallbackToken_ == nullptr);
+  deviceLostCallbackToken_ = CreateDeviceLostCallbackToken(lostState_);
+  descriptor.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  descriptor.deviceLostCallbackInfo.callback = OnDeviceLost;
+  descriptor.deviceLostCallbackInfo.userdata1 = deviceLostCallbackToken_;
+  descriptor.deviceLostCallbackInfo.userdata2 = nullptr;
+}
+
+namespace {
 
 wgpu::BackendType RequestedHeadlessBackend() {
   const char* backendEnv = std::getenv("WGPU_BACKEND");
@@ -371,10 +431,14 @@ uint64_t GeodeDevice::AllocateBufferId() {
   return g_nextBufferId.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-GeodeDevice::GeodeDevice()
-    : impl_(std::make_unique<Impl>()),
-      deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1),
-      lostState_(std::make_shared<GeodeDeviceLostState>()) {}
+GeodeDevice::GeodeDevice() : GeodeDevice(GeodePhysicalDeviceOwner::CreateOwned()) {}
+
+GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice)
+    : physicalDevice_(std::move(physicalDevice)),
+      impl_(std::make_unique<Impl>()),
+      deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1) {
+  UTILS_RELEASE_ASSERT(physicalDevice_ != nullptr);
+}
 
 GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
   if (lock.owns_lock() && owner && context) {
@@ -392,61 +456,24 @@ GeodeDevice::~GeodeDevice() {
   // on a hung driver can block forever, in the worst case in uninterruptible
   // kernel sleep, and a leak is strictly better than a hung thread.
 #ifndef __EMSCRIPTEN__
-  if (device_ && queue_) {
+  if (device() && queue()) {
     waitForQueueIdle();
   }
 #endif
-  wgpu::Instance instance;
-  if (!external_ && impl_) {
-    instance = impl_->instance;
-    impl_->instance = wgpu::Instance();
-  }
   drainDeferredDestroys();
   impl_.reset();
-  if (device_) {
+  if (device()) {
 #ifndef __EMSCRIPTEN__
     // Second drain after the pipelines and pooled resources released above;
     // returns immediately if the first wait already declared the device lost.
     waitForQueueIdle();
 #endif
   }
-
-  if (external_) {
-    queue_ = wgpu::Queue();
-    device_ = wgpu::Device();
-    adapter_ = wgpu::Adapter();
-    ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/false);
-    return;
-  }
-
-  if (isDeviceLost()) {
-    // Deliberate leak: destroying or releasing the root handles of a hung
-    // device can block inside the driver with no bound. Abandon them; the
-    // process has already lost GPU rendering on this device.
-    //
-    // Post-loss teardown is wait-free, not driver-free: drainDeferredDestroys
-    // and the Impl reset above still issued release/destroy calls into the
-    // client library for pooled textures, buffers, and pipelines. Those are
-    // refcount drops and deferred-destroy marks that do not wait on GPU
-    // completion; only the root-handle destroy/release below, which can
-    // trigger a blocking device drain, is skipped.
-    ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/false);
-    return;
-  }
-
-  ReleaseWgpuHandle(queue_);
-  if (device_) {
-    device_.destroy();
-  }
-  ReleaseWgpuHandle(device_);
-  ReleaseWgpuHandle(adapter_);
-  ReleaseWgpuHandle(instance);
-  ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/true);
 }
 
 bool GeodeDevice::pollSuspending(bool wait) const {
   const ScopedSuspendPoint suspend(SuspendKind::DeviceWait);
-  return device_.poll(wait, nullptr);
+  return device().poll(wait, nullptr);
 }
 
 namespace {
@@ -460,7 +487,7 @@ void LogDeclaredDeviceLoss(const char* reason) {
 }  // namespace
 
 void GeodeDevice::markDeviceLost(const char* reason) const {
-  if (DeclareDeviceLost(*lostState_)) {
+  if (DeclareDeviceLost(*physicalDevice_->lostState())) {
     LogDeclaredDeviceLoss(reason);
   }
 }
@@ -468,7 +495,7 @@ void GeodeDevice::markDeviceLost(const char* reason) const {
 void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
                                                  std::chrono::milliseconds elapsed,
                                                  const char* reason) const {
-  if (DeclareDeviceLostAfterWaitTimeout(*lostState_, site, elapsed)) {
+  if (DeclareDeviceLostAfterWaitTimeout(*physicalDevice_->lostState(), site, elapsed)) {
     LogDeclaredDeviceLoss(reason);
   }
 }
@@ -487,7 +514,7 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
     }
     return result;
   }
-  if (!device_) {
+  if (!device()) {
     return GpuWaitResult::Complete;
   }
 #ifdef __EMSCRIPTEN__
@@ -535,8 +562,10 @@ GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
       .deviceLost = isDeviceLost(),
       // Acquire on the site pairs with its release store, so a non-empty site
       // guarantees the elapsed time written before it is visible too.
-      .timedOutWaitSite = lostState_->timedOutSite.load(std::memory_order_acquire),
-      .timedOutWaitMs = lostState_->timedOutElapsedMs.load(std::memory_order_relaxed),
+      .timedOutWaitSite =
+          physicalDevice_->lostState()->timedOutSite.load(std::memory_order_acquire),
+      .timedOutWaitMs =
+          physicalDevice_->lostState()->timedOutElapsedMs.load(std::memory_order_relaxed),
       .captureCancellations = readbackCaptureCancellations_.exchange(0, std::memory_order_relaxed),
       .captureTimeouts = readbackCaptureTimeouts_.exchange(0, std::memory_order_relaxed),
       .contextCreates = readbackContextCreates_.exchange(0, std::memory_order_relaxed),
@@ -607,17 +636,11 @@ GeodeDevice::SnapshotCaptureLease GeodeDevice::acquireSnapshotCapture(
     return lease;
   }
   if (!impl_->snapshotCaptureContext) {
-    auto context = std::unique_ptr<GeodeDevice>(new GeodeDevice());
-    context->external_ = true;
+    auto context = std::unique_ptr<GeodeDevice>(new GeodeDevice(physicalDevice_));
     context->readbackOnly_ = true;
-    context->device_ = device_;
-    context->queue_ = queue_;
-    context->adapter_ = adapter_;
     context->textureFormat_ = textureFormat_;
     context->maxTextureDimension2D_ = maxTextureDimension2D_;
     context->isVulkan_ = isVulkan_;
-    context->lostState_ = lostState_;
-    context->impl_->instance = instance();
     context->impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*context);
     context->impl_->runtimeDeviceId = context->impl_->adapterDevice->deviceId();
     context->counters_ = &context->isolatedReadbackCounters_;
@@ -701,8 +724,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
   instanceDescriptor.requiredFeatureCount = 1;
   instanceDescriptor.requiredFeatures = &timedWaitFeature;
-  result->impl_->instance = wgpu::Instance(wgpuCreateInstance(&instanceDescriptor));
-  if (!result->impl_->instance) {
+  result->physicalDevice_->instance_ = wgpu::Instance(wgpuCreateInstance(&instanceDescriptor));
+  if (!result->physicalDevice_->instance_) {
     std::fprintf(stderr, "[Geode/emscripten] wgpuCreateInstance returned null.\n");
     return nullptr;
   }
@@ -714,7 +737,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   // TimedWaitAny below.
   BrowserImportState state;
   WGPUDevice importedDevice = nullptr;
-  G(&state.device, result->impl_->instance);
+  G(&state.device, result->physicalDevice_->instance_);
   while ((importedDevice = state.device.load(std::memory_order_acquire)) == nullptr) {
     emscripten_sleep(1);
   }
@@ -722,9 +745,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
     std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device request failed.\n");
     return nullptr;
   }
-  result->device_ = wgpu::Device(importedDevice);
-  result->queue_ = result->device_.getQueue();
-  if (!result->queue_) {
+  result->physicalDevice_->device_ = wgpu::Device(importedDevice);
+  result->physicalDevice_->queue_ = result->physicalDevice_->device_.getQueue();
+  if (!result->physicalDevice_->queue_) {
     std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device returned no queue.\n");
     return nullptr;
   }
@@ -741,8 +764,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   //    is synchronous and never blocks on I/O; the returned handle is
   //    the root of the object graph.
   const wgpu::BackendType headlessBackend = RequestedHeadlessBackend();
-  result->impl_->instance = CreateHeadlessInstance(headlessBackend);
-  if (!result->impl_->instance) {
+  result->physicalDevice_->instance_ = CreateHeadlessInstance(headlessBackend);
+  if (!result->physicalDevice_->instance_) {
     std::fprintf(stderr, "[Geode/wgpu-native] wgpuCreateInstance returned null\n");
     return nullptr;
   }
@@ -770,8 +793,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   constexpr int kMaxAdapterRetries = 3;
   constexpr int kAdapterBackoffMs[kMaxAdapterRetries] = {50, 200, 800};
   for (int attempt = 0;; ++attempt) {
-    result->adapter_ = result->impl_->instance.requestAdapter(adapterOptions);
-    if (result->adapter_) {
+    result->physicalDevice_->adapter_ =
+        result->physicalDevice_->instance_.requestAdapter(adapterOptions);
+    if (result->physicalDevice_->adapter_) {
       break;  // Adapter acquired.
     }
 
@@ -800,7 +824,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
 #ifndef __EMSCRIPTEN__
   {
     WGPUAdapterInfo info = {};
-    if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
+    if (wgpuAdapterGetInfo(result->physicalDevice_->adapter_, &info) == WGPUStatus_Success) {
       auto sv = [](const WGPUStringView& s) {
         return std::string_view{s.data ? s.data : "", s.data ? s.length : 0};
       };
@@ -853,9 +877,6 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   //
   wgpu::DeviceDescriptor deviceDesc = {};
   deviceDesc.label = wgpu::StringView{std::string_view{"GeodeDevice"}};
-  deviceDesc.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
-  deviceDesc.deviceLostCallbackInfo.callback = OnDeviceLost;
-  deviceDesc.deviceLostCallbackInfo.userdata2 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.callback = OnUncapturedError;
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
@@ -884,14 +905,13 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
     // OnDeviceLost (including the Destroyed-at-teardown delivery). An attempt
     // that returns a null device strands at most one small retained block,
     // bounded by the retry count.
-    deviceDesc.deviceLostCallbackInfo.userdata1 = CreateDeviceLostCallbackToken(result->lostState_);
-    result->device_ = result->adapter_.requestDevice(deviceDesc);
-    if (result->device_) {
-      result->deviceLostCallbackToken_ = deviceDesc.deviceLostCallbackInfo.userdata1;
+    result->physicalDevice_->configureDeviceLostCallback(deviceDesc);
+    result->physicalDevice_->device_ = result->physicalDevice_->adapter_.requestDevice(deviceDesc);
+    if (result->physicalDevice_->device_) {
       break;  // Device created successfully.
     }
 
-    ReleaseDeviceLostCallbackToken(deviceDesc.deviceLostCallbackInfo.userdata1,
+    ReleaseDeviceLostCallbackToken(result->physicalDevice_->deviceLostCallbackToken_,
                                    /*callbackCannotRun=*/true);
 
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
@@ -909,8 +929,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   }
 
   // 4. Grab the default queue.
-  result->queue_ = result->device_.getQueue();
-  if (!result->queue_) {
+  result->physicalDevice_->queue_ = result->physicalDevice_->device_.getQueue();
+  if (!result->physicalDevice_->queue_) {
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to get queue.\n");
     return nullptr;
   }
@@ -1036,9 +1056,6 @@ void GeodeDevice::releaseSnapshotReadbackResources(SnapshotReadbackResources res
     impl_->snapshotReadbackPool.erase(lruIt);
   }
 }
-const wgpu::Instance& GeodeDevice::instance() const {
-  return impl_->instance;
-}
 GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
   if (!impl_->checkerboardPipeline) {
     // Lazy: only the editor's direct framebuffer presentation draws the
@@ -1063,37 +1080,43 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
-  if (!config.device || !config.queue) {
+  std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice = config.physicalDevice;
+  if (physicalDevice != nullptr &&
+      ((config.lostState && config.lostState != physicalDevice->lostState()) ||
+       (config.instance && static_cast<WGPUInstance>(config.instance) !=
+                               static_cast<WGPUInstance>(physicalDevice->instance())) ||
+       (config.adapter && static_cast<WGPUAdapter>(config.adapter) !=
+                              static_cast<WGPUAdapter>(physicalDevice->adapter())) ||
+       (config.device && static_cast<WGPUDevice>(config.device) !=
+                             static_cast<WGPUDevice>(physicalDevice->device())) ||
+       (config.queue &&
+        static_cast<WGPUQueue>(config.queue) != static_cast<WGPUQueue>(physicalDevice->queue())))) {
+    std::fprintf(stderr,
+                 "[Geode] CreateFromExternal: physical owner and explicit state disagree\n");
+    return nullptr;
+  }
+  if (physicalDevice == nullptr) {
+    physicalDevice = GeodePhysicalDeviceOwner::CreateBorrowed(
+        config.instance, config.adapter, config.device, config.queue, config.lostState);
+  }
+  if (!physicalDevice->device() || !physicalDevice->queue()) {
     std::fprintf(stderr, "[Geode] CreateFromExternal: null device or queue in config\n");
     return nullptr;
   }
 
-  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
-  result->external_ = true;
-  if (config.lostState) {
-    // Share the host's device-lost flag so a loss reported through the
-    // host's device-lost callback and a bounded-wait timeout inside Geode
-    // surface as the same isDeviceLost() condition.
-    result->lostState_ = config.lostState;
-  }
-  result->device_ = config.device;
-  result->queue_ = config.queue;
+  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice(std::move(physicalDevice)));
   result->textureFormat_ = config.textureFormat;
   // The raw wrapper does not release on destruction. Keep the host instance
   // available for event dispatch without taking ownership of it.
-  result->impl_->instance = config.instance;
-
   // Preserve the host-provided adapter for callers that need adapter metadata.
-  if (config.adapter) {
-    result->adapter_ = config.adapter;
-
+  if (result->adapter()) {
     // Detect a Vulkan backend on the embedder-supplied adapter the same way
     // CreateHeadless() does, so the filter-engine inter-pass serialization
     // (see isVulkan()) also protects external Vulkan devices.
 #ifndef __EMSCRIPTEN__
     {
       WGPUAdapterInfo info = {};
-      if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
+      if (wgpuAdapterGetInfo(result->adapter(), &info) == WGPUStatus_Success) {
         // If wgpuAdapterGetInfo fails on a real Vulkan device the fix
         // silently disables (accepted residual risk).
         result->isVulkan_ = (info.backendType == WGPUBackendType_Vulkan);
@@ -1103,7 +1126,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
 #endif
   }
 
-  result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
+  result->supportsTimestamps_ = result->device().hasFeature(wgpu::FeatureName::TimestampQuery);
 
   result->initSharedResources();
   result->initSharedPipelines();
@@ -1113,7 +1136,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
 
 void GeodeDevice::initSharedResources() {
   wgpu::Limits limits;
-  if (device_.getLimits(&limits) == wgpu::Status::Success &&
+  if (device().getLimits(&limits) == wgpu::Status::Success &&
       limits.maxTextureDimension2D != WGPU_LIMIT_U32_UNDEFINED &&
       limits.maxTextureDimension2D > 0) {
     maxTextureDimension2D_ = limits.maxTextureDimension2D;
@@ -1281,7 +1304,7 @@ GeodeMaskPipeline& GeodeGpuContext::maskPipeline() const {
 }
 
 void GeodeDevice::initSharedPipelines() {
-  // Requires device_ / queue_ / textureFormat_ to be fully populated.
+  // Requires the physical device/queue and textureFormat_ to be fully populated.
   // `CreateHeadless` and `CreateFromExternal` both call this as the final step.
   const gpu::TextureFormat fmt = GpuTextureFormatFromWgpu(textureFormat_);
 
