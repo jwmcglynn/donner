@@ -281,7 +281,11 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
   }
   return wgpu::createInstance();
 }
+
+}  // namespace
 #endif
+
+namespace {
 
 template <typename Handle>
 void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
