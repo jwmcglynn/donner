@@ -275,12 +275,14 @@ TEST(ImageLoader, RejectsPngWithTruncatedDeclaredIdat) {
 
 TEST(ImageLoader, LoadsPngWithAncillaryChunkAndSplitIdat) {
   // The declared-length walk must accept well-formed PNGs that carry ancillary
-  // chunks and split the zlib stream across multiple IDAT chunks.
+  // chunks and split the zlib stream across multiple IDAT chunks. Both IDAT
+  // chunks carry zero CRCs; stb_image reads and discards chunk CRCs without
+  // verifying them.
   StaticResourceLoader resourceLoader(std::vector<uint8_t>{
       0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  // PNG signature
       0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R',   // IHDR, 13 bytes
       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,  // 1x1
-      0x08, 0x04, 0x00, 0x00, 0x00,                    // 8-bit RGBA
+      0x08, 0x04, 0x00, 0x00, 0x00,                    // bit depth 8, grayscale+alpha
       0xB5, 0x1C, 0x0C, 0x02,                          // IHDR CRC
       0x00, 0x00, 0x00, 0x00, 't',  'E',  'X',  't',   // empty tEXt chunk
       0x00, 0x00, 0x00, 0x00,                          // CRC (stb_image does not verify it)
