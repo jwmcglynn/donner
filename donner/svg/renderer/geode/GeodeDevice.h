@@ -73,7 +73,8 @@ public:
   GeodePhysicalDeviceOwner(const GeodePhysicalDeviceOwner&) = delete;
   GeodePhysicalDeviceOwner& operator=(const GeodePhysicalDeviceOwner&) = delete;
 
-  /// Borrowed raw roots remain valid while this owner is retained.
+private:
+  /// Borrowed raw roots remain valid while a friend-owned logical context retains this owner.
   const wgpu::Instance& instance() const UTILS_LIFETIME_BOUND { return instance_; }
   const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return adapter_; }
   const wgpu::Device& device() const UTILS_LIFETIME_BOUND { return device_; }
@@ -84,7 +85,6 @@ public:
   }
   bool ownsRootHandles() const { return ownsRootHandles_; }
 
-private:
   /// Creates an empty owned root set populated incrementally by a trusted factory.
   static std::shared_ptr<GeodePhysicalDeviceOwner> CreateOwned(
       std::shared_ptr<GeodeDeviceLostState> lostState = nullptr);
@@ -197,9 +197,9 @@ struct GeodeEmbedConfig {
  * mode** (`CreateHeadless`), it creates a WebGPU instance, selects a default
  * adapter, and creates a device - all without any window system integration.
  *
- * In **embedded mode** (`CreateFromExternal`), it wraps a device and queue
- * already created by the host application. The host retains ownership of the
- * underlying WebGPU objects; GeodeDevice's destructor will not destroy them.
+ * In **embedded mode** (`CreateFromExternal`), it creates a logical context
+ * over either host-owned raw roots or a shared physical owner. Raw-root mode
+ * remains borrowed; shared-owner mode retains that owner's ownership contract.
  *
  * Typical headless usage:
  *
@@ -430,7 +430,8 @@ public:
   const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return physicalDevice_->adapter(); }
 
   /// Physical root lifetime shared by logical contexts using the same backend device.
-  /// Retains the physical roots and sticky loss state shared by this logical context.
+  /// Opaque lifetime token shared by logical contexts over the same physical roots.
+  /// Raw roots remain accessible only through a retained logical context.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDeviceOwner() const { return physicalDevice_; }
 
   /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;

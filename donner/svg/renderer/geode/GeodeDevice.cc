@@ -1079,23 +1079,27 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 namespace {
 
 bool EmbedConfigMatchesPhysicalDevice(const GeodeEmbedConfig& config,
-                                      const GeodePhysicalDeviceOwner& physicalDevice) {
-  return (!config.lostState || config.lostState == physicalDevice.lostState()) &&
-         (!config.instance || static_cast<WGPUInstance>(config.instance) ==
-                                  static_cast<WGPUInstance>(physicalDevice.instance())) &&
-         (!config.adapter || static_cast<WGPUAdapter>(config.adapter) ==
-                                 static_cast<WGPUAdapter>(physicalDevice.adapter())) &&
-         (!config.device || static_cast<WGPUDevice>(config.device) ==
-                                static_cast<WGPUDevice>(physicalDevice.device())) &&
-         (!config.queue ||
-          static_cast<WGPUQueue>(config.queue) == static_cast<WGPUQueue>(physicalDevice.queue()));
+                                      const std::shared_ptr<GeodeDeviceLostState>& lostState,
+                                      const wgpu::Instance& instance, const wgpu::Adapter& adapter,
+                                      const wgpu::Device& device, const wgpu::Queue& queue) {
+  return (!config.lostState || config.lostState == lostState) &&
+         (!config.instance ||
+          static_cast<WGPUInstance>(config.instance) == static_cast<WGPUInstance>(instance)) &&
+         (!config.adapter ||
+          static_cast<WGPUAdapter>(config.adapter) == static_cast<WGPUAdapter>(adapter)) &&
+         (!config.device ||
+          static_cast<WGPUDevice>(config.device) == static_cast<WGPUDevice>(device)) &&
+         (!config.queue || static_cast<WGPUQueue>(config.queue) == static_cast<WGPUQueue>(queue));
 }
 
 }  // namespace
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice = config.physicalDevice;
-  if (physicalDevice != nullptr && !EmbedConfigMatchesPhysicalDevice(config, *physicalDevice)) {
+  if (physicalDevice != nullptr &&
+      !EmbedConfigMatchesPhysicalDevice(config, physicalDevice->lostState_,
+                                        physicalDevice->instance_, physicalDevice->adapter_,
+                                        physicalDevice->device_, physicalDevice->queue_)) {
     std::fprintf(stderr,
                  "[Geode] CreateFromExternal: physical owner and explicit state disagree\n");
     return nullptr;
