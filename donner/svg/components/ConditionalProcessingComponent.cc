@@ -82,8 +82,18 @@ bool SystemLanguageMatches(std::string_view systemLanguage, std::string_view use
   return false;
 }
 
-bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional,
-                                   std::span<const RcString> userLanguages) {
+std::optional<size_t> SystemLanguageMatchRank(std::string_view systemLanguage,
+                                              std::span<const RcString> userLanguages) {
+  for (size_t i = 0; i < userLanguages.size(); ++i) {
+    if (SystemLanguageMatches(systemLanguage, userLanguages[i])) {
+      return i;
+    }
+  }
+
+  return std::nullopt;
+}
+
+bool NonLanguageConditionalProcessingPasses(const ConditionalProcessingComponent& conditional) {
   // `requiredFeatures` is deprecated in SVG2 and always evaluates to true (matching resvg, which
   // ignores it) - intentionally not checked here.
 
@@ -95,19 +105,19 @@ bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditi
     }
   }
 
+  return true;
+}
+
+bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional,
+                                   std::span<const RcString> userLanguages) {
+  if (!NonLanguageConditionalProcessingPasses(conditional)) {
+    return false;
+  }
+
   if (conditional.systemLanguage.has_value()) {
     // The attribute passes if any user-preferred language matches. An empty language list
     // therefore evaluates any present `systemLanguage` to false.
-    bool matched = false;
-    for (const RcString& userLanguage : userLanguages) {
-      if (SystemLanguageMatches(*conditional.systemLanguage, userLanguage)) {
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) {
-      return false;
-    }
+    return SystemLanguageMatchRank(*conditional.systemLanguage, userLanguages).has_value();
   }
 
   return true;

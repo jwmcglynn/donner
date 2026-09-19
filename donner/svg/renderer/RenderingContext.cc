@@ -397,6 +397,53 @@ bool IsSwitchProcessedElementType(ElementType type) {
   }
 }
 
+/**
+ * Selection score for one `<switch>` child. Ineligible children (wrong element type, failing
+ * non-language conditionals, or unmatched `systemLanguage`) never render. Eligible children
+ * either carry a language rank or are unconditional fallbacks.
+ */
+struct SwitchChildScore {
+  bool eligible = false;
+  bool hasLanguage = false;
+  size_t languageRank = 0;
+};
+
+/**
+ * Scores one `<switch>` child for selection against the user's preferred languages.
+ *
+ * @param registry Document registry holding the child entity.
+ * @param child Direct child entity of the `<switch>` element (or its shadow instance).
+ * @param userLanguages User's preferred languages, in priority order.
+ * @return The child's selection score.
+ */
+SwitchChildScore ScoreSwitchChild(Registry& registry, Entity child,
+                                  const std::vector<RcString>& userLanguages) {
+  const auto* shadowEntityComponent = registry.try_get<ShadowEntityComponent>(child);
+  const EntityHandle childDataHandle(
+      registry, shadowEntityComponent ? shadowEntityComponent->lightEntity : child);
+
+  const auto* typeComponent = childDataHandle.try_get<ElementTypeComponent>();
+  if (!typeComponent || !IsSwitchProcessedElementType(typeComponent->type())) {
+    return {};
+  }
+
+  const auto* conditional = childDataHandle.try_get<ConditionalProcessingComponent>();
+  if (conditional && !NonLanguageConditionalProcessingPasses(*conditional)) {
+    return {};
+  }
+
+  if (!conditional || !conditional->systemLanguage.has_value()) {
+    return {.eligible = true, .hasLanguage = false, .languageRank = 0};
+  }
+
+  const std::optional<size_t> rank =
+      SystemLanguageMatchRank(*conditional->systemLanguage, userLanguages);
+  if (!rank.has_value()) {
+    return {};
+  }
+  return {.eligible = true, .hasLanguage = true, .languageRank = *rank};
+}
+
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
@@ -789,8 +836,8 @@ public:
     if (prepared->traverseChildren) {
       const auto& tree = registry_.get<donner::components::TreeComponent>(treeEntity);
       if (prepared->selectSwitchChild) {
-        // <switch> renders only the first direct child whose conditional-processing attributes
-        // all evaluate to true.
+        // <switch> renders only its selected child: the best language match, else the first
+        // unconditional fallback.
         if (const Entity selectedChild = selectSwitchChild(tree); selectedChild != entt::null) {
           traverseTree(selectedChild);
         }
@@ -817,36 +864,46 @@ public:
   }
 
   /**
-   * Select the first direct child of a \ref xml_switch whose conditional-processing attributes
-   * all evaluate to true. Non-element children (comments, text) and children that are not
-   * directly-rendered element types (descriptive elements, `defs`, `symbol`, unknown elements) are
-   * never selected and do not consume the selection slot. `display` does not participate in
-   * selection, so a selected child with `display: none` still wins and renders nothing.
+   * Select the direct child of a \ref xml_switch to render: the language-conditioned child
+   * matching the highest-priority user language, or the first unconditional child when no
+   * language-conditioned child matches. Language matches at the same priority tie-break by
+   * document order, as do unconditional fallbacks.
+   *
+   * Non-element children (comments, text) and children that are not directly-rendered element
+   * types (descriptive elements, `defs`, `symbol`, unknown elements) are never selected.
+   * Children failing non-language conditionals (`requiredExtensions`) are ineligible regardless
+   * of language. `display` does not participate in selection, so a selected child with
+   * `display: none` still wins and renders nothing.
    *
    * @param switchTree Tree component of the `<switch>` element (or its shadow instance).
    * @return The selected child entity, or `entt::null` if no child matches.
    */
   Entity selectSwitchChild(const donner::components::TreeComponent& switchTree) const {
+    Entity fallbackChild = entt::null;
+    Entity bestChild = entt::null;
+    std::optional<size_t> bestRank;
+
     for (Entity cur = switchTree.firstChild(); cur != entt::null;
          cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
-      const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(cur);
-      const EntityHandle childDataHandle(
-          registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : cur);
-
-      const auto* typeComponent = childDataHandle.try_get<ElementTypeComponent>();
-      if (!typeComponent || !IsSwitchProcessedElementType(typeComponent->type())) {
+      const SwitchChildScore score = ScoreSwitchChild(registry_, cur, userLanguages_);
+      if (!score.eligible) {
         continue;
       }
 
-      if (const auto* conditional = childDataHandle.try_get<ConditionalProcessingComponent>();
-          conditional && !EvaluateConditionalProcessing(*conditional, userLanguages_)) {
+      if (!score.hasLanguage) {
+        if (fallbackChild == entt::null) {
+          fallbackChild = cur;
+        }
         continue;
       }
 
-      return cur;
+      if (!bestRank.has_value() || score.languageRank < *bestRank) {
+        bestChild = cur;
+        bestRank = score.languageRank;
+      }
     }
 
-    return entt::null;
+    return bestChild != entt::null ? bestChild : fallbackChild;
   }
 
   bool collectClipPaths(EntityHandle clipPathHandle,
