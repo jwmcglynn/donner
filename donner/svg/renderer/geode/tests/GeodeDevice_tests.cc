@@ -69,6 +69,16 @@ TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
   EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before);
 }
 
+TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingLostState) {
+  auto ownerContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(ownerContext, nullptr);
+
+  GeodeEmbedConfig config;
+  config.physicalDevice = ownerContext->physicalDeviceOwner();
+  config.lostState = std::make_shared<GeodeDeviceLostState>();
+  EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
+}
+
 /// Can we allocate an offscreen render-target texture?
 TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   auto device = GeodeDevice::CreateHeadless();
