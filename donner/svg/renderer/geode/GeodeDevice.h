@@ -157,10 +157,6 @@ struct SnapshotReadbackResources {
  * same `physicalDevice` to each config and omit the raw root fields.
  */
 struct GeodeEmbedConfig {
-  /// Optional shared physical owner. When present, the raw root fields below must either be null
-  /// or name the same roots. Multiple logical contexts use this to share root lifetime and loss.
-  std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice;
-
   /// Optional host-provided WebGPU instance. May be null when `physicalDevice` supplies it. Browser
   /// embedders should provide it so synchronous snapshot readback can wait for map callback
   /// completion through `Instance::waitAny()`.
@@ -188,6 +184,10 @@ struct GeodeEmbedConfig {
   /// creates a private flag that only bounded-wait timeouts can set. When `physicalDevice` is set,
   /// this must be null or pointer-identical to the owner's loss state.
   std::shared_ptr<GeodeDeviceLostState> lostState;
+
+  /// Optional shared physical owner. When present, the raw root fields above must either be null
+  /// or name the same roots. Appended to preserve legacy positional aggregate initialization.
+  std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice;
 };
 
 /**

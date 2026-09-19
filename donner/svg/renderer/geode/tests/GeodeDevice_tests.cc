@@ -79,6 +79,16 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingLostState) {
   EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
 }
 
+TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
+  auto ownerContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(ownerContext, nullptr);
+
+  GeodeEmbedConfig config{ownerContext->instance(), ownerContext->device(),
+                          ownerContext->queue(),    wgpu::TextureFormat::RGBA8Unorm,
+                          ownerContext->adapter(),  std::make_shared<GeodeDeviceLostState>()};
+  EXPECT_NE(GeodeDevice::CreateFromExternal(config), nullptr);
+}
+
 TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
   auto ownerContext = GeodeDevice::CreateHeadless();
   ASSERT_NE(ownerContext, nullptr);
