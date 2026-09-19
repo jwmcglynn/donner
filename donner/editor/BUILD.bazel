@@ -145,6 +145,7 @@ donner_cc_library(
         ":overlay_renderer",
         ":viewport_state",
         "//donner/base",
+        "//donner/base/xml",
         "//donner/svg",
     ],
 )

@@ -449,6 +449,128 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
   EXPECT_THAT(result.value, Not(HasSubstr("svg-not-root")));
 }
 
+// Regression tests carried from PR #1308, which this token-based exporter
+// supersedes. Each shape once desynchronized the old hand-rolled scan from the
+// XML parser; all markup boundaries below now come from the shared tokenizer.
+
+TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarkup) {
+  // A processing instruction whose content contains `>` followed by an `<svg>`
+  // element forms one opaque PI token, so the PI-embedded element is never
+  // mistaken for the document root.
+  const SVGDocument doc = ParseOrDie(
+      "<?editor data=\"a>b\"><svg id=\"not-the-root\" width=\"0\"/>?>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+}
+
+TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
+  // A `?>` inside a quoted declaration value does not end the declaration
+  // (the tokenizer skips quoted spans, mirroring the parser), so the markup
+  // that follows it is not treated as the document root.
+  const SVGDocument doc = ParseOrDie(
+      "<?xml version=\"1.0\" data='a?><svg id=\"not-the-root\" width=\"0\"/>'?>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+}
+
+TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
+  // A `>` inside a doctype internal subset does not end the doctype; the whole
+  // doctype is one token, so subset content cannot become the root.
+  const SVGDocument doc = ParseOrDie(
+      "<!DOCTYPE svg [<!ENTITY data \"a> <svg id='not-the-root' width='0'/>\">]>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+}
+
+TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
+  // A `</svg` sequence after the root inside a trailing comment sits inside a
+  // Comment token and cannot be mistaken for the root's closing tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>"
+      "<!-- trailing </svg> -->");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("trailing")));
+}
+
+TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
+  // Brackets inside a quoted `<!ENTITY>` value do not affect internal-subset
+  // nesting (mirroring the parser's quote-aware entity skip), so the doctype
+  // extends past them to its real `>`.
+  const SVGDocument doc = ParseOrDie(
+      "<!DOCTYPE svg [<!ENTITY data ']><svg id=\"not-the-root\">'>]>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+}
+
+TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
+  // A doctype inside the body whose entity value contains markup-like text is
+  // one token; the body still ends at the root's own `</svg>`, leaving the
+  // exported group balanced with a single close tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<!DOCTYPE d [<!ENTITY y ']><svg id=\"faux\">'>]>"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_EQ(result.value.find("</svg>"), result.value.rfind("</svg>"));
+}
+
 TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
   for (std::string_view prefix : {"<!--", "<?editor"}) {
     SCOPED_TRACE(prefix);
@@ -784,6 +906,40 @@ TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercas
 
   EXPECT_FALSE(result.ok());
   EXPECT_THAT(result.error, HasSubstr("HTTPS://example.com/image.png"));
+}
+
+TEST(ViewportSvgExportTest, ExternalReferenceInCommentIsIgnored) {
+  // Only real parsed attributes are inspected: an `href` inside a comment is
+  // inert, so it must not refuse the export.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<!-- <image href=\"https://example.com/commented-out.png\"/> -->"
+      "<rect id=\"content\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("id=\"content\""));
+}
+
+TEST(ViewportSvgExportTest, DataHrefAttributeIsRefused) {
+  // Attribute names ending in "href" keep the historical conservative match.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect data-href=\"https://example.com/data.png\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("https://example.com/data.png"));
 }
 
 // --- Overlay serialization -----------------------------------------------

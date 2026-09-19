@@ -11,6 +11,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLTokenizer.h"
 #include "donner/editor/OverlayRenderer.h"
 
 namespace donner::editor {
@@ -139,170 +140,213 @@ struct RootTag {
   bool found = false;
 };
 
-/// Find the byte offset of the root `<svg` open tag, skipping the XML
-/// declaration, comments, doctype, and processing instructions.
-std::size_t FindRootSvgStart(std::string_view source) {
-  std::size_t pos = 0;
-  while (pos < source.size()) {
-    if (source[pos] != '<') {
-      ++pos;
-      continue;
-    }
-    if (MatchesAtCaseInsensitive(source, pos, "<!--")) {
-      const std::size_t end = source.find("-->", pos + 4);
-      pos = (end == std::string_view::npos) ? source.size() : end + 3;
-      continue;
-    }
-    if (pos + 1 < source.size() && (source[pos + 1] == '?' || source[pos + 1] == '!')) {
-      const std::size_t end = source.find('>', pos);
-      pos = (end == std::string_view::npos) ? source.size() : end + 1;
-      continue;
-    }
-    if (MatchesAtCaseInsensitive(source, pos, "<svg") && pos + 4 < source.size()) {
-      const char after = source[pos + 4];
-      if (after == ' ' || after == '\t' || after == '\n' || after == '\r' || after == '>' ||
-          after == '/') {
-        return pos;
-      }
-    }
-    ++pos;
-  }
-  return std::string_view::npos;
+/// Returns true if \p text is the element name "svg" in ASCII
+/// case-insensitive comparison. The token stream already isolated the name, so
+/// no terminator check is needed.
+bool IsSvgTagName(std::string_view text) {
+  return text.size() == 3 && MatchesAtCaseInsensitive(text, 0, "svg");
 }
 
-/// Parse the root `<svg>` open tag attributes and locate the body bounds.
-RootTag ParseRootTag(std::string_view source) {
-  RootTag result;
-  const std::size_t start = FindRootSvgStart(source);
-  if (start == std::string_view::npos) {
-    return result;
+/// Byte offsets of a token's source range. The token stream is gap-free, so
+/// every token resolves to concrete offsets.
+std::size_t TokenStart(const xml::XMLToken& token) {
+  return token.range.start.offset.value_or(0);
+}
+std::size_t TokenEnd(const xml::XMLToken& token) {
+  return token.range.end.offset.value_or(TokenStart(token));
+}
+
+/// Tokenize \p source with the shared XML tokenizer. All markup-boundary
+/// decisions below come from this stream: comments, CDATA sections, doctypes,
+/// processing instructions, and quoted attribute values are opaque single
+/// tokens, so markup-like text inside them can never be mistaken for elements.
+std::vector<xml::XMLToken> TokenizeSource(std::string_view source) {
+  std::vector<xml::XMLToken> tokens;
+  xml::Tokenize(source, [&](xml::XMLToken token) { tokens.push_back(token); });
+  return tokens;
+}
+
+/// Strip one surrounding quote pair from a quoted attribute-value token. The
+/// tokenizer only emits `AttributeValue` for values with both delimiters
+/// present, so the first and last bytes are always the quote characters.
+std::string_view UnquoteValue(std::string_view quoted) {
+  if (quoted.size() >= 2) {
+    return quoted.substr(1, quoted.size() - 2);
   }
+  return std::string_view();
+}
 
-  // Advance past "<svg".
-  std::size_t pos = start + 4;
-  // Parse attributes until the end of the open tag ('>' possibly preceded by '/').
-  while (pos < source.size()) {
-    // Skip whitespace.
-    while (pos < source.size() && (source[pos] == ' ' || source[pos] == '\t' ||
-                                   source[pos] == '\n' || source[pos] == '\r')) {
-      ++pos;
-    }
-    if (pos >= source.size()) {
-      return result;  // Malformed: no '>'.
-    }
-    if (source[pos] == '>' || source[pos] == '/') {
-      break;
-    }
+/// Result of locating the end of an element open tag in the token stream.
+struct TagEnd {
+  std::size_t index = 0;  ///< Index of the TagClose or TagSelfClose token.
+  bool selfClosing = false;
+  bool complete = false;  ///< False when the tag never terminates.
+};
 
-    // Parse attribute name.
-    const std::size_t nameStart = pos;
-    while (pos < source.size() && source[pos] != '=' && source[pos] != ' ' && source[pos] != '\t' &&
-           source[pos] != '\n' && source[pos] != '\r' && source[pos] != '>' && source[pos] != '/') {
-      ++pos;
+/// Find the TagClose or TagSelfClose token terminating the open tag whose
+/// TagName is at \p nameIndex. Returns an incomplete result when error
+/// recovery intervenes: an unterminated tag is not an element boundary.
+TagEnd FindOpenTagEnd(const std::vector<xml::XMLToken>& tokens, std::size_t nameIndex) {
+  TagEnd result;
+  for (std::size_t j = nameIndex + 1; j < tokens.size(); ++j) {
+    const xml::XMLTokenType type = tokens[j].type;
+    if (type == xml::XMLTokenType::TagClose) {
+      result.index = j;
+      result.complete = true;
+      return result;
     }
-    Attribute attribute;
-    attribute.name.assign(source.substr(nameStart, pos - nameStart));
-
-    // Skip whitespace before '='.
-    while (pos < source.size() && (source[pos] == ' ' || source[pos] == '\t' ||
-                                   source[pos] == '\n' || source[pos] == '\r')) {
-      ++pos;
+    if (type == xml::XMLTokenType::TagSelfClose) {
+      result.index = j;
+      result.selfClosing = true;
+      result.complete = true;
+      return result;
     }
-    if (pos < source.size() && source[pos] == '=') {
-      ++pos;  // Past '='.
-      while (pos < source.size() && (source[pos] == ' ' || source[pos] == '\t' ||
-                                     source[pos] == '\n' || source[pos] == '\r')) {
-        ++pos;
-      }
-      if (pos < source.size() && (source[pos] == '"' || source[pos] == '\'')) {
-        const char quote = source[pos];
-        ++pos;
-        const std::size_t valueStart = pos;
-        while (pos < source.size() && source[pos] != quote) {
-          ++pos;
-        }
-        attribute.value.assign(source.substr(valueStart, pos - valueStart));
-        if (pos < source.size()) {
-          ++pos;  // Past closing quote.
-        }
-      }
-    }
-    if (!attribute.name.empty()) {
-      result.attributes.push_back(std::move(attribute));
+    if (type == xml::XMLTokenType::TagOpen || type == xml::XMLTokenType::ErrorRecovery) {
+      return result;
     }
   }
-
-  // `pos` is at '>' or '/'. Find the end of the open tag.
-  const std::size_t openTagEnd = source.find('>', pos);
-  if (openTagEnd == std::string_view::npos) {
-    return result;
-  }
-  const bool selfClosing = openTagEnd > 0 && source[openTagEnd - 1] == '/';
-  result.bodyStart = openTagEnd + 1;
-  if (selfClosing) {
-    result.bodyEnd = openTagEnd - 1;  // No children.
-  } else {
-    const std::size_t closeTag = source.rfind("</svg");
-    result.bodyEnd = (closeTag == std::string_view::npos || closeTag < result.bodyStart)
-                         ? source.size()
-                         : closeTag;
-  }
-  result.found = true;
   return result;
 }
 
-/// Scan the source for external `href` / `xlink:href` references over
-/// `http://`, `https://`, or `file://`. Returns the offending value, or empty.
-std::string FindExternalReference(std::string_view source) {
+/// Parse the root `<svg>` open tag attributes and locate the body bounds from
+/// the shared token stream. The first top-level `<svg>` element is the root;
+/// nested `<svg>` elements are tracked so an inner close cannot be mistaken for
+/// the root's. A missing root close tag tolerates slicing to end-of-source
+/// (live editing may export mid-edit); anything that prevents locating a
+/// complete root open tag fails closed with `found == false`.
+RootTag ParseRootTag(std::string_view source, const std::vector<xml::XMLToken>& tokens) {
+  RootTag result;
+  std::size_t depth = 0;
+  for (std::size_t i = 0; i < tokens.size();) {
+    if (tokens[i].type != xml::XMLTokenType::TagOpen || i + 1 >= tokens.size() ||
+        tokens[i + 1].type != xml::XMLTokenType::TagName) {
+      ++i;
+      continue;
+    }
+    const bool isClosing = tokens[i].text(source).starts_with("</");
+    const std::string_view name = tokens[i + 1].text(source);
+    if (isClosing) {
+      if (depth > 0) {
+        --depth;
+      }
+      i += 2;  // The close tag's own TagClose needs no handling.
+      continue;
+    }
+    const TagEnd tagEnd = FindOpenTagEnd(tokens, i + 1);
+    if (!tagEnd.complete) {
+      ++i;  // An unterminated tag is not an element boundary.
+      continue;
+    }
+    if (depth == 0 && IsSvgTagName(name)) {
+      // Collect the root attributes in source order. Values are the raw source
+      // bytes (entities intact); the caller re-escapes them on output.
+      std::optional<std::size_t> awaitingValue;
+      for (std::size_t k = i + 2; k < tagEnd.index; ++k) {
+        if (tokens[k].type == xml::XMLTokenType::AttributeName) {
+          Attribute attribute;
+          attribute.name.assign(tokens[k].text(source));
+          result.attributes.push_back(std::move(attribute));
+          awaitingValue = result.attributes.size() - 1;
+        } else if (tokens[k].type == xml::XMLTokenType::AttributeValue &&
+                   awaitingValue.has_value()) {
+          result.attributes[*awaitingValue].value.assign(UnquoteValue(tokens[k].text(source)));
+          awaitingValue.reset();
+        }
+      }
+      result.bodyStart = TokenEnd(tokens[tagEnd.index]);
+      if (tagEnd.selfClosing) {
+        result.bodyEnd = result.bodyStart;  // No children.
+        result.found = true;
+        return result;
+      }
+      // Find the matching close tag, tracking nested `<svg>` elements. A
+      // `</svg` prefix counts as a close without requiring its `>`, matching
+      // the historical scan; anything else (including error recovery) is
+      // skipped.
+      std::size_t svgDepth = 1;
+      for (std::size_t k = tagEnd.index + 1; k < tokens.size();) {
+        if (tokens[k].type != xml::XMLTokenType::TagOpen || k + 1 >= tokens.size() ||
+            tokens[k + 1].type != xml::XMLTokenType::TagName) {
+          ++k;
+          continue;
+        }
+        if (!IsSvgTagName(tokens[k + 1].text(source))) {
+          ++k;
+          continue;
+        }
+        if (tokens[k].text(source).starts_with("</")) {
+          --svgDepth;
+          if (svgDepth == 0) {
+            result.bodyEnd = TokenStart(tokens[k]);
+            result.found = true;
+            return result;
+          }
+          ++k;
+          continue;
+        }
+        const TagEnd nestedEnd = FindOpenTagEnd(tokens, k + 1);
+        if (nestedEnd.complete && !nestedEnd.selfClosing) {
+          ++svgDepth;
+          k = nestedEnd.index + 1;
+        } else {
+          ++k;
+        }
+      }
+      result.bodyEnd = source.size();  // No matching close tag; use the remainder.
+      result.found = true;
+      return result;
+    }
+    if (!tagEnd.selfClosing) {
+      ++depth;
+    }
+    i = tagEnd.index + 1;
+  }
+  return result;
+}
+
+/// Scan attribute tokens for external `href` / `xlink:href` references over
+/// `http://`, `https://`, or `file://`. Only real parsed attributes are
+/// inspected: `href`-like text in comments, CDATA sections, processing
+/// instructions, or element text never forms AttributeName tokens. An
+/// attribute matches when its name ends with "href" (case-sensitive),
+/// preserving the historical substring match for real attributes. Returns the
+/// offending raw value, or empty.
+std::string FindExternalReference(std::string_view source,
+                                  const std::vector<xml::XMLToken>& tokens) {
   static constexpr std::array<std::string_view, 3> kExternalSchemes = {
       "http://",
       "https://",
       "file://",
   };
-  std::size_t pos = 0;
-  while (pos < source.size()) {
-    const std::size_t hrefPos = source.find("href", pos);
-    if (hrefPos == std::string_view::npos) {
-      break;
-    }
-    // Find the value following `href[whitespace]=[whitespace]quote...quote`.
-    std::size_t cursor = hrefPos + 4;
-    while (cursor < source.size() && (source[cursor] == ' ' || source[cursor] == '\t' ||
-                                      source[cursor] == '\n' || source[cursor] == '\r')) {
-      ++cursor;
-    }
-    if (cursor >= source.size() || source[cursor] != '=') {
-      pos = hrefPos + 4;
-      continue;
-    }
-    ++cursor;
-    while (cursor < source.size() && (source[cursor] == ' ' || source[cursor] == '\t' ||
-                                      source[cursor] == '\n' || source[cursor] == '\r')) {
-      ++cursor;
-    }
-    if (cursor >= source.size() || (source[cursor] != '"' && source[cursor] != '\'')) {
-      pos = hrefPos + 4;
-      continue;
-    }
-    const char quote = source[cursor];
-    ++cursor;
-    const std::size_t valueStart = cursor;
-    while (cursor < source.size() && source[cursor] != quote) {
-      ++cursor;
-    }
-    const std::string_view value = source.substr(valueStart, cursor - valueStart);
-    // Skip leading whitespace inside the value when scheme-matching.
-    std::size_t valueOffset = 0;
-    while (valueOffset < value.size() &&
-           (value[valueOffset] == ' ' || value[valueOffset] == '\t')) {
-      ++valueOffset;
-    }
-    for (const std::string_view scheme : kExternalSchemes) {
-      if (MatchesAtCaseInsensitive(value, valueOffset, scheme)) {
-        return std::string(value);
+  bool awaitingHrefValue = false;
+  for (const xml::XMLToken& token : tokens) {
+    switch (token.type) {
+      case xml::XMLTokenType::AttributeName: {
+        const std::string_view name = token.text(source);
+        awaitingHrefValue = name.size() >= 4 && name.substr(name.size() - 4) == "href";
+        break;
       }
+      case xml::XMLTokenType::AttributeValue:
+        if (awaitingHrefValue) {
+          awaitingHrefValue = false;
+          const std::string_view value = UnquoteValue(token.text(source));
+          // Skip leading whitespace inside the value when scheme-matching.
+          std::size_t valueOffset = 0;
+          while (valueOffset < value.size() &&
+                 (value[valueOffset] == ' ' || value[valueOffset] == '\t')) {
+            ++valueOffset;
+          }
+          for (const std::string_view scheme : kExternalSchemes) {
+            if (MatchesAtCaseInsensitive(value, valueOffset, scheme)) {
+              return std::string(value);
+            }
+          }
+        }
+        break;
+      case xml::XMLTokenType::Whitespace:
+        break;  // Only whitespace intervenes between a name and its value.
+      default: awaitingHrefValue = false; break;
     }
-    pos = (cursor < source.size()) ? cursor + 1 : source.size();
   }
   return std::string();
 }
@@ -466,15 +510,19 @@ Result<std::string, std::string> ExportViewportAsSvg(
 
   const std::string_view source = doc.source();
 
+  // Tokenize once with the shared XML tokenizer; root bounds, root attributes,
+  // and the external-reference check below all derive from this stream.
+  const std::vector<xml::XMLToken> tokens = TokenizeSource(source);
+
   // Refuse documents that reference external resources we cannot embed safely.
-  const std::string externalReference = FindExternalReference(source);
+  const std::string externalReference = FindExternalReference(source, tokens);
   if (!externalReference.empty()) {
     return ResultType::Err(
         "Viewport export cannot embed external resource reference: " + externalReference +
         ". Inline or remove external href/xlink:href references and try again.");
   }
 
-  const RootTag rootTag = ParseRootTag(source);
+  const RootTag rootTag = ParseRootTag(source, tokens);
   if (!rootTag.found) {
     return ResultType::Err("Viewport export could not find the root <svg> element in the source.");
   }

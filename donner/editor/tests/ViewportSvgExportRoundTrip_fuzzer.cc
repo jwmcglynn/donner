@@ -3,11 +3,12 @@
 /// Headless libFuzzer target for the editor's viewport SVG export/serialization
 /// path (\ref donner::editor::ExportViewportAsSvg in ViewportSvgExport.cc).
 ///
-/// This is the editor's export/serialize surface: it hand-writes XML as
-/// strings (attribute carry-over, an injected `<defs><clipPath>`, a wrapping
-/// `<g>`) rather than going through a structured XML writer, which is exactly
-/// the kind of code that can mishandle escaping of untrusted attribute/text
-/// content. The fuzzer:
+/// This is the editor's export/serialize surface: root bounds, root
+/// attributes, and the external-reference check derive from the shared XML
+/// token stream (`donner::xml::Tokenize`), while the wrapper markup (an
+/// injected `<defs><clipPath>`, a wrapping `<g>`, carried attributes) is still
+/// emitted as strings with escaping, which is exactly the kind of code that
+/// can mishandle untrusted attribute/text content. The fuzzer:
 ///
 ///   1. Parses the raw input bytes as SVG via the engine's untrusted-input
 ///      parser (SVGParser::ParseSVG). Malformed input is expected and simply
