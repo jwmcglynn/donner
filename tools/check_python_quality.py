@@ -85,6 +85,11 @@ def xml_calls(tree, functions):
         yield (owner, called, ast.dump(node, include_attributes=False)), node.lineno
 
 
+def function_score(function):
+    """Decision/nesting cost of a function definition."""
+    return sum(decision_cost(statement) for statement in function.body)
+
+
 def check_source(source, baseline=""):
     tree = ast.parse(source)
     previous = ast.parse(baseline)
@@ -95,8 +100,14 @@ def check_source(source, baseline=""):
         old = old_functions.get(name)
         if old is not None and ast.dump(function) == ast.dump(old):
             continue
-        score = sum(decision_cost(statement) for statement in function.body)
-        if score > COMPLEXITY_LIMIT:
+        score = function_score(function)
+        old_score = 0
+        if old is not None:
+            old_score = function_score(old)
+        # Grandfather pre-existing debt like the C++ complexity check: a
+        # touched function fails only when it exceeds both the limit and its
+        # own baseline score, so hold-or-reduce edits to over-limit debt pass.
+        if score > max(COMPLEXITY_LIMIT, old_score):
             findings.append((function.lineno, "PY-COMPLEXITY",
                              f"{name} decision/nesting cost {score} exceeds {COMPLEXITY_LIMIT}"))
     previous_calls = Counter(key for key, _ in xml_calls(previous, old_functions))

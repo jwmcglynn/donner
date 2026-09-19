@@ -29,6 +29,30 @@ class PythonQualityTest(unittest.TestCase):
         self.assertEqual("PY-COMPLEXITY", findings[0][1])
         self.assertEqual([], quality.check_source(source, source))
 
+    @staticmethod
+    def _nested_if_source(levels, variable="value"):
+        source = f"def complex_method({variable}):\n"
+        for depth in range(levels):
+            source += "    " * (depth + 1) + f"if {variable}:\n"
+        source += "    " * (levels + 1) + f"return {variable}\n"
+        return source
+
+    def test_reduced_debt_passes_against_baseline(self):
+        baseline = self._nested_if_source(7)
+        reduced = self._nested_if_source(6)
+        self.assertEqual([], quality.check_source(reduced, baseline))
+
+    def test_increased_debt_fails_against_baseline(self):
+        baseline = self._nested_if_source(6)
+        increased = self._nested_if_source(7)
+        findings = quality.check_source(increased, baseline)
+        self.assertEqual("PY-COMPLEXITY", findings[0][1])
+
+    def test_unchanged_score_passes_against_baseline(self):
+        baseline = self._nested_if_source(7, variable="value")
+        renamed = self._nested_if_source(7, variable="other")
+        self.assertEqual([], quality.check_source(renamed, baseline))
+
     def test_simple_streaming_parser_calls_are_not_blacklisted(self):
         source = "from xml.parsers import expat\ndef parser():\n    return expat.ParserCreate()\n"
         self.assertEqual([], quality.check_source(source))
