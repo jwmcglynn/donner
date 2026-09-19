@@ -467,7 +467,7 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
   assert.ok(browserStartup, "expected a browser-specific headless device path");
   assert.match(
     browserStartup[1],
-    /G\(&state\.device, result->impl_->instance\)/,
+    /G\(&state\.device, result->physicalDevice_->instance_\)/,
   );
   assert.match(browserStartup[1], /emscripten_sleep\(1\)/);
   assert.doesNotMatch(browserStartup[1], /RequestAdapterCallbackInfo/);
