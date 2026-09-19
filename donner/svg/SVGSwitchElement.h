@@ -18,8 +18,8 @@ namespace donner::svg {
  * The `<switch>` element ranks its direct children carrying `systemLanguage` by the priority
  * order configured with `SVGDocument::setUserLanguages` (matching SVG2's allowReorder=yes
  * behavior) and renders the best match, tie-breaking by document order. Children without
- * conditional attributes are fallbacks: the first one renders when no language-conditioned
- * child matches. Unknown (non-SVG) child elements are never selected.
+ * `systemLanguage` are fallbacks: the first one renders when no language-conditioned child
+ * matches. Unknown (non-SVG) child elements are never selected.
  *
  * Donner evaluates `systemLanguage` against the user's preferred languages (default `en`, see
  * `SVGDocument::setUserLanguages`), treats a non-empty `requiredExtensions` list as

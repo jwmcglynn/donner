@@ -483,6 +483,25 @@ TEST(SVGSwitchElementTests, SystemLanguageMatchBeatsUnconditionalFallback) {
 }
 
 /**
+ * A higher-priority language child that fails `requiredExtensions` is ineligible, so a
+ * lower-priority language match wins.
+ */
+TEST(SVGSwitchElementTests, SystemLanguagePrioritySkipsFailingRequiredExtensions) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg width="16" height="16">
+      <switch>
+        <rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="fr"
+              requiredExtensions="http://example.org/bogus"/>
+        <rect x="0" y="0" width="8" height="16" fill="black" systemLanguage="en"/>
+      </switch>
+    </svg>
+  )");
+  document.setUserLanguages({RcString("fr"), RcString("en")});
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kLeftHalfFilled));
+}
+
+/**
  * Children matching the same highest-priority user language tie-break by document order: the
  * first one wins.
  */
