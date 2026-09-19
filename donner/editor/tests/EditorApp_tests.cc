@@ -9,6 +9,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/editor/SourceSync.h"
 #include "donner/editor/ViewportGeometry.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -599,6 +600,209 @@ TEST(EditorAppTest, SetElementVisibleShowWithoutPriorHideWritesInline) {
   r1 = app.document().document().querySelector("#r1");
   ASSERT_TRUE(r1.has_value());
   EXPECT_EQ(r1->getAttribute("display"), "inline");
+}
+
+// Each hidden-display cache entry owns an `SVGElement` handle, which retains
+// the document state of the element it names. Deleting a hidden element must
+// therefore release its entry on the next flush; otherwise the detached
+// subtree (kept in the registry for stale-reference safety) stays alive for
+// the rest of the session and the cache grows across hide/delete cycles.
+TEST(EditorAppTest, HiddenElementDisplayCachePrunesDeletedElement) {
+  EditorApp app;
+
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+    auto r1 = app.document().document().querySelector("#r1");
+    ASSERT_TRUE(r1.has_value());
+
+    app.setElementVisible(*r1, false);
+    ASSERT_TRUE(app.flushFrame());
+    ASSERT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u) << "cycle " << cycle;
+
+    app.applyMutation(EditorCommand::DeleteElementCommand(*r1));
+    ASSERT_TRUE(app.flushFrame());
+
+    EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+    EXPECT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 0u)
+        << "hidden entry must be released when its element is deleted (cycle " << cycle << ")";
+  }
+}
+
+// Deleting an ancestor detaches the hidden descendant with it, so the
+// descendant's cached handle must be pruned too.
+TEST(EditorAppTest, HiddenElementDisplayCachePrunesDeletedSubtree) {
+  constexpr std::string_view kGroupedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <g id="g1"><rect id="r1" x="10" y="10" width="20" height="20" fill="red"/></g>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto g1 = app.document().document().querySelector("#g1");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(g1.has_value());
+
+  app.setElementVisible(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u);
+
+  app.applyMutation(EditorCommand::DeleteElementCommand(*g1));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_FALSE(app.document().document().querySelector("#g1").has_value());
+  EXPECT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 0u)
+      << "hidden entries in a deleted subtree must be released with it";
+}
+
+// Loading a document replaces the inner document entirely, so every cached
+// handle names a dead entity space and must be dropped.
+TEST(EditorAppTest, HiddenElementDisplayCacheClearsOnDocumentLoad) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setElementVisible(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u);
+
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  EXPECT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 0u)
+      << "a loaded document must not inherit hidden-display entries from the previous document";
+}
+
+// Source-pane reparses go through `ReplaceDocument`, which swaps in a fresh
+// document like a load does. The cache must not retain handles into the
+// replaced document, and Show on the reparsed element falls back to
+// `display="inline"` since the pre-reparse author value is no longer known.
+TEST(EditorAppTest, HiddenElementDisplayCacheClearsOnSourceReparse) {
+  constexpr std::string_view kSvgWithBlockDisplay =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="r1" x="10" y="10" width="20" height="20" fill="red" display="block"/>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvgWithBlockDisplay));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setElementVisible(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u);
+
+  // Reparse the post-hide source: the fallback when a source-pane change
+  // cannot be applied incrementally.
+  app.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(std::string(app.document().document().source())));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 0u)
+      << "a reparsed document must not inherit hidden-display entries from the previous document";
+
+  auto reparsed = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(reparsed.has_value());
+  EXPECT_EQ(reparsed->getAttribute("display"), "none");
+  app.setElementVisible(*reparsed, true);
+  ASSERT_TRUE(app.flushFrame());
+  reparsed = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(reparsed.has_value());
+  EXPECT_EQ(reparsed->getAttribute("display"), "inline")
+      << "Show after a reparse has no author value to restore and must write display=inline";
+}
+
+// The default structured source-edit path deletes an element incrementally: it
+// bypasses the command queue entirely (no DeleteElement, no ReplaceDocument),
+// so neither `removedElements` nor a document replacement signals the detach.
+// The frame version still advances, so the cache must prune on that signal or
+// a hide-then-source-delete would retain the detached subtree.
+TEST(EditorAppTest, HiddenElementDisplayCachePrunesStructuredSourceEditDelete) {
+  constexpr std::string_view kTwoRectsSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="a" x="10" y="10" width="10" height="10"/>
+           <rect id="b" x="50" y="50" width="10" height="10"/>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.structuredEditingEnabled());
+  ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
+
+  auto a = app.document().document().querySelector("#a");
+  ASSERT_TRUE(a.has_value());
+  app.setElementVisible(*a, false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u);
+
+  const std::string hiddenSource(app.document().document().source());
+  const std::size_t start = hiddenSource.find("<rect id=\"a\"");
+  ASSERT_NE(start, std::string::npos);
+  const std::size_t end = hiddenSource.find("/>", start);
+  ASSERT_NE(end, std::string::npos);
+  std::string editedSource(hiddenSource);
+  editedSource.erase(start, end + 2u - start);
+  std::string previousSourceText(hiddenSource);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const std::vector<SourceEditIntent> intents = {SourceEditIntent{
+      .offset = start, .removedLength = end + 2u - start, .replacement = std::string()}};
+  const DispatchSourceTextChangeResult dispatch = DispatchSourceEditIntents(
+      app, intents, editedSource, &previousSourceText, &lastWritebackSourceText);
+  ASSERT_TRUE(dispatch.dispatchedMutation);
+  ASSERT_TRUE(app.document().queue().empty());
+
+  EXPECT_FALSE(app.flushFrame())
+      << "an incremental structured source edit queues no commands, so the flush applies nothing";
+  EXPECT_FALSE(app.document().document().querySelector("#a").has_value());
+  EXPECT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 0u)
+      << "a structured source delete must release hidden entries for the deleted element";
+}
+
+// Undo/redo of a transform replays against the same live element and never
+// replaces the document, so the hide/show round trip must keep working:
+// Show restores the authored `display="block"` captured before the hide.
+TEST(EditorAppTest, HiddenElementDisplayCacheSurvivesUndoRedoOfTransform) {
+  constexpr std::string_view kSvgWithBlockDisplay =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="r1" x="10" y="10" width="20" height="20" fill="red" display="block"/>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvgWithBlockDisplay));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setElementVisible(*r1, false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u);
+
+  const Transform2d before = r1->cast<svg::SVGGraphicsElement>().transform();
+  const Transform2d after = Transform2d::Translate(Vector2d(25.0, 0.0));
+  r1->cast<svg::SVGGraphicsElement>().setTransform(after);
+  UndoSnapshot beforeSnapshot{
+      .element = *r1, .transform = before, .writebackTarget = captureAttributeWritebackTarget(*r1)};
+  UndoSnapshot afterSnapshot{
+      .element = *r1, .transform = after, .writebackTarget = captureAttributeWritebackTarget(*r1)};
+  app.undoTimeline().record("Drag r1", std::move(beforeSnapshot), std::move(afterSnapshot));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  auto undoneR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(undoneR1.has_value());
+  EXPECT_TRUE(undoneR1->cast<svg::SVGGraphicsElement>().transform().isIdentity());
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.hiddenElementAuthorDisplayCountForTesting(), 1u)
+      << "transform undo/redo must not drop or duplicate the hide/show memory";
+
+  auto shownR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(shownR1.has_value());
+  app.setElementVisible(*shownR1, true);
+  ASSERT_TRUE(app.flushFrame());
+  shownR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(shownR1.has_value());
+  EXPECT_EQ(shownR1->getAttribute("display"), "block")
+      << "Show after undo/redo must still restore the author's display=block";
 }
 
 TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {

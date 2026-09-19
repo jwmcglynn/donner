@@ -932,6 +932,8 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   // now matches the last-loaded bytes. `setCurrentFilePath` should be
   // called separately by the caller if the bytes came from a file.
   if (result) {
+    hiddenElementAuthorDisplay_.clear();
+    hiddenElementDisplayPrunedVersion_ = document_.currentFrameVersion();
     isDirty_ = false;
   }
   return result;
@@ -969,7 +971,10 @@ bool EditorApp::flushFrame() {
     }
   }
 
-  if (!document_.flushFrame()) {
+  const bool appliedCommands = document_.flushFrame();
+  pruneHiddenElementDisplayCache();
+
+  if (!appliedCommands) {
     // A no-op flush still consumes a deferred source-undo entry: a tool that
     // flushes per keystroke (a text session) reaches its commit with nothing
     // queued, and the entry itself compares before/after source.
@@ -978,8 +983,9 @@ bool EditorApp::flushFrame() {
   }
 
   const auto& documentFlush = document_.lastFlushResult();
-  if (documentBeforeFlush.has_value() && document_.hasDocument() &&
-      !(*documentBeforeFlush == document_.document())) {
+  const bool documentReplaced = documentBeforeFlush.has_value() && document_.hasDocument() &&
+                                !(*documentBeforeFlush == document_.document());
+  if (documentReplaced) {
     editingScope_.reset();
     std::vector<svg::SVGElement> remappedSelection;
     remappedSelection.reserve(selectionTargets.size());
@@ -1041,6 +1047,44 @@ void EditorApp::consumePendingDocumentSourceUndo() {
     }
   }
   pendingDocumentSourceUndo_.reset();
+}
+
+void EditorApp::pruneHiddenElementDisplayCache() {
+  // Elements detach through applied commands (deletes, replacements), a
+  // document replacement, and incremental structured source edits that bypass
+  // the queue; all of them advance the frame version. Prune only when it moved
+  // since the last prune, skipping frames with no document change.
+  if (!document_.hasDocument() ||
+      document_.currentFrameVersion() == hiddenElementDisplayPrunedVersion_) {
+    return;
+  }
+  hiddenElementDisplayPrunedVersion_ = document_.currentFrameVersion();
+
+  if (hiddenElementAuthorDisplay_.empty()) {
+    return;
+  }
+
+  // The live root is the attachment test: walking a cached handle to its
+  // topmost ancestor must land on the current document's <svg>. Otherwise the
+  // entry belongs to a detached subtree or to a replaced document (whose root
+  // compares unequal by document identity).
+  const svg::SVGElement root = document_.document().svgElement();
+  std::erase_if(hiddenElementAuthorDisplay_, [&root](const auto& entry) {
+    if (!entry.first.unsafeEntityHandle().valid()) {
+      return true;  // Empty or stale handle: no document state worth retaining.
+    }
+
+    std::optional<svg::SVGElement> current = entry.first;
+    while (current.has_value()) {
+      const std::optional<svg::SVGElement> parent = current->parentElement();
+      if (!parent.has_value()) {
+        break;
+      }
+      current = parent;
+    }
+
+    return !current.has_value() || *current != root;
+  });
 }
 
 bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
