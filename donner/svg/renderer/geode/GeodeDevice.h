@@ -228,14 +228,14 @@ public:
       wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm);
 
   /**
-   * Create a GeodeDevice wrapping a host-provided device and queue.
+   * Create a logical GeodeDevice context over existing physical roots.
    *
-   * The returned device does NOT own the underlying WebGPU instance, adapter,
-   * device, or queue - the host is responsible for keeping them alive.
+   * Raw-root configuration is borrowed and remains the host's responsibility.
+   * Shared-owner configuration retains that owner's owning or borrowed mode.
    *
-   * @param config Embedding configuration with valid device/queue handles.
-   * @return A valid GeodeDevice on success, or null if \p config.device or
-   *   \p config.queue is null.
+   * @param config Embedding configuration with raw roots or a shared physical owner.
+   * @return A valid GeodeDevice on success, or null if roots are absent,
+   *   disagree with the owner, or name an already-lost physical device.
    */
   static std::unique_ptr<GeodeDevice> CreateFromExternal(const GeodeEmbedConfig& config);
 
