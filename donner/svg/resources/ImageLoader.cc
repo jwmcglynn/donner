@@ -34,6 +34,52 @@ bool LooksLikeSvgContent(const std::vector<uint8_t>& data) {
   return false;
 }
 
+/// Returns true if \p data begins with the PNG magic bytes.
+bool IsPng(const std::vector<uint8_t>& data) {
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  return data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E &&
+         data[3] == 0x47 && data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A &&
+         data[7] == 0x0A;
+}
+
+/// Returns true if every declared PNG chunk payload fits within the input.
+///
+/// stb_image sizes its IDAT accumulation buffer from each chunk's declared
+/// length before it checks that the payload bytes are present, so a truncated
+/// PNG can request a multi-gigabyte allocation from a tiny input
+/// (memory-exhaustion decode bomb). Walk the chunk headers and reject any
+/// declared length the input cannot supply. Malformed headers are left to
+/// stb_image's own validation.
+bool PngDeclaredChunkLengthsFit(const std::vector<uint8_t>& data) {
+  const auto readUint32BigEndian = [](const std::vector<uint8_t>& bytes, size_t offset) {
+    return (static_cast<uint32_t>(bytes[offset]) << 24u) |
+           (static_cast<uint32_t>(bytes[offset + 1]) << 16u) |
+           (static_cast<uint32_t>(bytes[offset + 2]) << 8u) |
+           static_cast<uint32_t>(bytes[offset + 3]);
+  };
+
+  // Layout: 8-byte signature, then [length:4][type:4][payload:length][crc:4].
+  size_t offset = 8;
+  while (offset + 8 <= data.size()) {
+    const uint32_t declaredLength = readUint32BigEndian(data, offset);
+    // The PNG specification caps chunk lengths at 2^31-1; reject larger values
+    // before the size arithmetic below so it cannot overflow on 32-bit targets.
+    if (declaredLength > 0x7FFFFFFFu) {
+      return false;
+    }
+    const size_t available = data.size() - offset - 8;
+    if (static_cast<size_t>(declaredLength) + 4u > available) {
+      return false;  // Payload plus CRC cannot be present.
+    }
+    if (data[offset + 4] == 'I' && data[offset + 5] == 'E' && data[offset + 6] == 'N' &&
+        data[offset + 7] == 'D') {
+      return true;
+    }
+    offset += 12u + declaredLength;
+  }
+  return true;
+}
+
 /// Returns true if \p data begins with the magic bytes of a raster format we
 /// intend to decode (PNG, JPEG, or GIF). stb_image also auto-detects magic-less
 /// formats such as TGA whose decoders iterate the full declared width*height
@@ -42,9 +88,7 @@ bool LooksLikeSvgContent(const std::vector<uint8_t>& data) {
 /// synchronously during document render). We only ever intend to accept the
 /// three formats in the supported MIME list, so gate stb on their magic bytes.
 bool HasSupportedRasterMagic(const std::vector<uint8_t>& data) {
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
-  if (data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E &&
-      data[3] == 0x47 && data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A) {
+  if (IsPng(data)) {
     return true;
   }
   // JPEG: FF D8 FF
@@ -98,6 +142,15 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
   // is a raster-path decode failure, not an unsupported MIME type, so it returns
   // DataCorrupt to match the loader's error contract.
   if (!HasSupportedRasterMagic(fileContents)) {
+    return UrlLoaderError::DataCorrupt;
+  }
+
+  // stb_image sizes its IDAT accumulation buffer from each chunk's declared
+  // length before it verifies the payload is present, so a truncated PNG can
+  // request a multi-gigabyte allocation from a tiny input (memory-exhaustion
+  // DoS, hit synchronously during document render). Validate the declared
+  // chunk lengths against the bytes actually supplied before stb runs.
+  if (IsPng(fileContents) && !PngDeclaredChunkLengthsFit(fileContents)) {
     return UrlLoaderError::DataCorrupt;
   }
 
