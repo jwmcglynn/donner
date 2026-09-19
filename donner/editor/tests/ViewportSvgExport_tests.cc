@@ -449,6 +449,28 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
   EXPECT_THAT(result.value, Not(HasSubstr("svg-not-root")));
 }
 
+TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarkup) {
+  // Regression: a processing instruction whose content contains `>` followed by
+  // an `<svg>` element. The XML parser consumes the whole `<?...?>` as one PI
+  // and finds the real root after it, so the scanner must stop at the PI
+  // terminator (`?>`) rather than the first `>`, or it will mistake the
+  // PI-embedded element for the document root.
+  const SVGDocument doc = ParseOrDie(
+      "<?editor data=\"a>b\"><svg id=\"not-the-root\" width=\"0\"/>?>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+}
+
 TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
   for (std::string_view prefix : {"<!--", "<?editor"}) {
     SCOPED_TRACE(prefix);

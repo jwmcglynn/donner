@@ -153,7 +153,16 @@ std::size_t FindRootSvgStart(std::string_view source) {
       pos = (end == std::string_view::npos) ? source.size() : end + 3;
       continue;
     }
-    if (pos + 1 < source.size() && (source[pos + 1] == '?' || source[pos + 1] == '!')) {
+    if (pos + 1 < source.size() && source[pos + 1] == '?') {
+      // Processing instructions (including the XML declaration) end at `?>`.
+      // The XML parser consumes the whole `<?...?>` as one node, so stop at the
+      // terminator rather than the first `>`: a PI whose content contains `>`
+      // followed by markup must not expose that markup to the root scan.
+      const std::size_t end = source.find("?>", pos + 2);
+      pos = (end == std::string_view::npos) ? source.size() : end + 2;
+      continue;
+    }
+    if (pos + 1 < source.size() && source[pos + 1] == '!') {
       const std::size_t end = source.find('>', pos);
       pos = (end == std::string_view::npos) ? source.size() : end + 1;
       continue;
