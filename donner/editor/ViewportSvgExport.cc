@@ -3,9 +3,11 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -295,6 +297,50 @@ std::size_t FindRootSvgStart(std::string_view source) {
   return std::string_view::npos;
 }
 
+/// Advance past a comment, CDATA section, processing instruction, or doctype
+/// starting at \p lt, which points at the `<`. Returns the next scan position,
+/// npos when the construct is unterminated, or nullopt when \p lt does not
+/// begin one of those constructs.
+std::optional<std::size_t> SkipMarkupConstruct(std::string_view source, std::size_t lt) {
+  if (MatchesAtCaseInsensitive(source, lt, "<!--")) {
+    const std::size_t end = source.find("-->", lt + 4);
+    return (end == std::string_view::npos) ? std::string_view::npos : end + 3;
+  }
+  if (source.substr(lt, 9) == "<![CDATA[") {
+    const std::size_t end = source.find("]]>", lt + 9);
+    return (end == std::string_view::npos) ? std::string_view::npos : end + 3;
+  }
+  if (lt + 1 < source.size() && source[lt + 1] == '?') {
+    return FindProcessingInstructionEnd(source, lt);
+  }
+  if (lt + 1 < source.size() && source[lt + 1] == '!') {
+    return FindDoctypeEnd(source, lt);
+  }
+  return std::nullopt;
+}
+
+/// Scan an opening tag starting at \p lt (which points at `<`) and return the
+/// position just past its `>` or `/>`, plus whether the tag is self-closing.
+std::pair<std::size_t, bool> ScanTagInterior(std::string_view source, std::size_t lt) {
+  bool selfClosing = false;
+  std::size_t cursor = lt + 1;
+  while (cursor < source.size()) {
+    const char ch = source[cursor];
+    if (ch == '"' || ch == '\'') {
+      const std::size_t quoteEnd = source.find(ch, cursor + 1);
+      cursor = (quoteEnd == std::string_view::npos) ? source.size() : quoteEnd + 1;
+      continue;
+    }
+    if (ch == '>') {
+      selfClosing = cursor > lt && source[cursor - 1] == '/';
+      ++cursor;
+      break;
+    }
+    ++cursor;
+  }
+  return {cursor, selfClosing};
+}
+
 /// Find the byte offset of the `</svg` that closes the root element at or
 /// after \p bodyStart, or npos when the source has no matching close tag.
 ///
@@ -312,26 +358,11 @@ std::size_t FindRootSvgEnd(std::string_view source, std::size_t bodyStart) {
       return std::string_view::npos;
     }
 
-    if (MatchesAtCaseInsensitive(source, lt, "<!--")) {
-      const std::size_t end = source.find("-->", lt + 4);
-      pos = (end == std::string_view::npos) ? source.size() : end + 3;
+    if (const std::optional<std::size_t> skipped = SkipMarkupConstruct(source, lt)) {
+      pos = (*skipped == std::string_view::npos) ? source.size() : *skipped;
       continue;
     }
-    if (source.substr(lt, 9) == "<![CDATA[") {
-      const std::size_t end = source.find("]]>", lt + 9);
-      pos = (end == std::string_view::npos) ? source.size() : end + 3;
-      continue;
-    }
-    if (lt + 1 < source.size() && source[lt + 1] == '?') {
-      const std::size_t end = FindProcessingInstructionEnd(source, lt);
-      pos = (end == std::string_view::npos) ? source.size() : end;
-      continue;
-    }
-    if (lt + 1 < source.size() && source[lt + 1] == '!') {
-      const std::size_t end = FindDoctypeEnd(source, lt);
-      pos = (end == std::string_view::npos) ? source.size() : end;
-      continue;
-    }
+
     if (lt + 1 < source.size() && source[lt + 1] == '/') {
       if (MatchesTagName(source, lt + 2, "svg")) {
         if (depth == 0) {
@@ -344,28 +375,12 @@ std::size_t FindRootSvgEnd(std::string_view source, std::size_t bodyStart) {
       continue;
     }
 
-    // Opening tag: scan to its `>` or `/>`, skipping quoted attribute values.
     const bool isSvg = MatchesTagName(source, lt + 1, "svg");
-    bool selfClosing = false;
-    std::size_t cursor = lt + 1;
-    while (cursor < source.size()) {
-      const char ch = source[cursor];
-      if (ch == '"' || ch == '\'') {
-        const std::size_t quoteEnd = source.find(ch, cursor + 1);
-        cursor = (quoteEnd == std::string_view::npos) ? source.size() : quoteEnd + 1;
-        continue;
-      }
-      if (ch == '>') {
-        selfClosing = cursor > lt && source[cursor - 1] == '/';
-        ++cursor;
-        break;
-      }
-      ++cursor;
-    }
+    const auto [nextPos, selfClosing] = ScanTagInterior(source, lt);
     if (isSvg && !selfClosing) {
       ++depth;
     }
-    pos = cursor;
+    pos = nextPos;
   }
   return std::string_view::npos;
 }
