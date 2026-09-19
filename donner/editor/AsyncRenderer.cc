@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -1661,10 +1662,17 @@ void AsyncRenderer::workerLoop() {
       if (snapshotPlan.captureTextureSnapshot) {
         ZoneScopedN("Renderer::takeTextureSnapshot");
         fullCanvasTexture = requestRenderer.takeTextureSnapshot();
-        UTILS_RELEASE_ASSERT_MSG(
-            fullCanvasTexture != nullptr,
-            "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
-            "readback/upload fallback in Geode presentation mode.");
+        if (fullCanvasTexture == nullptr) {
+          const svg::RendererResourceStats stats = requestRenderer.resourceStats();
+          std::fprintf(stderr,
+                       "[AsyncRenderer] Full-canvas GPU texture allocation failed "
+                       "(budgetRejected=%d), falling back to CPU snapshot\n",
+                       stats.surfaceBudgetRejected ? 1 : 0);
+          if (!snapshotPlan.captureCpuSnapshot) {
+            ZoneScopedN("Renderer::takeSnapshot (texture-fallback)");
+            bitmap = requestRenderer.takeSnapshot();
+          }
+        }
       }
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }

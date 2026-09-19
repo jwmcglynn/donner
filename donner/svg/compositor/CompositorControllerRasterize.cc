@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -106,7 +107,14 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   }
 
   auto offscreen = acquireOffscreen();
-  UTILS_RELEASE_ASSERT(offscreen != nullptr);
+  if (offscreen == nullptr) {
+    std::fprintf(stderr,
+                 "[Compositor] rasterizeLayer: offscreen unavailable for entity %u, leaving dirty "
+                 "for retry\n",
+                 static_cast<unsigned>(layer.entity()));
+    layer.markDirty();
+    return;
+  }
   RendererDriver driver(*offscreen);
 
   if (geometry.tight) {
@@ -140,10 +148,17 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   }
   if (offscreen->requiresTextureSnapshotPresentation()) {
     std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
-    UTILS_RELEASE_ASSERT_MSG(
-        texture != nullptr,
-        "Geode compositor layer rasterization did not produce a GPU texture. Refusing CPU "
-        "readback/upload fallback in Geode presentation mode.");
+    if (texture == nullptr) {
+      const RendererResourceStats stats = offscreen->resourceStats();
+      std::fprintf(stderr,
+                   "[Compositor] rasterizeLayer: GPU texture allocation failed for entity %u "
+                   "(viewport %.0fx%.0f, budgetRejected=%d), leaving dirty for retry\n",
+                   static_cast<unsigned>(layer.entity()), geometry.viewport.size.x,
+                   geometry.viewport.size.y, stats.surfaceBudgetRejected ? 1 : 0);
+      recycleOffscreen(std::move(offscreen));
+      layer.markDirty();
+      return;
+    }
     layer.setTextureSnapshot(std::move(texture), surfaceFromEntity);
   } else {
     layer.setBitmap(offscreen->takeSnapshot(), surfaceFromEntity);
@@ -418,7 +433,13 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         ZoneScopedN("Compositor::segment::createOffscreen");
         offscreen = acquireOffscreen();
       }
-      UTILS_RELEASE_ASSERT(offscreen != nullptr);
+      if (offscreen == nullptr) {
+        std::fprintf(stderr,
+                     "[Compositor] rasterizeDirtyStaticSegments: offscreen unavailable for segment "
+                     "%zu, leaving dirty for retry\n",
+                     i);
+        return;
+      }
 
       if (useTight) {
         ZoneScopedN("Compositor::segment::drawEntityRangeTight");
@@ -434,10 +455,17 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         }
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
-          UTILS_RELEASE_ASSERT_MSG(
-              texture != nullptr,
-              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
-              "readback/upload fallback in Geode presentation mode.");
+          if (texture == nullptr) {
+            const RendererResourceStats stats = offscreen->resourceStats();
+            std::fprintf(stderr,
+                         "[Compositor] rasterizeDirtyStaticSegments: GPU texture allocation failed "
+                         "for segment %zu (viewport %.0fx%.0f, budgetRejected=%d), leaving dirty "
+                         "for retry\n",
+                         i, tightViewport.size.x, tightViewport.size.y,
+                         stats.surfaceBudgetRejected ? 1 : 0);
+            recycleOffscreen(std::move(offscreen));
+            return;
+          }
           staticSegments_[i] = RendererBitmap{};
           staticSegmentTextures_[i] = std::move(texture);
         } else {
@@ -456,10 +484,16 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         }
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
-          UTILS_RELEASE_ASSERT_MSG(
-              texture != nullptr,
-              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
-              "readback/upload fallback in Geode presentation mode.");
+          if (texture == nullptr) {
+            const RendererResourceStats stats = offscreen->resourceStats();
+            std::fprintf(stderr,
+                         "[Compositor] rasterizeDirtyStaticSegments: GPU texture allocation failed "
+                         "for segment %zu (viewport %.0fx%.0f, budgetRejected=%d), leaving dirty "
+                         "for retry\n",
+                         i, viewport.size.x, viewport.size.y, stats.surfaceBudgetRejected ? 1 : 0);
+            recycleOffscreen(std::move(offscreen));
+            return;
+          }
           staticSegments_[i] = RendererBitmap{};
           staticSegmentTextures_[i] = std::move(texture);
         } else {
@@ -890,19 +924,20 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     renderer().setTransform(canvasFromPayload);
     if (texture != nullptr) {
       const bool drewTexture = renderer().drawTextureSnapshot(*texture, params.targetRect);
-      UTILS_RELEASE_ASSERT_MSG(
-          drewTexture || !renderer().requiresTextureSnapshotPresentation(),
-          "Geode compositor compose could not draw a GPU texture payload. Refusing CPU "
-          "bitmap fallback in Geode presentation mode.");
       if (drewTexture) {
         return;
       }
+      std::fprintf(stderr,
+                   "[Compositor] composeLayers: GPU texture draw failed (%dx%d), trying CPU "
+                   "bitmap fallback\n",
+                   payloadDims.x, payloadDims.y);
     }
-    UTILS_RELEASE_ASSERT_MSG(!renderer().requiresTextureSnapshotPresentation(),
-                             "Geode compositor compose received a CPU bitmap payload. Refusing CPU "
-                             "bitmap fallback in Geode presentation mode.");
-    if (renderer().requiresTextureSnapshotPresentation()) {
-      return;
+    if (renderer().requiresTextureSnapshotPresentation() && bitmap != nullptr &&
+        HasPublicTileBitmap(*bitmap)) {
+      std::fprintf(stderr,
+                   "[Compositor] composeLayers: CPU bitmap payload in Geode presentation mode "
+                   "(%dx%d), drawing via upload fallback instead of crashing\n",
+                   bitmap->dimensions.x, bitmap->dimensions.y);
     }
     if (bitmap != nullptr && HasPublicTileBitmap(*bitmap)) {
       // drawBitmap consumes the premultiplied raster directly. Routing this

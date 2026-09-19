@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <ostream>
 #include <string_view>
 #include <thread>
@@ -2412,6 +2413,150 @@ TEST_F(CompositorControllerTest, CancellationAtYieldSafePointPreservesPooledOffs
   const auto completionFrame = compositor.lastRenderFrameStats();
   EXPECT_EQ(completionFrame.offscreenCreateCount, 0)
       << "a safe-point cancellation must not discard the pooled offscreen instance";
+}
+
+// A GPU texture allocation failure (surface budget exhaustion at large
+// viewports, device loss, or driver OOM) must not abort the editor. The
+// failed tile stays dirty and the next frame retries, so a 5892x3260 first
+// frame that exceeds the per-frame budget makes incremental progress instead
+// of crashing in `rasterizeLayer`.
+TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesLayerDirtyForRetry) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  auto failTexture = std::make_shared<bool>(true);
+  ON_CALL(renderer_, requiresTextureSnapshotPresentation())
+      .WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([failTexture]() {
+    auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+    ON_CALL(*offscreen, requiresTextureSnapshotPresentation())
+        .WillByDefault(::testing::Return(true));
+    ON_CALL(*offscreen, takeTextureSnapshot()).WillByDefault([failTexture]() {
+      if (*failTexture) {
+        return std::shared_ptr<const RendererTextureSnapshot>{nullptr};
+      }
+      return std::shared_ptr<const RendererTextureSnapshot>(
+          std::make_shared<FakeTextureSnapshot>(Vector2i(32, 32)));
+    });
+    ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+    return offscreen;
+  });
+
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  // First frame fails texture allocation but must not abort.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFailure = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFailure.size(), 1u);
+  EXPECT_FALSE(rowsAfterFailure.front().hasValidBitmap)
+      << "failed allocation must leave the layer without a payload";
+  EXPECT_TRUE(rowsAfterFailure.front().dirty) << "failed allocation must leave the layer dirty";
+
+  // Retry succeeds once allocation works again.
+  *failTexture = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterRetry = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterRetry.size(), 1u);
+  EXPECT_TRUE(rowsAfterRetry.front().hasValidBitmap);
+  EXPECT_FALSE(rowsAfterRetry.front().dirty);
+}
+
+// Segment allocation failures follow the same contract: the slot stays dirty
+// and the next frame completes it, instead of aborting in
+// `rasterizeDirtyStaticSegments`.
+TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesSegmentsDirtyForRetry) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  auto failTexture = std::make_shared<bool>(true);
+  ON_CALL(renderer_, requiresTextureSnapshotPresentation())
+      .WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([failTexture]() {
+    auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+    ON_CALL(*offscreen, requiresTextureSnapshotPresentation())
+        .WillByDefault(::testing::Return(true));
+    ON_CALL(*offscreen, takeTextureSnapshot()).WillByDefault([failTexture]() {
+      if (*failTexture) {
+        return std::shared_ptr<const RendererTextureSnapshot>{nullptr};
+      }
+      return std::shared_ptr<const RendererTextureSnapshot>(
+          std::make_shared<FakeTextureSnapshot>(Vector2i(32, 32)));
+    });
+    ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+    return offscreen;
+  });
+
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto segmentsAfterFailure = compositor.snapshotSegmentInspectorRows();
+  const bool anyDirtyAfterFailure =
+      std::any_of(segmentsAfterFailure.begin(), segmentsAfterFailure.end(),
+                  [](const auto& row) { return row.dirty; });
+  EXPECT_TRUE(anyDirtyAfterFailure)
+      << "failed allocation must leave at least one segment dirty for retry";
+
+  *failTexture = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto segmentsAfterRetry = compositor.snapshotSegmentInspectorRows();
+  const bool anyDirtyAfterRetry =
+      std::any_of(segmentsAfterRetry.begin(), segmentsAfterRetry.end(),
+                  [](const auto& row) { return row.dirty; });
+  EXPECT_FALSE(anyDirtyAfterRetry) << "retry must complete all dirty segments";
+}
+
+// A null device (offscreen creation always fails) latches offscreen support
+// off and falls back to flat presentation instead of aborting. The probe in
+// `warmFirstFrameCaches` / `renderFrameImpl` retains this latch, so there is
+// no per-frame retry; the test pins the graceful flat fallback.
+TEST_F(CompositorControllerTest, NullOffscreenFallsBackToFlatWithoutCrash) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  ON_CALL(renderer_, requiresTextureSnapshotPresentation())
+      .WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, createOffscreenInstance())
+      .WillByDefault([]() { return std::unique_ptr<RendererInterface>{nullptr}; });
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  // Neither frame may abort; layers stay unrasterized under flat fallback.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFirst.size(), 1u);
+  EXPECT_FALSE(rowsAfterFirst.front().hasValidBitmap);
+  EXPECT_TRUE(rowsAfterFirst.front().dirty);
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterSecond = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterSecond.size(), 1u);
+  EXPECT_FALSE(rowsAfterSecond.front().hasValidBitmap);
 }
 
 }  // namespace donner::svg::compositor
