@@ -259,7 +259,10 @@ class GeneratedRootCmakeTest(unittest.TestCase):
             contents = (Path(temp_dir) / "CMakeLists.txt").read_text()
 
         self.assertNotIn("DONNER_BUILD_EXAMPLES", contents)
-        self.assertIn("if(DONNER_BUILD_TESTS)", contents)
+        # Issue #1212: the generated root must not advertise a test contract
+        # that the lib-closure discovery cannot fulfill.
+        self.assertNotIn("DONNER_BUILD_TESTS", contents)
+        self.assertNotIn("enable_testing()", contents)
         self.assertIn("add_library(donner INTERFACE)", contents)
         for revision in re.findall(r"GIT_TAG\s+(\S+)", contents):
             self.assertRegex(revision, r"^[0-9a-f]{40}$")
@@ -272,8 +275,10 @@ class GeneratedRootCmakeTest(unittest.TestCase):
 
 class GeneratedCompileBudgetTest(unittest.TestCase):
     def test_clang_budget_is_scoped_to_clang_for_all_target_kinds(self):
+        # cc_test targets are skipped by the generator (issue #1212), so they
+        # are not part of the emission matrix.
         for kind, concrete in [("cc_library", True), ("cc_library", False),
-                               ("cc_binary", True), ("cc_test", True)]:
+                               ("cc_binary", True)]:
             with self.subTest(kind=kind, concrete=concrete):
                 contents = self._generate(kind, concrete)
                 self.assertIn(
@@ -304,6 +309,31 @@ class GeneratedCompileBudgetTest(unittest.TestCase):
                 return Path("donner/gpu/shader/CMakeLists.txt").read_text()
             finally:
                 os.chdir(previous_cwd)
+
+
+class SkippedTestTargetsTest(unittest.TestCase):
+    def test_cc_test_targets_are_not_emitted(self):
+        values = g._target_value_map()
+        values["srcs"]["Svg_tests.cc"] = set(g._ALL_CONFIG_NAMES)
+        values["hdrs"]["Svg_tests.h"] = set(g._ALL_CONFIG_NAMES)
+        target = g.CMakeTarget(
+            label="//donner/svg/tests:svg_tests", package="donner/svg/tests",
+            name="svg_tests", kind="cc_test", configs=set(g._ALL_CONFIG_NAMES),
+            values=values,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(temp_dir)
+                with mock.patch.object(g, "get_cmake_targets", return_value={target.label: target}):
+                    g.generate_all_packages()
+                contents = Path("donner/svg/tests/CMakeLists.txt").read_text()
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertNotIn("svg_tests", contents)
+        self.assertNotIn("add_executable", contents)
+        self.assertNotIn("add_test", contents)
 
 
 class ConditionDerivationTest(unittest.TestCase):

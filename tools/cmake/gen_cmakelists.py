@@ -10,10 +10,12 @@ This script performs three high-level steps:
     embeds Skia, and wires up umbrella and convenience libraries.
 
 2.  **generate_all_packages()**
-    Discovers every `cc_library`, `cc_binary`, `cc_test`, and `embed_resources`
-    under the `//…` Bazel workspace (excluding a few hand-curated packages)
-    and mirrors them as CMake targets with appropriate source files,
-    include paths, and transitive dependencies.
+    Mirrors the public `//:donner` dependency closure (`cc_library`,
+    `cc_binary`, and `embed_resources`) as CMake targets with appropriate
+    source files, include paths, and transitive dependencies. `cc_test`
+    targets are not part of the mirror: tests depend on the public
+    libraries rather than the reverse, so no test-only leaf can enter the
+    queried closure (issue #1212). Run unit tests with Bazel instead.
 
 The generated tree lets consumers build Donner without Bazel, while
 retaining the original dependency graph.
@@ -1068,8 +1070,7 @@ def generate_root() -> None:
         # Force static libraries — template specializations are spread across
         # libraries and resolved at binary link time (like Bazel).
         f.write("set(BUILD_SHARED_LIBS OFF CACHE BOOL \"\" FORCE)\n\n")
-        f.write("include(FetchContent)\n")
-        f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n\n")
+        f.write("include(FetchContent)\n\n")
 
         # ── Feature options (mirror Bazel flags) ───────────────────────
         f.write("# Feature options (mirror Bazel flags)\n")
@@ -1193,12 +1194,6 @@ def generate_root() -> None:
         f.write("pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)\n")
         f.write("endif() # DONNER_TEXT_FULL\n\n")
 
-        # Optional test enable switch
-        f.write("\n")
-        f.write("if(DONNER_BUILD_TESTS)\n")
-        f.write("  enable_testing()\n")
-        f.write("endif()\n\n")
-
         # Symlink hack for rules_cc runfiles
         f.write(
             "execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "
@@ -1210,20 +1205,6 @@ def generate_root() -> None:
             "${rules_cc_SOURCE_DIR}/cc/runfiles/runfiles.cc)\n"
         )
         f.write("target_include_directories(rules_cc_runfiles PUBLIC ${CMAKE_BINARY_DIR})\n\n")
-
-        # Set up runfiles directory for CMake tests. Bazel tests use the runfiles
-        # tree automatically, but CMake tests need RUNFILES_DIR pointing to the
-        # source tree root (which already has donner/ in it). External repos need
-        # symlinks at the source root to match the Bazel runfiles layout.
-        f.write("# Runfiles setup for CMake tests\n")
-        f.write("if(DONNER_BUILD_TESTS)\n")
-        f.write("  # Symlink external repos to match Bazel runfiles layout\n")
-        f.write("  if(NOT EXISTS ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
-        f.write("    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink\n")
-        f.write("      ${PROJECT_SOURCE_DIR}/third_party/css-parsing-tests\n")
-        f.write("      ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
-        f.write("  endif()\n")
-        f.write("endif()\n\n")
 
         # Python3 is needed for embed_resources custom commands.
         f.write("find_package(Python3 REQUIRED)\n\n")
@@ -1406,199 +1387,297 @@ def _emit_links_and_system_includes(
         )
 
 
-def generate_all_packages() -> None:
-    """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
+@dataclass
+class _TargetEmission:
+    """Precomputed values for emitting one mirrored CMake target."""
 
-    print("Discovering configured cc_library, cc_binary, and cc_test targets...")
-    targets = get_cmake_targets()
-    targets_by_cmake_name = _targets_by_cmake_name(targets)
+    target: CMakeTarget
+    pkg: str
+    cmake_name: str
+    bazel_label: str
+    kind: str
+    hdrs: List[str]
+    srcs: List[str]
+    extracted_cond_srcs: List[Tuple[str, str]]
+    copts: List[str]
+    cond_copts: List[Tuple[str, str]]
+    includes: List[str]
+    cond_includes: List[Tuple[str, str]]
+    defines: List[str]
+    cond_defines: List[Tuple[str, str]]
+    condition: Optional[str]
+    scope: str
+    option_scope: str
+    include_scope: str
+
+
+def _prepare_emission(target: CMakeTarget, pkg: str) -> _TargetEmission:
+    """Gather the values needed to emit one target's CMake stanza."""
+    hdrs = sorted(target.values["hdrs"])
+    srcs, extracted_cond_srcs = _values_for_target(target, "srcs")
+    copts, cond_copts = _values_for_target(target, "copts")
+    includes, cond_includes = _values_for_target(target, "includes")
+    defines, cond_defines = _values_for_target(target, "defines")
+    # If a target has conditional sources but no fixed sources, it
+    # must be created as a concrete (STATIC) library rather than
+    # INTERFACE, so that target_sources(PRIVATE ...) works.
+    has_concrete_sources = bool(srcs) or bool(extracted_cond_srcs)
+    return _TargetEmission(
+        target=target,
+        pkg=pkg,
+        cmake_name=cmake_target_name(pkg, target.name),
+        bazel_label=target.label,
+        kind=target.kind,
+        hdrs=hdrs,
+        srcs=srcs,
+        extracted_cond_srcs=extracted_cond_srcs,
+        copts=copts,
+        cond_copts=cond_copts,
+        includes=includes,
+        cond_includes=cond_includes,
+        defines=defines,
+        cond_defines=cond_defines,
+        condition=_condition_for_target(target),
+        scope=_scope_for_target(target.kind, has_concrete_sources),
+        option_scope=_compile_option_scope(target.kind, has_concrete_sources),
+        include_scope=_include_scope(target.kind, has_concrete_sources),
+    )
+
+
+def _group_targets_by_package(
+    targets: Dict[str, CMakeTarget],
+) -> DefaultDict[str, List[CMakeTarget]]:
+    """Group configured targets by package, dropping the umbrella and skips."""
     by_pkg: DefaultDict[str, List[CMakeTarget]] = DefaultDict(list)
     for label, target in targets.items():
         if label == "//:donner" or _is_skipped_package(target.package):
             continue
         if target.configs:
             by_pkg[target.package].append(target)
+    return by_pkg
 
-    # Per-package generation
-    for pkg, entries in by_pkg.items():
-        cmake = Path(pkg) / "CMakeLists.txt"
-        cmake.parent.mkdir(parents=True, exist_ok=True)
-        with cmake.open("w") as f:
-            f.write("##\n")
-            f.write("## Generated by tools/cmake/gen_cmakelists.py - DO NOT EDIT\n")
-            f.write("##\n\n")
-            f.write("cmake_minimum_required(VERSION 3.20)\n\n")
 
-            for target in sorted(entries, key=lambda t: (t.kind, t.name)):
-                bazel_label = target.label
-                kind = target.kind
-                tgt = target.name
-                cmake_name = cmake_target_name(pkg, tgt)
+def _write_package_header(f) -> None:
+    """Write the header comment and cmake_minimum_required for one package file."""
+    f.write("##\n")
+    f.write("## Generated by tools/cmake/gen_cmakelists.py - DO NOT EDIT\n")
+    f.write("##\n\n")
+    f.write("cmake_minimum_required(VERSION 3.20)\n\n")
 
-                if "_fuzzer" in tgt:
-                    # Skip fuzzers, they are not built with CMake
-                    print(f"Skipping fuzzer {bazel_label}")
-                    continue
 
-                if kind == "embed_resources":
-                    print(
-                        "Adding target:",
-                        cmake_name,
-                        f" (kind={kind})",
-                    )
+def _handle_special_target(f, pkg: str, target: CMakeTarget) -> bool:
+    """Emit or skip targets that need no library/binary stanza.
 
-                    embed_info = get_embed_info(bazel_label)
-                    _emit_embed_resources(f, pkg, embed_info)
-                    continue
+    Returns True when the target was fully handled: fuzzers and tests are
+    skipped, embed_resources targets are emitted inline.
+    """
+    bazel_label = target.label
+    kind = target.kind
+    if "_fuzzer" in target.name:
+        # Skip fuzzers, they are not built with CMake
+        print(f"Skipping fuzzer {bazel_label}")
+        return True
+    if kind == "cc_test":
+        # Tests are not part of the CMake mirror: the queried
+        # deps(//:donner) closure cannot contain test-only leaves,
+        # so a cc_test reaching this point is a query regression
+        # that must not silently reintroduce an unexecuted test
+        # set (issue #1212).
+        print(f"Skipping test {bazel_label}: not in the CMake mirror")
+        return True
+    if kind == "embed_resources":
+        cmake_name = cmake_target_name(pkg, target.name)
+        print(
+            "Adding target:",
+            cmake_name,
+            f" (kind={kind})",
+        )
+        embed_info = get_embed_info(bazel_label)
+        _emit_embed_resources(f, pkg, embed_info)
+        return True
+    return False
 
-                hdrs = sorted(target.values["hdrs"])
-                srcs, extracted_cond_srcs = _values_for_target(target, "srcs")
-                copts, cond_copts = _values_for_target(target, "copts")
-                includes, cond_includes = _values_for_target(target, "includes")
-                defines, cond_defines = _values_for_target(target, "defines")
 
-                condition = _condition_for_target(target)
-                if condition == "FALSE":
-                    print(f"Skipping target {bazel_label}: unsupported in CMake configs")
-                    continue
-                if condition:
-                    f.write(f"if({condition})\n")
+def _emit_library_target(f, e: _TargetEmission) -> None:
+    """Emit a cc_library stanza: declaration, options, and includes."""
+    if not e.srcs and e.extracted_cond_srcs:
+        # Create concrete library with just headers; sources
+        # will be added via target_sources() below.
+        f.write(f"add_library({e.cmake_name}\n")
+        for path in e.hdrs:
+            f.write(f"  {path}\n")
+        f.write(")\n")
+        f.write(f"target_include_directories({e.cmake_name} PUBLIC ${{PROJECT_SOURCE_DIR}})\n")
+        f.write(
+            f"set_target_properties({e.cmake_name} PROPERTIES CXX_STANDARD 20 "
+            "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
+        )
+        f.write(f"target_compile_options({e.cmake_name} PRIVATE -fno-exceptions)\n")
+    else:
+        write_library(f, e.cmake_name, e.srcs, e.hdrs)
+    if e.copts:
+        f.write(
+            f"target_compile_options({e.cmake_name} {e.option_scope} {' '.join(e.copts)})\n"
+        )
+    for copt, copt_condition in e.cond_copts:
+        _write_guarded_line(
+            f,
+            copt_condition,
+            f"target_compile_options({e.cmake_name} {e.option_scope} {copt})\n",
+        )
+    if e.includes:
+        for inc in e.includes:
+            f.write(
+                f"target_include_directories({e.cmake_name} {e.include_scope} "
+                f'"${{PROJECT_SOURCE_DIR}}/{e.pkg}/{inc}")\n'
+            )
+    for inc, inc_condition in e.cond_includes:
+        _write_guarded_line(
+            f,
+            inc_condition,
+            f"target_include_directories({e.cmake_name} {e.include_scope} "
+            f'"${{PROJECT_SOURCE_DIR}}/{e.pkg}/{inc}")\n',
+        )
 
-                print(
-                    "Adding target:",
-                    cmake_name,
-                    f" (kind={kind}, srcs={len(srcs)}, hdrs={len(hdrs)})"
-                    + (f" [conditional: {condition}]" if condition else ""),
-                )
 
-                # If a target has conditional sources but no fixed sources, it
-                # must be created as a concrete (STATIC) library rather than
-                # INTERFACE, so that target_sources(PRIVATE ...) works.
-                has_concrete_sources = bool(srcs) or bool(extracted_cond_srcs)
-                scope = _scope_for_target(kind, has_concrete_sources)
-                option_scope = _compile_option_scope(kind, has_concrete_sources)
-                include_scope = _include_scope(kind, has_concrete_sources)
+def _emit_binary_target(f, e: _TargetEmission) -> None:
+    """Emit a cc_binary stanza: executable, options, and includes."""
+    f.write(f"add_executable({e.cmake_name}\n")
+    for p in e.srcs + e.hdrs:
+        f.write(f"  {p}\n")
+    f.write(")\n")
+    f.write(
+        f"target_include_directories({e.cmake_name} {e.scope} "
+        "${PROJECT_SOURCE_DIR})\n"
+    )
+    f.write(
+        f"set_target_properties({e.cmake_name} PROPERTIES "
+        "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
+    )
+    flag = (
+        "-fexceptions"
+        if "_with_exceptions" in e.cmake_name
+        else "-fno-exceptions"
+    )
+    all_copts = [flag] + e.copts
+    f.write(
+        f"target_compile_options({e.cmake_name} {e.scope} {' '.join(all_copts)})\n"
+    )
+    for copt, copt_condition in e.cond_copts:
+        _write_guarded_line(
+            f,
+            copt_condition,
+            f"target_compile_options({e.cmake_name} {e.scope} {copt})\n",
+        )
+    if e.includes:
+        for inc in e.includes:
+            f.write(
+                f"target_include_directories({e.cmake_name} {e.scope} "
+                f'"${{PROJECT_SOURCE_DIR}}/{e.pkg}/{inc}")\n'
+            )
+    for inc, inc_condition in e.cond_includes:
+        _write_guarded_line(
+            f,
+            inc_condition,
+            f"target_include_directories({e.cmake_name} {e.scope} "
+            f'"${{PROJECT_SOURCE_DIR}}/{e.pkg}/{inc}")\n',
+        )
 
-                # Target declaration
-                if kind == "cc_library":
-                    if not srcs and extracted_cond_srcs:
-                        # Create concrete library with just headers; sources
-                        # will be added via target_sources() below.
-                        f.write(f"add_library({cmake_name}\n")
-                        for path in hdrs:
-                            f.write(f"  {path}\n")
-                        f.write(")\n")
-                        f.write(f"target_include_directories({cmake_name} PUBLIC ${{PROJECT_SOURCE_DIR}})\n")
-                        f.write(
-                            f"set_target_properties({cmake_name} PROPERTIES CXX_STANDARD 20 "
-                            "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
-                        )
-                        f.write(f"target_compile_options({cmake_name} PRIVATE -fno-exceptions)\n")
-                    else:
-                        write_library(f, cmake_name, srcs, hdrs)
-                    if copts:
-                        f.write(
-                            f"target_compile_options({cmake_name} {option_scope} {' '.join(copts)})\n"
-                        )
-                    for copt, copt_condition in cond_copts:
-                        _write_guarded_line(
-                            f,
-                            copt_condition,
-                            f"target_compile_options({cmake_name} {option_scope} {copt})\n",
-                        )
-                    if includes:
-                        for inc in includes:
-                            f.write(
-                                f"target_include_directories({cmake_name} {include_scope} "
-                                f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n'
-                            )
-                    for inc, inc_condition in cond_includes:
-                        _write_guarded_line(
-                            f,
-                            inc_condition,
-                            f"target_include_directories({cmake_name} {include_scope} "
-                            f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n',
-                        )
-                else:  # cc_binary or cc_test
-                    f.write(f"add_executable({cmake_name}\n")
-                    for p in srcs + hdrs:
-                        f.write(f"  {p}\n")
-                    f.write(")\n")
-                    f.write(
-                        f"target_include_directories({cmake_name} {scope} "
-                        "${PROJECT_SOURCE_DIR})\n"
-                    )
-                    f.write(
-                        f"set_target_properties({cmake_name} PROPERTIES "
-                        "CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)\n"
-                    )
-                    flag = (
-                        "-fexceptions"
-                        if "_with_exceptions" in cmake_name
-                        else "-fno-exceptions"
-                    )
-                    all_copts = [flag] + copts
-                    f.write(
-                        f"target_compile_options({cmake_name} {scope} {' '.join(all_copts)})\n"
-                    )
-                    for copt, copt_condition in cond_copts:
-                        _write_guarded_line(
-                            f,
-                            copt_condition,
-                            f"target_compile_options({cmake_name} {scope} {copt})\n",
-                        )
-                    if kind == "cc_test":
-                        f.write(f"add_test(NAME {cmake_name} COMMAND {cmake_name})\n")
-                        f.write(
-                            f"set_tests_properties({cmake_name} PROPERTIES\n"
-                            f'  ENVIRONMENT "RUNFILES_DIR=${{PROJECT_SOURCE_DIR}}")\n'
-                        )
-                    if includes:
-                        for inc in includes:
-                            f.write(
-                                f"target_include_directories({cmake_name} {scope} "
-                                f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n'
-                            )
-                    for inc, inc_condition in cond_includes:
-                        _write_guarded_line(
-                            f,
-                            inc_condition,
-                            f"target_include_directories({cmake_name} {scope} "
-                            f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n',
-                        )
 
-                # Emit conditional sources via target_sources()
-                for cond_src, cond in extracted_cond_srcs:
-                    f.write(f"if({cond})\n")
-                    f.write(f"  target_sources({cmake_name} PRIVATE {cond_src})\n")
-                    f.write("endif()\n")
+def _emit_conditional_sources(f, e: _TargetEmission) -> None:
+    """Emit conditional sources via target_sources()."""
+    for cond_src, cond in e.extracted_cond_srcs:
+        f.write(f"if({cond})\n")
+        f.write(f"  target_sources({e.cmake_name} PRIVATE {cond_src})\n")
+        f.write("endif()\n")
 
-                define_scope = scope if kind in {"cc_binary", "cc_test"} else include_scope
-                if defines:
-                    f.write(
-                        f"target_compile_definitions({cmake_name} {define_scope} "
-                        f"{' '.join(defines)})\n"
-                    )
-                for define, define_condition in cond_defines:
-                    _write_guarded_line(
-                        f,
-                        define_condition,
-                        f"target_compile_definitions({cmake_name} {define_scope} {define})\n",
-                    )
 
-                _emit_links_and_system_includes(
-                    f,
-                    target,
-                    cmake_name,
-                    scope,
-                    targets_by_cmake_name,
-                )
+def _emit_target_defines(f, e: _TargetEmission) -> None:
+    """Emit unconditional and conditional compile definitions."""
+    # cc_test targets are skipped before emission, so only cc_binary takes
+    # the executable scope here.
+    define_scope = e.scope if e.kind == "cc_binary" else e.include_scope
+    if e.defines:
+        f.write(
+            f"target_compile_definitions({e.cmake_name} {define_scope} "
+            f"{' '.join(e.defines)})\n"
+        )
+    for define, define_condition in e.cond_defines:
+        _write_guarded_line(
+            f,
+            define_condition,
+            f"target_compile_definitions({e.cmake_name} {define_scope} {define})\n",
+        )
 
-                # Close conditional block
-                if condition:
-                    f.write(f"endif() # {condition}\n")
 
-    # Umbrella INTERFACE target mirroring //:donner
+def _emit_package_target(
+    f,
+    pkg: str,
+    target: CMakeTarget,
+    targets_by_cmake_name: Dict[str, CMakeTarget],
+) -> None:
+    """Emit one target's full stanza: declaration, sources, defines, links."""
+    e = _prepare_emission(target, pkg)
+    if e.condition == "FALSE":
+        print(f"Skipping target {e.bazel_label}: unsupported in CMake configs")
+        return
+    if e.condition:
+        f.write(f"if({e.condition})\n")
+    print(
+        "Adding target:",
+        e.cmake_name,
+        f" (kind={e.kind}, srcs={len(e.srcs)}, hdrs={len(e.hdrs)})"
+        + (f" [conditional: {e.condition}]" if e.condition else ""),
+    )
+    if e.kind == "cc_library":
+        _emit_library_target(f, e)
+    else:  # cc_binary (cc_test targets are skipped above)
+        _emit_binary_target(f, e)
+    _emit_conditional_sources(f, e)
+    _emit_target_defines(f, e)
+    _emit_links_and_system_includes(
+        f,
+        target,
+        e.cmake_name,
+        e.scope,
+        targets_by_cmake_name,
+    )
+    if e.condition:
+        f.write(f"endif() # {e.condition}\n")
+
+
+def _emit_umbrella_dep(
+    f,
+    root_target: CMakeTarget,
+    dep: str,
+    configs: Set[str],
+    targets_by_cmake_name: Dict[str, CMakeTarget],
+) -> None:
+    """Emit one umbrella link edge, honouring dep conditions."""
+    resolution = _resolve_cmake_dep(dep)
+    if resolution is None or resolution.kind != "target" or resolution.value == "donner":
+        return
+    condition = _condition_for_dep(
+        root_target,
+        resolution.value or dep,
+        configs,
+        targets_by_cmake_name,
+    )
+    if condition == "FALSE":
+        return
+    if condition is None:
+        f.write(f"  target_link_libraries(donner INTERFACE {resolution.value})\n")
+    else:
+        f.write(f"  if({condition})\n")
+        f.write(f"    target_link_libraries(donner INTERFACE {resolution.value})\n")
+        f.write("  endif()\n")
+
+
+def _emit_umbrella_target(
+    targets: Dict[str, CMakeTarget],
+    targets_by_cmake_name: Dict[str, CMakeTarget],
+) -> None:
+    """Append the umbrella INTERFACE target mirroring //:donner."""
     root = Path("CMakeLists.txt")
     with root.open("a") as f:
         f.write("\n# Umbrella library for external consumers\n")
@@ -1607,24 +1686,31 @@ def generate_all_packages() -> None:
         root_target = targets.get("//:donner")
         if root_target is not None:
             for dep, configs in sorted(root_target.values["deps"].items()):
-                resolution = _resolve_cmake_dep(dep)
-                if resolution is None or resolution.kind != "target" or resolution.value == "donner":
-                    continue
-                condition = _condition_for_dep(
-                    root_target,
-                    resolution.value or dep,
-                    configs,
-                    targets_by_cmake_name,
-                )
-                if condition == "FALSE":
-                    continue
-                if condition is None:
-                    f.write(f"  target_link_libraries(donner INTERFACE {resolution.value})\n")
-                else:
-                    f.write(f"  if({condition})\n")
-                    f.write(f"    target_link_libraries(donner INTERFACE {resolution.value})\n")
-                    f.write("  endif()\n")
+                _emit_umbrella_dep(f, root_target, dep, configs, targets_by_cmake_name)
         f.write("endif()\n")
+
+
+def generate_all_packages() -> None:
+    """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
+
+    print("Discovering configured cc_library and cc_binary targets...")
+    targets = get_cmake_targets()
+    targets_by_cmake_name = _targets_by_cmake_name(targets)
+    by_pkg = _group_targets_by_package(targets)
+
+    # Per-package generation
+    for pkg, entries in by_pkg.items():
+        cmake = Path(pkg) / "CMakeLists.txt"
+        cmake.parent.mkdir(parents=True, exist_ok=True)
+        with cmake.open("w") as f:
+            _write_package_header(f)
+            for target in sorted(entries, key=lambda t: (t.kind, t.name)):
+                if _handle_special_target(f, pkg, target):
+                    continue
+                _emit_package_target(f, pkg, target, targets_by_cmake_name)
+
+    # Umbrella INTERFACE target mirroring //:donner
+    _emit_umbrella_target(targets, targets_by_cmake_name)
 
 #
 # Entry point
