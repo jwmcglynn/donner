@@ -1077,8 +1077,50 @@ TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
       << "Desktop background rendering shares the primary wrapper across threads. The UI-only "
          "framebuffer path needs a separate wrapper to isolate mutable counters and deferred "
          "destroy queues.";
+  EXPECT_EQ(window.geodeFramebufferDevice()->physicalDeviceOwner(),
+            window.geodeDevice()->physicalDeviceOwner());
+  EXPECT_NE(window.geodeFramebufferDevice()->deviceId(), window.geodeDevice()->deviceId());
+  EXPECT_EQ(static_cast<WGPUDevice>(window.geodeFramebufferDevice()->device()),
+            static_cast<WGPUDevice>(window.geodeDevice()->device()));
+  EXPECT_EQ(static_cast<WGPUQueue>(window.geodeFramebufferDevice()->queue()),
+            static_cast<WGPUQueue>(window.geodeDevice()->queue()));
 #endif
 }
+
+#ifndef __EMSCRIPTEN__
+TEST(EditorWindowTest, WgpuPhysicalDeviceOutlivesWindowWhenContextIsRetained) {
+  std::shared_ptr<geode::GeodeDevice> retainedContext;
+  std::weak_ptr<geode::GeodePhysicalDeviceOwner> physicalOwner;
+  {
+    EditorWindow window(EditorWindowOptions{
+        .title = "Retained WGPU Context Test",
+        .initialWidth = 64,
+        .initialHeight = 64,
+        .visible = false,
+    });
+    if (!window.valid() || window.geodeFramebufferDevice() == nullptr) {
+      GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+    }
+    retainedContext = window.geodeFramebufferDevice();
+    physicalOwner = retainedContext->physicalDeviceOwner();
+  }
+
+  ASSERT_FALSE(physicalOwner.expired());
+  ASSERT_TRUE(static_cast<bool>(retainedContext->device()));
+  wgpu::BufferDescriptor descriptor = {};
+  descriptor.label = geode::wgpuLabel("RetainedContextBuffer");
+  descriptor.size = 16;
+  descriptor.usage = wgpu::BufferUsage::CopyDst;
+  {
+    geode::ScopedWgpuHandle<wgpu::Buffer> buffer(
+        retainedContext->device().createBuffer(descriptor));
+    EXPECT_TRUE(static_cast<bool>(buffer));
+  }
+
+  retainedContext.reset();
+  EXPECT_TRUE(physicalOwner.expired());
+}
+#endif
 
 TEST(EditorWindowTest, WgpuCheckerboardRejectsAStaleFramebufferExtent) {
   EditorWindow window(EditorWindowOptions{

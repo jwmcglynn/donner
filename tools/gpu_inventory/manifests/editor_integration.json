@@ -135,9 +135,6 @@
       ],
       "wgpuCTypes": [
         "WGPUDevice",
-        "WGPUDeviceLostReason",
-        "WGPUDeviceLostReason_Destroyed",
-        "WGPUDeviceLostReason_InstanceDropped",
         "WGPUEmscriptenSurfaceSourceCanvasHTMLSelector",
         "WGPUErrorType",
         "WGPUInstanceFeatureName",
@@ -178,7 +175,6 @@
         "LoadOp",
         "MapMode",
         "PresentMode",
-        "Queue",
         "RenderPassColorAttachment",
         "RenderPassDescriptor",
         "RenderPassEncoder",
@@ -247,14 +243,23 @@
     },
     "donner/editor/tests/EditorWindow_tests.cc": {
       "operations": [
+        "createBuffer",
         "draw"
       ],
       "usesEditorWgpuDefine": true,
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
       "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue",
         "WGPUTexture"
       ],
       "wgpuCppTokens": [
         "Adapter",
+        "Buffer",
+        "BufferDescriptor",
+        "BufferUsage",
         "Instance",
         "Surface",
         "Texture",

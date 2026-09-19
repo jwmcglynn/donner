@@ -69,6 +69,41 @@ TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
   EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before);
 }
 
+TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingLostState) {
+  auto ownerContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(ownerContext, nullptr);
+
+  GeodeEmbedConfig config;
+  config.physicalDevice = ownerContext->physicalDeviceOwner();
+  config.lostState = std::make_shared<GeodeDeviceLostState>();
+  EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
+}
+
+TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
+  auto ownerContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(ownerContext, nullptr);
+
+  GeodeEmbedConfig config{ownerContext->instance(), ownerContext->device(),
+                          ownerContext->queue(),    wgpu::TextureFormat::RGBA8Unorm,
+                          ownerContext->adapter(),  std::make_shared<GeodeDeviceLostState>()};
+  EXPECT_NE(GeodeDevice::CreateFromExternal(config), nullptr);
+}
+
+TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
+  auto ownerContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(ownerContext, nullptr);
+
+  auto lostState = std::make_shared<GeodeDeviceLostState>();
+  auto borrowedOwner = GeodePhysicalDeviceOwner::CreateBorrowed(
+      ownerContext->instance(), ownerContext->adapter(), ownerContext->device(),
+      ownerContext->queue(), lostState);
+  lostState->lost.store(true, std::memory_order_release);
+
+  GeodeEmbedConfig config;
+  config.physicalDevice = std::move(borrowedOwner);
+  EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
+}
+
 /// Can we allocate an offscreen render-target texture?
 TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   auto device = GeodeDevice::CreateHeadless();
