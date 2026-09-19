@@ -332,10 +332,7 @@ void DestroyPooledReadbackBuffer(GeodeWgpuAdapterDevice* adapter, gpu::Buffer& b
 
 }  // namespace
 
-/// PIMPL struct: holds the wgpu::Instance so its lifetime is tied to
-/// the GeodeDevice wrapper. Adapter/device/queue handles are stored
-/// directly on the outer class. In embedded mode, `instance` is null
-/// because the host owns the instance.
+/// Context-local pipelines, runtime tables, counters, and retirement state.
 struct GeodeDevice::Impl {
   ~Impl() {
     for (auto& [unusedKey, entry] : snapshotReadbackPool) {
@@ -345,8 +342,6 @@ struct GeodeDevice::Impl {
       DestroyPooledReadbackBuffer(adapterDevice.get(), entry.resources.readback);
     }
   }
-
-  wgpu::Instance instance;
 
   // Borrowed wgpu aliases of the shared bind-slot resources below, for the call sites that
   // still build wgpu bind groups. Non-owning: the runtime handles own the backing.
@@ -1081,18 +1076,26 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
   return *impl_->checkerboardUnderlayPipeline;
 }
 
+namespace {
+
+bool EmbedConfigMatchesPhysicalDevice(const GeodeEmbedConfig& config,
+                                      const GeodePhysicalDeviceOwner& physicalDevice) {
+  return (!config.lostState || config.lostState == physicalDevice.lostState()) &&
+         (!config.instance || static_cast<WGPUInstance>(config.instance) ==
+                                  static_cast<WGPUInstance>(physicalDevice.instance())) &&
+         (!config.adapter || static_cast<WGPUAdapter>(config.adapter) ==
+                                 static_cast<WGPUAdapter>(physicalDevice.adapter())) &&
+         (!config.device || static_cast<WGPUDevice>(config.device) ==
+                                static_cast<WGPUDevice>(physicalDevice.device())) &&
+         (!config.queue ||
+          static_cast<WGPUQueue>(config.queue) == static_cast<WGPUQueue>(physicalDevice.queue()));
+}
+
+}  // namespace
+
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice = config.physicalDevice;
-  if (physicalDevice != nullptr &&
-      ((config.lostState && config.lostState != physicalDevice->lostState()) ||
-       (config.instance && static_cast<WGPUInstance>(config.instance) !=
-                               static_cast<WGPUInstance>(physicalDevice->instance())) ||
-       (config.adapter && static_cast<WGPUAdapter>(config.adapter) !=
-                              static_cast<WGPUAdapter>(physicalDevice->adapter())) ||
-       (config.device && static_cast<WGPUDevice>(config.device) !=
-                             static_cast<WGPUDevice>(physicalDevice->device())) ||
-       (config.queue &&
-        static_cast<WGPUQueue>(config.queue) != static_cast<WGPUQueue>(physicalDevice->queue())))) {
+  if (physicalDevice != nullptr && !EmbedConfigMatchesPhysicalDevice(config, *physicalDevice)) {
     std::fprintf(stderr,
                  "[Geode] CreateFromExternal: physical owner and explicit state disagree\n");
     return nullptr;
@@ -1103,6 +1106,10 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
   }
   if (!physicalDevice->device() || !physicalDevice->queue()) {
     std::fprintf(stderr, "[Geode] CreateFromExternal: null device or queue in config\n");
+    return nullptr;
+  }
+  if (physicalDevice->lostState()->lost.load(std::memory_order_acquire)) {
+    std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
     return nullptr;
   }
 
