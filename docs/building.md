@@ -165,16 +165,8 @@ cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
 
-To run tests, they must be enabled during the CMake configuration step:
-
-```sh
-cmake -S . -B build -DDONNER_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build
-```
-
-This fetches dependencies with `FetchContent` and builds the libraries. Unit tests are
-not built by default and can be enabled with the `DONNER_BUILD_TESTS` option.
+This fetches dependencies with `FetchContent` and builds the libraries. The CMake
+mirror does not build unit tests; run them with `bazel test //donner/...`.
 
 The standalone CMake consumer example under `examples/cmake_consumer/` is a getting-started project
 for linking the exported `donner` target from another CMake project. See \ref GettingStartedCMake
@@ -188,7 +180,6 @@ for the external-consumer setup.
 | `DONNER_TEXT`             | `ON`          | Enable text rendering (`<text>`, `<tspan>`)                        |
 | `DONNER_TEXT_WOFF2`       | `ON`          | Enable WOFF2 web font loading                                      |
 | `DONNER_FILTERS`          | `ON`          | Enable SVG filter effects                                          |
-| `DONNER_BUILD_TESTS`      | `OFF`         | Build unit tests (adds googletest dependency)                      |
 
 ### Bazel configuration options
 

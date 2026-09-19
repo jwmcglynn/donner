@@ -208,8 +208,6 @@ bazel test //donner/base/...      # scope tests to specific dirs (renderer is sl
 
 # CMake
 python3 tools/cmake/gen_cmakelists.py && cmake -S . -B build && cmake --build build -j$(nproc)
-# CMake with tests
-cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) && ctest --test-dir build
 ```
 
 ## Transform Naming Convention

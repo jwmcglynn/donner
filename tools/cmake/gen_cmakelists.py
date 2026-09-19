@@ -10,10 +10,12 @@ This script performs three high-level steps:
     embeds Skia, and wires up umbrella and convenience libraries.
 
 2.  **generate_all_packages()**
-    Discovers every `cc_library`, `cc_binary`, `cc_test`, and `embed_resources`
-    under the `//…` Bazel workspace (excluding a few hand-curated packages)
-    and mirrors them as CMake targets with appropriate source files,
-    include paths, and transitive dependencies.
+    Mirrors the public `//:donner` dependency closure (`cc_library`,
+    `cc_binary`, and `embed_resources`) as CMake targets with appropriate
+    source files, include paths, and transitive dependencies. `cc_test`
+    targets are not part of the mirror: tests depend on the public
+    libraries rather than the reverse, so no test-only leaf can enter the
+    queried closure (issue #1212). Run unit tests with Bazel instead.
 
 The generated tree lets consumers build Donner without Bazel, while
 retaining the original dependency graph.
@@ -1068,8 +1070,7 @@ def generate_root() -> None:
         # Force static libraries — template specializations are spread across
         # libraries and resolved at binary link time (like Bazel).
         f.write("set(BUILD_SHARED_LIBS OFF CACHE BOOL \"\" FORCE)\n\n")
-        f.write("include(FetchContent)\n")
-        f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n\n")
+        f.write("include(FetchContent)\n\n")
 
         # ── Feature options (mirror Bazel flags) ───────────────────────
         f.write("# Feature options (mirror Bazel flags)\n")
@@ -1193,12 +1194,6 @@ def generate_root() -> None:
         f.write("pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)\n")
         f.write("endif() # DONNER_TEXT_FULL\n\n")
 
-        # Optional test enable switch
-        f.write("\n")
-        f.write("if(DONNER_BUILD_TESTS)\n")
-        f.write("  enable_testing()\n")
-        f.write("endif()\n\n")
-
         # Symlink hack for rules_cc runfiles
         f.write(
             "execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "
@@ -1210,20 +1205,6 @@ def generate_root() -> None:
             "${rules_cc_SOURCE_DIR}/cc/runfiles/runfiles.cc)\n"
         )
         f.write("target_include_directories(rules_cc_runfiles PUBLIC ${CMAKE_BINARY_DIR})\n\n")
-
-        # Set up runfiles directory for CMake tests. Bazel tests use the runfiles
-        # tree automatically, but CMake tests need RUNFILES_DIR pointing to the
-        # source tree root (which already has donner/ in it). External repos need
-        # symlinks at the source root to match the Bazel runfiles layout.
-        f.write("# Runfiles setup for CMake tests\n")
-        f.write("if(DONNER_BUILD_TESTS)\n")
-        f.write("  # Symlink external repos to match Bazel runfiles layout\n")
-        f.write("  if(NOT EXISTS ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
-        f.write("    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink\n")
-        f.write("      ${PROJECT_SOURCE_DIR}/third_party/css-parsing-tests\n")
-        f.write("      ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
-        f.write("  endif()\n")
-        f.write("endif()\n\n")
 
         # Python3 is needed for embed_resources custom commands.
         f.write("find_package(Python3 REQUIRED)\n\n")
@@ -1409,7 +1390,7 @@ def _emit_links_and_system_includes(
 def generate_all_packages() -> None:
     """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
 
-    print("Discovering configured cc_library, cc_binary, and cc_test targets...")
+    print("Discovering configured cc_library and cc_binary targets...")
     targets = get_cmake_targets()
     targets_by_cmake_name = _targets_by_cmake_name(targets)
     by_pkg: DefaultDict[str, List[CMakeTarget]] = DefaultDict(list)
@@ -1438,6 +1419,15 @@ def generate_all_packages() -> None:
                 if "_fuzzer" in tgt:
                     # Skip fuzzers, they are not built with CMake
                     print(f"Skipping fuzzer {bazel_label}")
+                    continue
+
+                if kind == "cc_test":
+                    # Tests are not part of the CMake mirror: the queried
+                    # deps(//:donner) closure cannot contain test-only leaves,
+                    # so a cc_test reaching this point is a query regression
+                    # that must not silently reintroduce an unexecuted test
+                    # set (issue #1212).
+                    print(f"Skipping test {bazel_label}: not in the CMake mirror")
                     continue
 
                 if kind == "embed_resources":
@@ -1519,7 +1509,7 @@ def generate_all_packages() -> None:
                             f"target_include_directories({cmake_name} {include_scope} "
                             f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n',
                         )
-                else:  # cc_binary or cc_test
+                else:  # cc_binary (cc_test targets are skipped above)
                     f.write(f"add_executable({cmake_name}\n")
                     for p in srcs + hdrs:
                         f.write(f"  {p}\n")
@@ -1546,12 +1536,6 @@ def generate_all_packages() -> None:
                             f,
                             copt_condition,
                             f"target_compile_options({cmake_name} {scope} {copt})\n",
-                        )
-                    if kind == "cc_test":
-                        f.write(f"add_test(NAME {cmake_name} COMMAND {cmake_name})\n")
-                        f.write(
-                            f"set_tests_properties({cmake_name} PROPERTIES\n"
-                            f'  ENVIRONMENT "RUNFILES_DIR=${{PROJECT_SOURCE_DIR}}")\n'
                         )
                     if includes:
                         for inc in includes:

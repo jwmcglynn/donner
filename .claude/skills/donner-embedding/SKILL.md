@@ -210,8 +210,9 @@ Key CMake facts (root `CMakeLists.txt` is generated; options validated with `FAT
 - `DONNER_RENDERER_BACKEND` supports only `"tiny_skia"` in CMake today — anything else fails
   configure. Geode is Bazel-only.
 - Options: `DONNER_TEXT` (ON), `DONNER_TEXT_FULL` (OFF), `DONNER_TEXT_WOFF2` (ON, requires
-  `DONNER_TEXT`), `DONNER_FILTERS` (ON), `DONNER_BUILD_TESTS` (OFF). Deps come via
-  `FetchContent` (abseil, EnTT, googletest, nlohmann_json, …).
+  `DONNER_TEXT`), `DONNER_FILTERS` (ON). Deps come via `FetchContent` (abseil, EnTT,
+  googletest, nlohmann_json, …). The CMake mirror does not build unit tests; run them
+  with `bazel test //donner/...`.
 - Error `"Run python3 tools/cmake/gen_cmakelists.py in DONNER_SOURCE_DIR first"` means exactly
   that — the consumer project checks for the generated root `CMakeLists.txt`.
 - **If you touch the CMake mirror or `gen_cmakelists.py`**, project rule: also run

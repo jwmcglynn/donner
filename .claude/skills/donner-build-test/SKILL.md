@@ -258,7 +258,6 @@ python3 tools/cmake/gen_cmakelists.py                    # regenerate (runs baze
 python3 tools/cmake/gen_cmakelists.py --check            # static validation, fast
 python3 tools/cmake/gen_cmakelists.py --check --build    # + real cmake configure/compile gate
 bazel test //tools/cmake:gen_cmakelists_test             # generator unit tests
-cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build && ctest --test-dir build
 ```
 
 A new `bazel_dep` in `MODULE.bazel` usually needs a mapping in `tools/cmake/external_deps.json`,
