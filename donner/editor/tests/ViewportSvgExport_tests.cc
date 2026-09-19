@@ -532,6 +532,46 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
   EXPECT_THAT(result.value, Not(HasSubstr("trailing")));
 }
 
+TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
+  // The parser skips `<!ENTITY ...>` declarations quote-aware inside a doctype
+  // internal subset, so brackets inside a quoted entity value do not close the
+  // subset. The scanner must not treat them as subset delimiters.
+  const SVGDocument doc = ParseOrDie(
+      "<!DOCTYPE svg [<!ENTITY data ']><svg id=\"not-the-root\">'>]>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+}
+
+TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
+  // A doctype inside the body whose entity value contains markup-like text must
+  // not derail the root close search: the body must still end at the root's own
+  // `</svg>`, leaving the exported group balanced with a single close tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<!DOCTYPE d [<!ENTITY y ']><svg id=\"faux\">'>]>"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_EQ(result.value.find("</svg>"), result.value.rfind("</svg>"));
+}
+
 TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
   for (std::string_view prefix : {"<!--", "<?editor"}) {
     SCOPED_TRACE(prefix);

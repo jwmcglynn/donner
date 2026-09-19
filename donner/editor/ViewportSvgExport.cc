@@ -174,23 +174,66 @@ std::size_t FindProcessingInstructionEnd(std::string_view source, std::size_t po
   return std::string_view::npos;
 }
 
+/// Find the byte offset of the `>` that ends a `<!ENTITY ...>` declaration
+/// whose body starts at \p pos, skipping quoted text, or npos when unterminated.
+std::size_t FindEntityDeclarationEnd(std::string_view source, std::size_t pos) {
+  bool inSingleQuote = false;
+  bool inDoubleQuote = false;
+  for (std::size_t cursor = pos; cursor < source.size(); ++cursor) {
+    const char ch = source[cursor];
+    if (ch == '\0') {
+      return std::string_view::npos;
+    }
+    if (!inSingleQuote && !inDoubleQuote) {
+      if (ch == '\'') {
+        inSingleQuote = true;
+      } else if (ch == '"') {
+        inDoubleQuote = true;
+      } else if (ch == '>') {
+        return cursor;
+      }
+    } else if (inSingleQuote) {
+      if (ch == '\'') {
+        inSingleQuote = false;
+      }
+    } else if (ch == '"') {
+      inDoubleQuote = false;
+    }
+  }
+  return std::string_view::npos;
+}
+
 /// Find the byte offset just past the `>` that ends a `<!...>` construct
 /// starting at \p pos, or npos when unterminated.
 ///
 /// This mirrors \ref donner::xml::XMLParser's doctype scan: a `>` inside the
-/// internal subset `[...]` does not terminate the doctype.
+/// internal subset `[...]` does not terminate the doctype, and `<!ENTITY>`
+/// declarations inside the subset are skipped quote-aware so brackets in their
+/// values do not affect the subset nesting.
 std::size_t FindDoctypeEnd(std::string_view source, std::size_t pos) {
   int bracketLevel = 0;
+  bool inInternalSubset = false;
   for (std::size_t cursor = pos; cursor < source.size(); ++cursor) {
     const char ch = source[cursor];
     if (ch == '[') {
       ++bracketLevel;
+      inInternalSubset = true;
     } else if (ch == ']') {
       if (bracketLevel > 0) {
         --bracketLevel;
       }
+      if (bracketLevel == 0) {
+        inInternalSubset = false;
+      }
     } else if (ch == '>' && bracketLevel == 0) {
       return cursor + 1;
+    } else if (inInternalSubset && cursor + 8 < source.size() &&
+               source.substr(cursor, 8) == "<!ENTITY") {
+      const std::size_t entityEnd = FindEntityDeclarationEnd(source, cursor + 8);
+      if (entityEnd == std::string_view::npos) {
+        return std::string_view::npos;
+      }
+      cursor = entityEnd;  // The loop increment continues past the '>'.
     }
   }
   return std::string_view::npos;
