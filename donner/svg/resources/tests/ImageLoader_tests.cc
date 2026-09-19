@@ -247,6 +247,63 @@ TEST(ImageLoader, ReturnsDataCorruptWhenInfoSucceedsButDecodeFails) {
   ExpectImageLoaderError(imageLoader.fromUri("missing-idat.png"), UrlLoaderError::DataCorrupt);
 }
 
+TEST(ImageLoader, RejectsPngWithTruncatedDeclaredIdat) {
+  // Regression: a 69-byte truncated PNG whose second IDAT chunk declares a
+  // 0x40000000-byte payload while only four payload bytes are present.
+  // stb_image sizes its IDAT accumulation buffer from the declared length
+  // before checking that the data exists, so the decode requests a 2 GiB
+  // allocation and aborts libFuzzer's memory limit (image_loader_fuzzer OOM).
+  // The checked-in corpus seed `regression-png-truncated-idat.png` is the
+  // red-to-green reproducer; this test pins the loader's rejection contract.
+  StaticResourceLoader resourceLoader(std::vector<uint8_t>{
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  // PNG signature
+      0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R',   // IHDR, 13 bytes
+      0x00, 0x00, 0x00, 0x0B,                          // width 11
+      0x00, 0x00, 0x04, 0x05,                          // height 1029
+      0x08, 0x02, 0x00, 0x00, 0x00,                    // bit depth 8, color type 2
+      0x90, 0x77, 0x53, 0xDE,                          // IHDR CRC
+      0x00, 0x00, 0x00, 0x0C, 'I',  'D',  'A',  'T',   // IDAT, 12 bytes
+      0x78, 0x9C, 0x6B, 0xF8, 0xCF, 0xC0, 0x00, 0x01,
+      0x03, 0x01, 0xE5, 0x00, 0xC9, 0xDE, 0x92, 0xEF,  // IDAT CRC
+      0x40, 0x00, 0x00, 0x00, 'I',  'D',  'A',  'T',   // IDAT declaring 0x40000000
+      0x78, 0x42, 0x60, 0x82,                          // only four payload bytes present
+  });
+  ImageLoader imageLoader(resourceLoader);
+
+  ExpectImageLoaderError(imageLoader.fromUri("truncated-idat.png"), UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, LoadsPngWithAncillaryChunkAndSplitIdat) {
+  // The declared-length walk must accept well-formed PNGs that carry ancillary
+  // chunks and split the zlib stream across multiple IDAT chunks. Both IDAT
+  // chunks carry zero CRCs; stb_image reads and discards chunk CRCs without
+  // verifying them.
+  StaticResourceLoader resourceLoader(std::vector<uint8_t>{
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  // PNG signature
+      0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R',   // IHDR, 13 bytes
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,  // 1x1
+      0x08, 0x04, 0x00, 0x00, 0x00,                    // bit depth 8, grayscale+alpha
+      0xB5, 0x1C, 0x0C, 0x02,                          // IHDR CRC
+      0x00, 0x00, 0x00, 0x00, 't',  'E',  'X',  't',   // empty tEXt chunk
+      0x00, 0x00, 0x00, 0x00,                          // CRC (stb_image does not verify it)
+      0x00, 0x00, 0x00, 0x05, 'I',  'D',  'A',  'T',   // first IDAT, 5 bytes
+      0x78, 0xDA, 0x63, 0xFC, 0xFF, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x06, 'I',  'D',  'A',  'T',  // second IDAT, 6 bytes
+      0x1F, 0x00, 0x03, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 'I',  'E',  'N',  'D',  // IEND
+      0xAE, 0x42, 0x60, 0x82,                               // IEND CRC
+  });
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("split-idat.png");
+
+  ASSERT_TRUE(std::holds_alternative<ImageResource>(result));
+  const ImageResource& image = std::get<ImageResource>(result);
+  EXPECT_EQ(image.width, 1);
+  EXPECT_EQ(image.height, 1);
+  EXPECT_EQ(image.data.size(), 4u);
+}
+
 TEST(ImageLoader, ReturnsUrlLoaderErrors) {
   NullResourceLoader resourceLoader;
   ImageLoader imageLoader(resourceLoader);
