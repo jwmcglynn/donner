@@ -82,6 +82,14 @@ ViewportState IdentityViewport() {
                       /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(400.0, 300.0));
 }
 
+/// Assert that exported SVG text re-parses cleanly: the deterministic form of
+/// the round-trip fuzzer oracle.
+void ExpectReparsesCleanly(std::string_view exported) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  ParseResult<SVGDocument> reparsed = SVGParser::ParseSVG(exported, sink);
+  ASSERT_FALSE(reparsed.hasError()) << "Re-parse error: " << reparsed.error();
+}
+
 TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
 
@@ -471,6 +479,7 @@ TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarku
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
@@ -491,6 +500,7 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
@@ -510,6 +520,7 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
 }
 
 TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
@@ -529,6 +540,7 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("trailing")));
+  ExpectReparsesCleanly(result.value);
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
@@ -549,6 +561,7 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
 }
 
 TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
@@ -569,6 +582,55 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_EQ(result.value.find("</svg>"), result.value.rfind("</svg>"));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, NestedSvgCloseDoesNotEndRootBody) {
+  // Nested `<svg>` elements are tracked, so an inner close cannot be mistaken
+  // for the root's: the body extends past it to the root's own close tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<svg id=\"inner\" width=\"10\" height=\"10\"><rect width=\"5\" height=\"5\"/></svg>"
+      "<rect id=\"outer-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("id=\"inner\""));
+  EXPECT_THAT(result.value, HasSubstr("id=\"outer-child\""));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, NestedSvgWithMissingRootCloseUsesBalancedRemainder) {
+  // With the root close tag missing, the body extends to end-of-source and
+  // stays balanced: slicing at the inner close instead would leave an unclosed
+  // `<svg>` inside the exported group.
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<svg id=\"inner\" width=\"10\" height=\"10\"></svg>"
+      "<rect id=\"outer-child\" width=\"10\" height=\"10\"/></svg>");
+  const std::size_t closeOffset = doc.source().rfind("</svg>");
+  ASSERT_NE(closeOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 6)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("id=\"inner\""));
+  EXPECT_THAT(result.value, HasSubstr("id=\"outer-child\""));
+  ExpectReparsesCleanly(result.value);
 }
 
 TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
@@ -940,6 +1002,33 @@ TEST(ViewportSvgExportTest, DataHrefAttributeIsRefused) {
 
   EXPECT_FALSE(result.ok());
   EXPECT_THAT(result.error, HasSubstr("https://example.com/data.png"));
+}
+
+TEST(ViewportSvgExportTest, UnterminatedHrefValueIsRefused) {
+  // An `href` attribute whose value never terminates (mid-edit) is refused by
+  // name: failing closed preserves the historical verdict for unparseable
+  // values.
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<image href=\"https://example.com/x\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const std::size_t valueStart = doc.source().find("https://example.com/x\"");
+  ASSERT_NE(valueStart, std::string_view::npos);
+  const std::size_t deleteFrom = valueStart + std::string_view("https://example.com/x").size();
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(deleteFrom), FileOffset::Offset(doc.source().size())},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("external"));
 }
 
 // --- Overlay serialization -----------------------------------------------

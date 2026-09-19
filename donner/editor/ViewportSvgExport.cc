@@ -176,6 +176,12 @@ std::string_view UnquoteValue(std::string_view quoted) {
   return std::string_view();
 }
 
+/// Returns true if \p token is a closing-tag opener (`</`). This classifies the
+/// already-isolated one-to-two-byte TagOpen token; it never searches source.
+bool IsClosingTagOpen(const xml::XMLToken& token, std::string_view source) {
+  return token.text(source).starts_with("</");
+}
+
 /// Result of locating the end of an element open tag in the token stream.
 struct TagEnd {
   std::size_t index = 0;  ///< Index of the TagClose or TagSelfClose token.
@@ -223,7 +229,7 @@ RootTag ParseRootTag(std::string_view source, const std::vector<xml::XMLToken>& 
       ++i;
       continue;
     }
-    const bool isClosing = tokens[i].text(source).starts_with("</");
+    const bool isClosing = IsClosingTagOpen(tokens[i], source);
     const std::string_view name = tokens[i + 1].text(source);
     if (isClosing) {
       if (depth > 0) {
@@ -274,7 +280,7 @@ RootTag ParseRootTag(std::string_view source, const std::vector<xml::XMLToken>& 
           ++k;
           continue;
         }
-        if (tokens[k].text(source).starts_with("</")) {
+        if (IsClosingTagOpen(tokens[k], source)) {
           --svgDepth;
           if (svgDepth == 0) {
             result.bodyEnd = TokenStart(tokens[k]);
@@ -309,8 +315,10 @@ RootTag ParseRootTag(std::string_view source, const std::vector<xml::XMLToken>& 
 /// inspected: `href`-like text in comments, CDATA sections, processing
 /// instructions, or element text never forms AttributeName tokens. An
 /// attribute matches when its name ends with "href" (case-sensitive),
-/// preserving the historical substring match for real attributes. Returns the
-/// offending raw value, or empty.
+/// preserving the historical substring match for real attributes. An `href`
+/// attribute with no consumable value (unterminated quote) is refused by name:
+/// failing closed preserves the historical verdict for unparseable values.
+/// Returns the offending raw value (or attribute name), or empty.
 std::string FindExternalReference(std::string_view source,
                                   const std::vector<xml::XMLToken>& tokens) {
   static constexpr std::array<std::string_view, 3> kExternalSchemes = {
@@ -318,17 +326,22 @@ std::string FindExternalReference(std::string_view source,
       "https://",
       "file://",
   };
-  bool awaitingHrefValue = false;
+  std::string pendingHrefName;  // Non-empty while an href name awaits its value.
   for (const xml::XMLToken& token : tokens) {
     switch (token.type) {
       case xml::XMLTokenType::AttributeName: {
+        if (!pendingHrefName.empty()) {
+          return pendingHrefName;  // Previous href attribute had no value.
+        }
         const std::string_view name = token.text(source);
-        awaitingHrefValue = name.size() >= 4 && name.substr(name.size() - 4) == "href";
+        if (name.size() >= 4 && name.substr(name.size() - 4) == "href") {
+          pendingHrefName.assign(name);
+        }
         break;
       }
       case xml::XMLTokenType::AttributeValue:
-        if (awaitingHrefValue) {
-          awaitingHrefValue = false;
+        if (!pendingHrefName.empty()) {
+          pendingHrefName.clear();
           const std::string_view value = UnquoteValue(token.text(source));
           // Skip leading whitespace inside the value when scheme-matching.
           std::size_t valueOffset = 0;
@@ -345,8 +358,15 @@ std::string FindExternalReference(std::string_view source,
         break;
       case xml::XMLTokenType::Whitespace:
         break;  // Only whitespace intervenes between a name and its value.
-      default: awaitingHrefValue = false; break;
+      default:
+        if (!pendingHrefName.empty()) {
+          return pendingHrefName;  // The href attribute never got a value.
+        }
+        break;
     }
+  }
+  if (!pendingHrefName.empty()) {
+    return pendingHrefName;  // Trailing href attribute with no value.
   }
   return std::string();
 }
