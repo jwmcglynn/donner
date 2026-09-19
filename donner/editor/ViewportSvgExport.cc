@@ -125,6 +125,77 @@ bool MatchesAtCaseInsensitive(std::string_view haystack, std::size_t pos, std::s
   return true;
 }
 
+/// Returns true if \p ch is XML whitespace.
+bool IsXmlWhitespace(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+/// Returns true if the tag name starting at \p pos equals \p name (ASCII
+/// case-insensitive) and ends at a tag-name terminator.
+bool MatchesTagName(std::string_view source, std::size_t pos, std::string_view name) {
+  if (!MatchesAtCaseInsensitive(source, pos, name)) {
+    return false;
+  }
+  const std::size_t after = pos + name.size();
+  return after >= source.size() || IsXmlWhitespace(source[after]) || source[after] == '>' ||
+         source[after] == '/';
+}
+
+/// Find the byte offset just past the `?>` that ends a `<?...?>` construct
+/// starting at \p pos, or npos when unterminated.
+///
+/// This mirrors \ref donner::xml::XMLParser: an XML declaration's attributes are
+/// parsed quote-aware, so a `?>` inside a quoted declaration value does not end
+/// the declaration, while a generic processing instruction ends at the first
+/// `?>`.
+std::size_t FindProcessingInstructionEnd(std::string_view source, std::size_t pos) {
+  const std::size_t contentStart = pos + 2;
+  if (source.substr(contentStart, 3) != "xml") {
+    const std::size_t end = source.find("?>", contentStart);
+    return (end == std::string_view::npos) ? std::string_view::npos : end + 2;
+  }
+
+  std::size_t cursor = contentStart;
+  while (cursor < source.size()) {
+    const char ch = source[cursor];
+    if (ch == '"' || ch == '\'') {
+      const std::size_t quoteEnd = source.find(ch, cursor + 1);
+      if (quoteEnd == std::string_view::npos) {
+        return std::string_view::npos;
+      }
+      cursor = quoteEnd + 1;
+      continue;
+    }
+    if (ch == '?' && cursor + 1 < source.size() && source[cursor + 1] == '>') {
+      return cursor + 2;
+    }
+    ++cursor;
+  }
+  return std::string_view::npos;
+}
+
+/// Find the byte offset just past the `>` that ends a `<!...>` construct
+/// starting at \p pos, or npos when unterminated.
+///
+/// This mirrors \ref donner::xml::XMLParser's doctype scan: a `>` inside the
+/// internal subset `[...]` does not terminate the doctype.
+std::size_t FindDoctypeEnd(std::string_view source, std::size_t pos) {
+  int bracketLevel = 0;
+  for (std::size_t cursor = pos; cursor < source.size(); ++cursor) {
+    const char ch = source[cursor];
+    if (ch == '[') {
+      ++bracketLevel;
+    } else if (ch == ']') {
+      if (bracketLevel > 0) {
+        --bracketLevel;
+      }
+    } else if (ch == '>' && bracketLevel == 0) {
+      return cursor + 1;
+    }
+  }
+  return std::string_view::npos;
+}
+
 /// A single `name="value"` attribute parsed from an element open tag.
 struct Attribute {
   std::string name;
@@ -154,17 +225,19 @@ std::size_t FindRootSvgStart(std::string_view source) {
       continue;
     }
     if (pos + 1 < source.size() && source[pos + 1] == '?') {
-      // Processing instructions (including the XML declaration) end at `?>`.
-      // The XML parser consumes the whole `<?...?>` as one node, so stop at the
-      // terminator rather than the first `>`: a PI whose content contains `>`
-      // followed by markup must not expose that markup to the root scan.
-      const std::size_t end = source.find("?>", pos + 2);
-      pos = (end == std::string_view::npos) ? source.size() : end + 2;
+      // XML declaration or processing instruction. Both end at `?>`, and the
+      // XML parser applies the quote-aware declaration rule, so a PI or
+      // declaration whose content contains `>` followed by markup must not
+      // expose that markup to the root scan.
+      const std::size_t end = FindProcessingInstructionEnd(source, pos);
+      pos = (end == std::string_view::npos) ? source.size() : end;
       continue;
     }
     if (pos + 1 < source.size() && source[pos + 1] == '!') {
-      const std::size_t end = source.find('>', pos);
-      pos = (end == std::string_view::npos) ? source.size() : end + 1;
+      // Doctype (comments are handled above); skip bracket-aware to match the
+      // parser's doctype scan.
+      const std::size_t end = FindDoctypeEnd(source, pos);
+      pos = (end == std::string_view::npos) ? source.size() : end;
       continue;
     }
     if (MatchesAtCaseInsensitive(source, pos, "<svg") && pos + 4 < source.size()) {
@@ -175,6 +248,81 @@ std::size_t FindRootSvgStart(std::string_view source) {
       }
     }
     ++pos;
+  }
+  return std::string_view::npos;
+}
+
+/// Find the byte offset of the `</svg` that closes the root element at or
+/// after \p bodyStart, or npos when the source has no matching close tag.
+///
+/// Nested `<svg>` elements are tracked so an inner element cannot be mistaken
+/// for the root, and comments, CDATA sections, processing instructions, and
+/// quoted attribute values are skipped so markup text inside them is not
+/// counted. Matching the parser's element nesting avoids slicing the body at a
+/// stray `</svg` sequence that appears after the root element.
+std::size_t FindRootSvgEnd(std::string_view source, std::size_t bodyStart) {
+  int depth = 0;
+  std::size_t pos = bodyStart;
+  while (pos < source.size()) {
+    const std::size_t lt = source.find('<', pos);
+    if (lt == std::string_view::npos) {
+      return std::string_view::npos;
+    }
+
+    if (MatchesAtCaseInsensitive(source, lt, "<!--")) {
+      const std::size_t end = source.find("-->", lt + 4);
+      pos = (end == std::string_view::npos) ? source.size() : end + 3;
+      continue;
+    }
+    if (source.substr(lt, 9) == "<![CDATA[") {
+      const std::size_t end = source.find("]]>", lt + 9);
+      pos = (end == std::string_view::npos) ? source.size() : end + 3;
+      continue;
+    }
+    if (lt + 1 < source.size() && source[lt + 1] == '?') {
+      const std::size_t end = FindProcessingInstructionEnd(source, lt);
+      pos = (end == std::string_view::npos) ? source.size() : end;
+      continue;
+    }
+    if (lt + 1 < source.size() && source[lt + 1] == '!') {
+      const std::size_t end = FindDoctypeEnd(source, lt);
+      pos = (end == std::string_view::npos) ? source.size() : end;
+      continue;
+    }
+    if (lt + 1 < source.size() && source[lt + 1] == '/') {
+      if (MatchesTagName(source, lt + 2, "svg")) {
+        if (depth == 0) {
+          return lt;  // Closes the root element.
+        }
+        --depth;
+      }
+      const std::size_t end = source.find('>', lt + 2);
+      pos = (end == std::string_view::npos) ? source.size() : end + 1;
+      continue;
+    }
+
+    // Opening tag: scan to its `>` or `/>`, skipping quoted attribute values.
+    const bool isSvg = MatchesTagName(source, lt + 1, "svg");
+    bool selfClosing = false;
+    std::size_t cursor = lt + 1;
+    while (cursor < source.size()) {
+      const char ch = source[cursor];
+      if (ch == '"' || ch == '\'') {
+        const std::size_t quoteEnd = source.find(ch, cursor + 1);
+        cursor = (quoteEnd == std::string_view::npos) ? source.size() : quoteEnd + 1;
+        continue;
+      }
+      if (ch == '>') {
+        selfClosing = cursor > lt && source[cursor - 1] == '/';
+        ++cursor;
+        break;
+      }
+      ++cursor;
+    }
+    if (isSvg && !selfClosing) {
+      ++depth;
+    }
+    pos = cursor;
   }
   return std::string_view::npos;
 }
@@ -251,10 +399,8 @@ RootTag ParseRootTag(std::string_view source) {
   if (selfClosing) {
     result.bodyEnd = openTagEnd - 1;  // No children.
   } else {
-    const std::size_t closeTag = source.rfind("</svg");
-    result.bodyEnd = (closeTag == std::string_view::npos || closeTag < result.bodyStart)
-                         ? source.size()
-                         : closeTag;
+    const std::size_t closeTag = FindRootSvgEnd(source, result.bodyStart);
+    result.bodyEnd = (closeTag == std::string_view::npos) ? source.size() : closeTag;
   }
   result.found = true;
   return result;
