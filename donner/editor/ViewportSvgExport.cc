@@ -317,8 +317,16 @@ RootTag ParseRootTag(std::string_view source, const std::vector<xml::XMLToken>& 
 /// attribute matches when its name ends with "href" (case-sensitive),
 /// preserving the historical substring match for real attributes. An `href`
 /// attribute with no consumable value (unterminated quote) is refused by name:
-/// failing closed preserves the historical verdict for unparseable values.
-/// Returns the offending raw value (or attribute name), or empty.
+/// this preserves the historical refuse verdict for unparseable external
+/// values, and fails closed for any other valueless href. Returns the
+/// offending raw value (or attribute name with an unterminated-value marker),
+/// or empty.
+///
+/// Refusal marker for an href attribute with no consumable value.
+std::string UnterminatedHrefRefusal(const std::string& name) {
+  return name + " (unterminated value)";
+}
+
 std::string FindExternalReference(std::string_view source,
                                   const std::vector<xml::XMLToken>& tokens) {
   static constexpr std::array<std::string_view, 3> kExternalSchemes = {
@@ -331,7 +339,7 @@ std::string FindExternalReference(std::string_view source,
     switch (token.type) {
       case xml::XMLTokenType::AttributeName: {
         if (!pendingHrefName.empty()) {
-          return pendingHrefName;  // Previous href attribute had no value.
+          return UnterminatedHrefRefusal(pendingHrefName);  // No value followed.
         }
         const std::string_view name = token.text(source);
         if (name.size() >= 4 && name.substr(name.size() - 4) == "href") {
@@ -360,13 +368,13 @@ std::string FindExternalReference(std::string_view source,
         break;  // Only whitespace intervenes between a name and its value.
       default:
         if (!pendingHrefName.empty()) {
-          return pendingHrefName;  // The href attribute never got a value.
+          return UnterminatedHrefRefusal(pendingHrefName);  // No value followed.
         }
         break;
     }
   }
   if (!pendingHrefName.empty()) {
-    return pendingHrefName;  // Trailing href attribute with no value.
+    return UnterminatedHrefRefusal(pendingHrefName);  // No value followed.
   }
   return std::string();
 }

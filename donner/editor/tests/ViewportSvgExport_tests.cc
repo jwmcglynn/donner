@@ -1029,6 +1029,7 @@ TEST(ViewportSvgExportTest, UnterminatedHrefValueIsRefused) {
 
   EXPECT_FALSE(result.ok());
   EXPECT_THAT(result.error, HasSubstr("external"));
+  EXPECT_THAT(result.error, HasSubstr("unterminated value"));
 }
 
 // --- Overlay serialization -----------------------------------------------
