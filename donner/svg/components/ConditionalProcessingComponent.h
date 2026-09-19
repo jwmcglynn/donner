@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -16,8 +17,8 @@ namespace donner::svg::components {
  * `systemLanguage`) for an element. Attached only when at least one of the attributes is present.
  *
  * These attributes control whether an element renders: on a direct child of \ref xml_switch they
- * select the first matching child, and on any other rendered element they disable rendering of
- * the element (and its subtree) when they evaluate to false.
+ * select the highest-priority matching child, and on any other rendered element they disable
+ * rendering of the element (and its subtree) when they evaluate to false.
  *
  * See https://www.w3.org/TR/SVG2/struct.html#ConditionalProcessing
  */
@@ -80,6 +81,18 @@ bool RemoveConditionalProcessingAttribute(ConditionalProcessingComponent& condit
 bool HasConditionalProcessingAttributes(const ConditionalProcessingComponent& conditional);
 
 /**
+ * Evaluates an element's conditional-processing attributes other than `systemLanguage`.
+ *
+ * Matches resvg's evaluation rules so rendering agrees with the resvg-test-suite goldens:
+ * - `requiredFeatures` always evaluates to true (deprecated in SVG2, ignored).
+ * - `requiredExtensions` evaluates to true only when empty (no extensions are supported).
+ *
+ * @param conditional Conditional-processing attribute values to evaluate.
+ * @return true if the non-language attributes evaluate to true.
+ */
+bool NonLanguageConditionalProcessingPasses(const ConditionalProcessingComponent& conditional);
+
+/**
  * Evaluates an element's conditional-processing attributes.
  *
  * Matches resvg's evaluation rules so rendering agrees with the resvg-test-suite goldens:
@@ -92,6 +105,7 @@ bool HasConditionalProcessingAttributes(const ConditionalProcessingComponent& co
  * @param userLanguages User's preferred languages, in priority order (see \ref
  *   SVGDocument::setUserLanguages). A `systemLanguage` value matches if any of these languages
  *   matches per \ref SystemLanguageMatches. An empty list disables all `systemLanguage` matches.
+ *   `<switch>` child selection ranks by priority instead; see \ref SystemLanguageMatchRank.
  * @return true if all present attributes evaluate to true (the element may render).
  */
 bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional,
@@ -116,5 +130,18 @@ bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditi
  * @return true if any tag in the list matches the user language.
  */
 bool SystemLanguageMatches(std::string_view systemLanguage, std::string_view userLanguage);
+
+/**
+ * Returns the index of the highest-priority user-preferred language matched by a
+ * `systemLanguage` attribute value, for priority-ordered `<switch>` child selection.
+ *
+ * @param systemLanguage Comma-separated list of BCP 47 language tags (e.g. "ru, en").
+ * @param userLanguages User's preferred languages, in priority order (see \ref
+ *   SVGDocument::setUserLanguages). Lower indices are higher priority.
+ * @return Index into \p userLanguages of the best match per \ref SystemLanguageMatches, or
+ *   `std::nullopt` when nothing matches. An empty list matches nothing.
+ */
+std::optional<size_t> SystemLanguageMatchRank(std::string_view systemLanguage,
+                                              std::span<const RcString> userLanguages);
 
 }  // namespace donner::svg::components

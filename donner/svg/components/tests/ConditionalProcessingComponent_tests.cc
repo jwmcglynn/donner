@@ -3,7 +3,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <vector>
+
+#include "donner/base/RcString.h"
+
+using testing::Eq;
 using testing::Not;
+using testing::Optional;
 
 namespace donner::svg::components {
 
@@ -61,6 +68,35 @@ TEST(SystemLanguageMatchesTest, EmptyValueDoesNotMatch) {
   EXPECT_THAT("", Not(MatchesUserLanguage("en")));
   EXPECT_THAT("  ", Not(MatchesUserLanguage("en")));
   EXPECT_THAT(",,", Not(MatchesUserLanguage("en")));
+}
+
+TEST(SystemLanguageMatchRankTest, ReturnsHighestPriorityMatchIndex) {
+  const std::vector<RcString> userLanguages = {RcString("fr"), RcString("en")};
+  EXPECT_THAT(SystemLanguageMatchRank("en", userLanguages), Optional(1));
+  EXPECT_THAT(SystemLanguageMatchRank("fr", userLanguages), Optional(0));
+  EXPECT_THAT(SystemLanguageMatchRank("en, fr", userLanguages), Optional(0));
+}
+
+TEST(SystemLanguageMatchRankTest, NoMatchReturnsNullopt) {
+  const std::vector<RcString> userLanguages = {RcString("fr"), RcString("en")};
+  EXPECT_THAT(SystemLanguageMatchRank("ru", userLanguages), Eq(std::nullopt));
+  EXPECT_THAT(SystemLanguageMatchRank("", userLanguages), Eq(std::nullopt));
+  EXPECT_THAT(SystemLanguageMatchRank("fr", {}), Eq(std::nullopt));
+}
+
+TEST(SystemLanguageMatchRankTest, SubtagAndCaseRulesMatchSystemLanguageMatches) {
+  const std::vector<RcString> userLanguages = {RcString("fr"), RcString("en")};
+  EXPECT_THAT(SystemLanguageMatchRank("EN-GB", userLanguages), Optional(1));
+  EXPECT_THAT(SystemLanguageMatchRank("eng", userLanguages), Eq(std::nullopt));
+}
+
+TEST(NonLanguageConditionalProcessingPassesTest, IgnoresSystemLanguage) {
+  ConditionalProcessingComponent conditional;
+  conditional.systemLanguage = "ru-RU";
+  EXPECT_TRUE(NonLanguageConditionalProcessingPasses(conditional));
+
+  conditional.requiredExtensions = "http://example.org/bogus";
+  EXPECT_FALSE(NonLanguageConditionalProcessingPasses(conditional));
 }
 
 TEST(EvaluateConditionalProcessingTest, NoAttributesEvaluatesToTrue) {

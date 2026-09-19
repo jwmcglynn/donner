@@ -419,6 +419,8 @@ public:
    * Each entry is a BCP 47 language tag such as `"en"` or `"en-US"`. A `systemLanguage` value
    * matches when it equals (case-insensitive) one of these languages, or begins with one of these
    * languages followed by `-` (e.g. user language `"en"` matches `systemLanguage="en-GB"`).
+   * `<switch>` selects the child matching the earliest entry in this list; other elements render
+   * when any entry matches.
    *
    * Defaults to `{"en"}` when not set. Passing an empty list disables all `systemLanguage` matches.
    *

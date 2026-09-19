@@ -8,20 +8,22 @@ namespace donner::svg {
 /**
  * @page xml_switch &lt;switch&gt;
  *
- * Conditional processing container: renders only the first direct child whose
- * conditional-processing attributes all evaluate to true.
+ * Conditional processing container: renders only the direct child whose `systemLanguage`
+ * best matches the user's preferred languages, or the first unconditional child when nothing
+ * matches.
  *
  * - DOM object: SVGSwitchElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html#SwitchElement
  *
- * The `<switch>` element evaluates the conditional-processing attributes on each of its direct
- * children in document order, and renders the first child for which all of them evaluate to true.
- * Children without conditional attributes evaluate to true, so a final unconditional child acts
- * as a fallback. Unknown (non-SVG) child elements are never selected.
+ * The `<switch>` element ranks its direct children carrying `systemLanguage` by the priority
+ * order configured with `SVGDocument::setUserLanguages` (matching SVG2's allowReorder=yes
+ * behavior) and renders the best match, tie-breaking by document order. Children without
+ * conditional attributes are fallbacks: the first one renders when no language-conditioned
+ * child matches. Unknown (non-SVG) child elements are never selected.
  *
- * Donner evaluates `systemLanguage` against the default user language `en`, treats a non-empty
- * `requiredExtensions` list as unsupported, and ignores `requiredFeatures` because SVG2
- * deprecates it.
+ * Donner evaluates `systemLanguage` against the user's preferred languages (default `en`, see
+ * `SVGDocument::setUserLanguages`), treats a non-empty `requiredExtensions` list as
+ * unsupported, and ignores `requiredFeatures` because SVG2 deprecates it.
  *
  * Aside from child selection, `<switch>` behaves like \ref xml_g; attributes such as `transform`
  * and `fill` set on it apply to the rendered child.
