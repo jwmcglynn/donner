@@ -211,9 +211,36 @@ TEST(XMLTokenizer, DoctypeWithInternalSubset) {
               ElementsAre(Tok(T::Doctype, "<!DOCTYPE test [ <!ENTITY a \"b\"> ]>")));
 }
 
+TEST(XMLTokenizer, DoctypeEntityValuesWithBracketsDoNotCloseSubset) {
+  // Mirrors `XMLParser::parseDoctype` with custom entities enabled (the
+  // configuration `SVGParser` uses): brackets inside a quoted `<!ENTITY>`
+  // value do not affect internal-subset nesting, so the doctype extends past
+  // them to its real `>`.
+  EXPECT_THAT(TokenizeWithText("<!DOCTYPE svg [<!ENTITY data ']><svg/>'>]>"),
+              ElementsAre(Tok(T::Doctype, "<!DOCTYPE svg [<!ENTITY data ']><svg/>'>]>")));
+}
+
+TEST(XMLTokenizer, UnterminatedDoctypeEntityUsesErrorRecovery) {
+  EXPECT_THAT(TokenizeWithText("<!DOCTYPE svg [<!ENTITY data 'unterminated]>"),
+              ElementsAre(Tok(T::ErrorRecovery, "<!DOCTYPE svg [<!ENTITY data 'unterminated]>")));
+}
+
 TEST(XMLTokenizer, XmlDeclaration) {
   EXPECT_THAT(TokenizeWithText(R"(<?xml version="1.0"?>)"),
               ElementsAre(Tok(T::XmlDeclaration, R"(<?xml version="1.0"?>)")));
+}
+
+TEST(XMLTokenizer, XmlDeclarationTerminatorInsideQuotesDoesNotEndDeclaration) {
+  // Mirrors `XMLParser`'s declaration handling: declaration contents are
+  // attribute-like, so a `?>` inside a quoted value does not end the
+  // declaration.
+  EXPECT_THAT(TokenizeWithText(R"(<?xml version="1.0" data='a?><svg/>'?>)"),
+              ElementsAre(Tok(T::XmlDeclaration, R"(<?xml version="1.0" data='a?><svg/>'?>)")));
+}
+
+TEST(XMLTokenizer, XmlDeclarationWithUnterminatedQuoteUsesErrorRecovery) {
+  EXPECT_THAT(TokenizeWithText(R"(<?xml version="1.0" data='unterminated?>)"),
+              ElementsAre(Tok(T::ErrorRecovery, R"(<?xml version="1.0" data='unterminated?>)")));
 }
 
 TEST(XMLTokenizer, ProcessingInstruction) {

@@ -179,6 +179,119 @@ private:
     return false;
   }
 
+  /// Scan forward from pos_ looking for the `?>` that ends an XML declaration,
+  /// skipping quoted spans. Mirrors `XMLParser`'s declaration handling: the
+  /// declaration contents are attribute-like, so a `?>` inside a quoted value
+  /// does not end the declaration. Returns true if found (pos_ is past the
+  /// terminator), false if not found or a quote is unterminated (pos_ is at end
+  /// of input).
+  bool scanUntilDeclarationEnd() {
+    while (pos_ + 1 < size_) {
+      const char c = source_[pos_];
+      if (c == '"' || c == '\'') {
+        if (!consumeQuotedValue()) {
+          pos_ = size_;
+          return false;
+        }
+        continue;
+      }
+      if (c == '?' && source_[pos_ + 1] == '>') {
+        pos_ += 2;
+        return true;
+      }
+      ++pos_;
+    }
+    pos_ = size_;
+    return false;
+  }
+
+  /// Skip a `<!ENTITY ...>` declaration inside a doctype internal subset,
+  /// ignoring `>` inside quoted values. Mirrors `FindEntityDeclEnd` in
+  /// `XMLParser.cc`, except embedded NUL bytes are skipped where the strict
+  /// parser errors (this tokenizer is error-recovering). Returns true if the
+  /// closing `>` was found (pos_ is past it), false if unterminated (pos_ is
+  /// at end of input).
+  bool skipEntityDeclaration() {
+    while (pos_ < size_) {
+      const char c = source_[pos_];
+      if (c == '"' || c == '\'') {
+        if (!consumeQuotedValue()) {
+          pos_ = size_;
+          return false;
+        }
+        continue;
+      }
+      if (c == '>') {
+        ++pos_;
+        return true;
+      }
+      ++pos_;
+    }
+    return false;
+  }
+
+  /// Outcome of attempting to skip an `<!ENTITY ...>` declaration.
+  enum class EntitySkip {
+    Absent,        ///< No declaration starts at pos_; pos_ is unchanged.
+    Skipped,       ///< A declaration was skipped; pos_ is past its `>`.
+    Unterminated,  ///< A declaration starts at pos_ but never closes; pos_ is at end of input.
+  };
+
+  /// If `<!ENTITY` starts at pos_, skip the declaration quote-aware. The
+  /// caller must have established that pos_ is inside a doctype internal
+  /// subset.
+  EntitySkip skipSubsetEntity() {
+    if (!(pos_ + 8 < size_ && source_.substr(pos_, 8) == "<!ENTITY")) {
+      return EntitySkip::Absent;
+    }
+    pos_ += 8;
+    if (!skipEntityDeclaration()) {
+      return EntitySkip::Unterminated;
+    }
+    return EntitySkip::Skipped;
+  }
+
+  /// Scan forward from pos_ looking for the `>` that ends a `<!DOCTYPE ...>`
+  /// construct. Mirrors `XMLParser::parseDoctype` with custom entities enabled
+  /// (the configuration `SVGParser` uses): a `>` inside the internal-subset
+  /// `[...]` does not end the doctype, and `<!ENTITY ...>` declarations inside
+  /// the subset are skipped quote-aware so brackets in their values do not
+  /// affect subset nesting. Embedded NUL bytes are skipped where the strict
+  /// parser errors (this tokenizer is error-recovering). Returns true if found
+  /// (pos_ is past the `>`), false if unterminated (pos_ is at end of input).
+  bool scanDoctypeEnd() {
+    int bracketLevel = 0;
+    bool inInternalSubset = false;
+    while (pos_ < size_) {
+      const char c = source_[pos_];
+      if (c == '[') {
+        ++bracketLevel;
+        inInternalSubset = true;
+      } else if (c == ']') {
+        --bracketLevel;
+        if (bracketLevel < 0) {
+          bracketLevel = 0;
+        }
+        if (bracketLevel == 0) {
+          inInternalSubset = false;
+        }
+      } else if (c == '>' && bracketLevel == 0) {
+        ++pos_;
+        return true;
+      } else if (inInternalSubset) {
+        const EntitySkip entity = skipSubsetEntity();
+        if (entity == EntitySkip::Unterminated) {
+          return false;
+        }
+        if (entity == EntitySkip::Skipped) {
+          continue;
+        }
+      }
+      ++pos_;
+    }
+    return false;
+  }
+
   template <typename EmitFn>
   void tokenizeTextContent(EmitFn& fn) {
     std::size_t textStart = pos_;
@@ -224,27 +337,14 @@ private:
     // DOCTYPE: <!DOCTYPE
     if (pos_ + 8 < size_ && source_.substr(pos_, 9) == "<!DOCTYPE") {
       pos_ += 9;
-      int bracket = 0;
-      while (pos_ < size_) {
-        if (source_[pos_] == '[')
-          ++bracket;
-        else if (source_[pos_] == ']')
-          --bracket;
-        else if (source_[pos_] == '>' && bracket <= 0) {
-          ++pos_;
-          emit(fn, T::Doctype, tagStart, pos_);
-          return;
-        }
-        ++pos_;
-      }
-      emit(fn, T::ErrorRecovery, tagStart, pos_);
+      emit(fn, scanDoctypeEnd() ? T::Doctype : T::ErrorRecovery, tagStart, pos_);
       return;
     }
 
     // XML declaration: <?xml
     if (pos_ + 4 < size_ && source_.substr(pos_, 5) == "<?xml") {
       pos_ += 5;
-      emit(fn, scanUntil("?>") ? T::XmlDeclaration : T::ErrorRecovery, tagStart, pos_);
+      emit(fn, scanUntilDeclarationEnd() ? T::XmlDeclaration : T::ErrorRecovery, tagStart, pos_);
       return;
     }
 
