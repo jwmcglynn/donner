@@ -201,6 +201,12 @@ public:
   /// element, so a caller passing a reference into that map would be reading a vacated entry.
   void setElementVisible(svg::SVGElement element, bool visible);
 
+  /// Number of cached hidden-element author-display entries. Test observable for the
+  /// retention invariant enforced by \ref pruneHiddenElementDisplayCache.
+  [[nodiscard]] std::size_t hiddenElementAuthorDisplayCountForTesting() const {
+    return hiddenElementAuthorDisplay_.size();
+  }
+
   /// Lock or unlock @p element by toggling the `data-donner-locked` marker
   /// attribute (`"true"` to lock, `"false"` to unlock). Routes through
   /// `applyMutation`. The lock toggle itself is NOT lock-gated, so a locked
@@ -649,6 +655,13 @@ private:
   /// `flushFrame()`, including no-op flushes with nothing queued.
   void consumePendingDocumentSourceUndo();
 
+  /// Drop cached hidden-element display entries whose element is no longer
+  /// attached to the live document: deleted (with or without an ancestor) via
+  /// the command queue or a structured source edit, or left behind by a
+  /// document replacement. Called from `flushFrame()` every frame; no-op
+  /// unless the frame version advanced since the last prune.
+  void pruneHiddenElementDisplayCache();
+
   /// Shared tail of the structural-move paths (\ref reorderSelectedElement and
   /// \ref reorderElementBeforeSibling): records an undo snapshot labelled
   /// @p undoLabel and issues the DOM `InsertElementCommand` that repositions
@@ -684,9 +697,15 @@ private:
   /// restores that value instead of clobbering it with `display="inline"`.
   /// `std::nullopt` for the captured value means the element had no author
   /// `display` attribute at all. Cleared for an element once its Show
-  /// consumes the entry. A stale entry (element deleted/reparsed away) is
-  /// simply never matched again and is harmless.
+  /// consumes the entry. Because each entry owns an `SVGElement` handle, a
+  /// frame that detaches or replaces its element prunes the entry (see
+  /// \ref pruneHiddenElementDisplayCache), so a stale handle cannot retain
+  /// the removed subtree's document state.
   std::vector<std::pair<svg::SVGElement, std::optional<std::string>>> hiddenElementAuthorDisplay_;
+  /// Frame version at the last hidden-element cache prune, so `flushFrame()`
+  /// runs the attachment walk once per frame-version change rather than
+  /// unconditionally on every frame.
+  std::uint64_t hiddenElementDisplayPrunedVersion_ = 0;
   std::optional<PendingDocumentSourceUndo> pendingDocumentSourceUndo_;
   std::optional<std::vector<svg::SVGElement>> pendingSelectionAfterFlush_;
   std::optional<std::vector<AttributeWritebackTarget>> pendingSelectionRestoreTargets_;

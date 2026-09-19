@@ -791,6 +791,7 @@ donner_cc_test(
     deps = [
         "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
+        "//donner/editor:source_sync",
         "//donner/editor:viewport_geometry",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
