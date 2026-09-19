@@ -253,7 +253,8 @@ TEST(ImageLoader, RejectsPngWithTruncatedDeclaredIdat) {
   // stb_image sizes its IDAT accumulation buffer from the declared length
   // before checking that the data exists, so the decode requests a 2 GiB
   // allocation and aborts libFuzzer's memory limit (image_loader_fuzzer OOM).
-  // Declared chunk lengths must be validated against the input before decode.
+  // The checked-in corpus seed `regression-png-truncated-idat.png` is the
+  // red-to-green reproducer; this test pins the loader's rejection contract.
   StaticResourceLoader resourceLoader(std::vector<uint8_t>{
       0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  // PNG signature
       0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R',   // IHDR, 13 bytes
@@ -270,6 +271,35 @@ TEST(ImageLoader, RejectsPngWithTruncatedDeclaredIdat) {
   ImageLoader imageLoader(resourceLoader);
 
   ExpectImageLoaderError(imageLoader.fromUri("truncated-idat.png"), UrlLoaderError::DataCorrupt);
+}
+
+TEST(ImageLoader, LoadsPngWithAncillaryChunkAndSplitIdat) {
+  // The declared-length walk must accept well-formed PNGs that carry ancillary
+  // chunks and split the zlib stream across multiple IDAT chunks.
+  StaticResourceLoader resourceLoader(std::vector<uint8_t>{
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  // PNG signature
+      0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R',   // IHDR, 13 bytes
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,  // 1x1
+      0x08, 0x04, 0x00, 0x00, 0x00,                    // 8-bit RGBA
+      0xB5, 0x1C, 0x0C, 0x02,                          // IHDR CRC
+      0x00, 0x00, 0x00, 0x00, 't',  'E',  'X',  't',   // empty tEXt chunk
+      0x00, 0x00, 0x00, 0x00,                          // CRC (stb_image does not verify it)
+      0x00, 0x00, 0x00, 0x05, 'I',  'D',  'A',  'T',   // first IDAT, 5 bytes
+      0x78, 0xDA, 0x63, 0xFC, 0xFF, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x06, 'I',  'D',  'A',  'T',  // second IDAT, 6 bytes
+      0x1F, 0x00, 0x03, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 'I',  'E',  'N',  'D',  // IEND
+      0xAE, 0x42, 0x60, 0x82,                               // IEND CRC
+  });
+  ImageLoader imageLoader(resourceLoader);
+
+  ImageLoader::Result result = imageLoader.fromUri("split-idat.png");
+
+  ASSERT_TRUE(std::holds_alternative<ImageResource>(result));
+  const ImageResource& image = std::get<ImageResource>(result);
+  EXPECT_EQ(image.width, 1);
+  EXPECT_EQ(image.height, 1);
+  EXPECT_EQ(image.data.size(), 4u);
 }
 
 TEST(ImageLoader, ReturnsUrlLoaderErrors) {
