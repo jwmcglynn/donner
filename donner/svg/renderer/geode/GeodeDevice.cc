@@ -116,6 +116,11 @@ void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
   ReleaseDeviceLostCallbackTokenReference(token);
   userdata = nullptr;
 }
+#else
+void ReleaseDeviceLostCallbackToken(void*& userdata, bool /*callbackCannotRun*/) {
+  assert(userdata == nullptr);
+}
+#endif
 
 }  // namespace
 
@@ -162,6 +167,7 @@ GeodePhysicalDeviceOwner::~GeodePhysicalDeviceOwner() {
   ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/true);
 }
 
+#ifndef __EMSCRIPTEN__
 namespace {
 
 /// Error callback wired onto the WebGPU device via
@@ -274,10 +280,6 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     return wgpu::createInstance(instanceDesc);
   }
   return wgpu::createInstance();
-}
-#else
-void ReleaseDeviceLostCallbackToken(void*& userdata, bool /*callbackCannotRun*/) {
-  assert(userdata == nullptr);
 }
 #endif
 
