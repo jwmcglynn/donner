@@ -535,10 +535,25 @@ gpu::SurfaceAlphaMode GpuAlphaModeFrom(wgpu::CompositeAlphaMode mode) {
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateSurface(uint32_t slotIndex,
                                                     const gpu::SurfaceDescriptor& descriptor) {
+  if (descriptor.native.kind == gpu::NativeSurfaceKind::EmbedderSurface) {
+    // The host's own window library made the surface object against this instance and keeps it.
+    // Taking a reference of its own is what keeps the swapchain built on it from outliving the
+    // object; the reference goes back when the slot does, and the object itself stays the host's
+    // to destroy.
+    wgpu::Surface hostSurface(
+        reinterpret_cast<WGPUSurface>(static_cast<uintptr_t>(descriptor.native.window)));
+    if (!hostSurface) {
+      return GpuError{GpuErrorType::InvalidDescriptor, "the embedder's surface handle is null"};
+    }
+    hostSurface.addRef();
+    SetSlot(slotSurfaces_, slotIndex,
+            SurfaceSlot{ScopedWgpuHandle<wgpu::Surface>(hostSurface), wgpu::Texture(), 0, false});
+    return OkStatus();
+  }
   if (descriptor.native.kind != gpu::NativeSurfaceKind::MetalLayer) {
     return GpuError{GpuErrorType::Unsupported,
-                    "this adapter presents to a Metal layer only; the other platform surfaces "
-                    "are still created by the embedder"};
+                    "this adapter presents to a Metal layer, or to a surface object the embedder "
+                    "created itself; the other platform surfaces are not built here"};
   }
 
   wgpu::SurfaceSourceMetalLayer source(wgpu::Default);
@@ -639,7 +654,8 @@ gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onPresentSurface(uint32_
   SurfaceSlot& slot = slotSurfaces_[slotIndex];
   slot.surface.get().present();
   SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
-  slot.acquired = wgpu::Texture();
+  // Acquiring the frame took a reference of its own, so it goes back with the frame.
+  ReleaseWgpuHandle(slot.acquired);
   slot.hasAcquired = false;
   return geodeDevice_.isDeviceLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
 }
@@ -656,7 +672,7 @@ void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
       slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
     SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
   }
-  slot.acquired = wgpu::Texture();
+  ReleaseWgpuHandle(slot.acquired);
   slot.hasAcquired = false;
 }
 
@@ -671,6 +687,7 @@ void GeodeWgpuAdapterDevice::onDestroySurface(uint32_t slotIndex) {
       slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
     SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
   }
+  ReleaseWgpuHandle(slot.acquired);
   slot = SurfaceSlot{};
 }
 

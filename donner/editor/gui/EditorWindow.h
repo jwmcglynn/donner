@@ -34,6 +34,7 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/Handles.h"
 #endif
 
 #include "donner/base/Vector2.h"
@@ -131,11 +132,17 @@ inline std::ostream& operator<<(std::ostream& os, SurfaceFrameAction value) {
 
 /// One frame's texture and what the surface reported while handing it over.
 ///
+/// The texture is borrowed for the length of one frame and no longer. It names the frame the
+/// platform handed out; presenting that frame, handing it back, reconfiguring the surface, or
+/// giving the surface up all end it, and the handle goes stale at the same moment, so a use
+/// afterwards is refused instead of reaching a frame the platform has taken back. Holding the
+/// handle past its frame keeps nothing alive.
+///
 /// A non-success status can still carry a usable texture: a surface whose configuration has
 /// drifted out of date usually still presents, so drawing this frame or following the window
 /// first is the caller's decision.
 struct AcquiredFrame {
-  wgpu::Texture texture;  //!< This frame's texture; null when no frame came back.
+  gpu::Texture texture;  //!< This frame's texture; invalid when no frame came back.
   gpu::SurfaceStatus status = gpu::SurfaceStatus::Success;  //!< What the surface reported.
 };
 
@@ -216,18 +223,100 @@ public:
   virtual void shutdown() = 0;
 
   /// Format acquired textures carry.
-  [[nodiscard]] virtual wgpu::TextureFormat format() const = 0;
+  [[nodiscard]] virtual gpu::TextureFormat format() const = 0;
 
   /// Usage flags acquired textures carry.
-  [[nodiscard]] virtual wgpu::TextureUsage usage() const = 0;
+  [[nodiscard]] virtual gpu::TextureUsage usage() const = 0;
 
   /// Whether the surface composites its alpha channel premultiplied rather than ignoring it.
   [[nodiscard]] virtual bool premultipliedAlpha() const = 0;
 };
 
+/**
+ * Presents through the GPU runtime's surface hooks, which is how every platform the editor runs
+ * on presents.
+ *
+ * What differs between platforms is only the platform object frames go to. A Core Animation
+ * Metal layer is named directly and the runtime builds the surface on it. Everywhere else the
+ * window library the editor already links makes the surface object, because adapter selection
+ * has to be constrained to it before there is a device to build anything with; the runtime is
+ * then pointed at that object and builds its swapchain on it without taking it over.
+ */
+class RuntimePresentationSurface final : public PresentationSurface {
+public:
+  /// Constructs a surface that is not attached to anything yet.
+  RuntimePresentationSurface() = default;
+
+  /// Hands back any frame still outstanding and gives up the surface.
+  ~RuntimePresentationSurface() override;
+
+  bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) override;
+  wgpu::Surface adapterSelectionSurface() const override;
+  bool chooseConfiguration(const wgpu::Adapter& adapter, bool enableReadback) override;
+  bool attachToDevice(geode::GeodeDevice& device) override;
+
+  /**
+   * Builds the surface on \p device for the platform object \p native names, and narrows what was
+   * asked for to what the surface reports it can do.
+   *
+   * This is the step \ref attachToDevice performs once it has resolved the runtime from a Geode
+   * context, and the platform object and settled configuration from the window. Callers that
+   * already hold all of them - a host embedding the editor, or a test standing in for a window -
+   * reach it directly.
+   *
+   * @param device Runtime frames are acquired from and presented through. Must outlive this.
+   * @param native Platform object frames are presented to.
+   * @param format Format the renderer's pipelines were compiled for. A surface that does not
+   *   present it cannot serve the editor's frames.
+   * @param enableReadback Whether finished frames are copied back to the host. Dropped when the
+   *   surface reports its frames cannot be copied from.
+   * @return False when the surface could not be built or cannot serve the editor's frames.
+   */
+  [[nodiscard]] bool attachToRuntime(gpu::Device& device, const gpu::NativeSurfaceHandle& native,
+                                     gpu::TextureFormat format, bool enableReadback);
+
+  bool configure(int width, int height) override;
+  AcquiredFrame acquire() override;
+  void present() override;
+  void abandon() override;
+  void shutdown() override;
+  gpu::TextureFormat format() const override;
+  gpu::TextureUsage usage() const override;
+  bool premultipliedAlpha() const override;
+
+private:
+  /// Narrows the configuration this surface was asked for to what it reported it can do, or
+  /// reports that it cannot serve the editor's frames at all.
+  /// @param capabilities What the surface reported.
+  [[nodiscard]] bool applyCapabilities(const gpu::SurfaceCapabilities& capabilities);
+
+  /// Usage acquired textures are configured to carry.
+  [[nodiscard]] gpu::TextureUsage configuredUsage() const;
+
+  /// Hands back any outstanding frame, gives the runtime's surface up, and lets go of the
+  /// platform object, in that order.
+  void release();
+
+  gpu::Device* device_ = nullptr;
+  gpu::Surface surface_;
+  /// Platform object frames are presented to, filled in while attaching to the window.
+  gpu::NativeSurfaceHandle native_;
+#ifndef __APPLE__
+  /// The surface object this made from the window's native handle. The runtime's swapchain is
+  /// built on it, so it is let go of only after the runtime's surface is gone.
+  wgpu::Surface platformSurface_;
+#endif
+  gpu::TextureFormat format_ = gpu::TextureFormat::BGRA8Unorm;
+  gpu::SurfaceAlphaMode alphaMode_ = gpu::SurfaceAlphaMode::Opaque;
+  /// Whether finished frames are copied back to the host.
+  bool readback_ = false;
+  /// Whether the platform is holding a frame this surface handed out.
+  bool hasAcquiredFrame_ = false;
+};
+
 /// What acquiring one frame produced, and what the window must do about it.
 struct PresentationFrameOutcome {
-  wgpu::Texture texture;  //!< Frame to draw into; null when there is no frame this time.
+  gpu::Texture texture;  //!< Frame to draw into; invalid when there is no frame this time.
   gpu::SurfaceStatus status = gpu::SurfaceStatus::Success;  //!< What the surface last reported.
   double acquireMs = 0.0;  //!< Wall time the acquire (including any retry) took.
   bool released = false;   //!< The surface was given up; the window holds none any more.
@@ -665,11 +754,12 @@ private:
    * @param timing Frame timing to record the acquire cost into.
    * @param[out] status What the surface reported for the frame that is returned, or for the
    *   frame that never came.
-   * @return This frame's texture, or a null texture when there is no frame to draw.
+   * @return This frame's texture, or an invalid texture when there is no frame to draw. The
+   *   handle is the frame's; see \ref internal::AcquiredFrame for how long it lasts.
    */
-  [[nodiscard]] wgpu::Texture acquirePresentationFrame(int framebufferWidth, int framebufferHeight,
-                                                       EditorWindowFrameTiming& timing,
-                                                       gpu::SurfaceStatus& status);
+  [[nodiscard]] gpu::Texture acquirePresentationFrame(int framebufferWidth, int framebufferHeight,
+                                                      EditorWindowFrameTiming& timing,
+                                                      gpu::SurfaceStatus& status);
 
   /// Builds a replacement presentation surface from this window, configured for the given
   /// framebuffer and ready to acquire from, or null when one could not be built.

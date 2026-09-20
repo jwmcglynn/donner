@@ -83,7 +83,6 @@
         "finish",
         "getCapabilities",
         "getConstMappedRange",
-        "getCurrentTexture",
         "getQueue",
         "mapAsync",
         "poll",
@@ -114,18 +113,14 @@
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
+        "WGPUSurface",
         "WGPUSurfaceDescriptor",
-        "WGPUSurfaceGetCurrentTextureStatus",
-        "WGPUSurfaceGetCurrentTextureStatus_Lost",
-        "WGPUSurfaceGetCurrentTextureStatus_Outdated",
-        "WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal",
-        "WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal",
-        "WGPUSurfaceGetCurrentTextureStatus_Timeout",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_RGBA8Unorm",
         "WGPUTextureUsage",
         "WGPUTextureUsage_CopySrc",
+        "WGPUTextureUsage_None",
         "WGPUTextureUsage_RenderAttachment"
       ],
       "wgpuCppTokens": [
@@ -137,7 +132,6 @@
         "CallbackMode",
         "CommandBuffer",
         "CommandEncoder",
-        "CompositeAlphaMode",
         "Default",
         "Device",
         "DeviceDescriptor",
@@ -146,7 +140,6 @@
         "InstanceDescriptor",
         "LoadOp",
         "MapMode",
-        "PresentMode",
         "RenderPassColorAttachment",
         "RenderPassDescriptor",
         "RenderPassEncoder",
@@ -155,8 +148,6 @@
         "StringView",
         "Surface",
         "SurfaceCapabilities",
-        "SurfaceConfiguration",
-        "SurfaceTexture",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
@@ -178,9 +169,7 @@
         "Adapter",
         "Instance",
         "Surface",
-        "Texture",
-        "TextureFormat",
-        "TextureUsage"
+        "Texture"
       ]
     },
     "donner/editor/gui/UiTextureRegistration.cc": {
@@ -210,16 +199,17 @@
     },
     "donner/editor/tests/EditorWindow_tests.cc": {
       "operations": [
+        "configure",
         "createBuffer",
-        "draw"
+        "draw",
+        "present"
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
       "wgpuCTypes": [
         "WGPUDevice",
-        "WGPUQueue",
-        "WGPUTexture"
+        "WGPUQueue"
       ],
       "wgpuCppTokens": [
         "Adapter",
@@ -227,10 +217,7 @@
         "BufferDescriptor",
         "BufferUsage",
         "Instance",
-        "Surface",
-        "Texture",
-        "TextureFormat",
-        "TextureUsage"
+        "Surface"
       ]
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {
@@ -684,6 +671,7 @@
         "WGPUPresentMode_Mailbox",
         "WGPUShaderStage",
         "WGPUStringView",
+        "WGPUSurface",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_R8Unorm",
