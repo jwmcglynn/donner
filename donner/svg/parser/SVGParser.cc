@@ -22,6 +22,7 @@
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -580,6 +581,10 @@ public:
 
   std::optional<SVGDocument> document() const { return document_; }
 
+  /// Nesting depth of retained foreign-namespace subtrees currently being converted; nonzero
+  /// means the unsupported-namespace warning was already reported at the subtree's top.
+  int foreignSubtreeDepth_ = 0;
+
   /**
    * Create the SVG element matching \p tagName on \p node, or an unknown element if no type
    * matches.
@@ -599,9 +604,68 @@ public:
     }
 
     auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
+    if (!isSvgNamespace) {
+      // A foreign-namespace element is retained for whole-tree consumers, not for painting: no
+      // conforming SVG consumer renders it or its subtree, and the unknown-element default
+      // ("renders and traverses children") would otherwise make it behave like a <g>.
+      node.entityHandle().emplace_or_replace<components::RenderingBehaviorComponent>(
+          components::RenderingBehavior::Nonrenderable);
+    }
     return ParseAttributes(context_, element, node);
   }
 
+  /// Marks the conversion as being inside a retained foreign-namespace subtree for its lifetime.
+  /// Unconditional so early returns unwind it, and counted so nested foreign elements restore
+  /// the enclosing state rather than clearing it.
+  class ForeignSubtreeScope {
+  public:
+    ForeignSubtreeScope(SVGParserImpl* parser, bool foreign) : parser_(parser), foreign_(foreign) {
+      parser_->foreignSubtreeDepth_ += static_cast<int>(foreign_);
+    }
+    ~ForeignSubtreeScope() { parser_->foreignSubtreeDepth_ -= static_cast<int>(foreign_); }
+
+    ForeignSubtreeScope(const ForeignSubtreeScope&) = delete;
+    ForeignSubtreeScope& operator=(const ForeignSubtreeScope&) = delete;
+
+  private:
+    SVGParserImpl* parser_;
+    bool foreign_;
+  };
+
+  /**
+   * Resolve whether \p child is in the SVG namespace, reporting the unsupported-namespace
+   * warning once at the top of a retained foreign subtree rather than once per descendant.
+   *
+   * @param child XML node being converted.
+   * @param name Qualified tag name of \p child, already read by the caller.
+   * @return True when the tag name's prefix resolves to the SVG namespace.
+   */
+  bool resolveSvgNamespace(const XMLNode& child, const XMLQualifiedNameRef& name) {
+    const std::optional<RcString> maybeUri = child.getNamespaceUri(name.namespacePrefix);
+    const bool isSvgNamespace = maybeUri == "http://www.w3.org/2000/svg";
+    if (isSvgNamespace || foreignSubtreeDepth_ > 0) {
+      return isSvgNamespace;
+    }
+
+    ParseDiagnostic err;
+    std::ostringstream ss;
+    ss << "Retaining element <" << name << "> with an unsupported namespace as unknown. "
+       << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix << "'";
+    err.reason = ss.str();
+    if (auto sourceOffset = child.sourceStartOffset()) {
+      err.range.start = sourceOffset.value();
+    }
+    context_.addWarning(std::move(err));
+    return false;
+  }
+
+  /**
+   * Convert \p rootNode's children into SVG elements.
+   *
+   * @param element Parent SVG element, or std::nullopt while looking for the root `<svg>`.
+   * @param rootNode XML node whose children are converted.
+   * @param parentDepth Element depth of \p rootNode, checked against the depth limit.
+   */
   std::optional<ParseDiagnostic> walkChildren(std::optional<SVGElement> element,
                                               const XMLNode& rootNode, std::size_t parentDepth) {
     bool foundRootSvg = false;
@@ -643,22 +707,10 @@ public:
 
         // Foreign-namespace elements are retained as unknown elements rather than detached, so
         // the shared XML tree stays complete for whole-tree consumers and their SVG-namespace
-        // children still project. The namespace check below resolves this tag name's prefix
-        // once for both the warning and the factory lookup.
-        std::optional<RcString> maybeUri = child->getNamespaceUri(name.namespacePrefix);
-        const bool isSvgNamespace = maybeUri == "http://www.w3.org/2000/svg";
-        if (!isSvgNamespace) {
-          ParseDiagnostic err;
-          std::ostringstream ss;
-          ss << "Retaining element <" << name << "> with an unsupported namespace as unknown. "
-             << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix
-             << "'";
-          err.reason = ss.str();
-          if (auto sourceOffset = child->sourceStartOffset()) {
-            err.range.start = sourceOffset.value();
-          }
-          context_.addWarning(std::move(err));
-        }
+        // children still project. The resolved answer feeds both the factory lookup and the
+        // non-rendering marking inside createElement.
+        const bool isSvgNamespace = resolveSvgNamespace(child.value(), name);
+        const ForeignSubtreeScope foreignScope(this, !isSvgNamespace);
 
         auto maybeNewElement = createElement(child->tagName(), child.value(), isSvgNamespace);
         if (maybeNewElement.hasError()) {

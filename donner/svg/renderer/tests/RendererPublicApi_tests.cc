@@ -631,9 +631,11 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   EXPECT_GT(std::filesystem::file_size(outputPath), 0u);
 }
 
-TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersLikeGroup) {
-  // Retained foreign-namespace elements are unknown elements: they contribute no rendering of
-  // their own, while their SVG-namespace children render normally.
+TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersNothing) {
+  // A retained foreign-namespace element is kept in the tree for whole-tree consumers, but no
+  // conforming SVG consumer paints foreign content: neither the wrapper nor its SVG-namespace
+  // children reach the canvas. The identical document with a <g> wrapper does paint, which is
+  // what makes this a contract assertion rather than a "renders nothing" tautology.
   SVGDocument foreignDocument = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other" width="8" height="6" viewBox="0 0 8 6">
         <other:wrapper><rect width="8" height="6" fill="#00ff00" /></other:wrapper>
@@ -657,7 +659,21 @@ TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersLikeGroup) {
   ASSERT_FALSE(groupSnapshot.empty());
   EXPECT_EQ(foreignSnapshot.dimensions, groupSnapshot.dimensions);
   ASSERT_EQ(foreignSnapshot.pixels.size(), groupSnapshot.pixels.size());
-  EXPECT_THAT(foreignSnapshot.pixels, testing::ElementsAreArray(groupSnapshot.pixels));
+
+  const auto countOpaqueGreen = [](const RendererBitmap& bitmap) {
+    int count = 0;
+    for (std::size_t offset = 0; offset + 3 < bitmap.pixels.size(); offset += 4) {
+      if (bitmap.pixels[offset + 3] > 200 && bitmap.pixels[offset + 1] > 200 &&
+          bitmap.pixels[offset] < 60 && bitmap.pixels[offset + 2] < 60) {
+        ++count;
+      }
+    }
+    return count;
+  };
+  EXPECT_EQ(countOpaqueGreen(foreignSnapshot), 0)
+      << "a foreign-namespace wrapper must not paint its subtree";
+  EXPECT_GT(countOpaqueGreen(groupSnapshot), 0)
+      << "the same document under a <g> wrapper must still paint";
 }
 
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {

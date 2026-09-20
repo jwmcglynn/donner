@@ -314,9 +314,10 @@ if (warnings.hasWarnings()) {
 ```
 
 One more case to check if your CSS is not applying: `SVGParser::Options::disableUserAttributes`
-defaults to `true`, which drops non-presentation (user-defined) attributes for performance. That
-means attribute selectors like `rect[data-role="status"]` will not match. Set it to `false` if you
-rely on them. If the missing element is a gradient fill, see \ref faq-gradient.
+defaults to `false`, so non-presentation (user-defined) attributes are retained and attribute
+selectors like `rect[data-role="status"]` match. If you set it to `true` to skip them for
+performance, those selectors stop matching. If the missing element is a gradient fill, see
+\ref faq-gradient.
 
 ## Something looks off but parsing succeeded. How do I get diagnostics? {#faq-diagnostics}
 

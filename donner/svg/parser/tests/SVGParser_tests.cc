@@ -459,6 +459,60 @@ TEST(SVGParser, ForeignNamespaceElementsAreRetainedAsUnknown) {
       testing::StartsWith("<other:group"));
 }
 
+TEST(SVGParser, ForeignNamespaceSubtreeWarnsOnceAndCountsTowardCaps) {
+  // A retained foreign subtree materializes one entity per element and is charged to the
+  // tree-node and depth caps like any other content. Under the default caps a large subtree
+  // parses, and the unsupported-namespace warning is reported once at the top of the subtree
+  // rather than once per descendant.
+  constexpr int kForeignDescendants = 512;
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:root id="foreign-root">)";
+  for (int i = 0; i < kForeignDescendants; ++i) {
+    source += "<other:child/>";
+  }
+  source += "</other:root></svg>";
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  std::vector<std::string> retentionWarnings;
+  std::string allWarnings;
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    allWarnings += warning.reason.str();
+    allWarnings += "\n";
+    if (warning.reason.str().find("Retaining element") != std::string::npos) {
+      retentionWarnings.push_back(warning.reason.str());
+    }
+  }
+  ASSERT_EQ(retentionWarnings.size(), 1u) << allWarnings;
+  EXPECT_THAT(retentionWarnings[0], testing::HasSubstr("other:root"));
+
+  auto foreignRoot = result.result().querySelector("#foreign-root");
+  ASSERT_TRUE(foreignRoot.has_value());
+  EXPECT_EQ(foreignRoot->type(), ElementType::Unknown);
+}
+
+TEST(SVGParser, ForeignNamespaceSubtreeExceedingTreeNodeCapIsRejected) {
+  // The cap is enforced on the retained subtree, so a foreign document cannot buy unbounded
+  // entities by being foreign.
+  SVGParser::Options options;
+  options.maximumTreeNodes = 8;
+
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:root>)";
+  for (int i = 0; i < 32; ++i) {
+    source += "<other:child/>";
+  }
+  source += "</other:root></svg>";
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings, options);
+  EXPECT_THAT(result, ParseErrorIs(testing::HasSubstr("count exceeded")));
+}
+
 TEST(SVGParser, ExperimentalElementsRequireOptIn) {
   const std::string_view source(
       R"(<svg xmlns="http://www.w3.org/2000/svg"><animate id="a" attributeName="x"/></svg>)");

@@ -13,6 +13,14 @@ namespace donner::svg::parser {
 
 /**
  * Parse an SVG XML document.
+ *
+ * Elements outside the SVG namespace are retained in the tree as unknown elements rather than
+ * detached, so whole-tree consumers (attribute selectors, export checks, source projection) see
+ * a complete document. They are marked non-rendering: neither a foreign element nor its subtree
+ * paints, matching how conforming SVG consumers treat foreign content. A retained foreign
+ * subtree materializes one entity per element and counts against \ref Options::maximumTreeNodes
+ * and \ref Options::maximumTreeDepth like any other content, and reports one
+ * unsupported-namespace warning at the top of the subtree.
  */
 class SVGParser {
 public:
