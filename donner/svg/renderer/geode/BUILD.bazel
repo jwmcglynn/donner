@@ -121,8 +121,8 @@ donner_cc_library(
     deps = ["//donner/svg/components"],
 )
 
-# Header-only ECS component for the M2 Geode path-encode cache. See
-# design doc 0030 §Milestone 2.
+# Header-only ECS component caching the encoded form of each path, so an unchanged path is not
+# re-encoded on the CPU every frame.
 donner_cc_library(
     name = "geode_path_cache_component",
     hdrs = ["GeodePathCacheComponent.h"],
@@ -134,7 +134,7 @@ donner_cc_library(
     ],
 )
 
-# Header-only perf-counters struct. See design doc 0030.
+# Header-only perf-counters struct.
 donner_cc_library(
     name = "geode_counters",
     hdrs = ["GeodeCounters.h"],
@@ -210,8 +210,8 @@ donner_cc_test(
     ],
 )
 
-# Header-only ECS component for wave-2 GPU residence: persistent per-entity
-# GPU buffers for cached encoded paths. See design doc 0030 (wave 2).
+# Header-only ECS component holding persistent per-entity GPU buffers for cached encoded paths,
+# so a path that has not changed is re-drawn without re-uploading its geometry.
 donner_cc_library(
     name = "geode_resident_path_component",
     hdrs = ["GeodeResidentPathComponent.h"],
@@ -224,8 +224,6 @@ donner_cc_library(
         # this is a link dependency and not just an include.
         ":geode_device",
         ":geode_resource_budget",
-        ":geode_wgpu_util",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -320,7 +318,6 @@ donner_cc_library(
                "//donner/base",
                "//donner/gpu",
                "//donner/gpu/shader:compiled_shader",
-               "//third_party/webgpu-cpp:webgpu_cpp",
            ] + shader_apis(CHECKERBOARD_SHADER_FAMILIES) +
            shader_artifacts(CHECKERBOARD_SHADER_FAMILIES) +
            native_shader_artifacts(CHECKERBOARD_SHADER_FAMILIES),
@@ -622,9 +619,9 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# Geode perf-counter assertions. See design doc 0030 (geode_performance).
-# Each later milestone tightens the ceilings in this suite; M0 ceilings
-# match current observed behaviour so the baseline is stable.
+# Geode perf-counter assertions. The ceilings match currently observed behaviour and are
+# tightened as the renderer improves, so a regression shows up as a failure here rather than as
+# unnoticed drift.
 donner_cc_test(
     name = "geode_perf_tests_impl",
     srcs = ["tests/GeodePerf_tests.cc"],

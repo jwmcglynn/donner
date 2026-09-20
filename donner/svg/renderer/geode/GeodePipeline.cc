@@ -14,8 +14,6 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
@@ -44,19 +42,19 @@ gpu::BlendState PremultipliedSourceOverBlend() {
 
 }  // namespace
 
-GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat)
-    : adapterDevice_(&adapterDevice), colorFormat_(colorFormat) {
+GeodePipeline::GeodePipeline(gpu::Device& device, gpu::TextureFormat colorFormat)
+    : device_(&device), colorFormat_(colorFormat) {
   const auto& shader = gpu::shader::programs::SlugFillShader();
   const auto entries = gpu::shader::MakeBindingLayout(shader);
-  bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                                       gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
-                                   "GeodeSlugFillBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
+      "GeodeSlugFillBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(device.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeSlugFillPL", {bindGroupLayout_}}),
                                   "GeodeSlugFillPL createPipelineLayout");
 
-  shaderModule_ = UnwrapOrAbort(createSlugFillShader(adapterDevice), "SlugFill shader module");
+  shaderModule_ = UnwrapOrAbort(createSlugFillShader(device), "SlugFill shader module");
 
   // The default entry points take the draw's paint and geometry from the uniform, which serves
   // every draw whose instances share one paint and one encoded path. `batchedPipeline` builds the
@@ -69,7 +67,7 @@ gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label,
                                                  std::string_view vertexEntryPoint,
                                                  std::string_view fragmentEntryPoint) const {
   return UnwrapOrAbort(
-      adapterDevice_->createRenderPipeline(gpu::RenderPipelineDescriptor{
+      device_->createRenderPipeline(gpu::RenderPipelineDescriptor{
           label, pipelineLayout_, gpu::VertexState{shaderModule_, RcString(vertexEntryPoint), {}},
           gpu::FragmentState{shaderModule_,
                              RcString(fragmentEntryPoint),
@@ -95,25 +93,22 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
 // GeodeGradientPipeline
 // ============================================================================
 
-GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice,
-                                             gpu::TextureFormat colorFormat)
+GeodeGradientPipeline::GeodeGradientPipeline(gpu::Device& device, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   const auto& shader = gpu::shader::programs::SlugGradientShader();
   const auto entries = gpu::shader::MakeBindingLayout(shader);
-  bindGroupLayout_ =
-      UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                        gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
-                    "GeodeSlugGradientBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
+      "GeodeSlugGradientBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(device.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeSlugGradientPL", {bindGroupLayout_}}),
                                   "GeodeSlugGradientPL createPipelineLayout");
 
-  shaderModule_ =
-      UnwrapOrAbort(createSlugGradientShader(adapterDevice), "SlugGradient shader module");
+  shaderModule_ = UnwrapOrAbort(createSlugGradientShader(device), "SlugGradient shader module");
 
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      device.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeSlugGradient", pipelineLayout_,
           gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,
@@ -127,18 +122,18 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
 // GeodeMaskPipeline
 // ============================================================================
 
-GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
+GeodeMaskPipeline::GeodeMaskPipeline(gpu::Device& device) {
   const auto& shader = gpu::shader::programs::SlugMaskShader();
   const auto entries = gpu::shader::MakeBindingLayout(shader);
-  bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                                       gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
-                                   "GeodeSlugMaskBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
+      "GeodeSlugMaskBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(device.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeSlugMaskPL", {bindGroupLayout_}}),
                                   "GeodeSlugMaskPL createPipelineLayout");
 
-  shaderModule_ = UnwrapOrAbort(createSlugMaskShader(adapterDevice), "SlugMask shader module");
+  shaderModule_ = UnwrapOrAbort(createSlugMaskShader(device), "SlugMask shader module");
 
   // Max-blend unions scalar analytic coverage from multiple clip paths.
   const gpu::BlendState maxBlend{
@@ -146,7 +141,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
       gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::One, gpu::BlendOperation::Max}};
 
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      device.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeSlugMask", pipelineLayout_,
           gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,

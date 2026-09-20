@@ -13,7 +13,6 @@
 namespace donner::geode {
 
 class GeodeDevice;
-class GeodeWgpuAdapterDevice;
 
 /**
  * Appearance of the transparency checkerboard drawn behind see-through
@@ -118,12 +117,12 @@ public:
   /**
    * Create the checkerboard pipeline for the given device and target format.
    *
-   * @param adapterDevice The Donner GPU device owned by the GeodeDevice.
+   * @param device Runtime device the pipeline and its layouts are created on.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    * @param blendMode How the emitted checkerboard combines with the target.
    */
-  GeodeCheckerboardPipeline(gpu::Device& adapterDevice, gpu::TextureFormat colorFormat,
+  GeodeCheckerboardPipeline(gpu::Device& device, gpu::TextureFormat colorFormat,
                             BlendMode blendMode = BlendMode::Replace);
 
   ~GeodeCheckerboardPipeline() = default;

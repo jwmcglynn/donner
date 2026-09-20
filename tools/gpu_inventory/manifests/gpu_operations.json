@@ -892,6 +892,7 @@
         "wgpuLabel"
       ],
       "wgpuCTypes": [
+        "WGPUAdapter",
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView"

@@ -429,9 +429,8 @@ public:
   /// not provide one, including embedded mode and browser headless imports.
   const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return physicalDevice_->adapter(); }
 
-  /// Physical root lifetime shared by logical contexts using the same backend device.
-  /// Opaque lifetime token shared by logical contexts over the same physical roots.
-  /// Raw roots remain accessible only through a retained logical context.
+  /// Opaque lifetime token shared by logical contexts over the same physical roots. Raw roots
+  /// remain accessible only through a retained logical context.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDeviceOwner() const { return physicalDevice_; }
 
   /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;
@@ -832,9 +831,17 @@ public:
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
   /// @}
 
+  /// This context's GPU runtime device: the owner of its handle tables, submission serials, and
+  /// resource retirement. Renderer services that need only the runtime contract take this instead
+  /// of naming the concrete backend type. Today it is the same object \ref adapterDevice returns,
+  /// which `GeodeDevice_tests.RuntimeAndAdapterAccessorsNameOneDevice` pins while both accessors
+  /// exist.
+  gpu::Device& runtimeDevice() const UTILS_LIFETIME_BOUND;
+
   /// The TEMPORARY transition adapter implementing \c donner::gpu::Device over this
-  /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
-  /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
+  /// device's wgpu objects. The same object \ref runtimeDevice returns, named by its concrete
+  /// type for the callers that still use operations the runtime contract does not carry yet; see
+  /// GeodeWgpuAdapterDevice.h for the removal gates.
   GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
 
   /// The recording context Geode's encoders record a frame against: this device's GPU runtime

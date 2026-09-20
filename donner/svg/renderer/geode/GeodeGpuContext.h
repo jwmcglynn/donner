@@ -31,11 +31,11 @@ inline constexpr uint64_t kUniformOffsetAlignment = 256u;
  * Everything Geode's encoders need to record a frame through the \c donner::gpu runtime.
  *
  * Production wires one of these from \c GeodeDevice (see `GeodeDevice::gpuContext()`): the
- * `gpuDevice` is the device's adapter, the dummy resources are the shared device-owned identity
- * fills for inactive pattern / clip-mask / paint bind slots, and the counter helpers forward to
- * the \c GeodeDevice perf counters. A test harness can instead construct one against a GPU-less
- * \c donner::gpu::Device with `geodeDevice == nullptr` (counters become no-ops) and
- * `maskPipelineOverride` set.
+ * `gpuDevice` is that context's GPU runtime device, the dummy resources are the shared
+ * device-owned identity fills for inactive pattern / clip-mask / paint bind slots, and the
+ * counter helpers forward to the \c GeodeDevice perf counters. A test harness can instead
+ * construct one against a GPU-less \c donner::gpu::Device with `geodeDevice == nullptr` (counters
+ * become no-ops) and `maskPipelineOverride` set.
  *
  * Non-owning: every pointer references state owned by the wiring scope, which must outlive any
  * encoder recording against this context.

@@ -28,32 +28,31 @@ bool HasCheckerboardInterface(const gpu::shader::CompiledShaderView& shader) {
 
 }  // namespace
 
-GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& adapterDevice,
+GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& device,
                                                      gpu::TextureFormat colorFormat,
                                                      BlendMode blendMode) {
-  const gpu::shader::CompiledShaderView& shader = SelectCheckerboardShader(adapterDevice);
+  const gpu::shader::CompiledShaderView& shader = SelectCheckerboardShader(device);
   if (!HasCheckerboardInterface(shader)) {
     return;
   }
   uniformBinding_ = shader.resource("params")->binding;
   gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
-      adapterDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
+      device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
           "GeodeCheckerboardBGL", gpu::shader::MakeBindingLayout(shader)});
   if (bindGroupLayout.hasError()) {
     return;
   }
   bindGroupLayout_ = std::move(bindGroupLayout).result();
 
-  gpu::Result<gpu::PipelineLayout> pipelineLayout = adapterDevice.createPipelineLayout(
+  gpu::Result<gpu::PipelineLayout> pipelineLayout = device.createPipelineLayout(
       gpu::PipelineLayoutDescriptor{"GeodeCheckerboardPL", {bindGroupLayout_}});
   if (pipelineLayout.hasError()) {
     return;
   }
   pipelineLayout_ = std::move(pipelineLayout).result();
 
-  gpu::Result<gpu::ShaderModule> shaderModule =
-      adapterDevice.createShaderModule(gpu::shader::MakeShaderDescriptor(
-          shader, adapterDevice.shaderSourceKind(), "GeodeCheckerboard"));
+  gpu::Result<gpu::ShaderModule> shaderModule = device.createShaderModule(
+      gpu::shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "GeodeCheckerboard"));
   if (shaderModule.hasError()) {
     return;
   }
@@ -73,7 +72,7 @@ GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(gpu::Device& adapterDevice,
   }
 
   gpu::Result<gpu::RenderPipeline> pipeline =
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      device.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeCheckerboard", pipelineLayout_,
           gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{

@@ -10,7 +10,6 @@
 #include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::editor {
 namespace {
@@ -135,7 +134,7 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> AcquireRuntimeUploadSnapshot(
       reusableSnapshot->alphaType() == alphaType) {
     return reusableSnapshot;
   }
-  gpu::Result<gpu::Texture> texture = device->adapterDevice().createTexture(gpu::TextureDescriptor{
+  gpu::Result<gpu::Texture> texture = device->runtimeDevice().createTexture(gpu::TextureDescriptor{
       "EditorUploadedBitmap",
       {static_cast<uint32_t>(allocationDimensions.x),
        static_cast<uint32_t>(allocationDimensions.y)},
@@ -170,7 +169,7 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> UploadRuntimeBitmap(
     return nullptr;
   }
   if (reusableSnapshot != nullptr && reusableSnapshot->runtimeTexture() != nullptr &&
-      reusableSnapshot->runtimeTexture()->deviceId() != device->adapterDevice().deviceId()) {
+      reusableSnapshot->runtimeTexture()->deviceId() != device->runtimeDevice().deviceId()) {
     return nullptr;
   }
   std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploaded = AcquireRuntimeUploadSnapshot(
@@ -180,7 +179,7 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> UploadRuntimeBitmap(
   }
   const gpu::Texture* runtimeTexture = uploaded->runtimeTexture();
   if (runtimeTexture == nullptr ||
-      !WriteRuntimeBitmapUpload(device->adapterDevice(), *runtimeTexture, pixels, dimensions,
+      !WriteRuntimeBitmapUpload(device->runtimeDevice(), *runtimeTexture, pixels, dimensions,
                                 rowBytes, *layout)) {
     return nullptr;
   }
