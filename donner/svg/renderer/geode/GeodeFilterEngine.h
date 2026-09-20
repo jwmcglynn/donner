@@ -17,11 +17,13 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <string_view>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
@@ -77,6 +79,29 @@ struct RuntimeComputeProgram {
   std::array<uint32_t, 4> twoInputBindings = {0, 1, 2, 3};
   //!< Reflected source, backdrop, output and parameter bindings of a two-input program.
 };
+
+/**
+ * Creates the compute program of one shader family from the projection \p runtime consumes.
+ *
+ * Both artifacts are required so that a caller cannot hand a device a projection it does not
+ * consume: a native device selects \p nativeShader, every other device selects \p wgslShader,
+ * and a build that links no native artifact passes null and fails closed at module creation.
+ * The shader module descriptor and the group-zero binding layout are both derived from the
+ * selected artifact, so the source a device compiles and the interface the host binds against
+ * always come from the same compiled program. A family that does not expose exactly one
+ * two-dimensional compute entry point yields a program with null handles, which a dispatch
+ * refuses.
+ *
+ * @param runtime Device receiving the selected precompiled projection.
+ * @param wgslShader Authored WGSL artifact of the family.
+ * @param nativeShader Platform-native artifact of the family, or null when this build links none.
+ * @param label Diagnostic program label.
+ * @return The built program, or one with null handles when the build failed.
+ */
+RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
+                                             const gpu::shader::CompiledShaderView& wgslShader,
+                                             const gpu::shader::CompiledShaderView* nativeShader,
+                                             std::string_view label);
 
 /**
  * Renderer-owned allocation boundary for filter textures.

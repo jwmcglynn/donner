@@ -24,6 +24,20 @@
 #define DONNER_GEODE_NATIVE_SHADER(family) (nullptr)
 #endif
 
+/**
+ * Names one family's two linked artifacts as an adjacent `wgslShader, nativeShader` argument pair.
+ *
+ * The family token is written once, so a call site cannot pair one family's authored WGSL with
+ * another family's native artifact. Expands to two arguments, so it is usable only where a
+ * function takes them adjacently and in that order, and it must not be passed to another macro,
+ * where the comma would split arguments. The caller includes the family's own program header;
+ * this only names the accessors.
+ *
+ * @param family Program name, as in `SlugFill` for `SlugFillShader` and `SlugFillNativeShader`.
+ */
+#define DONNER_GEODE_SHADER_ARTIFACTS(family) \
+  ::donner::gpu::shader::programs::family##Shader(), DONNER_GEODE_NATIVE_SHADER(family)
+
 namespace donner::geode {
 
 /**
