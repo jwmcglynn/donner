@@ -20,6 +20,8 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -82,12 +84,16 @@ ViewportState IdentityViewport() {
                       /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(400.0, 300.0));
 }
 
-/// Assert that exported SVG text re-parses cleanly: the deterministic form of
-/// the round-trip fuzzer oracle.
-void ExpectReparsesCleanly(std::string_view exported) {
+/// Whether exported SVG text re-parses cleanly: the deterministic form of the round-trip
+/// fuzzer oracle. Returns an assertion result so call sites decide between EXPECT and ASSERT;
+/// a fatal assertion inside a void helper would not stop the calling test.
+testing::AssertionResult ReparsesCleanly(std::string_view exported) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
   ParseResult<SVGDocument> reparsed = SVGParser::ParseSVG(exported, sink);
-  ASSERT_FALSE(reparsed.hasError()) << "Re-parse error: " << reparsed.error();
+  if (reparsed.hasError()) {
+    return testing::AssertionFailure() << "Re-parse error: " << reparsed.error();
+  }
+  return testing::AssertionSuccess();
 }
 
 TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
@@ -389,11 +395,21 @@ TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
+  // Root attribute values are carried as decoded values and escaped exactly once, so the
+  // source spelling round-trips rather than gaining an escaping level per export.
   ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("source: root&amp;amp;source"));
-  EXPECT_THAT(result.value, HasSubstr("id=\"root&amp;amp;source\""));
+  EXPECT_THAT(result.value, HasSubstr("source: root&amp;source"));
+  EXPECT_THAT(result.value, HasSubstr("id=\"root&amp;source\""));
   EXPECT_THAT(result.value, HasSubstr("data-title=\"&quot;quoted&quot;\""));
   EXPECT_THAT(result.value, HasSubstr("data-owner=\"Bob&apos;s\""));
+  EXPECT_TRUE(ReparsesCleanly(result.value));
+
+  // Re-exporting the export is a fixed point: the id does not grow another `amp;`.
+  const SVGDocument reexportedDoc = ParseOrDie(result.value);
+  const Result<std::string, std::string> reexported =
+      ExportViewportAsSvg(reexportedDoc, viewport, renderPaneRect, ViewportExportOptions{});
+  ASSERT_TRUE(reexported.ok()) << reexported.error;
+  EXPECT_THAT(reexported.value, HasSubstr("id=\"root&amp;source\""));
 }
 
 TEST(ViewportSvgExportTest, RawLessThanInRootAttributeIsEscapedAfterSourceEdit) {
@@ -457,9 +473,9 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
   EXPECT_THAT(result.value, Not(HasSubstr("svg-not-root")));
 }
 
-// Regression tests carried from PR #1308, which the tree-based exporter
-// supersedes. Each shape once desynchronized the old hand-rolled scan from the
-// XML parser; all markup boundaries below now come from parsed-tree locations.
+// Each shape below once desynchronized a raw-source scan from the tokenizer, letting the
+// exporter pick the wrong root, body start, or body end. Markup boundaries now come from
+// parsed-tree source locations, so these documents are only interesting as regressions.
 
 TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarkup) {
   // A processing instruction whose content contains `>` followed by an `<svg>`
@@ -479,7 +495,7 @@ TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarku
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
@@ -500,13 +516,13 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
-TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
-  // A `>` inside a doctype internal subset does not end the doctype; the parser
-  // consumes the whole declaration as one node, so subset content cannot become
-  // the root.
+TEST(ViewportSvgExportTest, DoctypeInternalSubsetIsRefused) {
+  // The parser expands entity references and drops the DOCTYPE node, so the export cannot
+  // reproduce the declarations. Refuse rather than emit a body whose entity references no
+  // longer resolve.
   const SVGDocument doc = ParseOrDie(
       "<!DOCTYPE svg [<!ENTITY data \"a> <svg id='not-the-root' width='0'/>\">]>"
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
@@ -518,10 +534,26 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
-  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("DOCTYPE internal subset"));
+}
+
+TEST(ViewportSvgExportTest, DoctypeEntityReferencedFromBodyIsRefused) {
+  // The sharp case: the body actually uses the declared entity, so an export carrying the
+  // body verbatim without the declaration would reference an undeclared entity.
+  const SVGDocument doc = ParseOrDie(
+      "<!DOCTYPE svg [<!ENTITY shapeFill \"red\">]>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\" fill=\"&shapeFill;\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("DOCTYPE internal subset"));
 }
 
 TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
@@ -542,13 +574,13 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_THAT(result.value, Not(HasSubstr("trailing")));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
-TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
-  // Brackets inside a quoted `<!ENTITY>` value do not affect internal-subset
-  // nesting (mirroring the parser's quote-aware entity skip), so the doctype
-  // extends past them to its real `>`.
+TEST(ViewportSvgExportTest, DoctypeEntityValueWithBracketsIsRefused) {
+  // Brackets inside a quoted `<!ENTITY>` value do not affect internal-subset nesting, so the
+  // markup-shaped entity value is part of the declaration, and the declaration refuses the
+  // export rather than leaking `<svg id="not-the-root">` into the output.
   const SVGDocument doc = ParseOrDie(
       "<!DOCTYPE svg [<!ENTITY data ']><svg id=\"not-the-root\">'>]>"
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
@@ -560,10 +592,9 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
-  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("DOCTYPE internal subset"));
+  EXPECT_THAT(result.error, Not(HasSubstr("not-the-root")));
 }
 
 TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
@@ -584,7 +615,7 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("real-root-child"));
   EXPECT_EQ(result.value.find("</svg>"), result.value.rfind("</svg>"));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
 TEST(ViewportSvgExportTest, NestedSvgCloseDoesNotEndRootBody) {
@@ -604,7 +635,7 @@ TEST(ViewportSvgExportTest, NestedSvgCloseDoesNotEndRootBody) {
   ASSERT_TRUE(result.ok()) << result.error;
   EXPECT_THAT(result.value, HasSubstr("id=\"inner\""));
   EXPECT_THAT(result.value, HasSubstr("id=\"outer-child\""));
-  ExpectReparsesCleanly(result.value);
+  EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
 TEST(ViewportSvgExportTest, NestedSvgWithMissingRootCloseIsRefused) {
@@ -1533,6 +1564,88 @@ TEST(ViewportSvgExportTest, ExportRenderClampsContentOutsideViewport) {
       << "the red shape inside the viewport crop must be present in the export";
   EXPECT_EQ(CountPixels(rendered, isGreen), 0)
       << "the green shape outside the viewport crop must be clamped out of the export";
+}
+
+// Rendering instantiates shadow-tree entities (for `<use>` and for gradients that inherit
+// through `href`) as children of their host element in the same tree the XML facade walks.
+// Those entities carry tree structure but no XML node type, so an export that walks the tree
+// must skip them instead of asking every child for its node type.
+TEST(ViewportSvgExportTest, ExportAfterRenderSkipsShadowTreeEntities) {
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"400\" height=\"300\" viewBox=\"0 0 400 300\" "
+      "xmlns=\"http://www.w3.org/2000/svg\" "
+      "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+      "<defs>"
+      "<linearGradient id=\"base\">"
+      "<stop offset=\"0\" stop-color=\"#ff0000\"/>"
+      "<stop offset=\"1\" stop-color=\"#0000ff\"/>"
+      "</linearGradient>"
+      "<linearGradient id=\"derived\" xlink:href=\"#base\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"/>"
+      "</defs>"
+      "<rect id=\"src\" x=\"10\" y=\"20\" width=\"100\" height=\"50\" fill=\"url(#derived)\"/>"
+      "<use xlink:href=\"#src\" x=\"120\"/>"
+      "</svg>");
+
+  svg::Renderer renderer;
+  renderer.draw(doc);
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(400, 300)), ViewportExportOptions());
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("<use"));
+  EXPECT_TRUE(ReparsesCleanly(result.value));
+}
+
+// A programmatically created element joins the shared tree before it has any XML node data.
+// The export walks that tree, so it must skip the entry rather than ask it for a node type.
+TEST(ViewportSvgExportTest, ExportSkipsProgrammaticallyAppendedElement) {
+  SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  svg::SVGRectElement added = svg::SVGRectElement::Create(doc);
+  added.setAttribute("id", "programmatic");
+  svg::SVGSVGElement root = doc.svgElement();
+  root.appendChild(added);
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(400, 300)), ViewportExportOptions());
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(ReparsesCleanly(result.value));
+}
+
+// A root spelled with a namespace prefix has no default namespace for the injected wrapper
+// markup to fall into, so the export re-emits the root under its own qualified name and gives
+// every injected element the same prefix. Unprefixed injections would land in no namespace and
+// the clipped group would stop being an SVG group.
+TEST(ViewportSvgExportTest, PrefixedRootKeepsInjectedMarkupInTheSvgNamespace) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg:svg xmlns:svg=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\" "
+      "viewBox=\"0 0 100 100\">"
+      "<svg:rect id=\"body-shape\" width=\"10\" height=\"10\" fill=\"#ff0000\"/>"
+      "</svg:svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  ViewportExportOptions options;
+  options.transparentBackground = false;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  EXPECT_THAT(result.value, HasSubstr("<svg:svg"));
+  EXPECT_THAT(result.value, HasSubstr("</svg:svg>"));
+  EXPECT_THAT(result.value, HasSubstr("<svg:defs><svg:clipPath"));
+  EXPECT_THAT(result.value, HasSubstr("<svg:g clip-path="));
+  EXPECT_THAT(result.value, HasSubstr("<svg:style>"));
+  EXPECT_THAT(result.value, HasSubstr("<svg:rect x="));
+  EXPECT_TRUE(ReparsesCleanly(result.value));
+
+  // The re-parsed export is a real SVG document: the clipped wrapper resolves to a group and
+  // the carried body content is still reachable.
+  SVGDocument reparsed = ParseOrDie(result.value);
+  EXPECT_TRUE(reparsed.querySelector("#body-shape").has_value());
+  EXPECT_TRUE(reparsed.querySelector("#donner-editor-overlay").has_value());
 }
 
 }  // namespace

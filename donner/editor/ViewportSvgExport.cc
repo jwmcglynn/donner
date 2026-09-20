@@ -14,6 +14,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
@@ -109,48 +110,33 @@ std::string EscapeXmlComment(std::string_view input) {
   return output;
 }
 
-/// Case-insensitive ASCII comparison of \p haystack starting at \p pos against
-/// \p needle.
-bool MatchesAtCaseInsensitive(std::string_view haystack, std::size_t pos, std::string_view needle) {
-  if (pos + needle.size() > haystack.size()) {
-    return false;
-  }
-  for (std::size_t i = 0; i < needle.size(); ++i) {
-    char a = haystack[pos + i];
-    char b = needle[i];
-    if (a >= 'A' && a <= 'Z') {
-      a = static_cast<char>(a - 'A' + 'a');
-    }
-    if (b >= 'A' && b <= 'Z') {
-      b = static_cast<char>(b - 'A' + 'a');
-    }
-    if (a != b) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/// A single `name="value"` attribute parsed from an element open tag.
+/// A single `name="value"` attribute of the root element.
 struct Attribute {
-  std::string name;
-  std::string value;  ///< Raw value bytes as they appeared in the source.
+  std::string name;   ///< Qualified name in source spelling (`prefix:local` or `local`).
+  std::string value;  ///< Parser-decoded value, escaped once when written out.
 };
 
-/// Parsed root `<svg ...>` open tag.
+/// Root element markup derived from the parsed tree.
 struct RootTag {
+  /// Root tag in source spelling, `svg` or `prefix:svg`. The export re-emits the root under
+  /// its own name so a prefixed root keeps resolving against the body's own declarations.
+  std::string qualifiedName;
+  /// Prefix (`` or `prefix:`) given to elements the export injects, so they land in the same
+  /// namespace as the root rather than in no namespace under a prefixed root.
+  std::string injectedPrefix;
   std::vector<Attribute> attributes;
-  std::size_t bodyStart = 0;  ///< Byte offset just past the root open tag.
-  std::size_t bodyEnd = 0;    ///< Byte offset of the root `</svg>` close tag.
-  bool found = false;
+  std::size_t prologEnd = 0;       ///< Byte offset of the root open tag's `<`.
+  std::size_t bodyStart = 0;       ///< Byte offset just past the root open tag.
+  std::size_t bodyEnd = 0;         ///< Byte offset of the root closing tag.
+  bool locationsResolved = false;  ///< True once the offsets above resolved from the tree.
 };
 
 /// Find the document's root `<svg>` element: the first top-level element with local
 /// name `svg`, matching `SVGParser`'s own root check (which additionally enforces the
 /// namespace URI, so a wrong-namespace `<other:svg>` never reaches a parsed document).
 std::optional<xml::XMLNode> FindRootSvgElement(const xml::XMLDocument& xmlDocument) {
-  for (std::optional<xml::XMLNode> child = xmlDocument.root().firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  for (std::optional<xml::XMLNode> child = xmlDocument.root().firstXmlChild(); child.has_value();
+       child = child->nextXmlSibling()) {
     if (child->type() != xml::XMLNode::Type::Element) {
       continue;
     }
@@ -171,8 +157,8 @@ std::optional<std::pair<std::size_t, std::size_t>> RangeOffsets(const SourceRang
   return std::pair{*range.start.offset, *range.end.offset};
 }
 
-/// Serialize a qualified attribute name in source spelling (`prefix:local` or `local`).
-std::string SerializeAttributeName(const xml::XMLQualifiedNameRef& name) {
+/// Serialize a qualified name in source spelling (`prefix:local` or `local`).
+std::string SerializeQualifiedName(const xml::XMLQualifiedNameRef& name) {
   std::string result;
   if (!name.namespacePrefix.empty()) {
     result.assign(name.namespacePrefix);
@@ -182,12 +168,12 @@ std::string SerializeAttributeName(const xml::XMLQualifiedNameRef& name) {
   return result;
 }
 
-/// Derive the root tag's attributes (source order, raw bytes) and body bounds from the
-/// parsed tree. Attribute order is recovered by sorting on each attribute's source offset,
-/// since the tree stores attributes by name; values are the raw source bytes re-escaped on
-/// output, except for attributes without a source location (parser-injected or programmatic),
-/// which fall back to their decoded value.
-RootTag ParseRootTag(std::string_view source, const xml::XMLNode& root) {
+/// Derive the root tag's name, attributes (source order, decoded values) and body bounds from
+/// the parsed tree. Attribute order is recovered by sorting on each attribute's source offset,
+/// since the tree stores attributes by name. Values are the parser-decoded values and are
+/// escaped exactly once on output, so a source `&amp;` round-trips instead of becoming
+/// `&amp;amp;`; the source offsets are used only for ordering.
+RootTag DeriveRootTagFromTree(std::string_view source, const xml::XMLNode& root) {
   RootTag result;
   const std::optional<SourceRange> openTag = root.getOpeningTagLocation();
   const std::optional<std::pair<std::size_t, std::size_t>> openOffsets =
@@ -195,12 +181,13 @@ RootTag ParseRootTag(std::string_view source, const xml::XMLNode& root) {
   if (!openOffsets.has_value() || openOffsets->second > source.size()) {
     return result;
   }
+  result.prologEnd = openOffsets->first;
   result.bodyStart = openOffsets->second;
 
   const std::optional<SourceRange> closeTag = root.getClosingTagLocation();
   if (!closeTag.has_value()) {
     // No closing tag is only sound for a childless (self-closing) root.
-    if (root.firstChild().has_value()) {
+    if (root.firstXmlChild().has_value()) {
       return result;
     }
     result.bodyEnd = result.bodyStart;
@@ -221,26 +208,18 @@ RootTag ParseRootTag(std::string_view source, const xml::XMLNode& root) {
   std::vector<OrderedAttribute> ordered;
   for (const xml::XMLQualifiedNameRef& name : root.attributes()) {
     OrderedAttribute entry;
-    entry.attribute.name = SerializeAttributeName(name);
-    const std::optional<xml::XMLAttributeSourceLocation> location =
-        root.getAttributeSourceLocation(name);
-    if (location.has_value()) {
-      const std::optional<std::pair<std::size_t, std::size_t>> valueOffsets =
-          RangeOffsets(location->valueRange);
-      const std::optional<std::pair<std::size_t, std::size_t>> fullOffsets =
-          RangeOffsets(location->fullRange);
-      if (valueOffsets.has_value() && valueOffsets->second <= source.size() &&
+    entry.attribute.name = SerializeQualifiedName(name);
+    if (const std::optional<RcString> decoded = root.getAttribute(name); decoded.has_value()) {
+      entry.attribute.value.assign(std::string_view(*decoded));
+    }
+    if (const std::optional<xml::XMLAttributeSourceLocation> location =
+            root.getAttributeSourceLocation(name);
+        location.has_value()) {
+      if (const std::optional<std::pair<std::size_t, std::size_t>> fullOffsets =
+              RangeOffsets(location->fullRange);
           fullOffsets.has_value()) {
-        entry.attribute.value.assign(
-            source.substr(valueOffsets->first, valueOffsets->second - valueOffsets->first));
         entry.offset = fullOffsets->first;
         entry.anchored = true;
-      }
-    }
-    if (!entry.anchored) {
-      const std::optional<RcString> decoded = root.getAttribute(name);
-      if (decoded.has_value()) {
-        entry.attribute.value.assign(std::string_view(*decoded));
       }
     }
     ordered.push_back(std::move(entry));
@@ -255,8 +234,22 @@ RootTag ParseRootTag(std::string_view source, const xml::XMLNode& root) {
   for (auto& entry : ordered) {
     result.attributes.push_back(std::move(entry.attribute));
   }
-  result.found = true;
+  result.qualifiedName = SerializeQualifiedName(root.tagName());
+  if (!root.tagName().namespacePrefix.empty()) {
+    result.injectedPrefix = std::string(std::string_view(root.tagName().namespacePrefix)) + ":";
+  }
+  result.locationsResolved = true;
   return result;
+}
+
+/// Returns true when the document prolog declares a DOCTYPE internal subset. The SVG parser
+/// expands entity references and drops the DOCTYPE node, so the export cannot reproduce the
+/// declarations; a body that references a declared entity would otherwise export with an
+/// undeclared reference that no consumer can resolve.
+bool PrologDeclaresInternalSubset(std::string_view prolog) {
+  const std::size_t doctype =
+      StringUtils::Find<StringComparison::IgnoreCase>(prolog, std::string_view("<!doctype"));
+  return doctype != std::string_view::npos && prolog.find('[', doctype) != std::string_view::npos;
 }
 
 /// Returns true when an attribute local name ends with "href" (case-sensitive), preserving
@@ -291,22 +284,17 @@ std::string FindExternalReference(const xml::XMLNode& root) {
           continue;
         }
         const std::string_view view(*value);
-        // Skip leading whitespace inside the value when scheme-matching.
-        std::size_t valueOffset = 0;
-        while (valueOffset < view.size() &&
-               (view[valueOffset] == ' ' || view[valueOffset] == '\t')) {
-          ++valueOffset;
-        }
+        const std::string_view trimmed = StringUtils::TrimWhitespace(view);
         for (const std::string_view scheme : kExternalSchemes) {
-          if (MatchesAtCaseInsensitive(view, valueOffset, scheme)) {
+          if (StringUtils::StartsWith<StringComparison::IgnoreCase>(trimmed, scheme)) {
             return std::string(view);
           }
         }
       }
     }
     std::vector<xml::XMLNode> children;
-    for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-         child = child->nextSibling()) {
+    for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
+         child = child->nextXmlSibling()) {
       children.push_back(*child);
     }
     for (auto it = children.rbegin(); it != children.rend(); ++it) {
@@ -328,8 +316,8 @@ std::string OverlayPaintStyle(std::string_view fill, std::string_view stroke,
   return " style=\"" + OverlayPaintDeclarations(fill, stroke, strokeWidth) + "\"";
 }
 
-std::string OverlayStylesheet(std::string_view overlayGroupId) {
-  std::string out = "<style>";
+std::string OverlayStylesheet(std::string_view prefix, std::string_view overlayGroupId) {
+  std::string out = "<" + std::string(prefix) + "style>";
   const auto appendRule = [&out, overlayGroupId](std::string_view className, std::string_view fill,
                                                  std::string_view stroke,
                                                  std::string_view strokeWidth) {
@@ -340,14 +328,15 @@ std::string OverlayStylesheet(std::string_view overlayGroupId) {
   appendRule(kOverlayLineClass, "none", kOverlayStroke, "1");
   appendRule(kOverlayPointClass, kOverlayStroke, "none", "0");
   appendRule(kOverlayHandleClass, kOverlayHandleFill, kOverlayStroke, "1");
-  out += "</style>";
+  out += "</" + std::string(prefix) + "style>";
   return out;
 }
 
 /// Append a `<rect>` element for a document-space box with explicit fill/stroke.
-void AppendRect(std::string* out, const Box2d& boxDoc, std::string_view fill,
-                std::string_view stroke, std::string_view strokeWidth, std::string_view className) {
-  *out += "<rect x=\"" + FormatNumber(boxDoc.topLeft.x) + "\" y=\"" +
+void AppendRect(std::string* out, std::string_view prefix, const Box2d& boxDoc,
+                std::string_view fill, std::string_view stroke, std::string_view strokeWidth,
+                std::string_view className) {
+  *out += "<" + std::string(prefix) + "rect x=\"" + FormatNumber(boxDoc.topLeft.x) + "\" y=\"" +
           FormatNumber(boxDoc.topLeft.y) + "\" width=\"" + FormatNumber(boxDoc.width()) +
           "\" height=\"" + FormatNumber(boxDoc.height()) + "\" fill=\"" + std::string(fill) +
           "\" stroke=\"" + std::string(stroke) + "\" stroke-width=\"" + std::string(strokeWidth) +
@@ -356,25 +345,28 @@ void AppendRect(std::string* out, const Box2d& boxDoc, std::string_view fill,
 }
 
 /// Append a closed `<path>` element tracing the four corners of an oriented box.
-void AppendOrientedBox(std::string* out, const std::array<Vector2d, 4>& cornersDoc) {
+void AppendOrientedBox(std::string* out, std::string_view prefix,
+                       const std::array<Vector2d, 4>& cornersDoc) {
   std::string d = "M " + FormatNumber(cornersDoc[0].x) + " " + FormatNumber(cornersDoc[0].y);
   for (std::size_t i = 1; i < cornersDoc.size(); ++i) {
     d += " L " + FormatNumber(cornersDoc[i].x) + " " + FormatNumber(cornersDoc[i].y);
   }
   d += " Z";
-  *out += "<path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
-          "\" stroke-width=\"1\" class=\"" + std::string(kOverlayLineClass) + "\"" +
-          OverlayPaintStyle("none", kOverlayStroke, "1") + "/>";
+  *out += "<" + std::string(prefix) + "path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" +
+          std::string(kOverlayStroke) + "\" stroke-width=\"1\" class=\"" +
+          std::string(kOverlayLineClass) + "\"" + OverlayPaintStyle("none", kOverlayStroke, "1") +
+          "/>";
 }
 
 /// Append an open line path for a path control-handle guide.
-void AppendControlLine(std::string* out, const SelectionChromeSnapshot::PathControlLine& lineDoc) {
+void AppendControlLine(std::string* out, std::string_view prefix,
+                       const SelectionChromeSnapshot::PathControlLine& lineDoc) {
   const std::string d =
       "M " + FormatNumber(lineDoc.anchorDoc.x) + " " + FormatNumber(lineDoc.anchorDoc.y) + " L " +
       FormatNumber(lineDoc.controlDoc.x) + " " + FormatNumber(lineDoc.controlDoc.y);
-  *out += "<path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
-          "\" stroke-width=\"1\" class=\"" + std::string(kOverlayLineClass) + "\"" +
-          OverlayPaintStyle("none", kOverlayStroke, "1") +
+  *out += "<" + std::string(prefix) + "path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" +
+          std::string(kOverlayStroke) + "\" stroke-width=\"1\" class=\"" +
+          std::string(kOverlayLineClass) + "\"" + OverlayPaintStyle("none", kOverlayStroke, "1") +
           " vector-effect=\"non-scaling-stroke\"/>";
 }
 
@@ -403,7 +395,8 @@ std::string UniqueInjectedId(const svg::SVGDocument& document, std::string_view 
 
 }  // namespace
 
-std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot) {
+std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot,
+                                          std::string_view elementPrefix) {
   std::string out;
 
   // Selected path outlines. `vector-effect="non-scaling-stroke"` keeps the 1.5px
@@ -413,9 +406,9 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
     if (pathData.empty()) {
       continue;
     }
-    out += "<path d=\"" + EscapeXml(pathData.str()) + "\" fill=\"none\" stroke=\"" +
-           std::string(kOverlayStroke) + "\" stroke-width=\"1.5\" class=\"" +
-           std::string(kOverlayOutlineClass) + "\"" +
+    out += "<" + std::string(elementPrefix) + "path d=\"" + EscapeXml(pathData.str()) +
+           "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
+           "\" stroke-width=\"1.5\" class=\"" + std::string(kOverlayOutlineClass) + "\"" +
            OverlayPaintStyle("none", kOverlayStroke, "1.5") +
            " vector-effect=\"non-scaling-stroke\"/>";
   }
@@ -423,16 +416,16 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
   // Selected path Bezier control lines and points.
   for (const SelectionChromeSnapshot::PathControlLine& controlLineDoc :
        snapshot.pathControlLinesDoc) {
-    AppendControlLine(&out, controlLineDoc);
+    AppendControlLine(&out, elementPrefix, controlLineDoc);
   }
   for (const Vector2d& controlPointDoc : snapshot.pathControlPointsDoc) {
-    AppendRect(&out,
+    AppendRect(&out, elementPrefix,
                OverlayRenderer::ChromeSquareForPoint(
                    snapshot, OverlayRenderer::ChromeSquare::PathControlPoint, controlPointDoc),
                kOverlayStroke, "none", "0", kOverlayPointClass);
   }
   for (const Vector2d& anchorDoc : snapshot.pathAnchorPointsDoc) {
-    AppendRect(&out,
+    AppendRect(&out, elementPrefix,
                OverlayRenderer::ChromeSquareForPoint(
                    snapshot, OverlayRenderer::ChromeSquare::PathAnchor, anchorDoc),
                kOverlayStroke, "none", "0", kOverlayPointClass);
@@ -440,17 +433,17 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
 
   // Selection AABBs.
   for (const Box2d& aabbDoc : snapshot.aabbsDoc) {
-    AppendRect(&out, aabbDoc, "none", kOverlayStroke, "1", kOverlayLineClass);
+    AppendRect(&out, elementPrefix, aabbDoc, "none", kOverlayStroke, "1", kOverlayLineClass);
   }
 
   // Oriented rotation box (drawn instead of axis-aligned AABBs during rotation).
   if (snapshot.orientedBoundsDoc.has_value()) {
-    AppendOrientedBox(&out, snapshot.orientedBoundsDoc->cornersDoc);
+    AppendOrientedBox(&out, elementPrefix, snapshot.orientedBoundsDoc->cornersDoc);
   }
 
   // Resize handles: small filled squares.
   for (const Vector2d& handleAnchorDoc : snapshot.handleAnchorsDoc) {
-    AppendRect(&out,
+    AppendRect(&out, elementPrefix,
                OverlayRenderer::ChromeSquareForPoint(
                    snapshot, OverlayRenderer::ChromeSquare::TransformHandle, handleAnchorDoc),
                kOverlayHandleFill, kOverlayStroke, "1", kOverlayHandleClass);
@@ -458,7 +451,8 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
 
   // Marquee rect.
   if (snapshot.marqueeDoc.has_value()) {
-    AppendRect(&out, *snapshot.marqueeDoc, "none", kOverlayStroke, "1", kOverlayLineClass);
+    AppendRect(&out, elementPrefix, *snapshot.marqueeDoc, "none", kOverlayStroke, "1",
+               kOverlayLineClass);
   }
 
   return out;
@@ -483,19 +477,33 @@ Result<std::string, std::string> ExportViewportAsSvg(
 
   const std::string_view source = doc.source();
 
-  // Refuse documents that reference external resources we cannot embed safely.
+  // Refuse `href`-suffixed attributes (`href`, `xlink:href`, `data-href`) whose decoded value
+  // targets http://, https://, or file://. This is the whole check: CSS `url()` references in
+  // `style` attributes or `<style>` elements are not inspected.
   const std::string externalReference = FindExternalReference(xmlDocument.root());
   if (!externalReference.empty()) {
     return ResultType::Err(
-        "Viewport export cannot embed external resource reference: " + externalReference +
-        ". Inline or remove external href/xlink:href references and try again.");
+        "Viewport export cannot embed the external href reference: " + externalReference +
+        ". Inline or remove http://, https://, and file:// href/xlink:href references and try "
+        "again.");
   }
 
   const std::optional<xml::XMLNode> rootNode = FindRootSvgElement(xmlDocument);
-  const RootTag rootTag = rootNode.has_value() ? ParseRootTag(source, *rootNode) : RootTag{};
-  if (!rootTag.found) {
+  if (!rootNode.has_value()) {
     return ResultType::Err("Viewport export could not find the root <svg> element in the source.");
   }
+  const RootTag rootTag = DeriveRootTagFromTree(source, *rootNode);
+  if (!rootTag.locationsResolved) {
+    return ResultType::Err(
+        "Viewport export could not resolve the source locations of the root <svg> element.");
+  }
+  if (PrologDeclaresInternalSubset(source.substr(0, rootTag.prologEnd))) {
+    return ResultType::Err(
+        "Viewport export cannot reproduce a DOCTYPE internal subset: the parser expands and drops "
+        "the declarations, so an exported body could reference an undeclared entity. Inline the "
+        "entity values and try again.");
+  }
+  const std::string& injectedPrefix = rootTag.injectedPrefix;
 
   // Id for the injected clip path, uniquified against ids already declared in
   // the source so a document that defines "donner-viewport-clip" itself does
@@ -550,7 +558,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
   output += " -->\n";
 
   // Root open tag: carry source root attributes, replacing viewBox/width/height.
-  output += "<svg";
+  output += "<" + rootTag.qualifiedName;
   bool wroteViewBox = false;
   bool wroteWidth = false;
   bool wroteHeight = false;
@@ -580,17 +588,18 @@ Result<std::string, std::string> ExportViewportAsSvg(
   output += ">\n";
 
   // Defs: clip path covering the document-space viewport rect.
-  output += "  <defs><clipPath id=\"";
+  output += "  <" + injectedPrefix + "defs><" + injectedPrefix + "clipPath id=\"";
   output += clipPathId;
-  output += "\"><rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" + FormatNumber(viewBoxMinY) +
-            "\" width=\"" + FormatNumber(viewBoxWidth) + "\" height=\"" +
-            FormatNumber(viewBoxHeight) + "\"/></clipPath></defs>\n";
+  output += "\"><" + injectedPrefix + "rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" +
+            FormatNumber(viewBoxMinY) + "\" width=\"" + FormatNumber(viewBoxWidth) +
+            "\" height=\"" + FormatNumber(viewBoxHeight) + "\"/></" + injectedPrefix +
+            "clipPath></" + injectedPrefix + "defs>\n";
 
   // Optional covering background rect (non-transparent export).
   if (!options.transparentBackground) {
-    output += "  <rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" + FormatNumber(viewBoxMinY) +
-              "\" width=\"" + FormatNumber(viewBoxWidth) + "\" height=\"" +
-              FormatNumber(viewBoxHeight) + "\" fill=\"#ffffff\"/>\n";
+    output += "  <" + injectedPrefix + "rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" +
+              FormatNumber(viewBoxMinY) + "\" width=\"" + FormatNumber(viewBoxWidth) +
+              "\" height=\"" + FormatNumber(viewBoxHeight) + "\" fill=\"#ffffff\"/>\n";
   }
 
   // Source stylesheets remain active in the exported SVG. Define the editor
@@ -599,37 +608,37 @@ Result<std::string, std::string> ExportViewportAsSvg(
   // also give them the intended precedence in standards-compliant browsers.
   if (options.includeSelectionOverlay && overlaySnapshot != nullptr) {
     output += "  ";
-    output += OverlayStylesheet(overlayGroupId);
+    output += OverlayStylesheet(injectedPrefix, overlayGroupId);
     output += "\n";
   }
 
   // Document content: source children verbatim, wrapped in a clipped group.
-  output += "  <g clip-path=\"url(#";
+  output += "  <" + injectedPrefix + "g clip-path=\"url(#";
   output += clipPathId;
   output += ")\">";
   if (rootTag.bodyEnd > rootTag.bodyStart) {
     output += source.substr(rootTag.bodyStart, rootTag.bodyEnd - rootTag.bodyStart);
   }
-  output += "</g>\n";
+  output += "</" + injectedPrefix + "g>\n";
 
   // Optional editor overlay group. Populated from the captured selection-chrome
   // snapshot when one is supplied; otherwise emitted empty (back-compat).
   // Clipped to the same document-space viewport rect as the content so overlay
   // chrome never spills outside the exported crop.
   if (options.includeSelectionOverlay) {
-    output += "  <g id=\"";
+    output += "  <" + injectedPrefix + "g id=\"";
     output += overlayGroupId;
     output +=
         "\" data-donner-export-role=\"editor-overlay\" pointer-events=\"none\" clip-path=\"url(#";
     output += clipPathId;
     output += ")\">";
     if (overlaySnapshot != nullptr) {
-      output += SerializeOverlaySnapshotToSvg(*overlaySnapshot);
+      output += SerializeOverlaySnapshotToSvg(*overlaySnapshot, injectedPrefix);
     }
-    output += "</g>\n";
+    output += "</" + injectedPrefix + "g>\n";
   }
 
-  output += "</svg>\n";
+  output += "</" + rootTag.qualifiedName + ">\n";
 
   return ResultType::Ok(std::move(output));
 }

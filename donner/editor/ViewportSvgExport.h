@@ -19,6 +19,7 @@
 /// theme-independent styling.
 
 #include <string>
+#include <string_view>
 
 #include "donner/base/Box.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -78,10 +79,14 @@ struct ViewportExportOptions {
  * regardless of ImGui theme drift.
  *
  * @param snapshot Captured selection chrome (document-space geometry).
+ * @param elementPrefix Namespace prefix (including the trailing `:`) to give the emitted
+ *   elements, so they resolve to the SVG namespace inside a root that is itself prefixed.
+ *   Empty for the usual default-namespace root.
  * @return Concatenated overlay SVG children, or an empty string when the
  *   snapshot has no drawable primitives.
  */
-std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot);
+std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot,
+                                          std::string_view elementPrefix = "");
 
 /**
  * Export the currently-visible document region as a cropped, standalone SVG.
@@ -96,10 +101,12 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
  * The export reads from \p doc only; it does not reparse the active document
  * or clear any compositor cache. The source document is never mutated.
  *
- * Self-contained documents export successfully. Documents that reference
- * external resources over `http://`, `https://`, or `file://` via
- * `href` / `xlink:href` are refused with a human-readable error, since the
- * export cannot embed or safely reference them (vector-first; no rasterizing).
+ * Self-contained documents export successfully. Documents are refused with a human-readable
+ * error when an `href`-suffixed attribute targets `http://`, `https://`, or `file://` (the
+ * export cannot embed or safely reference them; vector-first, no rasterizing), when the source
+ * has not been reparsed into the tree, or when the prolog declares a DOCTYPE internal subset
+ * (the parser drops the declarations, so the exported body could carry undeclared entity
+ * references). CSS `url()` references are not inspected.
  *
  * When \p options.includeSelectionOverlay is true and \p overlaySnapshot is
  * non-null, the overlay group is populated with the serialized snapshot (see
