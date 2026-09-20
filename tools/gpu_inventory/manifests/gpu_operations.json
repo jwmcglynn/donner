@@ -1189,12 +1189,5 @@
       ]
     }
   },
-  "wgpuPatchFiles": [
-    "examples/third_party/patches/imgui_wgpu_texture_cache.patch",
-    "third_party/patches/imgui-explicit-raw-memory.patch",
-    "third_party/patches/imgui_bazel_build_files.patch",
-    "third_party/patches/imgui_wgpu_emscripten_dawn.patch",
-    "third_party/patches/imgui_wgpu_premultiplied_textures.patch",
-    "third_party/patches/imgui_wgpu_texture_cache.patch"
-  ]
+  "wgpuPatchFiles": []
 }

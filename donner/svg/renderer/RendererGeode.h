@@ -127,7 +127,7 @@ public:
   /// Resolved single-sample WebGPU texture.
   [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
 
-  /// Lazily-created texture view suitable for ImGui_ImplWGPU's ImTextureID.
+  /// Lazily-created single-sample view of the resolved texture, for sampling it as a UI texture.
   [[nodiscard]] const wgpu::TextureView& textureView() const;
 
   /// WebGPU texture format.

@@ -267,8 +267,12 @@ commits and their fixes together in a focused reviewable change.
       [PR #1267](https://github.com/jwmcglynn/donner/pull/1267); follow-up
       [#1284](https://github.com/jwmcglynn/donner/pull/1284) preserves retired atlas backing and
       bindings until exact release.
-- [ ] Migrate frame composition and remove `imgui_wgpu_backend` dependencies, registration calls,
-      and obsolete patches when their final consumers move.
+- [x] Remove the `imgui_wgpu_backend` dependency and its obsolete patches. The target had no C++
+      consumer once the runtime ImGui renderer landed, so the vendored ImGui WebGPU backend target,
+      the three patches that customized it, and the duplicated copy in the examples module are
+      deleted.
+- [ ] Migrate frame composition off the raw WebGPU frame encoder so the editor records its whole
+      frame through the runtime.
 
 ### Native surfaces
 

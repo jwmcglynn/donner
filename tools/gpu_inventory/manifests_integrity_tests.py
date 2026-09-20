@@ -44,11 +44,18 @@ class GpuOperationsManifestTest(unittest.TestCase):
         self.assertIn("donner/svg/renderer/geode/GeodeDevice.cc", files)
         self.assertIn("donner/svg/renderer/RendererGeode.cc", files)
 
-    def test_imgui_wgpu_patches_inventoried(self):
+    def test_no_vendored_webgpu_renderer_patches(self):
+        # No vendored dependency is patched to call WebGPU: the editor draws its
+        # own ImGui draw data through the GPU runtime, and a patch that carried a
+        # second WebGPU renderer would make that a divergent duplicate. The
+        # manifest records the empty set as a ratchet.
         patches = self.manifest["wgpuPatchFiles"]
-        self.assertTrue(
-            any("imgui_wgpu" in p for p in patches),
-            f"expected an imgui_wgpu patch in {patches}",
+        self.assertEqual(
+            patches,
+            [],
+            f"a patch introducing WebGPU calls into a vendored dependency reappeared: {patches}. "
+            "Render through the GPU runtime instead; if the patch is deliberate, update this "
+            "ratchet in the same change and say why a second WebGPU renderer is warranted.",
         )
 
 
