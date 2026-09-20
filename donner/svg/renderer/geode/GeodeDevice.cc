@@ -91,7 +91,7 @@ std::shared_ptr<GeodeDeviceLostState> ConsumeDeviceLostCallbackState(void* userd
 
   std::shared_ptr<GeodeDeviceLostState> state = token->state;
   token->status.store(DeviceLostCallbackStatus::Done, std::memory_order_release);
-  const std::size_t previous =
+  [[maybe_unused]] const std::size_t previous =
       gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
   assert(previous > 0);
   ReleaseDeviceLostCallbackTokenReference(token);
@@ -106,7 +106,7 @@ void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
     DeviceLostCallbackStatus expected = DeviceLostCallbackStatus::Pending;
     if (token->status.compare_exchange_strong(expected, DeviceLostCallbackStatus::Canceled,
                                               std::memory_order_acq_rel)) {
-      const std::size_t previous =
+      [[maybe_unused]] const std::size_t previous =
           gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
       assert(previous > 0);
       ReleaseDeviceLostCallbackTokenReference(token);
