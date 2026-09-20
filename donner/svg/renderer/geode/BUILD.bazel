@@ -526,16 +526,13 @@ donner_cc_test(
     srcs = ["tests/GeodeShaderProjection_tests.cc"],
     target_compatible_with = _GEODE_ONLY + _NATIVE_SHADERS_ONLY,
     deps = [
+        ":geode_device",
         ":geode_shaders",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu/shader:compiled_shader",
-        "//donner/gpu/shader:image_blit_api",
-        "//donner/gpu/shader:slug_fill_api",
-        "//donner/gpu/shader:slug_gradient_api",
-        "//donner/gpu/shader:slug_mask_api",
-    ],
+    ] + shader_apis(GEODE_DEVICE_SHADER_FAMILIES),
 )
 
 # Selection runs against a fake device, so no GPU is opened.

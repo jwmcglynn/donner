@@ -17,11 +17,13 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <string_view>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/CompiledShader.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
@@ -77,6 +79,23 @@ struct RuntimeComputeProgram {
   std::array<uint32_t, 4> twoInputBindings = {0, 1, 2, 3};
   //!< Reflected source, backdrop, output and parameter bindings of a two-input program.
 };
+
+/**
+ * Creates the compute program of one shader family from its reflected interface.
+ *
+ * The shader module descriptor and the group-zero binding layout are both derived from the
+ * artifact, so the source a device compiles and the interface the host binds against always come
+ * from the same compiled program. A family that does not expose exactly one two-dimensional
+ * compute entry point yields a program with null handles, which a dispatch refuses.
+ *
+ * @param runtime Device receiving the precompiled projection.
+ * @param shader Static compiled shader interface.
+ * @param label Diagnostic program label.
+ * @return The built program, or one with null handles when the build failed.
+ */
+RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
+                                             const gpu::shader::CompiledShaderView& shader,
+                                             std::string_view label);
 
 /**
  * Renderer-owned allocation boundary for filter textures.

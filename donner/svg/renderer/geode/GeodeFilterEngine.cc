@@ -887,18 +887,6 @@ bool HasSingleComputeEntry(const gpu::shader::CompiledShaderView& shader) {
          shape[1] > 0 && shape[2] == 1;
 }
 
-/// Creates a program straight from its reflected interface, without host binding roles.
-/// @param runtime Device receiving the selected precompiled projection.
-/// @param shader Static compiled shader interface. @param label Diagnostic program label.
-RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
-                                             const gpu::shader::CompiledShaderView& shader,
-                                             std::string_view label) {
-  if (!HasSingleComputeEntry(shader)) return {};
-  return CreateRuntimeComputeProgram(
-      runtime, gpu::shader::MakeShaderDescriptor(shader, runtime.shaderSourceKind(), label),
-      gpu::shader::MakeBindingLayout(shader));
-}
-
 /// Creates an output/parameter program with no sampled input, such as feFlood.
 /// @param runtime Device receiving the selected precompiled projection.
 /// @param shader Static compiled shader interface. @param label Diagnostic program label.
@@ -1297,6 +1285,15 @@ std::optional<ComponentTransferData> BuildComponentTransferData(
 }
 
 }  // namespace
+
+RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
+                                             const gpu::shader::CompiledShaderView& shader,
+                                             std::string_view label) {
+  if (!HasSingleComputeEntry(shader)) return {};
+  return CreateRuntimeComputeProgram(
+      runtime, gpu::shader::MakeShaderDescriptor(shader, runtime.shaderSourceKind(), label),
+      gpu::shader::MakeBindingLayout(shader));
+}
 
 GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     : device_(device), verbose_(verbose), resourceCache_(std::make_unique<FilterResourceCache>()) {
