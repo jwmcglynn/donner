@@ -764,6 +764,57 @@ std::unique_ptr<internal::PresentationSurface> ScriptedSurfaceReporting(
   return std::make_unique<ScriptedSurface>(std::move(statuses), calls);
 }
 
+TEST(EditorWindowTest, AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Success}, &calls);
+  Vector2i configuredPx(640, 480);
+
+  // A minimized window reports a framebuffer with no texels in it, which is not an extent a
+  // surface can be configured for or hand out a frame of.
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, Vector2i::Zero(), configuredPx, nullptr);
+
+  EXPECT_FALSE(static_cast<bool>(outcome.texture)) << "there is no framebuffer to draw into";
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success)
+      << "nothing failed; there was simply no frame to ask for";
+  EXPECT_FALSE(outcome.released) << "the surface is still the window's; only this frame is gone";
+  EXPECT_FALSE(outcome.markDeviceLost);
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(calls, (SurfaceCalls{.acquires = 0,
+                                 .abandons = 0,
+                                 .configures = 0,
+                                 .shutdowns = 0,
+                                 .lastConfigureSize = Vector2i::Zero()}))
+      << "a frame asked for and then handed straight back is an acquisition the window never "
+         "needed to open";
+  EXPECT_EQ(configuredPx, Vector2i(640, 480))
+      << "the surface still matches the extent it was configured for";
+}
+
+TEST(EditorWindowTest, ATimedOutFrameIsSkippedAndTheSurfaceKept) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Timeout}, &calls);
+  Vector2i configuredPx = kFrameSizePx;
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, nullptr);
+
+  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Timeout);
+  EXPECT_FALSE(outcome.released) << "nothing became available in time; the surface is still fine";
+  EXPECT_FALSE(outcome.markDeviceLost);
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(configuredPx, kFrameSizePx) << "a dropped frame does not reconfigure the surface";
+  EXPECT_EQ(calls, (SurfaceCalls{.acquires = 1,
+                                 .abandons = 1,
+                                 .configures = 0,
+                                 .shutdowns = 0,
+                                 .lastConfigureSize = Vector2i::Zero()}))
+      << "the frame that never came is handed back once and nothing else happens";
+}
+
 TEST(EditorWindowTest, AnOutdatedFrameFollowsTheWindowAndIsRetriedOnce) {
   SurfaceCalls calls;
   std::unique_ptr<internal::PresentationSurface> surface =
