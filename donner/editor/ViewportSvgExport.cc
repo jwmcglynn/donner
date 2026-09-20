@@ -1,16 +1,22 @@
 #include "donner/editor/ViewportSvgExport.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/OverlayRenderer.h"
 
 namespace donner::editor {
@@ -139,170 +145,172 @@ struct RootTag {
   bool found = false;
 };
 
-/// Find the byte offset of the root `<svg` open tag, skipping the XML
-/// declaration, comments, doctype, and processing instructions.
-std::size_t FindRootSvgStart(std::string_view source) {
-  std::size_t pos = 0;
-  while (pos < source.size()) {
-    if (source[pos] != '<') {
-      ++pos;
+/// Find the document's root `<svg>` element: the first top-level element, which the
+/// parser requires to be an exact `svg` (matching `SVGParser`'s own root check).
+std::optional<xml::XMLNode> FindRootSvgElement(const xml::XMLDocument& xmlDocument) {
+  for (std::optional<xml::XMLNode> child = xmlDocument.root().firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() != xml::XMLNode::Type::Element) {
       continue;
     }
-    if (MatchesAtCaseInsensitive(source, pos, "<!--")) {
-      const std::size_t end = source.find("-->", pos + 4);
-      pos = (end == std::string_view::npos) ? source.size() : end + 3;
-      continue;
+    if (child->tagName().name == "svg") {
+      return child;
     }
-    if (pos + 1 < source.size() && (source[pos + 1] == '?' || source[pos + 1] == '!')) {
-      const std::size_t end = source.find('>', pos);
-      pos = (end == std::string_view::npos) ? source.size() : end + 1;
-      continue;
-    }
-    if (MatchesAtCaseInsensitive(source, pos, "<svg") && pos + 4 < source.size()) {
-      const char after = source[pos + 4];
-      if (after == ' ' || after == '\t' || after == '\n' || after == '\r' || after == '>' ||
-          after == '/') {
-        return pos;
-      }
-    }
-    ++pos;
+    return std::nullopt;
   }
-  return std::string_view::npos;
+  return std::nullopt;
 }
 
-/// Parse the root `<svg>` open tag attributes and locate the body bounds.
-RootTag ParseRootTag(std::string_view source) {
+/// Resolve a source range to concrete offsets, or nullopt when unavailable or unordered.
+std::optional<std::pair<std::size_t, std::size_t>> RangeOffsets(const SourceRange& range) {
+  if (!range.start.offset.has_value() || !range.end.offset.has_value() ||
+      *range.start.offset > *range.end.offset) {
+    return std::nullopt;
+  }
+  return std::pair{*range.start.offset, *range.end.offset};
+}
+
+/// Serialize a qualified attribute name in source spelling (`prefix:local` or `local`).
+std::string SerializeAttributeName(const xml::XMLQualifiedNameRef& name) {
+  std::string result;
+  if (!name.namespacePrefix.empty()) {
+    result.assign(name.namespacePrefix);
+    result += ':';
+  }
+  result += std::string_view(name.name);
+  return result;
+}
+
+/// Derive the root tag's attributes (source order, raw bytes) and body bounds from the
+/// parsed tree. Attribute order is recovered by sorting on each attribute's source offset,
+/// since the tree stores attributes by name; values are the raw source bytes re-escaped on
+/// output, except for attributes without a source location (parser-injected or programmatic),
+/// which fall back to their decoded value.
+RootTag ParseRootTag(std::string_view source, const xml::XMLNode& root) {
   RootTag result;
-  const std::size_t start = FindRootSvgStart(source);
-  if (start == std::string_view::npos) {
+  const std::optional<SourceRange> openTag = root.getOpeningTagLocation();
+  const std::optional<std::pair<std::size_t, std::size_t>> openOffsets =
+      openTag.has_value() ? RangeOffsets(*openTag) : std::nullopt;
+  if (!openOffsets.has_value() || openOffsets->second > source.size()) {
     return result;
   }
+  result.bodyStart = openOffsets->second;
 
-  // Advance past "<svg".
-  std::size_t pos = start + 4;
-  // Parse attributes until the end of the open tag ('>' possibly preceded by '/').
-  while (pos < source.size()) {
-    // Skip whitespace.
-    while (pos < source.size() && (source[pos] == ' ' || source[pos] == '\t' ||
-                                   source[pos] == '\n' || source[pos] == '\r')) {
-      ++pos;
+  const std::optional<SourceRange> closeTag = root.getClosingTagLocation();
+  if (!closeTag.has_value()) {
+    // No closing tag is only sound for a childless (self-closing) root.
+    if (root.firstChild().has_value()) {
+      return result;
     }
-    if (pos >= source.size()) {
-      return result;  // Malformed: no '>'.
-    }
-    if (source[pos] == '>' || source[pos] == '/') {
-      break;
-    }
-
-    // Parse attribute name.
-    const std::size_t nameStart = pos;
-    while (pos < source.size() && source[pos] != '=' && source[pos] != ' ' && source[pos] != '\t' &&
-           source[pos] != '\n' && source[pos] != '\r' && source[pos] != '>' && source[pos] != '/') {
-      ++pos;
-    }
-    Attribute attribute;
-    attribute.name.assign(source.substr(nameStart, pos - nameStart));
-
-    // Skip whitespace before '='.
-    while (pos < source.size() && (source[pos] == ' ' || source[pos] == '\t' ||
-                                   source[pos] == '\n' || source[pos] == '\r')) {
-      ++pos;
-    }
-    if (pos < source.size() && source[pos] == '=') {
-      ++pos;  // Past '='.
-      while (pos < source.size() && (source[pos] == ' ' || source[pos] == '\t' ||
-                                     source[pos] == '\n' || source[pos] == '\r')) {
-        ++pos;
-      }
-      if (pos < source.size() && (source[pos] == '"' || source[pos] == '\'')) {
-        const char quote = source[pos];
-        ++pos;
-        const std::size_t valueStart = pos;
-        while (pos < source.size() && source[pos] != quote) {
-          ++pos;
-        }
-        attribute.value.assign(source.substr(valueStart, pos - valueStart));
-        if (pos < source.size()) {
-          ++pos;  // Past closing quote.
-        }
-      }
-    }
-    if (!attribute.name.empty()) {
-      result.attributes.push_back(std::move(attribute));
-    }
-  }
-
-  // `pos` is at '>' or '/'. Find the end of the open tag.
-  const std::size_t openTagEnd = source.find('>', pos);
-  if (openTagEnd == std::string_view::npos) {
-    return result;
-  }
-  const bool selfClosing = openTagEnd > 0 && source[openTagEnd - 1] == '/';
-  result.bodyStart = openTagEnd + 1;
-  if (selfClosing) {
-    result.bodyEnd = openTagEnd - 1;  // No children.
+    result.bodyEnd = result.bodyStart;
   } else {
-    const std::size_t closeTag = source.rfind("</svg");
-    result.bodyEnd = (closeTag == std::string_view::npos || closeTag < result.bodyStart)
-                         ? source.size()
-                         : closeTag;
+    const std::optional<std::pair<std::size_t, std::size_t>> closeOffsets = RangeOffsets(*closeTag);
+    if (!closeOffsets.has_value() || closeOffsets->first < result.bodyStart ||
+        closeOffsets->first > source.size()) {
+      return result;
+    }
+    result.bodyEnd = closeOffsets->first;
+  }
+
+  struct OrderedAttribute {
+    std::size_t offset = 0;
+    bool anchored = false;
+    Attribute attribute;
+  };
+  std::vector<OrderedAttribute> ordered;
+  for (const xml::XMLQualifiedNameRef& name : root.attributes()) {
+    OrderedAttribute entry;
+    entry.attribute.name = SerializeAttributeName(name);
+    const std::optional<xml::XMLAttributeSourceLocation> location =
+        root.getAttributeSourceLocation(name);
+    if (location.has_value()) {
+      const std::optional<std::pair<std::size_t, std::size_t>> valueOffsets =
+          RangeOffsets(location->valueRange);
+      const std::optional<std::pair<std::size_t, std::size_t>> fullOffsets =
+          RangeOffsets(location->fullRange);
+      if (valueOffsets.has_value() && valueOffsets->second <= source.size() &&
+          fullOffsets.has_value()) {
+        entry.attribute.value.assign(
+            source.substr(valueOffsets->first, valueOffsets->second - valueOffsets->first));
+        entry.offset = fullOffsets->first;
+        entry.anchored = true;
+      }
+    }
+    if (!entry.anchored) {
+      const std::optional<RcString> decoded = root.getAttribute(name);
+      if (decoded.has_value()) {
+        entry.attribute.value.assign(std::string_view(*decoded));
+      }
+    }
+    ordered.push_back(std::move(entry));
+  }
+  std::stable_sort(ordered.begin(), ordered.end(),
+                   [](const OrderedAttribute& lhs, const OrderedAttribute& rhs) {
+                     if (lhs.anchored != rhs.anchored) {
+                       return lhs.anchored;
+                     }
+                     return lhs.offset < rhs.offset;
+                   });
+  for (auto& entry : ordered) {
+    result.attributes.push_back(std::move(entry.attribute));
   }
   result.found = true;
   return result;
 }
 
-/// Scan the source for external `href` / `xlink:href` references over
-/// `http://`, `https://`, or `file://`. Returns the offending value, or empty.
-std::string FindExternalReference(std::string_view source) {
+/// Returns true when an attribute local name ends with "href" (case-sensitive), preserving
+/// the historical match for `href`, `xlink:href`, `data-href`, and friends.
+bool IsHrefAttributeName(std::string_view localName) {
+  return localName.size() >= 4 && localName.substr(localName.size() - 4) == "href";
+}
+
+/// Check every element attribute in the parsed tree for external `href` references over
+/// `http://`, `https://`, or `file://`. Only real parsed attributes are inspected, and
+/// values are entity-decoded by the parser, so encoded schemes cannot evade the match.
+/// Returns the offending decoded value, or empty.
+std::string FindExternalReference(const xml::XMLNode& root) {
   static constexpr std::array<std::string_view, 3> kExternalSchemes = {
       "http://",
       "https://",
       "file://",
   };
-  std::size_t pos = 0;
-  while (pos < source.size()) {
-    const std::size_t hrefPos = source.find("href", pos);
-    if (hrefPos == std::string_view::npos) {
-      break;
-    }
-    // Find the value following `href[whitespace]=[whitespace]quote...quote`.
-    std::size_t cursor = hrefPos + 4;
-    while (cursor < source.size() && (source[cursor] == ' ' || source[cursor] == '\t' ||
-                                      source[cursor] == '\n' || source[cursor] == '\r')) {
-      ++cursor;
-    }
-    if (cursor >= source.size() || source[cursor] != '=') {
-      pos = hrefPos + 4;
-      continue;
-    }
-    ++cursor;
-    while (cursor < source.size() && (source[cursor] == ' ' || source[cursor] == '\t' ||
-                                      source[cursor] == '\n' || source[cursor] == '\r')) {
-      ++cursor;
-    }
-    if (cursor >= source.size() || (source[cursor] != '"' && source[cursor] != '\'')) {
-      pos = hrefPos + 4;
-      continue;
-    }
-    const char quote = source[cursor];
-    ++cursor;
-    const std::size_t valueStart = cursor;
-    while (cursor < source.size() && source[cursor] != quote) {
-      ++cursor;
-    }
-    const std::string_view value = source.substr(valueStart, cursor - valueStart);
-    // Skip leading whitespace inside the value when scheme-matching.
-    std::size_t valueOffset = 0;
-    while (valueOffset < value.size() &&
-           (value[valueOffset] == ' ' || value[valueOffset] == '\t')) {
-      ++valueOffset;
-    }
-    for (const std::string_view scheme : kExternalSchemes) {
-      if (MatchesAtCaseInsensitive(value, valueOffset, scheme)) {
-        return std::string(value);
+  // Iterative pre-order walk (explicit stack, children pushed in reverse): no recursion
+  // depth risk on deep documents, deterministic document order for the first refusal.
+  std::vector<xml::XMLNode> stack{root};
+  while (!stack.empty()) {
+    const xml::XMLNode node = stack.back();
+    stack.pop_back();
+    if (node.type() == xml::XMLNode::Type::Element) {
+      for (const xml::XMLQualifiedNameRef& name : node.attributes()) {
+        if (!IsHrefAttributeName(name.name)) {
+          continue;
+        }
+        const std::optional<RcString> value = node.getAttribute(name);
+        if (!value.has_value()) {
+          continue;
+        }
+        const std::string_view view(*value);
+        // Skip leading whitespace inside the value when scheme-matching.
+        std::size_t valueOffset = 0;
+        while (valueOffset < view.size() &&
+               (view[valueOffset] == ' ' || view[valueOffset] == '\t')) {
+          ++valueOffset;
+        }
+        for (const std::string_view scheme : kExternalSchemes) {
+          if (MatchesAtCaseInsensitive(view, valueOffset, scheme)) {
+            return std::string(view);
+          }
+        }
       }
     }
-    pos = (cursor < source.size()) ? cursor + 1 : source.size();
+    std::vector<xml::XMLNode> children;
+    for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      children.push_back(*child);
+    }
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+      stack.push_back(*it);
+    }
   }
   return std::string();
 }
@@ -464,17 +472,26 @@ Result<std::string, std::string> ExportViewportAsSvg(
     return ResultType::Err("Viewport export requires a document with an XML source store.");
   }
 
+  // Everything below derives from the parsed tree, so refuse while the tree is stale
+  // relative to the source rather than slicing current bytes with old ranges.
+  const xml::XMLDocument xmlDocument = doc.xmlDocument();
+  if (const std::optional<ParseDiagnostic> stale = xmlDocument.sourceDiagnostic()) {
+    return ResultType::Err("Viewport export requires a document whose source parses cleanly: " +
+                           stale->reason.str() + ".");
+  }
+
   const std::string_view source = doc.source();
 
   // Refuse documents that reference external resources we cannot embed safely.
-  const std::string externalReference = FindExternalReference(source);
+  const std::string externalReference = FindExternalReference(xmlDocument.root());
   if (!externalReference.empty()) {
     return ResultType::Err(
         "Viewport export cannot embed external resource reference: " + externalReference +
         ". Inline or remove external href/xlink:href references and try again.");
   }
 
-  const RootTag rootTag = ParseRootTag(source);
+  const std::optional<xml::XMLNode> rootNode = FindRootSvgElement(xmlDocument);
+  const RootTag rootTag = rootNode.has_value() ? ParseRootTag(source, *rootNode) : RootTag{};
   if (!rootTag.found) {
     return ResultType::Err("Viewport export could not find the root <svg> element in the source.");
   }

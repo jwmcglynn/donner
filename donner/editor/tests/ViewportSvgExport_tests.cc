@@ -82,6 +82,14 @@ ViewportState IdentityViewport() {
                       /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(400.0, 300.0));
 }
 
+/// Assert that exported SVG text re-parses cleanly: the deterministic form of
+/// the round-trip fuzzer oracle.
+void ExpectReparsesCleanly(std::string_view exported) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  ParseResult<SVGDocument> reparsed = SVGParser::ParseSVG(exported, sink);
+  ASSERT_FALSE(reparsed.hasError()) << "Re-parse error: " << reparsed.error();
+}
+
 TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
 
@@ -449,6 +457,179 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
   EXPECT_THAT(result.value, Not(HasSubstr("svg-not-root")));
 }
 
+// Regression tests carried from PR #1308, which this token-based exporter
+// supersedes. Each shape once desynchronized the old hand-rolled scan from the
+// XML parser; all markup boundaries below now come from the shared tokenizer.
+
+TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarkup) {
+  // A processing instruction whose content contains `>` followed by an `<svg>`
+  // element forms one opaque PI token, so the PI-embedded element is never
+  // mistaken for the document root.
+  const SVGDocument doc = ParseOrDie(
+      "<?editor data=\"a>b\"><svg id=\"not-the-root\" width=\"0\"/>?>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
+  // A `?>` inside a quoted declaration value does not end the declaration
+  // (the tokenizer skips quoted spans, mirroring the parser), so the markup
+  // that follows it is not treated as the document root.
+  const SVGDocument doc = ParseOrDie(
+      "<?xml version=\"1.0\" data='a?><svg id=\"not-the-root\" width=\"0\"/>'?>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
+  // A `>` inside a doctype internal subset does not end the doctype; the whole
+  // doctype is one token, so subset content cannot become the root.
+  const SVGDocument doc = ParseOrDie(
+      "<!DOCTYPE svg [<!ENTITY data \"a> <svg id='not-the-root' width='0'/>\">]>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
+  // A `</svg` sequence after the root inside a trailing comment sits inside a
+  // Comment token and cannot be mistaken for the root's closing tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>"
+      "<!-- trailing </svg> -->");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("trailing")));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
+  // Brackets inside a quoted `<!ENTITY>` value do not affect internal-subset
+  // nesting (mirroring the parser's quote-aware entity skip), so the doctype
+  // extends past them to its real `>`.
+  const SVGDocument doc = ParseOrDie(
+      "<!DOCTYPE svg [<!ENTITY data ']><svg id=\"not-the-root\">'>]>"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_THAT(result.value, Not(HasSubstr("not-the-root")));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
+  // A doctype inside the body whose entity value contains markup-like text is
+  // one token; the body still ends at the root's own `</svg>`, leaving the
+  // exported group balanced with a single close tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<!DOCTYPE d [<!ENTITY y ']><svg id=\"faux\">'>]>"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_EQ(result.value.find("</svg>"), result.value.rfind("</svg>"));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, NestedSvgCloseDoesNotEndRootBody) {
+  // Nested `<svg>` elements are tracked, so an inner close cannot be mistaken
+  // for the root's: the body extends past it to the root's own close tag.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<svg id=\"inner\" width=\"10\" height=\"10\"><rect width=\"5\" height=\"5\"/></svg>"
+      "<rect id=\"outer-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("id=\"inner\""));
+  EXPECT_THAT(result.value, HasSubstr("id=\"outer-child\""));
+  ExpectReparsesCleanly(result.value);
+}
+
+TEST(ViewportSvgExportTest, NestedSvgWithMissingRootCloseIsRefused) {
+  // The tree is stale while the source has errors: export refuses instead of
+  // slicing the remainder.
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<svg id=\"inner\" width=\"10\" height=\"10\"></svg>"
+      "<rect id=\"outer-child\" width=\"10\" height=\"10\"/></svg>");
+  const std::size_t closeOffset = doc.source().rfind("</svg>");
+  ASSERT_NE(closeOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 6)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
+}
+
 TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
   for (std::string_view prefix : {"<!--", "<?editor"}) {
     SCOPED_TRACE(prefix);
@@ -468,7 +649,7 @@ TEST(ViewportSvgExportTest, RootScannerRejectsUnterminatedPrologMarkup) {
                             ViewportExportOptions{});
 
     EXPECT_FALSE(result.ok());
-    EXPECT_THAT(result.error, HasSubstr("root <svg>"));
+    EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
   }
 }
 
@@ -609,7 +790,7 @@ TEST(ViewportSvgExportTest, SourceWithoutRootSvgIsRejected) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
 TEST(ViewportSvgExportTest, MalformedRootOpenTagWithoutTerminatorIsRejected) {
@@ -631,7 +812,7 @@ TEST(ViewportSvgExportTest, MalformedRootOpenTagWithoutTerminatorIsRejected) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
 TEST(ViewportSvgExportTest, MalformedRootOpenTagEndingInWhitespaceIsRejected) {
@@ -653,7 +834,7 @@ TEST(ViewportSvgExportTest, MalformedRootOpenTagEndingInWhitespaceIsRejected) {
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
 TEST(ViewportSvgExportTest, MalformedSelfClosingRootWithoutCloseAngleIsRejected) {
@@ -675,7 +856,7 @@ TEST(ViewportSvgExportTest, MalformedSelfClosingRootWithoutCloseAngleIsRejected)
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
   EXPECT_FALSE(result.ok());
-  EXPECT_THAT(result.error, HasSubstr("root <svg>"));
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
 TEST(ViewportSvgExportTest, EmptyRootIdFallsBackToUntitledProvenance) {
@@ -692,7 +873,7 @@ TEST(ViewportSvgExportTest, EmptyRootIdFallsBackToUntitledProvenance) {
   EXPECT_THAT(result.value, HasSubstr("id=\"\""));
 }
 
-TEST(ViewportSvgExportTest, RootScannerSkipsSvgPrefixedElementNamesBeforeRealRoot) {
+TEST(ViewportSvgExportTest, SvgPrefixedElementInsertionIsRefused) {
   SVGDocument doc =
       ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
 
@@ -702,16 +883,16 @@ TEST(ViewportSvgExportTest, RootScannerSkipsSvgPrefixedElementNamesBeforeRealRoo
       .sourceVersion = doc.sourceVersion(),
   });
   ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
 
   const Result<std::string, std::string> result = ExportViewportAsSvg(
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, Not(HasSubstr("not-root")));
-  EXPECT_THAT(result.value, HasSubstr("width=\"100\""));
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
-TEST(ViewportSvgExportTest, MissingRootCloseTagUsesSourceRemainderAsBody) {
+TEST(ViewportSvgExportTest, MissingRootCloseTagIsRefused) {
   SVGDocument doc = ParseOrDie(
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
       "<rect id=\"kept\" width=\"10\" height=\"10\"/></svg>");
@@ -729,8 +910,8 @@ TEST(ViewportSvgExportTest, MissingRootCloseTagUsesSourceRemainderAsBody) {
   const Result<std::string, std::string> result = ExportViewportAsSvg(
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("id=\"kept\""));
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
 TEST(ViewportSvgExportTest, HrefLikeTextWithoutQuotedValueIsIgnored) {
@@ -749,7 +930,7 @@ TEST(ViewportSvgExportTest, HrefLikeTextWithoutQuotedValueIsIgnored) {
   EXPECT_THAT(result.value, HasSubstr("not-an-attribute.png"));
 }
 
-TEST(ViewportSvgExportTest, HrefScannerIgnoresMalformedRawSuffixes) {
+TEST(ViewportSvgExportTest, MalformedTrailingSuffixIsRefused) {
   SVGDocument doc = ParseOrDie(
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
       "<defs><rect id=\"shape\" width=\"10\" height=\"10\"/></defs>"
@@ -767,8 +948,8 @@ TEST(ViewportSvgExportTest, HrefScannerIgnoresMalformedRawSuffixes) {
   const Result<std::string, std::string> result = ExportViewportAsSvg(
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("id=\"shape\""));
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
 }
 
 TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercaseSchemes) {
@@ -784,6 +965,206 @@ TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercas
 
   EXPECT_FALSE(result.ok());
   EXPECT_THAT(result.error, HasSubstr("HTTPS://example.com/image.png"));
+}
+
+TEST(ViewportSvgExportTest, ExternalReferenceInCommentIsIgnored) {
+  // Only real parsed attributes are inspected: an `href` inside a comment is
+  // inert, so it must not refuse the export.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<!-- <image href=\"https://example.com/commented-out.png\"/> -->"
+      "<rect id=\"content\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("id=\"content\""));
+}
+
+TEST(ViewportSvgExportTest, DataHrefAttributeIsRefused) {
+  // Attribute names ending in "href" keep the historical conservative match.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect data-href=\"https://example.com/data.png\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("https://example.com/data.png"));
+}
+
+TEST(ViewportSvgExportTest, UnterminatedHrefValueIsRefused) {
+  // An `href` attribute whose value never terminates (mid-edit) leaves the tree stale,
+  // so the staleness gate refuses: failing closed preserves the historical verdict for
+  // unparseable values.
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<image href=\"https://example.com/x\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const std::size_t valueStart = doc.source().find("https://example.com/x\"");
+  ASSERT_NE(valueStart, std::string_view::npos);
+  const std::size_t deleteFrom = valueStart + std::string_view("https://example.com/x").size();
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(deleteFrom), FileOffset::Offset(doc.source().size())},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
+}
+
+TEST(ViewportSvgExportTest, StaleTreeRefusalNamesUnderlyingReason) {
+  SVGDocument doc =
+      ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const std::size_t nameOffset = doc.source().find("svg");
+  ASSERT_NE(nameOffset, std::string_view::npos);
+
+  const xml::ApplySourceEditResult edit = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(nameOffset), FileOffset::Offset(nameOffset + 3)},
+      .replacement = "g",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_TRUE(edit.diagnostic.has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("parses cleanly"));
+  EXPECT_THAT(result.error, HasSubstr("rename"));
+}
+
+TEST(ViewportSvgExportTest, RootAttributesKeepSourceOrderFromTree) {
+  // Attribute names deliberately out of alphabetical order: the tree stores them by
+  // name, so the exporter must restore source order from their locations.
+  const SVGDocument doc = ParseOrDie(
+      "<svg zebra=\"1\" apple=\"2\" mango=\"3\" width=\"100\" height=\"100\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect width=\"10\" height=\"10\"/>"
+      "</svg>");
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  const std::size_t zebra = result.value.find("zebra=\"1\"");
+  const std::size_t apple = result.value.find("apple=\"2\"");
+  const std::size_t mango = result.value.find("mango=\"3\"");
+  ASSERT_NE(zebra, std::string::npos);
+  ASSERT_NE(apple, std::string::npos);
+  ASSERT_NE(mango, std::string::npos);
+  EXPECT_LT(zebra, apple);
+  EXPECT_LT(apple, mango);
+}
+
+TEST(ViewportSvgExportTest, AnchorlessRootAttributeFallsBackToDecodedValue) {
+  // Inline parsing injects `xmlns` without a source location; the exporter emits
+  // its decoded value instead of dropping it.
+  SVGParser::Options options;
+  options.parseAsInlineSVG = true;
+  ParseWarningSink warnings;
+  ParseResult<SVGDocument> parsed = SVGParser::ParseSVG(
+      "<svg width=\"100\" height=\"100\"><rect width=\"10\" height=\"10\"/></svg>", warnings,
+      options);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error();
+  const SVGDocument doc = std::move(parsed).result();
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("xmlns=\"http://www.w3.org/2000/svg\""));
+}
+
+TEST(ViewportSvgExportTest, ExternalHrefInsideForeignNamespaceIsRefused) {
+  // Foreign-namespace subtrees are retained in the tree, so references hidden in
+  // them are still inspected: both a nested SVG image and an href directly on the
+  // foreign element refuse.
+  for (std::string_view body :
+       {"<other:group xmlns:other=\"http://example.test/other\">"
+        "<image href=\"http://example.com/nested.png\" width=\"10\" height=\"10\"/>"
+        "</other:group>",
+        "<other:group xmlns:other=\"http://example.test/other\" "
+        "href=\"http://example.com/direct.png\"/>"}) {
+    SCOPED_TRACE(body);
+    const SVGDocument doc =
+        ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">" +
+                   std::string(body) + "</svg>");
+
+    const Result<std::string, std::string> result =
+        ExportViewportAsSvg(doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)),
+                            ViewportExportOptions{});
+
+    EXPECT_FALSE(result.ok());
+    EXPECT_THAT(result.error, HasSubstr("external"));
+    EXPECT_THAT(result.error, HasSubstr("http://example.com/"));
+  }
+}
+
+TEST(ViewportSvgExportTest, EntityEncodedSchemeIsRefused) {
+  // Scheme matching runs on decoded values, so `https&#58;//` cannot evade it.
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<image href=\"https&#58;//example.com/x.png\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("external"));
+  EXPECT_THAT(result.error, HasSubstr("https://example.com/x.png"));
+}
+
+TEST(ViewportSvgExportTest, DuplicateRootAttributeKeepsLastValue) {
+  // Duplicate attributes are invalid XML; the parser keeps the last occurrence and
+  // the exporter emits it once.
+  const SVGDocument doc = ParseOrDie(
+      "<svg data-x=\"1\" data-x=\"2\" width=\"100\" height=\"100\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect width=\"10\" height=\"10\"/>"
+      "</svg>");
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, Not(HasSubstr("data-x=\"1\"")));
+  EXPECT_THAT(result.value, HasSubstr("data-x=\"2\""));
+}
+
+TEST(ViewportSvgExportTest, CleanEditBeforeBodyKeepsBoundsCorrect) {
+  SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"kept\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+
+  const xml::ApplySourceEditResult edit = doc.setElementAttribute(doc.svgElement(), "id", "grown");
+  ASSERT_TRUE(edit.applied);
+  EXPECT_FALSE(doc.xmlDocument().sourceDiagnostic().has_value());
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("id=\"grown\""));
+  EXPECT_THAT(result.value, HasSubstr("id=\"kept\""));
 }
 
 // --- Overlay serialization -----------------------------------------------
