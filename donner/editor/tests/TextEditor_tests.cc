@@ -4826,6 +4826,57 @@ TEST_F(TextEditorTests, SourceDiagnosticsTrackSourceEditsAndValidateActiveId) {
   EXPECT_EQ(editor.activeSourceDiagnosticId(), std::nullopt);
 }
 
+TEST_F(TextEditorTests, SourceDiagnosticsTrackExternalSourceEdits) {
+  editor.setText("abcdef");
+  ASSERT_TRUE(editor.setSourceDiagnostics({
+      SourceDiagnostic{.id = 7, .range = {2, 4}, .line = 1, .column = 2, .message = "issue"},
+  }));
+  EXPECT_TRUE(editor.setActiveSourceDiagnosticId(7));
+
+  // External edit inserts "XX" at offset 0, shifting diagnostic by 2 (issue #1205).
+  editor.applyExternalSourceEdit(0, 0, "XX");
+
+  ASSERT_EQ(editor.sourceDiagnostics().size(), 1u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().range, (SourceByteRange{4, 6}));
+  EXPECT_EQ(editor.sourceDiagnostics().front().line, 1u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().column, 4u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().endLine, 1u);
+  EXPECT_EQ(editor.sourceDiagnostics().front().endColumn, 6u);
+  EXPECT_EQ(editor.activeSourceDiagnosticId(), 7u);
+
+  // External edit that overlaps diagnostic range invalidates it.
+  editor.applyExternalSourceEdit(3, 3, "");
+
+  EXPECT_TRUE(editor.sourceDiagnostics().empty());
+  EXPECT_EQ(editor.activeSourceDiagnosticId(), std::nullopt);
+}
+
+TEST_F(TextEditorTests, SourceDiagnosticsTrackExternalEditsAcrossEarlierSpan) {
+  // Reproduce acceptance: diagnostic after an earlier changed span.
+  editor.setText("<svg><g><rect/></g></svg>");
+  // Place diagnostic on "rect" (offset around 8).
+  const std::size_t rectOffset = editor.getText().find("rect");
+  ASSERT_NE(rectOffset, std::string::npos);
+  ASSERT_TRUE(editor.setSourceDiagnostics({
+      SourceDiagnostic{.id = 9,
+                       .range = {rectOffset, rectOffset + 4},
+                       .line = 1,
+                       .column = rectOffset,
+                       .message = "error rect"},
+  }));
+  EXPECT_TRUE(editor.setActiveSourceDiagnosticId(9));
+
+  // External edit inserts attribute earlier, changing earlier span.
+  editor.applyExternalSourceEdit(5, 0, " data-x=\"1\"");
+
+  ASSERT_EQ(editor.sourceDiagnostics().size(), 1u);
+  const std::size_t expectedOffset = rectOffset + std::string_view(" data-x=\"1\"").size();
+  EXPECT_EQ(editor.sourceDiagnostics().front().range.start, expectedOffset);
+  EXPECT_EQ(editor.activeSourceDiagnosticId(), 9u);
+  // Navigating to diagnostic should land at remapped offset.
+  EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(expectedOffset + 1), 9u);
+}
+
 TEST_F(TextEditorTests, HoveringErrorMarkerRendersTooltip) {
   editor.setText("first\nsecond\nthird");
   editor.setErrorMarkers(ErrorMarkers{{2, "syntax error"}});

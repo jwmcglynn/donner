@@ -4166,8 +4166,40 @@ void TextEditor::applyExternalSourceEdit(std::size_t offset, std::size_t removed
                                          std::string_view replacement) {
   const std::size_t currentSize = getText().size();
   const std::size_t newSize = currentSize - removedLength + replacement.size();
+
+  // Capture pre-edit coordinates for constructing a SourceEditIntent that can be
+  // reused by the existing diagnostic and focus-metadata remapping path. This
+  // keeps DOM-mirrored edits (issue #1205) aligned with user-typed edits.
+  const Coordinates startCoord = text_.getCoordinatesAtByteOffset(offset);
+  const Coordinates removedEndCoord =
+      text_.getCoordinatesAtByteOffset(offset + removedLength);
+
   flashDecorations_.applySourceEdit(offset, removedLength, replacement.size(), newSize);
   core_.applyExternalSourceEdit(offset, removedLength, replacement);
+
+  // Post-edit replacement end coordinate from the now-updated buffer.
+  const Coordinates replacementEndCoord =
+      text_.getCoordinatesAtByteOffset(offset + replacement.size());
+
+  SourceEditIntent intent{
+      .offset = offset,
+      .removedLength = removedLength,
+      .replacement = std::string(replacement),
+      .kind = SourceEditIntentKind::Replace,
+      .start = SourceEditPoint{.line = startCoord.line, .column = startCoord.column},
+      .removedEnd =
+          SourceEditPoint{.line = removedEndCoord.line, .column = removedEndCoord.column},
+      .replacementEnd = SourceEditPoint{.line = replacementEndCoord.line,
+                                        .column = replacementEndCoord.column},
+  };
+  if (removedLength == 0 && !replacement.empty()) {
+    intent.kind = SourceEditIntentKind::Insert;
+  } else if (removedLength != 0 && replacement.empty()) {
+    intent.kind = SourceEditIntentKind::Delete;
+  }
+
+  remapFocusMetadataForSourceEdit(intent);
+
   if (!replacement.empty()) {
     flashSourceRange(SourceByteRange{.start = offset, .end = offset + replacement.size()});
   }
