@@ -23,6 +23,7 @@ namespace donner::geode {
 
 using svg::test::RgbaEq;
 using testing::HasSubstr;
+using testing::IsNull;
 using testing::Not;
 
 /// Marker that `GeodeDevice`'s uncaptured-error callback prints when wgpu
@@ -69,14 +70,54 @@ TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
   EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before);
 }
 
-TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingLostState) {
+namespace {
+
+/// One `GeodeEmbedConfig` field that must agree with the shared physical owner the same config
+/// names.
+struct EmbedConfigConflictArm {
+  /// Field name, so a failure says which check is missing.
+  std::string_view field;
+  /// Overwrites that field with state belonging to a different physical device.
+  void (*applyConflict)(GeodeEmbedConfig& config, GeodeDevice& foreign);
+};
+
+constexpr std::array<EmbedConfigConflictArm, 5> kEmbedConfigConflictArms{
+    {{"device",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.device = foreign.device(); }},
+     {"queue",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.queue = foreign.queue(); }},
+     {"instance",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.instance = foreign.instance(); }},
+     {"adapter",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.adapter = foreign.adapter(); }},
+     {"lostState", [](GeodeEmbedConfig& config, GeodeDevice&) {
+        config.lostState = std::make_shared<GeodeDeviceLostState>();
+      }}}};
+
+}  // namespace
+
+/// A config that names a shared physical owner may also repeat that owner's roots, but every
+/// repeated field has to be the same object. Naming one owner's roots alongside another device's
+/// is a caller error with no safe resolution - silently preferring either side would hand the
+/// context a queue, instance, or loss flag that does not belong to the device it renders on - so
+/// creation is refused for each field independently.
+TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
   auto ownerContext = GeodeDevice::CreateHeadless();
   ASSERT_NE(ownerContext, nullptr);
+  auto foreignContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(foreignContext, nullptr);
 
-  GeodeEmbedConfig config;
-  config.physicalDevice = ownerContext->physicalDeviceOwner();
-  config.lostState = std::make_shared<GeodeDeviceLostState>();
-  EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
+  for (const EmbedConfigConflictArm& arm : kEmbedConfigConflictArms) {
+    SCOPED_TRACE(arm.field);
+
+    GeodeEmbedConfig config;
+    config.physicalDevice = ownerContext->physicalDeviceOwner();
+    arm.applyConflict(config, *foreignContext);
+
+    EXPECT_THAT(GeodeDevice::CreateFromExternal(config), IsNull())
+        << "CreateFromExternal accepted a config whose " << arm.field
+        << " belongs to a different physical device than its physical owner";
+  }
 }
 
 TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
