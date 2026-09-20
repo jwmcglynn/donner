@@ -608,6 +608,15 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
   }
 }
 
+std::string WriteBitmapToTestOutputs(const RendererBitmap& bitmap, std::string_view label) {
+  const std::filesystem::path path =
+      parityOutputDir() / ("actual_" + escapeFilename(std::string(label)) + ".png");
+  RendererImageIO::writeRgbaPixelsToPngFile(path.string().c_str(), bitmap.pixels,
+                                            bitmap.dimensions.x, bitmap.dimensions.y,
+                                            bitmap.rowBytes / 4u);
+  return path.string();
+}
+
 void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& expected,
                             std::string_view label) {
   if (actual.dimensions != expected.dimensions || actual.rowBytes != expected.rowBytes ||

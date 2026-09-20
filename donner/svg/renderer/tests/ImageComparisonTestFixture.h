@@ -444,6 +444,18 @@ void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& 
                             std::string_view label);
 
 /**
+ * @brief Writes @p bitmap to `actual_<label>.png` under `$TEST_UNDECLARED_OUTPUTS_DIR`.
+ *
+ * For assertions that measure a geometric quantity pixelmatch cannot express (a stroke's device
+ * extent, a dash run length), so a CI failure still ships the image that produced the number.
+ *
+ * @param bitmap Bitmap to write.
+ * @param label Short identifier used in the filename.
+ * @return Path the bitmap was written to.
+ */
+std::string WriteBitmapToTestOutputs(const RendererBitmap& bitmap, std::string_view label);
+
+/**
  * @brief Terminal preview configuration derived from the environment.
  */
 struct TerminalPreviewConfig {
