@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/SVGImageElement.h"
@@ -43,6 +44,17 @@ constexpr std::string_view kBlueImageDataUri =
     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYPgPRmAKABf2A/1+6zfzAAAAAElFTkSu"
     "QmCC";
 
+/// Parses a complete SVG document, failing the test on a parse error.
+SVGDocument ParseSvg(std::string_view svg) {
+  ParseWarningSink warnings;
+  auto maybeResult = parser::SVGParser::ParseSVG(svg, warnings);
+  if (maybeResult.hasError()) {
+    ADD_FAILURE() << "SVG parse error: " << maybeResult.error();
+    return SVGDocument();
+  }
+  return std::move(maybeResult.result());
+}
+
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap. Returns transparent for a pixel
 /// outside the bitmap so an assertion fails cleanly instead of reading out of bounds.
 std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
@@ -52,6 +64,43 @@ std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
   }
   return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
           bitmap.pixels[offset + 3]};
+}
+
+/// Counts pixels with alpha above \p threshold in the given device row.
+int CountOpaqueInRow(const RendererBitmap& bitmap, int y, uint8_t threshold = 128) {
+  int count = 0;
+  for (int x = 0; x < bitmap.dimensions.x; ++x) {
+    if (PixelAt(bitmap, x, y)[3] > threshold) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+/// Counts pixels with alpha above \p threshold in the given device column.
+int CountOpaqueInColumn(const RendererBitmap& bitmap, int x, uint8_t threshold = 128) {
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    if (PixelAt(bitmap, x, y)[3] > threshold) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+/// Length of the first run of pixels with alpha above \p threshold in device row \p y, starting at
+/// \p startX. Returns 0 when the first pixel is not opaque.
+int FirstOpaqueRunLengthInRow(const RendererBitmap& bitmap, int y, int startX,
+                              uint8_t threshold = 128) {
+  int length = 0;
+  for (int x = startX; x < bitmap.dimensions.x; ++x) {
+    if (PixelAt(bitmap, x, y)[3] > threshold) {
+      ++length;
+    } else if (length > 0) {
+      break;
+    }
+  }
+  return length;
 }
 
 ImageComparisonParams GoldenParams() {
@@ -474,6 +523,74 @@ TEST_F(RendererRegressionTests, VectorEffectNonScalingStrokeChangesOutput) {
   ASSERT_EQ(nonScaling.pixels.size(), control.pixels.size());
   EXPECT_NE(nonScaling.pixels, control.pixels)
       << "vector-effect: non-scaling-stroke had no effect on the rendered output";
+}
+
+// `vector-effect: non-scaling-stroke` must hold the authored width under a non-uniform CTM.
+// `scale(2, 1)` doubles a vertical stroke's device x extent while leaving a horizontal stroke's y
+// extent unchanged; a single area-average scale factor cannot satisfy both. Both strokes must
+// measure the authored 10px.
+TEST_F(RendererRegressionTests, NonScalingStrokeIsExactUnderAnisotropicScale) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="60">
+      <g transform="scale(2, 1)">
+        <line x1="20" y1="5" x2="20" y2="55" stroke="black" stroke-width="10"
+              vector-effect="non-scaling-stroke"/>
+        <line x1="5" y1="40" x2="55" y2="40" stroke="black" stroke-width="10"
+              vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  ASSERT_FALSE(bitmap.empty());
+
+  // Device row 30 crosses only the vertical stroke (device x = 40).
+  EXPECT_NEAR(CountOpaqueInRow(bitmap, 30), 10, 2)
+      << "A vertical non-scaling stroke must keep its authored width under scale(2, 1)";
+  // Device column 100 crosses only the horizontal stroke (device y = 40).
+  EXPECT_NEAR(CountOpaqueInColumn(bitmap, 100), 10, 2)
+      << "A horizontal non-scaling stroke must keep its authored width under scale(2, 1)";
+}
+
+// The same contract through a non-uniform `viewBox` mapping: a 60x60 viewBox stretched to 120x60
+// with `preserveAspectRatio="none"` scales x by 2 and y by 1, so the non-scaling strokes must
+// still measure the authored 10px on both axes.
+TEST_F(RendererRegressionTests, NonScalingStrokeIsExactUnderNonUniformViewBox) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 60 60"
+         preserveAspectRatio="none">
+      <line x1="20" y1="5" x2="20" y2="55" stroke="black" stroke-width="10"
+            vector-effect="non-scaling-stroke"/>
+      <line x1="5" y1="40" x2="55" y2="40" stroke="black" stroke-width="10"
+            vector-effect="non-scaling-stroke"/>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  ASSERT_FALSE(bitmap.empty());
+
+  EXPECT_NEAR(CountOpaqueInRow(bitmap, 30), 10, 2)
+      << "A vertical non-scaling stroke must keep its authored width under a non-uniform viewBox";
+  EXPECT_NEAR(CountOpaqueInColumn(bitmap, 100), 10, 2)
+      << "A horizontal non-scaling stroke must keep its authored width under a non-uniform viewBox";
+}
+
+// Dash lengths are host-space CSS pixels for `non-scaling-stroke`, so an anisotropic CTM must not
+// stretch them along the axis it scales. Under scale(2, 1) a horizontal dashed stroke would render
+// each 10px dash as ~14px if the scalar compensation were still in effect.
+TEST_F(RendererRegressionTests, NonScalingStrokeDashLengthIsExactUnderAnisotropicScale) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="160" height="40">
+      <g transform="scale(2, 1)">
+        <line x1="10" y1="20" x2="60" y2="20" stroke="black" stroke-width="4"
+              stroke-dasharray="10 10" vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  ASSERT_FALSE(bitmap.empty());
+
+  // The line starts at device x = 20 and the first dash is authored at 10px.
+  EXPECT_NEAR(FirstOpaqueRunLengthInRow(bitmap, 20, 20), 10, 2)
+      << "A non-scaling dashed stroke must keep its authored dash length under scale(2, 1)";
 }
 
 // The tiny-skia backend memoizes each shape's converted `tiny_skia::Path` on the shape's source
