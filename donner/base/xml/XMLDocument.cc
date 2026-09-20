@@ -717,16 +717,6 @@ bool SpanCoveredBy(const XMLDocumentContext::UnreparsedSpan& span, std::size_t s
   return start <= span.start && span.end <= end;
 }
 
-/// Drop every pending span covered by a successfully validated fragment.
-void RemoveCoveredSpans(XMLDocument& document, std::size_t start, std::size_t end) {
-  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
-  spans.erase(std::remove_if(spans.begin(), spans.end(),
-                             [&](const XMLDocumentContext::UnreparsedSpan& span) {
-                               return SpanCoveredBy(span, start, end);
-                             }),
-              spans.end());
-}
-
 /// Derive the surfaced diagnostic from the pending spans: the newest failure, verbatim.
 /// After a merge this may name already-fixed bytes until the union clears; fail-closed and
 /// safe, potentially stale as a UI message.
@@ -771,65 +761,51 @@ std::optional<SourceEditRange> NodeSpanInCurrentCoords(const XMLNode& node) {
 }
 
 /**
- * Fragment span a classified edit validates, in pre-edit coordinates. Callers capture this
- * before the source replacement and map it through the delta; locations resolve against
- * current bytes, so capturing after the replacement would silently shift the span.
+ * The fragment span a classified edit validates, in pre-edit coordinates, together with the node
+ * blamed for its span-change mutations. Both answers come from the same classification shape, so
+ * they are read out together rather than in two parallel switches.
  *
+ * Callers capture the span before the source replacement and map it through the delta; locations
+ * resolve against current bytes, so capturing after the replacement would silently shift it.
  * Unclassified edits validate nothing and leave the tree untouched, so their span is the edit
- * range itself: the divergence is exactly the replaced bytes.
+ * range itself: the divergence is exactly the replaced bytes, blamed on the document root.
  */
-SourceEditRange ClassificationSpan(const SourceEditClassification& classification,
-                                   SourceEditRange intentRange) {
+struct ClassificationTarget {
+  SourceEditRange span;  ///< Fragment span the edit validates, in pre-edit coordinates.
+  XMLNode node;          ///< Node blamed for span-change mutations.
+};
+
+ClassificationTarget ClassifiedEditTarget(const XMLDocument& document,
+                                          const SourceEditClassification& classification,
+                                          SourceEditRange intentRange) {
   if (classification.attribute.has_value()) {
-    const SourceRange& location = classification.attribute->attributeLocation;
+    const AttributeValueEdit& edit = *classification.attribute;
+    const SourceRange& location = edit.attributeLocation;
     if (location.start.offset.has_value() && location.end.offset.has_value() &&
         *location.start.offset <= *location.end.offset) {
-      return SourceEditRange{*location.start.offset, *location.end.offset};
+      return {SourceEditRange{*location.start.offset, *location.end.offset}, edit.node};
     }
-    const AttributeValueEdit& edit = *classification.attribute;
     if (edit.valueStart <= edit.valueEnd) {
-      return SourceEditRange{edit.valueStart, edit.valueEnd};
+      return {SourceEditRange{edit.valueStart, edit.valueEnd}, edit.node};
     }
-    return intentRange;
+    return {intentRange, edit.node};
   }
   if (classification.openingTag.has_value()) {
     const OpeningTagEdit& edit = *classification.openingTag;
     if (edit.tagStart <= edit.tagEnd) {
-      return SourceEditRange{edit.tagStart, edit.tagEnd};
+      return {SourceEditRange{edit.tagStart, edit.tagEnd}, edit.node};
     }
-    return intentRange;
+    return {intentRange, edit.node};
   }
   if (classification.textNode.has_value()) {
-    if (auto span = NodeSpanInCurrentCoords(classification.textNode->node)) {
-      return *span;
-    }
-    return intentRange;
+    const XMLNode& node = classification.textNode->node;
+    return {NodeSpanInCurrentCoords(node).value_or(intentRange), node};
   }
   if (classification.elementSubtree.has_value()) {
-    if (auto span = NodeSpanInCurrentCoords(classification.elementSubtree->node)) {
-      return *span;
-    }
-    return intentRange;
+    const XMLNode& node = classification.elementSubtree->node;
+    return {NodeSpanInCurrentCoords(node).value_or(intentRange), node};
   }
-  return intentRange;
-}
-
-/// Node blamed for span-change mutations: the classified target, else the document root.
-XMLNode ClassificationNode(const XMLDocument& document,
-                           const SourceEditClassification& classification) {
-  if (classification.attribute.has_value()) {
-    return classification.attribute->node;
-  }
-  if (classification.openingTag.has_value()) {
-    return classification.openingTag->node;
-  }
-  if (classification.textNode.has_value()) {
-    return classification.textNode->node;
-  }
-  if (classification.elementSubtree.has_value()) {
-    return classification.elementSubtree->node;
-  }
-  return document.root();
+  return {intentRange, document.root()};
 }
 
 /**
@@ -2746,8 +2722,9 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
 
   // Capture the validated fragment span before the replacement; node locations resolve
   // against current bytes, so capturing after would silently shift the span.
-  const SourceEditRange fragmentSpan = ClassificationSpan(classification, *range);
-  const XMLNode mutationNode = ClassificationNode(*this, classification);
+  const ClassificationTarget classified = ClassifiedEditTarget(*this, classification, *range);
+  const SourceEditRange fragmentSpan = classified.span;
+  const XMLNode mutationNode = classified.node;
   const std::optional<ParseDiagnostic> diagnosticBefore = DerivedSourceDiagnostic(*this);
 
   const std::optional<XMLSourceDelta> delta =
@@ -2778,7 +2755,7 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
       AddUnreparsedSpan(*this, validatedSpan.start, validatedSpan.end, *result.diagnostic);
     }
   } else {
-    RemoveCoveredSpans(*this, validatedSpan.start, validatedSpan.end);
+    RemoveSpansCoveredByAny(*this, {validatedSpan});
   }
   EmitSpansChangedIfNeeded(*this, result, mutationNode, diagnosticBefore);
   return result;
