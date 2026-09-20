@@ -162,6 +162,22 @@ public:
   std::uint64_t sourceVersion() const;
 
   /**
+   * Whether the parse that built this document resolved a DOCTYPE internal subset, i.e. a
+   * `<!DOCTYPE root [ ... ]>` whose bracketed declarations the parser consumed.
+   *
+   * The parser expands entity references and does not keep the declarations in the tree, so a
+   * consumer that reproduces the document from the tree (the viewport export, for example)
+   * cannot reproduce them and must refuse rather than emit a body carrying entity references
+   * that nothing declares. This reports what the parser resolved, not a scan of the source
+   * text: a `<!DOCTYPE` inside a comment or a processing instruction is not a DOCTYPE.
+   *
+   * \ref setSource clears it, since installing whole new source hands responsibility for the
+   * tree back to a full reparse. Incremental fragment reparses leave it alone; they never see
+   * the prolog, so they cannot observe that the subset is gone.
+   */
+  bool declaresDoctypeInternalSubset() const;
+
+  /**
    * Return the pending source diagnostic, if any.
    *
    * Incremental source edits commit source bytes before reparsing; when the reparse fails, the

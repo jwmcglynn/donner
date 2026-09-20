@@ -64,6 +64,11 @@ public:
   /// Optional source store for parsed documents that own their source projection.
   std::shared_ptr<XMLSourceStore> sourceStore;
 
+  /// Whether the parse that built this document resolved a DOCTYPE internal subset. Set by the
+  /// XML parser while it consumes the DOCTYPE, and cleared only when whole new source is
+  /// installed, since incremental fragment reparses never see the prolog.
+  bool declaredDoctypeInternalSubset = false;
+
   /// One source span the live tree does not reflect, with the failure that reported it.
   struct UnreparsedSpan {
     /// Start byte offset in current source coordinates (inclusive).

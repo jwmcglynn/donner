@@ -577,6 +577,26 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
   EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
+TEST(ViewportSvgExportTest, DoctypeShapedCommentInPrologStillExports) {
+  // The refusal comes from what the parser resolved, not from a scan for `<!DOCTYPE` in the
+  // prolog bytes: a comment or processing instruction that merely looks like a DOCTYPE
+  // declares nothing and must not cost the user their export.
+  const SVGDocument doc = ParseOrDie(
+      "<!-- <!DOCTYPE svg [<!ENTITY data \"unused\">]> -->"
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
+  EXPECT_TRUE(ReparsesCleanly(result.value));
+}
+
 TEST(ViewportSvgExportTest, DoctypeEntityValueWithBracketsIsRefused) {
   // Brackets inside a quoted `<!ENTITY>` value do not affect internal-subset nesting, so the
   // markup-shaped entity value is part of the declaration, and the declaration refuses the
@@ -597,10 +617,10 @@ TEST(ViewportSvgExportTest, DoctypeEntityValueWithBracketsIsRefused) {
   EXPECT_THAT(result.error, Not(HasSubstr("not-the-root")));
 }
 
-TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
-  // A doctype inside the body whose entity value contains markup-like text is a
-  // single parsed node; the body still ends at the root's own `</svg>`, leaving
-  // the exported group balanced with a single close tag.
+TEST(ViewportSvgExportTest, DoctypeInsideTheBodyIsRefused) {
+  // The internal-subset refusal is document level, because the parser expands the declarations
+  // away wherever they appeared. A doctype inside the body is refused for the same reason as
+  // one in the prolog, rather than on where its markup-like entity value happens to sit.
   const SVGDocument doc = ParseOrDie(
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
       "<!DOCTYPE d [<!ENTITY y ']><svg id=\"faux\">'>]>"
@@ -612,10 +632,9 @@ TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("real-root-child"));
-  EXPECT_EQ(result.value.find("</svg>"), result.value.rfind("</svg>"));
-  EXPECT_TRUE(ReparsesCleanly(result.value));
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("DOCTYPE internal subset"));
+  EXPECT_THAT(result.error, Not(HasSubstr("faux")));
 }
 
 TEST(ViewportSvgExportTest, NestedSvgCloseDoesNotEndRootBody) {

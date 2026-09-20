@@ -125,7 +125,6 @@ struct RootTag {
   /// namespace as the root rather than in no namespace under a prefixed root.
   std::string injectedPrefix;
   std::vector<Attribute> attributes;
-  std::size_t prologEnd = 0;       ///< Byte offset of the root open tag's `<`.
   std::size_t bodyStart = 0;       ///< Byte offset just past the root open tag.
   std::size_t bodyEnd = 0;         ///< Byte offset of the root closing tag.
   bool locationsResolved = false;  ///< True once the offsets above resolved from the tree.
@@ -181,7 +180,6 @@ RootTag DeriveRootTagFromTree(std::string_view source, const xml::XMLNode& root)
   if (!openOffsets.has_value() || openOffsets->second > source.size()) {
     return result;
   }
-  result.prologEnd = openOffsets->first;
   result.bodyStart = openOffsets->second;
 
   const std::optional<SourceRange> closeTag = root.getClosingTagLocation();
@@ -240,16 +238,6 @@ RootTag DeriveRootTagFromTree(std::string_view source, const xml::XMLNode& root)
   }
   result.locationsResolved = true;
   return result;
-}
-
-/// Returns true when the document prolog declares a DOCTYPE internal subset. The SVG parser
-/// expands entity references and drops the DOCTYPE node, so the export cannot reproduce the
-/// declarations; a body that references a declared entity would otherwise export with an
-/// undeclared reference that no consumer can resolve.
-bool PrologDeclaresInternalSubset(std::string_view prolog) {
-  const std::size_t doctype =
-      StringUtils::Find<StringComparison::IgnoreCase>(prolog, std::string_view("<!doctype"));
-  return doctype != std::string_view::npos && prolog.find('[', doctype) != std::string_view::npos;
 }
 
 /// Returns true when an attribute local name ends with "href" (case-sensitive), preserving
@@ -475,6 +463,16 @@ Result<std::string, std::string> ExportViewportAsSvg(
                            stale->reason.str() + ".");
   }
 
+  // The parser expands entity references and does not keep the DOCTYPE declarations, so a body
+  // carrying `&name;` would export with nothing to resolve it against. Refuse from what the
+  // parser resolved rather than inspecting the prolog bytes.
+  if (xmlDocument.declaresDoctypeInternalSubset()) {
+    return ResultType::Err(
+        "Viewport export cannot reproduce a DOCTYPE internal subset: the parser expands and drops "
+        "the declarations, so an exported body could reference an undeclared entity. Inline the "
+        "entity values and try again.");
+  }
+
   const std::string_view source = doc.source();
 
   // Refuse `href`-suffixed attributes (`href`, `xlink:href`, `data-href`) whose decoded value
@@ -496,12 +494,6 @@ Result<std::string, std::string> ExportViewportAsSvg(
   if (!rootTag.locationsResolved) {
     return ResultType::Err(
         "Viewport export could not resolve the source locations of the root <svg> element.");
-  }
-  if (PrologDeclaresInternalSubset(source.substr(0, rootTag.prologEnd))) {
-    return ResultType::Err(
-        "Viewport export cannot reproduce a DOCTYPE internal subset: the parser expands and drops "
-        "the declarations, so an exported body could reference an undeclared entity. Inline the "
-        "entity values and try again.");
   }
   const std::string& injectedPrefix = rootTag.injectedPrefix;
 

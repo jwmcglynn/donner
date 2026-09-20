@@ -4185,4 +4185,49 @@ TEST_F(XMLDocumentTests, XMLMutationKindOstreamOutput) {
   EXPECT_THAT(XMLMutation::Kind::SourceDiagnosticChanged, ToStringIs("SourceDiagnosticChanged"));
 }
 
+// The exporter and any other consumer that reproduces a document from the tree has to know
+// whether the parser swallowed entity declarations it cannot reproduce. The answer comes from
+// the parse, not from scanning the prolog: a `<!DOCTYPE` inside a comment or a processing
+// instruction is not a DOCTYPE, and a `[` after a real DOCTYPE is not necessarily its subset.
+TEST(XMLDocument, DeclaresDoctypeInternalSubset) {
+  EXPECT_TRUE(
+      ParseDocument(R"(<!DOCTYPE root [<!ENTITY a "b">]><root/>)", XMLParser::Options::ParseAll())
+          .declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, DoctypeWithoutInternalSubsetDeclaresNothing) {
+  EXPECT_FALSE(ParseDocument(R"(<!DOCTYPE root><root/>)", XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+  EXPECT_FALSE(
+      ParseDocument(R"(<!DOCTYPE root PUBLIC "-//x//DTD//EN" "http://example.test/x.dtd"><root/>)",
+                    XMLParser::Options::ParseAll())
+          .declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, DocumentWithoutDoctypeDeclaresNothing) {
+  EXPECT_FALSE(ParseDocument(R"(<root/>)").declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, DoctypeShapedTextOutsideADoctypeDeclaresNothing) {
+  EXPECT_FALSE(ParseDocument(R"(<!-- <!DOCTYPE x [<!ENTITY a "b">]> --><root/>)",
+                             XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+  EXPECT_FALSE(ParseDocument(R"(<?tool <!DOCTYPE x [ ?><root/>)", XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+  EXPECT_FALSE(ParseDocument(R"(<root><![CDATA[<!DOCTYPE x [<!ENTITY a "b">]>]]></root>)",
+                             XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, SetSourceClearsDeclaredDoctypeInternalSubset) {
+  XMLDocument doc =
+      ParseDocument(R"(<!DOCTYPE root [<!ENTITY a "b">]><root/>)", XMLParser::Options::ParseAll());
+  ASSERT_TRUE(doc.declaresDoctypeInternalSubset());
+
+  // Installing whole new source hands the tree back to a full reparse, which sets the flag
+  // again if the new source declares a subset.
+  doc.setSource("<root/>", 4096);
+  EXPECT_FALSE(doc.declaresDoctypeInternalSubset());
+}
+
 }  // namespace donner::xml

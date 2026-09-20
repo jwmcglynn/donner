@@ -1178,6 +1178,12 @@ private:
       if (c == '[') {
         bracketLevel++;
         inInternalSubset = true;
+        // Recorded even when `parseDoctype` is off: the declarations were resolved and expanded
+        // either way, so consumers that reproduce the document from the tree must know.
+        document_.registry()
+            .ctx()
+            .get<components::XMLDocumentContext>()
+            .declaredDoctypeInternalSubset = true;
       } else if (c == ']') {
         bracketLevel--;
         if (bracketLevel < 0) {

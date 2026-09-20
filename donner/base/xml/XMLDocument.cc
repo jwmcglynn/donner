@@ -2619,6 +2619,10 @@ std::optional<ParseDiagnostic> XMLDocument::sourceDiagnostic() const {
   return DerivedSourceDiagnostic(*this);
 }
 
+bool XMLDocument::declaresDoctypeInternalSubset() const {
+  return registry_->ctx().get<XMLDocumentContext>().declaredDoctypeInternalSubset;
+}
+
 XMLSourceStore* XMLDocument::sourceStore() {
   return registry_->ctx().get<XMLDocumentContext>().sourceStore.get();
 }
@@ -3342,6 +3346,7 @@ void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   XMLDocumentContext& context = registry_->ctx().get<XMLDocumentContext>();
   context.sourceStore = std::make_shared<XMLSourceStore>(std::move(source), maximumSourceSize);
   context.unreparsedSpans.clear();
+  context.declaredDoctypeInternalSubset = false;
 }
 
 }  // namespace donner::xml
