@@ -380,10 +380,11 @@ TEST(SVGParser, MismatchedNamespace) {
     ParseWarningSink warnings;
     EXPECT_THAT(SVGParser::ParseSVG(mismatchedXmlnsXml, warnings), NoParseError());
 
-    EXPECT_THAT(warnings.warnings(),
-                ElementsAre(AllOf(ParseErrorPos(2, 13),
-                                  ParseErrorIs("Ignored element <path> with an unsupported "
-                                               "namespace. Expected 'svg', found ''"))));
+    EXPECT_THAT(
+        warnings.warnings(),
+        ElementsAre(AllOf(ParseErrorPos(2, 13),
+                          ParseErrorIs("Retaining element <path> with an unsupported namespace as "
+                                       "unknown. Expected 'svg', found ''"))));
   }
 
   {
@@ -418,6 +419,44 @@ TEST(SVGParser, UnknownElementInSvgNamespace) {
   ASSERT_TRUE(unknown.has_value());
   EXPECT_EQ(unknown->type(), ElementType::Unknown);
   EXPECT_THAT(unknown->tagName(), testing::Eq("notAnElement"));
+}
+
+TEST(SVGParser, ForeignNamespaceElementsAreRetainedAsUnknown) {
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:group id="foreign" custom="kept"><rect id="inner" width="10" height="10"/>))"
+      R"(</other:group></svg>)",
+      warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  // Retained and selectable, like unknown SVG-namespace elements.
+  auto foreign = result.result().querySelector("#foreign");
+  ASSERT_TRUE(foreign.has_value());
+  EXPECT_EQ(foreign->type(), ElementType::Unknown);
+
+  // SVG-namespace children inside the foreign wrapper project normally.
+  auto inner = result.result().querySelector("#inner");
+  ASSERT_TRUE(inner.has_value());
+  EXPECT_EQ(inner->type(), ElementType::Rect);
+  EXPECT_THAT(inner->getAttribute("width"), testing::Optional(RcString("10")));
+
+  // The shared XML tree keeps the foreign element with attributes and source locations.
+  xml::XMLDocument xmlDoc = result.result().xmlDocument();
+  std::optional<xml::XMLNode> svgNode = xmlDoc.root().firstChild();
+  ASSERT_TRUE(svgNode.has_value());
+  std::optional<xml::XMLNode> foreignNode = svgNode->firstChild();
+  ASSERT_TRUE(foreignNode.has_value());
+  EXPECT_EQ(foreignNode->tagName(), xml::XMLQualifiedName(RcString("other"), RcString("group")));
+  EXPECT_THAT(foreignNode->getAttribute("custom"), testing::Optional(RcString("kept")));
+  std::optional<SourceRange> location = foreignNode->getNodeLocation();
+  ASSERT_TRUE(location.has_value());
+  ASSERT_TRUE(location->start.offset.has_value());
+  ASSERT_TRUE(location->end.offset.has_value());
+  const std::string_view source = result.result().source();
+  EXPECT_THAT(
+      source.substr(*location->start.offset, *location->end.offset - *location->start.offset),
+      testing::StartsWith("<other:group"));
 }
 
 TEST(SVGParser, ExperimentalElementsRequireOptIn) {

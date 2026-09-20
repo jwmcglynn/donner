@@ -73,8 +73,8 @@ TEST(ElementStyleTests, AttributeMatchers) {
                   .stroke.get(),
               Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
 
-  // User attributes are not parsed by default, the `rect[test="value"]` matcher should have no
-  // effect.
+  // User attributes are retained by default, so the `rect[test="value"]` matcher
+  // applies.
   EXPECT_THAT(instantiateSubtreeElement(R"(
       <rect fill="red" test="value" />
       <style>
@@ -83,11 +83,11 @@ TEST(ElementStyleTests, AttributeMatchers) {
     )")
                   ->getComputedStyle()
                   .stroke.get(),
-              Optional(PaintServer(PaintServer::None())));
+              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
 
-  // It will work if user attributes are enabled.
+  // It will not match if user attributes are explicitly disabled.
   parser::SVGParser::Options disableUserAttributesOptions;
-  disableUserAttributesOptions.disableUserAttributes = false;
+  disableUserAttributesOptions.disableUserAttributes = true;
 
   EXPECT_THAT(instantiateSubtreeElement(R"(
       <rect fill="red" test="value" />
@@ -98,6 +98,6 @@ TEST(ElementStyleTests, AttributeMatchers) {
                                         disableUserAttributesOptions)
                   ->getComputedStyle()
                   .stroke.get(),
-              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0xFF, 0, 0xFF))))));
+              Optional(PaintServer(PaintServer::None())));
 }
 }  // namespace donner::svg

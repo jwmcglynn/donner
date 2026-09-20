@@ -641,29 +641,26 @@ public:
       if (element) {
         assert(document_.has_value());
 
-        // TODO: Create an SVGUnknownElement if the namespace doesn't match?
+        // Foreign-namespace elements are retained as unknown elements rather than detached, so
+        // the shared XML tree stays complete for whole-tree consumers and their SVG-namespace
+        // children still project. The namespace check below resolves this tag name's prefix
+        // once for both the warning and the factory lookup.
         std::optional<RcString> maybeUri = child->getNamespaceUri(name.namespacePrefix);
-        if (maybeUri != "http://www.w3.org/2000/svg") {
+        const bool isSvgNamespace = maybeUri == "http://www.w3.org/2000/svg";
+        if (!isSvgNamespace) {
           ParseDiagnostic err;
           std::ostringstream ss;
-          ss << "Ignored element <" << name << "> with an unsupported namespace. " << "Expected '"
-             << context_.namespacePrefix() << "', found '" << name.namespacePrefix << "'";
+          ss << "Retaining element <" << name << "> with an unsupported namespace as unknown. "
+             << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix
+             << "'";
           err.reason = ss.str();
           if (auto sourceOffset = child->sourceStartOffset()) {
             err.range.start = sourceOffset.value();
           }
           context_.addWarning(std::move(err));
-
-          // Remove the unknown element from the tree.
-          XMLNode nodeToRemove = child.value();
-          child = child->nextSibling();
-          nodeToRemove.remove();
-          continue;
         }
 
-        // The namespace check above already resolved this tag name's prefix.
-        auto maybeNewElement =
-            createElement(child->tagName(), child.value(), /*isSvgNamespace=*/true);
+        auto maybeNewElement = createElement(child->tagName(), child.value(), isSvgNamespace);
         if (maybeNewElement.hasError()) {
           return std::move(maybeNewElement.error());
         }

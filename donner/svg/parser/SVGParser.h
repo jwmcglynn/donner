@@ -39,9 +39,9 @@ public:
     constexpr Options() {}
 
     /**
-     * By default, the parser will ignore user-defined attributes (only presentation attributes will
-     * be parsed), to optimize for performance. This behavior breaks some CSS matchers, which may
-     * use user-defined attributes to control styling.
+     * By default, the parser retains user-defined attributes on the parsed tree so the tree
+     * stays complete for whole-tree consumers (attribute selectors, export checks) and CSS
+     * matchers that key off custom attributes keep working.
      *
      * For example:
      * ```svg
@@ -57,12 +57,14 @@ public:
      * </svg>
      * ```
      *
-     * If user attributes are disabled (\ref disableUserAttributes is true), the above example will
-     * only match the first rule, because `my-custom-attribute` will be ignored during parsing.
+     * Both rules match by default. If user attributes are disabled (\ref disableUserAttributes
+     * is true), only the first rule matches, because `my-custom-attribute` is omitted
+     * during parsing.
      *
-     * To support rendering documents that use user-defined attributes, set this to false.
+     * Set this to true only to optimize for performance when custom attributes are known
+     * to be irrelevant; whole-tree attribute checks then cannot see them.
      */
-    bool disableUserAttributes = true;
+    bool disableUserAttributes = false;
 
     /**
      * Enable experimental or incomplete features. When true, element types that declare

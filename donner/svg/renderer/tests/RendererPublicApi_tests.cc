@@ -631,6 +631,35 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   EXPECT_GT(std::filesystem::file_size(outputPath), 0u);
 }
 
+TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersLikeGroup) {
+  // Retained foreign-namespace elements are unknown elements: they contribute no rendering of
+  // their own, while their SVG-namespace children render normally.
+  SVGDocument foreignDocument = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other" width="8" height="6" viewBox="0 0 8 6">
+        <other:wrapper><rect width="8" height="6" fill="#00ff00" /></other:wrapper>
+      </svg>
+    )svg");
+  SVGDocument groupDocument = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6">
+        <g><rect width="8" height="6" fill="#00ff00" /></g>
+      </svg>
+    )svg");
+
+  Renderer foreignRenderer;
+  foreignRenderer.draw(foreignDocument);
+  const RendererBitmap foreignSnapshot = NormalizeSnapshot(foreignRenderer.takeSnapshot());
+
+  Renderer groupRenderer;
+  groupRenderer.draw(groupDocument);
+  const RendererBitmap groupSnapshot = NormalizeSnapshot(groupRenderer.takeSnapshot());
+
+  ASSERT_FALSE(foreignSnapshot.empty());
+  ASSERT_FALSE(groupSnapshot.empty());
+  EXPECT_EQ(foreignSnapshot.dimensions, groupSnapshot.dimensions);
+  ASSERT_EQ(foreignSnapshot.pixels.size(), groupSnapshot.pixels.size());
+  EXPECT_THAT(foreignSnapshot.pixels, testing::ElementsAreArray(groupSnapshot.pixels));
+}
+
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
   // Backends composite in premultiplied space but publish straight alpha, so a
   // half-covered pixel has to come back carrying its full-strength color. A
