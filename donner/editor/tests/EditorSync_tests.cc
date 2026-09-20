@@ -15,6 +15,7 @@
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/UndoTimeline.h"
+#include "donner/editor/ViewportSvgExport.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "gtest/gtest.h"
@@ -1277,6 +1278,46 @@ TEST(EditorSyncTest, UndoSkipsGracefullyWhenSnapshotTargetNoLongerResolvesAfterR
   EXPECT_FALSE(app.flushFrame());
 
   EXPECT_FALSE(app.document().document().querySelector("#r").has_value());
+}
+
+// An incremental apply commits its source bytes before reparsing, so a failed fragment reparse
+// records an unreparsed span while the source itself is already valid. Nothing forces a later
+// edit to cover that span, so the editor must reconcile against a fresh parse whenever the new
+// source parses: otherwise emptying an element's text in the source pane leaves a stale DOM
+// behind valid source, and every consumer that fails closed on staleness (viewport export)
+// stays refused until the document is reloaded.
+TEST(EditorSyncTest, EmptiedTextInSourcePaneRemountsStaleTreeSoExportSucceeds) {
+  constexpr std::string_view kSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">"
+      "<text id=\"t\" x=\"10\" y=\"20\">hello</text>"
+      "</svg>";
+  constexpr std::string_view kEmptiedSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">"
+      "<text id=\"t\" x=\"10\" y=\"20\"></text>"
+      "</svg>";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSource));
+
+  std::string previousSourceText(kSource);
+  std::optional<std::string> lastWritebackSourceText;
+
+  // A structured apply that handles the edit in place queues no mutation, so the flush is
+  // best-effort here rather than an assertion about which path handled the keystroke.
+  DispatchSourceTextChange(app, kEmptiedSource, &previousSourceText, &lastWritebackSourceText);
+  (void)app.flushFrame();
+
+  EXPECT_EQ(app.document().document().source(), kEmptiedSource);
+  EXPECT_FALSE(app.document().document().xmlDocument().sourceDiagnostic().has_value())
+      << "valid source must leave no unreparsed span behind";
+
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d::Zero();
+  viewport.paneSize = Vector2d(100.0, 100.0);
+  const Result<std::string, std::string> exported =
+      ExportViewportAsSvg(app.document().document(), viewport,
+                          Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions());
+  EXPECT_TRUE(exported.ok()) << exported.error;
 }
 
 }  // namespace

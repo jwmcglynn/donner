@@ -822,6 +822,7 @@ donner_cc_test(
         "//donner/editor:selection_aabb",
         "//donner/editor:source_sync",
         "//donner/editor:text_patch",
+        "//donner/editor:viewport_svg_export",
         "//donner/svg",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",

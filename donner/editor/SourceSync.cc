@@ -26,7 +26,6 @@ struct SourceTextEdit {
 struct StructuredApplyResult {
   bool applied = false;
   bool needsDocumentReplace = false;
-  bool hadDiagnostic = false;
 };
 
 struct SelectionRemapTarget {
@@ -198,7 +197,6 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
   return StructuredApplyResult{
       .applied = true,
       .needsDocumentReplace = result.scope == xml::ReparseScope::Document,
-      .hadDiagnostic = result.diagnostic.has_value(),
   };
 }
 
@@ -246,21 +244,28 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
     return true;
   }
 
-  // Guard against a lossy incremental apply. `BuildSingleSourceTextEdit` produces
-  // a minimal whole-text diff, which is ambiguous: inserting an element textually
-  // similar to a sibling can collapse into what looks like a single-character
-  // attribute edit, so the structured apply renames the existing sibling and
+  // Guard against a lossy incremental apply and against a tree left stale. The fresh parse is
+  // the arbiter for both: when the new source does not parse, the editor is mid-error and keeps
+  // the last-good DOM; when it does parse, the live DOM must match it and no unreparsed span may
+  // remain.
+  //
+  // `BuildSingleSourceTextEdit` produces a minimal whole-text diff, which is ambiguous:
+  // inserting an element textually similar to a sibling can collapse into what looks like a
+  // single-character attribute edit, so the structured apply renames the existing sibling and
   // never materializes the new element even though the source bytes are correct.
-  // Skip the check when the apply carried a diagnostic - the source is then
-  // intentionally mid-error and the editor keeps the last-good DOM. Otherwise
-  // compare a structural fingerprint of the live DOM against a fresh parse of the
-  // new source; on mismatch the DOM desynced, so fall back to a full reparse.
-  if (!result.hadDiagnostic) {
-    ParseWarningSink warningSink;
-    ParseResult<svg::SVGDocument> freshParse =
-        svg::parser::SVGParser::ParseSVG(newSource, warningSink);
-    if (freshParse.hasResult() && StructuralFingerprint(app.document().document().svgElement()) !=
-                                      StructuralFingerprint(freshParse.result().svgElement())) {
+  //
+  // A per-edit diagnostic does not mean the source is broken: an incremental apply commits its
+  // bytes and can then fail to reparse a fragment (an emptied element subtree, say) while the
+  // whole document is valid. Skipping the check there left valid source with a stale DOM and a
+  // pending span that no later edit had to cover, and the editor stayed stuck until reload.
+  ParseWarningSink warningSink;
+  ParseResult<svg::SVGDocument> freshParse =
+      svg::parser::SVGParser::ParseSVG(newSource, warningSink);
+  if (freshParse.hasResult()) {
+    const bool treeStale = app.document().document().xmlDocument().sourceDiagnostic().has_value() ||
+                           StructuralFingerprint(app.document().document().svgElement()) !=
+                               StructuralFingerprint(freshParse.result().svgElement());
+    if (treeStale) {
       app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
     }
   }
