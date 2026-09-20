@@ -57,8 +57,8 @@ def _non_bcr_deps_impl(_mctx):
     new_git_repository(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
+        commit = "56feae4035bdd48f62ba2b8d8c16232d4d89b3a4",  # tag 14.2.1
         remote = "https://github.com/harfbuzz/harfbuzz.git",
-        tag = "14.2.1",
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
 // Re-enable the draw API for glyph outline extraction.
@@ -135,7 +135,7 @@ HBEOF""",
         name = "tracy",
         build_file = "//third_party:BUILD.tracy",
         # Pinned to the latest stable upstream release. Bump deliberately.
-        tag = "v0.13.1",
+        commit = "05cceee0df3b8d7c6fa87e9638af311dbabc63cb",  # tag v0.13.1
         remote = "https://github.com/wolfpld/tracy.git",
     )
 

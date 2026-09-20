@@ -4,6 +4,7 @@ WOFF2_COPTS = [
     "-Wno-unused-parameter",
     "-Wno-unused-variable",
     "-Wno-unused-const-variable",
+    "-Wno-unused-but-set-variable",
 ]
 
 filegroup(
