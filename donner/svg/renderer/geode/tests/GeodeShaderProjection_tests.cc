@@ -53,6 +53,7 @@ using testing::Eq;
 using testing::Field;
 using testing::HasSubstr;
 using testing::IsEmpty;
+using testing::IsFalse;
 using testing::IsTrue;
 using testing::Not;
 
@@ -304,17 +305,31 @@ INSTANTIATE_TEST_SUITE_P(Programs, GeodeFilterProgramProjectionTests,
 TEST_P(GeodeFilterProgramProjectionTests, WgslDeviceReceivesTheAuthoredWgsl) {
   ProjectionCapturingDevice device(gpu::ShaderSourceKind::Wgsl);
 
-  CreateReflectedProgram(device, GetParam().wgsl(), GetParam().name);
+  const RuntimeComputeProgram program =
+      CreateReflectedProgram(device, GetParam().wgsl(), &GetParam().native(), GetParam().name);
 
   EXPECT_THAT(device.lastDescriptor(), CarriesTheAuthoredWgslOf(GetParam().wgsl()));
+  EXPECT_THAT(program.pipeline.isValid(), IsTrue());
 }
 
 TEST_P(GeodeFilterProgramProjectionTests, NativeDeviceReceivesThePlatformProjection) {
   ProjectionCapturingDevice device(kPlatformNativeKind);
 
-  CreateReflectedProgram(device, GetParam().wgsl(), GetParam().name);
+  const RuntimeComputeProgram program =
+      CreateReflectedProgram(device, GetParam().wgsl(), &GetParam().native(), GetParam().name);
 
   EXPECT_THAT(device.lastDescriptor(), CarriesTheNativeProjectionOf(GetParam().native()));
+  EXPECT_THAT(program.pipeline.isValid(), IsTrue());
+}
+
+TEST_P(GeodeFilterProgramProjectionTests, SourceKindTheLinkedArtifactLacksBuildsNoProgram) {
+  ProjectionCapturingDevice device(kUnlinkedNativeKind);
+
+  const RuntimeComputeProgram program =
+      CreateReflectedProgram(device, GetParam().wgsl(), &GetParam().native(), GetParam().name);
+
+  EXPECT_THAT(program.shaderModule.isValid(), IsFalse());
+  EXPECT_THAT(program.pipeline.isValid(), IsFalse());
 }
 
 TEST(GeodeSnapshotReadbackProjectionTests, WgslDeviceReceivesTheAuthoredWgsl) {
@@ -336,6 +351,15 @@ TEST(GeodeSnapshotReadbackProjectionTests, NativeDeviceReceivesThePlatformProjec
   EXPECT_THAT(
       device.lastDescriptor(),
       CarriesTheNativeProjectionOf(gpu::shader::programs::SnapshotUnpremultiplyNativeShader()));
+}
+
+TEST(GeodeSnapshotReadbackProjectionTests, SourceKindTheLinkedArtifactLacksIsRefused) {
+  ProjectionCapturingDevice device(kUnlinkedNativeKind);
+
+  const GeodeSnapshotReadbackPipeline pipeline(device);
+
+  EXPECT_THAT(pipeline.valid(), IsFalse());
+  EXPECT_THAT(device.lastDescriptor().sourceText, IsEmpty());
 }
 
 }  // namespace

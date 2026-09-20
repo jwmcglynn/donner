@@ -15,8 +15,7 @@ namespace {
 /// WebAssembly package never links.
 /// @param device Device the pipeline is created on.
 const gpu::shader::CompiledShaderView& SelectCheckerboardShader(const gpu::Device& device) {
-  return SelectShaderProjection(device, gpu::shader::programs::CheckerboardShader(),
-                                DONNER_GEODE_NATIVE_SHADER(Checkerboard));
+  return SelectShaderProjection(device, DONNER_GEODE_SHADER_ARTIFACTS(Checkerboard));
 }
 
 /// True when \p shader exposes the vertex/fragment pair and its uniform block.

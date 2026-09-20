@@ -9,23 +9,19 @@
 namespace donner::geode {
 
 gpu::Result<gpu::ShaderModule> createSlugFillShader(gpu::Device& device) {
-  return CreateShaderModule(device, gpu::shader::programs::SlugFillShader(),
-                            DONNER_GEODE_NATIVE_SHADER(SlugFill), "Slug fill");
+  return CreateShaderModule(device, DONNER_GEODE_SHADER_ARTIFACTS(SlugFill), "Slug fill");
 }
 
 gpu::Result<gpu::ShaderModule> createSlugGradientShader(gpu::Device& device) {
-  return CreateShaderModule(device, gpu::shader::programs::SlugGradientShader(),
-                            DONNER_GEODE_NATIVE_SHADER(SlugGradient), "SlugGradient");
+  return CreateShaderModule(device, DONNER_GEODE_SHADER_ARTIFACTS(SlugGradient), "SlugGradient");
 }
 
 gpu::Result<gpu::ShaderModule> createSlugMaskShader(gpu::Device& device) {
-  return CreateShaderModule(device, gpu::shader::programs::SlugMaskShader(),
-                            DONNER_GEODE_NATIVE_SHADER(SlugMask), "SlugMask");
+  return CreateShaderModule(device, DONNER_GEODE_SHADER_ARTIFACTS(SlugMask), "SlugMask");
 }
 
 gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
-  return CreateShaderModule(device, gpu::shader::programs::ImageBlitShader(),
-                            DONNER_GEODE_NATIVE_SHADER(ImageBlit), "ImageBlit");
+  return CreateShaderModule(device, DONNER_GEODE_SHADER_ARTIFACTS(ImageBlit), "ImageBlit");
 }
 
 }  // namespace donner::geode

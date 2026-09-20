@@ -385,6 +385,7 @@ donner_cc_library(
                ":checkerboard_pipeline",
                ":geode_counters",
                ":geode_gpu_wait",
+               ":geode_shader_selection",
                ":geode_shaders",
                ":geode_wgpu_util",
                "//donner/base",

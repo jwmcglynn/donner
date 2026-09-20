@@ -12,6 +12,7 @@
 #include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
+#include "donner/svg/renderer/geode/GeodeShaderSelection.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -161,7 +162,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 
 GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device) {
   const gpu::shader::CompiledShaderView& shader =
-      gpu::shader::programs::SnapshotUnpremultiplyShader();
+      SelectShaderProjection(device, DONNER_GEODE_SHADER_ARTIFACTS(SnapshotUnpremultiply));
   const gpu::shader::ShaderResource* input = shader.resource("inputTexture");
   const gpu::shader::ShaderResource* output = shader.resource("outputTexture");
   if (input == nullptr || output == nullptr || shader.entryPoints.size() != 1 ||
