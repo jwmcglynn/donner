@@ -550,9 +550,16 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
 /// The key covers the stroke style, the device-derived flattening tolerance, and whether the
 /// outline was built from a host-space `non-scaling-stroke` centerline.
 bool StrokeSlotMatches(const geode::GeodePathCacheComponent::StrokeSlot& slot,
-                       const StrokeStyle& strokeStyle, double flattenTolerance, bool hostSpace) {
-  return slot.strokeKey == strokeStyle && slot.flattenTolerance == flattenTolerance &&
-         slot.hostSpace == hostSpace;
+                       const StrokeStyle& strokeStyle, double flattenTolerance,
+                       const std::optional<Transform2d>& hostFromLocal) {
+  if (slot.hostFromLocal.has_value() != hostFromLocal.has_value()) {
+    return false;
+  }
+  if (hostFromLocal.has_value() && *slot.hostFromLocal != *hostFromLocal) {
+    return false;
+  }
+
+  return slot.strokeKey == strokeStyle && slot.flattenTolerance == flattenTolerance;
 }
 
 /// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
@@ -2388,9 +2395,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
                                    frame.filterBufferOffsetX, frame.filterBufferOffsetY};
-    return ComputeGeodeLocalRasterGeometry(
-        frame.filterGraph, frame.filterRegion, frame.deviceFromFilter, buffer,
-        !frame.localRasterRequiredForBudget);
+    return ComputeGeodeLocalRasterGeometry(frame.filterGraph, frame.filterRegion,
+                                           frame.deviceFromFilter, buffer,
+                                           !frame.localRasterRequiredForBudget);
   }
 
   TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
@@ -4415,7 +4422,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
-                                 const StrokeStyle& strokeStyle, bool hostSpace) {
+                                 const StrokeStyle& strokeStyle,
+                                 const std::optional<Transform2d>& hostFromLocal) {
     StrokeDerived result;
     // Device-aware flattening tolerance for this draw. Part of the cache key
     // below: a zoom change that crosses a scale bucket must re-flatten instead
@@ -4427,7 +4435,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           documentGeometryBudget(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
       if (cache.strokeSlot.has_value() &&
-          StrokeSlotMatches(*cache.strokeSlot, strokeStyle, flattenTolerance, hostSpace)) {
+          StrokeSlotMatches(*cache.strokeSlot, strokeStyle, flattenTolerance, hostFromLocal)) {
         result.strokedPath = &cache.strokeSlot->strokedPath;
         result.encoded = &cache.strokeSlot->strokedEncode;
         result.persistent = true;
@@ -4453,7 +4461,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         geode::GeodePathCacheComponent::StrokeSlot candidate{
             .strokeKey = strokeStyle,
             .flattenTolerance = flattenTolerance,
-            .hostSpace = hostSpace,
+            .hostFromLocal = hostFromLocal,
             .strokedPath = std::move(stroked),
             .strokedEncode = std::move(*encoded),
             .strokeFillRule = fillRule,
@@ -4828,8 +4836,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       gpu::Result<gpu::Texture> created =
           device->adapterDevice().createTexture(gpu::TextureDescriptor{
               "RendererGeodeTarget",
-              gpu::Extent2d{static_cast<uint32_t>(pixelWidth),
-                            static_cast<uint32_t>(pixelHeight)},
+              gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
               geode::GpuTextureFormatFromWgpu(textureFormat),
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                   gpu::TextureUsage::Sampled});
@@ -6482,8 +6489,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // by `StrokeStyle` equality. A cache hit skips all three computations.
   const StrokeStyle strokeStyle = toStrokeStyle(stroke);
   const Impl::StrokeDerived strokeDerived =
-      impl_->getStrokeDerived(path.sourceEntity, drawPathGeometry, strokeStyle,
-                              path.hostSpaceStroke);
+      impl_->getStrokeDerived(path.sourceEntity, drawPathGeometry, strokeStyle, path.hostFromLocal);
   if (!strokeDerived.strokedPath) {
     return;
   }

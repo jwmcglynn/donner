@@ -24,6 +24,7 @@
 #include <optional>
 #include <vector>
 
+#include "donner/base/Transform.h"
 #include "tiny_skia/Path.h"
 
 namespace donner::svg::components {
@@ -55,6 +56,12 @@ struct TinySkiaPathCacheComponent {
   /// mirrors \ref openedPath for the dash-seam conversion.
   std::optional<tiny_skia::Path> hostSpaceClosedPath;
   std::optional<tiny_skia::Path> hostSpaceOpenedPath;
+
+  /// The element-to-host transform the two host-space slots were built from. Part of their key:
+  /// the entity-level invalidation only watches the spline, so a transform-only attribute write, a
+  /// canvas resize, or a second `<use>` instance in the same frame would otherwise be served the
+  /// previous CTM's geometry.
+  std::optional<Transform2d> hostFromLocal;
 };
 
 /// Per-entity cache of a `LoadedImageComponent`'s pixels converted from the straight-alpha

@@ -5,6 +5,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
+#include "donner/base/Transform.h"
 
 namespace donner::svg::components {
 
@@ -50,6 +51,30 @@ struct ComputedPathComponent {
   std::optional<RcString> sourcePathData;
 
   /**
+   * The transform that produced \ref cachedHostSpline, or `std::nullopt` when nothing is cached.
+   *
+   * Public and mutable for the same reason as \ref cachedLocalBounds: the component has to stay
+   * an aggregate.
+   */
+  mutable std::optional<Transform2d> cachedHostFromLocal;
+
+  /**
+   * Cache of \ref spline mapped through \ref cachedHostFromLocal. @see hostSpaceSpline.
+   *
+   * Retained for the component's lifetime once populated, like \ref cachedLocalBounds, and not
+   * released when an element stops resolving to a host-space stroke. A style change that turns
+   * `vector-effect` off therefore leaves one mapped path per shape behind until `ShapeSystem`
+   * replaces the component or the entity is destroyed. That is bounded by the geometry the
+   * document already holds (one extra copy of a spline that is itself retained), so it is not
+   * metered by the Geode geometry budget, which meters the encode and stroke-outline products
+   * built from it.
+   */
+  mutable Path cachedHostSpline;
+
+  /// Memoized arc length of \ref spline. @see localPathLength.
+  mutable std::optional<double> cachedLocalPathLength;
+
+  /**
    * Returns the tight fill bounds of the path in local (pre-transform) space.
    *
    * Memoized - `Path::bounds()` walks every command (O(N) in path size), so
@@ -74,6 +99,50 @@ struct ComputedPathComponent {
    */
   Box2d transformedBounds(const Transform2d& pathFromTarget) {
     return spline.transformedBounds(pathFromTarget);
+  }
+
+  /**
+   * Returns \ref spline mapped into host (root canvas) space by \p hostFromLocal.
+   *
+   * `vector-effect: non-scaling-stroke` under a non-similarity CTM is stroked from this geometry
+   * on every frame, so the mapped path is memoized here rather than rebuilt per draw. Both inputs
+   * are part of the key: the component's lifetime covers the spline (`ShapeSystem` replaces the
+   * component whenever the geometry changes, exactly as for \ref cachedLocalBounds), and the
+   * stored transform covers the CTM, which a transform-only DOM mutation, a canvas resize, or a
+   * second `<use>` instance of the same shape changes without touching the spline.
+   *
+   * One slot, so the memo pays off for one host-space instance of a shape per frame. Two `<use>`
+   * copies of one shape under different CTMs in the same frame are each correct, but they evict
+   * one another and rebuild the mapped path on every draw; the backends' own per-entity slots
+   * behave the same way. Multi-way caching is deliberately not implemented here.
+   *
+   * The returned reference is invalidated by the next call with a different transform.
+   *
+   * @param hostFromLocal Transform from the element's local space to host space.
+   */
+  const Path& hostSpaceSpline(const Transform2d& hostFromLocal) const {
+    if (!cachedHostFromLocal.has_value() || *cachedHostFromLocal != hostFromLocal) {
+      cachedHostSpline = spline.transformed(hostFromLocal);
+      cachedHostFromLocal = hostFromLocal;
+    }
+
+    return cachedHostSpline;
+  }
+
+  /**
+   * Returns the arc length of \ref spline in local (pre-transform) space.
+   *
+   * Memoized - `Path::pathLength()` subdivides every curve, and a dashed `pathLength` stroke asks
+   * for it on every draw. A pure function of the spline, so unlike \ref hostSpaceSpline it needs
+   * no key: the component's lifetime is the whole invalidation story, exactly as for
+   * \ref cachedLocalBounds.
+   */
+  double localPathLength() const {
+    if (!cachedLocalPathLength.has_value()) {
+      cachedLocalPathLength = spline.pathLength();
+    }
+
+    return *cachedLocalPathLength;
   }
 };
 
