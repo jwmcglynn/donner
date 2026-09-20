@@ -33,7 +33,10 @@ enum class ReparseScope : std::uint8_t {
   OpeningTag,      ///< Edit touched an element opening tag outside one attribute value.
   TextNode,        ///< Edit was contained inside a text-like node.
   ElementSubtree,  ///< Edit touched one element subtree.
-  Document,        ///< Edit requires whole-document fallback.
+  /// Edit matched no incremental scope. The bytes changed but the tree was left untouched;
+  /// callers that need the tree to match the source must reparse the document fresh, since
+  /// later incremental edits may never cover the unreconciled span.
+  Document,
 };
 
 /// Print a \ref ReparseScope.
@@ -151,6 +154,20 @@ public:
 
   /// Return the source version, or 0 for documents without a source store.
   std::uint64_t sourceVersion() const;
+
+  /**
+   * Return the pending source diagnostic, if any.
+   *
+   * Incremental source edits commit source bytes before reparsing; when the reparse fails, the
+   * tree keeps its last-valid state and the broken span is recorded until a later edit
+   * successfully reparses a fragment covering it. A set diagnostic therefore means the tree
+   * is stale relative to \ref source, and consumers that need current-source accuracy must
+   * fail closed instead of using stale ranges. A later success elsewhere never clears an
+   * unrelated broken span.
+   *
+   * Documents without a source store never carry a diagnostic.
+   */
+  std::optional<ParseDiagnostic> sourceDiagnostic() const;
 
   /// Get the mutable source store, or `nullptr` if this document does not own source text.
   XMLSourceStore* sourceStore();
@@ -271,6 +288,10 @@ public:
 
   /**
    * Install owned source text for this document.
+   *
+   * Pending unreparsed spans are cleared: the caller takes responsibility for rebuilding
+   * the tree against the new bytes (as the XML parser does), after which the tree matches
+   * the source again.
    *
    * @param source XML source text to own.
    * @param maximumSourceSize Maximum source size retained after later structured edits.

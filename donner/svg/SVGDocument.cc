@@ -1439,7 +1439,11 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
 
 std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {
   if (mutation.kind == xml::XMLMutation::Kind::SourceDiagnosticChanged) {
-    return mutation.diagnostic;
+    // A UI and invalidation signal only, never an edit failure: the wrapped XML result
+    // already carries this edit's own failure, while this mutation also fires when an
+    // unrelated older span shifts under a successful edit or finally clears. Propagating
+    // it would mark clean edits failed.
+    return std::nullopt;
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
