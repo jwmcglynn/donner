@@ -552,6 +552,32 @@ std::optional<XMLNode> XMLNode::nextSibling() const {
              : std::nullopt;
 }
 
+namespace {
+
+/// Advance from \p node over siblings that are not XML nodes.
+std::optional<XMLNode> XmlNodeAtOrAfter(std::optional<XMLNode> node) {
+  while (node.has_value()) {
+    if (std::optional<XMLNode> xmlNode = XMLNode::TryCast(node->entityHandle())) {
+      return xmlNode;
+    }
+    if (!node->entityHandle().all_of<TreeComponent>()) {
+      return std::nullopt;
+    }
+    node = node->nextSibling();
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+std::optional<XMLNode> XMLNode::firstXmlChild() const {
+  return XmlNodeAtOrAfter(firstChild());
+}
+
+std::optional<XMLNode> XMLNode::nextXmlSibling() const {
+  return XmlNodeAtOrAfter(nextSibling());
+}
+
 // `TreeMutationContext` is an invariant of any registry created through the document facades
 // (XMLDocument's ctor installs the basic XML defaults; SVGDocument overrides them with the
 // SVG-specific callbacks). We can therefore call through the context unconditionally instead of
