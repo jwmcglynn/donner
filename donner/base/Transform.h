@@ -2,6 +2,7 @@
 /// @file
 
 #include <cmath>
+#include <cstddef>
 #include <ostream>
 
 #include "donner/base/Box.h"
@@ -310,6 +311,25 @@ struct Transform2 {
     result.data[4] = data[4] * rhs.data[0] + data[5] * rhs.data[2] + rhs.data[4];
     result.data[5] = data[4] * rhs.data[1] + data[5] * rhs.data[3] + rhs.data[5];
     return result;
+  }
+
+  /**
+   * Exact element-wise equality.
+   *
+   * No epsilon: this is the comparison a cache key needs, where any difference in the producing
+   * transform means the cached derivative has to be rebuilt. Compare with an explicit tolerance
+   * instead when the two transforms went through different arithmetic.
+   *
+   * @param rhs Other transform.
+   */
+  bool operator==(const Transform2<T>& rhs) const {
+    for (size_t i = 0; i < 6; ++i) {
+      if (data[i] != rhs.data[i]) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /// Ostream output operator.

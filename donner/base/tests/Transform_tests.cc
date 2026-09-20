@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <limits>
+
 #include "donner/base/tests/BaseTestUtils.h"
 
 namespace donner {
@@ -370,6 +373,43 @@ TEST(Transform, ToSVGTransformStringGeneralMatrix) {
   t.data[4] = 10.0;
   t.data[5] = 20.0;
   EXPECT_EQ(toSVGTransformString(t), "matrix(1.5, 0.25, -0.25, 1.5, 10, 20)");
+}
+
+TEST(Transform, EqualityComparesEveryComponent) {
+  const Transform2d base = Transform2d::Scale({2.0, 3.0}) * Transform2d::Translate({10.0, 20.0});
+  EXPECT_TRUE(base == base);
+  EXPECT_TRUE(base == Transform2d::Scale({2.0, 3.0}) * Transform2d::Translate({10.0, 20.0}));
+
+  for (size_t i = 0; i < 6; ++i) {
+    Transform2d changed = base;
+    changed.data[i] += 1.0;
+    EXPECT_FALSE(base == changed) << "component " << i << " is not part of the comparison";
+    EXPECT_TRUE(base != changed) << "component " << i << " is not part of the comparison";
+  }
+}
+
+TEST(Transform, EqualityIsExactNotApproximate) {
+  Transform2d base;
+  Transform2d nudged = base;
+  nudged.data[0] = std::nextafter(base.data[0], 2.0);
+
+  ASSERT_NE(base.data[0], nudged.data[0]);
+  EXPECT_TRUE(base != nudged) << "a one-ulp difference must compare unequal";
+}
+
+TEST(Transform, EqualityIsFalseForNonFiniteComponents) {
+  Transform2d withNan;
+  withNan.data[3] = std::numeric_limits<double>::quiet_NaN();
+
+  // A NaN component is never equal to itself, so a cache keyed on such a transform can never hit.
+  // ResolveNonScalingStrokeMode keeps non-finite CTMs off the transform-keyed paths for exactly
+  // this reason.
+  EXPECT_FALSE(withNan == withNan);
+  EXPECT_TRUE(withNan != withNan);
+
+  Transform2d withInfinity;
+  withInfinity.data[4] = std::numeric_limits<double>::infinity();
+  EXPECT_TRUE(withInfinity == withInfinity) << "infinity compares equal to itself";
 }
 
 }  // namespace donner

@@ -620,6 +620,47 @@ TEST(Path, TransformedBoundsUsesTightTransformedPathNotTransformedLocalAabb) {
 }
 
 // =============================================================================
+// Path::transformed
+// =============================================================================
+
+TEST(Path, TransformedMapsEveryPointAndKeepsVerbs) {
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .lineTo({10, 0})
+                        .quadTo({12, 4}, {10, 8})
+                        .curveTo({6, 10}, {2, 10}, {0, 8})
+                        .closePath()
+                        .build();
+
+  const Transform2d transform = Transform2d::Scale({2, 3}) * Transform2d::Translate({5, -7});
+  const Path transformed = path.transformed(transform);
+
+  ASSERT_EQ(transformed.commands().size(), path.commands().size());
+  for (size_t i = 0; i < path.commands().size(); ++i) {
+    EXPECT_EQ(transformed.commands()[i], path.commands()[i]) << "command " << i;
+  }
+
+  ASSERT_EQ(transformed.points().size(), path.points().size());
+  for (size_t i = 0; i < path.points().size(); ++i) {
+    ExpectNear(transformed.points()[i], transform.transformPosition(path.points()[i]));
+  }
+}
+
+TEST(Path, TransformedIsExactForCurvesNotAFlattening) {
+  const Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 10}, {10, 10}, {10, 0}).build();
+  const Transform2d transform = Transform2d::Rotate(MathConstants<double>::kPi / 3.0);
+
+  const Path transformed = path.transformed(transform);
+  const Box2d expected = path.transformedBounds(transform);
+  ExpectNear(transformed.bounds().topLeft, expected.topLeft);
+  ExpectNear(transformed.bounds().bottomRight, expected.bottomRight);
+}
+
+TEST(Path, TransformedEmptyStaysEmpty) {
+  EXPECT_TRUE(Path().transformed(Transform2d::Translate({3, 4})).empty());
+}
+
+// =============================================================================
 // Path::pathLength
 // =============================================================================
 
