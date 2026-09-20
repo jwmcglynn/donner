@@ -15,6 +15,7 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Path.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -207,14 +208,15 @@ Vector2i CheckedRenderingSize(const RenderViewport& viewport) {
 /// at miter joins but never under-counts, which is the only direction that
 /// matters for a culling decision.
 ///
-/// \p worldFromEntity is the entity's canvas CTM; it is needed because
-/// `vector-effect: non-scaling-stroke` renders with the local stroke width
-/// pre-divided by the CTM's scale factor (see `toStrokeParams`), so the cull
-/// inflate must use that same adjusted width or a downscaling CTM would make
-/// the bounds under-count and wrongly cull a visible stroke.
-std::optional<Box2d> LocalDrawableBoundsWithStroke(const EntityHandle& dataHandle,
-                                                   const components::ComputedStyleComponent& style,
-                                                   const Transform2d& worldFromEntity) {
+/// The result is in device (surface) space. `vector-effect: non-scaling-stroke`
+/// strokes the centerline in host (root canvas) space at the authored width, so
+/// its bounds are computed there before the canvas-to-surface transform; an
+/// area-average inflation in local space would under-count under an anisotropic
+/// CTM and wrongly cull a visible stroke.
+std::optional<Box2d> DeviceDrawableBoundsWithStroke(const EntityHandle& dataHandle,
+                                                    const components::ComputedStyleComponent& style,
+                                                    const Transform2d& worldFromEntity,
+                                                    const Transform2d& surfaceFromCanvas) {
   const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
   if (!path) {
     // Text and <image> draws are not culled by this path for now: text
@@ -229,42 +231,28 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(const EntityHandle& dataHandl
   if (box.isEmpty()) {
     return std::nullopt;
   }
-  if (!style.properties.has_value()) {
-    return box;
-  }
 
-  const auto& props = style.properties.value();
-  // Value (not reference): `get()` returns a temporary optional, so binding a
-  // reference to its `.value()` would dangle. PaintServer is a small variant.
-  const PaintServer strokeServer = props.stroke.get().value();
-  if (strokeServer.is<PaintServer::None>()) {
-    return box;
-  }
+  if (style.properties.has_value()) {
+    const auto& props = style.properties.value();
+    // Value (not reference): `get()` returns a temporary optional, so binding a
+    // reference to its `.value()` would dangle. PaintServer is a small variant.
+    const PaintServer strokeServer = props.stroke.get().value();
+    const double strokeWidth = props.strokeWidth.get().value().value;
+    if (!strokeServer.is<PaintServer::None>() && strokeWidth > 0.0) {
+      const double halfStroke = strokeWidth * 0.5;
+      if (props.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
+        const Box2d hostBox = worldFromEntity.transformBox(box);
+        return surfaceFromCanvas.transformBox(
+            Box2d(hostBox.topLeft - Vector2d(halfStroke, halfStroke),
+                  hostBox.bottomRight + Vector2d(halfStroke, halfStroke)));
+      }
 
-  const double strokeWidth = props.strokeWidth.get().value().value;
-  if (strokeWidth <= 0.0) {
-    return box;
-  }
-
-  double halfStroke = strokeWidth * 0.5;
-
-  // Mirror the non-scaling-stroke width adjustment applied at draw time in
-  // `toStrokeParams`: the effective local stroke width is the authored width
-  // divided by the CTM's scale factor. Under a downscaling CTM the effective
-  // width is *larger* than the authored one, so inflating by the authored
-  // width would under-count and could cull a stroke that still reaches into
-  // the viewport. The guard conditions match `toStrokeParams` exactly so the
-  // cull bounds always cover what is actually drawn.
-  if (props.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
-    const double det = worldFromEntity.determinant();
-    const double scale = std::sqrt(std::abs(det));
-    if (std::isfinite(scale) && scale > 0.0) {
-      halfStroke /= scale;
+      box = Box2d(box.topLeft - Vector2d(halfStroke, halfStroke),
+                  box.bottomRight + Vector2d(halfStroke, halfStroke));
     }
   }
 
-  return Box2d(box.topLeft - Vector2d(halfStroke, halfStroke),
-               box.bottomRight + Vector2d(halfStroke, halfStroke));
+  return (worldFromEntity * surfaceFromCanvas).transformBox(box);
 }
 
 /// Return the SVG object bounding box used by objectBoundingBox effects.
@@ -567,7 +555,8 @@ PathShape toPathShape(EntityHandle sourceEntity,
 
 StrokeParams toStrokeParams(Registry& registry,
                             const components::RenderingInstanceComponent& instance,
-                            const components::ComputedStyleComponent& style) {
+                            const components::ComputedStyleComponent& style,
+                            bool compensateNonScalingStroke) {
   StrokeParams stroke;
   const auto& properties = style.properties.value();
 
@@ -599,17 +588,19 @@ StrokeParams toStrokeParams(Registry& registry,
     stroke.pathLength = pathLengthComp->value;
   }
 
-  // `vector-effect: non-scaling-stroke` keeps the stroke geometry constant in the coordinate
-  // system of the referencing viewport, ignoring the element's own transform and any viewBox
-  // scaling. Both renderer backends stroke by expanding the path outline in local (pre-transform)
-  // coordinates using this local stroke width, and then apply the element->canvas CTM to the
-  // resulting outline (so the stroke normally scales with the CTM like the geometry does). To hold
-  // the stroke constant in device/canvas space we therefore pre-divide the local stroke width (and
-  // the dash pattern) by the CTM's scale factor, so that after the CTM is applied the stroke lands
-  // at its authored width. We use sqrt(|det|) as the scalar scale, which is exact for uniform scale
-  // (the common viewBox / scale() case) and rotation-invariant; anisotropy under a non-uniform CTM
-  // is not preserved (that would require stroking in device space). See VectorEffect.h.
-  if (properties.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
+  // `vector-effect: non-scaling-stroke` keeps the stroke geometry constant in host (root canvas)
+  // space. When the element's CTM is a non-uniform scale or shear, path draws handle that exactly
+  // at the draw site by transforming the centerline into host space and stroking it there (see
+  // `drawPathWithPaintOrder`), so those draws pass `compensateNonScalingStroke=false` and receive
+  // the authored width here.
+  //
+  // A similarity CTM, a pattern-painted stroke, and text strokes keep the scalar approximation:
+  // pre-divide the local stroke width (and dash pattern) by sqrt(|det(CTM)|) so that after the
+  // element CTM is applied the stroke lands at its authored width. That scalar is exact for a
+  // similarity CTM; for text and pattern strokes it averages an anisotropic CTM, and exact
+  // coverage for those needs glyph or pattern geometry in host space and is a follow-up.
+  if (compensateNonScalingStroke &&
+      properties.vectorEffect.getOr(VectorEffect::None) == VectorEffect::NonScalingStroke) {
     const double det = instance.worldFromEntityTransform.determinant();
     const double scale = std::sqrt(std::abs(det));
     if (std::isfinite(scale) && scale > 0.0) {
@@ -625,6 +616,111 @@ StrokeParams toStrokeParams(Registry& registry,
   return stroke;
 }
 
+/// Returns \p path with every point mapped through \p transform. An affine transform maps Bézier
+/// control points exactly, so the verbs are preserved without flattening.
+Path TransformPath(const Path& path, const Transform2d& transform) {
+  PathBuilder builder;
+  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    switch (verb) {
+      case Path::Verb::MoveTo: builder.moveTo(transform.transformPosition(points[0])); break;
+      case Path::Verb::LineTo: builder.lineTo(transform.transformPosition(points[0])); break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[0]),
+                       transform.transformPosition(points[1]));
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[0]),
+                        transform.transformPosition(points[1]),
+                        transform.transformPosition(points[2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  });
+  return builder.build();
+}
+
+/// Builds the paint remap that carries a `non-scaling-stroke` paint server from the element's
+/// local space into host (root canvas) space.
+///
+/// The stroke centerline is transformed into host space and stroked there, but paint servers stay
+/// authored in local space. The remap's `entityFromContextTransform` composes the forward
+/// local-to-host transform onto the paint's resolved transform, and `contextBounds` preserves the
+/// authored local bounding box so `objectBoundingBox` paint units still resolve against the
+/// element's own box rather than the host-space geometry bounds.
+components::PaintContextRemap ComposeStrokeHostRemap(
+    const std::optional<components::PaintContextRemap>& existing, const Transform2d& hostFromLocal,
+    const Box2d& localBounds) {
+  components::PaintContextRemap remap;
+  if (existing) {
+    remap = *existing;
+    remap.entityFromContextTransform = remap.entityFromContextTransform * hostFromLocal;
+  } else {
+    remap.contextBounds = localBounds;
+    remap.entityFromContextTransform = hostFromLocal;
+  }
+  remap.resolveAtDrawTime = false;
+  return remap;
+}
+
+/// Returns whether \p transform's linear part is a similarity: uniform scale combined with
+/// rotation and optionally reflection.
+///
+/// Under a similarity the CTM's scale is exactly `sqrt(|det|)`, so `non-scaling-stroke` can keep
+/// the centerline in local space with a scalar width adjustment. That preserves the existing
+/// output for the common uniform-scale case; only a non-uniform scale or shear needs the exact
+/// host-space path.
+bool IsSimilarityTransform(const Transform2d& transform) {
+  // Layout is [a c e; b d f], so (a, b) and (c, d) are the two linear columns.
+  const double a = transform.data[0];
+  const double b = transform.data[1];
+  const double c = transform.data[2];
+  const double d = transform.data[3];
+
+  const double scaleSq = a * a + b * b;
+  if (!(scaleSq > 0.0) || !std::isfinite(scaleSq)) {
+    return false;
+  }
+
+  constexpr double kRelativeTolerance = 1e-9;
+  const double otherScaleSq = c * c + d * d;
+  if (!std::isfinite(otherScaleSq) ||
+      std::abs(otherScaleSq - scaleSq) > kRelativeTolerance * scaleSq) {
+    return false;
+  }
+
+  // Equal-length columns are a similarity exactly when they are orthogonal.
+  return std::abs(a * c + b * d) <= kRelativeTolerance * scaleSq;
+}
+
+/// Returns whether a shape's `non-scaling-stroke` needs the exact host-space path, rather than the
+/// scalar width adjustment that is exact under a similarity.
+///
+/// Pattern-painted strokes are excluded: a pattern's tile placement is built in path-local space
+/// and is not part of the stroke pass, so they keep the scalar compensation.
+bool NonScalingStrokeNeedsHostSpace(const components::RenderingInstanceComponent& instance,
+                                    const components::ComputedStyleComponent& style) {
+  if (style.properties->vectorEffect.getOr(VectorEffect::None) != VectorEffect::NonScalingStroke) {
+    return false;
+  }
+
+  const auto* strokeRef = std::get_if<components::PaintResolvedReference>(&instance.resolvedStroke);
+  if (strokeRef != nullptr &&
+      strokeRef->reference.handle.try_get<components::ComputedPatternComponent>() != nullptr) {
+    return false;
+  }
+
+  return !IsSimilarityTransform(instance.worldFromEntityTransform);
+}
+
+/// Returns whether a shape's stroke must be drawn by transforming its centerline into host (root
+/// canvas) space before stroking.
+bool UseHostSpaceStroke(const components::RenderingInstanceComponent& instance,
+                        const components::ComputedStyleComponent& style, const PaintParams& paint) {
+  return NonScalingStrokeNeedsHostSpace(instance, style) && paint.drawStrokeComponent &&
+         !std::holds_alternative<PaintServer::None>(paint.stroke) &&
+         paint.strokeParams.strokeWidth > 0.0;
+}
+
 PaintParams toPaintParams(Registry& registry,
                           const components::RenderingInstanceComponent& instance,
                           const components::ComputedStyleComponent& style) {
@@ -638,7 +734,13 @@ PaintParams toPaintParams(Registry& registry,
   paint.strokeOpacity = properties.strokeOpacity.get().value();
   paint.currentColor = properties.color.get().value();
   paint.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  paint.strokeParams = toStrokeParams(registry, instance, style);
+
+  // `non-scaling-stroke` keeps the scalar width adjustment when it is exact (a similarity CTM) or
+  // when the stroke pass cannot transform the geometry (a pattern-painted stroke); otherwise the
+  // draw site strokes the host-space centerline and receives the authored width here.
+  paint.strokeParams = toStrokeParams(
+      registry, instance, style,
+      /*compensateNonScalingStroke=*/!NonScalingStrokeNeedsHostSpace(instance, style));
 
   return paint;
 }
@@ -1197,7 +1299,8 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   // Always populate stroke params when there's any non-none stroke (solid, gradient, or pattern),
   // so that the renderer knows to stroke text outlines.
   if (!std::holds_alternative<PaintServer::None>(instance.resolvedStroke)) {
-    params.strokeParams = toStrokeParams(registry, instance, style);
+    params.strokeParams =
+        toStrokeParams(registry, instance, style, /*compensateNonScalingStroke=*/true);
   }
 
   params.fontFamilies = properties.fontFamily.get().value();
@@ -2359,13 +2462,11 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
-        if (const auto localBounds = LocalDrawableBoundsWithStroke(
-                instance.dataHandle(registry), style, instance.worldFromEntityTransform);
-            localBounds.has_value()) {
-          const Transform2d deviceFromLocal =
-              instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
-          const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
-          cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
+        if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
+                instance.dataHandle(registry), style, instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
+            deviceBounds.has_value()) {
+          cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
         }
       }
     }
@@ -2615,13 +2716,11 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
           std::any_of(localDeferred.begin(), localDeferred.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
-        if (const auto localBounds = LocalDrawableBoundsWithStroke(
-                instance.dataHandle(registry), style, instance.worldFromEntityTransform);
-            localBounds.has_value()) {
-          const Transform2d deviceFromLocal =
-              instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
-          const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
-          cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
+        if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
+                instance.dataHandle(registry), style, instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
+            deviceBounds.has_value()) {
+          cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
         }
       }
     }
@@ -3026,9 +3125,15 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
   const PaintOrder paintOrder = style.properties->paintOrder.get().value();
   const PathShape pathShape = toPathShape(instance.dataHandle(registry), path, style);
 
+  // `vector-effect: non-scaling-stroke` strokes the centerline in host (root canvas) space, so an
+  // anisotropic CTM or shear cannot distort the width or dash geometry. The fill still uses the
+  // element's own CTM, so the stroke is drawn as a separate pass with the centerline transformed
+  // forward into host space and its paint server remapped there.
+  const bool hostSpaceStroke = UseHostSpaceStroke(instance, style, paint);
+
   // Fast path: canonical order (fill, stroke, markers) is the common case and lets a
   // single drawPath emit both fill and stroke together.
-  if (paintOrder == PaintOrder{}) {
+  if (paintOrder == PaintOrder{} && !hostSpaceStroke) {
     renderer_.drawPath(pathShape, paint.strokeParams);
     drawMarkers(view, registry, instance, path, style);
     return;
@@ -3048,8 +3153,13 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
         PaintParams strokePaint = paint;
         strokePaint.drawFillComponent = false;
         strokePaint.drawStrokeComponent = true;
-        renderer_.setPaint(strokePaint);
-        renderer_.drawPath(pathShape, strokePaint.strokeParams);
+
+        if (hostSpaceStroke) {
+          drawHostSpaceStroke(instance, path, pathShape, strokePaint, deviceFromLocalForShape);
+        } else {
+          renderer_.setPaint(strokePaint);
+          renderer_.drawPath(pathShape, strokePaint.strokeParams);
+        }
         break;
       }
       case PaintComponent::Markers:
@@ -3066,6 +3176,29 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
   // Restore the combined paint state so subsequent draw calls for this instance
   // (and the post-draw bookkeeping) see the unmodified params.
   renderer_.setPaint(paint);
+}
+
+void RendererDriver::drawHostSpaceStroke(
+    const components::RenderingInstanceComponent& instance,
+    const components::ComputedPathComponent& path, const PathShape& pathShape,
+    const PaintParams& strokePaint, const Transform2d& deviceFromLocalForShape) {
+  // Draw the host-space path with the canvas-to-surface transform only, so the centerline is
+  // stroked after the element CTM has been applied.
+  const Transform2d hostFromLocal = instance.worldFromEntityTransform;
+  const Path hostPath = TransformPath(path.spline, hostFromLocal);
+  const PathShape hostShape{&hostPath, pathShape.fillRule, pathShape.sourceEntity,
+                            /*hostSpaceStroke=*/true};
+
+  PaintParams remappedPaint = strokePaint;
+  if (auto* hostRef = std::get_if<components::PaintResolvedReference>(&remappedPaint.stroke)) {
+    hostRef->contextRemap =
+        ComposeStrokeHostRemap(hostRef->contextRemap, hostFromLocal, path.localBounds());
+  }
+
+  renderer_.setTransform(surfaceFromCanvasTransform_);
+  renderer_.setPaint(remappedPaint);
+  renderer_.drawPath(hostShape, remappedPaint.strokeParams);
+  renderer_.setTransform(deviceFromLocalForShape);
 }
 
 void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry,

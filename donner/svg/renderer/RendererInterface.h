@@ -767,6 +767,12 @@ struct PathShape {
   /// it null and backends fall back to the un-cached path.
   EntityHandle sourceEntity;
 
+  /// True when this geometry is a `vector-effect: non-scaling-stroke` centerline already
+  /// transformed into host (root canvas) space, rather than the element's local-space geometry.
+  /// Backends cache per-entity geometry, so they must keep this variant in a distinct slot from
+  /// the local-space fill/stroke conversion of the same entity.
+  bool hostSpaceStroke = false;
+
   /// Geometry to draw, with a null `path` reading as the empty path. The returned reference
   /// is not bound to this `PathShape`: it names either the pointee or a shared empty path
   /// with static storage, so it stays valid after the view itself goes away.

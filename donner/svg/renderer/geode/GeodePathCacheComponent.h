@@ -66,6 +66,12 @@ struct GeodePathCacheComponent {
     /// stable across a continuous zoom.
     double flattenTolerance = 0.0;
 
+    /// Third half of the equality key: whether the cached outline was built from a
+    /// `vector-effect: non-scaling-stroke` centerline already transformed into host space.
+    /// A runtime change of the element's `vector-effect` keeps the same `StrokeStyle`, so
+    /// without this flag the slot could serve a local-space outline for a host-space draw.
+    bool hostSpace = false;
+
     /// Cached `Path::strokeToFill` output. Reused across draws of
     /// the same entity + stroke-key combination.
     Path strokedPath;

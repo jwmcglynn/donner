@@ -293,8 +293,9 @@ inspection changes several classifications:
   category cases are active.
 - `image-rendering` carries the full CSS value set through `<image>` and `<feImage>` on both
   renderers. Two legacy `optimizeSpeed` reference cases retain a nearest-grid oracle disagreement.
-- `non-scaling-stroke` changes output and adjusts culling, but its determinant-based scalar is exact
-  only for uniform scale and rotation. Text and hit-testing need separate coverage.
+- `non-scaling-stroke` strokes path centerlines in host space and adjusts culling from the same
+  exact bounds, so width and dashes are exact under general affine transforms. Text strokes,
+  pattern-painted strokes, and hit-testing still need separate coverage.
 - `pointer-events` affects path and link hit-testing, but its complete SVG value matrix is not
   applied to every drawable kind or clipping case.
 - `cursor` has complete typed keyword parsing plus authored `url()`/hotspot lists, cascade,

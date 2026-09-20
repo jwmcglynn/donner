@@ -23,13 +23,12 @@ enum class VectorEffect : uint8_t {
                      ///< system of the referencing viewport, ignoring the element's own transform
                      ///< and viewBox scaling.
                      ///<
-                     ///< Known limitation: the implementation compensates with a scalar factor,
-                     ///< `sqrt(|det(CTM)|)`, which is exact for uniform scale and rotation but
-                     ///< averages a non-uniform scale (e.g. `scale(2, 1)` or
-                     ///< `preserveAspectRatio="none"`), so strokes under an anisotropic CTM are
-                     ///< not held at a constant device width. Full conformance would require
-                     ///< stroking the path in device space instead of pre-dividing the local
-                     ///< stroke width; see `toStrokeParams` in RendererDriver.cc.
+                     ///< For paths, the centerline is transformed forward into host (root
+                     ///< canvas) space and dashed and stroked there, so uniform scaling,
+                     ///< non-uniform scaling, and shear all preserve the authored width and dash
+                     ///< lengths. Stroke paint servers stay authored in the element's user space
+                     ///< and are remapped onto the host-space outline. Text strokes and
+                     ///< pattern-painted strokes still use a scalar geometric-mean approximation.
   NonScalingSize,    ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
   NonRotation,       ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
   FixedPosition,     ///< At-risk in SVG 2 CR. Parses but is treated as `none`.

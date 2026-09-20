@@ -276,6 +276,14 @@ private:
                               const components::ComputedPathComponent& path,
                               const components::ComputedStyleComponent& style,
                               const PaintParams& paint, const Transform2d& deviceFromLocalForShape);
+  /// Draw a `vector-effect: non-scaling-stroke` stroke by transforming the centerline into host
+  /// (root canvas) space and stroking it there, so an anisotropic CTM or shear cannot distort the
+  /// width or dash geometry. \p strokePaint is the shape's paint with only the stroke component
+  /// enabled.
+  void drawHostSpaceStroke(const components::RenderingInstanceComponent& instance,
+                           const components::ComputedPathComponent& path,
+                           const PathShape& pathShape, const PaintParams& strokePaint,
+                           const Transform2d& deviceFromLocalForShape);
   void drawMarkers(RenderingInstanceView& view, Registry& registry,
                    const components::RenderingInstanceComponent& instance,
                    const components::ComputedPathComponent& path,

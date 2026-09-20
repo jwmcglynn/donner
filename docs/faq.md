@@ -270,11 +270,10 @@ Other current-feature gap:
 
 Two behaviors that are often mistaken for bugs:
 
-- **`vector-effect="non-scaling-stroke"` is supported, with a non-uniform-scale limitation.** It
-  keeps stroke width and dash lengths constant under uniform scaling and rotation. A non-uniform
-  transform such as `scale(2, 1)` currently uses the transform's scalar geometric-mean scale, so
-  it cannot keep the stroke at one constant device width in every direction. See
-  \ref faq-stroke-scale.
+- **`vector-effect="non-scaling-stroke"` is supported.** It keeps stroke width and dash lengths
+  constant in host (root canvas) space under uniform and non-uniform scaling and shear: the path
+  centerline is transformed into host space before it is dashed and stroked, so an anisotropic
+  transform cannot stretch the stroke. See \ref faq-stroke-scale.
 - **An unknown element becomes an `SVGUnknownElement`.** It parses fine and lives in the DOM, but it
   has no geometry and renders nothing. See \ref faq-not-rendered.
 
@@ -392,17 +391,16 @@ SVG specifies this behavior: `stroke-width` is measured in user units, so scalin
 system (a large `viewBox` mapped into a small viewport, or a `transform`) scales the stroke along
 with the geometry. A shape scaled 2x gets a stroke twice as thick.
 
-Use `vector-effect="non-scaling-stroke"` to hold the stroke width and dash pattern constant under
-uniform scaling and rotation. Donner applies the property in both renderer backends and includes
-the adjusted stroke width in viewport culling, so a downscaled non-scaling stroke is not clipped
-merely because its authored path bounds are small.
+Use `vector-effect="non-scaling-stroke"` to hold the stroke width and dash pattern constant in the
+renderer's host (root canvas) space. Donner applies the property in both renderer backends and
+includes the exact host-space stroke bounds in viewport culling, so a downscaled non-scaling stroke
+is not clipped merely because its authored path bounds are small.
 
-The current implementation compensates before stroking with the scalar geometric-mean scale of the
-element's transform. That is exact for uniform scale and rotation, but a non-uniform transform such
-as `scale(2, 1)` cannot be represented by one scalar stroke width. Under such transforms the stroke
-is only an approximation of a constant device-space width. If that distinction matters, apply the
-non-uniform scale to the geometry's coordinates and leave the stroked coordinate space unscaled.
-See \ref xml_path and \ref faq-path-api for setting geometry.
+For paths, the centerline is transformed forward into host space and dashed and stroked there, so
+uniform scaling, non-uniform scaling, and shear all preserve the authored width and dash lengths.
+Stroke paint servers remain authored in the element's user space and are mapped onto the host-space
+outline. Text strokes and pattern-painted strokes still use the earlier scalar geometric-mean
+approximation. See \ref xml_path and \ref faq-path-api for setting geometry.
 
 <div class="section_buttons">
 

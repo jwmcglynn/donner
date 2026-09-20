@@ -48,6 +48,13 @@ struct TinySkiaPathCacheComponent {
   /// dash-stroke path that has to emit caps at a closed contour's seam, so it is filled in on
   /// demand rather than alongside \ref closedPath.
   std::optional<tiny_skia::Path> openedPath;
+
+  /// Conversion of a `vector-effect: non-scaling-stroke` centerline transformed into host space.
+  /// Kept apart from \ref closedPath because the same entity's local-space geometry is also
+  /// converted for its fill, and the two must never be served for each other. The second slot
+  /// mirrors \ref openedPath for the dash-seam conversion.
+  std::optional<tiny_skia::Path> hostSpaceClosedPath;
+  std::optional<tiny_skia::Path> hostSpaceOpenedPath;
 };
 
 /// Per-entity cache of a `LoadedImageComponent`'s pixels converted from the straight-alpha
