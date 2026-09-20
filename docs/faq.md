@@ -392,15 +392,18 @@ system (a large `viewBox` mapped into a small viewport, or a `transform`) scales
 with the geometry. A shape scaled 2x gets a stroke twice as thick.
 
 Use `vector-effect="non-scaling-stroke"` to hold the stroke width and dash pattern constant in the
-renderer's host (root canvas) space. Donner applies the property in both renderer backends and
-includes the exact host-space stroke bounds in viewport culling, so a downscaled non-scaling stroke
-is not clipped merely because its authored path bounds are small.
+renderer's host (root canvas) space. Donner applies the property in both renderer backends, and
+viewport culling inflates the centerline bounds in whichever space the stroke is actually expanded
+in, so a downscaled non-scaling stroke is not clipped merely because its authored path bounds are
+small. Those culling bounds are the exact host-space stroke extent only for strokes that are drawn
+in host space; for the local-space cases below the cull uses the adjusted local width.
 
 For paths, the centerline is transformed forward into host space and dashed and stroked there, so
 uniform scaling, non-uniform scaling, and shear all preserve the authored width and dash lengths.
 Stroke paint servers remain authored in the element's user space and are mapped onto the host-space
-outline. Text strokes and pattern-painted strokes still use the earlier scalar geometric-mean
-approximation. See \ref xml_path and \ref faq-path-api for setting geometry.
+outline. Text strokes and pattern-painted strokes are stroked in local space, so under an
+anisotropic transform their drawn width is the geometric mean of the two axis widths. See
+\ref xml_path and \ref faq-path-api for setting geometry.
 
 <div class="section_buttons">
 
