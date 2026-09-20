@@ -585,7 +585,9 @@ bool DiagnosticEquals(const std::optional<ParseDiagnostic>& lhs,
  * length change; spans the edit touches grow to the union, since the replacement bytes are
  * unvalidated. A pure insertion exactly at a span's start grows the span (the new bytes
  * precede its shifted content); a removal ending exactly there shifts it instead. Empty
- * spans at the edit boundaries stay put so a later covering reparse can still claim them.
+ * spans at the leading edit boundary stay put so a later covering reparse can still claim
+ * them; empty spans at the trailing boundary shift with the following content to keep
+ * tracking the post-edit gap.
  */
 SourceEditRange MapSpanThroughDelta(SourceEditRange span, const XMLSourceDelta& delta) {
   const std::size_t editStart = delta.offset;
@@ -639,8 +641,14 @@ void TranslateUnreparsedSpans(XMLDocument& document, const XMLSourceDelta& delta
       [](const XMLDocumentContext::UnreparsedSpan& lhs,
          const XMLDocumentContext::UnreparsedSpan& rhs) { return lhs.start < rhs.start; });
   std::vector<XMLDocumentContext::UnreparsedSpan> merged;
+  // Merge only on true overlap or exact equality. Touching spans stay separate so later
+  // narrow successes can clear each side independently; merging them would stick the gate
+  // until an unlikely covering reparse.
   for (auto& span : spans) {
-    if (!merged.empty() && span.start <= merged.back().end) {
+    const bool overlaps =
+        !merged.empty() && (span.start < merged.back().end ||
+                            (span.start == merged.back().start && span.end == merged.back().end));
+    if (overlaps) {
       merged.back().end = std::max(merged.back().end, span.end);
       if (span.sequence > merged.back().sequence) {
         merged.back().diagnostic = std::move(span.diagnostic);
@@ -660,33 +668,51 @@ void AddUnreparsedSpan(XMLDocument& document, std::size_t start, std::size_t end
   auto& spans = context.unreparsedSpans;
   std::size_t mergedStart = start;
   std::size_t mergedEnd = end;
-  // The set holds pairwise-disjoint spans, so one pass suffices: nothing skipped early can
-  // overlap the final union without overlapping an already-merged member.
-  spans.erase(std::remove_if(spans.begin(), spans.end(),
-                             [&](const XMLDocumentContext::UnreparsedSpan& span) {
-                               const bool overlaps =
-                                   span.start <= mergedEnd && mergedStart <= span.end;
-                               if (overlaps) {
-                                 mergedStart = std::min(mergedStart, span.start);
-                                 mergedEnd = std::max(mergedEnd, span.end);
-                               }
-                               return overlaps;
-                             }),
-              spans.end());
+  // The set holds pairwise non-overlapping spans (touching allowed), so one pass suffices:
+  // nothing skipped early can overlap the final union without overlapping an
+  // already-merged member. Touching spans stay separate so each side can clear
+  // independently; exact duplicates still merge.
+  spans.erase(
+      std::remove_if(spans.begin(), spans.end(),
+                     [&](const XMLDocumentContext::UnreparsedSpan& span) {
+                       const bool overlaps = span.start < mergedEnd && mergedStart < span.end;
+                       const bool equal = span.start == mergedStart && span.end == mergedEnd;
+                       if (overlaps || equal) {
+                         mergedStart = std::min(mergedStart, span.start);
+                         mergedEnd = std::max(mergedEnd, span.end);
+                       }
+                       return overlaps || equal;
+                     }),
+      spans.end());
   spans.push_back(
       {mergedStart, mergedEnd, std::move(diagnostic), ++context.unreparsedSpanSequence});
+  // Bound the set: past the cap, coalesce to the whole document with the newest failure.
+  // Clearing then needs a covering reparse (or a fresh parse for degenerate empty-source
+  // states), which trades precision for bounded memory in pathological failure loops.
+  constexpr std::size_t kMaxUnreparsedSpans = 64;
+  if (spans.size() > kMaxUnreparsedSpans) {
+    auto newest = std::max_element(
+        spans.begin(), spans.end(),
+        [](const XMLDocumentContext::UnreparsedSpan& lhs,
+           const XMLDocumentContext::UnreparsedSpan& rhs) { return lhs.sequence < rhs.sequence; });
+    ParseDiagnostic diagnostic = std::move(newest->diagnostic);
+    const std::uint64_t sequence = newest->sequence;
+    spans.clear();
+    spans.push_back({0, document.source().size(), std::move(diagnostic), sequence});
+  }
 }
 
 /**
  * Return true when a successfully validated fragment covers a pending span. Non-empty spans
- * are covered by containment; empty spans only by strict interior (a reparse does not see
- * past its edges, so absence at a boundary stays unvalidated) or by an exactly equal empty
- * fragment (a deletion consumed the broken point).
+ * are covered by containment; empty spans only by strict interior, since a reparse does not
+ * see past its edges and absence at a boundary stays unvalidated. Deletions that consume
+ * broken bytes clear through DropSpansConsumedByRemoval instead, which runs before mapping
+ * and can tell consumed bytes from an abutting gap.
  */
 bool SpanCoveredBy(const XMLDocumentContext::UnreparsedSpan& span, std::size_t start,
                    std::size_t end) {
   if (span.start == span.end) {
-    return (start < span.start && span.start < end) || (start == span.start && span.end == end);
+    return start < span.start && span.start < end;
   }
   return start <= span.start && span.end <= end;
 }
@@ -702,6 +728,8 @@ void RemoveCoveredSpans(XMLDocument& document, std::size_t start, std::size_t en
 }
 
 /// Derive the surfaced diagnostic from the pending spans: the newest failure, verbatim.
+/// After a merge this may name already-fixed bytes until the union clears; fail-closed and
+/// safe, potentially stale as a UI message.
 std::optional<ParseDiagnostic> DerivedSourceDiagnostic(const XMLDocument& document) {
   const auto& spans = document.sharedRegistry()->ctx().get<XMLDocumentContext>().unreparsedSpans;
   if (spans.empty()) {
@@ -838,14 +866,39 @@ void RemoveSpansCoveredByAny(XMLDocument& document, const std::vector<SourceEdit
 }
 
 /**
+ * Drop spans a constructed removal consumed: spans whose bytes lie fully inside the removed
+ * range are gone along with the mirrored tree content. This runs before mapping, while
+ * consumed bytes are still distinguishable from an abutting gap: an empty span at the
+ * removal edge marks a gap beside surviving content and must stay.
+ */
+void DropSpansConsumedByRemoval(XMLDocument& document, const XMLSourceDelta& delta) {
+  if (delta.removedLength == 0) {
+    return;
+  }
+  const std::size_t removeStart = delta.offset;
+  const std::size_t removeEnd = delta.offset + delta.removedLength;
+  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
+  spans.erase(std::remove_if(spans.begin(), spans.end(),
+                             [&](const XMLDocumentContext::UnreparsedSpan& span) {
+                               if (span.start < removeStart || span.end > removeEnd) {
+                                 return false;
+                               }
+                               return span.start < span.end ||
+                                      (removeStart < span.start && span.start < removeEnd);
+                             }),
+              spans.end());
+}
+
+/**
  * Maintain spans after a DOM entry point changed source bytes successfully. The written
- * regions are fresh by construction: tree surgery mirrored the splice, so covered spans are
- * revalidated.
+ * regions are fresh by construction: tree surgery mirrored the splice, so consumed spans
+ * drop and covered spans are revalidated.
  */
 void NoteConstructedSourceChange(XMLDocument& document, ApplySourceEditResult& result,
                                  const XMLNode& node) {
   const std::optional<ParseDiagnostic> before = DerivedSourceDiagnostic(document);
   for (const XMLSourceDelta& delta : result.sourceDeltas) {
+    DropSpansConsumedByRemoval(document, delta);
     TranslateUnreparsedSpans(document, delta);
   }
   RemoveSpansCoveredByAny(document, FinalReplacementSpans(result.sourceDeltas));

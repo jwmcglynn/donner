@@ -145,8 +145,9 @@ struct RootTag {
   bool found = false;
 };
 
-/// Find the document's root `<svg>` element: the first top-level element, which the
-/// parser requires to be an exact `svg` (matching `SVGParser`'s own root check).
+/// Find the document's root `<svg>` element: the first top-level element with local
+/// name `svg`, matching `SVGParser`'s own root check (which additionally enforces the
+/// namespace URI, so a wrong-namespace `<other:svg>` never reaches a parsed document).
 std::optional<xml::XMLNode> FindRootSvgElement(const xml::XMLDocument& xmlDocument) {
   for (std::optional<xml::XMLNode> child = xmlDocument.root().firstChild(); child.has_value();
        child = child->nextSibling()) {
@@ -206,7 +207,7 @@ RootTag ParseRootTag(std::string_view source, const xml::XMLNode& root) {
   } else {
     const std::optional<std::pair<std::size_t, std::size_t>> closeOffsets = RangeOffsets(*closeTag);
     if (!closeOffsets.has_value() || closeOffsets->first < result.bodyStart ||
-        closeOffsets->first > source.size()) {
+        closeOffsets->second > source.size()) {
       return result;
     }
     result.bodyEnd = closeOffsets->first;

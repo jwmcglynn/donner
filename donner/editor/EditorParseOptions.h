@@ -9,9 +9,10 @@ namespace donner::editor {
 /// the parser must PRESERVE user / `data-*` attributes in the DOM rather than
 /// dropping them - editor features read them back via `getAttribute` (e.g.
 /// `IsLocked` reads `data-donner-locked`), and a save must not silently lose the
-/// user's own attributes. The library default `disableUserAttributes = true` is
-/// correct for a strict renderer, not for an authoring tool. Every editor-side
-/// parse (document load, structural replace, clipboard validation) uses this.
+/// user's own attributes. This matches the library default; the explicit
+/// assignment below pins the requirement so a future default change cannot
+/// silently break authoring. Every editor-side parse (document load, structural
+/// replace, clipboard validation) uses this.
 inline svg::parser::SVGParser::Options EditorParseOptions() {
   svg::parser::SVGParser::Options options;
   options.disableUserAttributes = false;

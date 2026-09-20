@@ -50,6 +50,8 @@ std::optional<std::size_t> FindReusableChild(const XMLNode& parsedChild,
                                              const std::vector<XMLNode>& oldChildren,
                                              const std::vector<bool>& usedChildren);
 bool HasCompatibleNodeIdentity(const XMLNode& target, const XMLNode& parsedNode);
+void AddUnreparsedSpan(XMLDocument& document, std::size_t start, std::size_t end,
+                       ParseDiagnostic diagnostic);
 
 }  // namespace internal
 
@@ -306,6 +308,88 @@ TEST_F(XMLDocumentTests, SourceDiagnosticTracksIndependentSpansSeparately) {
   ASSERT_TRUE(secondFixed.applied);
   EXPECT_FALSE(secondFixed.diagnostic.has_value());
   EXPECT_FALSE(doc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, DomRemovalKeepsAbuttingGapSpan) {
+  XMLDocument doc = ParseDocument("<root><a/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const std::size_t bStart = doc.source().find("<b/>");
+  ASSERT_NE(bStart, std::string_view::npos);
+
+  // A gap exactly at the removal start outlives the deleted bytes beside it: the
+  // missing bytes are still missing after the node is gone.
+  context.unreparsedSpans.push_back(
+      {bStart, bStart,
+       ParseDiagnostic::Error("seeded",
+                              SourceRange{FileOffset::Offset(bStart), FileOffset::Offset(bStart)}),
+       1});
+  XMLNode root = doc.root().firstChild().value();
+  ApplySourceEditResult removed = doc.removeNode(ElementChild(root, 1));
+  ASSERT_TRUE(removed.applied);
+  EXPECT_TRUE(doc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, DomRemovalConsumesBrokenBytesSpan) {
+  XMLDocument doc = ParseDocument("<root><a/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const std::size_t bStart = doc.source().find("<b/>");
+  ASSERT_NE(bStart, std::string_view::npos);
+
+  // Broken bytes fully inside the removed range clear with the mirrored tree content.
+  context.unreparsedSpans.push_back(
+      {bStart, bStart + 4,
+       ParseDiagnostic::Error(
+           "seeded", SourceRange{FileOffset::Offset(bStart), FileOffset::Offset(bStart + 4)}),
+       1});
+  XMLNode root = doc.root().firstChild().value();
+  ApplySourceEditResult removed = doc.removeNode(ElementChild(root, 1));
+  ASSERT_TRUE(removed.applied);
+  EXPECT_FALSE(doc.sourceDiagnostic().has_value());
+  EXPECT_THAT(MutationKinds(removed),
+              testing::Contains(XMLMutation::Kind::SourceDiagnosticChanged));
+}
+
+TEST_F(XMLDocumentTests, UnreparsedSpanMergingKeepsTouchingSeparate) {
+  XMLDocument doc = ParseDocument("<root><a/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const auto err = [](const char* reason) {
+    return ParseDiagnostic::Error(reason,
+                                  SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+  };
+
+  internal::AddUnreparsedSpan(doc, 0, 5, err("first"));
+  internal::AddUnreparsedSpan(doc, 5, 10, err("second"));
+  ASSERT_EQ(context.unreparsedSpans.size(), 2u);
+
+  internal::AddUnreparsedSpan(doc, 4, 8, err("third"));
+  ASSERT_EQ(context.unreparsedSpans.size(), 1u);
+  EXPECT_EQ(context.unreparsedSpans[0].start, 0u);
+  EXPECT_EQ(context.unreparsedSpans[0].end, 10u);
+  EXPECT_EQ(context.unreparsedSpans[0].diagnostic.reason, "third");
+
+  internal::AddUnreparsedSpan(doc, 0, 10, err("fourth"));
+  ASSERT_EQ(context.unreparsedSpans.size(), 1u);
+  EXPECT_EQ(context.unreparsedSpans[0].diagnostic.reason, "fourth");
+}
+
+TEST_F(XMLDocumentTests, UnreparsedSpansCoalescePastCap) {
+  const std::string xml = "<root>" + std::string(70, ' ') + "</root>";
+  XMLDocument doc = ParseDocument(xml);
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const auto err = [](const char* reason) {
+    return ParseDiagnostic::Error(reason,
+                                  SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+  };
+
+  for (int i = 0; i < 65; ++i) {
+    internal::AddUnreparsedSpan(doc, 10 + i, 10 + i, err("old"));
+  }
+  internal::AddUnreparsedSpan(doc, 75, 75, err("newest"));
+
+  ASSERT_EQ(context.unreparsedSpans.size(), 1u);
+  EXPECT_EQ(context.unreparsedSpans[0].start, 0u);
+  EXPECT_EQ(context.unreparsedSpans[0].end, doc.source().size());
+  EXPECT_EQ(context.unreparsedSpans[0].diagnostic.reason, "newest");
 }
 
 TEST_F(XMLDocumentTests, RootEntityHandleMatchesRootNode) {

@@ -87,11 +87,17 @@ struct XMLMutation {
 
 /// Result from \ref XMLDocument::applySourceEdit.
 struct ApplySourceEditResult {
-  bool applied = false;                         ///< True if source bytes were changed.
+  /// True if the operation fully applied: source bytes changed and the tree was updated
+  /// to match. A multi-step operation that fails partway still commits its completed
+  /// source replacements, so check \ref sourceDeltas for the exact record of committed
+  /// changes rather than assuming applied false means untouched bytes.
+  bool applied = false;
   ReparseScope scope = ReparseScope::Document;  ///< Reparse scope selected for the edit.
-  std::vector<XMLSourceDelta> sourceDeltas;     ///< Source edits applied by this operation.
-  std::vector<XMLMutation> mutations;           ///< DOM mutations emitted by this operation.
-  std::optional<ParseDiagnostic> diagnostic;    ///< Diagnostic if local reparsing failed.
+  /// Source edits committed by this operation, in order. Non-empty whenever source bytes
+  /// changed, even if the operation did not fully apply.
+  std::vector<XMLSourceDelta> sourceDeltas;
+  std::vector<XMLMutation> mutations;         ///< DOM mutations emitted by this operation.
+  std::optional<ParseDiagnostic> diagnostic;  ///< Diagnostic if local reparsing failed.
 };
 
 /**

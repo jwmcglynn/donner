@@ -457,13 +457,13 @@ TEST(ViewportSvgExportTest, RootScannerSkipsPrologCommentsDoctypeAndProcessingIn
   EXPECT_THAT(result.value, Not(HasSubstr("svg-not-root")));
 }
 
-// Regression tests carried from PR #1308, which this token-based exporter
+// Regression tests carried from PR #1308, which the tree-based exporter
 // supersedes. Each shape once desynchronized the old hand-rolled scan from the
-// XML parser; all markup boundaries below now come from the shared tokenizer.
+// XML parser; all markup boundaries below now come from parsed-tree locations.
 
 TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarkup) {
   // A processing instruction whose content contains `>` followed by an `<svg>`
-  // element forms one opaque PI token, so the PI-embedded element is never
+  // element is not an element node, so the PI-embedded element is never
   // mistaken for the document root.
   const SVGDocument doc = ParseOrDie(
       "<?editor data=\"a>b\"><svg id=\"not-the-root\" width=\"0\"/>?>"
@@ -484,8 +484,8 @@ TEST(ViewportSvgExportTest, RootScannerSkipsProcessingInstructionContainingMarku
 
 TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
   // A `?>` inside a quoted declaration value does not end the declaration
-  // (the tokenizer skips quoted spans, mirroring the parser), so the markup
-  // that follows it is not treated as the document root.
+  // (the parser skips quoted spans), so the markup that follows it is not
+  // treated as the document root.
   const SVGDocument doc = ParseOrDie(
       "<?xml version=\"1.0\" data='a?><svg id=\"not-the-root\" width=\"0\"/>'?>"
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
@@ -504,8 +504,9 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDeclarationWithQuotedTerminator) {
 }
 
 TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
-  // A `>` inside a doctype internal subset does not end the doctype; the whole
-  // doctype is one token, so subset content cannot become the root.
+  // A `>` inside a doctype internal subset does not end the doctype; the parser
+  // consumes the whole declaration as one node, so subset content cannot become
+  // the root.
   const SVGDocument doc = ParseOrDie(
       "<!DOCTYPE svg [<!ENTITY data \"a> <svg id='not-the-root' width='0'/>\">]>"
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
@@ -524,8 +525,9 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeInternalSubset) {
 }
 
 TEST(ViewportSvgExportTest, RootScannerFindsRootCloseBeforeTrailingComment) {
-  // A `</svg` sequence after the root inside a trailing comment sits inside a
-  // Comment token and cannot be mistaken for the root's closing tag.
+  // A `</svg` sequence after the root inside a trailing comment is comment text,
+  // and the body end comes from the root's own closing-tag location, so the
+  // comment cannot be mistaken for the root's closing tag.
   const SVGDocument doc = ParseOrDie(
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
       "<rect id=\"real-root-child\" width=\"10\" height=\"10\"/>"
@@ -565,9 +567,9 @@ TEST(ViewportSvgExportTest, RootScannerSkipsDoctypeEntityValuesWithBrackets) {
 }
 
 TEST(ViewportSvgExportTest, RootScannerFindsRootCloseAfterBodyDoctypeEntity) {
-  // A doctype inside the body whose entity value contains markup-like text is
-  // one token; the body still ends at the root's own `</svg>`, leaving the
-  // exported group balanced with a single close tag.
+  // A doctype inside the body whose entity value contains markup-like text is a
+  // single parsed node; the body still ends at the root's own `</svg>`, leaving
+  // the exported group balanced with a single close tag.
   const SVGDocument doc = ParseOrDie(
       "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
       "<!DOCTYPE d [<!ENTITY y ']><svg id=\"faux\">'>]>"
