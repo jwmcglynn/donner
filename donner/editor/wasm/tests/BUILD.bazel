@@ -340,6 +340,18 @@ js_test(
     node_options = ["--test"],
 )
 
+# Drives the canvas surface path of the GPU bridge's JavaScript library against a stub canvas and
+# a stub GPU device, so the library's own code runs under the normal test gate rather than only in
+# a browser. The C++ half of the bridge is covered separately by //donner/gpu/browser:browser_tests.
+js_test(
+    name = "browser_bridge_surface_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["//donner/gpu/browser:library_donner_gpu.js"],
+    entry_point = "browser-bridge-surface.spec.mjs",
+    node_options = ["--test"],
+)
+
 js_test(
     name = "playwright_bazel_config_tests",
     size = "small",

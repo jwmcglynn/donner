@@ -99,6 +99,41 @@ bool FindCall(const std::vector<std::string>& calls, std::string_view line) {
   return std::find(calls.begin(), calls.end(), line) != calls.end();
 }
 
+/// A descriptor naming the canvas a browser surface presents to.
+SurfaceDescriptor CanvasSurface() {
+  SurfaceDescriptor descriptor;
+  descriptor.label = RcString("canvas");
+  descriptor.native.kind = NativeSurfaceKind::CanvasSelector;
+  descriptor.native.selector = RcString("#canvas");
+  return descriptor;
+}
+
+/// A configuration a canvas surface accepts. @param size Extent to present at.
+SurfaceConfiguration CanvasConfiguration(Extent2d size) {
+  SurfaceConfiguration configuration;
+  configuration.format = TextureFormat::BGRA8Unorm;
+  configuration.usage = TextureUsage::RenderAttachment;
+  configuration.size = size;
+  configuration.alphaMode = SurfaceAlphaMode::Premultiplied;
+  return configuration;
+}
+
+/// The lines of \p calls that name a surface, in order.
+///
+/// Every browser-side surface call spells the word in its name or in its arguments, and nothing
+/// else in a transcript does, so this is the presentation sequence on its own: what a test of the
+/// frame contract asserts, rather than the presence of one line somewhere in the whole stream.
+/// @param calls Recorded lines.
+std::vector<std::string> SurfaceCalls(const std::vector<std::string>& calls) {
+  std::vector<std::string> selected;
+  for (const std::string& line : calls) {
+    if (line.find("urface") != std::string::npos) {
+      selected.push_back(line);
+    }
+  }
+  return selected;
+}
+
 }  // namespace
 
 TEST(BrowserDeviceRequest, PendingRequestYieldsNoDevice) {
@@ -954,6 +989,181 @@ TEST(BrowserDevice, DecodesOnlyTheSurfaceCapabilitiesItRecognizes) {
   EXPECT_THAT(capabilities.result().usages, TextureUsage::RenderAttachment);
   EXPECT_THAT(capabilities.result().presentModes, ElementsAre(PresentMode::Fifo));
   EXPECT_THAT(capabilities.result().alphaModes, ElementsAre(SurfaceAlphaMode::Premultiplied));
+}
+
+TEST(BrowserDevice, AcquiringBeforeConfiguringReachesNoCanvas) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+
+  // A canvas whose context has never been configured has no frame to give, so the refusal has to
+  // come before the browser is asked rather than from the browser refusing.
+  EXPECT_THAT(fixture.device->acquireCurrentTexture(surface.result()),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not been configured")));
+  EXPECT_THAT(SurfaceCalls(*calls), ElementsAre("createSurface id=1 canvas=#canvas"));
+  EXPECT_THAT(fixture.bridge->objectCount(), 1u);
+}
+
+TEST(BrowserDevice, AcquiringTwiceInOneFrameMintsNoSecondFrame) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  // A canvas holds one frame at a time, so a second acquisition inside the same frame is refused
+  // without a second identifier being minted for a frame the canvas never handed over.
+  EXPECT_THAT(fixture.device->acquireCurrentTexture(surface.result()),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not been presented")));
+  EXPECT_THAT(SurfaceCalls(*calls),
+              ElementsAre("createSurface id=1 canvas=#canvas",
+                          "configureSurface surface=1 format=2 usage=1 size=8x8 alphaMode=2",
+                          "acquireCurrentTexture surface=1 texture=2"));
+  EXPECT_THAT(fixture.bridge->objectCount(), 2u);
+}
+
+TEST(BrowserDevice, ReconfiguringASurfaceEndsTheFrameItHadAcquired) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+  ASSERT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), true);
+
+  // Reconfiguring is how a canvas follows its element's size, and it replaces the swap chain
+  // behind the context: the outstanding frame goes back before the new configuration is applied,
+  // and the next acquisition is a different frame rather than the same one renamed.
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{16, 16})),
+      IsOk());
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), false);
+
+  Result<SurfaceTexture> reacquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(reacquired, HasResult());
+  EXPECT_THAT(
+      SurfaceCalls(*calls),
+      ElementsAre("createSurface id=1 canvas=#canvas",
+                  "configureSurface surface=1 format=2 usage=1 size=8x8 alphaMode=2",
+                  "acquireCurrentTexture surface=1 texture=2", "abandonCurrentTexture surface=1",
+                  "configureSurface surface=1 format=2 usage=1 size=16x16 alphaMode=2",
+                  "acquireCurrentTexture surface=1 texture=3"));
+}
+
+TEST(BrowserDevice, DestroyingASurfaceLetsGoOfTheCanvasContextBehindIt) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(fixture.bridge->objectCount(), 1u);
+
+  ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
+
+  // The browser side holds a configured canvas context for as long as this device names it, so a
+  // destroyed surface has to say so: leaving it named keeps the canvas configured against a
+  // device the caller has finished with.
+  EXPECT_THAT(SurfaceCalls(*calls),
+              ElementsAre("createSurface id=1 canvas=#canvas", "destroyObject kind=surface id=1"));
+  EXPECT_THAT(fixture.bridge->objectCount(), 0u);
+  EXPECT_THAT(fixture.device->liveObjectCountForTest(), 0u);
+}
+
+TEST(BrowserDevice, DestroyingASurfaceHandsBackItsFrameBeforeLettingGoOfTheCanvas) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
+
+  // Order is the contract: the frame belongs to the canvas, so it goes back while the canvas is
+  // still named. Releasing the surface first would leave the browser holding a frame for a
+  // context nothing can name any more.
+  EXPECT_THAT(SurfaceCalls(*calls),
+              ElementsAre("createSurface id=1 canvas=#canvas",
+                          "configureSurface surface=1 format=2 usage=1 size=8x8 alphaMode=2",
+                          "acquireCurrentTexture surface=1 texture=2",
+                          "abandonCurrentTexture surface=1", "destroyObject kind=surface id=1"));
+  EXPECT_THAT(fixture.bridge->objectCount(), 0u);
+  EXPECT_THAT(fixture.device->liveObjectCountForTest(), 0u);
+}
+
+TEST(BrowserDevice, LosingTheDeviceDuringAFrameStillHandsTheFrameBack) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  fixture.bridge->lost = true;
+
+  // Loss is permanent and refuses everything that draws, but a frame already handed over still
+  // has to go back and the canvas context still has to be let go of: refusing releases would
+  // strand both for the life of the page.
+  ASSERT_THAT(fixture.device->abandonCurrentTexture(surface.result()), IsOk());
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), false);
+
+  ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
+  EXPECT_THAT(fixture.bridge->objectCount(), 0u);
+}
+
+TEST(BrowserDevice, SurfacesABrowserRefusalOfASurfaceIdentifier) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+
+  // The browser side checks the identifier and its kind on every surface call, not only on the
+  // one that created it, and what it reports is carried through as a handle failure rather than
+  // flattened into a generic error.
+  fixture.bridge->failOperation = "configureSurface";
+  fixture.bridge->failStatus = BridgeStatus::WrongObjectKind;
+  EXPECT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("object of another kind")));
+
+  fixture.bridge->failOperation.clear();
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+
+  fixture.bridge->failOperation = "acquireCurrentTexture";
+  fixture.bridge->failStatus = BridgeStatus::UnknownObject;
+  EXPECT_THAT(fixture.device->acquireCurrentTexture(surface.result()),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    HasSubstr("no object under this identifier")));
+  // A refused acquisition leaves no frame named on either side.
+  EXPECT_THAT(fixture.device->liveObjectCountForTest(), 1u);
+  EXPECT_THAT(fixture.bridge->objectCount(), 1u);
 }
 
 TEST(BrowserDevice, AcceptsOnlyTheWgslProjection) {
