@@ -1,5 +1,6 @@
 #include "donner/editor/TextToOutlines.h"
 
+#include <cassert>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -73,12 +74,47 @@ struct ResolvedPaint {
   std::string stroke;         ///< `stroke` value (`none`, hex, or `url(#id)`).
   std::string strokeWidth;    ///< `stroke-width` value.
   std::string strokeOpacity;  ///< `stroke-opacity` value.
+  /// `opacity` value to write onto the element this paint is serialized to. Unlike the paint
+  /// properties, `opacity` does not inherit and does not override an enclosing value - every
+  /// `opacity` between an element and the canvas multiplies - so this holds only the share of the
+  /// opacity the receiving element is responsible for.
+  std::string opacity;
 
   bool hasStroke() const { return stroke != "none"; }
 };
 
-/// Resolve the paint-affecting computed style of \p element into serialized SVG attribute strings.
-ResolvedPaint resolvePaint(const svg::SVGElement& element) {
+/// Computed `opacity` of \p element alone. `opacity` is not an inherited property, so this is the
+/// element's own value, independent of its ancestors.
+double ownOpacity(const svg::SVGElement& element) {
+  return element.getComputedStyle().opacity.getOr(1.0);
+}
+
+/// Effective `opacity` of the glyph run painted by \p source, relative to \p textRoot: the product
+/// of the own `opacity` of \p source and of every element between it and \p textRoot.
+///
+/// \p textRoot is excluded because its `opacity` rides on the outline group that replaces it;
+/// including it here would composite the root's opacity a second time on every run.
+double runOpacityBelowRoot(const svg::SVGElement& source, const svg::SVGElement& textRoot) {
+  double opacity = 1.0;
+  std::optional<svg::SVGElement> current = source;
+  while (current.has_value()) {
+    if (*current == textRoot) {
+      return opacity;
+    }
+    opacity *= ownOpacity(*current);
+    current = current->parentElement();
+  }
+
+  // Every glyph of a converted `<text>` is painted by that element or a descendant of it, so the
+  // walk above always reaches the text root. A source from outside that subtree contributes no
+  // opacity rather than a product over an unrelated ancestor chain.
+  assert(false && "glyph source is outside the converted text subtree");
+  return 1.0;
+}
+
+/// Resolve the paint-affecting computed style of \p element into serialized SVG attribute strings,
+/// carrying \p opacity as the receiving element's own `opacity`.
+ResolvedPaint resolvePaint(const svg::SVGElement& element, double opacity) {
   static constexpr css::RGBA kBlack = css::RGBA(0, 0, 0, 0xFF);
   const svg::PropertyRegistry& style = element.getComputedStyle();
 
@@ -96,6 +132,7 @@ ResolvedPaint resolvePaint(const svg::SVGElement& element) {
   paint.strokeWidth = std::string(
       std::string_view(style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None)).toRcString()));
   paint.strokeOpacity = detail::FormatNumberForSVG(style.strokeOpacity.getOr(1.0));
+  paint.opacity = detail::FormatNumberForSVG(opacity);
   return paint;
 }
 
@@ -175,6 +212,11 @@ void applyPaintOverrides(svg::SVGElement& pathElement, const ResolvedPaint& runP
       pathElement.setAttribute("stroke-opacity", runPaint.strokeOpacity);
     }
   }
+  // The run's opacity multiplies with the group's rather than replacing it, so it is written
+  // whenever the run is not fully opaque - never compared against the group's value.
+  if (runPaint.opacity != "1") {
+    pathElement.setAttribute("opacity", runPaint.opacity);
+  }
 }
 
 void applyGroupPaint(svg::SVGElement& groupElement, const ResolvedPaint& groupPaint) {
@@ -191,6 +233,9 @@ void applyGroupPaint(svg::SVGElement& groupElement, const ResolvedPaint& groupPa
     if (groupPaint.strokeOpacity != "1") {
       groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
     }
+  }
+  if (groupPaint.opacity != "1") {
+    groupElement.setAttribute("opacity", groupPaint.opacity);
   }
 }
 
@@ -227,21 +272,19 @@ ConvertTextToOutlinesResult buildDetachedTextOutlines(svg::SVGDocument& document
   group.setAttribute("data-donner-converted-from", "text");
   svg::SVGElement groupElement = group;
 
-  const ResolvedPaint groupPaint = resolvePaint(textElement);
+  // The text element's own `opacity` composites the whole run set as one layer, exactly as it did
+  // on the `<text>`; `transform` positions the outlined geometry. Carry both onto the group so it
+  // sits and composites where the text did.
+  const ResolvedPaint groupPaint = resolvePaint(textElement, ownOpacity(textElement));
   applyGroupPaint(groupElement, groupPaint);
-  // `opacity` is a (non-inherited) group property, and `transform` positions the outlined geometry;
-  // carry both from the text element so the group sits and composites exactly as the text did.
-  const std::string opacity =
-      detail::FormatNumberForSVG(textElement.getComputedStyle().opacity.getOr(1.0));
-  if (opacity != "1") {
-    groupElement.setAttribute("opacity", opacity);
-  }
   copyAttributeIfPresent(textElement, "transform", groupElement);
 
   // Build one detached `<path>` per placed glyph, in paint order. Empty glyph paths (e.g.
   // whitespace) are skipped - they contribute no geometry. Each path overrides the group paint
   // only where its source run's computed paint differs, so per-<tspan> fill/stroke is preserved
-  // without collapsing to the group level. Resolution is cached per contiguous same-source run.
+  // without collapsing to the group level, and carries the `opacity` of the spans between it and
+  // the `<text>`, which multiplies with the group's. Resolution is cached per contiguous
+  // same-source run.
   int pathIndex = 0;
   std::optional<svg::SVGElement> cachedSource;
   ResolvedPaint cachedPaint;
@@ -256,7 +299,7 @@ ConvertTextToOutlinesResult buildDetachedTextOutlines(svg::SVGDocument& document
     if (glyph.source != textElement) {
       if (!cachedSource.has_value() || *cachedSource != glyph.source) {
         cachedSource = glyph.source;
-        cachedPaint = resolvePaint(glyph.source);
+        cachedPaint = resolvePaint(glyph.source, runOpacityBelowRoot(glyph.source, textElement));
       }
       const ResolvedPaint& runPaint = cachedPaint;
 
