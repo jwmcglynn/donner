@@ -16,6 +16,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -41,6 +42,7 @@
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
+#include "donner/gpu/tests/SubmissionOrderScene.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
@@ -605,6 +607,53 @@ TEST_F(MetalSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
                              {},
                              bindings.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+/// A frame recorded by two independent encoder owners is one submission: the buffers execute in
+/// the order they were handed over, on one queue, and one serial covers both of them.
+TEST_F(MetalSolidFillTest, ASpanOfCommandBuffersExecutesInOrderUnderOneSerial) {
+  const auto module = gpu::tests::BuildSubmissionOrderModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitMsl(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  const auto bindings = shader::BufferBindingsOf(module.result());
+  ASSERT_THAT(bindings, HasResult());
+  gpu::tests::CheckSubmissionOrderAcrossCommandBuffers(
+      *device_,
+      ShaderModuleDescriptor{"submissionOrder",
+                             RcString(emitted.result()),
+                             ShaderSourceKind::Msl,
+                             {},
+                             {},
+                             bindings.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+/// A submission acquires every native command buffer before it commits any of them, and a Metal
+/// queue blocks the acquiring thread once its uncompleted buffers reach the queue's maximum. A
+/// buffer this submission still holds uncommitted can never complete, so a queue left at its
+/// default size would block here on work only this call could release. This submits the largest
+/// span the runtime accepts, which is well past that default.
+TEST_F(MetalSolidFillTest, ASpanAtTheSubmissionBoundDoesNotBlockOnItsOwnCommandBuffers) {
+  std::vector<CommandBuffer> span;
+  span.reserve(Device::kMaxCommandBuffersPerSubmission);
+  for (size_t i = 0; i < Device::kMaxCommandBuffersPerSubmission; ++i) {
+    auto encoder = device_->createCommandEncoder();
+    ASSERT_THAT(encoder, HasResult());
+    auto commands = encoder.result()->finish();
+    ASSERT_THAT(commands, HasResult());
+    span.push_back(std::move(commands).result());
+  }
+
+  const uint64_t before = device_->lastSubmittedSerial();
+  auto serial = device_->submit(span);
+  ASSERT_THAT(serial, HasResult());
+  EXPECT_THAT(serial.result(), testing::Eq(before + 1))
+      << Device::kMaxCommandBuffersPerSubmission << " command buffers must consume one serial";
+  EXPECT_THAT(device_->waitForSerial(serial.result(), 10.0), testing::IsTrue())
+      << "submission " << serial.result() << " did not complete";
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

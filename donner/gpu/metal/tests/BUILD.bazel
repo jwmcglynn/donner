@@ -72,6 +72,7 @@ donner_cc_test(
         "//donner/gpu:baseline_scene",
         "//donner/gpu:checkerboard_pixel_tests",
         "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:submission_order_scene",
         "//donner/gpu:vertex_input_slice",
         "//donner/gpu/baseline:frozen_baseline_policy",
         "//donner/gpu/metal:metal_device",

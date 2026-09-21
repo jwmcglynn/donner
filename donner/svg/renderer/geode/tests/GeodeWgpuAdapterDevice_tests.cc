@@ -876,6 +876,90 @@ TEST_F(GeodeWgpuAdapterDeviceTests, SubRectangleCopyHonorsBothOriginsWhenReplaye
   ExpectSubRectCopyResult(pixels);
 }
 
+/// A frame recorded by two independent encoder owners is one submission: the adapter encodes a
+/// buffer per element of the span, hands them to the queue together, and reports one serial.
+/// The second buffer copies what the first one wrote, so a queue that ran them out of order
+/// would copy the untouched destination instead.
+TEST_F(GeodeWgpuAdapterDeviceTests, ASpanOfCommandBuffersExecutesInOrderUnderOneSerial) {
+  const SubRectCopyScene scene = MakeSubRectCopyScene(*adapter_);
+  const gpu::Extent2d extent{gpu::tests::kSubRectCopyExtent, gpu::tests::kSubRectCopyExtent};
+  const gpu::Texture forwarded = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"subRectForwarded", extent, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+
+  std::unique_ptr<gpu::CommandEncoder> copyEncoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  RecordSubRectCopy(*copyEncoder, scene);
+  std::unique_ptr<gpu::CommandEncoder> forwardEncoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  EXPECT_THAT(forwardEncoder->copyTextureToTexture(scene.destination, forwarded, extent),
+              gpu::IsOk());
+
+  GeodeCounters counters;
+  geodeDevice_->setCounters(&counters);
+
+  std::array<gpu::CommandBuffer, 2> span{gpu::GetResultOrFail(copyEncoder->finish()),
+                                         gpu::GetResultOrFail(forwardEncoder->finish())};
+  const uint64_t serial = gpu::GetResultOrFail(adapter_->submit(span));
+
+  EXPECT_EQ(counters.submits, 1u) << "a two-buffer span must still reach the queue once";
+  EXPECT_THAT(adapter_->lastSubmittedSerial(), serial);
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "submission " << serial << " did not complete";
+  geodeDevice_->setCounters(nullptr);
+
+  const std::vector<uint8_t> pixels = ReadbackTexturePixels(
+      *geodeDevice_, adapter_->wgpuTextureOf(forwarded), gpu::tests::kSubRectCopyExtent);
+  ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "forwarded readback failed";
+  ExpectSubRectCopyResult(pixels);
+}
+
+/// The same span replayed into a host-owned encoder: every buffer records into that one encoder,
+/// in order, and the runtime still holds its serial back until the host reports its submit.
+TEST_F(GeodeWgpuAdapterDeviceTests, ASpanReplayedIntoAHostEncoderKeepsItsOrderAndOneSerial) {
+  const SubRectCopyScene scene = MakeSubRectCopyScene(*adapter_);
+  const gpu::Extent2d extent{gpu::tests::kSubRectCopyExtent, gpu::tests::kSubRectCopyExtent};
+  const gpu::Texture forwarded = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"subRectForwarded", extent, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+
+  wgpu::CommandEncoderDescriptor hostDescriptor = {};
+  ScopedWgpuHandle<wgpu::CommandEncoder> hostEncoder(
+      geodeDevice_->device().createCommandEncoder(hostDescriptor));
+  ASSERT_TRUE(static_cast<bool>(hostEncoder.get()));
+  adapter_->setHostCommandEncoder(hostEncoder.get());
+
+  std::unique_ptr<gpu::CommandEncoder> copyEncoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  RecordSubRectCopy(*copyEncoder, scene);
+  std::unique_ptr<gpu::CommandEncoder> forwardEncoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  EXPECT_THAT(forwardEncoder->copyTextureToTexture(scene.destination, forwarded, extent),
+              gpu::IsOk());
+
+  std::array<gpu::CommandBuffer, 2> span{gpu::GetResultOrFail(copyEncoder->finish()),
+                                         gpu::GetResultOrFail(forwardEncoder->finish())};
+  const uint64_t serial = gpu::GetResultOrFail(adapter_->submit(span));
+  EXPECT_THAT(adapter_->completedSerial(), Lt(serial))
+      << "a replayed span completes when the host submits, not when it is recorded";
+
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> hostCommands(hostEncoder.get().finish());
+    ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
+    geodeDevice_->queue().submit(1, &hostCommands.get());
+  }
+  adapter_->notifyHostSubmitted(hostEncoder.get());
+  adapter_->clearHostCommandEncoder();
+
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "submission " << serial << " did not complete after the host submit";
+
+  const std::vector<uint8_t> pixels = ReadbackTexturePixels(
+      *geodeDevice_, adapter_->wgpuTextureOf(forwarded), gpu::tests::kSubRectCopyExtent);
+  ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "forwarded readback failed";
+  ExpectSubRectCopyResult(pixels);
+}
+
 /// Clearing the host encoder returns the adapter to owning and submitting its own encoders, so
 /// a stream submitted afterwards completes without any host notification.
 TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitResumesAfterClearingTheHostEncoder) {
