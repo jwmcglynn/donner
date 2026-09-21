@@ -8,6 +8,7 @@
 #include <optional>
 #include <string_view>
 
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/shader/wgsl/Module.h"
 #include "donner/gpu/shader/wgsl/Number.h"
 #include "donner/gpu/shader/wgsl/Uniformity.h"
@@ -1032,7 +1033,7 @@ private:
     const BindingKind kind = ResolveBindingKind(addressSpace, accessMode, type, name);
     if (failed()) return;
     if (kind == BindingKind::Uniform) ValidateUniformType(type, name.span);
-    if (!BindingWithinLimits(attributes, kind, name)) return;
+    if (!BindingWithinLimits(attributes, name)) return;
     InsertBinding(attributes, kind, type, name);
   }
 
@@ -1097,11 +1098,14 @@ private:
     return BindingKind::Uniform;
   }
 
-  constexpr bool BindingWithinLimits(const Attributes& attributes, BindingKind kind, Token name) {
-    const bool bufferBinding = kind == BindingKind::Uniform || kind == BindingKind::ReadOnlyStorage;
-    if (attributes.group != 0 || (bufferBinding && attributes.binding >= 29) ||
-        (kind == BindingKind::Sampler && attributes.binding >= 16) ||
-        (!bufferBinding && attributes.binding >= 128)) {
+  /// Rejects a binding index the GPU runtime would refuse, so an accepted module never reflects a
+  /// bind group layout entry no device can bind. Narrower per-backend argument-table sizes are
+  /// enforced by the projection that assigns those slots, not here. The single-group restriction
+  /// is this frontend's own profile: the runtime allows several bind groups, and the emitted
+  /// projections assume one.
+  /// @param attributes Parsed attributes of the declaration. @param name Declaration name token.
+  constexpr bool BindingWithinLimits(const Attributes& attributes, Token name) {
+    if (attributes.group != 0 || attributes.binding >= gpu::kMaxBindings) {
       Fail(ErrorCode::InvalidBinding, name.span);
       return false;
     }
@@ -1172,12 +1176,15 @@ private:
         attributes.hasBinding || attributes.interface().present())
       return false;
     if (!attributes.compute) return true;
+    // A declared workgroup size reaches compute pipeline creation verbatim, so the per-dimension
+    // and total-invocation caps are the runtime's, not a shape the frontend picks.
     return attributes.workgroupX > 0 && attributes.workgroupY > 0 && attributes.workgroupZ > 0 &&
-           attributes.workgroupX <= 256 && attributes.workgroupY <= 256 &&
-           attributes.workgroupZ <= 256 &&
+           attributes.workgroupX <= gpu::kMaxComputeWorkgroupSizeXY &&
+           attributes.workgroupY <= gpu::kMaxComputeWorkgroupSizeXY &&
+           attributes.workgroupZ <= gpu::kMaxComputeWorkgroupSizeZ &&
            static_cast<uint64_t>(attributes.workgroupX) * attributes.workgroupY *
                    attributes.workgroupZ <=
-               256;
+               gpu::kMaxComputeInvocationsPerWorkgroup;
   }
 
   constexpr void ParseFunctionParameters(Function* function) {
@@ -1969,13 +1976,10 @@ private:
       Fail(ErrorCode::InvalidPointer, op.span);
       return ErrorExpression(op.span);
     }
-    return AddExpression(Expression{ExpressionKind::AddressOf,
-                                    PointerTo(pointee),
-                                    SourceSpan{op.span.begin, value.span.end},
-                                    {operand.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                                    1,
-                                    0},
-                         false, operand.rootSymbol, std::numeric_limits<int32_t>::max());
+    return AddExpression(
+        Expression{ExpressionKind::AddressOf, PointerTo(pointee),
+                   SourceSpan{op.span.begin, value.span.end}, Operands(operand.id), 1, 0},
+        false, operand.rootSymbol, std::numeric_limits<int32_t>::max());
   }
 
   /// Returns `*pointer`, an assignable value in the function address space.
@@ -1986,13 +1990,10 @@ private:
       Fail(ErrorCode::InvalidPointer, op.span);
       return ErrorExpression(op.span);
     }
-    return AddExpression(Expression{ExpressionKind::Deref,
-                                    value.type.elementType(),
-                                    SourceSpan{op.span.begin, value.span.end},
-                                    {operand.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                                    1,
-                                    0},
-                         true, operand.rootSymbol, std::numeric_limits<int32_t>::max());
+    return AddExpression(
+        Expression{ExpressionKind::Deref, value.type.elementType(),
+                   SourceSpan{op.span.begin, value.span.end}, Operands(operand.id), 1, 0},
+        true, operand.rootSymbol, std::numeric_limits<int32_t>::max());
   }
 
   constexpr ExpressionInfo ParseUnary() {
@@ -2014,11 +2015,8 @@ private:
       ValidateUnaryConstant(op, type, operand.id);
       return AddExpression(
           Expression{
-              ExpressionKind::Unary,
-              type,
-              SourceSpan{op.span.begin, ExpressionAt(operand.id).span.end},
-              {operand.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-              1,
+              ExpressionKind::Unary, type,
+              SourceSpan{op.span.begin, ExpressionAt(operand.id).span.end}, Operands(operand.id), 1,
               static_cast<uint32_t>(op.kind == TokenKind::Minus ? UnaryOp::Negate : UnaryOp::Not)},
           false, kInvalidArenaId, operand.i32UpperBound);
     }
@@ -2117,9 +2115,7 @@ private:
         Expression{
             ExpressionKind::Index,
             base.kind == TypeKind::Matrix ? Type{TypeKind::F32, base.rows} : base.elementType(),
-            SourceSpan{ExpressionAt(value.id).span.begin, end.end},
-            {value.id, index.id, kInvalidArenaId, kInvalidArenaId},
-            2,
+            SourceSpan{ExpressionAt(value.id).span.begin, end.end}, Operands(value.id, index.id), 2,
             base.kind == TypeKind::Matrix
                 ? (constant.hasSigned ? uint32_t(constant.signedValue) : constant.unsignedValue)
                 : 0},
@@ -2142,12 +2138,9 @@ private:
         return ErrorExpression(member.span);
       }
       value =
-          AddExpression(Expression{ExpressionKind::Member,
-                                   module_.structMembers[memberId].type,
+          AddExpression(Expression{ExpressionKind::Member, module_.structMembers[memberId].type,
                                    SourceSpan{ExpressionAt(value.id).span.begin, member.span.end},
-                                   {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                                   1,
-                                   memberId},
+                                   Operands(value.id), 1, memberId},
                         value.mutableLvalue, value.rootSymbol, std::numeric_limits<int32_t>::max());
     } else {
       uint32_t encoding = 0;
@@ -2156,12 +2149,9 @@ private:
       Type type = base;
       type.lanes = lanes;
       value = AddExpression(
-          Expression{ExpressionKind::Swizzle,
-                     type,
+          Expression{ExpressionKind::Swizzle, type,
                      SourceSpan{ExpressionAt(value.id).span.begin, member.span.end},
-                     {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                     1,
-                     encoding},
+                     Operands(value.id), 1, encoding},
           value.mutableLvalue && lanes == 1, value.rootSymbol, std::numeric_limits<int32_t>::max());
     }
     return value;
@@ -2222,14 +2212,9 @@ private:
   }
 
   constexpr ExpressionInfo ParseBoolLiteral(Token name) {
-    return AddExpression(
-        Expression{ExpressionKind::Literal,
-                   Type{TypeKind::Bool},
-                   name.span,
-                   {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                   0,
-                   TextEquals(name.text, "true") ? 1u : 0u},
-        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+    return AddExpression(Expression{ExpressionKind::Literal, Type{TypeKind::Bool}, name.span,
+                                    Operands(), 0, TextEquals(name.text, "true") ? 1u : 0u},
+                         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
   constexpr ExpressionInfo ParseCallOrConversion(Token name) {
@@ -2243,12 +2228,9 @@ private:
     if (!valueType.isNumeric() || valueType.lanes != 1) Fail(ErrorCode::TypeMismatch, name.span);
     if (IsConstantSyntax(value.id) && valueType.kind != type.kind)
       Fail(ErrorCode::InvalidConstantExpression, name.span);
-    return AddExpression(Expression{ExpressionKind::Convert,
-                                    type,
+    return AddExpression(Expression{ExpressionKind::Convert, type,
                                     SourceSpan{name.span.begin, ExpressionAt(value.id).span.end},
-                                    {value.id, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                                    1,
-                                    0},
+                                    Operands(value.id), 1, 0},
                          false, kInvalidArenaId, value.i32UpperBound);
   }
 
@@ -2264,12 +2246,7 @@ private:
     if (resolved.kind == SymbolKind::Binding && currentFunctionId_ < module_.functionCount)
       module_.functions[currentFunctionId_].resourceMask |= 1u << resolved.bindingId;
     return AddExpression(
-        Expression{ExpressionKind::Symbol,
-                   resolved.type,
-                   name.span,
-                   {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                   0,
-                   symbol},
+        Expression{ExpressionKind::Symbol, resolved.type, name.span, Operands(), 0, symbol},
         resolved.mutableValue, symbol, symbolUpperBounds_[symbol]);
   }
 
@@ -2282,7 +2259,7 @@ private:
       Fail(ErrorCode::UnsupportedConstruct, name.span);
     else
       module_.functions[currentFunctionId_].hasLocalArrays = true;
-    std::array<ArenaId, Expression::kMaxOperands> operands{};
+    std::array<ArenaId, Expression::kMaxOperands> operands = Operands();
     uint8_t count = 0;
     if (!IsLocalArray(type)) Fail(ErrorCode::UnsupportedConstruct, name.span);
     if (token_.kind != TokenKind::RightParen) {
@@ -2308,8 +2285,7 @@ private:
   }
 
   constexpr ExpressionInfo ParseMatrixConstruction(Token name, Type type) {
-    std::array<ArenaId, Expression::kMaxOperands> operands{kInvalidArenaId, kInvalidArenaId,
-                                                           kInvalidArenaId, kInvalidArenaId};
+    std::array<ArenaId, Expression::kMaxOperands> operands = Operands();
     uint8_t count = 0;
     if (token_.kind != TokenKind::RightParen) {
       do {
@@ -2379,8 +2355,7 @@ private:
         count == 1 && firstArgumentType.isNumeric() && firstArgumentType.lanes == type.lanes;
     valid = scalarOrComponentConstruction || vectorConversion;
     if (!valid) Fail(ErrorCode::InvalidCall, constructor.span);
-    std::array<ArenaId, Expression::kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId,
-                                                              kInvalidArenaId, kInvalidArenaId};
+    std::array<ArenaId, Expression::kMaxOperands> operands = Operands();
     for (uint8_t i = 0; i < count; ++i) operands[i] = arguments[i].id;
     return AddExpression(Expression{ExpressionKind::Construct, type,
                                     SourceSpan{constructor.span.begin, end.end}, operands, count},
@@ -2403,7 +2378,7 @@ private:
       Fail(ErrorCode::InvalidCall, name.span);
       return ErrorExpression(name.span);
     }
-    std::array<ArenaId, Expression::kMaxOperands> operands{};
+    std::array<ArenaId, Expression::kMaxOperands> operands = Operands();
     for (uint8_t i = 0; i < count; ++i) {
       const Type member = module_.structMembers[structure.firstMember + i].type;
       arguments[i] = Materialize(arguments[i], member);
@@ -2423,8 +2398,7 @@ private:
     const uint8_t count = ParseArguments(arguments);
     const SourceSpan end = token_.span;
     Expect(TokenKind::RightParen);
-    std::array<ArenaId, Expression::kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId,
-                                                              kInvalidArenaId, kInvalidArenaId};
+    std::array<ArenaId, Expression::kMaxOperands> operands = Operands();
     for (uint8_t i = 0; i < count; ++i) operands[i] = arguments[i].id;
     Builtin builtin;
     if (BuiltinNamed(name, &builtin))
@@ -2842,15 +2816,9 @@ private:
   constexpr ExpressionInfo NumericLiteral(Type type, uint64_t bits, SourceSpan span) {
     const int32_t bound = type == Type{TypeKind::I32} ? std::bit_cast<int32_t>(uint32_t(bits))
                                                       : std::numeric_limits<int32_t>::max();
-    return AddExpression(
-        Expression{ExpressionKind::Literal,
-                   type,
-                   span,
-                   {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                   0,
-                   uint32_t(bits),
-                   uint32_t(bits >> 32)},
-        false, kInvalidArenaId, bound);
+    return AddExpression(Expression{ExpressionKind::Literal, type, span, Operands(), 0,
+                                    uint32_t(bits), uint32_t(bits >> 32)},
+                         false, kInvalidArenaId, bound);
   }
 
   constexpr Type DefaultType(Type type) const {
@@ -3104,7 +3072,7 @@ private:
         Expression{ExpressionKind::Binary,
                    result,
                    {ExpressionAt(lhs.id).span.begin, ExpressionAt(rhs.id).span.end},
-                   {lhs.id, rhs.id, kInvalidArenaId, kInvalidArenaId},
+                   Operands(lhs.id, rhs.id),
                    2,
                    uint32_t(BinaryOp::Mul)},
         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
@@ -3249,12 +3217,9 @@ private:
       if (sum >= INT32_MIN && sum <= INT32_MAX) bound = int32_t(sum);
     }
     return AddExpression(
-        Expression{ExpressionKind::Binary,
-                   result,
+        Expression{ExpressionKind::Binary, result,
                    SourceSpan{ExpressionAt(lhs.id).span.begin, ExpressionAt(rhs.id).span.end},
-                   {lhs.id, rhs.id, kInvalidArenaId, kInvalidArenaId},
-                   2,
-                   static_cast<uint32_t>(binary)},
+                   Operands(lhs.id, rhs.id), 2, static_cast<uint32_t>(binary)},
         false, kInvalidArenaId, bound);
   }
 
@@ -3283,14 +3248,8 @@ private:
   }
 
   constexpr ExpressionInfo ErrorExpression(SourceSpan span) {
-    return AddExpression(
-        Expression{ExpressionKind::Literal,
-                   Type{},
-                   span,
-                   {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId, kInvalidArenaId},
-                   0,
-                   0},
-        false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+    return AddExpression(Expression{ExpressionKind::Literal, Type{}, span, Operands(), 0, 0}, false,
+                         kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
   constexpr bool ConstI32Value(ArenaId expressionId, int32_t* value) const {

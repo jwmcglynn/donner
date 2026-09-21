@@ -21,17 +21,6 @@ using testing::HasSubstr;
 namespace donner::gpu {
 namespace {
 
-// The runtime and the shader IR validate the same workgroup shape at two layers that cannot
-// include each other's headers, so each carries its own copy of the caps. Tying them together
-// here means tuning one side alone fails this build instead of producing a pipeline that passes
-// one layer's check and is rejected by the other's.
-static_assert(kMaxComputeInvocationsPerWorkgroup == shader::kMaxComputeInvocationsPerWorkgroup,
-              "the runtime and shader IR invocation caps must stay in step");
-static_assert(kMaxComputeWorkgroupSizeXY == shader::kMaxComputeWorkgroupSizeXY,
-              "the runtime and shader IR X/Y workgroup caps must stay in step");
-static_assert(kMaxComputeWorkgroupSizeZ == shader::kMaxComputeWorkgroupSizeZ,
-              "the runtime and shader IR Z workgroup caps must stay in step");
-
 /// Builds the color-matrix compute scene: a sampled input texture, a write-only storage output
 /// texture, a uniform params buffer, a read-only storage bias buffer, and the pipeline binding
 /// all four.

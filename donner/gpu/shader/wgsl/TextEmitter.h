@@ -95,6 +95,7 @@ public:
     if (!module_.isValid() || module_.sourceByteCount > ModuleLimits::kMaxSourceBytes) {
       return fail(TextEmitError::InvalidModule);
     }
+    if (!everyBindingFitsArgumentTables()) return fail(TextEmitError::UnsupportedBinding);
     text("#include <metal_stdlib>\nusing namespace metal;\n\n");
     for (uint16_t index = 0; index < module_.structCount; ++index) {
       if (error_ != TextEmitError::None) return finish();
@@ -120,6 +121,28 @@ private:
   TextSink& sink_;
   TextEmitError error_ = TextEmitError::None;
   uint8_t indent_ = 0;
+
+  /// Returns whether every declared binding has an argument-table slot. Checked over the whole
+  /// arena rather than per emitted parameter, because reflection turns a declared binding into a
+  /// bind group layout entry whether or not an entry point references it, and Metal's argument
+  /// tables are narrower than the binding index range this frontend accepts.
+  constexpr bool everyBindingFitsArgumentTables() const {
+    for (uint16_t index = 0; index < module_.bindingCount; ++index) {
+      if (!bindingFitsArgumentTables(module_.bindings[index])) return false;
+    }
+    return true;
+  }
+
+  /// Returns whether `binding` has a Metal argument-table slot of its kind.
+  /// @param binding Binding to place.
+  static constexpr bool bindingFitsArgumentTables(const Binding& binding) {
+    const uint32_t tableSize =
+        binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage
+            ? kMslBufferBindingCount
+        : binding.kind == BindingKind::Sampler ? kMslSamplerBindingCount
+                                               : kMslTextureBindingCount;
+    return binding.group == 0 && binding.binding < tableSize;
+  }
 
   constexpr TextEmitResult fail(TextEmitError error) {
     if (error_ == TextEmitError::None) {
@@ -456,14 +479,7 @@ private:
         text(", ");
       }
       comma = true;
-      const Binding& binding = module_.bindings[index];
-      const bool isBuffer =
-          binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage;
-      const uint32_t bindingLimit = isBuffer ? kMslBufferBindingCount
-                                    : binding.kind == BindingKind::Sampler
-                                        ? kMslSamplerBindingCount
-                                        : kMslTextureBindingCount;
-      if (binding.group != 0 || binding.binding >= bindingLimit) {
+      if (!bindingFitsArgumentTables(module_.bindings[index])) {
         error_ = TextEmitError::UnsupportedBinding;
         return;
       }

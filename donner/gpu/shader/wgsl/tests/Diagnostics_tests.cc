@@ -49,10 +49,10 @@ std::string TextureBindingSource(uint32_t binding) {
   return "@group(0) @binding(" + std::to_string(binding) + ") var t: texture_2d<f32>;\n";
 }
 
-/// A compute entry point whose declared workgroup size is 1x1x`depth`.
-std::string WorkgroupDepthSource(uint32_t depth) {
-  return "@compute @workgroup_size(1, 1, " + std::to_string(depth) +
-         ")\nfn cs(@builtin(global_invocation_id) gid: vec3<u32>) {}\n";
+/// A compute entry point with the given declared workgroup size.
+std::string WorkgroupSource(uint32_t x, uint32_t y, uint32_t z) {
+  return "@compute @workgroup_size(" + std::to_string(x) + ", " + std::to_string(y) + ", " +
+         std::to_string(z) + ")\nfn cs(@builtin(global_invocation_id) gid: vec3<u32>) {}\n";
 }
 
 const DiagnosticCase kSemanticCases[] = {
@@ -171,12 +171,25 @@ TEST(Diagnostics, BindingIndexIsBoundedByTheRuntimeBindingCap) {
 
 TEST(Diagnostics, WorkgroupSizeIsBoundedByTheRuntimeComputeCaps) {
   // A declared workgroup size reaches compute pipeline creation verbatim, which caps the Z extent
-  // well below the X and Y extents.
+  // well below the X and Y extents and caps the product below either.
   static_assert(gpu::kMaxComputeWorkgroupSizeZ < gpu::kMaxComputeWorkgroupSizeXY,
-                "The Z cap is the one this case distinguishes from the X and Y caps");
-  EXPECT_THAT(WorkgroupDepthSource(gpu::kMaxComputeWorkgroupSizeZ), ParsedSuccessfully());
-  EXPECT_THAT(WorkgroupDepthSource(gpu::kMaxComputeWorkgroupSizeZ + 1),
+                "The Z case below is what distinguishes the Z cap from the X and Y caps");
+
+  EXPECT_THAT(WorkgroupSource(1, 1, gpu::kMaxComputeWorkgroupSizeZ), ParsedSuccessfully());
+  EXPECT_THAT(WorkgroupSource(1, 1, gpu::kMaxComputeWorkgroupSizeZ + 1),
               RejectedWithCode(ErrorCode::InvalidAttribute));
+
+  EXPECT_THAT(WorkgroupSource(gpu::kMaxComputeWorkgroupSizeXY, 1, 1), ParsedSuccessfully());
+  EXPECT_THAT(WorkgroupSource(gpu::kMaxComputeWorkgroupSizeXY + 1, 1, 1),
+              RejectedWithCode(ErrorCode::InvalidAttribute));
+  EXPECT_THAT(WorkgroupSource(1, gpu::kMaxComputeWorkgroupSizeXY, 1), ParsedSuccessfully());
+  EXPECT_THAT(WorkgroupSource(1, gpu::kMaxComputeWorkgroupSizeXY + 1, 1),
+              RejectedWithCode(ErrorCode::InvalidAttribute));
+
+  // Each extent below its own cap, and their product above the invocation cap.
+  static_assert(16 * 16 * 2 > gpu::kMaxComputeInvocationsPerWorkgroup);
+  EXPECT_THAT(WorkgroupSource(16, 16, 1), ParsedSuccessfully());
+  EXPECT_THAT(WorkgroupSource(16, 16, 2), RejectedWithCode(ErrorCode::InvalidAttribute));
 }
 
 TEST(Diagnostics, SymbolLimitTripsOnModuleConstantsWithoutStatements) {
