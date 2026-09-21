@@ -386,6 +386,7 @@ TEST(ViewportSvgExportTest, InternalFragmentReferencesAreAllowed) {
 TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
   const SVGDocument doc = ParseOrDie(
       "<svg id=\"root&amp;source\" data-title='\"quoted\"' data-owner=\"Bob's\" "
+      "data-lines=\"first&#10;second\" "
       "width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
       "<rect width=\"10\" height=\"10\"/>"
       "</svg>");
@@ -402,14 +403,19 @@ TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
   EXPECT_THAT(result.value, HasSubstr("id=\"root&amp;source\""));
   EXPECT_THAT(result.value, HasSubstr("data-title=\"&quot;quoted&quot;\""));
   EXPECT_THAT(result.value, HasSubstr("data-owner=\"Bob&apos;s\""));
+  // A literal newline in an attribute value is normalized to a space when the document is
+  // re-parsed, so it has to be written as a numeric reference for the value to survive.
+  EXPECT_THAT(result.value, HasSubstr("data-lines=\"first&#10;second\""));
   EXPECT_TRUE(ReparsesCleanly(result.value));
 
-  // Re-exporting the export is a fixed point: the id does not grow another `amp;`.
+  // Re-exporting the export is a fixed point: the id does not grow another `amp;`, and the
+  // newline is still a newline rather than a space.
   const SVGDocument reexportedDoc = ParseOrDie(result.value);
   const Result<std::string, std::string> reexported =
       ExportViewportAsSvg(reexportedDoc, viewport, renderPaneRect, ViewportExportOptions{});
   ASSERT_TRUE(reexported.ok()) << reexported.error;
   EXPECT_THAT(reexported.value, HasSubstr("id=\"root&amp;source\""));
+  EXPECT_THAT(reexported.value, HasSubstr("data-lines=\"first&#10;second\""));
 }
 
 TEST(ViewportSvgExportTest, RawLessThanInRootAttributeIsEscapedAfterSourceEdit) {
@@ -1615,9 +1621,10 @@ TEST(ViewportSvgExportTest, ExportAfterRenderSkipsShadowTreeEntities) {
   EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
-// A programmatically created element joins the shared tree before it has any XML node data.
-// The export walks that tree, so it must skip the entry rather than ask it for a node type.
-TEST(ViewportSvgExportTest, ExportSkipsProgrammaticallyAppendedElement) {
+// The source is a projection of the DOM: appendChild reflects the new element into the source
+// text, so the export carries it. The export therefore reproduces source, and a DOM mutation
+// reaches the output exactly to the extent it was reflected.
+TEST(ViewportSvgExportTest, ExportCarriesReflectedProgrammaticAppend) {
   SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   svg::SVGRectElement added = svg::SVGRectElement::Create(doc);
   added.setAttribute("id", "programmatic");
@@ -1627,6 +1634,8 @@ TEST(ViewportSvgExportTest, ExportSkipsProgrammaticallyAppendedElement) {
   const Result<std::string, std::string> result = ExportViewportAsSvg(
       doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(400, 300)), ViewportExportOptions());
   ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(doc.source(), HasSubstr("id=\"programmatic\""));
+  EXPECT_THAT(result.value, HasSubstr("id=\"programmatic\""));
   EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
@@ -1665,6 +1674,32 @@ TEST(ViewportSvgExportTest, PrefixedRootKeepsInjectedMarkupInTheSvgNamespace) {
   SVGDocument reparsed = ParseOrDie(result.value);
   EXPECT_TRUE(reparsed.querySelector("#body-shape").has_value());
   EXPECT_TRUE(reparsed.querySelector("#donner-editor-overlay").has_value());
+}
+
+// Inline-SVG parsing repairs a root whose prefix is not bound to any namespace by injecting a
+// default `xmlns`, which leaves the prefix itself undeclared. Re-emitting that prefix, and
+// giving it to the injected elements, would produce markup no consumer can resolve, so the
+// export falls back to the unprefixed spelling that the injected `xmlns` covers.
+TEST(ViewportSvgExportTest, UnboundRootPrefixIsNotCarriedIntoInjectedMarkup) {
+  ParseWarningSink warningSink = ParseWarningSink::Disabled();
+  SVGParser::Options options;
+  options.parseAsInlineSVG = true;
+  ParseResult<SVGDocument> parseResult = SVGParser::ParseSVG(
+      "<svg:svg width=\"100\" height=\"100\" viewBox=\"0 0 100 100\">"
+      "<rect id=\"body-shape\" width=\"10\" height=\"10\"/>"
+      "</svg:svg>",
+      warningSink, options);
+  ASSERT_FALSE(parseResult.hasError()) << parseResult.error();
+  const SVGDocument doc = std::move(parseResult).result();
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, IdentityViewport(), Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  EXPECT_THAT(result.value, Not(HasSubstr("<svg:")));
+  EXPECT_THAT(result.value, Not(HasSubstr("</svg:")));
+  EXPECT_THAT(result.value, HasSubstr("<defs><clipPath"));
+  EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
 }  // namespace

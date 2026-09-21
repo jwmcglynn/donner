@@ -494,6 +494,33 @@ TEST(SVGParser, ForeignNamespaceSubtreeWarnsOnceAndCountsTowardCaps) {
   EXPECT_EQ(foreignRoot->type(), ElementType::Unknown);
 }
 
+TEST(SVGParser, ForeignNamespaceNestingDoesNotSuppressALaterForeignSibling) {
+  // The suppression state is counted, not a flag: leaving a foreign element nested inside a
+  // foreign element must restore "inside a foreign subtree", while leaving the outer one must
+  // clear it so the next top-level foreign element is still reported.
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:outer><other:inner/></other:outer>)"
+      R"(<other:sibling/>)"
+      R"(</svg>)",
+      warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  std::vector<std::string> retentionWarnings;
+  std::string allWarnings;
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    allWarnings += warning.reason.str();
+    allWarnings += "\n";
+    if (warning.reason.str().find("Retaining element") != std::string::npos) {
+      retentionWarnings.push_back(warning.reason.str());
+    }
+  }
+  ASSERT_EQ(retentionWarnings.size(), 2u) << allWarnings;
+  EXPECT_THAT(retentionWarnings[0], testing::HasSubstr("other:outer"));
+  EXPECT_THAT(retentionWarnings[1], testing::HasSubstr("other:sibling"));
+}
+
 TEST(SVGParser, ForeignNamespaceSubtreeExceedingTreeNodeCapIsRejected) {
   // The cap is enforced on the retained subtree, so a foreign document cannot buy unbounded
   // entities by being foreign.

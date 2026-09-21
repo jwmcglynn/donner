@@ -8,7 +8,9 @@
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {
 namespace {
@@ -936,6 +938,40 @@ TEST(AttributeWritebackTargetOverloadTest, RemoveRootElementAtEndOfSource) {
   const auto result = applyPatches(source, {{*patch}});
   ASSERT_EQ(result.applied, 1u);
   EXPECT_TRUE(source.empty());
+}
+
+// Rendering attaches shadow-tree entities under their host element in the same tree the XML
+// facade walks, and those entities carry no XML node data. Capturing a writeback target walks
+// each ancestor's children to find the element's index, so it must walk the XML projection
+// rather than asking every raw tree entry for its node type. An element inserted into a
+// rendered shadow host lands after the shadow entities, so the walk reaches them before it
+// reaches the element.
+TEST_F(AttributeWritebackTest, CaptureTargetSkipsShadowEntitiesAfterRender) {
+  constexpr std::string_view kUseShadowSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <rect id="shape" x="10" y="20" width="50" height="30" fill="red"/>
+  <use id="u" xlink:href="#shape" x="60"/>
+</svg>)svg";
+
+  std::optional<svg::SVGDocument> document = ParseDocument(kUseShadowSvg);
+  ASSERT_TRUE(document.has_value());
+
+  svg::Renderer renderer;
+  renderer.draw(*document);
+
+  std::optional<svg::SVGElement> useElement = document->querySelector("#u");
+  ASSERT_TRUE(useElement.has_value());
+
+  svg::SVGRectElement added = svg::SVGRectElement::Create(*document);
+  added.setAttribute("id", "added");
+  document->insertElement(*useElement, added);
+
+  const std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(added);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->elementId, testing::Optional(RcString("added")));
+  ASSERT_FALSE(target->elementPath.empty());
+  EXPECT_THAT(target->elementPath.back().qualifiedName,
+              Eq(xml::XMLQualifiedName(RcString("rect"))));
 }
 
 }  // namespace

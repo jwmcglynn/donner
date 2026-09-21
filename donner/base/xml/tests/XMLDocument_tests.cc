@@ -4202,6 +4202,12 @@ TEST(XMLDocument, DoctypeWithoutInternalSubsetDeclaresNothing) {
       ParseDocument(R"(<!DOCTYPE root PUBLIC "-//x//DTD//EN" "http://example.test/x.dtd"><root/>)",
                     XMLParser::Options::ParseAll())
           .declaresDoctypeInternalSubset());
+
+  // A bracket inside a quoted external identifier is part of the literal, not the start of an
+  // internal subset.
+  EXPECT_FALSE(ParseDocument(R"(<!DOCTYPE svg SYSTEM "schema[v2].dtd"><svg/>)",
+                             XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
 }
 
 TEST(XMLDocument, DocumentWithoutDoctypeDeclaresNothing) {
