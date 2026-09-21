@@ -37,6 +37,7 @@
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "gtest/gtest.h"
@@ -6440,6 +6441,71 @@ TEST(RenderCoordinatorTest, FullCanvasPreviewCanStretchAcrossCanvasEpochs) {
   preview.tiles.push_back(fullCanvas);
 
   EXPECT_TRUE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(1896, 1088)));
+}
+
+// When the full-canvas GPU texture cannot be allocated, the worker keeps the
+// frame presentable by capturing a CPU snapshot instead of aborting, and it
+// reports that it did so.
+TEST(AsyncRendererTest, FullCanvasTextureAllocationFailureFallsBackToCpuSnapshot) {
+  ::testing::NiceMock<svg::tests::MockRendererInterface> renderer;
+  ON_CALL(renderer, takeTextureSnapshot())
+      .WillByDefault(::testing::Return(std::shared_ptr<const svg::RendererTextureSnapshot>{}));
+  ON_CALL(renderer, takeSnapshot()).WillByDefault([]() {
+    return svg::tests::MockRendererInterface::makeDummyBitmap();
+  });
+
+  PresentationSnapshotPlan plan;
+  plan.captureTextureSnapshot = true;
+  svg::RendererBitmap bitmap;
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture;
+  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture);
+
+  EXPECT_THAT(fellBack, ::testing::IsTrue());
+  EXPECT_THAT(texture, ::testing::IsNull());
+  EXPECT_THAT(bitmap.dimensions, ::testing::Eq(Vector2i(1, 1)));
+}
+
+// A plan that already captures a CPU snapshot does not capture a second one
+// when the texture allocation fails.
+TEST(AsyncRendererTest, FullCanvasTextureFallbackDoesNotDuplicateCpuSnapshot) {
+  ::testing::NiceMock<svg::tests::MockRendererInterface> renderer;
+  ON_CALL(renderer, takeTextureSnapshot())
+      .WillByDefault(::testing::Return(std::shared_ptr<const svg::RendererTextureSnapshot>{}));
+  EXPECT_CALL(renderer, takeSnapshot()).Times(0);
+
+  PresentationSnapshotPlan plan;
+  plan.captureTextureSnapshot = true;
+  plan.captureCpuSnapshot = true;
+  svg::RendererBitmap bitmap;
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture;
+  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture);
+
+  EXPECT_THAT(fellBack, ::testing::IsTrue());
+  EXPECT_THAT(texture, ::testing::IsNull());
+}
+
+// A successful texture capture reports no fallback and touches no CPU snapshot.
+TEST(AsyncRendererTest, FullCanvasTextureCaptureSuccessReportsNoFallback) {
+  ::testing::NiceMock<svg::tests::MockRendererInterface> renderer;
+  class FakeTexture final : public svg::RendererTextureSnapshot {
+  public:
+    [[nodiscard]] Vector2i dimensions() const override { return Vector2i(4, 4); }
+    [[nodiscard]] svg::AlphaType alphaType() const override {
+      return svg::AlphaType::Premultiplied;
+    }
+  };
+  ON_CALL(renderer, takeTextureSnapshot())
+      .WillByDefault(::testing::Return(std::make_shared<FakeTexture>()));
+  EXPECT_CALL(renderer, takeSnapshot()).Times(0);
+
+  PresentationSnapshotPlan plan;
+  plan.captureTextureSnapshot = true;
+  svg::RendererBitmap bitmap;
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture;
+  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture);
+
+  EXPECT_THAT(fellBack, ::testing::IsFalse());
+  EXPECT_THAT(texture, ::testing::NotNull());
 }
 
 }  // namespace

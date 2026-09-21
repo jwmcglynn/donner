@@ -20,8 +20,15 @@
 
 using ::testing::_;
 using ::testing::AtLeast;
+using ::testing::Each;
+using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::Field;
+using ::testing::Ge;
+using ::testing::Gt;
 using ::testing::HasSubstr;
 using ::testing::NiceMock;
+using ::testing::SizeIs;
 
 namespace donner::svg::compositor {
 
@@ -449,8 +456,7 @@ TEST_F(CompositorControllerTest, PixelIdentityVerificationRequiresMainComposeFor
   EXPECT_EQ(compositor.lastRenderFrameStats().mainComposeCount, 1);
 }
 
-TEST_F(CompositorControllerTest,
-       TextureBackedFlatComposeTranslatesReusedImmediateDragLayer) {
+TEST_F(CompositorControllerTest, TextureBackedFlatComposeTranslatesReusedImmediateDragLayer) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="100" height="100" fill="white" />
     <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
@@ -478,8 +484,8 @@ TEST_F(CompositorControllerTest,
   // flat direct-surface compose must therefore blit that payload with canvasFromBitmap instead of
   // direct-drawing the range as if the cached transform were still identity.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(5.0, 0.0)));
-  EXPECT_CALL(renderer_, drawTextureSnapshot(::testing::_, ::testing::_, ::testing::_,
-                                              ::testing::_))
+  EXPECT_CALL(renderer_,
+              drawTextureSnapshot(::testing::_, ::testing::_, ::testing::_, ::testing::_))
       .Times(2);
   compositor.renderFrame(viewport);
 }
@@ -2430,8 +2436,7 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesLayerDirtyForRetry) {
   const Entity entity = target->unsafeEntityHandle().entity();
 
   auto failTexture = std::make_shared<bool>(true);
-  ON_CALL(renderer_, requiresTextureSnapshotPresentation())
-      .WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
   ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
   ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([failTexture]() {
     auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
@@ -2484,8 +2489,7 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesSegmentsDirtyForRetry)
   const Entity entity = target->unsafeEntityHandle().entity();
 
   auto failTexture = std::make_shared<bool>(true);
-  ON_CALL(renderer_, requiresTextureSnapshotPresentation())
-      .WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
   ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
   ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([failTexture]() {
     auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
@@ -2519,9 +2523,8 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesSegmentsDirtyForRetry)
   *failTexture = false;
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
   const auto segmentsAfterRetry = compositor.snapshotSegmentInspectorRows();
-  const bool anyDirtyAfterRetry =
-      std::any_of(segmentsAfterRetry.begin(), segmentsAfterRetry.end(),
-                  [](const auto& row) { return row.dirty; });
+  const bool anyDirtyAfterRetry = std::any_of(segmentsAfterRetry.begin(), segmentsAfterRetry.end(),
+                                              [](const auto& row) { return row.dirty; });
   EXPECT_FALSE(anyDirtyAfterRetry) << "retry must complete all dirty segments";
 }
 
@@ -2537,11 +2540,11 @@ TEST_F(CompositorControllerTest, NullOffscreenFallsBackToFlatWithoutCrash) {
   ASSERT_TRUE(target.has_value());
   const Entity entity = target->unsafeEntityHandle().entity();
 
-  ON_CALL(renderer_, requiresTextureSnapshotPresentation())
-      .WillByDefault(::testing::Return(true));
+  ON_CALL(renderer_, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
   ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
-  ON_CALL(renderer_, createOffscreenInstance())
-      .WillByDefault([]() { return std::unique_ptr<RendererInterface>{nullptr}; });
+  ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([]() {
+    return std::unique_ptr<RendererInterface>{nullptr};
+  });
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
@@ -2557,6 +2560,349 @@ TEST_F(CompositorControllerTest, NullOffscreenFallsBackToFlatWithoutCrash) {
   const auto rowsAfterSecond = compositor.snapshotLayerInspectorRows();
   ASSERT_EQ(rowsAfterSecond.size(), 1u);
   EXPECT_FALSE(rowsAfterSecond.front().hasValidBitmap);
+}
+
+namespace {
+
+// Shared knobs for offscreen mocks that model a GPU texture allocation
+// failure under the per-frame surface budget.
+struct TextureFailureState {
+  bool failTexture = true;
+  bool budgetRejected = false;
+  int snapshotAttempts = 0;
+};
+
+// Offscreen renderer whose texture snapshot fails while the shared surface
+// budget reports a rejection, counting every attempt so tests can assert
+// how many tiles a frame tried to allocate.
+class BudgetAwareOffscreen : public NiceMock<MockRendererInterface> {
+public:
+  explicit BudgetAwareOffscreen(std::shared_ptr<TextureFailureState> state)
+      : state_(std::move(state)) {
+    ON_CALL(*this, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
+    ON_CALL(*this, takeTextureSnapshot()).WillByDefault([this]() {
+      ++state_->snapshotAttempts;
+      if (state_->failTexture) {
+        return std::shared_ptr<const RendererTextureSnapshot>{nullptr};
+      }
+      return std::shared_ptr<const RendererTextureSnapshot>(
+          std::make_shared<FakeTextureSnapshot>(Vector2i(32, 32)));
+    });
+    ON_CALL(*this, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+  }
+
+  RendererResourceStats resourceStats() const override {
+    RendererResourceStats stats;
+    stats.surfaceBudgetSupported = true;
+    stats.surfaceBudgetRejected = state_->budgetRejected;
+    return stats;
+  }
+
+private:
+  std::shared_ptr<TextureFailureState> state_;
+};
+
+// Main renderer that requires texture presentation and counts CPU bitmap
+// uploads, which the compose step must never issue in that mode.
+class TextureModeMainRenderer : public NiceMock<MockRendererInterface> {
+public:
+  TextureModeMainRenderer() {
+    ON_CALL(*this, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
+    ON_CALL(*this, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  }
+
+  void drawBitmap(const RendererBitmap& /*bitmap*/, const ImageParams& /*params*/) override {
+    ++drawBitmapCalls;
+  }
+
+  int drawBitmapCalls = 0;
+};
+
+void ConfigureBudgetAwareOffscreens(MockRendererInterface& mainRenderer,
+                                    std::shared_ptr<TextureFailureState> state) {
+  ON_CALL(mainRenderer, requiresTextureSnapshotPresentation())
+      .WillByDefault(::testing::Return(true));
+  ON_CALL(mainRenderer, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  ON_CALL(mainRenderer, createOffscreenInstance()).WillByDefault([state]() {
+    return std::make_unique<BudgetAwareOffscreen>(state);
+  });
+}
+
+CompositorConfig CachedLayersOnlyConfig() {
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  return config;
+}
+
+}  // namespace
+
+// An offscreen whose texture snapshot failed still owns its drawn target, so
+// it is the half-drawn state the pool contract excludes: it must be destroyed,
+// and the next rasterize must construct a fresh instance.
+TEST_F(CompositorControllerTest, NullTextureSnapshotDestroysTheFailedOffscreen) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  ConfigureBudgetAwareOffscreens(renderer_, state);
+
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_THAT(compositor.snapshotLayerInspectorRows(),
+              ElementsAre(Field(&CompositorController::LayerInspectorRow::dirty, true)));
+
+  state->failTexture = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(compositor.snapshotLayerInspectorRows(),
+              ElementsAre(Field(&CompositorController::LayerInspectorRow::hasValidBitmap, true)));
+  EXPECT_THAT(compositor.lastRenderFrameStats().offscreenCreateCount, Eq(1))
+      << "the failed offscreen must be destroyed rather than pooled for reuse";
+}
+
+// Allocation failures are observable through frame statistics rather than
+// process output: a per-frame count and a controller-lifetime total.
+TEST_F(CompositorControllerTest, TextureAllocationFailuresAreCountedInFrameStats) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  ConfigureBudgetAwareOffscreens(renderer_, state);
+
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, Ge(1));
+  const int totalAfterFailure = compositor.lastRenderFrameStats().textureAllocationFailureTotal;
+  EXPECT_THAT(totalAfterFailure, Ge(1));
+
+  state->failTexture = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, Eq(0));
+  EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureTotal,
+              Eq(totalAfterFailure));
+}
+
+// The surface budget is shared by every tile in a frame and latches its
+// rejection until the next frame scope, so after one rejected allocation the
+// remaining tiles cannot succeed this frame. The frame stops attempting them
+// and the next frame completes every tile.
+TEST_F(CompositorControllerTest, SurfaceBudgetRejectionStopsFurtherTileAttemptsInFrame) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" width="20" height="20" fill="red" />
+    <rect id="b" x="30" width="20" height="20" fill="green" />
+  )svg");
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  state->budgetRejected = true;
+  ConfigureBudgetAwareOffscreens(renderer_, state);
+
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(state->snapshotAttempts, Eq(1))
+      << "a latched budget rejection must stop further allocation attempts in the frame";
+
+  state->failTexture = false;
+  state->budgetRejected = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(compositor.snapshotLayerInspectorRows(),
+              ::testing::AllOf(
+                  SizeIs(2), Each(Field(&CompositorController::LayerInspectorRow::dirty, false))));
+  EXPECT_THAT(
+      compositor.snapshotSegmentInspectorRows(),
+      ::testing::AllOf(SizeIs(Ge(1u)),
+                       Each(Field(&CompositorController::SegmentInspectorRow::dirty, false))));
+}
+
+// A tile rejected by two consecutive frames' fresh budgets at the same canvas
+// size stops being retried every frame with its content missing: it is
+// presented immediately (direct-drawn into the main frame) and no further
+// allocations are attempted until the canvas size changes.
+TEST_F(CompositorControllerTest, PersistentSurfaceBudgetRejectionFallsBackToDirectCompose) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="1" /></filter></defs>
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" filter="url(#blur)" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  state->budgetRejected = true;
+  ConfigureBudgetAwareOffscreens(renderer_, state);
+  int directDraws = 0;
+  ON_CALL(renderer_, drawPath(_, _))
+      .WillByDefault([&directDraws](const PathShape&, const StrokeParams&) { ++directDraws; });
+
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+
+  // The layer is attempted once per frame; each rejection latches the frame's budget, so the
+  // segment slots are attempted only after the layer stops (two more frames, one each).
+  for (int frame = 0; frame < 4; ++frame) {
+    compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  }
+  const int attemptsAfterFallback = state->snapshotAttempts;
+  EXPECT_THAT(attemptsAfterFallback, Eq(4));
+
+  const int directDrawsBefore = directDraws;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(state->snapshotAttempts, Eq(attemptsAfterFallback))
+      << "tiles rejected twice must stop retrying at the same canvas size";
+  EXPECT_THAT(directDraws, Gt(directDrawsBefore))
+      << "the unfittable layer must be direct-drawn so its content stays visible";
+
+  // A smaller canvas may fit, so the budget fallback resets and retries.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize / 2});
+  EXPECT_THAT(state->snapshotAttempts, Gt(attemptsAfterFallback));
+}
+
+// A texture allocation failure that is not a budget rejection leaves the layer's
+// presentation plan alone: an immediate layer stays immediate and is still
+// direct-drawn while its retained payload is missing.
+TEST_F(CompositorControllerTest, NonBudgetAllocationFailureKeepsImmediateLayerImmediate) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  state->failTexture = false;
+  ConfigureBudgetAwareOffscreens(renderer_, state);
+  int directDraws = 0;
+  ON_CALL(renderer_, drawPath(_, _))
+      .WillByDefault([&directDraws](const PathShape&, const StrokeParams&) { ++directDraws; });
+
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const int directDrawsWhileImmediate = directDraws;
+  ASSERT_THAT(directDrawsWhileImmediate, Gt(0)) << "an active-drag rect is presented immediately";
+
+  state->failTexture = true;
+  const int directDrawsBefore = directDraws;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(directDraws, Gt(directDrawsBefore))
+      << "a non-budget allocation failure must not demote the layer from immediate";
+}
+
+// In texture-presentation mode a failed texture draw is not silently repaired
+// by a CPU upload: the compose counts it and marks the layer dirty so the next
+// frame re-rasterizes the tile.
+TEST_F(CompositorControllerTest, ComposeTextureDrawFailureMarksLayerDirtyWithoutCpuFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="1" /></filter></defs>
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" filter="url(#blur)" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  state->failTexture = false;
+  TextureModeMainRenderer mainRenderer;
+  ConfigureBudgetAwareOffscreens(mainRenderer, state);
+
+  CompositorController compositor(document, mainRenderer, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_THAT(compositor.snapshotLayerInspectorRows(),
+              ElementsAre(Field(&CompositorController::LayerInspectorRow::hasValidBitmap, true)));
+  const int attemptsAfterFirstFrame = state->snapshotAttempts;
+
+  ON_CALL(mainRenderer, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(false));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(compositor.lastRenderFrameStats().composePayloadRefusalCount, Ge(1));
+  EXPECT_THAT(mainRenderer.drawBitmapCalls, Eq(0));
+  EXPECT_THAT(compositor.snapshotLayerInspectorRows(),
+              ElementsAre(Field(&CompositorController::LayerInspectorRow::dirty, true)))
+      << "a texture draw failure must schedule a re-rasterize";
+
+  ON_CALL(mainRenderer, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(state->snapshotAttempts, Gt(attemptsAfterFirstFrame));
+  EXPECT_THAT(compositor.snapshotLayerInspectorRows(),
+              ElementsAre(Field(&CompositorController::LayerInspectorRow::dirty, false)));
+}
+
+// A declined texture draw earns one re-rasterize; if the fresh payload is declined too, the
+// tile stops re-rasterizing rather than allocating a new texture every frame.
+TEST_F(CompositorControllerTest, RepeatedComposeDeclineStopsReRasterizingAfterTwoStrikes) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="1" /></filter></defs>
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" filter="url(#blur)" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  state->failTexture = false;
+  TextureModeMainRenderer mainRenderer;
+  ConfigureBudgetAwareOffscreens(mainRenderer, state);
+
+  CompositorController compositor(document, mainRenderer, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  ON_CALL(mainRenderer, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(false));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});  // decline 1: marks dirty
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});  // re-raster, decline 2
+  const int attemptsAfterTwoDeclines = state->snapshotAttempts;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(state->snapshotAttempts, Eq(attemptsAfterTwoDeclines))
+      << "a payload declined twice must not be re-rasterized every frame";
+  EXPECT_THAT(compositor.lastRenderFrameStats().composePayloadRefusalCount, Ge(1))
+      << "the persistent decline stays observable";
+
+  // A successful draw clears the strikes, so a later decline is retried again.
+  ON_CALL(mainRenderer, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ON_CALL(mainRenderer, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(false));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(state->snapshotAttempts, Gt(attemptsAfterTwoDeclines));
+}
+
+// A CPU bitmap payload has no place in texture-presentation mode; uploading
+// it per frame is the presentation regression the mode exists to prevent.
+// The compose refuses the payload and counts the refusal.
+TEST_F(CompositorControllerTest, ComposeRefusesCpuBitmapPayloadInTextureMode) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  TextureModeMainRenderer mainRenderer;
+  ON_CALL(mainRenderer, createOffscreenInstance()).WillByDefault([]() {
+    auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+    ON_CALL(*offscreen, requiresTextureSnapshotPresentation())
+        .WillByDefault(::testing::Return(false));
+    ON_CALL(*offscreen, takeSnapshot()).WillByDefault([]() {
+      return MockRendererInterface::makeDummyBitmap();
+    });
+    ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+    return offscreen;
+  });
+
+  CompositorController compositor(document, mainRenderer, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(mainRenderer.drawBitmapCalls, Eq(0))
+      << "texture-presentation mode must never upload a CPU bitmap payload";
+  EXPECT_THAT(compositor.lastRenderFrameStats().composePayloadRefusalCount, Ge(1));
 }
 
 }  // namespace donner::svg::compositor

@@ -573,6 +573,7 @@ donner_cc_test(
         "//donner/editor:tracy_wrapper",
         "//donner/svg/compositor",
         "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
