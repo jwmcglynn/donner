@@ -97,6 +97,7 @@ donner_cc_test(
     srcs = ["tests/XMLIncrementalLimits_tests.cc"],
     deps = [
         ":xml",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
