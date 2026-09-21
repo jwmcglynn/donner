@@ -1415,12 +1415,16 @@ donner_cc_test(
 # Convert Text to Outlines. Covers
 # the pure conversion helper, the structural-replace apply path through
 # AsyncSVGDocument, undo restoration, the empty-outline failure path, a
-# before/after pixel-compare, and the three-glyph performance budget. Runs in
-# the default basic-text (stb_truetype) configuration using the embedded
-# fallback font, so no checked-in font or `--config=text-full` is required.
+# before/after pixel-compare, the paint-retention matrix, and the three-glyph
+# performance budget. `editor_cc_test` pins every editor test to the full text
+# tier (FreeType + HarfBuzz + WOFF2), so no text `--config=` flag applies; the
+# embedded fallback font keeps the fixtures hermetic with no checked-in font.
+# The geode variant covers the backend the editor itself renders with.
 donner_cc_test(
     name = "text_outline_tests",
     srcs = ["TextToOutlines_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["geode"],
     deps = [
         ":bitmap_golden_compare",
         "//donner/base",

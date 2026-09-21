@@ -11,16 +11,20 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -29,9 +33,17 @@ namespace donner::editor {
 
 namespace {
 
+using ::testing::DoubleNear;
+using ::testing::Eq;
 using ::testing::HasSubstr;
+using ::testing::Lt;
+using ::testing::Not;
+using ::testing::Optional;
 
 constexpr int kCanvas = 200;
+
+/// Slack for comparing an `opacity` that survived a decimal serialization round-trip.
+constexpr double kOpacityTolerance = 1e-6;
 
 /// Parse \p svg into a source-backed SVGDocument, asserting success. Source
 /// backing is required so `convertTextToOutlines` can splice the `<text>` node's
@@ -48,6 +60,42 @@ svg::SVGElement TextElement(svg::SVGDocument& document) {
   auto element = document.querySelector("text");
   EXPECT_TRUE(element.has_value());
   return *element;
+}
+
+/// Computed `opacity` of the element \p selector matches in \p document. Returns a negative
+/// sentinel when nothing matches, so a missing element reports as a value mismatch rather than
+/// dereferencing an empty optional.
+double ComputedOpacity(svg::SVGDocument& document, std::string_view selector) {
+  const std::optional<svg::SVGElement> element = document.querySelector(selector);
+  if (!element.has_value()) {
+    return -1.0;
+  }
+  return element->getComputedStyle().opacity.getOr(1.0);
+}
+
+/// Authored \p name attribute of the element \p selector matches in \p document, or `nullopt` when
+/// the element carries none (or does not exist).
+std::optional<std::string> Attribute(svg::SVGDocument& document, std::string_view selector,
+                                     std::string_view name) {
+  const std::optional<svg::SVGElement> element = document.querySelector(selector);
+  if (!element.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<RcString> value = element->getAttribute(name);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return std::string(std::string_view(*value));
+}
+
+/// World-space bounds of the `<path>` that \p selector matches in \p document, or `nullopt` when
+/// nothing matches.
+std::optional<Box2d> PathBounds(svg::SVGDocument& document, std::string_view selector) {
+  const std::optional<svg::SVGElement> element = document.querySelector(selector);
+  if (!element.has_value()) {
+    return std::nullopt;
+  }
+  return element->cast<svg::SVGPathElement>().worldBounds();
 }
 
 /// Render \p document to a `RendererBitmap` at the canvas size, using the same
@@ -309,6 +357,104 @@ TEST(TextToOutlines, PreservesStyleAndPaintOrder) {
   EXPECT_LT(groupPos, overPos);
 }
 
+// `opacity` on the text root and on its spans: `opacity` is a non-inherited group property, so
+// the outline group carries the text root's own opacity and each converted run carries the product
+// of the opacities between its source span and that root. The two multiply when the converted
+// markup renders, so a run must not repeat the root's opacity.
+//
+// Asserted on the emitted markup and its computed style rather than by a before/after pixel
+// compare: the pre-conversion render of a `<text>` carrying its own `opacity` is wrong today (the
+// renderer applies that opacity more than once), so comparing pixels would pin the buggy render
+// instead of the conversion. The pixel cases below use the span and ancestor opacities the
+// renderer composites correctly.
+TEST(TextToOutlines, PreservesRootAndNestedSpanOpacity) {
+  constexpr std::string_view kSpanOpacitySvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<text id="t" x="10" y="120" font-size="64" fill="#0033aa" opacity="0.6"><tspan opacity="0.3">S</tspan><tspan>V</tspan><tspan opacity="0.5"><tspan opacity="0.4">G</tspan></tspan></text>
+</svg>)";
+  svg::SVGDocument document = Parse(kSpanOpacitySvg);
+  svg::SVGElement text = TextElement(document);
+
+  ConvertTextToOutlinesResult result = convertTextToOutlines(document, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  const std::string mergedSource = ApplyConversion(document, text, result);
+  // Leading space: `fill-opacity` and `stroke-opacity` must not satisfy these.
+  EXPECT_THAT(mergedSource, HasSubstr(" opacity=\"0.6\""));
+  EXPECT_THAT(mergedSource, HasSubstr(" opacity=\"0.3\""));
+
+  // Reparse the emitted markup so the assertions read what the converted source actually resolves
+  // to, not just what the in-memory DOM was handed.
+  svg::SVGDocument reparsed = Parse(mergedSource);
+  EXPECT_THAT(ComputedOpacity(reparsed, "#t_outlines"), DoubleNear(0.6, kOpacityTolerance));
+  EXPECT_THAT(ComputedOpacity(reparsed, "#t_outlines_0"), DoubleNear(0.3, kOpacityTolerance));
+  EXPECT_THAT(ComputedOpacity(reparsed, "#t_outlines_1"), DoubleNear(1.0, kOpacityTolerance));
+  // Nested spans multiply: 0.5 * 0.4.
+  EXPECT_THAT(ComputedOpacity(reparsed, "#t_outlines_2"), DoubleNear(0.2, kOpacityTolerance));
+
+  // A fully opaque run carries no `opacity` attribute at all.
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "opacity"), Eq(std::nullopt));
+}
+
+// Overlapping glyphs inside one translucent run. The run's `opacity` lands on each glyph `<path>`
+// rather than on a per-run `<g opacity>`, which is what keeps the outlines identical to the text
+// they replace: the text renderer folds a span's `opacity` into each glyph's paint alpha, so it
+// composites the overlap twice (measured 0.75 for two glyphs of an `opacity="0.5"` span, where a
+// single layer would be 0.5). Pin the emitted per-path form so a move to per-run groups is a
+// deliberate change reviewed against that compositing difference.
+TEST(TextToOutlines, TranslucentRunWritesOpacityOnEachOverlappingGlyph) {
+  constexpr std::string_view kOverlappingGlyphsSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<text id="t" x="10" y="120" font-size="64" fill="#0033aa" letter-spacing="-30"><tspan opacity="0.5">SS</tspan></text>
+</svg>)";
+  svg::SVGDocument document = Parse(kOverlappingGlyphsSvg);
+  svg::SVGElement text = TextElement(document);
+
+  ConvertTextToOutlinesResult result = convertTextToOutlines(document, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  ASSERT_EQ(result.outlinePaths.size(), 2u);
+  const std::string mergedSource = ApplyConversion(document, text, result);
+
+  svg::SVGDocument reparsed = Parse(mergedSource);
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "opacity"), Optional(std::string("0.5")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "opacity"), Optional(std::string("0.5")));
+  // Both paths are direct children of the outline group: no per-run group was interposed.
+  EXPECT_THAT(mergedSource, HasSubstr("<g data-donner-converted-from=\"text\""));
+  EXPECT_THAT(mergedSource, Not(HasSubstr("<g opacity")));
+
+  // The premise of the case: these two glyph outlines really do overlap.
+  const std::optional<Box2d> first = PathBounds(reparsed, "#t_outlines_0");
+  const std::optional<Box2d> second = PathBounds(reparsed, "#t_outlines_1");
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_THAT(second->topLeft.x, Lt(first->bottomRight.x));
+}
+
+// A translucent run that both fills and strokes. The path's `opacity` composites fill and stroke
+// as one isolated layer, the spec-correct reading; the text renderer approximates it by folding
+// the span's opacity into the fill and stroke alpha separately, so the two differ where a stroke
+// overlaps its own fill and a pixel identity check cannot hold. Pin the emitted markup instead.
+TEST(TextToOutlines, StrokedTranslucentRunSerializesOpacityAndStroke) {
+  constexpr std::string_view kStrokedSpanSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<text id="t" x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.4" stroke="#aa0000" stroke-width="3" stroke-opacity="0.8">S</tspan><tspan>VG</tspan></text>
+</svg>)";
+  svg::SVGDocument document = Parse(kStrokedSpanSvg);
+  svg::SVGElement text = TextElement(document);
+
+  ConvertTextToOutlinesResult result = convertTextToOutlines(document, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  const std::string mergedSource = ApplyConversion(document, text, result);
+
+  svg::SVGDocument reparsed = Parse(mergedSource);
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "opacity"), Optional(std::string("0.4")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "stroke"), Optional(std::string("#aa0000")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "stroke-width"), Optional(std::string("3")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "stroke-opacity"), Optional(std::string("0.8")));
+  // The stroke and the opacity stay on the stroked run only.
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "opacity"), Eq(std::nullopt));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "stroke"), Eq(std::nullopt));
+}
+
 // Apply path through AsyncSVGDocument: a ConvertTextToOutlines command swaps the
 // document to the outlined source, and a subsequent ReplaceDocument with the
 // original bytes (what undo replays) restores the live `<text>` element.
@@ -517,6 +663,41 @@ TEST(TextToOutlinesPaint, FillOpacityInteraction) {
 <text x="10" y="120" font-size="64" fill="#0033aa" fill-opacity="0.45">SVG</text>
 </svg>)",
       "paint_matrix_fill_opacity");
+}
+
+// Per-<tspan> `opacity`: each run composites on its own, so a translucent span must stay
+// translucent after conversion. The pre-fix per-run serialization carried fill, fill-rule, and
+// stroke but no opacity, so every run came back fully opaque.
+TEST(TextToOutlinesPaint, PerTspanOpacityOverrides) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.35">S</tspan><tspan>V</tspan><tspan opacity="0.8">G</tspan></text>
+</svg>)",
+      "paint_matrix_per_tspan_opacity");
+}
+
+// Ancestor `opacity` combined with a per-run `opacity` that differs from it. The outline group
+// replaces the text inside the same parent, so the ancestor's opacity still composites the result;
+// only the run's own opacity belongs on the run.
+TEST(TextToOutlinesPaint, AncestorOpacityWithPerTspanOpacity) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g opacity="0.6"><text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.3">S</tspan><tspan>VG</tspan></text></g>
+</svg>)",
+      "paint_matrix_ancestor_and_tspan_opacity");
+}
+
+// Per-<tspan> `opacity` layered on top of the span's own `fill-opacity`: the two multiply, and
+// both have to survive independently.
+TEST(TextToOutlinesPaint, PerTspanOpacityWithFillOpacity) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa" fill-opacity="0.5"><tspan opacity="0.4" fill-opacity="0.75">S</tspan><tspan>VG</tspan></text>
+</svg>)",
+      "paint_matrix_per_tspan_opacity_fill_opacity");
 }
 
 // Stroke declared through inline CSS with stroke-width and stroke-opacity. The
