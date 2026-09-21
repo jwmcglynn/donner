@@ -852,8 +852,6 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     (void)pass->setBindGroup(0, bindGroup);
     (void)pass->draw(encoded.boundingDrawVertexCount(), 1, 0, 0);
   }
-  // Direct-render texture, owned by the caller. External code may sample or copy from it.
-  const gpu::Texture* target = nullptr;
   gpu::TextureView targetView;
   std::unique_ptr<gpu::CommandEncoder> ownedCommandEncoder;
   gpu::CommandEncoder* commandEncoder = nullptr;
@@ -1257,7 +1255,6 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
   impl.pipeline = &fillPipeline;
   impl.gradientPipeline = &gradientPipeline;
   impl.imagePipeline = &imagePipeline;
-  impl.target = &target;
   gpu::Result<gpu::TextureView> view = impl.gpuContext->gpuDevice->createTextureView(
       target, gpu::TextureViewDescriptor{"GeoEncoderTargetView"});
   if (!view.hasError()) {

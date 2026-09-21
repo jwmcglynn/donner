@@ -668,6 +668,9 @@ TEST_P(FrameEncoderCloseFailureTest, APopWhoseCloseFailsAbandonsInsteadOfRecordi
     renderer.pushIsolatedLayer(0.8, MixBlendMode::Multiply);
   } else if (kind == "Mask") {
     renderer.pushMask(std::nullopt, MaskType::Luminance);
+  } else if (kind == "PatternTile") {
+    ASSERT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+                testing::IsTrue());
   } else {
     renderer.pushFilterLayer(FilterGraph{}, Box2d({0, 0}, {kViewportSize, kViewportSize}));
   }
@@ -678,6 +681,8 @@ TEST_P(FrameEncoderCloseFailureTest, APopWhoseCloseFailsAbandonsInsteadOfRecordi
   if (kind == "Mask") {
     renderer.transitionMaskToContent();
     renderer.popMask();
+  } else if (kind == "PatternTile") {
+    renderer.endPatternTile(/*forStroke=*/false);
   } else if (kind == "Filter") {
     renderer.popFilterLayer();
   } else {
@@ -696,7 +701,8 @@ TEST_P(FrameEncoderCloseFailureTest, APopWhoseCloseFailsAbandonsInsteadOfRecordi
 }
 
 INSTANTIATE_TEST_SUITE_P(EveryPopThatRetires, FrameEncoderCloseFailureTest,
-                         testing::Values("IsolatedLayer", "BlendedLayer", "Mask", "Filter"),
+                         testing::Values("IsolatedLayer", "BlendedLayer", "Mask", "PatternTile",
+                                         "Filter"),
                          [](const testing::TestParamInfo<const char*>& info) {
                            return std::string(info.param);
                          });

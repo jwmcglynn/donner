@@ -1659,6 +1659,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// nondeterministic large-area corruption. The wait is bounded, and a timeout is reported as a
   /// failure so the frame is abandoned rather than recorded against unproven work.
   [[nodiscard]] bool splitFrameSubmission() {
+    if (frameCommandBuffers.empty()) {
+      return true;  // Nothing was split, so there is no edge to wait across.
+    }
     if (!submitFrameCommandBuffers()) {
       return false;
     }
@@ -2115,6 +2118,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // reached the queue, so this splits the frame the same way reaching the bound on one
     // submission does.
     if (!closeFrameGpuEncoder(false) || !splitFrameSubmission()) {
+      // The frame has no encoder to record into any more, and every later push and pop records
+      // through one. The caller reads a refusal here as "no room for this filter" and carries on
+      // drawing, so the abandonment has to be declared rather than reported through the return.
+      device->markDeviceLost("the frame's recorded draws could not be split mid-frame");
+      abandonFrameRecording();
       return false;
     }
     frameGpuEncoders.clear();
@@ -2123,6 +2131,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     drainPendingReleases();
 
     if (!openFrameGpuEncoder()) {
+      device->markDeviceLost("the frame's encoder could not be reopened after a mid-frame split");
+      abandonFrameRecording();
       return false;
     }
     replaceActiveEncoder(std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline,
