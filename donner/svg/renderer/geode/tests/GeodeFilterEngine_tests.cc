@@ -218,6 +218,11 @@ public:
 
   bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
     if (refuse_) return false;
+    // The renderer's frame submits what it holds when it reaches its own bound, so the double
+    // here does too: an execution must see the same split behaviour a real frame gives it.
+    if (submitAt_ != 0 && commandBuffers_.size() >= submitAt_) {
+      submit();
+    }
     commandBuffers_.push_back(std::move(commandBuffer));
     return true;
   }
@@ -232,18 +237,28 @@ public:
   /// Refuses every further command buffer, which is what a frame with no room left does.
   void refuseFurtherBuffers() { refuse_ = true; }
 
+  /// Submits once the frame holds \p count buffers, the way a real frame splits at its bound.
+  /// @param count Buffers to hold before submitting; zero never splits.
+  void setSubmitAt(size_t count) { submitAt_ = count; }
+
+  /// Submissions this frame has made.
+  size_t submissions() const { return submissions_; }
+
   /// Ends the frame: one submission carrying every buffer collected, in order.
   void submit() {
     if (commandBuffers_.empty()) return;
     EXPECT_THAT(device_.runtimeDevice().submit(commandBuffers_).hasResult(), testing::IsTrue());
     commandBuffers_.clear();
     retained_.clear();
+    ++submissions_;
   }
 
 private:
   GeodeDevice& device_;
   std::vector<gpu::CommandBuffer> commandBuffers_;
   std::vector<RetainedFilterResources> retained_;
+  size_t submitAt_ = 0;
+  size_t submissions_ = 0;
   bool refuse_ = false;
 };
 

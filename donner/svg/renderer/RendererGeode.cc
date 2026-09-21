@@ -1652,9 +1652,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Add \p commandBuffer to the frame, submitting what has accumulated first when the frame has
   /// already reached \ref kMaxFrameCommandBuffersPerSubmission.
   [[nodiscard]] bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
-    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission &&
-        !submitFrameCommandBuffers()) {
-      return false;
+    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission) {
+      if (!submitFrameCommandBuffers()) {
+        return false;
+      }
+      // A forced split is a cross-submit edge for whatever recorded the buffers on either side of
+      // it: a pass in the next submission may sample a storage texture the submitted one wrote,
+      // and on hardware Vulkan the automatic barrier for that races the async queue and produces
+      // nondeterministic large-area corruption. Wait the submitted work out, exactly as a filter
+      // execution does when it submits its chunks itself. Bounded: a timeout is reported as a
+      // failure, which abandons the frame rather than recording against unproven work.
+      if (device->isVulkan() && device->waitForQueueIdle() != geode::GpuWaitResult::Complete) {
+        return false;
+      }
     }
     frameCommandBuffers.push_back(std::move(commandBuffer));
     return true;
@@ -1759,6 +1769,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameRecordingAbandoned = true;
   }
 
+  /// Abandon the frame where there is no outer target to go back to, leaving the same state as
+  /// the filter-failure path: nothing submitted, and everything the frame recorded against
+  /// retained rather than returned to a reusable pool.
+  void abandonFrameRecording() {
+    const wgpu::Texture currentTarget = target;
+    abandonFrameRecordingAfterFilterFailure(currentTarget);
+  }
+
   std::unique_ptr<geode::GeoEncoder> encoder;
   std::vector<std::unique_ptr<geode::GeoEncoder>> frameFinishedEncoders;
 
@@ -1783,11 +1801,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
     encoder->finish();
-    // Replay before the encoder's recorded draws can outlive what they name: the resources a
+    // Close before the encoder's recorded draws can outlive what they name: the resources a
     // draw references stay alive only as long as whoever recorded it keeps them, and a
     // subsequent encoder is free to re-upload over them.
-    (void)flushFrameGpuEncoder();
+    const bool closed = flushFrameGpuEncoder();
     retireFinishedEncoder(std::move(encoder));
+    if (!closed) {
+      // The frame has no encoder to record into any more, and every later push and pop records
+      // through one. Abandon here so those take their abandoned path instead of recording
+      // against nothing.
+      device->markDeviceLost("the frame's recorded draws could not be closed");
+      abandonFrameRecording();
+    }
   }
 
   // Reusable scratch storage for gradient stop vectors - keeps the
@@ -2088,9 +2113,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!openFrameGpuEncoder()) {
       return false;
     }
-    encoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            activeTarget(), targetExtent(), *frameGpuEncoder);
+    replaceActiveEncoder(std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline,
+                                                             *imagePipeline, activeTarget(),
+                                                             targetExtent(), *frameGpuEncoder));
     configurePathEncoder(*encoder);
     encoder->setLoadPreserve();
     updateEncoderScissor();
@@ -2934,9 +2959,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           .closePath();
     }
 
-    encoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            activeTarget(), targetExtent(), *frameGpuEncoder);
+    replaceActiveEncoder(std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline,
+                                                             *imagePipeline, activeTarget(),
+                                                             targetExtent(), *frameGpuEncoder));
     configureEncoder(*encoder);
     encoder->setLoadPreserve();
     encoder->setTransform(Transform2d());
@@ -5341,13 +5366,17 @@ void RendererGeode::endFrame() {
   // render passes (base + every pushed layer / filter / mask) execute on the GPU in program
   // order.
   if (impl_->frameRecordingOpen) {
-    UTILS_RELEASE_ASSERT_MSG(impl_->closeFrameGpuEncoder(false),
-                             "Failed to close the frame's recorded draws");
-    UTILS_RELEASE_ASSERT_MSG(impl_->submitFrameCommandBuffers(),
-                             "Failed to submit the frame's command buffers");
+    // That submission re-validates every resource the frame's command buffers name, so a handle
+    // dropped anywhere in the frame fails here. Drop the frame, not the process: a document must
+    // not be able to take the renderer down.
+    const bool submitted = impl_->closeFrameGpuEncoder(false) && impl_->submitFrameCommandBuffers();
+    if (!submitted) {
+      impl_->device->markDeviceLost("the frame's command buffers could not be submitted");
+    }
     impl_->frameRecordingOpen = false;
     impl_->frameGpuEncoders.clear();
     impl_->frameFinishedEncoders.clear();
+    impl_->frameCommandBuffers.clear();
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
     impl_->frameRetainedFilterResources.clear();
@@ -5356,6 +5385,12 @@ void RendererGeode::endFrame() {
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
     impl_->device->drainDeferredTextureBackings();
+    if (!submitted) {
+      // Whether any of what the frame recorded reached the queue is exactly what the failure
+      // leaves unknown, so nothing it named may go back to a reusable pool.
+      impl_->retainPendingFrameReleasesAfterFailure();
+      impl_->frameRecordingAbandoned = true;
+    }
   }
 
   // The frame's work is submitted, so nothing it recorded can still be waiting

@@ -303,10 +303,9 @@ public:
    */
   Result<CommandBuffer> finish();
 
-  /// Commands recorded so far. A caller splitting one frame across several command buffers reads
-  /// it to leave an encoder that has recorded nothing open: finishing it would spend one of the
-  /// submission's \ref Device::kMaxCommandBuffersPerSubmission slots on a buffer with no work in
-  /// it.
+  /// Number of commands recorded so far; zero until the first operation records one, and frozen
+  /// once \ref finish has transferred them. A caller that splits its work across command buffers
+  /// reads it to tell an encoder with nothing in it from one worth finishing.
   size_t recordedCommandCount() const { return commands_.size(); }
 
 private:

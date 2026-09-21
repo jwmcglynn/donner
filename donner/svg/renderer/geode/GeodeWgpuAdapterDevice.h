@@ -215,8 +215,7 @@ private:
 
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
-    ScopedWgpuHandle<wgpu::CommandEncoder> ownedEncoder;  //!< Encoder this adapter owns.
-    wgpu::CommandEncoder encoder;  //!< Borrowed alias of \ref ownedEncoder, used for encoding.
+    ScopedWgpuHandle<wgpu::CommandEncoder> encoder;          //!< Encoder this adapter records into.
     ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;          //!< Active render pass, or empty.
     ScopedWgpuHandle<wgpu::ComputePassEncoder> computePass;  //!< Active compute pass, or empty.
   };

@@ -549,9 +549,9 @@ TEST_F(RendererGeodeTest, FilterChunkBoundaryInsideAFrameClosesBuffersWithoutSub
   beginFrame(renderer);
   ASSERT_THAT(device->counters(), testing::NotNull());
   const geode::GeodeCounters* counters = device->counters();
-  // Armed one-shot: the completion wait a chunk boundary used to force would consume it and
-  // report a hang, which is terminal. Nothing inside a frame may take that wait now, because the
-  // passes on both sides of the boundary belong to one submission and are ordered by it.
+  // Armed for one wait: the completion wait a chunk boundary used to force would consume it and
+  // report a hang, which is terminal. A boundary inside one submission may not take that wait,
+  // because the passes on both sides of it belong to that submission and are ordered by it.
   device->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
 
   renderer.pushFilterLayer(MultiChunkMorphologyGraph(),
@@ -572,6 +572,72 @@ TEST_F(RendererGeodeTest, FilterChunkBoundaryInsideAFrameClosesBuffersWithoutSub
   EXPECT_THAT(counters->submits, testing::Eq(1u));
   EXPECT_THAT(counters->commandBuffers, testing::Ge(3u))
       << "the graph's passes must still be spread across several command buffers";
+}
+
+/// Draws a filter whose chunks pass the most command buffers one submission carries, so the
+/// frame has to split. The graph is ordinary; what multiplies its passes is the small working
+/// tile the caller sets on the engine, which keeps the document (and the case) small.
+/// @param renderer Renderer with an open frame, on a device whose maximum tile extent is small.
+void DrawFilterGraphPastTheSubmissionBound(RendererGeode& renderer) {
+  using namespace components;
+  FilterGraph graph;
+  graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+  graph.elementBoundingBox = Box2d({0, 0}, Vector2d(1.1, 1.1));
+  FilterNode flood;
+  flood.primitive =
+      filter_primitive::Flood{.floodColor = css::Color(css::RGBA(255, 255, 255, 255))};
+  graph.nodes.push_back(flood);
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 2.0, .stdDeviationY = 2.0};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::Scale(1.1));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+  renderer.popFilterLayer();
+}
+
+TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndKeepsRecordingOrder) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  device->filterEngine().setMaximumTileExtentForTesting(16);
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+
+  DrawFilterGraphPastTheSubmissionBound(renderer);
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(counters->commandBuffers, testing::Gt(16u))
+      << "the fixture must actually pass the bound, or it pins nothing";
+  EXPECT_THAT(counters->submits, testing::Gt(1u))
+      << "a frame past the bound splits across submissions rather than handing the backend a "
+         "span it cannot acquire command buffers for";
+  // Submissions execute in the order they are made, so a split keeps the frame's recording order.
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsFalse());
+}
+
+TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  if (!device->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  device->filterEngine().setMaximumTileExtentForTesting(16);
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  // Armed for one wait. A split puts the pass that samples what the submitted buffers wrote in a
+  // later submission, which hardware Vulkan does not order automatically, so the split must wait
+  // that work out - and a wait that reports a hang must fail the frame closed.
+  device->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
+
+  DrawFilterGraphPastTheSubmissionBound(renderer);
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  device->setQueueWaitResultForTesting(std::nullopt);
 }
 
 TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {

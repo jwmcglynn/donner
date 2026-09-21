@@ -678,9 +678,12 @@ public:
   /// whole span has encoded, so that nothing reaches the queue when an element fails to encode.
   /// Native queues cap how many command buffers may be outstanding at once and block the
   /// acquiring thread at that cap, so a span large enough to reach it on its own would wait for
-  /// buffers only it could release. Refusing above this bound keeps that wait impossible and
-  /// leaves plenty of room: a frame split at the bound a backend needs runs to tens of buffers,
-  /// not hundreds.
+  /// buffers only it could release.
+  ///
+  /// This is the refusal bound, not a promise that every smaller span clears that cap on every
+  /// backend: the cap belongs to the native queue, and a backend layered over another API can sit
+  /// far below this one. A caller splitting a frame picks a bound its backend tolerates and stays
+  /// under it; this bound only keeps a span from being absurd.
   static constexpr size_t kMaxCommandBuffersPerSubmission = 256;
 
   /**

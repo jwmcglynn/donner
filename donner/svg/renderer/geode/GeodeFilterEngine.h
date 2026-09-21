@@ -25,7 +25,6 @@
 #include "donner/base/Transform.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {

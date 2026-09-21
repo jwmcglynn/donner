@@ -193,7 +193,7 @@ struct FilterResourceArena {
             return (value.srgb == texture || value.linear == texture) &&
                    (live(value.srgb) || live(value.linear));
           });
-      // Queue uploads can precede earlier reads still recorded in the host encoder.
+      // Queue uploads can precede earlier reads that are recorded but not yet submitted.
       owned.available = !gpu::HasAllFlags(owned.desc.usage, gpu::TextureUsage::CopyDst) &&
                         !live(texture) && !representationIsLive;
     }
@@ -454,8 +454,9 @@ struct FilterResourceArena {
     // sampled-read barrier races the async queue and produces nondeterministic large-area filter
     // corruption, so force the submitted work to complete before recording continues.
     //
-    // Chunks that joined a frame take no wait: they are buffers of one submission, and the
-    // barrier the sampling buffer records is what orders it against the writing one.
+    // A chunk that joined a frame takes no wait here: it is one buffer of the frame's submission,
+    // and the barrier the sampling buffer records is what orders it against the writing one. A
+    // frame that has to split across submissions takes the same wait at the point it splits.
     //
     // The wait is bounded: a timeout declares device loss and fails this execution, so no output
     // or accepted-work backing can be detached or returned to a reusable pool.

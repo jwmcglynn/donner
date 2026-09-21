@@ -460,8 +460,11 @@ TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), counters);
 
   // The graph decomposes into far more passes than one command buffer may hold, so it must still
-  // be split; the split costs command buffers, not submissions.
+  // be split; the split costs command buffers, not submissions. The submission ceiling below
+  // holds only while the frame stays under the most buffers one submission carries, which this
+  // fixture does by a wide margin.
   EXPECT_GE(counters.commandBuffers, 3u);
+  EXPECT_LE(counters.commandBuffers, 16u);
   EXPECT_LE(counters.submits, 2u)
       << "the frame's command buffers belong to one submission, plus the snapshot readback's own";
 }

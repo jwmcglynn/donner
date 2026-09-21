@@ -1425,7 +1425,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeBeginRenderPass(
   passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
   passDescriptor.colorAttachmentCount = colorAttachments.size();
   passDescriptor.colorAttachments = colorAttachments.data();
-  state.pass.reset(state.encoder.beginRenderPass(passDescriptor));
+  state.pass.reset(state.encoder.get().beginRenderPass(passDescriptor));
   if (!state.pass) {
     return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
   }
@@ -1542,7 +1542,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeBeginComputePass(
     EncodingState& state, const gpu::BeginComputePassCommand& beginPass) {
   wgpu::ComputePassDescriptor passDescriptor = {};
   passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
-  state.computePass.reset(state.encoder.beginComputePass(passDescriptor));
+  state.computePass.reset(state.encoder.get().beginComputePass(passDescriptor));
   if (!state.computePass) {
     return GpuError{GpuErrorType::InvalidState, "wgpu compute pass creation failed"};
   }
@@ -1602,7 +1602,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToBuffer(
   destination.layout.bytesPerRow = copy.layout.bytesPerRow;
   destination.layout.rowsPerImage = copy.layout.rowsPerImage;
   const wgpu::Extent3D extent = {copy.copySize.width, copy.copySize.height, 1u};
-  state.encoder.copyTextureToBuffer(source, destination, extent);
+  state.encoder.get().copyTextureToBuffer(source, destination, extent);
   return OkStatus();
 }
 
@@ -1628,7 +1628,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToTexture(
   destination.texture = destinationTexture;
   destination.origin = {textureCopy.destinationOrigin.x, textureCopy.destinationOrigin.y, 0u};
   const wgpu::Extent3D extent = {textureCopy.copySize.width, textureCopy.copySize.height, 1u};
-  state.encoder.copyTextureToTexture(source, destination, extent);
+  state.encoder.get().copyTextureToTexture(source, destination, extent);
   return OkStatus();
 }
 
@@ -1769,15 +1769,14 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(
   finished.reserve(commandBuffers.size());
   for (const gpu::SubmittedCommandBuffer& commandBuffer : commandBuffers) {
     EncodingState state;
-    state.ownedEncoder.reset(geodeDevice_.device().createCommandEncoder());
-    state.encoder = state.ownedEncoder.get();
+    state.encoder.reset(geodeDevice_.device().createCommandEncoder());
 
     if (gpu::Status status = encodeSubmittedCommandBuffer(state, commandBuffer.commands);
         status.hasError()) {
       return status;
     }
 
-    finished.emplace_back(state.encoder.finish());
+    finished.emplace_back(state.encoder.get().finish());
     if (!finished.back()) {
       return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
     }
