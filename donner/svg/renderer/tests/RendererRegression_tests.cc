@@ -1144,6 +1144,61 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
                              Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
 }
 
+// `display: none` removes an element and its whole subtree from the rendering tree, so nothing
+// inside it contributes to an ancestor's object bounding box. `display` does not inherit, so the
+// `<text>` and `<rect>` below still report boxes of their own when asked directly; it is the
+// hidden ancestor that keeps them out of the container's box.
+TEST_F(RendererRegressionTests, GroupObjectBoundingBoxExcludesDisplayNoneSubtrees) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 400 400" font-family="Noto Sans" font-size="40">
+      <g id="group">
+        <g display="none">
+          <text id="hiddenText" x="250" y="300">Text</text>
+          <rect id="hiddenRect" x="300" y="330" width="40" height="40"/>
+        </g>
+        <g>
+          <text id="shownText" x="20" y="60">Text</text>
+        </g>
+      </g>
+    </svg>
+  )",
+                                            {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  // Rendering prepares the text layout that the bounding box is derived from.
+  ASSERT_THAT(RenderDocumentWithBackend(document, RendererBackend::TinySkia).empty(),
+              testing::IsFalse());
+
+  auto group = document.querySelector("#group");
+  auto hiddenText = document.querySelector("#hiddenText");
+  auto hiddenRect = document.querySelector("#hiddenRect");
+  auto shownText = document.querySelector("#shownText");
+  ASSERT_THAT(group, testing::Ne(std::nullopt));
+  ASSERT_THAT(hiddenText, testing::Ne(std::nullopt));
+  ASSERT_THAT(hiddenRect, testing::Ne(std::nullopt));
+  ASSERT_THAT(shownText, testing::Ne(std::nullopt));
+
+  // The visible text inside a nested group is the whole of the expected box, which also proves the
+  // traversal is not over-pruned into skipping visible nested subtrees.
+  const Box2d expected = shownText->cast<SVGTextElement>().objectBoundingBox();
+  ASSERT_THAT(expected.isEmpty(), testing::IsFalse());
+
+  const Box2d hiddenTextBox = hiddenText->cast<SVGTextElement>().objectBoundingBox();
+  const std::optional<Box2d> hiddenRectBox =
+      components::ShapeSystem().getShapeBounds(hiddenRect->entityHandle());
+  ASSERT_THAT(hiddenTextBox.isEmpty(), testing::IsFalse()) << "hidden text box: " << hiddenTextBox;
+  ASSERT_THAT(hiddenRectBox, testing::Ne(std::nullopt));
+  // Both hidden boxes must lie outside the expected box, otherwise including them would not be
+  // observable and this test could not fail.
+  ASSERT_THAT(hiddenTextBox.topLeft.x, testing::Gt(expected.bottomRight.x));
+  ASSERT_THAT(hiddenRectBox->topLeft.x, testing::Gt(expected.bottomRight.x));
+
+  const std::optional<Box2d> actual =
+      components::ShapeSystem().getShapeBounds(group->entityHandle());
+  ASSERT_THAT(actual.has_value(), testing::IsTrue());
+  EXPECT_THAT(*actual, BoxEq(Vector2Near(expected.topLeft.x, expected.topLeft.y),
+                             Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
+}
+
 // SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
 // covers all of its text element's content must render exactly as the same effect on the text
 // element. Both forms resolve objectBoundingBox effect regions through the same glyph-cell box, so
@@ -1192,6 +1247,98 @@ TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElem
     ExpectBitmapsDiffer(expected, unaffected, std::string("effect_on_text_changes_") + effect.name);
     ExpectBitmapsIdentical(actual, expected, std::string("effect_on_tspan_") + effect.name);
   }
+}
+
+// `visibility` is inherited and a descendant may set it back to `visible`, so a visible span
+// inside a `visibility: hidden` `<text>` still paints. The text element renders as a unit through
+// one rendering instance, and its draw already filters glyphs per span, so the instance has to
+// survive the element's own hidden style for that filter to have anything to run on.
+TEST_F(RendererRegressionTests, VisibleSpanInsideHiddenTextRootStillPaints) {
+  const std::string kPrefix = R"svg(<g font-family="Noto Sans" font-size="40">)svg";
+  const std::string kSuffix = R"svg(</g>)svg";
+  const std::string kHiddenRoot =
+      R"svg(<text x="20" y="60" visibility="hidden"><tspan visibility="visible">Text</tspan>)svg"
+      R"svg(</text>)svg";
+  const std::string kVisibleRoot =
+      R"svg(<text x="20" y="60"><tspan visibility="visible">Text</tspan></text>)svg";
+  const std::string kNoOverride =
+      R"svg(<text x="20" y="60" visibility="hidden"><tspan>Text</tspan></text>)svg";
+
+  SVGDocument hiddenRoot =
+      instantiateSubtree(kPrefix + kHiddenRoot + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument visibleRoot =
+      instantiateSubtree(kPrefix + kVisibleRoot + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument noOverride =
+      instantiateSubtree(kPrefix + kNoOverride + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument noText = instantiateSubtree(kPrefix + kSuffix, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(hiddenRoot, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(visibleRoot, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(noOverride, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(noText, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(hiddenRoot, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(visibleRoot, ActiveRendererBackend());
+  const RendererBitmap inherited = RenderDocumentWithBackend(noOverride, ActiveRendererBackend());
+  const RendererBitmap blank = RenderDocumentWithBackend(noText, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse()) << "the hidden-root document rendered nothing";
+  ASSERT_THAT(expected.empty(), testing::IsFalse()) << "the visible-root document rendered nothing";
+
+  // The span paints at all, so the comparison below cannot hold with nothing painted on either
+  // side.
+  ExpectVisibleBitmap(expected, "visible_span_inside_visible_text_root");
+  ExpectBitmapsIdentical(actual, expected, "visible_span_inside_hidden_text_root");
+  // A span that inherits the hidden root's visibility still paints nothing, so the fix is a filter
+  // on the instance's spans rather than the removal of the visibility gate.
+  ExpectBitmapsIdentical(inherited, blank, "hidden_text_root_without_visible_span");
+}
+
+// `visibility` is inherited, and a descendant may set it back to `visible`, so a visible span
+// nested inside a `visibility: hidden` span still paints. A span that declares `clip-path`, `mask`
+// or `filter` is painted by its own rendering instance, and the visible descendant's glyphs belong
+// to that instance, so suppressing the instance from the hidden span's own style would drop them.
+// A full-coverage clip path changes nothing it is applied to, which makes the render with the
+// effect comparable to the same markup without it.
+TEST_F(RendererRegressionTests, VisibleSpanInsideHiddenEffectSpanStillPaints) {
+  const std::string kPrefix =
+      R"svg(<clipPath id="c"><rect x="0" y="0" width="200" height="200"/></clipPath>)svg"
+      R"svg(<g font-family="Noto Sans" font-size="40">)svg";
+  const std::string kSuffix = R"svg(</g>)svg";
+  const std::string kVisibleInsideHidden =
+      R"svg(<text x="20" y="60"><tspan visibility="hidden" clip-path="url(#c)">)svg"
+      R"svg(<tspan visibility="visible">Text</tspan></tspan></text>)svg";
+  const std::string kVisibleInsideHiddenNoEffect =
+      R"svg(<text x="20" y="60"><tspan visibility="hidden">)svg"
+      R"svg(<tspan visibility="visible">Text</tspan></tspan></text>)svg";
+  const std::string kAllHidden =
+      R"svg(<text x="20" y="60"><tspan visibility="hidden" clip-path="url(#c)">Text</tspan>)svg"
+      R"svg(</text>)svg";
+
+  SVGDocument withEffect =
+      instantiateSubtree(kPrefix + kVisibleInsideHidden + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument withoutEffect =
+      instantiateSubtree(kPrefix + kVisibleInsideHiddenNoEffect + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument allHidden =
+      instantiateSubtree(kPrefix + kAllHidden + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument noText = instantiateSubtree(kPrefix + kSuffix, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(withEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(withoutEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(allHidden, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(noText, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(withEffect, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(withoutEffect, ActiveRendererBackend());
+  const RendererBitmap hiddenOnly = RenderDocumentWithBackend(allHidden, ActiveRendererBackend());
+  const RendererBitmap blank = RenderDocumentWithBackend(noText, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  // The override has to be observable without the effect, otherwise the comparison below would
+  // hold with nothing painted on either side.
+  ExpectVisibleBitmap(expected, "visible_span_inside_hidden_span_no_effect");
+  ExpectBitmapsIdentical(actual, expected, "visible_span_inside_hidden_effect_span");
+  // A hidden span with no visible descendant still paints nothing, so the fix is a filter on the
+  // effect instance's spans rather than the removal of the visibility gate.
+  ExpectBitmapsIdentical(hiddenOnly, blank, "hidden_effect_span_without_visible_descendant");
 }
 
 // A `<use>` copy renders the referenced text through the light tree's laid-out spans, but the
