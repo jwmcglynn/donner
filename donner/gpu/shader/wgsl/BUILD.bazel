@@ -25,6 +25,7 @@ donner_cc_library(
     deps = [
         ":number",
         "//donner/base",
+        "//donner/gpu:gpu_limits",
     ],
 )
 
@@ -111,6 +112,7 @@ donner_cc_test(
     srcs = ["tests/Diagnostics_tests.cc"],
     deps = [
         ":frontend",
+        "//donner/gpu:gpu_limits",
         "@com_google_gtest//:gtest_main",
     ],
 )

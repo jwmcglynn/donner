@@ -1,9 +1,11 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <string>
 #include <string_view>
 
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/shader/wgsl/Parser.h"
 
 namespace donner::gpu::shader::wgsl {
@@ -22,6 +24,35 @@ void ExpectRejected(std::string_view source, ErrorCode expected) {
   const ParseResult parsed = Parse(source);
   EXPECT_EQ(parsed.diagnostic.code, expected) << "actual code " << unsigned(parsed.diagnostic.code);
   EXPECT_FALSE(parsed.hasResult());
+}
+
+/// Matches a WGSL source that Parse() accepts, naming the diagnostic when it does not.
+MATCHER(ParsedSuccessfully, "parses into a module without a diagnostic") {
+  const ParseResult parsed = Parse(std::string_view(arg));
+  *result_listener << "diagnostic code " << unsigned(parsed.diagnostic.code) << " over bytes ["
+                   << parsed.diagnostic.span.begin << ", " << parsed.diagnostic.span.end << ")";
+  return parsed.hasResult();
+}
+
+/// Matches a WGSL source that Parse() rejects with exactly `expected`, naming the actual code.
+MATCHER_P(RejectedWithCode, expected,
+          "is rejected with diagnostic code " + testing::PrintToString(unsigned(expected))) {
+  const ParseResult parsed = Parse(std::string_view(arg));
+  *result_listener << "diagnostic code " << unsigned(parsed.diagnostic.code) << " over bytes ["
+                   << parsed.diagnostic.span.begin << ", " << parsed.diagnostic.span.end
+                   << "), produced a module: " << (parsed.hasResult() ? "yes" : "no");
+  return parsed.diagnostic.code == expected && !parsed.hasResult();
+}
+
+/// A module declaring one texture at `binding` in group zero.
+std::string TextureBindingSource(uint32_t binding) {
+  return "@group(0) @binding(" + std::to_string(binding) + ") var t: texture_2d<f32>;\n";
+}
+
+/// A compute entry point whose declared workgroup size is 1x1x`depth`.
+std::string WorkgroupDepthSource(uint32_t depth) {
+  return "@compute @workgroup_size(1, 1, " + std::to_string(depth) +
+         ")\nfn cs(@builtin(global_invocation_id) gid: vec3<u32>) {}\n";
 }
 
 const DiagnosticCase kSemanticCases[] = {
@@ -128,6 +159,24 @@ TEST(Diagnostics, BindingLimitTripsOnOneBindingPastTheArena) {
               ": texture_2d<f32>;\n";
   }
   ExpectRejected(source, ErrorCode::BindingLimit);
+}
+
+TEST(Diagnostics, BindingIndexIsBoundedByTheRuntimeBindingCap) {
+  // Reflection turns every accepted binding into a bind group layout entry, and the runtime
+  // refuses an entry whose index reaches kMaxBindings. A higher index accepted here would compile
+  // to an artifact no device can bind.
+  EXPECT_THAT(TextureBindingSource(gpu::kMaxBindings - 1), ParsedSuccessfully());
+  EXPECT_THAT(TextureBindingSource(gpu::kMaxBindings), RejectedWithCode(ErrorCode::InvalidBinding));
+}
+
+TEST(Diagnostics, WorkgroupSizeIsBoundedByTheRuntimeComputeCaps) {
+  // A declared workgroup size reaches compute pipeline creation verbatim, which caps the Z extent
+  // well below the X and Y extents.
+  static_assert(gpu::kMaxComputeWorkgroupSizeZ < gpu::kMaxComputeWorkgroupSizeXY,
+                "The Z cap is the one this case distinguishes from the X and Y caps");
+  EXPECT_THAT(WorkgroupDepthSource(gpu::kMaxComputeWorkgroupSizeZ), ParsedSuccessfully());
+  EXPECT_THAT(WorkgroupDepthSource(gpu::kMaxComputeWorkgroupSizeZ + 1),
+              RejectedWithCode(ErrorCode::InvalidAttribute));
 }
 
 TEST(Diagnostics, SymbolLimitTripsOnModuleConstantsWithoutStatements) {
