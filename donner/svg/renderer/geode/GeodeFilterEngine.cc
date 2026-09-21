@@ -124,8 +124,11 @@ struct FilterResourceArena {
         hostLease_(hostLease),
         hostCommandBuffer_(hostCommandBuffer) {
     // A different lease names a different command buffer: the caller submitted or abandoned the
-    // one the count describes, so none of its passes are still open.
-    if (hostLease_.has_value() && hostCommandBuffer_.lease != hostLease_) {
+    // one the count describes, so none of its passes are still open. Only the runtime can say
+    // so - a stale or foreign lease is refused before anything is replayed, and must not clear a
+    // count that still describes a buffer another execution is filling.
+    if (hostLease_.has_value() && hostCommandBuffer_.lease != hostLease_ &&
+        device_.adapterDevice().hostCommandEncoderLease() == hostLease_) {
       hostCommandBuffer_ = {hostLease_, 0};
     }
   }
@@ -413,9 +416,16 @@ struct FilterResourceArena {
   /// document of many small filter graphs fill one buffer without any graph reaching the bound.
   static constexpr size_t kMaxPassesPerCommandBuffer = 64;
 
+  /// Passes the bound applies to: this execution's open chunk, plus the frame's host command
+  /// buffer when the chunk is destined for it. Without a lease the chunk reaches the queue
+  /// directly and cannot grow a buffer some other execution is filling.
+  size_t boundedPasses() const {
+    return passesInOpenChunk_ + (hostLease_.has_value() ? hostCommandBuffer_.passes : 0);
+  }
+
   /// Returns the runtime encoder for the next pass, closing the buffer that reached the bound.
   gpu::CommandEncoder* commandEncoder() {
-    if (passesInOpenChunk_ + hostCommandBuffer_.passes >= kMaxPassesPerCommandBuffer) {
+    if (boundedPasses() >= kMaxPassesPerCommandBuffer) {
       if (!closeChunkAtBound()) return nullptr;
     }
     if (!commandEncoder_) {
@@ -464,18 +474,18 @@ struct FilterResourceArena {
 
   /// Closes whatever holds the passes that reached \ref kMaxPassesPerCommandBuffer: this
   /// execution's open chunk, or - once earlier executions of the frame have filled it - the host
-  /// command buffer those chunks were replayed into.
+  /// command buffer those chunks were replayed into. Only a leased execution counts that buffer,
+  /// so reaching the bound with no chunk open means there is a lease to rotate.
   [[nodiscard]] bool closeChunkAtBound() {
-    if (commandEncoder_) return submitCommandBuffer(true);
-    // Without a lease this execution cannot close a buffer another one filled, and its own chunk
-    // will be refused before anything is replayed.
-    return !hostLease_.has_value() || rotateHostAfterBoundary();
+    return commandEncoder_ ? submitCommandBuffer(true) : rotateHostAfterBoundary();
   }
 
   bool submitCommandBuffer(bool boundary = false) {
     if (!commandEncoder_) return true;
     // Read before the chunk closes: passes in a chunk that is dropped rather than accepted never
-    // reach a command buffer, so they must not be left counted against the bound.
+    // reach a command buffer, so they must not be left counted against the bound. A submit that
+    // fails after validation may have encoded part of the chunk, which would leave the count
+    // low - but it declares device loss, which is terminal, so nothing records afterwards.
     const size_t chunkPasses = std::exchange(passesInOpenChunk_, size_t{0});
     gpu::Result<gpu::CommandBuffer> commands = commandEncoder_->finish();
     commandEncoder_.reset();

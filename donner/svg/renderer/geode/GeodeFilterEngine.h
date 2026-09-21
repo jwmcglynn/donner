@@ -362,12 +362,6 @@ private:
   friend struct FilterGraphExecution;
   friend struct FilterNodeExecution;
 
-  /// Filter passes already replayed into one host command buffer, and the lease naming it.
-  struct HostCommandBufferPasses {
-    /// Host command buffer \ref passes describes, or `std::nullopt` before one is leased.
-    std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> lease;
-    size_t passes = 0;  //!< Filter passes replayed into that buffer.
-  };
   /// Two-pass separable Gaussian blur via compute shader.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
@@ -687,12 +681,22 @@ private:
   FilterExecutionMemory lastExecutionMemory_;
   uint32_t preferredTileExtent_ = 512;
   bool adaptiveTiles_ = true;
+
+  /// Filter passes already replayed into one host command buffer, and the lease naming it.
+  struct HostCommandBufferPasses {
+    /// Host command buffer \ref passes describes, or `std::nullopt` before one is leased.
+    std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> lease;
+    size_t passes = 0;  //!< Filter passes replayed into that buffer.
+  };
+
   /// Filter passes the frame has replayed into the host command buffer it is recording through.
   /// An execution's final partial chunk is replayed into that buffer rather than queue-submitted,
   /// so the bound on one command buffer has to count every execution of the frame: a document
   /// with many small filter graphs would otherwise fill it without any single graph reaching the
   /// bound. Cleared by \ref beginFrame, by the rotation that puts the buffer on the queue, and
-  /// whenever a different buffer is leased.
+  /// whenever the runtime confirms a different buffer is leased. One count serves the device, so
+  /// two renderers must not interleave executions of different frames on it; \ref beginFrame
+  /// already requires callers to serialize one frame per device.
   HostCommandBufferPasses hostCommandBufferPasses_;
   std::function<void(size_t)> chunkSubmittedHookForTesting_;
 };
