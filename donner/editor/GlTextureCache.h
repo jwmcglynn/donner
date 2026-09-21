@@ -285,20 +285,17 @@ private:
   /// @param snapshot Snapshot to register.
   NativeTextureHandle registerSnapshotTexture(const svg::RendererTextureSnapshot& snapshot);
 
-  /// Returns the identifier an upload should publish: \p existing when the upload reused the
-  /// texture behind it, since re-registering would strand the live registration, and a fresh
-  /// registration of \p snapshot otherwise.
-  /// @param snapshot Snapshot the upload produced.
-  /// @param reusedTexture Whether the upload reused the entry's previous texture.
-  /// @param existing Identifier the entry already published.
-  NativeTextureHandle textureIdForUpload(const svg::RendererTextureSnapshot& snapshot,
-                                         bool reusedTexture, NativeTextureHandle existing);
-  /// Upload a CPU bitmap into a WGPU texture owned by the returned snapshot. Reuses
-  /// @p reusableSnapshot's texture when its allocation still fits the payload, so the
-  /// snapshot handed back may be the one passed in.
+  /// Upload a CPU bitmap into a runtime texture owned by the returned snapshot, or null when the
+  /// payload is invalid or the runtime refuses the upload.
+  ///
+  /// Every upload allocates its own texture rather than overwriting one this cache has already
+  /// published: the runtime write is chunked, so an in-place replacement that is refused part way
+  /// through would leave the presented allocation holding a mix of the old and new payloads. The
+  /// superseded allocation is handed to \ref retireSnapshots and released once its presentation
+  /// frames have elapsed, the same lifetime the cache already gives backend-produced snapshots.
+  /// @param bitmap Payload to upload.
   std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadBitmapToWgpu(
-      const svg::RendererBitmap& bitmap,
-      const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot = nullptr);
+      const svg::RendererBitmap& bitmap);
 #endif
 #ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
@@ -310,11 +307,6 @@ private:
   struct CachedTextureEntry {
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
-#ifdef DONNER_EDITOR_WGPU
-    /// Non-null when this cache uploaded the payload itself; aliases \ref textureSnapshot
-    /// and is the handle a later re-upload writes into.
-    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot;
-#endif
     CompositedTileTextureIdentity identity;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;

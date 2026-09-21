@@ -11,6 +11,7 @@
 
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/tests/CompositorDebugPanelTestAccess.h"
 
 namespace donner::editor {
 namespace {
@@ -111,6 +112,55 @@ TEST_F(CompositorDebugPanelImGuiTest, TileRowsExtendTheScrollableContentOfAShort
       << "ten extra tile rows only grew the panel's scrollable content from " << twoTiles << " to "
       << twelveTiles << " px; the tile table is not reachable in a " << kHostHeight
       << " px tall panel";
+}
+
+/// A tile carrying pixels whose extent has no area. Both upload branches treat it as having
+/// nothing to present.
+/// @param id Composite tile identifier.
+CompositeTileSnapshot DegenerateExtentTile(std::string id) {
+  CompositeTileSnapshot tile;
+  tile.kind = CompositeTileSnapshot::Kind::Segment;
+  tile.id = std::move(id);
+  tile.generation = 1;
+  tile.hasValidBitmap = true;
+  tile.thumbnailDims = Vector2i(0, 2);
+  tile.thumbnailPixels.assign(8u, 0xFFu);
+  return tile;
+}
+
+// Both upload branches share one presentability rule: a thumbnail buffer whose extent has no area
+// cannot be drawn, so the tile gets no preview resource at all.
+TEST_F(CompositorDebugPanelImGuiTest, DegenerateThumbnailExtentRegistersNothing) {
+  const CompositeTileSnapshot tile = DegenerateExtentTile("seg:degenerate");
+
+  EXPECT_THAT(CompositorDebugPanelTestAccess::upload(panel_, tile), testing::Eq(0u));
+  EXPECT_THAT(CompositorDebugPanelTestAccess::registrationCount(panel_), testing::Eq(0u))
+      << "A tile with nothing presentable must not leave a preview resource behind.";
+}
+
+// The same rule releases a registration the tile already had. Seeding one without a backing
+// texture keeps the release observable without a live graphics context.
+TEST_F(CompositorDebugPanelImGuiTest, DegenerateThumbnailExtentReleasesAnExistingRegistration) {
+  const CompositeTileSnapshot tile = DegenerateExtentTile("seg:degenerate");
+  CompositorDebugPanelTestAccess::seedRegistrationWithoutTexture(panel_, tile.id);
+  ASSERT_THAT(CompositorDebugPanelTestAccess::registrationCount(panel_), testing::Eq(1u));
+
+  EXPECT_THAT(CompositorDebugPanelTestAccess::upload(panel_, tile), testing::Eq(0u));
+  EXPECT_THAT(CompositorDebugPanelTestAccess::registrationCount(panel_), testing::Eq(0u))
+      << "The tile's existing registration must be released, not left behind for the panel to "
+         "keep drawing.";
+}
+
+// A thumbnail buffer shorter than its own extent cannot be uploaded: reading the full extent
+// would run past the source. The refusal keeps whatever the tile last published.
+TEST_F(CompositorDebugPanelImGuiTest, ShortThumbnailStorageRegistersNothing) {
+  CompositeTileSnapshot tile = DegenerateExtentTile("seg:short-storage");
+  tile.thumbnailDims = Vector2i(3, 2);
+  tile.thumbnailPixels.assign(23u, 0xFFu);
+
+  EXPECT_THAT(CompositorDebugPanelTestAccess::upload(panel_, tile), testing::Eq(0u));
+  EXPECT_THAT(CompositorDebugPanelTestAccess::registrationCount(panel_), testing::Eq(0u))
+      << "A buffer covering only part of its extent must be refused before it is read.";
 }
 
 }  // namespace

@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstring>
 #include <iterator>
-#include <limits>
 #include <utility>
 
 #include "donner/editor/TracyWrapper.h"
@@ -286,8 +285,6 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     Vector2i allocationDims = Vector2i::Zero();
     Vector2d uvBottomRight(1.0, 1.0);
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
-    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot;
-    bool reusedTexture = false;
 
     if (tile.textureSnapshot != nullptr) {
       textureId = registerSnapshotTexture(*tile.textureSnapshot);
@@ -295,10 +292,10 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       allocationDims = textureDims;
       textureSnapshot = tile.textureSnapshot;
     } else if (!tile.bitmap.empty()) {
-      uploadedSnapshot = uploadBitmapToWgpu(tile.bitmap, entry->uploadedSnapshot);
+      const std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot =
+          uploadBitmapToWgpu(tile.bitmap);
       if (uploadedSnapshot != nullptr) {
-        reusedTexture = uploadedSnapshot == entry->uploadedSnapshot;
-        textureId = textureIdForUpload(*uploadedSnapshot, reusedTexture, entry->texture);
+        textureId = registerSnapshotTexture(*uploadedSnapshot);
         textureDims = tile.bitmap.dimensions;
         allocationDims = uploadedSnapshot->allocationDimensions();
         uvBottomRight = TextureUvBottomRightForPayload(textureDims, allocationDims);
@@ -313,7 +310,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       return false;
     }
 
-    if (entry->texture != 0 && !reusedTexture) {
+    if (entry->texture != 0) {
       retiredSnapshots.push_back(RetiredSnapshot{
           .texture = entry->texture,
           .snapshot = std::move(entry->textureSnapshot),
@@ -322,7 +319,6 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     }
     entry->texture = textureId;
     entry->textureSnapshot = std::move(textureSnapshot);
-    entry->uploadedSnapshot = std::move(uploadedSnapshot);
     entry->identity = tileIdentity;
     entry->uploadedGeneration = tile.generation;
     entry->width = textureDims.x;
@@ -524,8 +520,6 @@ void GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
     Vector2i allocationDims = Vector2i::Zero();
     Vector2d uvBottomRight(1.0, 1.0);
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
-    std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot;
-    bool reusedTexture = false;
 
     if (tile.textureSnapshot != nullptr) {
       textureId = registerSnapshotTexture(*tile.textureSnapshot);
@@ -533,10 +527,10 @@ void GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
       allocationDims = textureDims;
       textureSnapshot = tile.textureSnapshot;
     } else if (!tile.bitmap.empty()) {
-      uploadedSnapshot = uploadBitmapToWgpu(tile.bitmap, entry->uploadedSnapshot);
+      const std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot =
+          uploadBitmapToWgpu(tile.bitmap);
       if (uploadedSnapshot != nullptr) {
-        reusedTexture = uploadedSnapshot == entry->uploadedSnapshot;
-        textureId = textureIdForUpload(*uploadedSnapshot, reusedTexture, entry->texture);
+        textureId = registerSnapshotTexture(*uploadedSnapshot);
         textureDims = tile.bitmap.dimensions;
         allocationDims = uploadedSnapshot->allocationDimensions();
         uvBottomRight = TextureUvBottomRightForPayload(textureDims, allocationDims);
@@ -551,7 +545,7 @@ void GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
       return false;
     }
 
-    if (entry->texture != 0 && !reusedTexture) {
+    if (entry->texture != 0) {
       retiredSnapshots.push_back(RetiredSnapshot{
           .texture = entry->texture,
           .snapshot = std::move(entry->textureSnapshot),
@@ -560,7 +554,6 @@ void GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
     }
     entry->texture = textureId;
     entry->textureSnapshot = std::move(textureSnapshot);
-    entry->uploadedSnapshot = std::move(uploadedSnapshot);
     entry->identity = tileIdentity;
     entry->uploadedGeneration = tile.generation;
     entry->width = textureDims.x;
@@ -716,18 +709,17 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::uploadThumbnail(
   }
 
 #ifdef DONNER_EDITOR_WGPU
-  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot =
-      uploadBitmapToWgpu(bitmap, entry.uploadedSnapshot);
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedSnapshot = uploadBitmapToWgpu(bitmap);
   if (uploadedSnapshot == nullptr) {
+    // The refused upload never touched the published allocation, so the preview the caller is
+    // already drawing stays exactly as it was.
     return ThumbnailTextureView{
         .texture = ToImTextureId(entry.texture),
         .uvBottomRight = entry.uvBottomRight,
     };
   }
-  const bool reusedTexture = uploadedSnapshot == entry.uploadedSnapshot;
-  const NativeTextureHandle textureId =
-      textureIdForUpload(*uploadedSnapshot, reusedTexture, entry.texture);
-  if (entry.texture != 0 && !reusedTexture) {
+  const NativeTextureHandle textureId = registerSnapshotTexture(*uploadedSnapshot);
+  if (entry.texture != 0) {
     RetiredSnapshotBatch retiredSnapshots;
     retiredSnapshots.push_back(RetiredSnapshot{
         .texture = entry.texture,
@@ -737,8 +729,7 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::uploadThumbnail(
     retireSnapshots(std::move(retiredSnapshots));
   }
   const Vector2i allocationDimensions = uploadedSnapshot->allocationDimensions();
-  entry.textureSnapshot = uploadedSnapshot;
-  entry.uploadedSnapshot = std::move(uploadedSnapshot);
+  entry.textureSnapshot = std::move(uploadedSnapshot);
   entry.texture = textureId;
   entry.width = bitmap.dimensions.x;
   entry.height = bitmap.dimensions.y;
@@ -790,7 +781,6 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::retainThumbnailTextureSnaps
 
   entry.texture = textureId;
   entry.textureSnapshot = std::move(textureSnapshot);
-  entry.uploadedSnapshot.reset();
   entry.identity = CompositedTileTextureIdentity{};
   entry.uploadedGeneration = 0;
   entry.width = entry.textureSnapshot->dimensions().x;
@@ -951,15 +941,6 @@ void GlTextureCache::releaseImGuiTexture(NativeTextureHandle texture) {
   registeredBackings_.erase(backing);
 }
 
-GlTextureCache::NativeTextureHandle GlTextureCache::textureIdForUpload(
-    const svg::RendererTextureSnapshot& snapshot, bool reusedTexture,
-    NativeTextureHandle existing) {
-  if (reusedTexture && existing != 0) {
-    return existing;
-  }
-  return registerSnapshotTexture(snapshot);
-}
-
 GlTextureCache::NativeTextureHandle GlTextureCache::registerSnapshotTexture(
     const svg::RendererTextureSnapshot& snapshot) {
   UiTextureBacking backing;
@@ -971,11 +952,10 @@ GlTextureCache::NativeTextureHandle GlTextureCache::registerSnapshotTexture(
 }
 
 std::shared_ptr<svg::RendererGeodeTextureSnapshot> GlTextureCache::uploadBitmapToWgpu(
-    const svg::RendererBitmap& bitmap,
-    const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot) {
-  return UploadRuntimeBitmap(
-      geodeDevice_, bitmap.pixels, bitmap.dimensions, bitmap.rowBytes, bitmap.alphaType,
-      PowerOfTwoTextureDimensionsForPayload(bitmap.dimensions), reusableSnapshot);
+    const svg::RendererBitmap& bitmap) {
+  return UploadRuntimeBitmap(geodeDevice_, bitmap.pixels, bitmap.dimensions, bitmap.rowBytes,
+                             bitmap.alphaType,
+                             PowerOfTwoTextureDimensionsForPayload(bitmap.dimensions));
 }
 
 void GlTextureCache::retireSnapshots(RetiredSnapshotBatch snapshots) {

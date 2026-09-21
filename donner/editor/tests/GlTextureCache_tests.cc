@@ -357,7 +357,7 @@ std::array<uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) 
   return {pixel[0], pixel[1], pixel[2], pixel[3]};
 }
 
-TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesPixelsAndClearsUnusedAllocationOnReuse) {
+TEST(GlTextureCacheTest, RuntimeBitmapUploadReplicatesBordersAndClearsUnusedAllocation) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
   GlTextureCache cache(device);
@@ -373,8 +373,10 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesPixelsAndClearsUnusedAlloca
   cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/2, second));
   std::shared_ptr<const svg::RendererGeodeTextureSnapshot> secondSnapshot = UploadedSnapshot(cache);
   ASSERT_NE(secondSnapshot, nullptr);
-  EXPECT_THAT(secondSnapshot.get(), testing::Eq(firstSnapshot.get()));
-  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsAfterFirstUpload));
+  EXPECT_THAT(secondSnapshot.get(), testing::Ne(firstSnapshot.get()))
+      << "A replacement must land in its own allocation instead of overwriting the one the "
+         "previous publication still presents.";
+  EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsAfterFirstUpload + 1u));
   EXPECT_THAT(secondSnapshot->dimensions(), testing::Eq(Vector2i(5, 5)));
   EXPECT_THAT(secondSnapshot->allocationDimensions(), testing::Eq(Vector2i(8, 8)));
 
@@ -390,6 +392,33 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesPixelsAndClearsUnusedAlloca
   EXPECT_THAT(PixelAt(allocation, 5, 5), testing::ElementsAre(44u, 44u, 48u, 255u));
   EXPECT_THAT(PixelAt(allocation, 6, 5), testing::ElementsAre(0u, 0u, 0u, 0u));
   EXPECT_THAT(PixelAt(allocation, 0, 6), testing::ElementsAre(0u, 0u, 0u, 0u));
+}
+
+// The runtime write is chunked, so a replacement that overwrote the allocation a live registration
+// still points at could leave that allocation holding part of the old payload and part of the new
+// one once any chunk was refused. The superseded allocation must therefore stay byte-identical to
+// what it was published with.
+TEST(GlTextureCacheTest, ReplacedTilePayloadLeavesTheSupersededAllocationIntact) {
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+
+  const svg::RendererBitmap published = MakeBitmap(Vector2i(5, 5), /*rowBytes=*/24u, /*seed=*/40u);
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/1, published));
+  std::shared_ptr<const svg::RendererGeodeTextureSnapshot> publishedSnapshot =
+      UploadedSnapshot(cache);
+  ASSERT_NE(publishedSnapshot, nullptr);
+
+  const svg::RendererBitmap replacement =
+      MakeBitmap(Vector2i(5, 5), /*rowBytes=*/24u, /*seed=*/90u);
+  cache.uploadComposited(SingleBitmapTilePreview(/*generation=*/2, replacement));
+  ASSERT_NE(UploadedSnapshot(cache), nullptr);
+
+  const svg::RendererBitmap retained = publishedSnapshot->takeSnapshot();
+  ASSERT_THAT(retained.dimensions, testing::Eq(Vector2i(5, 5)));
+  EXPECT_THAT(PixelAt(retained, 0, 0), testing::ElementsAre(40u, 40u, 40u, 255u));
+  EXPECT_THAT(PixelAt(retained, 4, 4), testing::ElementsAre(44u, 44u, 48u, 255u));
+  EXPECT_THAT(PixelAt(retained, 4, 0), testing::ElementsAre(44u, 40u, 44u, 255u));
 }
 
 TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBoundary) {

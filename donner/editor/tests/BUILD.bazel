@@ -231,6 +231,7 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
+            ":compositor_debug_panel_test_access",
             "//donner/base:base_test_utils",
             "//donner/editor:async_renderer",
             "//donner/editor:compositor_debug_panel",
@@ -647,6 +648,23 @@ donner_cc_test(
         ],
         "//conditions:default": [],
     }),
+)
+
+# The shared runtime bitmap uploader, exercised directly because it has no surface of its own:
+# each upload owns its allocation, and the storage and extent contracts an upload is refused on
+# before anything is allocated. The uploader only exists on the runtime backend, so this target
+# pins that backend rather than emitting an empty binary on the software-rasterizer lane.
+donner_cc_test(
+    name = "runtime_bitmap_upload_tests",
+    srcs = ["RuntimeBitmapUpload_tests.cc"],
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    deps = [
+        "//donner/editor:runtime_bitmap_upload",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_cc_test(
@@ -1153,10 +1171,22 @@ donner_cc_test(
     name = "compositor_debug_panel_tests",
     srcs = ["CompositorDebugPanel_tests.cc"],
     deps = [
+        ":compositor_debug_panel_test_access",
         "//donner/base",
         "//donner/editor:compositor_debug_panel",
         "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# One definition of the panel's test-only accessor, shared by every binary that reaches into its
+# private preview bookkeeping.
+donner_cc_library(
+    name = "compositor_debug_panel_test_access",
+    testonly = 1,
+    hdrs = ["CompositorDebugPanelTestAccess.h"],
+    deps = [
+        "//donner/editor:compositor_debug_panel",
     ],
 )
 
