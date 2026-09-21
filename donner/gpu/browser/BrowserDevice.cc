@@ -401,17 +401,16 @@ Result<BrowserObjectId> BrowserDevice::objectFor(BrowserObjectKind kind, uint32_
 
 Result<BrowserObjectId> BrowserDevice::registerObject(BrowserObjectKind kind, uint32_t slotIndex,
                                                       std::string_view operation) {
-  // A texture slot about to be reused may still be named as some surface's frame, because dropping
-  // a Surface handle reaches no backend hook: the runtime releases the surface and its frame
-  // without telling this device. Hand that frame back before the slot changes hands, or the record
-  // would go on naming a slot the caller now owns and teardown would take the caller's texture
-  // while orphaning the frame.
+  // The runtime hands a frame back before it retires the slot holding it, so this is not the
+  // primary release. It stays reachable because \ref releaseObject refuses a release issued from a
+  // thread that does not own the browser device: that leaves the runtime slot free while this
+  // device still records a frame against it. Hand the frame back before the slot changes hands, or
+  // teardown would take the caller's texture while orphaning the one the canvas is still holding.
   if (kind == BrowserObjectKind::Texture) {
     releaseFramesNaming(slotIndex);
   } else if (kind == BrowserObjectKind::Surface) {
-    // The mirror of the texture case: a surface slot can be reused while this device still records
-    // a frame against it, and the frame has to go back to the surface that supplied it before that
-    // surface is displaced, or the record would outlive the surface it names.
+    // The mirror of the texture case: a surface slot reused while this device still records a
+    // frame against it would leave that record naming a surface that is gone.
     releaseAcquiredFrame(slotIndex);
   }
 
@@ -1443,6 +1442,13 @@ void BrowserDevice::releaseAcquiredFrame(uint32_t surfaceSlotIndex) {
 
 void BrowserDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
   releaseAcquiredFrame(slotIndex);
+}
+
+void BrowserDevice::onDestroySurface(uint32_t slotIndex) {
+  // The frame is already back with the canvas by here: the runtime hands it over before it
+  // destroys the surface holding it. What is left is the canvas context itself, which the browser
+  // side keeps configured against this device for as long as an identifier names it.
+  releaseObject(BrowserObjectKind::Surface, slotIndex);
 }
 
 }  // namespace donner::gpu::browser

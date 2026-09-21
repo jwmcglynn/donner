@@ -56,6 +56,8 @@ donner_cc_library(
     ],
 )
 
+# The library is also driven directly, against a stub canvas and a stub GPU device, by
+# //donner/editor/wasm/tests:browser_bridge_surface_tests.
 exports_files(["library_donner_gpu.js"])
 
 # Links the bridge against its JavaScript library.
