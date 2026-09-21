@@ -3,11 +3,12 @@
 /// Headless libFuzzer target for the editor's viewport SVG export/serialization
 /// path (\ref donner::editor::ExportViewportAsSvg in ViewportSvgExport.cc).
 ///
-/// This is the editor's export/serialize surface: it hand-writes XML as
-/// strings (attribute carry-over, an injected `<defs><clipPath>`, a wrapping
-/// `<g>`) rather than going through a structured XML writer, which is exactly
-/// the kind of code that can mishandle escaping of untrusted attribute/text
-/// content. The fuzzer:
+/// This is the editor's export/serialize surface: root bounds, root attributes,
+/// and the external-reference check derive from the parsed XML tree (plus source
+/// anchors for verbatim slices), while the wrapper markup (an injected
+/// `<defs><clipPath>`, a wrapping `<g>`, carried attributes) is still emitted as
+/// strings with escaping, which is exactly the kind of code that can mishandle
+/// untrusted attribute/text content. The fuzzer:
 ///
 ///   1. Parses the raw input bytes as SVG via the engine's untrusted-input
 ///      parser (SVGParser::ParseSVG). Malformed input is expected and simply
@@ -42,8 +43,8 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
-#include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/ViewportSvgExport.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -61,7 +62,9 @@ constexpr std::size_t kMaxInputSize = 65536;
 /// rect keeps every run's viewBox math identical and lets the fuzzer spend
 /// its entropy on the SVG source instead. `Box2<int>` has no constexpr
 /// constructor, so this is a plain function rather than a constant.
-Recti RenderPaneRect() { return Recti(Vector2i(0, 0), Vector2i(400, 300)); }
+Recti RenderPaneRect() {
+  return Recti(Vector2i(0, 0), Vector2i(400, 300));
+}
 
 /// A fixed identity-ish viewport: `screenToDocument` maps the render pane
 /// rect above onto document-space `[0, 400] x [0, 300]`.

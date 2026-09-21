@@ -559,6 +559,10 @@ ParseDiagnostic MakeEditDiagnostic(RcString reason, SourceRange range) {
   return ParseDiagnostic::Error(std::move(reason), range);
 }
 
+/**
+ * Return true when two diagnostics describe the same failure. Line info is derived display
+ * data and is ignored: severity, reason, and byte offsets are the truth.
+ */
 bool DiagnosticEquals(const std::optional<ParseDiagnostic>& lhs,
                       const std::optional<ParseDiagnostic>& rhs) {
   if (lhs.has_value() != rhs.has_value()) {
@@ -569,25 +573,334 @@ bool DiagnosticEquals(const std::optional<ParseDiagnostic>& lhs,
     return true;
   }
 
-  return lhs->severity == rhs->severity && lhs->reason == rhs->reason && lhs->range == rhs->range;
+  return lhs->severity == rhs->severity && lhs->reason == rhs->reason &&
+         lhs->range.start.offset == rhs->range.start.offset &&
+         lhs->range.end.offset == rhs->range.end.offset;
 }
 
-void UpdateSourceDiagnostic(XMLDocument& document, ApplySourceEditResult& result,
-                            const XMLNode& node, std::optional<ParseDiagnostic> diagnostic) {
-  auto& context = document.registry().ctx().get<XMLDocumentContext>();
-  if (DiagnosticEquals(context.sourceDiagnostic, diagnostic)) {
+/**
+ * Map one span in pre-edit coordinates to post-edit coordinates for a source delta.
+ *
+ * Spans fully before the edit are unchanged; spans strictly after it shift by the net
+ * length change; spans the edit touches grow to the union, since the replacement bytes are
+ * unvalidated. A pure insertion exactly at a span's start grows the span (the new bytes
+ * precede its shifted content); a removal ending exactly there shifts it instead. Empty
+ * spans at the leading edit boundary stay put so a later covering reparse can still claim
+ * them; empty spans at the trailing boundary shift with the following content to keep
+ * tracking the post-edit gap.
+ */
+SourceEditRange MapSpanThroughDelta(SourceEditRange span, const XMLSourceDelta& delta) {
+  const std::size_t editStart = delta.offset;
+  const std::size_t editEnd = delta.offset + delta.removedLength;
+  if (span.end <= editStart) {
+    return span;
+  }
+  // Shifted offsets stay at or past editEnd, so the subtraction cannot underflow.
+  const auto shift = [&](std::size_t offset) {
+    return offset - delta.removedLength + delta.insertedLength;
+  };
+  if (span.start > editEnd ||
+      (span.start == editEnd && (delta.removedLength > 0 || delta.insertedLength == 0))) {
+    return SourceEditRange{.start = shift(span.start), .end = shift(span.end)};
+  }
+  return SourceEditRange{
+      .start = span.start < editStart ? span.start : editStart,
+      .end = span.end > editEnd ? shift(span.end) : editStart + delta.insertedLength};
+}
+
+/**
+ * Map a surfaced diagnostic range across a source edit. Offsets follow the same span rules;
+ * an endpoint that moved drops its line info (stale line numbers are worse than none).
+ * End-of-string-anchored ranges stay valid and are left alone.
+ */
+void MapDiagnosticRangeThroughDelta(ParseDiagnostic& diagnostic, const XMLSourceDelta& delta) {
+  if (!diagnostic.range.start.offset.has_value() || !diagnostic.range.end.offset.has_value()) {
     return;
   }
+  const SourceEditRange mapped =
+      MapSpanThroughDelta({*diagnostic.range.start.offset, *diagnostic.range.end.offset}, delta);
+  if (mapped.start != *diagnostic.range.start.offset) {
+    diagnostic.range.start = FileOffset::Offset(mapped.start);
+  }
+  if (mapped.end != *diagnostic.range.end.offset) {
+    diagnostic.range.end = FileOffset::Offset(mapped.end);
+  }
+}
 
-  context.sourceDiagnostic = diagnostic;
+/// Map every pending unreparsed span across a source change, merging spans the edit joined.
+void TranslateUnreparsedSpans(XMLDocument& document, const XMLSourceDelta& delta) {
+  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
+  for (auto& span : spans) {
+    const SourceEditRange mapped = MapSpanThroughDelta({span.start, span.end}, delta);
+    span.start = mapped.start;
+    span.end = mapped.end;
+    MapDiagnosticRangeThroughDelta(span.diagnostic, delta);
+  }
+  std::stable_sort(
+      spans.begin(), spans.end(),
+      [](const XMLDocumentContext::UnreparsedSpan& lhs,
+         const XMLDocumentContext::UnreparsedSpan& rhs) { return lhs.start < rhs.start; });
+  std::vector<XMLDocumentContext::UnreparsedSpan> merged;
+  // Merge only on true overlap or exact equality. Touching spans stay separate so later
+  // narrow successes can clear each side independently; merging them would stick the gate
+  // until an unlikely covering reparse.
+  for (auto& span : spans) {
+    const bool overlaps =
+        !merged.empty() && (span.start < merged.back().end ||
+                            (span.start == merged.back().start && span.end == merged.back().end));
+    if (overlaps) {
+      merged.back().end = std::max(merged.back().end, span.end);
+      if (span.sequence > merged.back().sequence) {
+        merged.back().diagnostic = std::move(span.diagnostic);
+        merged.back().sequence = span.sequence;
+      }
+    } else {
+      merged.push_back(std::move(span));
+    }
+  }
+  spans = std::move(merged);
+}
+
+/// Record a failed span in current source coordinates, merging whatever it touches.
+void AddUnreparsedSpan(XMLDocument& document, std::size_t start, std::size_t end,
+                       ParseDiagnostic diagnostic) {
+  auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  auto& spans = context.unreparsedSpans;
+  std::size_t mergedStart = start;
+  std::size_t mergedEnd = end;
+  // The set holds pairwise non-overlapping spans (touching allowed), so one pass suffices:
+  // nothing skipped early can overlap the final union without overlapping an
+  // already-merged member. Touching spans stay separate so each side can clear
+  // independently; exact duplicates still merge.
+  spans.erase(
+      std::remove_if(spans.begin(), spans.end(),
+                     [&](const XMLDocumentContext::UnreparsedSpan& span) {
+                       const bool overlaps = span.start < mergedEnd && mergedStart < span.end;
+                       const bool equal = span.start == mergedStart && span.end == mergedEnd;
+                       if (overlaps || equal) {
+                         mergedStart = std::min(mergedStart, span.start);
+                         mergedEnd = std::max(mergedEnd, span.end);
+                       }
+                       return overlaps || equal;
+                     }),
+      spans.end());
+  spans.push_back(
+      {mergedStart, mergedEnd, std::move(diagnostic), ++context.unreparsedSpanSequence});
+  // Bound the set: past the cap, coalesce to the whole document with the newest failure.
+  // Clearing then needs a covering reparse (or a fresh parse for degenerate empty-source
+  // states), which trades precision for bounded memory in pathological failure loops.
+  constexpr std::size_t kMaxUnreparsedSpans = 64;
+  if (spans.size() > kMaxUnreparsedSpans) {
+    auto newest = std::max_element(
+        spans.begin(), spans.end(),
+        [](const XMLDocumentContext::UnreparsedSpan& lhs,
+           const XMLDocumentContext::UnreparsedSpan& rhs) { return lhs.sequence < rhs.sequence; });
+    ParseDiagnostic diagnostic = std::move(newest->diagnostic);
+    const std::uint64_t sequence = newest->sequence;
+    spans.clear();
+    spans.push_back({0, document.source().size(), std::move(diagnostic), sequence});
+  }
+}
+
+/**
+ * Return true when a successfully validated fragment covers a pending span. Non-empty spans
+ * are covered by containment; empty spans only by strict interior, since a reparse does not
+ * see past its edges and absence at a boundary stays unvalidated. Deletions that consume
+ * broken bytes clear through DropSpansConsumedByRemoval instead, which runs before mapping
+ * and can tell consumed bytes from an abutting gap.
+ */
+bool SpanCoveredBy(const XMLDocumentContext::UnreparsedSpan& span, std::size_t start,
+                   std::size_t end) {
+  if (span.start == span.end) {
+    return start < span.start && span.start < end;
+  }
+  return start <= span.start && span.end <= end;
+}
+
+/// Derive the surfaced diagnostic from the pending spans: the newest failure, verbatim.
+/// After a merge this may name already-fixed bytes until the union clears; fail-closed and
+/// safe, potentially stale as a UI message.
+std::optional<ParseDiagnostic> DerivedSourceDiagnostic(const XMLDocument& document) {
+  const auto& spans = document.sharedRegistry()->ctx().get<XMLDocumentContext>().unreparsedSpans;
+  if (spans.empty()) {
+    return std::nullopt;
+  }
+  return std::max_element(spans.begin(), spans.end(),
+                          [](const XMLDocumentContext::UnreparsedSpan& lhs,
+                             const XMLDocumentContext::UnreparsedSpan& rhs) {
+                            return lhs.sequence < rhs.sequence;
+                          })
+      ->diagnostic;
+}
+
+/// Emit a SourceDiagnosticChanged mutation when the derived diagnostic changed.
+void EmitSpansChangedIfNeeded(XMLDocument& document, ApplySourceEditResult& result,
+                              const XMLNode& node, const std::optional<ParseDiagnostic>& before) {
+  std::optional<ParseDiagnostic> after = DerivedSourceDiagnostic(document);
+  if (DiagnosticEquals(before, after)) {
+    return;
+  }
   result.mutations.push_back(XMLMutation{
       .kind = XMLMutation::Kind::SourceDiagnosticChanged,
       .node = node,
       .attributeName = XMLQualifiedName(""),
       .value = std::nullopt,
-      .diagnostic = std::move(diagnostic),
+      .diagnostic = std::move(after),
       .scope = result.scope,
   });
+}
+
+/// Node location span in current coordinates, or nullopt when unavailable or unordered.
+std::optional<SourceEditRange> NodeSpanInCurrentCoords(const XMLNode& node) {
+  const std::optional<SourceRange> location = node.getNodeLocation();
+  if (!location.has_value() || !location->start.offset.has_value() ||
+      !location->end.offset.has_value() || *location->start.offset > *location->end.offset) {
+    return std::nullopt;
+  }
+  return SourceEditRange{*location->start.offset, *location->end.offset};
+}
+
+/**
+ * The fragment span a classified edit validates, in pre-edit coordinates, together with the node
+ * blamed for its span-change mutations. Both answers come from the same classification shape, so
+ * they are read out together rather than in two parallel switches.
+ *
+ * Callers capture the span before the source replacement and map it through the delta; locations
+ * resolve against current bytes, so capturing after the replacement would silently shift it.
+ * Unclassified edits validate nothing and leave the tree untouched, so their span is the edit
+ * range itself: the divergence is exactly the replaced bytes, blamed on the document root.
+ */
+struct ClassificationTarget {
+  SourceEditRange span;  ///< Fragment span the edit validates, in pre-edit coordinates.
+  XMLNode node;          ///< Node blamed for span-change mutations.
+};
+
+ClassificationTarget ClassifiedEditTarget(const XMLDocument& document,
+                                          const SourceEditClassification& classification,
+                                          SourceEditRange intentRange) {
+  if (classification.attribute.has_value()) {
+    const AttributeValueEdit& edit = *classification.attribute;
+    const SourceRange& location = edit.attributeLocation;
+    if (location.start.offset.has_value() && location.end.offset.has_value() &&
+        *location.start.offset <= *location.end.offset) {
+      return {SourceEditRange{*location.start.offset, *location.end.offset}, edit.node};
+    }
+    if (edit.valueStart <= edit.valueEnd) {
+      return {SourceEditRange{edit.valueStart, edit.valueEnd}, edit.node};
+    }
+    return {intentRange, edit.node};
+  }
+  if (classification.openingTag.has_value()) {
+    const OpeningTagEdit& edit = *classification.openingTag;
+    if (edit.tagStart <= edit.tagEnd) {
+      return {SourceEditRange{edit.tagStart, edit.tagEnd}, edit.node};
+    }
+    return {intentRange, edit.node};
+  }
+  if (classification.textNode.has_value()) {
+    const XMLNode& node = classification.textNode->node;
+    return {NodeSpanInCurrentCoords(node).value_or(intentRange), node};
+  }
+  if (classification.elementSubtree.has_value()) {
+    const XMLNode& node = classification.elementSubtree->node;
+    return {NodeSpanInCurrentCoords(node).value_or(intentRange), node};
+  }
+  return {intentRange, document.root()};
+}
+
+/**
+ * Replacement spans for folded deltas, in final coordinates. Each delta's offset is in
+ * pre-replace coordinates for its own step, so earlier spans map forward through later ones.
+ * No-op deltas validate nothing and contribute no region.
+ */
+std::vector<SourceEditRange> FinalReplacementSpans(const std::vector<XMLSourceDelta>& deltas) {
+  std::vector<SourceEditRange> spans;
+  for (const XMLSourceDelta& delta : deltas) {
+    for (auto& span : spans) {
+      span = MapSpanThroughDelta(span, delta);
+    }
+    if (delta.removedLength == 0 && delta.insertedLength == 0) {
+      continue;
+    }
+    spans.push_back({delta.offset, delta.offset + delta.insertedLength});
+  }
+  return spans;
+}
+
+/// Drop every pending span covered by any of the given regions.
+void RemoveSpansCoveredByAny(XMLDocument& document, const std::vector<SourceEditRange>& regions) {
+  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
+  spans.erase(std::remove_if(spans.begin(), spans.end(),
+                             [&](const XMLDocumentContext::UnreparsedSpan& span) {
+                               return std::any_of(regions.begin(), regions.end(),
+                                                  [&](const SourceEditRange& region) {
+                                                    return SpanCoveredBy(span, region.start,
+                                                                         region.end);
+                                                  });
+                             }),
+              spans.end());
+}
+
+/**
+ * Drop spans a constructed removal consumed: spans whose bytes lie fully inside the removed
+ * range are gone along with the mirrored tree content. This runs before mapping, while
+ * consumed bytes are still distinguishable from an abutting gap: an empty span at the
+ * removal edge marks a gap beside surviving content and must stay.
+ */
+void DropSpansConsumedByRemoval(XMLDocument& document, const XMLSourceDelta& delta) {
+  if (delta.removedLength == 0) {
+    return;
+  }
+  const std::size_t removeStart = delta.offset;
+  const std::size_t removeEnd = delta.offset + delta.removedLength;
+  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
+  spans.erase(std::remove_if(spans.begin(), spans.end(),
+                             [&](const XMLDocumentContext::UnreparsedSpan& span) {
+                               if (span.start < removeStart || span.end > removeEnd) {
+                                 return false;
+                               }
+                               return span.start < span.end ||
+                                      (removeStart < span.start && span.start < removeEnd);
+                             }),
+              spans.end());
+}
+
+/**
+ * Maintain spans after a DOM entry point changed source bytes successfully. The written
+ * regions are fresh by construction: tree surgery mirrored the splice, so consumed spans
+ * drop and covered spans are revalidated.
+ */
+void NoteConstructedSourceChange(XMLDocument& document, ApplySourceEditResult& result,
+                                 const XMLNode& node) {
+  const std::optional<ParseDiagnostic> before = DerivedSourceDiagnostic(document);
+  for (const XMLSourceDelta& delta : result.sourceDeltas) {
+    DropSpansConsumedByRemoval(document, delta);
+    TranslateUnreparsedSpans(document, delta);
+  }
+  RemoveSpansCoveredByAny(document, FinalReplacementSpans(result.sourceDeltas));
+  EmitSpansChangedIfNeeded(document, result, node, before);
+}
+
+/**
+ * Maintain spans after a DOM entry point changed source bytes but failed, leaving the tree
+ * untouched. The changed regions diverge and are recorded as broken. Paths that changed
+ * nothing are no-ops.
+ */
+void NotePartialSourceChange(XMLDocument& document, ApplySourceEditResult& result,
+                             const XMLNode& node) {
+  if (result.sourceDeltas.empty()) {
+    return;
+  }
+  UTILS_RELEASE_ASSERT_MSG(result.diagnostic.has_value(),
+                           "Partial source change must carry a diagnostic");
+  const std::optional<ParseDiagnostic> before = DerivedSourceDiagnostic(document);
+  for (const XMLSourceDelta& delta : result.sourceDeltas) {
+    TranslateUnreparsedSpans(document, delta);
+  }
+  for (const SourceEditRange& region : FinalReplacementSpans(result.sourceDeltas)) {
+    AddUnreparsedSpan(document, region.start, region.end, *result.diagnostic);
+  }
+  EmitSpansChangedIfNeeded(document, result, node, before);
 }
 
 SourceRange MakeNodeDiagnosticRange(const XMLNode& node) {
@@ -1926,30 +2239,14 @@ std::optional<ParseDiagnostic> PreflightSourceEdit(XMLDocument& document, XMLSou
   return std::nullopt;
 }
 
-ApplySourceEditResult FinishSourceEditWithDiagnostic(XMLDocument& document,
-                                                     ApplySourceEditResult result,
-                                                     ParseDiagnostic diagnostic,
-                                                     const XMLNode& node) {
-  result.diagnostic = std::move(diagnostic);
-  UpdateSourceDiagnostic(document, result, node, result.diagnostic);
-  return result;
-}
-
-ApplySourceEditResult FinishSourceEditSuccess(XMLDocument& document, ApplySourceEditResult result,
-                                              const XMLNode& node) {
-  UpdateSourceDiagnostic(document, result, node, std::nullopt);
-  return result;
-}
-
 ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
                                                 const OpeningTagEdit& edit,
                                                 ApplySourceEditResult result) {
   const std::optional<SourceRange> nodeLocation = edit.node.getNodeLocation();
   if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Opening tag edit left the node source range unavailable", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Opening tag edit left the node source range unavailable", intent.range);
+    return result;
   }
 
   const std::size_t tagStart = *nodeLocation->start.offset;
@@ -1960,34 +2257,30 @@ ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XML
       dirtyRange =
           SourceRange{FileOffset::Offset(tagStart), FileOffset::Offset(*nodeLocation->end.offset)};
     }
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Opening tag edit left the opening tag malformed", dirtyRange),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Opening tag edit left the opening tag malformed", dirtyRange);
+    return result;
   }
 
   const std::string_view fragment = document.source().substr(tagStart, *tagEnd - tagStart);
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseOpeningTag(
       fragment, IncrementalReparseOptions(document, fragment.size()));
   if (parsed.hasError()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        RebaseDiagnosticToDirtyRange(std::move(parsed).error(),
-                                     SourceEditRange{.start = tagStart, .end = *tagEnd}),
-        edit.node);
+    result.diagnostic = RebaseDiagnosticToDirtyRange(
+        std::move(parsed).error(), SourceEditRange{.start = tagStart, .end = *tagEnd});
+    return result;
   }
 
   std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
   if (!parsedNode.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Opening tag edit did not produce an element", intent.range), edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Opening tag edit did not produce an element", intent.range);
+    return result;
   }
   if (parsedNode->tagName() != edit.node.tagName()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Opening tag element rename is not implemented", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Opening tag element rename is not implemented", intent.range);
+    return result;
   }
 
   const AttributeMap currentAttributes = BuildAttributeMap(edit.node);
@@ -1995,7 +2288,7 @@ ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XML
   XMLNode target = edit.node;
   AppendAttributeMutations(target, currentAttributes, reparsedAttributes, result);
   SyncAttributeSourceLocationsFromParsed(target, *parsedNode, tagStart);
-  return FinishSourceEditSuccess(document, std::move(result), target);
+  return result;
 }
 
 ApplySourceEditResult ApplyRawTextSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
@@ -2005,35 +2298,30 @@ ApplySourceEditResult ApplyRawTextSourceEdit(XMLDocument& document, const XMLEdi
   const std::optional<SourceEditRange> updatedRange =
       nodeLocation.has_value() ? ResolveEditRange(*nodeLocation, document.source()) : std::nullopt;
   if (!updatedRange.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Text-like node edit left the node source range unavailable",
-                           intent.range),
-        edit.node);
+    result.diagnostic = MakeEditDiagnostic(
+        "Text-like node edit left the node source range unavailable", intent.range);
+    return result;
   }
 
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseTextLikeNode(
       document.source().substr(updatedRange->start, updatedRange->end - updatedRange->start));
   if (parsed.hasError()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        RebaseDiagnosticToDirtyRange(std::move(parsed).error(), *updatedRange), edit.node);
+    result.diagnostic = RebaseDiagnosticToDirtyRange(std::move(parsed).error(), *updatedRange);
+    return result;
   }
 
   std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
   if (!parsedNode.has_value() || parsedNode->type() != edit.node.type() ||
       parsedNode->nextSibling().has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Text-like node edit changed the local XML structure", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Text-like node edit changed the local XML structure", intent.range);
+    return result;
   }
   if (edit.node.type() == XMLNode::Type::ProcessingInstruction &&
       parsedNode->tagName() != edit.node.tagName()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Processing instruction target rename is not implemented", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Processing instruction target rename is not implemented", intent.range);
+    return result;
   }
 
   const RcString parsedValue = parsedNode->value().value_or(RcString(""));
@@ -2047,7 +2335,7 @@ ApplySourceEditResult ApplyRawTextSourceEdit(XMLDocument& document, const XMLEdi
       .value = parsedValue,
       .scope = ReparseScope::TextNode,
   });
-  return FinishSourceEditSuccess(document, std::move(result), target);
+  return result;
 }
 
 ApplySourceEditResult ApplyParsedTextSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
@@ -2055,34 +2343,30 @@ ApplySourceEditResult ApplyParsedTextSourceEdit(XMLDocument& document, const XML
                                                 ApplySourceEditResult result) {
   const std::optional<SourceEditRange> updatedRange = GetTextNodeSourceRange(document, edit);
   if (!updatedRange.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Text node edit left the node source range unavailable", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Text node edit left the node source range unavailable", intent.range);
+    return result;
   }
 
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParsePcdata(
       document.source().substr(updatedRange->start, updatedRange->end - updatedRange->start));
   if (parsed.hasError()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        RebaseDiagnosticToDirtyRange(std::move(parsed).error(), *updatedRange), edit.node);
+    result.diagnostic = RebaseDiagnosticToDirtyRange(std::move(parsed).error(), *updatedRange);
+    return result;
   }
 
   std::optional<XMLNode> parsedElement = parsed.result().root().firstChild();
   if (!parsedElement.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Text node edit did not produce a wrapper element", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Text node edit did not produce a wrapper element", intent.range);
+    return result;
   }
   std::optional<XMLNode> parsedTextNode = parsedElement->firstChild();
   if (!parsedTextNode.has_value() || parsedTextNode->type() != XMLNode::Type::Data ||
       parsedTextNode->nextSibling().has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Text node edit changed the local XML structure", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Text node edit changed the local XML structure", intent.range);
+    return result;
   }
 
   const RcString parsedValue = parsedTextNode->value().value_or(RcString(""));
@@ -2100,7 +2384,7 @@ ApplySourceEditResult ApplyParsedTextSourceEdit(XMLDocument& document, const XML
       .value = parsedValue,
       .scope = ReparseScope::TextNode,
   });
-  return FinishSourceEditSuccess(document, std::move(result), target);
+  return result;
 }
 
 ApplySourceEditResult ApplyTextSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
@@ -2118,11 +2402,9 @@ ApplySourceEditResult ApplyElementSubtreeSourceEdit(XMLDocument& document,
   const std::optional<SourceRange> nodeLocation = edit.node.getNodeLocation();
   if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
       !nodeLocation->end.offset.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Element subtree edit left the node source range unavailable",
-                           intent.range),
-        edit.node);
+    result.diagnostic = MakeEditDiagnostic(
+        "Element subtree edit left the node source range unavailable", intent.range);
+    return result;
   }
 
   const std::size_t nodeStart = *nodeLocation->start.offset;
@@ -2131,26 +2413,22 @@ ApplySourceEditResult ApplyElementSubtreeSourceEdit(XMLDocument& document,
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
       fragment, IncrementalReparseOptions(document, fragment.size()));
   if (parsed.hasError()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        RebaseDiagnosticToDirtyRange(std::move(parsed).error(),
-                                     SourceEditRange{.start = nodeStart, .end = nodeEnd}),
-        edit.node);
+    result.diagnostic = RebaseDiagnosticToDirtyRange(
+        std::move(parsed).error(), SourceEditRange{.start = nodeStart, .end = nodeEnd});
+    return result;
   }
 
   std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
   if (!parsedNode.has_value() || parsedNode->type() != XMLNode::Type::Element ||
       parsedNode->nextSibling().has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Element subtree edit did not produce one element", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Element subtree edit did not produce one element", intent.range);
+    return result;
   }
   if (parsedNode->tagName() != edit.node.tagName()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Element subtree edit renamed the target element", intent.range),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Element subtree edit renamed the target element", intent.range);
+    return result;
   }
 
   XMLNode target = edit.node;
@@ -2165,7 +2443,7 @@ ApplySourceEditResult ApplyElementSubtreeSourceEdit(XMLDocument& document,
       .scope = ReparseScope::ElementSubtree,
   });
   result.mutations.insert(result.mutations.end(), subtreeMutations.begin(), subtreeMutations.end());
-  return FinishSourceEditSuccess(document, std::move(result), target);
+  return result;
 }
 
 struct UpdatedAttributeRanges {
@@ -2205,10 +2483,9 @@ ApplySourceEditResult ApplyAttributeValueSourceEdit(XMLDocument& document,
   if (!ranges.attribute.has_value()) {
     const SourceRange diagnosticRange =
         ranges.value.has_value() ? ToSourceRange(*ranges.value) : intent.range;
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Attribute value edit left the opening tag malformed", diagnosticRange),
-        edit.node);
+    result.diagnostic =
+        MakeEditDiagnostic("Attribute value edit left the opening tag malformed", diagnosticRange);
+    return result;
   }
 
   ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseAttribute(document.source().substr(
@@ -2216,26 +2493,21 @@ ApplySourceEditResult ApplyAttributeValueSourceEdit(XMLDocument& document,
   if (parsed.hasError()) {
     const SourceEditRange diagnosticRange =
         ranges.value.has_value() ? *ranges.value : *ranges.attribute;
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        RebaseDiagnosticToDirtyRange(std::move(parsed).error(), diagnosticRange), edit.node);
+    result.diagnostic = RebaseDiagnosticToDirtyRange(std::move(parsed).error(), diagnosticRange);
+    return result;
   }
 
   std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
   if (!parsedNode.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Attribute value edit did not produce an element",
-                           ToSourceRange(*ranges.attribute)),
-        edit.node);
+    result.diagnostic = MakeEditDiagnostic("Attribute value edit did not produce an element",
+                                           ToSourceRange(*ranges.attribute));
+    return result;
   }
   std::optional<RcString> parsedValue = parsedNode->getAttribute(edit.name);
   if (!parsedValue.has_value()) {
-    return FinishSourceEditWithDiagnostic(
-        document, std::move(result),
-        MakeEditDiagnostic("Attribute value edit removed the target attribute",
-                           ToSourceRange(*ranges.attribute)),
-        edit.node);
+    result.diagnostic = MakeEditDiagnostic("Attribute value edit removed the target attribute",
+                                           ToSourceRange(*ranges.attribute));
+    return result;
   }
 
   XMLNode target = edit.node;
@@ -2248,7 +2520,7 @@ ApplySourceEditResult ApplyAttributeValueSourceEdit(XMLDocument& document,
       .value = *parsedValue,
       .scope = ReparseScope::AttributeValue,
   });
-  return FinishSourceEditSuccess(document, std::move(result), target);
+  return result;
 }
 
 ApplySourceEditResult ApplyClassifiedSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
@@ -2341,6 +2613,14 @@ std::string_view XMLDocument::source() const {
 std::uint64_t XMLDocument::sourceVersion() const {
   const XMLSourceStore* store = sourceStore();
   return store != nullptr ? store->sourceVersion() : 0;
+}
+
+std::optional<ParseDiagnostic> XMLDocument::sourceDiagnostic() const {
+  return DerivedSourceDiagnostic(*this);
+}
+
+bool XMLDocument::declaresDoctypeInternalSubset() const {
+  return registry_->ctx().get<XMLDocumentContext>().declaredDoctypeInternalSubset;
 }
 
 XMLSourceStore* XMLDocument::sourceStore() {
@@ -2444,6 +2724,13 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
     return result;
   }
 
+  // Capture the validated fragment span before the replacement; node locations resolve
+  // against current bytes, so capturing after would silently shift the span.
+  const ClassificationTarget classified = ClassifiedEditTarget(*this, classification, *range);
+  const SourceEditRange fragmentSpan = classified.span;
+  const XMLNode mutationNode = classified.node;
+  const std::optional<ParseDiagnostic> diagnosticBefore = DerivedSourceDiagnostic(*this);
+
   const std::optional<XMLSourceDelta> delta =
       store->replace(range->start, range->end - range->start, intent.replacement);
   if (!delta.has_value()) {
@@ -2453,7 +2740,29 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
 
   result.applied = true;
   result.sourceDeltas.push_back(*delta);
-  return ApplyClassifiedSourceEdit(*this, intent, classification, std::move(result));
+
+  // A no-op replacement changes no bytes, so prior spans keep their coordinates and a
+  // failure adds nothing; a success still revalidates its fragment and may clear spans.
+  const bool isNoOp = delta->removedLength == 0 && delta->insertedLength == 0;
+  if (!isNoOp) {
+    TranslateUnreparsedSpans(*this, *delta);
+  }
+  // The reparse validated the post-edit fragment: the mapped classification span plus the
+  // replacement bytes (which a boundary edit places outside the mapped span).
+  const SourceEditRange mappedSpan = MapSpanThroughDelta(fragmentSpan, *delta);
+  const SourceEditRange validatedSpan{
+      std::min(mappedSpan.start, delta->offset),
+      std::max(mappedSpan.end, delta->offset + delta->insertedLength)};
+  result = ApplyClassifiedSourceEdit(*this, intent, classification, std::move(result));
+  if (result.diagnostic.has_value()) {
+    if (!isNoOp) {
+      AddUnreparsedSpan(*this, validatedSpan.start, validatedSpan.end, *result.diagnostic);
+    }
+  } else {
+    RemoveSpansCoveredByAny(*this, {validatedSpan});
+  }
+  EmitSpansChangedIfNeeded(*this, result, mutationNode, diagnosticBefore);
+  return result;
 }
 
 ApplySourceEditResult XMLDocument::setAttribute(XMLNode node, const XMLQualifiedNameRef& name,
@@ -2528,6 +2837,7 @@ ApplySourceEditResult XMLDocument::setAttribute(XMLNode node, const XMLQualified
         .value = ownedValue,
         .scope = ReparseScope::OpeningTag,
     });
+    NoteConstructedSourceChange(*this, result, node);
     return result;
   }
 
@@ -2559,6 +2869,7 @@ ApplySourceEditResult XMLDocument::setAttribute(XMLNode node, const XMLQualified
       .value = ownedValue,
       .scope = ReparseScope::AttributeValue,
   });
+  NoteConstructedSourceChange(*this, result, node);
   return result;
 }
 
@@ -2611,6 +2922,7 @@ ApplySourceEditResult XMLDocument::removeAttribute(XMLNode node, const XMLQualif
       .value = std::nullopt,
       .scope = ReparseScope::OpeningTag,
   });
+  NoteConstructedSourceChange(*this, result, node);
   return result;
 }
 
@@ -2749,6 +3061,7 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       if (!removeDelta.has_value()) {
         result.diagnostic =
             MakeEditDiagnostic("Invalid source removal for node move", diagnosticRange);
+        NotePartialSourceChange(*this, result, parent);
         return result;
       }
       result.sourceDeltas.push_back(*removeDelta);
@@ -2765,6 +3078,7 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       if (!ShiftPlanLeft(appliedInsertionPlan, effectiveRemovalLength)) {
         result.diagnostic =
             MakeEditDiagnostic("Invalid source insertion plan for node move", diagnosticRange);
+        NotePartialSourceChange(*this, result, parent);
         return result;
       }
 
@@ -2774,6 +3088,7 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       if (!insertDelta.has_value()) {
         result.diagnostic =
             MakeEditDiagnostic("Invalid source replacement for node move", diagnosticRange);
+        NotePartialSourceChange(*this, result, parent);
         return result;
       }
       result.sourceDeltas.push_back(*insertDelta);
@@ -2803,6 +3118,7 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
         .value = std::nullopt,
         .scope = ReparseScope::ElementSubtree,
     });
+    NoteConstructedSourceChange(*this, result, parent);
     return result;
   }
 
@@ -2854,6 +3170,7 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
       .value = std::nullopt,
       .scope = ReparseScope::ElementSubtree,
   });
+  NoteConstructedSourceChange(*this, result, parent);
   return result;
 }
 
@@ -2909,6 +3226,7 @@ ApplySourceEditResult XMLDocument::removeNode(XMLNode node) {
       .value = std::nullopt,
       .scope = ReparseScope::ElementSubtree,
   });
+  NoteConstructedSourceChange(*this, result, node);
   return result;
 }
 
@@ -2982,6 +3300,7 @@ ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_v
                       FileOffset::Offset(valueRange->start + escaped->size())});
     }
     emitValueChanged();
+    NoteConstructedSourceChange(*this, result, element);
     return result;
   }
 
@@ -3019,13 +3338,15 @@ ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_v
       FileOffset::Offset(plan->insertedNodeOffset + escaped->size()),
   });
   emitValueChanged();
+  NoteConstructedSourceChange(*this, result, element);
   return result;
 }
 
 void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   XMLDocumentContext& context = registry_->ctx().get<XMLDocumentContext>();
   context.sourceStore = std::make_shared<XMLSourceStore>(std::move(source), maximumSourceSize);
-  context.sourceDiagnostic.reset();
+  context.unreparsedSpans.clear();
+  context.declaredDoctypeInternalSubset = false;
 }
 
 }  // namespace donner::xml

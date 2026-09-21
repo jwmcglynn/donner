@@ -434,6 +434,27 @@ public:
   std::optional<XMLNode> nextSibling() const;
 
   /**
+   * Get the first child of this node that is an XML node, if it exists.
+   *
+   * Tree storage is shared with the layers above XML: \ref SVGElement creates elements that join
+   * the tree without XML node data until they are projected, and rendering attaches shadow-tree
+   * entities under their host element. \ref firstChild returns those raw tree entries, on which
+   * every XML accessor (\ref type included) is invalid. Consumers that walk the XML projection
+   * of a shared tree use this and \ref nextXmlSibling instead.
+   *
+   * @return The first child that is an XML node, or \c std::nullopt if there is none.
+   */
+  std::optional<XMLNode> firstXmlChild() const;
+
+  /**
+   * Get the next sibling of this node that is an XML node, if it exists. See \ref firstXmlChild
+   * for why a shared tree can hold entries that are not XML nodes.
+   *
+   * @return The next sibling that is an XML node, or \c std::nullopt if there is none.
+   */
+  std::optional<XMLNode> nextXmlSibling() const;
+
+  /**
    * Insert \p newNode as a child, before \p referenceNode. If \p referenceNode is std::nullopt,
    * append the child.
    *

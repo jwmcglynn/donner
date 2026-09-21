@@ -77,6 +77,23 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
   `PathBuilder::rejectRemainingCommands` is the new public hook producers use to request that
   result.
 
+### Behavior Changes
+
+- **User-defined attributes are retained by default.** `SVGParser::Options::disableUserAttributes`
+  now defaults to `false`, so a parse keeps `data-*` and other non-presentation attributes. CSS
+  attribute selectors such as `rect[data-role="status"]` match without opting in, whole-tree
+  consumers see the attributes through `getAttribute`, and editor round-trips no longer silently
+  drop the author's own attributes. Parses retain more per document; set the option to `true` to
+  restore the previous skip-for-performance behavior when custom attributes are known to be
+  irrelevant.
+- **Foreign-namespace elements are retained, and never render.** Elements outside the SVG
+  namespace are kept in the tree as unknown elements instead of being detached, so the tree stays
+  complete for selectors, export checks, and source projection, and their SVG-namespace children
+  still project. They are marked non-rendering: neither the foreign element nor its subtree paints.
+  A retained foreign subtree materializes one entity per element and counts against
+  `maximumTreeNodes` and `maximumTreeDepth` like any other content, and reports a single
+  unsupported-namespace warning at the top of the subtree.
+
 ### Removed
 
 - Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains

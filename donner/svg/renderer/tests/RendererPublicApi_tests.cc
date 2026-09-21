@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -629,6 +630,53 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   EXPECT_TRUE(renderer.save(outputPath.c_str()));
   ASSERT_TRUE(std::filesystem::exists(outputPath));
   EXPECT_GT(std::filesystem::file_size(outputPath), 0u);
+}
+
+TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersNothing) {
+  // A retained foreign-namespace element is kept in the tree for whole-tree consumers, but no
+  // conforming SVG consumer paints foreign content: neither the wrapper nor its SVG-namespace
+  // children reach the canvas. Ground truth is the same document with the foreign subtree
+  // deleted outright, which must be pixel-identical. The <g> wrapper render is the vacuity
+  // guard: if it matched too, the fixture would be painting nothing either way.
+  SVGDocument foreignDocument = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other" width="8" height="6" viewBox="0 0 8 6">
+        <other:wrapper><rect width="8" height="6" fill="#00ff00" /></other:wrapper>
+      </svg>
+    )svg");
+  SVGDocument removedDocument = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other" width="8" height="6" viewBox="0 0 8 6">
+      </svg>
+    )svg");
+  SVGDocument groupDocument = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="8" height="6" viewBox="0 0 8 6">
+        <g><rect width="8" height="6" fill="#00ff00" /></g>
+      </svg>
+    )svg");
+
+  Renderer foreignRenderer;
+  foreignRenderer.draw(foreignDocument);
+  const RendererBitmap foreignSnapshot = NormalizeSnapshot(foreignRenderer.takeSnapshot());
+
+  Renderer removedRenderer;
+  removedRenderer.draw(removedDocument);
+  const RendererBitmap removedSnapshot = NormalizeSnapshot(removedRenderer.takeSnapshot());
+
+  Renderer groupRenderer;
+  groupRenderer.draw(groupDocument);
+  const RendererBitmap groupSnapshot = NormalizeSnapshot(groupRenderer.takeSnapshot());
+
+  ASSERT_FALSE(foreignSnapshot.empty());
+  ASSERT_FALSE(removedSnapshot.empty());
+  ASSERT_FALSE(groupSnapshot.empty());
+
+  editor::tests::CompareBitmapToBitmap(foreignSnapshot, removedSnapshot,
+                                       "foreign_namespace_wrapper_renders_nothing",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // Vacuity guard: the same content under a <g> wrapper does paint, so the identity above is a
+  // statement about foreign content and not about an empty fixture.
+  ASSERT_EQ(groupSnapshot.pixels.size(), removedSnapshot.pixels.size());
+  EXPECT_NE(groupSnapshot.pixels, removedSnapshot.pixels);
 }
 
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {

@@ -412,6 +412,7 @@ donner_cc_test(
     deps = [
         ":mock_renderer_interface",
         ":renderer_test_backend",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer",
         "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",

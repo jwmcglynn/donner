@@ -427,32 +427,6 @@ SourceRange FallbackRange() {
   return SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)};
 }
 
-std::optional<xml::XMLNode> XmlSiblingAtOrAfter(Registry& registry, Entity entity) {
-  while (entity != entt::null) {
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
-    if (tree == nullptr) {
-      return std::nullopt;
-    }
-    if (std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(EntityHandle(registry, entity))) {
-      return node;
-    }
-    entity = tree->nextSibling();
-  }
-  return std::nullopt;
-}
-
-std::optional<xml::XMLNode> FirstXmlChild(const xml::XMLNode& node) {
-  Registry& registry = *node.entityHandle().registry();
-  const Entity first = node.entityHandle().get<donner::components::TreeComponent>().firstChild();
-  return XmlSiblingAtOrAfter(registry, first);
-}
-
-std::optional<xml::XMLNode> NextXmlSibling(const xml::XMLNode& node) {
-  Registry& registry = *node.entityHandle().registry();
-  const Entity next = node.entityHandle().get<donner::components::TreeComponent>().nextSibling();
-  return XmlSiblingAtOrAfter(registry, next);
-}
-
 xml::XMLNode EnsureXMLSubtreeForSVGElement(xml::XMLDocument& document, const SVGElement& element) {
   std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(element.entityHandle());
   const bool createMissingDescendants = !node.has_value();
@@ -480,8 +454,8 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   bool foundContentChild = false;
   const std::size_t maximumChunks =
       handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
-  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
+       child = child->nextXmlSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundContentChild = true;
       ++chunkCount;
@@ -527,8 +501,8 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   combined.reserve(contentBytes);
   SmallVector<RcString, 1> textChunks;
 
-  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
+       child = child->nextXmlSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       const RcString value = child->value().value_or(RcString(""));
       combined.append(value.data(), value.size());
@@ -583,8 +557,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   bool foundContentChild = false;
   const std::size_t maximumChunks =
       handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
-  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
+       child = child->nextXmlSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundContentChild = true;
       ++chunkCount;
@@ -628,8 +602,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   combined.reserve(contentBytes);
   components::StylesheetSourceMap sourceMap;
   bool foundTextChild = false;
-  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
+       child = child->nextXmlSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundTextChild = true;
       if (std::optional<RcString> value = child->value()) {
@@ -1439,7 +1413,10 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
 
 std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {
   if (mutation.kind == xml::XMLMutation::Kind::SourceDiagnosticChanged) {
-    return mutation.diagnostic;
+    // Never an edit failure: the wrapped XML result already carries this edit's own failure,
+    // while this mutation also fires when an unrelated older span shifts under a successful
+    // edit or finally clears. Propagating it would mark clean edits failed.
+    return std::nullopt;
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
@@ -1542,8 +1519,8 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     return diagnostic;
   }
 
-  for (std::optional<xml::XMLNode> child = FirstXmlChild(node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
+       child = child->nextXmlSibling()) {
     if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child)) {
       return diagnostic;
     }

@@ -1154,6 +1154,20 @@ private:
   }
 
   /**
+   * Quote character still open after \p ch while scanning a DOCTYPE, given \p quote before it.
+   *
+   * @param quote Quote character currently open, or '\\0' outside a literal.
+   * @param ch Character just scanned.
+   * @return The quote character still open after \p ch, or '\\0' outside a literal.
+   */
+  static char NextDoctypeLiteralQuote(char quote, char ch) {
+    if (quote != '\0') {
+      return ch == quote ? '\0' : quote;
+    }
+    return (ch == '"' || ch == '\'') ? ch : '\0';
+  }
+
+  /**
    * Parse DOCTYPE, e.g. `<!DOCTYPE root [ ... ]>`
    *
    * We store the entire doctype text in the node's value(), but also
@@ -1169,15 +1183,28 @@ private:
     bool inInternalSubset = false;
 
     size_t i = 0;
+    // Quote state tracked only to decide whether a '[' opens the internal subset for the
+    // document-level flag below. A '[' inside a quoted external identifier, as in
+    // `<!DOCTYPE svg SYSTEM "schema[v2].dtd">`, declares nothing.
+    char literalQuote = '\0';
     const CharScanner chars(remaining_);  // remaining_ is only read, never modified, in this loop.
     while (i < remaining_.size()) {
       char c = chars[i];
       if (c == '\0') {
         return createParseError("Unexpected end of data, found embedded null character");
       }
+      literalQuote = NextDoctypeLiteralQuote(literalQuote, c);
       if (c == '[') {
         bracketLevel++;
         inInternalSubset = true;
+        // Only an unquoted '[' opens the internal subset. Recorded even when `parseDoctype` is
+        // off: the declarations are resolved and expanded either way, so consumers that
+        // reproduce the document from the tree must know. Accumulated with `|=` so a later
+        // quoted bracket cannot clear a subset already seen.
+        document_.registry()
+            .ctx()
+            .get<components::XMLDocumentContext>()
+            .declaredDoctypeInternalSubset |= (literalQuote == '\0');
       } else if (c == ']') {
         bracketLevel--;
         if (bracketLevel < 0) {

@@ -275,6 +275,16 @@ public:
   std::uint64_t sourceVersion() const;
 
   /**
+   * Rehydrate the underlying XML document facade over this SVG document's shared registry.
+   *
+   * The returned facade exposes the parsed XML tree, including source locations for
+   * source-backed documents. When \ref xml::XMLDocument::sourceDiagnostic reports a pending
+   * diagnostic, the tree reflects the last valid parse and is stale relative to \ref source;
+   * consumers that slice current source bytes must refuse rather than use stale ranges.
+   */
+  xml::XMLDocument xmlDocument() const;
+
+  /**
    * Apply an incremental source edit through the underlying XML document and update the SVG
    * semantic projection from emitted XML mutations.
    *
@@ -462,9 +472,6 @@ public:
   std::optional<SVGElement> querySelector(std::string_view selector);
 
 private:
-  /// Rehydrate the underlying XML document facade from this SVG document's shared registry.
-  xml::XMLDocument xmlDocument() const;
-
   /**
    * Apply a single XML mutation to this SVG document's semantic projection.
    *

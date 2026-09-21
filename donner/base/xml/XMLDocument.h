@@ -33,7 +33,10 @@ enum class ReparseScope : std::uint8_t {
   OpeningTag,      ///< Edit touched an element opening tag outside one attribute value.
   TextNode,        ///< Edit was contained inside a text-like node.
   ElementSubtree,  ///< Edit touched one element subtree.
-  Document,        ///< Edit requires whole-document fallback.
+  /// Edit matched no incremental scope. The bytes changed but the tree was left untouched;
+  /// callers that need the tree to match the source must reparse the document fresh, since
+  /// later incremental edits may never cover the unreconciled span.
+  Document,
 };
 
 /// Print a \ref ReparseScope.
@@ -84,11 +87,17 @@ struct XMLMutation {
 
 /// Result from \ref XMLDocument::applySourceEdit.
 struct ApplySourceEditResult {
-  bool applied = false;                         ///< True if source bytes were changed.
+  /// True if the operation fully applied: source bytes changed and the tree was updated
+  /// to match. A multi-step operation that fails partway still commits its completed
+  /// source replacements, so check \ref sourceDeltas for the exact record of committed
+  /// changes rather than assuming applied false means untouched bytes.
+  bool applied = false;
   ReparseScope scope = ReparseScope::Document;  ///< Reparse scope selected for the edit.
-  std::vector<XMLSourceDelta> sourceDeltas;     ///< Source edits applied by this operation.
-  std::vector<XMLMutation> mutations;           ///< DOM mutations emitted by this operation.
-  std::optional<ParseDiagnostic> diagnostic;    ///< Diagnostic if local reparsing failed.
+  /// Source edits committed by this operation, in order. Non-empty whenever source bytes
+  /// changed, even if the operation did not fully apply.
+  std::vector<XMLSourceDelta> sourceDeltas;
+  std::vector<XMLMutation> mutations;         ///< DOM mutations emitted by this operation.
+  std::optional<ParseDiagnostic> diagnostic;  ///< Diagnostic if local reparsing failed.
 };
 
 /**
@@ -151,6 +160,36 @@ public:
 
   /// Return the source version, or 0 for documents without a source store.
   std::uint64_t sourceVersion() const;
+
+  /**
+   * Whether the parse that built this document resolved a DOCTYPE internal subset, i.e. a
+   * `<!DOCTYPE root [ ... ]>` whose bracketed declarations the parser consumed.
+   *
+   * The parser expands entity references and does not keep the declarations in the tree, so a
+   * consumer that reproduces the document from the tree (the viewport export, for example)
+   * cannot reproduce them and must refuse rather than emit a body carrying entity references
+   * that nothing declares. This reports what the parser resolved, not a scan of the source
+   * text: a `<!DOCTYPE` inside a comment or a processing instruction is not a DOCTYPE.
+   *
+   * \ref setSource clears it, since installing whole new source hands responsibility for the
+   * tree back to a full reparse. Incremental fragment reparses leave it alone; they never see
+   * the prolog, so they cannot observe that the subset is gone.
+   */
+  bool declaresDoctypeInternalSubset() const;
+
+  /**
+   * Return the pending source diagnostic, if any.
+   *
+   * Incremental source edits commit source bytes before reparsing; when the reparse fails, the
+   * tree keeps its last-valid state and the broken span is recorded until a later edit
+   * successfully reparses a fragment covering it. A set diagnostic therefore means the tree
+   * is stale relative to \ref source, and consumers that need current-source accuracy must
+   * fail closed instead of using stale ranges. A later success elsewhere never clears an
+   * unrelated broken span.
+   *
+   * Documents without a source store never carry a diagnostic.
+   */
+  std::optional<ParseDiagnostic> sourceDiagnostic() const;
 
   /// Get the mutable source store, or `nullptr` if this document does not own source text.
   XMLSourceStore* sourceStore();
@@ -271,6 +310,10 @@ public:
 
   /**
    * Install owned source text for this document.
+   *
+   * Pending unreparsed spans are cleared: the caller takes responsibility for rebuilding
+   * the tree against the new bytes (as the XML parser does), after which the tree matches
+   * the source again.
    *
    * @param source XML source text to own.
    * @param maximumSourceSize Maximum source size retained after later structured edits.

@@ -380,10 +380,11 @@ TEST(SVGParser, MismatchedNamespace) {
     ParseWarningSink warnings;
     EXPECT_THAT(SVGParser::ParseSVG(mismatchedXmlnsXml, warnings), NoParseError());
 
-    EXPECT_THAT(warnings.warnings(),
-                ElementsAre(AllOf(ParseErrorPos(2, 13),
-                                  ParseErrorIs("Ignored element <path> with an unsupported "
-                                               "namespace. Expected 'svg', found ''"))));
+    EXPECT_THAT(
+        warnings.warnings(),
+        ElementsAre(AllOf(ParseErrorPos(2, 13),
+                          ParseErrorIs("Retaining element <path> with an unsupported namespace as "
+                                       "unknown. Expected 'svg', found ''"))));
   }
 
   {
@@ -418,6 +419,125 @@ TEST(SVGParser, UnknownElementInSvgNamespace) {
   ASSERT_TRUE(unknown.has_value());
   EXPECT_EQ(unknown->type(), ElementType::Unknown);
   EXPECT_THAT(unknown->tagName(), testing::Eq("notAnElement"));
+}
+
+TEST(SVGParser, ForeignNamespaceElementsAreRetainedAsUnknown) {
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:group id="foreign" custom="kept"><rect id="inner" width="10" height="10"/>))"
+      R"(</other:group></svg>)",
+      warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  // Retained and selectable, like unknown SVG-namespace elements.
+  auto foreign = result.result().querySelector("#foreign");
+  ASSERT_TRUE(foreign.has_value());
+  EXPECT_EQ(foreign->type(), ElementType::Unknown);
+
+  // SVG-namespace children inside the foreign wrapper project normally.
+  auto inner = result.result().querySelector("#inner");
+  ASSERT_TRUE(inner.has_value());
+  EXPECT_EQ(inner->type(), ElementType::Rect);
+  EXPECT_THAT(inner->getAttribute("width"), testing::Optional(RcString("10")));
+
+  // The shared XML tree keeps the foreign element with attributes and source locations.
+  xml::XMLDocument xmlDoc = result.result().xmlDocument();
+  std::optional<xml::XMLNode> svgNode = xmlDoc.root().firstChild();
+  ASSERT_TRUE(svgNode.has_value());
+  std::optional<xml::XMLNode> foreignNode = svgNode->firstChild();
+  ASSERT_TRUE(foreignNode.has_value());
+  EXPECT_EQ(foreignNode->tagName(), xml::XMLQualifiedName(RcString("other"), RcString("group")));
+  EXPECT_THAT(foreignNode->getAttribute("custom"), testing::Optional(RcString("kept")));
+  std::optional<SourceRange> location = foreignNode->getNodeLocation();
+  ASSERT_TRUE(location.has_value());
+  ASSERT_TRUE(location->start.offset.has_value());
+  ASSERT_TRUE(location->end.offset.has_value());
+  const std::string_view source = result.result().source();
+  EXPECT_THAT(
+      source.substr(*location->start.offset, *location->end.offset - *location->start.offset),
+      testing::StartsWith("<other:group"));
+}
+
+TEST(SVGParser, ForeignNamespaceSubtreeWarnsOnceAndCountsTowardCaps) {
+  // A retained foreign subtree materializes one entity per element and is charged to the
+  // tree-node and depth caps like any other content. Under the default caps a large subtree
+  // parses, and the unsupported-namespace warning is reported once at the top of the subtree
+  // rather than once per descendant.
+  constexpr int kForeignDescendants = 512;
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:root id="foreign-root">)";
+  for (int i = 0; i < kForeignDescendants; ++i) {
+    source += "<other:child/>";
+  }
+  source += "</other:root></svg>";
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  std::vector<std::string> retentionWarnings;
+  std::string allWarnings;
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    allWarnings += warning.reason.str();
+    allWarnings += "\n";
+    if (warning.reason.str().find("Retaining element") != std::string::npos) {
+      retentionWarnings.push_back(warning.reason.str());
+    }
+  }
+  ASSERT_EQ(retentionWarnings.size(), 1u) << allWarnings;
+  EXPECT_THAT(retentionWarnings[0], testing::HasSubstr("other:root"));
+
+  auto foreignRoot = result.result().querySelector("#foreign-root");
+  ASSERT_TRUE(foreignRoot.has_value());
+  EXPECT_EQ(foreignRoot->type(), ElementType::Unknown);
+}
+
+TEST(SVGParser, ForeignNamespaceNestingDoesNotSuppressALaterForeignSibling) {
+  // The suppression state is counted, not a flag: leaving a foreign element nested inside a
+  // foreign element must restore "inside a foreign subtree", while leaving the outer one must
+  // clear it so the next top-level foreign element is still reported.
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:outer><other:inner/></other:outer>)"
+      R"(<other:sibling/>)"
+      R"(</svg>)",
+      warnings);
+  ASSERT_THAT(result, NoParseError());
+
+  std::vector<std::string> retentionWarnings;
+  std::string allWarnings;
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    allWarnings += warning.reason.str();
+    allWarnings += "\n";
+    if (warning.reason.str().find("Retaining element") != std::string::npos) {
+      retentionWarnings.push_back(warning.reason.str());
+    }
+  }
+  ASSERT_EQ(retentionWarnings.size(), 2u) << allWarnings;
+  EXPECT_THAT(retentionWarnings[0], testing::HasSubstr("other:outer"));
+  EXPECT_THAT(retentionWarnings[1], testing::HasSubstr("other:sibling"));
+}
+
+TEST(SVGParser, ForeignNamespaceSubtreeExceedingTreeNodeCapIsRejected) {
+  // The cap is enforced on the retained subtree, so a foreign document cannot buy unbounded
+  // entities by being foreign.
+  SVGParser::Options options;
+  options.maximumTreeNodes = 8;
+
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other">)"
+      R"(<other:root>)";
+  for (int i = 0; i < 32; ++i) {
+    source += "<other:child/>";
+  }
+  source += "</other:root></svg>";
+
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings, options);
+  EXPECT_THAT(result, ParseErrorIs(testing::HasSubstr("count exceeded")));
 }
 
 TEST(SVGParser, ExperimentalElementsRequireOptIn) {

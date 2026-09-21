@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -63,8 +64,35 @@ public:
   /// Optional source store for parsed documents that own their source projection.
   std::shared_ptr<XMLSourceStore> sourceStore;
 
-  /// Current source diagnostic for a dirty structured-editing region, if any.
-  std::optional<ParseDiagnostic> sourceDiagnostic;
+  /// Whether the parse that built this document resolved a DOCTYPE internal subset. Set by the
+  /// XML parser while it consumes the DOCTYPE, and cleared only when whole new source is
+  /// installed, since incremental fragment reparses never see the prolog.
+  bool declaredDoctypeInternalSubset = false;
+
+  /// One source span the live tree does not reflect, with the failure that reported it.
+  struct UnreparsedSpan {
+    /// Start byte offset in current source coordinates (inclusive).
+    std::size_t start = 0;
+    /// End byte offset in current source coordinates (exclusive).
+    std::size_t end = 0;
+    /// Failure that marked the span; surfaced verbatim while pending. Its range tracks the
+    /// span across later edits.
+    ParseDiagnostic diagnostic;
+    /// Recency order for surfacing; higher is a newer failure.
+    std::uint64_t sequence = 0;
+  };
+
+  /**
+   * Source spans the live tree does not reflect. Empty means the tree matches the source.
+   *
+   * Spans are mapped across every source change and removed only when a successful reparse
+   * covers them, so an empty set is the sound staleness signal for consumers that slice
+   * current source bytes: a later success elsewhere never clears an unrelated broken span.
+   */
+  std::vector<UnreparsedSpan> unreparsedSpans;
+
+  /// Monotonic recency counter for \ref unreparsedSpans; the newest reason is surfaced.
+  std::uint64_t unreparsedSpanSequence = 0;
 
   /// Maximum live non-document XML nodes admitted by one incremental source edit.
   std::uint64_t maximumSourceEditTreeNodes = kDefaultMaximumSourceEditTreeNodes;

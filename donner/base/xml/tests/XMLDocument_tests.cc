@@ -50,6 +50,8 @@ std::optional<std::size_t> FindReusableChild(const XMLNode& parsedChild,
                                              const std::vector<XMLNode>& oldChildren,
                                              const std::vector<bool>& usedChildren);
 bool HasCompatibleNodeIdentity(const XMLNode& target, const XMLNode& parsedNode);
+void AddUnreparsedSpan(XMLDocument& document, std::size_t start, std::size_t end,
+                       ParseDiagnostic diagnostic);
 
 }  // namespace internal
 
@@ -154,6 +156,240 @@ TEST_F(XMLDocumentTests, DefaultConstructedDocumentHasDocumentRootAndNoSource) {
   // const overload also returns nullptr.
   const XMLDocument& constDoc = doc;
   EXPECT_THAT(constDoc.sourceStore(), IsNull());
+}
+
+TEST_F(XMLDocumentTests, SourceDiagnosticIsEmptyForFreshDocuments) {
+  XMLDocument defaultDoc;
+  EXPECT_FALSE(defaultDoc.sourceDiagnostic().has_value());
+
+  XMLDocument parsedDoc = ParseDocument("<root><child/></root>");
+  EXPECT_FALSE(parsedDoc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, SourceDiagnosticRecordsUnclassifiedEditsUntilCovered) {
+  XMLDocument doc = ParseDocument("<root><child id=\"c\"/></root>");
+  const std::size_t closeOffset = doc.source().find("</root>");
+  ASSERT_NE(closeOffset, std::string_view::npos);
+
+  // Deleting the root close tag classifies nowhere: the bytes change, the tree keeps its
+  // last-valid state, and the failure is recorded for staleness gates.
+  ApplySourceEditResult failed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 7)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(failed.applied);
+  ASSERT_TRUE(failed.diagnostic.has_value());
+  EXPECT_THAT(std::string(doc.source()), testing::Not(testing::HasSubstr("</root>")));
+  ASSERT_TRUE(doc.root().firstChild().has_value());
+  EXPECT_EQ(doc.root().firstChild()->tagName(), XMLQualifiedNameRef("root"));
+  ASSERT_TRUE(doc.sourceDiagnostic().has_value());
+  EXPECT_EQ(doc.sourceDiagnostic()->reason, failed.diagnostic->reason);
+
+  // A later attribute-value success elsewhere revalidates only its own fragment: the
+  // broken span stays.
+  const std::size_t valueOffset = doc.source().find("id=\"c\"") + 4;
+  ApplySourceEditResult elsewhere = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 1)},
+      .replacement = "d",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(elsewhere.applied);
+  EXPECT_EQ(elsewhere.scope, ReparseScope::AttributeValue);
+  EXPECT_FALSE(elsewhere.diagnostic.has_value());
+  EXPECT_TRUE(doc.sourceDiagnostic().has_value());
+
+  // Retyping the close does not incrementally reconcile: no narrow scope covers a lone
+  // close tag at end of source, so the failure persists until the caller reparses fresh
+  // (the editor remounts on Document-scope results for exactly this reason).
+  ApplySourceEditResult retyped = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(doc.source().size()),
+                           FileOffset::Offset(doc.source().size())},
+      .replacement = "</root>",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(retyped.applied);
+  EXPECT_TRUE(retyped.diagnostic.has_value());
+  EXPECT_TRUE(doc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, SourceDiagnosticClearsOnlyOnCoveringRepair) {
+  XMLDocument doc = ParseDocument("<root><a x=\"1\" y=\"2\"/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const std::size_t tagOffset = doc.source().find("<a ");
+  ASSERT_NE(tagOffset, std::string_view::npos);
+
+  // An empty span strictly inside a successfully reparsed tag clears: the reparse
+  // re-derives everything around the point.
+  const std::size_t yOffset = doc.source().find("y=\"2\"");
+  ASSERT_NE(yOffset, std::string_view::npos);
+  context.unreparsedSpans.push_back(
+      {yOffset + 3, yOffset + 3,
+       ParseDiagnostic::Error(
+           "seeded", SourceRange{FileOffset::Offset(yOffset + 3), FileOffset::Offset(yOffset + 3)}),
+       1});
+  ASSERT_TRUE(doc.sourceDiagnostic().has_value());
+  ApplySourceEditResult repaired = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(yOffset), FileOffset::Offset(yOffset + 1)},
+      .replacement = "z",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(repaired.applied);
+  EXPECT_EQ(repaired.scope, ReparseScope::OpeningTag);
+  EXPECT_FALSE(repaired.diagnostic.has_value());
+  EXPECT_FALSE(doc.sourceDiagnostic().has_value());
+
+  // An empty span exactly at the tag's end boundary stays: a reparse does not see past
+  // its edges, so absence at the boundary is still unvalidated.
+  const std::size_t tagEnd = doc.source().find("/>", tagOffset) + 2;
+  context.unreparsedSpans.push_back(
+      {tagEnd, tagEnd,
+       ParseDiagnostic::Error("seeded",
+                              SourceRange{FileOffset::Offset(tagEnd), FileOffset::Offset(tagEnd)}),
+       2});
+  const std::size_t xOffset = doc.source().find("x=\"1\"");
+  ASSERT_NE(xOffset, std::string_view::npos);
+  ApplySourceEditResult adjacent = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(xOffset), FileOffset::Offset(xOffset + 1)},
+      .replacement = "w",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(adjacent.applied);
+  EXPECT_EQ(adjacent.scope, ReparseScope::OpeningTag);
+  EXPECT_FALSE(adjacent.diagnostic.has_value());
+  EXPECT_TRUE(doc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, SourceDiagnosticTracksIndependentSpansSeparately) {
+  XMLDocument doc = ParseDocument("<root><a x=\"1\"/><b y=\"2\"/></root>");
+
+  // Break `a` with an unbalanced quote in its value (attribute scope).
+  const std::size_t aValue = doc.source().find("x=\"1\"") + 3;
+  ApplySourceEditResult firstFailed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(aValue), FileOffset::Offset(aValue + 1)},
+      .replacement = "b\"a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(firstFailed.applied);
+  EXPECT_EQ(firstFailed.scope, ReparseScope::AttributeValue);
+  ASSERT_TRUE(firstFailed.diagnostic.has_value());
+
+  // Break `b` the same way: an independent span.
+  const std::size_t bValue = doc.source().find("y=\"2\"") + 3;
+  ApplySourceEditResult secondFailed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(bValue), FileOffset::Offset(bValue + 1)},
+      .replacement = "d\"c",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(secondFailed.applied);
+  EXPECT_EQ(secondFailed.scope, ReparseScope::AttributeValue);
+  ASSERT_TRUE(secondFailed.diagnostic.has_value());
+
+  // Fixing the first span leaves the second pending with its own reason.
+  const std::size_t brokenA = doc.source().find("b\"a");
+  ASSERT_NE(brokenA, std::string_view::npos);
+  ApplySourceEditResult firstFixed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(brokenA), FileOffset::Offset(brokenA + 3)},
+      .replacement = "1",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(firstFixed.applied);
+  EXPECT_FALSE(firstFixed.diagnostic.has_value());
+  ASSERT_TRUE(doc.sourceDiagnostic().has_value());
+  EXPECT_EQ(doc.sourceDiagnostic()->reason, secondFailed.diagnostic->reason);
+
+  const std::size_t brokenB = doc.source().find("d\"c");
+  ASSERT_NE(brokenB, std::string_view::npos);
+  ApplySourceEditResult secondFixed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(brokenB), FileOffset::Offset(brokenB + 3)},
+      .replacement = "2",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(secondFixed.applied);
+  EXPECT_FALSE(secondFixed.diagnostic.has_value());
+  EXPECT_FALSE(doc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, DomRemovalKeepsAbuttingGapSpan) {
+  XMLDocument doc = ParseDocument("<root><a/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const std::size_t bStart = doc.source().find("<b/>");
+  ASSERT_NE(bStart, std::string_view::npos);
+
+  // A gap exactly at the removal start outlives the deleted bytes beside it: the
+  // missing bytes are still missing after the node is gone.
+  context.unreparsedSpans.push_back(
+      {bStart, bStart,
+       ParseDiagnostic::Error("seeded",
+                              SourceRange{FileOffset::Offset(bStart), FileOffset::Offset(bStart)}),
+       1});
+  XMLNode root = doc.root().firstChild().value();
+  ApplySourceEditResult removed = doc.removeNode(ElementChild(root, 1));
+  ASSERT_TRUE(removed.applied);
+  EXPECT_TRUE(doc.sourceDiagnostic().has_value());
+}
+
+TEST_F(XMLDocumentTests, DomRemovalConsumesBrokenBytesSpan) {
+  XMLDocument doc = ParseDocument("<root><a/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const std::size_t bStart = doc.source().find("<b/>");
+  ASSERT_NE(bStart, std::string_view::npos);
+
+  // Broken bytes fully inside the removed range clear with the mirrored tree content.
+  context.unreparsedSpans.push_back(
+      {bStart, bStart + 4,
+       ParseDiagnostic::Error(
+           "seeded", SourceRange{FileOffset::Offset(bStart), FileOffset::Offset(bStart + 4)}),
+       1});
+  XMLNode root = doc.root().firstChild().value();
+  ApplySourceEditResult removed = doc.removeNode(ElementChild(root, 1));
+  ASSERT_TRUE(removed.applied);
+  EXPECT_FALSE(doc.sourceDiagnostic().has_value());
+  EXPECT_THAT(MutationKinds(removed),
+              testing::Contains(XMLMutation::Kind::SourceDiagnosticChanged));
+}
+
+TEST_F(XMLDocumentTests, UnreparsedSpanMergingKeepsTouchingSeparate) {
+  XMLDocument doc = ParseDocument("<root><a/><b/></root>");
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const auto err = [](const char* reason) {
+    return ParseDiagnostic::Error(reason,
+                                  SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+  };
+
+  internal::AddUnreparsedSpan(doc, 0, 5, err("first"));
+  internal::AddUnreparsedSpan(doc, 5, 10, err("second"));
+  ASSERT_EQ(context.unreparsedSpans.size(), 2u);
+
+  internal::AddUnreparsedSpan(doc, 4, 8, err("third"));
+  ASSERT_EQ(context.unreparsedSpans.size(), 1u);
+  EXPECT_EQ(context.unreparsedSpans[0].start, 0u);
+  EXPECT_EQ(context.unreparsedSpans[0].end, 10u);
+  EXPECT_EQ(context.unreparsedSpans[0].diagnostic.reason, "third");
+
+  internal::AddUnreparsedSpan(doc, 0, 10, err("fourth"));
+  ASSERT_EQ(context.unreparsedSpans.size(), 1u);
+  EXPECT_EQ(context.unreparsedSpans[0].diagnostic.reason, "fourth");
+}
+
+TEST_F(XMLDocumentTests, UnreparsedSpansCoalescePastCap) {
+  const std::string xml = "<root>" + std::string(70, ' ') + "</root>";
+  XMLDocument doc = ParseDocument(xml);
+  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  const auto err = [](const char* reason) {
+    return ParseDiagnostic::Error(reason,
+                                  SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+  };
+
+  for (int i = 0; i < 65; ++i) {
+    internal::AddUnreparsedSpan(doc, 10 + i, 10 + i, err("old"));
+  }
+  internal::AddUnreparsedSpan(doc, 75, 75, err("newest"));
+
+  ASSERT_EQ(context.unreparsedSpans.size(), 1u);
+  EXPECT_EQ(context.unreparsedSpans[0].start, 0u);
+  EXPECT_EQ(context.unreparsedSpans[0].end, doc.source().size());
+  EXPECT_EQ(context.unreparsedSpans[0].diagnostic.reason, "newest");
 }
 
 TEST_F(XMLDocumentTests, RootEntityHandleMatchesRootNode) {
@@ -345,17 +581,23 @@ TEST_F(XMLDocumentTests, SetSourceInstallsSourceStore) {
 }
 
 TEST_F(XMLDocumentTests, SetSourceClearsSourceDiagnostic) {
-  XMLDocument doc;
-  doc.setSource("<svg></svg>");
+  XMLDocument doc = ParseDocument("<svg></svg>");
+  const std::size_t closeOffset = doc.source().find("</svg>");
+  ASSERT_NE(closeOffset, std::string_view::npos);
 
-  // Seed a stale diagnostic and confirm setSource() clears it.
-  auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
-  context.sourceDiagnostic =
-      ParseDiagnostic::Error("stale", SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)});
+  // Seed a stale diagnostic with a failing edit and confirm setSource() clears it.
+  ApplySourceEditResult failed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 6)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(failed.applied);
+  ASSERT_TRUE(failed.diagnostic.has_value());
+  ASSERT_TRUE(doc.sourceDiagnostic().has_value());
 
   doc.setSource("<svg/>");
 
-  EXPECT_FALSE(context.sourceDiagnostic.has_value());
+  EXPECT_FALSE(doc.sourceDiagnostic().has_value());
 }
 
 //
@@ -761,8 +1003,12 @@ TEST_F(XMLDocumentTests, ApplySourceEditChangedDiagnosticRangeEmitsMutation) {
   ASSERT_TRUE(first.diagnostic.has_value());
 
   auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
-  context.sourceDiagnostic = ParseDiagnostic::Error(
-      first.diagnostic->reason, SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+  context.unreparsedSpans.clear();
+  context.unreparsedSpans.push_back(
+      {0, 0,
+       ParseDiagnostic::Error(first.diagnostic->reason,
+                              SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)}),
+       1});
 
   const std::size_t updatedValueOffset = doc.source().find("bad");
   ASSERT_NE(updatedValueOffset, std::string_view::npos);
@@ -3937,6 +4183,57 @@ TEST_F(XMLDocumentTests, XMLMutationKindOstreamOutput) {
   EXPECT_THAT(XMLMutation::Kind::NodeRemoved, ToStringIs("NodeRemoved"));
   EXPECT_THAT(XMLMutation::Kind::SubtreeReplaced, ToStringIs("SubtreeReplaced"));
   EXPECT_THAT(XMLMutation::Kind::SourceDiagnosticChanged, ToStringIs("SourceDiagnosticChanged"));
+}
+
+// The exporter and any other consumer that reproduces a document from the tree has to know
+// whether the parser swallowed entity declarations it cannot reproduce. The answer comes from
+// the parse, not from scanning the prolog: a `<!DOCTYPE` inside a comment or a processing
+// instruction is not a DOCTYPE, and a `[` after a real DOCTYPE is not necessarily its subset.
+TEST(XMLDocument, DeclaresDoctypeInternalSubset) {
+  EXPECT_TRUE(
+      ParseDocument(R"(<!DOCTYPE root [<!ENTITY a "b">]><root/>)", XMLParser::Options::ParseAll())
+          .declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, DoctypeWithoutInternalSubsetDeclaresNothing) {
+  EXPECT_FALSE(ParseDocument(R"(<!DOCTYPE root><root/>)", XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+  EXPECT_FALSE(
+      ParseDocument(R"(<!DOCTYPE root PUBLIC "-//x//DTD//EN" "http://example.test/x.dtd"><root/>)",
+                    XMLParser::Options::ParseAll())
+          .declaresDoctypeInternalSubset());
+
+  // A bracket inside a quoted external identifier is part of the literal, not the start of an
+  // internal subset.
+  EXPECT_FALSE(ParseDocument(R"(<!DOCTYPE svg SYSTEM "schema[v2].dtd"><svg/>)",
+                             XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, DocumentWithoutDoctypeDeclaresNothing) {
+  EXPECT_FALSE(ParseDocument(R"(<root/>)").declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, DoctypeShapedTextOutsideADoctypeDeclaresNothing) {
+  EXPECT_FALSE(ParseDocument(R"(<!-- <!DOCTYPE x [<!ENTITY a "b">]> --><root/>)",
+                             XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+  EXPECT_FALSE(ParseDocument(R"(<?tool <!DOCTYPE x [ ?><root/>)", XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+  EXPECT_FALSE(ParseDocument(R"(<root><![CDATA[<!DOCTYPE x [<!ENTITY a "b">]>]]></root>)",
+                             XMLParser::Options::ParseAll())
+                   .declaresDoctypeInternalSubset());
+}
+
+TEST(XMLDocument, SetSourceClearsDeclaredDoctypeInternalSubset) {
+  XMLDocument doc =
+      ParseDocument(R"(<!DOCTYPE root [<!ENTITY a "b">]><root/>)", XMLParser::Options::ParseAll());
+  ASSERT_TRUE(doc.declaresDoctypeInternalSubset());
+
+  // Installing whole new source hands the tree back to a full reparse, which sets the flag
+  // again if the new source declares a subset.
+  doc.setSource("<root/>", 4096);
+  EXPECT_FALSE(doc.declaresDoctypeInternalSubset());
 }
 
 }  // namespace donner::xml
