@@ -476,13 +476,39 @@ public:
   }
 
   /**
-   * @brief Whether an instance whose own style is not `visible` still has content to paint.
+   * @brief Whether this instance paints a group of text spans rather than one element.
    *
-   * Only a text span instance does. It paints every span in the subtree of the span that declared
-   * `clip-path`, `mask` or `filter`, and `visibility` is inherited but a descendant may set it back
-   * to `visible`; suppressing the instance would take that descendant's glyphs with it, so the
-   * instance survives and the draw filters the hidden spans out per span. Every other instance
-   * paints the single element that is hidden.
+   * Two do: the instance of a `<text>` element, which renders as a unit because its descendants
+   * carry \ref RenderingBehavior::NoTraverseChildren, and the instance of a span that declared
+   * `clip-path`, `mask` or `filter`, which paints every span in its own subtree.
+   *
+   * @param textSpanRoot Text root whose spans this instance paints, or `entt::null` when the
+   *   instance is not a span instance.
+   * @param dataHandle Handle supplying the instance's data components.
+   * @return True when the instance's draw filters what it paints per span.
+   */
+  bool instancePaintsTextSpans(Entity textSpanRoot, EntityHandle dataHandle) const {
+#ifdef DONNER_TEXT_ENABLED
+    return textSpanRoot != entt::null || dataHandle.all_of<TextRootComponent>();
+#else
+    (void)textSpanRoot;
+    (void)dataHandle;
+    return false;
+#endif
+  }
+
+  /**
+   * @brief Whether an instance whose own style is not `visible` still has spans to paint.
+   *
+   * `visibility` is inherited but a descendant may set it back to `visible`, and an instance that
+   * paints a group of spans would take such a descendant's glyphs with it when suppressed. Those
+   * instances survive instead, and their draw drops the hidden spans per span through
+   * \ref ClearUnpaintedSpanGlyphs. An instance that paints one element is simply hidden.
+   *
+   * The subtree scan is a superset of that per-span filter: it answers "some element below this one
+   * is visible", not "some visible span below this one has glyphs", so a visible descendant that
+   * contributes no glyph keeps the instance alive and its draw then paints nothing. Keeping an
+   * empty layer is the safe direction; the exact span set is not resolved until draw time.
    *
    * An entity with no computed style of its own inherits its nearest styled ancestor's visibility,
    * which the walk already covers, so it needs no entry of its own.
@@ -490,24 +516,26 @@ public:
    * @param textSpanRoot Text root whose spans this instance paints, or `entt::null` when the
    *   instance is not a span instance.
    * @param styleEntity Entity supplying the instance's style, and the root of the span subtree.
+   * @param dataHandle Handle supplying the instance's data components.
    * @return True when the instance must still be drawn.
    */
-  bool hiddenInstancePaintsVisibleSpans(Entity textSpanRoot, Entity styleEntity) {
-    if (textSpanRoot == entt::null) {
+  bool hiddenInstancePaintsVisibleSpans(Entity textSpanRoot, Entity styleEntity,
+                                        EntityHandle dataHandle) const {
+    if (!instancePaintsTextSpans(textSpanRoot, dataHandle)) {
       return false;
     }
 
     bool anyVisible = false;
     donner::components::ForAllChildrenRecursivePruned(
         EntityHandle(registry_, styleEntity), [&anyVisible](EntityHandle handle) {
-          if (anyVisible) {
+          const auto* style = handle.try_get<ComputedStyleComponent>();
+          if (style != nullptr && style->properties.has_value() &&
+              style->properties->visibility.get().value() == Visibility::Visible) {
+            anyVisible = true;
             return false;
           }
 
-          const auto* style = handle.try_get<ComputedStyleComponent>();
-          anyVisible = style != nullptr && style->properties.has_value() &&
-                       style->properties->visibility.get().value() == Visibility::Visible;
-          return !anyVisible;
+          return true;
         });
     return anyVisible;
   }
@@ -644,7 +672,7 @@ public:
     const bool hasFilterEffect = !filterEffects.empty();
 
     if (properties.visibility.get().value() != Visibility::Visible) {
-      instance.visible = hiddenInstancePaintsVisibleSpans(textSpanRoot, styleEntity);
+      instance.visible = hiddenInstancePaintsVisibleSpans(textSpanRoot, styleEntity, dataHandle);
     }
 
     if (hasFilterEffect) {
