@@ -229,11 +229,13 @@ test("capabilities report the canvas's preferred format and what a frame can be 
 test("the alpha modes reported are the ones the canvas context can be configured with", async () => {
   const { bridge, id } = await surfaceBridge();
   const supported = bridge.outParameter();
-  for (const alphaModeCode of [
-    bridge.state.kAlphaModeOpaque,
-    bridge.state.kAlphaModePremultiplied,
-    bridge.state.kAlphaModeInherit,
-  ]) {
+  for (
+    const alphaModeCode of [
+      bridge.state.kAlphaModeOpaque,
+      bridge.state.kAlphaModePremultiplied,
+      bridge.state.kAlphaModeInherit,
+    ]
+  ) {
     assert.equal(
       bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(id, alphaModeCode, supported),
       bridge.state.kSuccess,

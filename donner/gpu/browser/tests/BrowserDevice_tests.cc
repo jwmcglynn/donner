@@ -786,8 +786,8 @@ TEST(BrowserDevice, ReusingTheSlotOfASurfaceHandsBackTheFrameItHeld) {
   Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
   ASSERT_THAT(acquired, HasResult());
 
-  // Destroying the surface with a frame outstanding tells this backend nothing, so the frame is
-  // still recorded against that surface slot when the next surface takes it.
+  // Destroying the surface hands its frame back, so the slot the next surface takes carries no
+  // record of one; what this covers is that the replacement starts from nothing either way.
   ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
   Result<Surface> replacement = fixture.device->createSurface(surfaceDescriptor);
   ASSERT_THAT(replacement, HasResult());
@@ -901,13 +901,12 @@ TEST(BrowserDevice, ReusingTheSlotOfAnOutstandingFrameHandsTheFrameBackFirst) {
   ASSERT_THAT(acquired, HasResult());
   ASSERT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), true);
 
-  // Destroying the surface with a frame outstanding reaches no hook on this backend: the runtime
-  // releases the surface and the frame's texture slot without telling it. The frame is still
-  // recorded against that slot at this point.
+  // Destroying the surface hands its frame back and releases the texture slot the frame occupied,
+  // so that slot is free for the next texture the caller creates.
   ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
 
-  // The next texture takes the released slot. The frame has to be handed back before it does, or
-  // the record would name a slot the caller now owns.
+  // The next texture takes the released slot, and the identifier it is given is a new one: an
+  // identifier is never reused, so nothing can name the frame that occupied the slot before it.
   Result<Texture> reused = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
   ASSERT_THAT(reused, HasResult());
   EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);

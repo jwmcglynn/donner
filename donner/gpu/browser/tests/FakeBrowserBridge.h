@@ -260,21 +260,17 @@ public:
   }
 
   BridgeStatus destroyObject(BrowserObjectKind kind, BrowserObjectId id) override {
-    // Releases are not refused on a lost device: a lost device still has to free what it holds, and
-    // the browser side takes them for the same reason.
-    if (!owned) {
-      return BridgeStatus::NotOwner;
-    }
-    if (!failOperation.empty() && failOperation == "destroyObject") {
-      return failStatus;
-    }
-    if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
+    const std::string line =
+        std::format("destroyObject kind={} id={}", BrowserObjectKindName(kind), id);
+    if (const BridgeStatus status = release(line, kind, id); status != BridgeStatus::Success) {
       return status;
     }
     objects->erase(id);
     mappings_.erase(id);
     textureImages_.erase(id);
-    calls->push_back(std::format("destroyObject kind={} id={}", BrowserObjectKindName(kind), id));
+    // A surface that is destroyed while it still names a frame gives that frame up with it: the
+    // canvas owns the texture, so nothing is left to name it once its surface is gone.
+    releaseFrame(id);
     return BridgeStatus::Success;
   }
 
@@ -598,17 +594,15 @@ public:
   }
 
   BridgeStatus abandonCurrentTexture(BrowserObjectId surfaceId) override {
-    const BridgeStatus status = operate(std::format("abandonCurrentTexture surface={}", surfaceId),
+    // Handing a frame back is a release, so a lost device takes it: the browser side refuses work
+    // on one but not releases, and refusing here would leave the canvas holding a frame for a
+    // device that can never draw another.
+    const BridgeStatus status = release(std::format("abandonCurrentTexture surface={}", surfaceId),
                                         BrowserObjectKind::Surface, surfaceId);
     if (status != BridgeStatus::Success) {
       return status;
     }
-    // The canvas owns the frame texture, so taking it back is a matter of no longer naming it.
-    const auto frame = frames_.find(surfaceId);
-    if (frame != frames_.end()) {
-      objects->erase(frame->second);
-      frames_.erase(frame);
-    }
+    releaseFrame(surfaceId);
     return BridgeStatus::Success;
   }
 
@@ -687,6 +681,37 @@ private:
       return BridgeStatus::Failed;
     }
     (*objects)[id] = kind;
+    calls->push_back(line);
+    return BridgeStatus::Success;
+  }
+
+  /// Stops naming the frame the surface \p surfaceId took from its canvas, if it has one.
+  ///
+  /// The canvas owns the frame texture, so taking it back is a matter of no longer naming it.
+  /// @param surfaceId Surface holding the frame.
+  void releaseFrame(BrowserObjectId surfaceId) {
+    const auto frame = frames_.find(surfaceId);
+    if (frame != frames_.end()) {
+      objects->erase(frame->second);
+      frames_.erase(frame);
+    }
+  }
+
+  /// Records \p line for a release naming \p id of \p kind.
+  ///
+  /// A release takes every check an operation does except loss: a lost device still has to free
+  /// what it holds, and the browser side accepts releases on one for that reason.
+  /// @param line Line to record. @param kind Expected kind of \p id. @param id Identifier used.
+  BridgeStatus release(const std::string& line, BrowserObjectKind kind, BrowserObjectId id) {
+    if (!owned) {
+      return BridgeStatus::NotOwner;
+    }
+    if (!failOperation.empty() && line.starts_with(failOperation)) {
+      return failStatus;
+    }
+    if (const BridgeStatus status = require(kind, id); status != BridgeStatus::Success) {
+      return status;
+    }
     calls->push_back(line);
     return BridgeStatus::Success;
   }

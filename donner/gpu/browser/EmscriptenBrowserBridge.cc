@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
@@ -127,6 +128,8 @@ int donner_gpu_unmap_buffer(unsigned int mappingId);
 int donner_gpu_create_surface(unsigned int id, const char* canvasSelector, int selectorBytes);
 int donner_gpu_surface_capabilities(unsigned int surfaceId, unsigned int* preferredFormatCode,
                                     unsigned int* usageBits);
+int donner_gpu_surface_supports_alpha_mode(unsigned int surfaceId, unsigned int alphaModeCode,
+                                           unsigned int* supported);
 int donner_gpu_configure_surface(unsigned int surfaceId, unsigned int formatCode,
                                  unsigned int usageBits, unsigned int width, unsigned int height,
                                  unsigned int alphaModeCode);
@@ -179,6 +182,35 @@ MapSliceState MappingStateFromBrowser(int state) {
 /// @param status Value the browser side returned.
 SurfaceStatus SurfaceStatusFromBrowser(unsigned int status) {
   return SurfaceStatusFromWire(status).value_or(SurfaceStatus::Lost);
+}
+
+/// Collects the alpha modes the canvas behind \p surfaceId can actually be configured with.
+///
+/// Asked one enumerator at a time, encoded through the protocol's own translation, so the browser
+/// side answers about the values this half sends rather than describing a list of its own that
+/// could drift from them.
+/// @param surfaceId Surface to ask about. @param codes Receives the codes the browser accepted.
+BridgeStatus CollectAlphaModes(BrowserObjectId surfaceId, std::vector<uint32_t>& codes) {
+  static constexpr SurfaceAlphaMode kAlphaModes[] = {
+      SurfaceAlphaMode::Opaque, SurfaceAlphaMode::Premultiplied, SurfaceAlphaMode::Inherit};
+
+  codes.clear();
+  for (const SurfaceAlphaMode alphaMode : kAlphaModes) {
+    const std::optional<uint32_t> code = WireSurfaceAlphaMode(alphaMode);
+    if (!code.has_value()) {
+      continue;  // An enumerator this protocol has no code for is not one to ask the browser about.
+    }
+    unsigned int supported = 0;
+    const BridgeStatus status =
+        StatusFromBrowser(donner_gpu_surface_supports_alpha_mode(surfaceId, *code, &supported));
+    if (status != BridgeStatus::Success) {
+      return status;
+    }
+    if (supported != 0) {
+      codes.push_back(*code);
+    }
+  }
+  return BridgeStatus::Success;
 }
 
 /// Reads a bounded message the browser side exposes through \p reader.
@@ -599,9 +631,11 @@ BridgeStatus EmscriptenBrowserBridge::surfaceCapabilities(
     capabilities.formatCodes.push_back(preferredFormatCode);
   }
   capabilities.usageBits = usageBits;
-  capabilities.presentModeCodes = {1};
-  capabilities.alphaModeCodes = {1, 2};
-  return BridgeStatus::Success;
+  capabilities.presentModeCodes.clear();
+  if (const std::optional<uint32_t> fifo = WirePresentMode(PresentMode::Fifo); fifo.has_value()) {
+    capabilities.presentModeCodes.push_back(*fifo);
+  }
+  return CollectAlphaModes(surfaceId, capabilities.alphaModeCodes);
 }
 
 BridgeStatus EmscriptenBrowserBridge::configureSurface(BrowserObjectId surfaceId,

@@ -52,6 +52,19 @@ var LibraryDonnerGpu = {
     kSurfaceDeviceLost: 4,
     kSurfaceTimeout: 5,
 
+    // Texture usage bits and canvas alpha modes by name. These are the same protocol numbers the
+    // table below pins; naming them keeps an entry point that reports a usage or answers a
+    // question about an alpha mode from spelling out a bit pattern a second time.
+    kUsageRenderAttachment: 1,
+    kUsageTextureBinding: 2,
+    kUsageCopySrc: 4,
+    kUsageCopyDst: 8,
+    kUsageStorageBinding: 16,
+
+    kAlphaModeOpaque: 1,
+    kAlphaModePremultiplied: 2,
+    kAlphaModeInherit: 3,
+
     kBuffer: 1,
     kTexture: 2,
     kTextureView: 3,
@@ -287,11 +300,11 @@ var LibraryDonnerGpu = {
     // assignment stays independent of the browser's.
     textureUsage: function(bits) {
       var usage = 0;
-      if (bits & 1) usage |= GPUTextureUsage.RENDER_ATTACHMENT;
-      if (bits & 2) usage |= GPUTextureUsage.TEXTURE_BINDING;
-      if (bits & 4) usage |= GPUTextureUsage.COPY_SRC;
-      if (bits & 8) usage |= GPUTextureUsage.COPY_DST;
-      if (bits & 16) usage |= GPUTextureUsage.STORAGE_BINDING;
+      if (bits & DonnerGpu.kUsageRenderAttachment) usage |= GPUTextureUsage.RENDER_ATTACHMENT;
+      if (bits & DonnerGpu.kUsageTextureBinding) usage |= GPUTextureUsage.TEXTURE_BINDING;
+      if (bits & DonnerGpu.kUsageCopySrc) usage |= GPUTextureUsage.COPY_SRC;
+      if (bits & DonnerGpu.kUsageCopyDst) usage |= GPUTextureUsage.COPY_DST;
+      if (bits & DonnerGpu.kUsageStorageBinding) usage |= GPUTextureUsage.STORAGE_BINDING;
       return usage;
     },
 
@@ -411,12 +424,30 @@ var LibraryDonnerGpu = {
     },
     alphaMode: function(code) {
       switch (code) {
-        case 1: return 'opaque';
-        case 2: return 'premultiplied';
+        case DonnerGpu.kAlphaModeOpaque: return 'opaque';
+        case DonnerGpu.kAlphaModePremultiplied: return 'premultiplied';
         // A surface that asks the platform for its default gets the one a canvas actually has.
-        case 3: return 'opaque';
+        case DonnerGpu.kAlphaModeInherit: return 'opaque';
         default: return null;
       }
+    },
+
+    // Stops naming the frame `surface` took from its canvas, if it has one. The canvas owns the
+    // texture, so letting go of the identifier is all there is to do; the browser shows the canvas
+    // on its own schedule either way.
+    releaseFrame: function(surface) {
+      if (surface.frame !== null) {
+        DonnerGpu.objects.delete(surface.frame);
+        surface.frame = null;
+      }
+    },
+
+    // Gives up everything a surface holds: the frame its canvas is still waiting to take back,
+    // and the context configuration naming this device. A canvas outlives the surface over it, so
+    // leaving it configured would keep a device the caller has finished with attached to the page.
+    releaseSurface: function(surface) {
+      DonnerGpu.releaseFrame(surface);
+      surface.context.unconfigure();
     },
 
     // True when every value decoded is one this protocol assigns; a null among them means the
@@ -625,10 +656,12 @@ var LibraryDonnerGpu = {
     var object = DonnerGpu.objects.get(id).object;
     DonnerGpu.objects.delete(id);
     DonnerGpu.mappings.delete(id);
-    // Buffers and textures hold GPU allocations the browser will not release until asked; the
-    // remaining kinds are released by dropping the last reference to them.
+    // A surface holds no GPU allocation of its own. Buffers and textures do, and the browser will
+    // not release those until asked; the remaining kinds go when the last reference to them does.
     try {
-      if (object && typeof object.destroy === 'function') {
+      if (kindCode === DonnerGpu.kSurface) {
+        DonnerGpu.releaseSurface(object);
+      } else if (object && typeof object.destroy === 'function') {
         object.destroy();
       }
     } catch (e) {
@@ -1354,7 +1387,21 @@ var LibraryDonnerGpu = {
       HEAPU32[preferredFormatCode >> 2] = DonnerGpu.formatCode(preferred);
       // A canvas texture is a render attachment and can be copied from; the rest of the usage
       // vocabulary does not apply to one.
-      HEAPU32[usageBits >> 2] = 1 | 4;
+      HEAPU32[usageBits >> 2] = DonnerGpu.kUsageRenderAttachment | DonnerGpu.kUsageCopySrc;
+    });
+  },
+
+  donner_gpu_surface_supports_alpha_mode__deps: ['$DonnerGpu'],
+  donner_gpu_surface_supports_alpha_mode: function(surfaceId, alphaModeCode, supported) {
+    var surface = DonnerGpu.lookup(DonnerGpu.kSurface, surfaceId);
+    if (surface === null) {
+      return DonnerGpu.refusalFor(DonnerGpu.kSurface, surfaceId);
+    }
+    return DonnerGpu.perform(function() {
+      // What a canvas context can be configured with is exactly what this library has a canvas
+      // value for, so the decoder that configure uses is what answers here. Reporting an alpha
+      // mode configure would then refuse is the one answer this has to avoid.
+      HEAPU32[supported >> 2] = DonnerGpu.alphaMode(alphaModeCode) === null ? 0 : 1;
     });
   },
 
@@ -1379,7 +1426,7 @@ var LibraryDonnerGpu = {
         usage: DonnerGpu.textureUsage(usageBits),
         alphaMode: alphaMode,
       });
-      surface.frame = null;
+      DonnerGpu.releaseFrame(surface);
     });
   },
 
@@ -1426,12 +1473,7 @@ var LibraryDonnerGpu = {
     if (surface === null) {
       return DonnerGpu.refusalFor(DonnerGpu.kSurface, surfaceId);
     }
-    // The canvas owns the frame texture; letting go of the identifier is all there is to do, and
-    // the browser shows the canvas on its own schedule.
-    if (surface.frame !== null) {
-      DonnerGpu.objects.delete(surface.frame);
-      surface.frame = null;
-    }
+    DonnerGpu.releaseFrame(surface);
     return DonnerGpu.kSuccess;
   },
 };

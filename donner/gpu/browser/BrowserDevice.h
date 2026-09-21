@@ -197,6 +197,7 @@ protected:
                                                 uint32_t textureSlotIndex) override;
   Result<SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
   void onAbandonCurrentTexture(uint32_t slotIndex) override;
+  void onDestroySurface(uint32_t slotIndex) override;
 
 private:
   friend class BrowserDeviceRequest;
