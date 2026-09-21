@@ -726,7 +726,9 @@ void expectMidFrameSplitFailureAbandonsTheFrame(size_t closesBeforeFailure) {
   renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
   renderer.injectFrameEncoderCloseFailureForTesting(closesBeforeFailure);
 
-  EXPECT_THAT(renderer.submitFilterBudgetChunkForTesting(), testing::IsFalse());
+  // The return value says nothing here: a forced split reports whether the budget can begin a
+  // chunk after it, and this budget never rejected anything. The frame's state is the evidence.
+  (void)renderer.submitFilterBudgetChunkForTesting();
 
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   // The layer opened before the split still has to unwind, and it records through the frame.

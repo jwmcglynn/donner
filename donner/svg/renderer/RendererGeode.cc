@@ -1716,6 +1716,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (failFrameEncoderCloseForTesting.has_value()) {
       if (*failFrameEncoderCloseForTesting == 0) {
         failFrameEncoderCloseForTesting.reset();
+        // Refuse in the state a real handover failure leaves behind: the encoder is gone, so a
+        // caller that records afterwards without noticing has nothing to record through. Failing
+        // with one still installed would be a state this never reaches in production.
+        frameGpuEncoder = nullptr;
         return false;
       }
       --*failFrameEncoderCloseForTesting;
@@ -7895,7 +7899,7 @@ void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
   impl_->failFilterFrameRestoreForTesting = true;
 }
 
-void RendererGeode::injectFrameEncoderCloseFailureForTesting(size_t successfulCloses) {
+void RendererGeode::injectFrameEncoderCloseFailureForTesting(std::size_t successfulCloses) {
   impl_->failFrameEncoderCloseForTesting = successfulCloses;
 }
 

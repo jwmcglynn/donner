@@ -504,12 +504,17 @@ public:
   /// Inject transformed-filter suspension and following encoder-restoration failure once.
   void injectFilterFrameSuspensionAndRestoreFailureForTesting();
 
-  /// Fail one close of the frame's recorded draws, as a backend refusal would.
-  /// @param successfulCloses Closes to let through before the failing one.
-  void injectFrameEncoderCloseFailureForTesting(size_t successfulCloses = 0);
+  /// Fail one close of the frame's recorded draws, as a backend refusal would, leaving the frame
+  /// with no encoder exactly as a real handover failure does.
+  /// @param successfulCloses Closes to let through first, counting every close that reaches a
+  ///   live frame encoder, including one whose encoder recorded nothing. A count higher than the
+  ///   closes that follow stays armed rather than firing.
+  void injectFrameEncoderCloseFailureForTesting(std::size_t successfulCloses = 0);
 
   /// Run one mid-frame filter-budget split now, without waiting for a budget to ask for one.
-  /// @return What the split reported, which is false when it could not make room.
+  /// @return False, always: the split reports whether the budget can begin a chunk after it, and
+  ///   a budget that never rejected anything has nothing to begin. Read the renderer's state to
+  ///   tell a split that failed from one that did its work.
   bool submitFilterBudgetChunkForTesting();
 
   /// Number of filter textures retained outside reusable pools after an uncertain failure.
