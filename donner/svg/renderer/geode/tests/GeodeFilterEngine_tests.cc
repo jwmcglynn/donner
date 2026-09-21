@@ -527,6 +527,28 @@ TEST_F(GeodeFilterEngineTest, ShortExecutionsShareOneFrameCommandBufferBound) {
   host.submitAndRelease();
 }
 
+TEST_F(GeodeFilterEngineTest, ASubmittedFrameCommandBufferNoLongerCountsAgainstTheBound) {
+  engine_->beginFrame();
+  RotatingHostEncoder first(*device_);
+  ASSERT_THAT(first.installed(), testing::IsTrue());
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  EXPECT_THAT(engine_->recordPassesForTesting(32, allocator, first.lease()), testing::IsTrue());
+
+  // The renderer submits and replaces the frame command encoder mid-frame when a filter budget
+  // rejection forces it, without beginning a new frame. The replaced buffer is on the queue, so
+  // its passes are no longer open and cannot reach the bound.
+  first.submitAndRelease();
+  RotatingHostEncoder replacement(*device_);
+  ASSERT_THAT(replacement.installed(), testing::IsTrue());
+
+  EXPECT_THAT(engine_->recordPassesForTesting(33, allocator, replacement.lease()),
+              testing::IsTrue());
+
+  EXPECT_THAT(replacement.rotations(), testing::Eq(0u))
+      << "33 filter passes in a fresh command buffer must batch below the bound";
+  replacement.submitAndRelease();
+}
+
 TEST_F(GeodeFilterEngineTest, RotationAcceptsEarlierFilterRangesOnTheSameExactHost) {
   engine_->beginFrame();
   RotatingHostEncoder host(*device_);

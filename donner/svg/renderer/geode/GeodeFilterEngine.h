@@ -282,6 +282,12 @@ public:
    * command buffer has submitted. Every intermediate the execution allocated is released back to
    * @p textureAllocator before this call returns.
    *
+   * Filter compute, copy and clear commands are recorded into command-encoder chunks this
+   * execution owns. Each chunk is replayed into the leased frame command encoder, so a graph
+   * that stays below the per-command-buffer pass bound costs no queue submission of its own;
+   * crossing that bound rotates the frame command encoder, which does reach the queue. The
+   * caller restores its following frame encoder before compositing the result.
+   *
    * @param graph The filter graph to execute.
    * @param sourceGraphic The input texture (layer snapshot), borrowed for the call.
    * @param sourceGraphicDesc Descriptor \p sourceGraphic was allocated with; its extent, format
@@ -292,14 +298,15 @@ public:
    *   derive per-axis scale factors and to project directional parameters
    *   (e.g. feOffset dx/dy) through rotation/skew.
    * @param textureAllocator Renderer-owned filter texture pool boundary.
-   * Filter compute, copy and clear commands are recorded into encoder chunks owned and submitted
-   * by this execution. The caller submits source rendering first, leaves host replay disabled
-   * during execution, then restores its following frame encoder before compositing the result.
    * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
    *   only the graph-local limit.
    * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
    *   this layout even if shared scratch state or planning preferences change. Invalid plans or
    *   failed execution-time budgets fail the execution instead of bypassing the filter.
+   * @param hostLease Lease of the caller's frame command encoder, or `std::nullopt` when the
+   *   execution submits to the queue on its own. When given, it must be the lease currently
+   *   installed on the device, and the caller must have submitted its source rendering before
+   *   the call; a stale or foreign lease fails the execution before anything is replayed.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
   FilterExecutionResult execute(
@@ -311,7 +318,8 @@ public:
       std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease = std::nullopt);
 
   /**
-   * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.
+   * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor and the
+   * count of filter passes in the host command buffer the frame records through.
    *
    * The renderer calls this once per frame from its own beginFrame, BEFORE
    * the filter texture pool runs its stale-bucket eviction, and before any
@@ -350,8 +358,16 @@ public:
   FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
 
 private:
+  friend struct FilterResourceArena;
   friend struct FilterGraphExecution;
   friend struct FilterNodeExecution;
+
+  /// Filter passes already replayed into one host command buffer, and the lease naming it.
+  struct HostCommandBufferPasses {
+    /// Host command buffer \ref passes describes, or `std::nullopt` before one is leased.
+    std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> lease;
+    size_t passes = 0;  //!< Filter passes replayed into that buffer.
+  };
   /// Two-pass separable Gaussian blur via compute shader.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
@@ -671,6 +687,13 @@ private:
   FilterExecutionMemory lastExecutionMemory_;
   uint32_t preferredTileExtent_ = 512;
   bool adaptiveTiles_ = true;
+  /// Filter passes the frame has replayed into the host command buffer it is recording through.
+  /// An execution's final partial chunk is replayed into that buffer rather than queue-submitted,
+  /// so the bound on one command buffer has to count every execution of the frame: a document
+  /// with many small filter graphs would otherwise fill it without any single graph reaching the
+  /// bound. Cleared by \ref beginFrame, by the rotation that puts the buffer on the queue, and
+  /// whenever a different buffer is leased.
+  HostCommandBufferPasses hostCommandBufferPasses_;
   std::function<void(size_t)> chunkSubmittedHookForTesting_;
 };
 

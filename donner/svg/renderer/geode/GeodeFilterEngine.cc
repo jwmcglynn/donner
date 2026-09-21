@@ -115,12 +115,20 @@ struct FilterResourceArena {
   FilterResourceArena(GeodeDevice& device, FilterTextureAllocator& textureAllocator,
                       FilterResourceCache& resourceCache,
                       const std::function<void(size_t)>& chunkSubmittedHook,
-                      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease)
+                      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease,
+                      GeodeFilterEngine::HostCommandBufferPasses& hostCommandBuffer)
       : device_(device),
         textureAllocator_(textureAllocator),
         resourceCache_(resourceCache),
         chunkSubmittedHook_(chunkSubmittedHook),
-        hostLease_(hostLease) {}
+        hostLease_(hostLease),
+        hostCommandBuffer_(hostCommandBuffer) {
+    // A different lease names a different command buffer: the caller submitted or abandoned the
+    // one the count describes, so none of its passes are still open.
+    if (hostLease_.has_value() && hostCommandBuffer_.lease != hostLease_) {
+      hostCommandBuffer_ = {hostLease_, 0};
+    }
+  }
   ~FilterResourceArena() {
     for (auto& owned : textures_) {
       // A detached output left its record behind with a null handle; the caller owns it now.
@@ -392,20 +400,23 @@ struct FilterResourceArena {
 #endif
   }
 
-  /// Maximum compute/render passes recorded into one execution-owned command buffer before the
-  /// arena finishes and submits it. Pathological filter graphs must not grow a single command
-  /// buffer without bound. For example, an feMorphology with a
-  /// 24,998-device-pixel radius decomposes into 1,614 passes, and wgpu-native
-  /// v24's Metal completion path has been observed to stall on a single
-  /// command buffer of that size. Chunked submits preserve program order, so
-  /// passes recorded after the chunk still execute after the earlier chunk.
-  /// Each execution submits its final partial chunk before returning.
+  /// Maximum compute/render passes one command buffer may hold before the arena closes it at a
+  /// chunk boundary. Command buffers must not grow without bound. For example, an feMorphology
+  /// with a 24,998-device-pixel radius decomposes into 1,614 passes, and wgpu-native v24's Metal
+  /// completion path has been observed to stall on a single command buffer of that size. Chunked
+  /// submits preserve program order, so passes recorded after the chunk still execute after the
+  /// earlier chunk.
+  ///
+  /// The bound covers this execution's open chunk together with everything the frame has already
+  /// replayed into the host command buffer that chunk is destined for. An execution's final
+  /// partial chunk is replayed rather than queue-submitted, so counting per execution would let a
+  /// document of many small filter graphs fill one buffer without any graph reaching the bound.
   static constexpr size_t kMaxPassesPerCommandBuffer = 64;
 
-  /// Returns the runtime encoder for the next pass, submitting the prior bounded chunk first.
+  /// Returns the runtime encoder for the next pass, closing the buffer that reached the bound.
   gpu::CommandEncoder* commandEncoder() {
-    if (passesInCommandBuffer_ >= kMaxPassesPerCommandBuffer) {
-      if (!submitCommandBuffer(true)) return nullptr;
+    if (passesInOpenChunk_ + hostCommandBuffer_.passes >= kMaxPassesPerCommandBuffer) {
+      if (!closeChunkAtBound()) return nullptr;
     }
     if (!commandEncoder_) {
       gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
@@ -413,16 +424,18 @@ struct FilterResourceArena {
       if (!created.hasResult()) return nullptr;
       commandEncoder_ = std::move(created).result();
     }
-    ++passesInCommandBuffer_;
+    ++passesInOpenChunk_;
     return commandEncoder_.get();
   }
 
-  /// Finishes and submits the current standalone runtime chunk, if one was recorded.
+  /// Accounts for a chunk of \p chunkPasses passes the runtime accepted. A host-recorded chunk
+  /// joins the frame's host command buffer; a queue-submitted one is already gone.
   bool accountSubmittedChunk(const GeodeWgpuAdapterDevice::RuntimeSubmitResult& submitted,
-                             bool boundary) {
+                             bool boundary, size_t chunkPasses) {
     switch (submitted.disposition) {
       case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::RefusedBeforeReplay: return false;
       case GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded:
+        hostCommandBuffer_.passes += chunkPasses;
         ++hostPendingChunks_;
         if (!boundary) return true;
         return rotateHostAfterBoundary();
@@ -449,9 +462,21 @@ struct FilterResourceArena {
     return true;
   }
 
+  /// Closes whatever holds the passes that reached \ref kMaxPassesPerCommandBuffer: this
+  /// execution's open chunk, or - once earlier executions of the frame have filled it - the host
+  /// command buffer those chunks were replayed into.
+  [[nodiscard]] bool closeChunkAtBound() {
+    if (commandEncoder_) return submitCommandBuffer(true);
+    // Without a lease this execution cannot close a buffer another one filled, and its own chunk
+    // will be refused before anything is replayed.
+    return !hostLease_.has_value() || rotateHostAfterBoundary();
+  }
+
   bool submitCommandBuffer(bool boundary = false) {
     if (!commandEncoder_) return true;
-    passesInCommandBuffer_ = 0;
+    // Read before the chunk closes: passes in a chunk that is dropped rather than accepted never
+    // reach a command buffer, so they must not be left counted against the bound.
+    const size_t chunkPasses = std::exchange(passesInOpenChunk_, size_t{0});
     gpu::Result<gpu::CommandBuffer> commands = commandEncoder_->finish();
     commandEncoder_.reset();
     if (!commands.hasResult()) {
@@ -466,7 +491,7 @@ struct FilterResourceArena {
       device_.markDeviceLost("filter command buffer submission failed");
       return false;
     }
-    return accountSubmittedChunk(submitted.result(), boundary);
+    return accountSubmittedChunk(submitted.result(), boundary, chunkPasses);
   }
 
   bool rotateHostAfterBoundary() {
@@ -481,9 +506,13 @@ struct FilterResourceArena {
       device_.markDeviceLost("filter host command encoder rotation was rejected");
       return false;
     }
+    hostCommandBuffer_.passes = 0;
+    const bool acceptedOwnChunks = hostPendingChunks_ != 0;
     queueSubmittedChunks_ += hostPendingChunks_;
     hostPendingChunks_ = 0;
-    if (chunkSubmittedHook_) chunkSubmittedHook_(queueSubmittedChunks_);
+    // Silent when the rotation only carried earlier executions' passes to the queue: this arena
+    // has had no chunk accepted, and reporting one would claim work it does not own.
+    if (acceptedOwnChunks && chunkSubmittedHook_) chunkSubmittedHook_(queueSubmittedChunks_);
     if (device_.isDeviceLost()) return false;
     if (rotation.stage ==
         GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedReplacementFailed) {
@@ -497,6 +526,7 @@ struct FilterResourceArena {
       return false;
     }
     hostLease_ = *rotation.replacementLease;
+    hostCommandBuffer_.lease = hostLease_;
     if (device_.isVulkan()) {
       if (device_.waitForQueueIdle() != GpuWaitResult::Complete) return false;
       completedQueueChunks_ = queueSubmittedChunks_;
@@ -515,13 +545,16 @@ private:
   FilterTextureAllocator& textureAllocator_;
   FilterResourceCache& resourceCache_;
   std::unique_ptr<gpu::CommandEncoder> commandEncoder_;
-  /// Passes in the currently open execution-owned chunk.
-  size_t passesInCommandBuffer_ = 0;
   const std::function<void(size_t)>& chunkSubmittedHook_;
   size_t hostPendingChunks_ = 0;
   size_t queueSubmittedChunks_ = 0;
   size_t completedQueueChunks_ = 0;
   std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease_;
+  /// Passes in this execution's open chunk, none of which have reached a command buffer yet.
+  size_t passesInOpenChunk_ = 0;
+  /// Engine-owned count for the host command buffer those chunks are replayed into; see
+  /// \ref kMaxPassesPerCommandBuffer.
+  GeodeFilterEngine::HostCommandBufferPasses& hostCommandBuffer_;
   bool executionFailed_ = false;
   bool submissionUncertain_ = false;
   bool forceRetain_ = false;
@@ -1381,6 +1414,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 GeodeFilterEngine::~GeodeFilterEngine() = default;
 
 void GeodeFilterEngine::beginFrame() {
+  hostCommandBufferPasses_ = {};
   if (resourceCache_) {
     resourceCache_->beginFrame();
   }
@@ -1644,7 +1678,7 @@ struct FilterGraphExecution {
         executionBudget(executionBudget),
         admittedPlan(admittedPlan),
         arena(engine.device_, textureAllocator, *engine.resourceCache_,
-              engine.chunkSubmittedHookForTesting_, hostLease),
+              engine.chunkSubmittedHookForTesting_, hostLease, engine.hostCommandBufferPasses_),
         coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter),
         currentBuffer(sourceGraphic),
         axisAligned(NearZero(deviceFromFilter.data[1], 1e-6) &&
@@ -2006,7 +2040,7 @@ bool GeodeFilterEngine::recordPassesForTesting(
     size_t passCount, FilterTextureAllocator& textureAllocator,
     std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease) {
   FilterResourceArena arena(device_, textureAllocator, *resourceCache_,
-                            chunkSubmittedHookForTesting_, hostLease);
+                            chunkSubmittedHookForTesting_, hostLease, hostCommandBufferPasses_);
   const FilterTexture texture = arena.createRuntimeTexture(
       gpu::TextureDescriptor{"FilterPassCountTest",
                              {1, 1},
