@@ -1158,6 +1158,49 @@ TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElem
   }
 }
 
+// `visibility` is inherited and a descendant may set it back to `visible`, so a visible span
+// inside a `visibility: hidden` `<text>` still paints. The text element renders as a unit through
+// one rendering instance, and its draw already filters glyphs per span, so the instance has to
+// survive the element's own hidden style for that filter to have anything to run on.
+TEST_F(RendererRegressionTests, VisibleSpanInsideHiddenTextRootStillPaints) {
+  const std::string kPrefix = R"svg(<g font-family="Noto Sans" font-size="40">)svg";
+  const std::string kSuffix = R"svg(</g>)svg";
+  const std::string kHiddenRoot =
+      R"svg(<text x="20" y="60" visibility="hidden"><tspan visibility="visible">Text</tspan>)svg"
+      R"svg(</text>)svg";
+  const std::string kVisibleRoot =
+      R"svg(<text x="20" y="60"><tspan visibility="visible">Text</tspan></text>)svg";
+  const std::string kNoOverride =
+      R"svg(<text x="20" y="60" visibility="hidden"><tspan>Text</tspan></text>)svg";
+
+  SVGDocument hiddenRoot =
+      instantiateSubtree(kPrefix + kHiddenRoot + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument visibleRoot =
+      instantiateSubtree(kPrefix + kVisibleRoot + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument noOverride =
+      instantiateSubtree(kPrefix + kNoOverride + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument noText = instantiateSubtree(kPrefix + kSuffix, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(hiddenRoot, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(visibleRoot, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(noOverride, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(noText, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(hiddenRoot, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(visibleRoot, ActiveRendererBackend());
+  const RendererBitmap inherited = RenderDocumentWithBackend(noOverride, ActiveRendererBackend());
+  const RendererBitmap blank = RenderDocumentWithBackend(noText, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  // The span paints at all, so the comparison below cannot hold with nothing painted on either
+  // side.
+  ExpectVisibleBitmap(expected, "visible_span_inside_visible_text_root");
+  ExpectBitmapsIdentical(actual, expected, "visible_span_inside_hidden_text_root");
+  // A span that inherits the hidden root's visibility still paints nothing, so the fix is a filter
+  // on the instance's spans rather than the removal of the visibility gate.
+  ExpectBitmapsIdentical(inherited, blank, "hidden_text_root_without_visible_span");
+}
+
 // `visibility` is inherited, and a descendant may set it back to `visible`, so a visible span
 // nested inside a `visibility: hidden` span still paints. A span that declares `clip-path`, `mask`
 // or `filter` is painted by its own rendering instance, and the visible descendant's glyphs belong
