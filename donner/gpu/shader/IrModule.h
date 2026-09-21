@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/shader/IrExpr.h"
 #include "donner/gpu/shader/IrStatement.h"
 #include "donner/gpu/shader/IrType.h"
@@ -75,21 +76,6 @@ struct WorkgroupSize {
     return os << value.x << "x" << value.y << "x" << value.z;
   }
 };
-
-// The three caps below are duplicated by the GPU runtime's own limits, which validates the same
-// shape one layer up and which this header cannot depend on. A static_assert in the compute-pass
-// tests ties the two sets together, so tuning one side alone fails the build rather than letting
-// a pipeline pass one layer's check and fail the other's.
-
-/// Maximum invocations one workgroup may declare (x * y * z). 256 is the strictest common cap
-/// across the native APIs this runtime targets.
-inline constexpr uint32_t kMaxComputeInvocationsPerWorkgroup = 256;
-
-/// Maximum invocations a workgroup may declare along X or Y.
-inline constexpr uint32_t kMaxComputeWorkgroupSizeXY = 256;
-
-/// Maximum invocations a workgroup may declare along Z.
-inline constexpr uint32_t kMaxComputeWorkgroupSizeZ = 64;
 
 /// Builtin output values available to entry point outputs.
 enum class BuiltinOutput : uint8_t {

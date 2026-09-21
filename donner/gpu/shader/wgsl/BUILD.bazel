@@ -25,6 +25,7 @@ donner_cc_library(
     deps = [
         ":number",
         "//donner/base",
+        "//donner/gpu:gpu_limits",
     ],
 )
 
@@ -100,8 +101,10 @@ donner_cc_test(
         ":compiler",
         ":graphics_test_artifact",
         ":graphics_test_source",
+        "//donner/gpu:gpu_limits",
         "//donner/gpu/shader:gaussian_blur_artifact",
         "//donner/gpu/shader:gaussian_blur_source",
+        "//donner/gpu/shader:msl_binding_map",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -111,6 +114,7 @@ donner_cc_test(
     srcs = ["tests/Diagnostics_tests.cc"],
     deps = [
         ":frontend",
+        "//donner/gpu:gpu_limits",
         "@com_google_gtest//:gtest_main",
     ],
 )

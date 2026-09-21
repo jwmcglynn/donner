@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/shader/programs/GaussianBlurSource.h"
 
 namespace donner::gpu::shader::wgsl {
@@ -224,18 +225,19 @@ fn coefficient(index: i32) -> f32 { return params.coefficients[index]; }
   EXPECT_TRUE(hasIndex);
 }
 
-TEST(Parser, AppliesBufferBindingLimitToReadOnlyStorage) {
-  constexpr std::string_view kBinding28 = R"(
+TEST(Parser, AppliesRuntimeBindingLimitToReadOnlyStorage) {
+  static_assert(gpu::kMaxBindings == 32, "The sources below name the cap and the index past it");
+  constexpr std::string_view kHighestBinding = R"(
 struct Params { coefficients: array<f32, 1>, }
-@group(0) @binding(28) var<storage, read> params: Params;
+@group(0) @binding(31) var<storage, read> params: Params;
 )";
-  constexpr std::string_view kBinding29 = R"(
+  constexpr std::string_view kBindingPastTheCap = R"(
 struct Params { coefficients: array<f32, 1>, }
-@group(0) @binding(29) var<storage, read> params: Params;
+@group(0) @binding(32) var<storage, read> params: Params;
 )";
 
-  EXPECT_TRUE(Parse(kBinding28).hasResult());
-  EXPECT_EQ(Parse(kBinding29).diagnostic.code, ErrorCode::InvalidBinding);
+  EXPECT_EQ(Parse(kHighestBinding).diagnostic.code, ErrorCode::None);
+  EXPECT_EQ(Parse(kBindingPastTheCap).diagnostic.code, ErrorCode::InvalidBinding);
 }
 
 TEST(Parser, RejectsUnsupportedArrayUsesAndStaticOutOfBoundsIndices) {

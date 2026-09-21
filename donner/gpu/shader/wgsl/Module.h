@@ -3,6 +3,7 @@
 /// Bounded, typed intermediate representation for the supported WGSL frontend profile.
 
 #include <array>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <string_view>
@@ -256,18 +257,44 @@ enum class ExpressionKind : uint8_t {
   Deref,         //!< `*pointer`; yields the pointee as an assignable value.
 };
 
+/// Maximum call arity and expression operands.
+inline constexpr uint8_t kMaxExpressionOperands = 8;
+
+/**
+ * Builds an expression operand array, filling every slot past \p ids with \ref kInvalidArenaId.
+ *
+ * Zero is a valid arena identifier, so an unset slot left value-initialized would alias
+ * expression zero. Every operand array is built here so no call site has to spell the sentinel
+ * once per slot.
+ *
+ * @param ids Operand arena identifiers in source order.
+ */
+constexpr std::array<ArenaId, kMaxExpressionOperands> Operands(std::same_as<ArenaId> auto... ids) {
+  static_assert(sizeof...(ids) <= kMaxExpressionOperands,
+                "An expression carries at most kMaxExpressionOperands operands");
+  std::array<ArenaId, kMaxExpressionOperands> result{};
+  result.fill(kInvalidArenaId);
+  uint8_t next = 0;
+  ((result[next++] = ids), ...);
+  return result;
+}
+
 /// One typed expression node. Operands are in source order.
 struct Expression {
-  static constexpr uint8_t kMaxOperands = 8;      //!< Maximum call arity and expression operands.
+  /// Alias of \ref kMaxExpressionOperands.
+  static constexpr uint8_t kMaxOperands = kMaxExpressionOperands;
   ExpressionKind kind = ExpressionKind::Literal;  //!< Node category.
   Type type;                                      //!< Statically resolved result type.
   SourceSpan span;                                //!< Source bytes covering this expression.
-  std::array<ArenaId, kMaxOperands> operands = {kInvalidArenaId, kInvalidArenaId, kInvalidArenaId,
-                                                kInvalidArenaId};  //!< Child expressions.
-  uint8_t operandCount = 0;                                        //!< Number of valid operands.
+  std::array<ArenaId, kMaxOperands> operands = Operands();  //!< Child expressions.
+  uint8_t operandCount = 0;                                 //!< Number of valid operands.
   uint32_t payload = 0;          //!< Kind-specific bits or arena identifier.
   uint32_t literalHighBits = 0;  //!< Upper bits for abstract scalar literals.
 };
+
+// Zero is a valid arena identifier, so a default-constructed node must carry the invalid sentinel
+// in every operand slot, including the ones past any current caller's arity.
+static_assert(Expression{}.operands[kMaxExpressionOperands - 1] == kInvalidArenaId);
 
 /// Kind of a typed statement node.
 enum class StatementKind : uint8_t {

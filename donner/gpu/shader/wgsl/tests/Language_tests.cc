@@ -188,7 +188,8 @@ TEST(Language, RejectsMalformedConstantDeclarationsWithoutInvalidArenaAccess) {
         Case{"fn f() { continue; }", ErrorCode::InvalidLoop},
         Case{"@vertex fn f()->@builtin(position)vec4f { discard; return vec4f(0); }",
              ErrorCode::UnsupportedConstruct},
-        Case{"@group(0) @binding(16) var s: sampler;", ErrorCode::InvalidBinding}}) {
+        Case{"@group(0) @binding(32) var s: sampler;", ErrorCode::InvalidBinding},
+        Case{"@group(1) @binding(0) var s: sampler;", ErrorCode::InvalidBinding}}) {
     SCOPED_TRACE(item.source);
     EXPECT_EQ(Parse(item.source).diagnostic.code, item.error);
   }

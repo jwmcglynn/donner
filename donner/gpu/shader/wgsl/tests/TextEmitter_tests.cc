@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+#include "donner/gpu/GpuLimits.h"
+#include "donner/gpu/shader/MslBindingMap.h"
 #include "donner/gpu/shader/wgsl/Parser.h"
 #include "donner/gpu/shader/wgsl/SpirvEmitter.h"
 
@@ -83,6 +85,31 @@ fn storage_entry(@builtin(global_invocation_id) gid: vec3<u32>) {}
 
 constexpr ParseResult kStorageArrayParsed = Parse(kStorageArraySource);
 static_assert(kStorageArrayParsed.hasResult());
+
+// Binding indices the runtime accepts and Metal's narrower argument tables cannot hold. The buffer
+// is declared but never referenced, because reflection turns every declared binding into a bind
+// group layout entry whether an entry point uses it or not.
+constexpr std::string_view kBufferPastMetalTableSource = R"(
+struct table_params { gain: f32, }
+@group(0) @binding(29) var<uniform> params_past_table: table_params;
+@compute @workgroup_size(1)
+fn buffer_entry(@builtin(global_invocation_id) gid: vec3<u32>) {}
+)";
+
+constexpr ParseResult kBufferPastMetalTableParsed = Parse(kBufferPastMetalTableSource);
+static_assert(kBufferPastMetalTableParsed.hasResult());
+
+constexpr std::string_view kSamplerPastMetalTableSource = R"(
+@group(0) @binding(0) var texture_past_table: texture_2d<f32>;
+@group(0) @binding(16) var sampler_past_table: sampler;
+@fragment
+fn fragment_entry(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  return textureSample(texture_past_table, sampler_past_table, vec2f(0.5));
+}
+)";
+
+constexpr ParseResult kSamplerPastMetalTableParsed = Parse(kSamplerPastMetalTableSource);
+static_assert(kSamplerPastMetalTableParsed.hasResult());
 
 constexpr std::string_view kCommentedSource = R"(
 // Leading comment before any declaration.
@@ -196,6 +223,28 @@ TEST(TextEmitter, MslManglesNamesAndForwardsUsedResourcesToHelpers) {
   EXPECT_THAT(msl, HasSubstr("donner_msl_texture_load("));
   EXPECT_THAT(msl, HasSubstr("level < 0 || uint(level) >= texture.get_num_mip_levels()"));
   EXPECT_THAT(msl, HasSubstr("donner_msl_texture_store("));
+}
+
+TEST(TextEmitter, RefusesBindingsBeyondTheMetalArgumentTables) {
+  // The frontend bounds a binding index by the runtime cap, which is wider than Metal's buffer and
+  // sampler argument tables. Those narrower bounds belong to this projection, the only place the
+  // argument-table indices are assigned.
+  static_assert(kMslBufferBindingCount < gpu::kMaxBindings);
+  static_assert(kMslSamplerBindingCount < gpu::kMaxBindings);
+  std::array<char, 16384> output = {};
+
+  {
+    SCOPED_TRACE("unreferenced uniform buffer past the buffer argument table");
+    TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
+    EXPECT_EQ(EmitMsl(kBufferPastMetalTableParsed.module, sink).error,
+              TextEmitError::UnsupportedBinding);
+  }
+  {
+    SCOPED_TRACE("referenced sampler past the sampler argument table");
+    TextSink sink{output.data(), static_cast<uint32_t>(output.size())};
+    EXPECT_EQ(EmitMsl(kSamplerPastMetalTableParsed.module, sink).error,
+              TextEmitError::UnsupportedBinding);
+  }
 }
 
 TEST(TextEmitter, RefusesToTruncateOutput) {

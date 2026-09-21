@@ -276,9 +276,15 @@ donner_cc_library(
 # computation per the WGSL specification's memory layout rules, deterministic
 # text serialization, and three emitters that consume the same binding and
 # layout metadata.
+#
+# The IR, its three emitters, its descriptor bridge and the programs still
+# expressed in it are all test fixtures; every shipped shader is compiled from
+# WGSL source instead. `testonly = 1` holds that by construction rather than by
+# review, so a production target cannot pick the IR back up silently.
 
 donner_cc_library(
     name = "shader",
+    testonly = 1,
     srcs = [
         "IrExpr.cc",
         "IrLayout.cc",
@@ -298,6 +304,7 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
+        "//donner/gpu:gpu_limits",
     ],
 )
 
@@ -310,6 +317,7 @@ donner_cc_library(
 
 donner_cc_library(
     name = "msl_emitter",
+    testonly = 1,
     srcs = ["MslEmitter.cc"],
     hdrs = ["MslEmitter.h"],
     visibility = donner_internal_visibility(),
@@ -322,6 +330,7 @@ donner_cc_library(
 
 donner_cc_library(
     name = "spirv_emitter",
+    testonly = 1,
     srcs = ["SpirvEmitter.cc"],
     hdrs = ["SpirvEmitter.h"],
     visibility = donner_internal_visibility(),
@@ -333,6 +342,7 @@ donner_cc_library(
 
 donner_cc_library(
     name = "wgsl_emitter",
+    testonly = 1,
     srcs = ["WgslEmitter.cc"],
     hdrs = ["WgslEmitter.h"],
     visibility = donner_internal_visibility(),
@@ -347,6 +357,7 @@ donner_cc_library(
 # stays free of the runtime's descriptor types.
 donner_cc_library(
     name = "module_interface",
+    testonly = 1,
     srcs = ["ModuleInterface.cc"],
     hdrs = ["ModuleInterface.h"],
     visibility = donner_internal_visibility(),
@@ -378,6 +389,7 @@ donner_cc_library(
 
 donner_cc_library(
     name = "programs",
+    testonly = 1,
     srcs = [
         "programs/ColorMatrix.cc",
         "programs/RoundHalfAwayFromZero.cc",

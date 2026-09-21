@@ -21,6 +21,15 @@ donner_cc_library(
     deps = ["//donner/base"],
 )
 
+# The validation limits alone, without the device or its descriptors, so the compile-time shader
+# compiler can reject a module this runtime would refuse without pulling the runtime into the
+# translation unit of every shader artifact.
+donner_cc_library(
+    name = "gpu_limits",
+    hdrs = ["GpuLimits.h"],
+    visibility = donner_internal_visibility(),
+)
+
 donner_cc_library(
     name = "gpu",
     srcs = [
@@ -36,12 +45,12 @@ donner_cc_library(
         "Commands.h",
         "Device.h",
         "GpuError.h",
-        "GpuLimits.h",
         "GpuResult.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
         ":descriptors",
+        ":gpu_limits",
         "//donner/base",
     ],
 )
