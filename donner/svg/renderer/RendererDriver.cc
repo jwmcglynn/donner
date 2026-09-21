@@ -363,31 +363,61 @@ std::optional<ResolvedTextFont> ResolveDecorationFont(Registry& registry, Entity
                 : std::nullopt;
 }
 
+/// How a span's ancestors, up to its text root, decide which instance paints it and how much
+/// `opacity` that instance's isolated layer does not already apply.
+struct SpanLayerOwnership {
+  /// The \ref xml_tspan or \ref xml_textPath whose own rendering instance paints the span, or
+  /// `entt::null` when the text root's own instance paints it.
+  Entity effectOwner = entt::null;
+  /// Product of the `opacity` of every text content element from the span's source entity up to,
+  /// but excluding, the element named by \ref effectOwner, or the text root when it is null.
+  double opacity = 1.0;
+};
+
 /**
- * @brief The rendering instance that paints a span, expressed as the span entity that owns it.
+ * @brief Walk from a span's source entity towards its text root, resolving which rendering
+ * instance paints the span and the `opacity` product below that instance.
  *
  * A \ref xml_tspan or \ref xml_textPath carrying `clip-path`, `mask`, or `filter` renders through
  * its own instance, which is marked by \ref components::RenderingInstanceComponent::textSpanRoot.
- * Walking up from the span's source entity finds the nearest such ancestor-or-self; when there is
- * none the text root's own instance paints the span, which is `entt::null`.
+ * That element's own `opacity` rides on the isolated layer the driver pushes for its instance,
+ * exactly like a \ref xml_g, so the walk stops below it and leaves its `opacity` out of the
+ * product. With no such ancestor-or-self the text root's own instance paints the span and owns its
+ * `opacity` the same way.
  *
  * @param registry The registry to query.
  * @param textRootEntity Root text entity, where the walk stops.
  * @param spanSourceEntity The span's source entity.
- * @return The owning span entity, or `entt::null` for the text root's own instance.
+ * @param spansHaveOwnEffectInstances Whether the copy being drawn has the per-span instances at
+ *   all. A `<use>` shadow copy does not, so no layer applies a span-level `opacity` there and the
+ *   product must run all the way to the text root.
+ * @return The owning span entity and the opacity product below it.
  */
-Entity SpanEffectOwner(Registry& registry, Entity textRootEntity, Entity spanSourceEntity) {
-  for (Entity current = spanSourceEntity; current != entt::null && current != textRootEntity;) {
-    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(current);
-    if (instance != nullptr && instance->textSpanRoot == textRootEntity) {
-      return current;
+SpanLayerOwnership ResolveSpanLayerOwnership(Registry& registry, Entity textRootEntity,
+                                             Entity spanSourceEntity,
+                                             bool spansHaveOwnEffectInstances) {
+  SpanLayerOwnership ownership;
+  for (Entity current = spanSourceEntity;
+       current != entt::null && current != textRootEntity &&
+       !registry.all_of<components::TextRootComponent>(current);) {
+    if (spansHaveOwnEffectInstances) {
+      const auto* instance = registry.try_get<components::RenderingInstanceComponent>(current);
+      if (instance != nullptr && instance->textSpanRoot == textRootEntity) {
+        ownership.effectOwner = current;
+        return ownership;
+      }
+    }
+
+    if (const auto* style = registry.try_get<components::ComputedStyleComponent>(current);
+        style != nullptr && style->properties.has_value()) {
+      ownership.opacity *= style->properties->opacity.get().value();
     }
 
     const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
     current = tree != nullptr ? tree->parent() : entt::null;
   }
 
-  return entt::null;
+  return ownership;
 }
 
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
@@ -425,9 +455,10 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       continue;
     }
 
-    span.effectOwner = spansHaveOwnEffectInstances
-                           ? SpanEffectOwner(registry, textRootHandle.entity(), span.sourceEntity)
-                           : entt::null;
+    const SpanLayerOwnership ownership = ResolveSpanLayerOwnership(
+        registry, textRootHandle.entity(), span.sourceEntity, spansHaveOwnEffectInstances);
+    span.effectOwner = ownership.effectOwner;
+    span.opacity = ownership.opacity;
 
     const Box2d viewBox =
         textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
@@ -1258,7 +1289,6 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   const auto& properties = style.properties.value();
   const css::RGBA currentColor = properties.color.get().value().rgba();
 
-  params.opacity = properties.opacity.get().value();
   params.fillColor = resolveFillColor(instance, style);
 
   if (const auto* stroke = std::get_if<PaintServer::Solid>(&instance.resolvedStroke)) {

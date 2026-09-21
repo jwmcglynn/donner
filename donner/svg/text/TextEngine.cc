@@ -350,7 +350,6 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontSize = style->properties->fontSize.get().value();
     span.fontFamilies = style->properties->fontFamily.get().value();
     span.visibility = style->properties->visibility.get().value();
-    span.opacity = style->properties->opacity.get().value();
     span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
         viewBox, fontMetrics, Lengthd::Extent::X);
     span.wordSpacingPx = style->properties->wordSpacing.get().value().toPixels(viewBox, fontMetrics,

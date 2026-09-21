@@ -890,7 +890,6 @@ struct ImageParams {
  * Parameters describing how text is drawn and outlined.
  */
 struct TextParams {
-  double opacity = 1.0;
   css::Color fillColor = css::Color(css::RGBA());
   css::Color strokeColor = css::Color(css::RGBA());
   StrokeParams strokeParams;
