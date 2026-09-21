@@ -917,11 +917,7 @@ gpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
 }
 #endif  // !__APPLE__
 
-/// How the editor's window wants its alpha channel composited with what is behind it.
-///
-/// The desktop window is opaque, so alpha is ignored. A browser canvas is composited over the
-/// page's own background instead, so premultiplied alpha is what lets uncovered pixels stay
-/// transparent; without it the same clear presents as solid.
+/// How this platform's editor window wants its alpha channel composited with what is behind it.
 constexpr gpu::SurfaceAlphaMode kPreferredAlphaMode =
 #ifdef __EMSCRIPTEN__
     gpu::SurfaceAlphaMode::Premultiplied;
@@ -929,16 +925,6 @@ constexpr gpu::SurfaceAlphaMode kPreferredAlphaMode =
     gpu::SurfaceAlphaMode::Opaque;
 #endif
 
-/// Picks how a surface composites its alpha channel, from what it reports it supports.
-///
-/// Never answers \ref kPreferredAlphaMode when the surface did not offer it: a transparent clear
-/// on a surface composited as opaque presents as solid black, and the window clears to its page
-/// background instead once it can see that the alpha channel is not honored.
-///
-/// @param modes Alpha compositing the surface reported it supports.
-/// @return The preferred mode when it is on offer, and the first mode offered otherwise. A
-///   surface that named none is composited opaque, which every surface does and which the
-///   window's fallback clear color already assumes.
 /// Whether the usage a surface reports says anything about what its frames will accept. A browser
 /// canvas reports none of it, so asking for the copy and letting the configuration answer is the
 /// only way the diagnostic readback there can work at all.
@@ -949,9 +935,10 @@ constexpr bool kSurfaceReportsCopyUsage =
     true;
 #endif
 
-gpu::SurfaceAlphaMode ChooseRuntimeAlphaMode(const std::vector<gpu::SurfaceAlphaMode>& modes) {
-  if (std::find(modes.begin(), modes.end(), kPreferredAlphaMode) != modes.end()) {
-    return kPreferredAlphaMode;
+gpu::SurfaceAlphaMode ChooseSurfaceAlphaMode(const std::vector<gpu::SurfaceAlphaMode>& modes,
+                                             gpu::SurfaceAlphaMode preferred) {
+  if (std::find(modes.begin(), modes.end(), preferred) != modes.end()) {
+    return preferred;
   }
   return modes.empty() ? gpu::SurfaceAlphaMode::Opaque : modes.front();
 }
@@ -1014,10 +1001,10 @@ bool RuntimePresentationSurface::attachToDevice(geode::GeodeDevice& device) {
 }
 
 bool RuntimePresentationSurface::attachToRuntime(gpu::Device& device,
-                                                 const gpu::NativeSurfaceHandle& native,
+                                                 gpu::NativeSurfaceHandle native,
                                                  gpu::TextureFormat format, bool enableReadback) {
   device_ = &device;
-  native_ = native;
+  native_ = std::move(native);
   format_ = format;
   readback_ = enableReadback;
 
@@ -1042,6 +1029,13 @@ bool RuntimePresentationSurface::attachToRuntime(gpu::Device& device,
 }
 
 bool RuntimePresentationSurface::configure(int width, int height) {
+  // A frame acquired under the previous configuration describes a surface that no longer exists
+  // in that shape, and the platform holds exactly one of them, so it goes back before a new
+  // configuration is asked for. Handing it back here rather than leaving it to the reconfigure is
+  // what leaves nothing held when the configuration is refused as well, so the frame after a
+  // refusal is still the one frame the platform has to give rather than a second one.
+  abandon();
+
   gpu::SurfaceConfiguration configuration;
   configuration.format = format_;
   configuration.usage = configuredUsage();
@@ -1053,9 +1047,6 @@ bool RuntimePresentationSurface::configure(int width, int height) {
                  status.error().toString().c_str());
     return false;
   }
-  // Configuring hands back whatever frame was outstanding, so this surface is no longer holding
-  // one either.
-  hasAcquiredFrame_ = false;
   return true;
 }
 
@@ -1132,7 +1123,7 @@ bool RuntimePresentationSurface::applyCapabilities(const gpu::SurfaceCapabilitie
     // dropped rather than the whole surface refused.
     readback_ = false;
   }
-  alphaMode_ = ChooseRuntimeAlphaMode(capabilities.alphaModes);
+  alphaMode_ = ChooseSurfaceAlphaMode(capabilities.alphaModes, kPreferredAlphaMode);
   return true;
 }
 
@@ -1409,14 +1400,15 @@ struct EditorWindow::WgpuState {
   // Declared first so every context, renderer, registry, presentation object,
   // and texture below is destroyed before the shared physical roots.
   std::shared_ptr<geode::GeodePhysicalDeviceOwner> physicalDevice;
-  /// Where frames are presented, or null when this window renders into \ref offscreenTexture
-  /// instead of a presentable surface.
-  std::unique_ptr<internal::PresentationSurface> presentation;
   donner::geode::ScopedWgpuHandle<wgpu::Texture> offscreenTexture;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
   gpu::TextureUsage surfaceUsage = gpu::TextureUsage::RenderAttachment;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
+  /// Where frames are presented, or null when this window renders into \ref offscreenTexture
+  /// instead of a presentable surface. Giving a surface up hands its frame back through the
+  /// device it was built on, so it is declared after that device and destroyed before it.
+  std::unique_ptr<internal::PresentationSurface> presentation;
   /// Registrations of the textures UI draw data may sample, and the renderer that resolves them.
   /// Both are created once the device exists and torn down before it.
   std::unique_ptr<UiTextureRegistry> uiTextureRegistry;
@@ -1655,21 +1647,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       TerminateGlfw();
       return;
     }
+    // Only the format is settled this early, because the renderer's pipelines are compiled for it
+    // before there is a device. The usage and alpha compositing a surface ends up with depend on
+    // what it reports once it exists, so they are read after it is built below.
     wgpuState_->surfaceFormat = wgpuState_->presentation->format();
-    wgpuState_->surfaceUsage = wgpuState_->presentation->usage();
-#ifdef __EMSCRIPTEN__
-    // The constructor optimistically set an alpha-0 clear so the worker's
-    // document canvas can composite under the UI surface. That is only correct
-    // once the surface is known to honor the alpha channel; without
-    // premultiplied compositing the same clear presents as opaque black.
-    {
-      const std::array<float, 4> clearColor =
-          internal::WasmSurfaceClearColor({options_.clearColor[0], options_.clearColor[1],
-                                           options_.clearColor[2], options_.clearColor[3]},
-                                          wgpuState_->presentation->premultipliedAlpha());
-      std::copy(clearColor.begin(), clearColor.end(), std::begin(options_.clearColor));
-    }
-#endif
   } else {
     wgpuState_->surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
     wgpuState_->surfaceUsage = RenderTargetUsage(enableSurfaceReadback);
@@ -1732,6 +1713,22 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       TerminateGlfw();
       return;
     }
+    // The surface narrowed what it was asked for to what it reported it can do, so this is the
+    // first point the frames it hands out are actually described. Reading the usage earlier would
+    // let the frame loop copy out of frames that were never configured to be copied from.
+    wgpuState_->surfaceUsage = wgpuState_->presentation->usage();
+#ifdef __EMSCRIPTEN__
+    // The constructor optimistically set an alpha-0 clear so the worker's document canvas can
+    // composite under the UI surface. That is only correct once the surface is known to honor the
+    // alpha channel; without premultiplied compositing the same clear presents as opaque black.
+    {
+      const std::array<float, 4> clearColor =
+          internal::WasmSurfaceClearColor({options_.clearColor[0], options_.clearColor[1],
+                                           options_.clearColor[2], options_.clearColor[3]},
+                                          wgpuState_->presentation->premultipliedAlpha());
+      std::copy(clearColor.begin(), clearColor.end(), std::begin(options_.clearColor));
+    }
+#endif
   } else {
     wgpuState_->offscreenTexture.reset(CreateOffscreenTargetTexture(
         wgpuState_->physicalDevice->device_, surfaceWidth, surfaceHeight, wgpuState_->surfaceFormat,
@@ -2153,6 +2150,9 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
       !replacement->configure(framebufferWidth, framebufferHeight)) {
     return nullptr;
   }
+  // A replacement narrows its own configuration against what it reports, so what the frame loop
+  // believes about the frames it will hand out follows it rather than the surface it replaces.
+  wgpuState_->surfaceUsage = replacement->usage();
   return replacement;
 }
 #endif

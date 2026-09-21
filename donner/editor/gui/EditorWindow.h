@@ -130,6 +130,24 @@ inline std::ostream& operator<<(std::ostream& os, SurfaceFrameAction value) {
   return SurfaceFrameAction::Skip;
 }
 
+/**
+ * Picks how a surface composites its alpha channel, from what it reports it supports.
+ *
+ * Never answers \p preferred when the surface did not offer it: a transparent clear on a surface
+ * composited as opaque presents as solid black, and the window clears to its page background
+ * instead once it can see that the alpha channel is not honored.
+ *
+ * @param modes Alpha compositing the surface reported it supports.
+ * @param preferred Compositing this platform's window wants. A desktop window is opaque; a
+ *   browser canvas is composited over the page's own background, so premultiplied alpha is what
+ *   lets uncovered pixels stay transparent there.
+ * @return \p preferred when it is on offer, and the first mode offered otherwise. A surface that
+ *   named none is composited opaque, which every surface does and which the window's fallback
+ *   clear color already assumes.
+ */
+[[nodiscard]] gpu::SurfaceAlphaMode ChooseSurfaceAlphaMode(
+    const std::vector<gpu::SurfaceAlphaMode>& modes, gpu::SurfaceAlphaMode preferred);
+
 /// One frame's texture and what the surface reported while handing it over.
 ///
 /// The texture is borrowed for the length of one frame and no longer. It names the frame the
@@ -272,7 +290,7 @@ public:
    *   surface reports its frames cannot be copied from.
    * @return False when the surface could not be built or cannot serve the editor's frames.
    */
-  [[nodiscard]] bool attachToRuntime(gpu::Device& device, const gpu::NativeSurfaceHandle& native,
+  [[nodiscard]] bool attachToRuntime(gpu::Device& device, gpu::NativeSurfaceHandle native,
                                      gpu::TextureFormat format, bool enableReadback);
 
   bool configure(int width, int height) override;

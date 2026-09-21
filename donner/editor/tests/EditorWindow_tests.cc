@@ -783,7 +783,7 @@ TEST(EditorWindowTest, AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen) {
   EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success)
       << "nothing failed; there was simply no frame to ask for";
   EXPECT_FALSE(outcome.released) << "the surface is still the window's; only this frame is gone";
-  EXPECT_FALSE(outcome.markDeviceLost);
+  EXPECT_FALSE(outcome.markDeviceLost) << "a window with nothing to draw into is not a lost device";
   EXPECT_NE(surface, nullptr);
   EXPECT_EQ(calls, (SurfaceCalls{.acquires = 0,
                                  .abandons = 0,
@@ -1118,7 +1118,7 @@ TEST_F(RuntimePresentationSurfaceTest, FollowsAResizeByReconfiguringTheSameSurfa
       << "a resize follows the window with a new configuration, not a new surface";
   EXPECT_THAT(device_.configuredSizes,
               testing::ElementsAre(gpu::Extent2d{1280, 720}, gpu::Extent2d{800, 600}));
-  EXPECT_EQ(device_.destroySurfaceCalls, 0);
+  EXPECT_EQ(device_.destroySurfaceCalls, 0) << "the surface it reconfigured is the one it had";
 }
 
 TEST_F(RuntimePresentationSurfaceTest, ReconfiguringHandsBackAFrameThatWasStillOutstanding) {
@@ -1126,13 +1126,33 @@ TEST_F(RuntimePresentationSurfaceTest, ReconfiguringHandsBackAFrameThatWasStillO
   internal::AcquiredFrame frame = surface_.acquire();
   ASSERT_TRUE(frame.texture.isValid());
 
-  EXPECT_TRUE(surface_.configure(800, 600));
+  EXPECT_TRUE(surface_.configure(800, 600)) << "a resize is a configuration the surface accepts";
 
   EXPECT_EQ(device_.abandonCalls, 1)
       << "the platform is holding that frame and holds exactly one, so reconfiguring gives it "
          "back rather than leaving the next acquire to be refused";
   EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
       << "the frame described a surface that no longer exists in that shape";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AConfigurationThatWasRefusedStillLeavesNoFrameHeld) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+
+  // A window with no framebuffer has no extent to configure for, which is the refusal a window
+  // can actually arrive at.
+  EXPECT_FALSE(surface_.configure(0, 0));
+
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "the outstanding frame goes back before a new configuration is asked for, so a refused "
+         "one does not leave the platform holding the only frame it has to give";
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+
+  EXPECT_TRUE(surface_.configure(800, 600));
+  internal::AcquiredFrame next = surface_.acquire();
+  EXPECT_THAT(next.status, testing::Eq(gpu::SurfaceStatus::Success));
+  EXPECT_TRUE(next.texture.isValid()) << "the window recovers on the next extent it can present";
 }
 
 TEST_F(RuntimePresentationSurfaceTest, APresentedFrameIsNoLongerTheCallersToDrawInto) {
@@ -1214,6 +1234,31 @@ TEST_F(RuntimePresentationSurfaceTest, ReadbackIsConfiguredWhenFramesCanBeCopied
               testing::Eq(gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc));
   EXPECT_THAT(device_.lastConfiguration.usage,
               testing::Eq(gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc));
+}
+
+TEST(EditorWindowTest, AlphaCompositingTakesThePreferredModeOverTheOrderOffered) {
+  using gpu::SurfaceAlphaMode;
+
+  EXPECT_THAT(
+      internal::ChooseSurfaceAlphaMode({SurfaceAlphaMode::Premultiplied, SurfaceAlphaMode::Opaque},
+                                       SurfaceAlphaMode::Opaque),
+      testing::Eq(SurfaceAlphaMode::Opaque))
+      << "the window's own compositing wins over whichever mode the surface happened to list "
+         "first";
+  EXPECT_THAT(
+      internal::ChooseSurfaceAlphaMode({SurfaceAlphaMode::Opaque, SurfaceAlphaMode::Premultiplied},
+                                       SurfaceAlphaMode::Premultiplied),
+      testing::Eq(SurfaceAlphaMode::Premultiplied));
+
+  EXPECT_THAT(internal::ChooseSurfaceAlphaMode({SurfaceAlphaMode::Inherit},
+                                               SurfaceAlphaMode::Premultiplied),
+              testing::Eq(SurfaceAlphaMode::Inherit))
+      << "a preference the surface never offered would present a transparent clear as solid "
+         "black, so an offered mode is taken instead";
+
+  EXPECT_THAT(internal::ChooseSurfaceAlphaMode({}, SurfaceAlphaMode::Premultiplied),
+              testing::Eq(SurfaceAlphaMode::Opaque))
+      << "a surface that named no mode is composited opaque, which every surface does";
 }
 
 TEST_F(RuntimePresentationSurfaceTest, AlphaCompositingFollowsWhatTheSurfaceOffers) {

@@ -473,14 +473,16 @@ namespace {
 
 /// Maps what the backend reported about a surface onto the runtime's status.
 ///
-/// A suboptimal surface is reported as out of date on purpose: both mean the configuration no
-/// longer matches the window, and both recover the same way.
+/// A suboptimal frame is reported as a success rather than as out of date, because it presents
+/// correctly: reconfiguring for it would cost a frame to fix a difference that never reaches the
+/// display, and a platform that keeps reporting it would charge that cost on every frame.
 ///
 /// @param status Backend status.
 gpu::SurfaceStatus GpuSurfaceStatusFromWgpu(wgpu::SurfaceGetCurrentTextureStatus status) {
   switch (status) {
-    case wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal: return gpu::SurfaceStatus::Success;
+    case wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal:
     case wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal:
+      return gpu::SurfaceStatus::Success;
     case wgpu::SurfaceGetCurrentTextureStatus::Outdated: return gpu::SurfaceStatus::Outdated;
     case wgpu::SurfaceGetCurrentTextureStatus::Timeout: return gpu::SurfaceStatus::Timeout;
     case wgpu::SurfaceGetCurrentTextureStatus::DeviceLost: return gpu::SurfaceStatus::DeviceLost;
@@ -542,9 +544,6 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateSurface(uint32_t slotIndex,
     // to destroy.
     wgpu::Surface hostSurface(
         reinterpret_cast<WGPUSurface>(static_cast<uintptr_t>(descriptor.native.window)));
-    if (!hostSurface) {
-      return GpuError{GpuErrorType::InvalidDescriptor, "the embedder's surface handle is null"};
-    }
     hostSurface.addRef();
     SetSlot(slotSurfaces_, slotIndex,
             SurfaceSlot{ScopedWgpuHandle<wgpu::Surface>(hostSurface), wgpu::Texture(), 0, false});
@@ -600,6 +599,8 @@ gpu::Result<gpu::SurfaceCapabilities> GeodeWgpuAdapterDevice::onSurfaceCapabilit
   for (size_t i = 0; i < backendCapabilities.alphaModeCount; ++i) {
     capabilities.alphaModes.push_back(GpuAlphaModeFrom(backendCapabilities.alphaModes[i]));
   }
+  // The backend allocated the arrays above; they are this caller's to free.
+  backendCapabilities.freeMembers();
   return capabilities;
 }
 
