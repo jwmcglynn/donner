@@ -155,8 +155,8 @@ struct RootTag {
 /// name `svg`, matching `SVGParser`'s own root check (which additionally enforces the
 /// namespace URI, so a wrong-namespace `<other:svg>` never reaches a parsed document).
 std::optional<xml::XMLNode> FindRootSvgElement(const xml::XMLDocument& xmlDocument) {
-  for (std::optional<xml::XMLNode> child = xmlDocument.root().firstXmlChild(); child.has_value();
-       child = child->nextXmlSibling()) {
+  for (std::optional<xml::XMLNode> child = xmlDocument.root().firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (child->type() != xml::XMLNode::Type::Element) {
       continue;
     }
@@ -206,7 +206,7 @@ RootTag DeriveRootTagFromTree(std::string_view source, const xml::XMLNode& root)
   const std::optional<SourceRange> closeTag = root.getClosingTagLocation();
   if (!closeTag.has_value()) {
     // No closing tag is only sound for a childless (self-closing) root.
-    if (root.firstXmlChild().has_value()) {
+    if (root.firstChild().has_value()) {
       return result;
     }
     result.bodyEnd = result.bodyStart;
@@ -312,8 +312,8 @@ std::string FindExternalReference(const xml::XMLNode& root) {
       }
     }
     std::vector<xml::XMLNode> children;
-    for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
-         child = child->nextXmlSibling()) {
+    for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+         child = child->nextSibling()) {
       children.push_back(*child);
     }
     for (auto it = children.rbegin(); it != children.rend(); ++it) {

@@ -454,8 +454,8 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   bool foundContentChild = false;
   const std::size_t maximumChunks =
       handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
-  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
-       child = child->nextXmlSibling()) {
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundContentChild = true;
       ++chunkCount;
@@ -501,8 +501,8 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   combined.reserve(contentBytes);
   SmallVector<RcString, 1> textChunks;
 
-  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
-       child = child->nextXmlSibling()) {
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       const RcString value = child->value().value_or(RcString(""));
       combined.append(value.data(), value.size());
@@ -557,8 +557,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   bool foundContentChild = false;
   const std::size_t maximumChunks =
       handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
-  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
-       child = child->nextXmlSibling()) {
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundContentChild = true;
       ++chunkCount;
@@ -602,8 +602,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   combined.reserve(contentBytes);
   components::StylesheetSourceMap sourceMap;
   bool foundTextChild = false;
-  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
-       child = child->nextXmlSibling()) {
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundTextChild = true;
       if (std::optional<RcString> value = child->value()) {
@@ -1519,8 +1519,8 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     return diagnostic;
   }
 
-  for (std::optional<xml::XMLNode> child = node.firstXmlChild(); child.has_value();
-       child = child->nextXmlSibling()) {
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child)) {
       return diagnostic;
     }

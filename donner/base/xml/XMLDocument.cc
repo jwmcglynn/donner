@@ -76,32 +76,6 @@ struct SourceEditClassification {
 
 using AttributeMap = std::map<XMLQualifiedName, RcString>;
 
-std::optional<XMLNode> XmlSiblingAtOrAfter(Registry& registry, Entity entity) {
-  while (entity != entt::null) {
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
-    if (tree == nullptr) {
-      return std::nullopt;
-    }
-    if (std::optional<XMLNode> node = XMLNode::TryCast(EntityHandle(registry, entity))) {
-      return node;
-    }
-    entity = tree->nextSibling();
-  }
-  return std::nullopt;
-}
-
-std::optional<XMLNode> FirstXmlChild(const XMLNode& node) {
-  Registry& registry = *node.entityHandle().registry();
-  const Entity first = node.entityHandle().get<donner::components::TreeComponent>().firstChild();
-  return XmlSiblingAtOrAfter(registry, first);
-}
-
-std::optional<XMLNode> NextXmlSibling(const XMLNode& node) {
-  Registry& registry = *node.entityHandle().registry();
-  const Entity next = node.entityHandle().get<donner::components::TreeComponent>().nextSibling();
-  return XmlSiblingAtOrAfter(registry, next);
-}
-
 bool IsXmlWhitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 }
@@ -281,8 +255,8 @@ void BuildSourceIntervalIndex(const XMLNode& node, std::size_t depth, SourceInte
     });
   }
 
-  for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     BuildSourceIntervalIndex(*child, depth + 1, index);
   }
 }
@@ -417,8 +391,8 @@ std::optional<TextNodeEdit> GetTextNodeEdit(const XMLDocument& document, SourceE
     return std::nullopt;
   }
 
-  for (std::optional<XMLNode> child = FirstXmlChild(*node); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = node->firstChild(); child.has_value();
+       child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || IsRawTextLikeNode(child->type())) {
       std::optional<SourceEditRange> childValueRange =
           ResolveNodeValueRange(*child, document.source());
@@ -909,9 +883,9 @@ SourceRange MakeNodeDiagnosticRange(const XMLNode& node) {
 }
 
 void ClearSourceLocationsRecursive(XMLNode node) {
-  for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();) {
+  for (std::optional<XMLNode> child = node.firstChild(); child.has_value();) {
     XMLNode currentChild = *child;
-    child = NextXmlSibling(currentChild);
+    child = currentChild.nextSibling();
     ClearSourceLocationsRecursive(currentChild);
   }
 
@@ -926,12 +900,19 @@ bool IsDocumentNode(const XMLDocument& document, const XMLNode& node) {
   return node.entityHandle().registry() == document.sharedRegistry().get();
 }
 
+// Walks raw tree links rather than XMLNode::parentElement: this is the cycle guard for the shared
+// entity tree, which does not detect cycles itself, so it has to see ancestors that hold no XML
+// node data and that the authored-tree accessors step over.
 bool IsAncestorOf(const XMLNode& ancestor, const XMLNode& node) {
-  for (std::optional<XMLNode> current = node.parentElement(); current.has_value();
-       current = current->parentElement()) {
-    if (*current == ancestor) {
+  const Registry& registry = *node.entityHandle().registry();
+  const Entity target = ancestor.entityHandle().entity();
+  Entity current = node.entityHandle().get<donner::components::TreeComponent>().parent();
+  while (current != entt::null) {
+    if (current == target) {
       return true;
     }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree != nullptr ? tree->parent() : entt::null;
   }
 
   return false;
@@ -1542,8 +1523,8 @@ std::optional<std::uint64_t> CountSubtreeNodes(const XMLNode& root) {
     if (!CheckedAccumulate(count, 1)) {
       return std::nullopt;
     }
-    for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();
-         child = NextXmlSibling(*child)) {
+    for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
+         child = child->nextSibling()) {
       stack.push_back(*child);
     }
   }
@@ -1553,15 +1534,15 @@ std::optional<std::uint64_t> CountSubtreeNodes(const XMLNode& root) {
 std::optional<std::uint64_t> CountNewNodesRequired(const XMLNode& target,
                                                    const XMLNode& parsedTarget) {
   std::vector<XMLNode> oldChildren;
-  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     oldChildren.push_back(*child);
   }
   std::vector<bool> usedChildren(oldChildren.size(), false);
 
   std::uint64_t required = 0;
-  for (std::optional<XMLNode> parsedChild = FirstXmlChild(parsedTarget); parsedChild.has_value();
-       parsedChild = NextXmlSibling(*parsedChild)) {
+  for (std::optional<XMLNode> parsedChild = parsedTarget.firstChild(); parsedChild.has_value();
+       parsedChild = parsedChild->nextSibling()) {
     if (std::optional<std::size_t> oldIndex =
             FindReusableChild(*parsedChild, oldChildren, usedChildren)) {
       usedChildren[*oldIndex] = true;
@@ -1635,8 +1616,8 @@ std::size_t MaximumElementDepth(const XMLNode& root, std::size_t rootDepth,
       ++depth;
       maximumDepth = std::max(maximumDepth, depth);
     }
-    for (std::optional<XMLNode> child = FirstXmlChild(pending.node); child.has_value();
-         child = NextXmlSibling(*child)) {
+    for (std::optional<XMLNode> child = pending.node.firstChild(); child.has_value();
+         child = child->nextSibling()) {
       stack.push_back(PendingNode{*child, depth});
     }
   }
@@ -1657,8 +1638,8 @@ std::optional<std::uint64_t> CountSubtreeAttributes(const XMLNode& root) {
     if (!CheckedAccumulate(count, AttributeCount(node))) {
       return std::nullopt;
     }
-    for (std::optional<XMLNode> child = FirstXmlChild(node); child.has_value();
-         child = NextXmlSibling(*child)) {
+    for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
+         child = child->nextSibling()) {
       stack.push_back(*child);
     }
   }
@@ -1695,14 +1676,14 @@ bool ApplySyncedSubtreeAttributeCount(std::uint64_t& total, const XMLNode& targe
 bool ApplyReplacedChildrenAttributeCount(std::uint64_t& total, const XMLNode& target,
                                          const XMLNode& parsedTarget) {
   std::vector<XMLNode> oldChildren;
-  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     oldChildren.push_back(*child);
   }
   std::vector<bool> usedChildren(oldChildren.size(), false);
 
-  for (std::optional<XMLNode> parsedChild = FirstXmlChild(parsedTarget); parsedChild.has_value();
-       parsedChild = NextXmlSibling(*parsedChild)) {
+  for (std::optional<XMLNode> parsedChild = parsedTarget.firstChild(); parsedChild.has_value();
+       parsedChild = parsedChild->nextSibling()) {
     if (std::optional<std::size_t> oldIndex =
             FindReusableChild(*parsedChild, oldChildren, usedChildren)) {
       usedChildren[*oldIndex] = true;
@@ -1845,12 +1826,12 @@ bool HasCompatibleSubtreeShape(const XMLNode& target, const XMLNode& parsedNode)
     if (!HasCompatibleNodeIdentity(current, parsed)) {
       return false;
     }
-    std::optional<XMLNode> currentChild = FirstXmlChild(current);
-    std::optional<XMLNode> parsedChild = FirstXmlChild(parsed);
+    std::optional<XMLNode> currentChild = current.firstChild();
+    std::optional<XMLNode> parsedChild = parsed.firstChild();
     while (currentChild && parsedChild) {
       pending.emplace_back(*currentChild, *parsedChild);
-      currentChild = NextXmlSibling(*currentChild);
-      parsedChild = NextXmlSibling(*parsedChild);
+      currentChild = currentChild->nextSibling();
+      parsedChild = parsedChild->nextSibling();
     }
     if (currentChild || parsedChild) {
       return false;
@@ -1909,14 +1890,14 @@ bool SyncSourceLocationsFromParsedByPosition(XMLNode& target, const XMLNode& par
   }
 
   std::vector<XMLNode> targetChildren;
-  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     targetChildren.push_back(*child);
   }
 
   std::vector<XMLNode> parsedChildren;
-  for (std::optional<XMLNode> child = FirstXmlChild(parsedNode); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = parsedNode.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     parsedChildren.push_back(*child);
   }
 
@@ -1975,8 +1956,8 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
                                    std::vector<XMLMutation>* mutations,
                                    ReparseScope mutationScope) {
   std::vector<XMLNode> oldChildren;
-  for (std::optional<XMLNode> child = FirstXmlChild(target); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     oldChildren.push_back(*child);
   }
 
@@ -1985,8 +1966,8 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
   }
 
   std::vector<bool> usedChildren(oldChildren.size(), false);
-  for (std::optional<XMLNode> child = FirstXmlChild(parsedTarget); child.has_value();
-       child = NextXmlSibling(*child)) {
+  for (std::optional<XMLNode> child = parsedTarget.firstChild(); child.has_value();
+       child = child->nextSibling()) {
     std::optional<XMLNode> nodeToAppend;
     bool reusedExistingChild = false;
     if (std::optional<std::size_t> oldIndex =

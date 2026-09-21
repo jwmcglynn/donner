@@ -3,9 +3,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -1403,6 +1407,46 @@ TEST(SVGDocument, SourceBackedMoveOfRenderedShadowHostIgnoresComputedChildren) {
   EXPECT_THAT(destination.firstChild(), Optional(ElementIdEq("host")));
   const std::string_view source = document.source();
   EXPECT_LT(source.find(R"(id="destination")"), source.find(R"(id="host")"));
+}
+
+namespace {
+
+/// Tag names of \p node's XML children walked with firstChild()/nextSibling(). `std::optional<
+/// xml::XMLNode>` has no printer, so listing names is what names a leaked entity on failure.
+std::vector<std::string> ForwardXmlChildTagNames(const xml::XMLNode& node) {
+  std::vector<std::string> names;
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    names.emplace_back(child->tagName().name);
+  }
+  return names;
+}
+
+/// Tag names of \p node's XML children walked with lastChild()/previousSibling(), reverse order.
+std::vector<std::string> ReverseXmlChildTagNames(const xml::XMLNode& node) {
+  std::vector<std::string> names;
+  for (std::optional<xml::XMLNode> child = node.lastChild(); child.has_value();
+       child = child->previousSibling()) {
+    names.emplace_back(child->tagName().name);
+  }
+  return names;
+}
+
+}  // namespace
+
+TEST(SVGDocument, RenderedShadowContentIsNotVisibleThroughTheXmlTree) {
+  SVGDocument document = ParseSVG(kRenderedShadowSource);
+  InstantiateRenderedShadowTree(document);
+  SVGElement host = *document.querySelector("#host");
+  std::optional<xml::XMLNode> hostNode = xml::XMLNode::TryCast(host.entityHandle());
+  ASSERT_THAT(hostNode, testing::Ne(std::nullopt));
+
+  // Rendering instantiated the referenced `<g>` as entities parented under `<use>`. They are not
+  // XML nodes, so the authored document still sees `<use>` as childless.
+  EXPECT_THAT(ForwardXmlChildTagNames(*hostNode), testing::IsEmpty());
+  EXPECT_THAT(ReverseXmlChildTagNames(*hostNode), testing::IsEmpty());
+  EXPECT_THAT(std::string(std::string_view(hostNode->serializeToString(0, /*prettyPrint=*/false))),
+              testing::AllOf(testing::StartsWith("<use "), testing::EndsWith("/>")));
 }
 
 TEST(SVGDocument, SourceBackedInsertInvalidElementReportsProjectionDiagnostic) {

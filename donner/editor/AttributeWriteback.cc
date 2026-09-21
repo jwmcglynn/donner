@@ -87,7 +87,7 @@ std::optional<std::vector<AttributeWritebackPathSegment>> BuildElementPath(
 
     std::size_t childIndex = 0;
     bool foundCurrent = false;
-    for (auto child = parent->firstXmlChild(); child.has_value(); child = child->nextXmlSibling()) {
+    for (auto child = parent->firstChild(); child.has_value(); child = child->nextSibling()) {
       if (child->type() != xml::XMLNode::Type::Element) {
         continue;
       }
@@ -127,7 +127,7 @@ std::optional<xml::XMLNode> ResolveNodeInParsedDocument(
     std::size_t childIndex = 0;
     std::optional<xml::XMLNode> matchedChild;
 
-    for (auto child = current.firstXmlChild(); child.has_value(); child = child->nextXmlSibling()) {
+    for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
       if (child->type() != xml::XMLNode::Type::Element) {
         continue;
       }
@@ -163,7 +163,7 @@ std::optional<xml::XMLNode> FindNodeByIdInParsedTree(const xml::XMLNode& node,
     }
   }
 
-  for (auto child = node.firstXmlChild(); child.has_value(); child = child->nextXmlSibling()) {
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
     if (auto match = FindNodeByIdInParsedTree(*child, target); match.has_value()) {
       return match;
     }
