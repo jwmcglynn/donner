@@ -150,22 +150,39 @@ gpu::TextureUsage RenderTargetUsage(bool enableReadback) {
                         : gpu::TextureUsage::RenderAttachment;
 }
 
-/// The backend format matching \p format. Only the formats the editor's frames are configured
-/// with are mapped. @param format Runtime format.
+/// The backend format matching \p format. @param format Runtime format.
 wgpu::TextureFormat WgpuFormatOf(gpu::TextureFormat format) {
-  return format == gpu::TextureFormat::RGBA8Unorm ? wgpu::TextureFormat::RGBA8Unorm
-                                                  : wgpu::TextureFormat::BGRA8Unorm;
+  switch (format) {
+    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
+    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
+    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
+    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
+  }
+  // Every format the runtime describes is named above; this is the surface format the editor
+  // falls back to everywhere else, for a value that is none of them.
+  return wgpu::TextureFormat::BGRA8Unorm;
 }
 
-/// The backend usage matching \p usage. Only the flags the editor's frames carry are mapped.
-/// @param usage Runtime usage flags.
+/// The backend usage matching \p usage. @param usage Runtime usage flags.
 wgpu::TextureUsage WgpuUsageOf(gpu::TextureUsage usage) {
   WGPUTextureUsage backendUsage = WGPUTextureUsage_None;
-  if ((usage & gpu::TextureUsage::RenderAttachment) != gpu::TextureUsage::None) {
+  const auto carries = [usage](gpu::TextureUsage flag) {
+    return (usage & flag) != gpu::TextureUsage::None;
+  };
+  if (carries(gpu::TextureUsage::RenderAttachment)) {
     backendUsage |= WGPUTextureUsage_RenderAttachment;
   }
-  if ((usage & gpu::TextureUsage::CopySrc) != gpu::TextureUsage::None) {
+  if (carries(gpu::TextureUsage::Sampled)) {
+    backendUsage |= WGPUTextureUsage_TextureBinding;
+  }
+  if (carries(gpu::TextureUsage::CopySrc)) {
     backendUsage |= WGPUTextureUsage_CopySrc;
+  }
+  if (carries(gpu::TextureUsage::CopyDst)) {
+    backendUsage |= WGPUTextureUsage_CopyDst;
+  }
+  if (carries(gpu::TextureUsage::StorageBinding)) {
+    backendUsage |= WGPUTextureUsage_StorageBinding;
   }
   return wgpu::TextureUsage{backendUsage};
 }
@@ -1053,11 +1070,14 @@ bool RuntimePresentationSurface::configure(int width, int height) {
 AcquiredFrame RuntimePresentationSurface::acquire() {
   gpu::Result<gpu::SurfaceTexture> acquired = device_->acquireCurrentTexture(surface_);
   if (acquired.hasError()) {
-    // The runtime refused the acquire rather than reporting on the surface, so there is no
-    // surface state to recover from and the frame is given up the way a lost device is.
+    // The runtime refused the acquire outright rather than reporting on the surface, so it is
+    // this surface that cannot serve the frame - it was never configured, or it is still holding
+    // one it was not asked to give back - and none of that says the device is gone. Reported the
+    // way a lost surface is, so the window spends one bounded rebuild on it and keeps rendering
+    // instead of giving the device up for good.
     std::fprintf(stderr, "EditorWindow: could not acquire a frame: %s\n",
                  acquired.error().toString().c_str());
-    return AcquiredFrame{gpu::Texture(), gpu::SurfaceStatus::DeviceLost};
+    return AcquiredFrame{gpu::Texture(), gpu::SurfaceStatus::Lost};
   }
 
   gpu::SurfaceTexture frame = std::move(acquired).result();
@@ -1074,7 +1094,10 @@ void RuntimePresentationSurface::present() {
   hasAcquiredFrame_ = false;
 #ifdef __EMSCRIPTEN__
   // A browser shows its canvas from its own frame loop, so there is no present to ask for and
-  // asking is refused; the frame ends by handing its texture back.
+  // asking is refused; the frame ends by handing its texture back. The runtime carries that
+  // property on the surface kind that names a canvas by selector, which this window cannot use:
+  // adapter selection has to be constrained to a surface object before there is a device, so the
+  // canvas surface is made here and handed over as one the embedder created.
   (void)device_->abandonCurrentTexture(surface_);
 #else
   if (gpu::Result<gpu::SurfaceStatus> presented = device_->presentSurface(surface_);
@@ -1184,10 +1207,11 @@ AcquiredFrame FollowWindowAndReacquire(PresentationSurface& surface, Vector2i si
 AcquiredFrame RebuildAndReacquire(
     std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
     const std::function<std::unique_ptr<PresentationSurface>()>& rebuild) {
+  // The surface that was lost is given up before its replacement is built, so the window never
+  // has two surfaces on the same platform object at once.
   surface->abandon();
-  std::unique_ptr<PresentationSurface> replacement = rebuild ? rebuild() : nullptr;
   surface->shutdown();
-  surface = std::move(replacement);
+  surface = rebuild ? rebuild() : nullptr;
   if (surface == nullptr) {
     std::fprintf(stderr,
                  "EditorWindow: the presentation surface was lost and could not be rebuilt from "
@@ -1708,6 +1732,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     if (!wgpuState_->presentation->attachToDevice(*wgpuState_->framebufferGeodeDevice) ||
         !wgpuState_->presentation->configure(surfaceWidth, surfaceHeight)) {
       std::fprintf(stderr, "EditorWindow: failed to configure the presentation surface\n");
+      // Let the surface go while the window it was built on is still there, rather than leaving
+      // it to this window's teardown to release a platform object outliving its window.
+      wgpuState_->presentation.reset();
       glfwDestroyWindow(window_);
       window_ = nullptr;
       TerminateGlfw();

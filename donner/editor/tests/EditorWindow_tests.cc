@@ -685,9 +685,10 @@ TEST(EditorWindowTest, SurfaceStatusesKeepTheirBrowserRetryBuckets) {
             (internal::WgpuSurfaceRetryDecision{}));
 }
 
-/// A frame handle that names no device. The frame-acquisition orchestration only checks whether a
-/// frame came back and passes the handle along, so a handle that is merely valid is all a
-/// scripted surface needs to stand in for one; naming no device, it releases nothing when it goes.
+/// A frame handle carrying no device-alive token. The frame-acquisition orchestration only checks
+/// whether a frame came back and passes the handle along, so a handle that is merely valid is all
+/// a scripted surface needs to stand in for one; with no token to resolve against, it releases
+/// nothing when it goes.
 gpu::Texture FakeFrameTexture() {
   return gpu::Texture::CreateForBackend(/*slotIndex=*/0, /*generation=*/1, /*deviceId=*/1);
 }
@@ -999,7 +1000,8 @@ protected:
 
   gpu::Result<gpu::SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
     // The platform holds its own frame and holds exactly one, so a backend still holding the
-    // previous frame refuses to hand out another.
+    // previous frame refuses to hand out another. The runtime refuses that first, so this models
+    // the platform faithfully rather than being the refusal any case here observes.
     if (backendHasFrame_) {
       return gpu::GpuError{gpu::GpuErrorType::InvalidState,
                            "the backend is still holding the frame it handed out"};
@@ -1187,9 +1189,9 @@ TEST_F(RuntimePresentationSurfaceTest, AskingForASecondFrameWithoutResolvingTheF
   internal::AcquiredFrame second = surface_.acquire();
 
   EXPECT_FALSE(second.texture.isValid());
-  EXPECT_THAT(second.status, testing::Eq(gpu::SurfaceStatus::DeviceLost))
-      << "the runtime refused the acquire rather than reporting on the surface, so there is no "
-         "surface state to recover from and the frame is given up the way a lost device is";
+  EXPECT_THAT(second.status, testing::Eq(gpu::SurfaceStatus::Lost))
+      << "it is this surface that cannot serve the frame, not the device, so the window spends a "
+         "rebuild on it rather than giving the device up for good";
   EXPECT_THAT(useFrame(first.texture), gpu::HasResult())
       << "the frame already handed out is untouched by the refusal";
 }
@@ -1211,6 +1213,52 @@ TEST_F(RuntimePresentationSurfaceTest, ASurfaceThatCannotPresentTheCompiledForma
   EXPECT_FALSE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
                                         /*enableReadback=*/false))
       << "the renderer's pipelines were compiled for a format this surface never presents";
+  EXPECT_EQ(device_.createdSurfaces.size(), 1u);
+
+  surface_.shutdown();
+
+  EXPECT_EQ(device_.destroySurfaceCalls, 1)
+      << "the surface it built to ask the question is given up with the refusal, not left behind";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AFrameThatDidNotArriveInTimeLeavesNothingHeld) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  device_.acquireStatus = gpu::SurfaceStatus::Timeout;
+
+  internal::AcquiredFrame frame = surface_.acquire();
+
+  EXPECT_THAT(frame.status, testing::Eq(gpu::SurfaceStatus::Timeout));
+  EXPECT_FALSE(frame.texture.isValid()) << "nothing became available to draw into";
+
+  surface_.abandon();
+  surface_.present();
+
+  EXPECT_EQ(device_.abandonCalls, 0)
+      << "a frame that never came is not one to hand back, and asking would be refused";
+  EXPECT_EQ(device_.presentCalls, 0);
+
+  device_.acquireStatus = gpu::SurfaceStatus::Success;
+  internal::AcquiredFrame next = surface_.acquire();
+  EXPECT_TRUE(next.texture.isValid()) << "the surface is still the window's and still serves";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AnOutOfDateFrameIsStillHeldUntilTheSurfaceFollowsTheWindow) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  device_.acquireStatus = gpu::SurfaceStatus::Outdated;
+
+  internal::AcquiredFrame frame = surface_.acquire();
+
+  EXPECT_THAT(frame.status, testing::Eq(gpu::SurfaceStatus::Outdated));
+  EXPECT_TRUE(frame.texture.isValid())
+      << "a configuration that has drifted out of date usually still presents";
+
+  device_.acquireStatus = gpu::SurfaceStatus::Success;
+  EXPECT_TRUE(surface_.configure(800, 600));
+
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "the frame the platform was still holding goes back as the surface follows the window";
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+  EXPECT_TRUE(surface_.acquire().texture.isValid());
 }
 
 TEST_F(RuntimePresentationSurfaceTest, ReadbackIsDroppedWhenFramesCannotBeCopiedFrom) {

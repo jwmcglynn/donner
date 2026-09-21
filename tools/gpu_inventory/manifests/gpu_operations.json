@@ -119,9 +119,12 @@
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_RGBA8Unorm",
         "WGPUTextureUsage",
+        "WGPUTextureUsage_CopyDst",
         "WGPUTextureUsage_CopySrc",
         "WGPUTextureUsage_None",
-        "WGPUTextureUsage_RenderAttachment"
+        "WGPUTextureUsage_RenderAttachment",
+        "WGPUTextureUsage_StorageBinding",
+        "WGPUTextureUsage_TextureBinding"
       ],
       "wgpuCppTokens": [
         "Adapter",

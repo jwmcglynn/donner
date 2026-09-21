@@ -631,13 +631,17 @@ gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onAcquireCurrentTexture(
   wgpu::SurfaceTexture surfaceTexture = {};
   slotSurfaces_[slotIndex].surface.get().getCurrentTexture(&surfaceTexture);
   const gpu::SurfaceStatus status = GpuSurfaceStatusFromWgpu(surfaceTexture.status);
+  // Whatever came back carries a reference of its own, so it is held here and only handed to the
+  // slot below once this is a frame the caller is being given. A status that says there is no
+  // frame gives the reference back instead of dropping it.
+  ScopedWgpuHandle<wgpu::Texture> acquired{wgpu::Texture(surfaceTexture.texture)};
   if (status == gpu::SurfaceStatus::Lost || status == gpu::SurfaceStatus::DeviceLost ||
-      status == gpu::SurfaceStatus::Timeout || !surfaceTexture.texture) {
+      status == gpu::SurfaceStatus::Timeout || !acquired) {
     return status;
   }
 
   SurfaceSlot& slot = slotSurfaces_[slotIndex];
-  slot.acquired = wgpu::Texture(surfaceTexture.texture);
+  slot.acquired = acquired.take();
   slot.acquiredTextureSlot = textureSlotIndex;
   slot.hasAcquired = true;
   // Borrowed: the surface owns the frame's texture, so the runtime's slot names it without

@@ -194,8 +194,10 @@ public:
   [[nodiscard]] virtual wgpu::Surface adapterSelectionSurface() const = 0;
 
   /**
-   * Settles the format, usage and alpha compositing that acquired textures carry. Runs before the
-   * device exists, because the renderer compiles its pipelines for \ref format.
+   * Settles the format acquired textures carry, and records whether finished frames are to be
+   * copied back. Runs before the device exists, because the renderer compiles its pipelines for
+   * \ref format; everything else a frame carries is settled by \ref attachToDevice, which is the
+   * first point the surface can say what it supports.
    *
    * @param adapter Adapter the device will be created on.
    * @param enableReadback Whether finished frames are copied back to the host.
@@ -205,7 +207,9 @@ public:
                                                  bool enableReadback) = 0;
 
   /**
-   * Finishes setup against the device whose queue draws the frames.
+   * Finishes setup against the device whose queue draws the frames, narrowing what was asked for
+   * to what the surface reports it can do. \ref usage and \ref premultipliedAlpha describe the
+   * frames this surface hands out only once this has succeeded.
    *
    * @param device Device wrapper the editor renders its frames with.
    * @return False when the surface could not be completed against it.
@@ -320,7 +324,7 @@ private:
   /// Platform object frames are presented to, filled in while attaching to the window.
   gpu::NativeSurfaceHandle native_;
 #ifndef __APPLE__
-  /// The surface object this made from the window's native handle. The runtime's swapchain is
+  /// The surface object this made from the window's platform handle. The runtime's swapchain is
   /// built on it, so it is let go of only after the runtime's surface is gone.
   wgpu::Surface platformSurface_;
 #endif
