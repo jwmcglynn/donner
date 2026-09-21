@@ -512,6 +512,25 @@ TEST_F(GeodeFilterEngineTest, EachExecutionOfAFrameClosesItsOwnCommandBuffer) {
   frame.submit();
 }
 
+TEST_F(GeodeFilterEngineTest, ChunksPastTheFramesBoundSplitAcrossSubmissions) {
+  engine_->beginFrame();
+  RecordingFrameSink frame(*device_);
+  frame.setSubmitAt(2);
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+
+  // 129 passes close three chunks, so the frame reaches its bound twice while the execution is
+  // still recording and submits what it holds both times.
+  EXPECT_THAT(engine_->recordPassesForTesting(129, allocator, &frame), testing::IsTrue());
+  frame.submit();
+
+  device_->setCounters(nullptr);
+  EXPECT_THAT(frame.submissions(), testing::Eq(2u));
+  EXPECT_THAT(counters.submits, testing::Eq(2u));
+  EXPECT_THAT(counters.commandBuffers, testing::Eq(3u));
+}
+
 TEST_F(GeodeFilterEngineTest, LaterChunkLossDetachesNothingFromAcceptedWork) {
   using namespace svg::components;
   FilterGraph graph;

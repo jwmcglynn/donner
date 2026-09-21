@@ -598,7 +598,7 @@ void DrawFilterGraphPastTheSubmissionBound(RendererGeode& renderer) {
   renderer.popFilterLayer();
 }
 
-TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndKeepsRecordingOrder) {
+TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndStillRenders) {
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
   device->filterEngine().setMaximumTileExtentForTesting(16);
@@ -616,7 +616,6 @@ TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndKeepsRecordingOrd
   EXPECT_THAT(counters->submits, testing::Gt(1u))
       << "a frame past the bound splits across submissions rather than handing the backend a "
          "span it cannot acquire command buffers for";
-  // Submissions execute in the order they are made, so a split keeps the frame's recording order.
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsFalse());
 }
 
@@ -627,6 +626,8 @@ TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
   device->filterEngine().setMaximumTileExtentForTesting(16);
   RendererGeode renderer(device);
   beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
   // Armed for one wait. A split puts the pass that samples what the submitted buffers wrote in a
   // later submission, which hardware Vulkan does not order automatically, so the split must wait
   // that work out - and a wait that reports a hang must fail the frame closed.
@@ -636,7 +637,12 @@ TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
   renderer.endFrame();
 
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(counters->submits, testing::Eq(1u))
+      << "the forced split is where the wait runs, so exactly that submission happened and the "
+         "frame never reached its own";
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  // A wait on an already-lost device reports the loss without consuming the injection, so
+  // disarm it rather than leaving it for whatever waits next.
   device->setQueueWaitResultForTesting(std::nullopt);
 }
 

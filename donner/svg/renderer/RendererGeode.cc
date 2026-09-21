@@ -1651,22 +1651,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return frameGpuEncoder != nullptr;
   }
 
-  /// Add \p commandBuffer to the frame, submitting what has accumulated first when the frame has
+  /// Submit what the frame holds so far and let the backend finish it before recording resumes.
+  ///
+  /// Splitting a frame is a cross-submit edge for whatever recorded the buffers on either side of
+  /// it: a pass in the next submission may sample a storage texture the submitted one wrote, and
+  /// on hardware Vulkan the automatic barrier for that races the async queue and produces
+  /// nondeterministic large-area corruption. The wait is bounded, and a timeout is reported as a
+  /// failure so the frame is abandoned rather than recorded against unproven work.
+  [[nodiscard]] bool splitFrameSubmission() {
+    if (!submitFrameCommandBuffers()) {
+      return false;
+    }
+    return !device->isVulkan() || device->waitForQueueIdle() == geode::GpuWaitResult::Complete;
+  }
+
+  /// Add \p commandBuffer to the frame, splitting the submission first when the frame has
   /// already reached \ref kMaxFrameCommandBuffersPerSubmission.
   [[nodiscard]] bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
-    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission) {
-      if (!submitFrameCommandBuffers()) {
-        return false;
-      }
-      // A forced split is a cross-submit edge for whatever recorded the buffers on either side of
-      // it: a pass in the next submission may sample a storage texture the submitted one wrote,
-      // and on hardware Vulkan the automatic barrier for that races the async queue and produces
-      // nondeterministic large-area corruption. Wait the submitted work out, exactly as a filter
-      // execution does when it submits its chunks itself. Bounded: a timeout is reported as a
-      // failure, which abandons the frame rather than recording against unproven work.
-      if (device->isVulkan() && device->waitForQueueIdle() != geode::GpuWaitResult::Complete) {
-        return false;
-      }
+    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission &&
+        !splitFrameSubmission()) {
+      return false;
     }
     frameCommandBuffers.push_back(std::move(commandBuffer));
     return true;
@@ -1759,6 +1763,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameCommandBuffers.clear();
     frameRetainedFilterResources.clear();
     frameRecordingOpen = false;
+    frameImportedTextureViews.clear();
+    frameImportedTextures.clear();
     frameSnapshotImports.clear();
     frameSnapshotBackings.clear();
     if (device) {
@@ -2106,8 +2112,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
     retireActiveEncoder();
     // A memory-limited filter budget only frees its retained bytes once the work holding them has
-    // reached the queue, so this is the one place a frame submits before it ends.
-    if (!closeFrameGpuEncoder(false) || !submitFrameCommandBuffers()) {
+    // reached the queue, so this splits the frame the same way reaching the bound on one
+    // submission does.
+    if (!closeFrameGpuEncoder(false) || !splitFrameSubmission()) {
       return false;
     }
     frameGpuEncoders.clear();
@@ -5710,18 +5717,18 @@ void RendererGeode::popIsolatedLayer() {
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
   }
+  // Finish the layer's render pass so the texture contents are ready. Closing it can fail, which
+  // abandons the frame, so everything below is gated on the check after it rather than before.
+  if (impl_->encoder) {
+    impl_->retireActiveEncoder();
+  }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (impl_->frameRecordingAbandoned) {
     impl_->target = frame.savedTarget;
     impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
-
-  // Finish the layer's render pass so the texture contents are ready.
-  if (impl_->encoder) {
-    impl_->retireActiveEncoder();
-  }
-  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
   // Restore outer target references.
   impl_->target = frame.savedTarget;
@@ -5862,6 +5869,12 @@ void RendererGeode::popFilterLayer() {
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
   }
+  // Finish the filter layer's render pass so the texture is ready. Closing it can fail, which
+  // abandons the frame, so everything below is gated on the check after it rather than before.
+  if (impl_->encoder) {
+    impl_->retireActiveEncoder();
+  }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (impl_->frameRecordingAbandoned) {
     impl_->target = frame.savedTarget;
     impl_->replaceActiveEncoder(nullptr);
@@ -5869,12 +5882,6 @@ void RendererGeode::popFilterLayer() {
     impl_->filterExecutionBudget->release(frame.filterReservation);
     return;
   }
-
-  // Finish the filter layer's render pass so the texture is ready.
-  if (impl_->encoder) {
-    impl_->retireActiveEncoder();
-  }
-  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
   // When the filter buffer was expanded to capture negative-coordinate content, adjust
   // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
@@ -6031,8 +6038,12 @@ void RendererGeode::transitionMaskToContent() {
   }
 
   // Flush the mask-capture encoder so the mask texture is ready to
-  // sample in popMask.
+  // sample in popMask. Closing it can fail, which abandons the frame.
   impl_->retireActiveEncoder();
+  if (impl_->frameRecordingAbandoned) {
+    frame.phase = Impl::MaskStackFrame::Phase::Content;
+    return;
+  }
 
   impl_->target = impl_->backendTextureOf(frame.contentTexture);
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
@@ -6057,6 +6068,12 @@ void RendererGeode::popMask() {
     // Placeholder frame from the headless path - nothing to do.
     return;
   }
+  // Finish the content encoder so its target is ready to sample. Closing it can fail, which
+  // abandons the frame, so everything below is gated on the check after it rather than before.
+  if (impl_->encoder) {
+    impl_->retireActiveEncoder();
+  }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (impl_->frameRecordingAbandoned) {
     impl_->target = frame.savedTarget;
     impl_->replaceActiveEncoder(nullptr);
@@ -6064,12 +6081,6 @@ void RendererGeode::popMask() {
     impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
     return;
   }
-
-  // Finish the content encoder so its target is ready to sample.
-  if (impl_->encoder) {
-    impl_->retireActiveEncoder();
-  }
-  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
   // Restore the outer target and reopen a new encoder with load-preserve.
   impl_->target = frame.savedTarget;
