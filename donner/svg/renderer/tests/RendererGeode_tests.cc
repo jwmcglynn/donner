@@ -707,6 +707,45 @@ INSTANTIATE_TEST_SUITE_P(EveryPopThatRetires, FrameEncoderCloseFailureTest,
                            return std::string(info.param);
                          });
 
+/// Splitting a frame mid-frame for a memory-limited filter budget has two ways to leave it with
+/// no encoder: the retire it starts with, and its own close. The caller reads a refusal as "no
+/// room for this filter" and keeps drawing, so both have to abandon rather than report through
+/// the return value.
+/// @param closesBeforeFailure Closes to let through, choosing which of the two exits fails.
+void expectMidFrameSplitFailureAbandonsTheFrame(size_t closesBeforeFailure) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  renderer.beginFrame(viewport);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  renderer.pushIsolatedLayer(0.8, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectFrameEncoderCloseFailureForTesting(closesBeforeFailure);
+
+  EXPECT_THAT(renderer.submitFilterBudgetChunkForTesting(), testing::IsFalse());
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  // The layer opened before the split still has to unwind, and it records through the frame.
+  renderer.popIsolatedLayer();
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  renderer.endFrame();
+  EXPECT_THAT(counters->submits, testing::Eq(0u));
+  EXPECT_THAT(counters->commandBuffers, testing::Eq(0u));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, AMidFrameSplitAbandonsWhenItsOpeningRetireFails) {
+  expectMidFrameSplitFailureAbandonsTheFrame(/*closesBeforeFailure=*/0);
+}
+
+TEST_F(RendererGeodeTest, AMidFrameSplitAbandonsWhenItsOwnCloseFails) {
+  expectMidFrameSplitFailureAbandonsTheFrame(/*closesBeforeFailure=*/1);
+}
+
 TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());

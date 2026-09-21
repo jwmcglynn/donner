@@ -1399,8 +1399,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
   bool failFilterFrameSuspensionForTesting = false;
-  /// One-shot: the next close of the frame's recorded draws fails, as a backend refusal would.
-  bool failFrameEncoderCloseForTesting = false;
+  /// Closes of the frame's recorded draws to let through before one fails, as a backend refusal
+  /// would; empty when no failure is armed.
+  std::optional<size_t> failFrameEncoderCloseForTesting;
+  /// One-shot: the next filter-budget split runs without a budget rejection asking for it.
+  bool forceFilterBudgetChunkForTesting = false;
   bool failFilterFrameRestoreForTesting = false;
   bool frameRecordingAbandoned = false;
 
@@ -1710,8 +1713,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameGpuEncoder == nullptr) {
       return true;
     }
-    if (std::exchange(failFrameEncoderCloseForTesting, false)) {
-      return false;
+    if (failFrameEncoderCloseForTesting.has_value()) {
+      if (*failFrameEncoderCloseForTesting == 0) {
+        failFrameEncoderCloseForTesting.reset();
+        return false;
+      }
+      --*failFrameEncoderCloseForTesting;
     }
     if (frameGpuEncoder->recordedCommandCount() == 0) {
       // Finishing an encoder that recorded nothing would spend one of the submission's command
@@ -2104,16 +2111,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     framePendingReleases.clear();
   }
 
+  /// Whether a memory-limited filter budget is holding bytes it can only free once the work
+  /// naming them has reached the queue.
+  [[nodiscard]] bool filterBudgetNeedsChunkSubmit() const {
+    return filterExecutionBudget->rejectionReason() ==
+               components::FilterExecutionBudget::RejectionReason::MemoryLimit &&
+           filterExecutionBudget->activeGpuReservations() == 0 &&
+           filterExecutionBudget->retainedGpuBytes() != 0;
+  }
+
   bool submitFilterBudgetChunk() {
+    const bool forced = std::exchange(forceFilterBudgetChunkForTesting, false);
     if (!device || !frameRecordingOpen || !target || !filterStack.empty() ||
-        filterExecutionBudget->rejectionReason() !=
-            components::FilterExecutionBudget::RejectionReason::MemoryLimit ||
-        filterExecutionBudget->activeGpuReservations() != 0 ||
-        filterExecutionBudget->retainedGpuBytes() == 0) {
+        (!forced && !filterBudgetNeedsChunkSubmit())) {
       return false;
     }
 
     retireActiveEncoder();
+    if (frameRecordingAbandoned) {
+      return false;  // Closing the frame's recorded draws failed, which abandoned the frame.
+    }
     // A memory-limited filter budget only frees its retained bytes once the work holding them has
     // reached the queue, so this splits the frame the same way reaching the bound on one
     // submission does.
@@ -7878,8 +7895,13 @@ void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
   impl_->failFilterFrameRestoreForTesting = true;
 }
 
-void RendererGeode::injectFrameEncoderCloseFailureForTesting() {
-  impl_->failFrameEncoderCloseForTesting = true;
+void RendererGeode::injectFrameEncoderCloseFailureForTesting(size_t successfulCloses) {
+  impl_->failFrameEncoderCloseForTesting = successfulCloses;
+}
+
+bool RendererGeode::submitFilterBudgetChunkForTesting() {
+  impl_->forceFilterBudgetChunkForTesting = true;
+  return impl_->submitFilterBudgetChunk();
 }
 
 size_t RendererGeode::failedFilterTextureCountForTesting() const {

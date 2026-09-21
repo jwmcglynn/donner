@@ -504,8 +504,13 @@ public:
   /// Inject transformed-filter suspension and following encoder-restoration failure once.
   void injectFilterFrameSuspensionAndRestoreFailureForTesting();
 
-  /// Fail the next close of the frame's recorded draws once, as a backend refusal would.
-  void injectFrameEncoderCloseFailureForTesting();
+  /// Fail one close of the frame's recorded draws, as a backend refusal would.
+  /// @param successfulCloses Closes to let through before the failing one.
+  void injectFrameEncoderCloseFailureForTesting(size_t successfulCloses = 0);
+
+  /// Run one mid-frame filter-budget split now, without waiting for a budget to ask for one.
+  /// @return What the split reported, which is false when it could not make room.
+  bool submitFilterBudgetChunkForTesting();
 
   /// Number of filter textures retained outside reusable pools after an uncertain failure.
   [[nodiscard]] size_t failedFilterTextureCountForTesting() const;
