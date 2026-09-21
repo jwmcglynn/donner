@@ -1188,6 +1188,182 @@ TEST(BrowserDevice, DestroyingASurfaceHandsBackItsFrameBeforeLettingGoOfTheCanva
   EXPECT_THAT(fixture.device->liveObjectCountForTest(), 0u);
 }
 
+TEST(BrowserDevice, DoesNotHandBackAFrameFromAThreadThatDoesNotOwnTheDevice) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  const std::vector<std::string> callsBefore = *fixture.bridge->calls;
+
+  // Dropping the surface hands its frame back, and that names the canvas to the browser, which
+  // only the context holding the device may do. Declaration order is the test: the surface is
+  // destroyed first, so it is still holding the frame when it goes.
+  std::thread other([&] {
+    SurfaceTexture frame = std::move(acquired).result();
+    Surface dropped = std::move(surface).result();
+  });
+  other.join();
+
+  // Nothing else ran while the other thread held the handles, so any line added here is a call
+  // this device made to the browser from a thread that does not own it.
+  EXPECT_THAT(*fixture.bridge->calls, testing::ElementsAreArray(callsBefore));
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Surface, 1), true);
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), true);
+
+  // One refusal per release the drop issued, not one per handle: the frame and the canvas
+  // context are both released, and both are kept for the owning thread.
+  EXPECT_THAT(fixture.device->foreignThreadReleasesForTest(), 2u);
+}
+
+TEST(BrowserDevice, DoesNotHandBackAFrameAbandonedFromAThreadThatDoesNotOwnTheDevice) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  const std::vector<std::string> callsBefore = *fixture.bridge->calls;
+
+  // The same refusal covers the explicit request, not only the one a dropped handle issues.
+  Status abandoned = Status(GpuError{GpuErrorType::InvalidState, "unset"});
+  std::thread other([&] { abandoned = fixture.device->abandonCurrentTexture(surface.result()); });
+  other.join();
+
+  // The runtime lets go of its own record either way, so the status is the same; what the
+  // refusal withholds is the call to the browser, which is why the frame is still the canvas's
+  // until the owning thread hands it back.
+  EXPECT_THAT(abandoned, IsOk());
+  EXPECT_THAT(*fixture.bridge->calls, testing::ElementsAreArray(callsBefore));
+  EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), true);
+  EXPECT_THAT(fixture.device->foreignThreadReleasesForTest(), 1u);
+}
+
+TEST(BrowserDevice, HandsBackAFrameRefusedElsewhereWhenTheOwningThreadTearsTheDeviceDown) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  const std::vector<std::string> callsBefore = *calls;
+  std::thread other([&] {
+    SurfaceTexture frame = std::move(acquired).result();
+    Surface dropped = std::move(surface).result();
+  });
+  other.join();
+  ASSERT_THAT(*calls, testing::ElementsAreArray(callsBefore));
+
+  // A refused release is deferred, not discarded: teardown runs on the owning thread, so the
+  // frame goes back to the canvas there rather than staying with the browser for the life of the
+  // page.
+  fixture.device.reset();
+  EXPECT_THAT(SurfaceCalls(*calls),
+              ElementsAre("createSurface id=1 canvas=#canvas",
+                          "configureSurface surface=1 format=2 usage=1 size=8x8 alphaMode=2",
+                          "acquireCurrentTexture surface=1 texture=2",
+                          "abandonCurrentTexture surface=1", "destroyObject kind=surface id=1"));
+  EXPECT_THAT(*objects, testing::IsEmpty());
+}
+
+TEST(BrowserDevice, HandsBackAFrameRefusedElsewhereBeforeTheOwningThreadTakesTheNextOne) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  // Held across the refusal so the runtime has a second retired texture slot to hand out below;
+  // the next frame must not land on the slot the refused one still names, or the hand-back could
+  // come from the slot-reuse path rather than from the deferral under test. Which slot comes back
+  // depends on the runtime recycling retired slots most-recently-retired first.
+  Result<Texture> scratch = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
+  ASSERT_THAT(scratch, HasResult());
+
+  Status abandoned = Status(GpuError{GpuErrorType::InvalidState, "unset"});
+  const std::vector<std::string> callsBefore = *calls;
+  std::thread other([&] {
+    SurfaceTexture frame = std::move(acquired).result();
+    abandoned = fixture.device->abandonCurrentTexture(surface.result());
+  });
+  other.join();
+  ASSERT_THAT(abandoned, IsOk());
+  ASSERT_THAT(*calls, testing::ElementsAreArray(callsBefore));
+  ASSERT_THAT(fixture.device->destroyTexture(std::move(scratch).result()), IsOk());
+
+  // The surface outlives the refusal here, so the deferred hand-back happens at the next thing
+  // the owning thread asks of it. A canvas refuses a second frame while the first is still
+  // named, so without it this acquisition fails rather than merely losing track of a texture.
+  Result<SurfaceTexture> reacquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(reacquired, HasResult());
+  EXPECT_THAT(
+      SurfaceCalls(*calls),
+      ElementsAre("createSurface id=1 canvas=#canvas",
+                  "configureSurface surface=1 format=2 usage=1 size=8x8 alphaMode=2",
+                  "acquireCurrentTexture surface=1 texture=2", "abandonCurrentTexture surface=1",
+                  "acquireCurrentTexture surface=1 texture=4"));
+}
+
+TEST(BrowserDevice, TearingTheDeviceDownElsewhereStillHandsBackTheFrameItHolds) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
+  std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
+
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
+  Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  std::thread other([&] {
+    {
+      SurfaceTexture frame = std::move(acquired).result();
+      Surface dropped = std::move(surface).result();
+    }
+    fixture.device.reset();
+  });
+  other.join();
+
+  // Destroying a device off its owning thread is a caller error; what this pins is that refusing
+  // a hand-back does not make it worse. Teardown releases everything this device holds whatever
+  // thread it runs on, so a frame the refusal above left named would otherwise reach the object
+  // sweep and be destroyed, taking away the canvas's own texture rather than handing it back.
+  EXPECT_THAT(*calls, Not(Contains(HasSubstr("destroyObject kind=texture"))));
+  EXPECT_THAT(SurfaceCalls(*calls),
+              ElementsAre("createSurface id=1 canvas=#canvas",
+                          "configureSurface surface=1 format=2 usage=1 size=8x8 alphaMode=2",
+                          "acquireCurrentTexture surface=1 texture=2",
+                          "abandonCurrentTexture surface=1", "destroyObject kind=surface id=1"));
+  EXPECT_THAT(*objects, testing::IsEmpty());
+}
+
 TEST(BrowserDevice, LosingTheDeviceDuringAFrameStillHandsTheFrameBack) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
