@@ -567,10 +567,17 @@ public:
 
   BridgeStatus configureSurface(BrowserObjectId surfaceId, uint32_t formatCode, uint32_t usageBits,
                                 uint32_t width, uint32_t height, uint32_t alphaModeCode) override {
-    return operate(std::format("configureSurface surface={} format={} usage={} size={}x{} "
-                               "alphaMode={}",
-                               surfaceId, formatCode, usageBits, width, height, alphaModeCode),
-                   BrowserObjectKind::Surface, surfaceId);
+    const BridgeStatus status =
+        operate(std::format("configureSurface surface={} format={} usage={} size={}x{} "
+                            "alphaMode={}",
+                            surfaceId, formatCode, usageBits, width, height, alphaModeCode),
+                BrowserObjectKind::Surface, surfaceId);
+    if (status == BridgeStatus::Success) {
+      // Configuring replaces the swap chain behind the context, so the browser side drops the
+      // frame it was holding rather than carrying it across.
+      releaseFrame(surfaceId);
+    }
+    return status;
   }
 
   BridgeStatus acquireCurrentTexture(BrowserObjectId surfaceId, BrowserObjectId textureId,
@@ -578,6 +585,11 @@ public:
     if (const BridgeStatus bridgeStatus = require(BrowserObjectKind::Surface, surfaceId);
         bridgeStatus != BridgeStatus::Success) {
       return bridgeStatus;
+    }
+    if (frames_.find(surfaceId) != frames_.end()) {
+      // A canvas holds one frame at a time and refuses a second while the first is still named,
+      // as the browser side does: taking another would leave nothing able to name the first.
+      return BridgeStatus::Failed;
     }
     status = acquireStatus;
     if (acquireStatus != SurfaceStatus::Success && acquireStatus != SurfaceStatus::Outdated) {
