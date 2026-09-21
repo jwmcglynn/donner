@@ -77,6 +77,17 @@ Box2d Path::bounds() const {
   return box;
 }
 
+Path Path::transformed(const Transform2d& transform) const {
+  Path result;
+  result.commands_ = commands_;
+  result.points_.reserve(points_.size());
+  for (const Vector2d& point : points_) {
+    result.points_.push_back(transform.transformPosition(point));
+  }
+
+  return result;
+}
+
 Box2d Path::transformedBounds(const Transform2d& transform) const {
   if (points_.empty()) {
     return Box2d();

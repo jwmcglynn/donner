@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "donner/base/MathUtils.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/editor/EditorApp.h"
@@ -256,6 +258,72 @@ TEST(SelectionAabbTest, SnapshotIncludesGeometryStrokeExtents) {
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
 
   EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(15.0, 25.0, 50.0, 60.0)));
+}
+
+// `vector-effect: non-scaling-stroke` under an anisotropic CTM is stroked after the transform is
+// applied, so the selection frame has to bound a stroke that is 10px wide on both axes in document
+// space. Expanding in local space and scaling the outline would report 10 / sqrt(2) * 2 = 14.1px
+// along x and 7.1px along y instead.
+TEST(SelectionAabbTest, SnapshotBoundsNonScalingStrokeUnderAnisotropicScale) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+              <g transform="scale(2, 1)">
+                <rect id="stroked" x="20" y="30" width="40" height="50"
+                      fill="red" stroke="black" stroke-width="10" stroke-linejoin="round"
+                      vector-effect="non-scaling-stroke"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto stroked = app.document().document().querySelector("#stroked");
+  ASSERT_TRUE(stroked.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*stroked};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  // Document-space rect is x in [40, 120], y in [30, 80]; a 10px document-space stroke adds 5px on
+  // every side.
+  EXPECT_THAT(bounds, testing::ElementsAre(
+                          BoxNear(Box2d(Vector2d(35.0, 25.0), Vector2d(125.0, 85.0)), 1e-6)));
+}
+
+// A pattern-painted stroke is expanded in local space even under an anisotropic CTM, so its
+// document-space extent is the local width scaled per axis: 10 / sqrt(2) locally, doubled along x.
+//
+// The pattern id contains a dot on purpose. An author id is an arbitrary string, so resolving the
+// stroke's href through a `"#" + id` selector would read `pat.a` as id `pat` with class `a`, miss
+// the pattern, and fall through to the host-space bounds asserted by the test above.
+TEST(SelectionAabbTest, SnapshotBoundsPatternNonScalingStrokeUsesLocalExpansion) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+              <defs>
+                <pattern id="pat.a" width="4" height="4" patternUnits="userSpaceOnUse">
+                  <rect width="4" height="4" fill="black"/>
+                </pattern>
+              </defs>
+              <g transform="scale(2, 1)">
+                <rect id="stroked" x="20" y="30" width="40" height="50"
+                      fill="red" stroke="url(#pat.a)" stroke-width="10" stroke-linejoin="round"
+                      vector-effect="non-scaling-stroke"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto stroked = app.document().document().querySelector("#stroked");
+  ASSERT_TRUE(stroked.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*stroked};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  const double localHalfStroke = 5.0 / std::sqrt(2.0);
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxNear(
+                          Box2d(Vector2d(40.0 - 2.0 * localHalfStroke, 30.0 - localHalfStroke),
+                                Vector2d(120.0 + 2.0 * localHalfStroke, 80.0 + localHalfStroke)),
+                          1e-6)));
 }
 
 TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeometry) {

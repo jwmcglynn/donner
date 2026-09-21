@@ -208,6 +208,16 @@ public:
   Box2d transformedBounds(const Transform2d& transform) const;
 
   /**
+   * Returns this path with every point mapped through \p transform.
+   *
+   * An affine transform maps Bézier control points exactly, so the verb sequence is preserved and
+   * the result describes the same curves in the target space without flattening.
+   *
+   * @param transform Transform applied to every point.
+   */
+  Path transformed(const Transform2d& transform) const;
+
+  /**
    * Returns true if the given point is inside this path's fill region.
    *
    * Uses a winding-number ray-casting algorithm. Points lying exactly on the path boundary are

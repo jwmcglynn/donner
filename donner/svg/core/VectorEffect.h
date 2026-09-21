@@ -19,17 +19,18 @@ namespace donner::svg {
  */
 enum class VectorEffect : uint8_t {
   None,  ///< [DEFAULT] No vector effect; the element scales normally with the coordinate system.
-  NonScalingStroke,  ///< The stroke width (and dash pattern) is held constant in the coordinate
-                     ///< system of the referencing viewport, ignoring the element's own transform
-                     ///< and viewBox scaling.
-                     ///<
-                     ///< Known limitation: the implementation compensates with a scalar factor,
-                     ///< `sqrt(|det(CTM)|)`, which is exact for uniform scale and rotation but
-                     ///< averages a non-uniform scale (e.g. `scale(2, 1)` or
-                     ///< `preserveAspectRatio="none"`), so strokes under an anisotropic CTM are
-                     ///< not held at a constant device width. Full conformance would require
-                     ///< stroking the path in device space instead of pre-dividing the local
-                     ///< stroke width; see `toStrokeParams` in RendererDriver.cc.
+  NonScalingStroke,  ///< The stroke width and dash pattern are held constant in host (root canvas)
+                     ///< space, ignoring the element's own transform and viewBox scaling. For
+                     ///< paths the centerline is transformed forward into that space and dashed
+                     ///< and stroked there, so uniform scaling, non-uniform scaling, and shear all
+                     ///< preserve the authored width and dash lengths; stroke paint servers stay
+                     ///< authored in the element's user space and are remapped onto the host-space
+                     ///< outline. Text strokes and pattern-painted strokes are stroked in local
+                     ///< space, so under an anisotropic CTM their drawn width is the geometric
+                     ///< mean of the two axis widths. Caveat: SVG 2 defines the host space as the
+                     ///< nearest viewport, not the root canvas, and allows an explicit
+                     ///< `viewport`/`screen` keyword to select it; neither is implemented, and
+                     ///< `ParseVectorEffect` rejects the two-keyword syntax.
   NonScalingSize,    ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
   NonRotation,       ///< At-risk in SVG 2 CR. Parses but is treated as `none`.
   FixedPosition,     ///< At-risk in SVG 2 CR. Parses but is treated as `none`.

@@ -547,6 +547,22 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
   return style;
 }
 
+/// Returns whether \p slot's cached stroke outline is reusable for the given stroke parameters.
+/// The key covers the stroke style, the device-derived flattening tolerance, and whether the
+/// outline was built from a host-space `non-scaling-stroke` centerline.
+bool StrokeSlotMatches(const geode::GeodePathCacheComponent::StrokeSlot& slot,
+                       const StrokeStyle& strokeStyle, double flattenTolerance,
+                       const std::optional<Transform2d>& hostFromLocal) {
+  if (slot.hostFromLocal.has_value() != hostFromLocal.has_value()) {
+    return false;
+  }
+  if (hostFromLocal.has_value() && *slot.hostFromLocal != *hostFromLocal) {
+    return false;
+  }
+
+  return slot.strokeKey == strokeStyle && slot.flattenTolerance == flattenTolerance;
+}
+
 /// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
 /// `objectBoundingBox` mode. Mirrors the helper used by the software renderer
 /// for gradient coordinate resolution.
@@ -2380,9 +2396,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
                                    frame.filterBufferOffsetX, frame.filterBufferOffsetY};
-    return ComputeGeodeLocalRasterGeometry(
-        frame.filterGraph, frame.filterRegion, frame.deviceFromFilter, buffer,
-        !frame.localRasterRequiredForBudget);
+    return ComputeGeodeLocalRasterGeometry(frame.filterGraph, frame.filterRegion,
+                                           frame.deviceFromFilter, buffer,
+                                           !frame.localRasterRequiredForBudget);
   }
 
   TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
@@ -4394,8 +4410,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Returns a `StrokeDerived` pointing into the cache (entity path) or
   /// into `strokeScratchPath` (no-entity fallback). The caller must
   /// check `strokedPath == nullptr` for the "zero-stroke" case.
+  /// Flushes the pending batch when it still references the cached stroke encode, then drops the
+  /// resident stroke slots so a replacement or removal cannot leave a stale resident binding.
+  void releaseCachedStrokeSlots(EntityHandle source, geode::GeodePathCacheComponent& cache) {
+    if (cache.strokeSlot.has_value() && pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
+      flushPendingBatch();
+    }
+    if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
+      resident->strokeSlot.reset();
+      resident->gradientStrokeSlot.reset();
+    }
+  }
+
   StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
-                                 const StrokeStyle& strokeStyle) {
+                                 const StrokeStyle& strokeStyle,
+                                 const std::optional<Transform2d>& hostFromLocal) {
     StrokeDerived result;
     // Device-aware flattening tolerance for this draw. Part of the cache key
     // below: a zoom change that crosses a scale bucket must re-flatten instead
@@ -4406,8 +4435,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
           documentGeometryBudget(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
-      if (cache.strokeSlot && cache.strokeSlot->strokeKey == strokeStyle &&
-          cache.strokeSlot->flattenTolerance == flattenTolerance) {
+      if (cache.strokeSlot.has_value() &&
+          StrokeSlotMatches(*cache.strokeSlot, strokeStyle, flattenTolerance, hostFromLocal)) {
         result.strokedPath = &cache.strokeSlot->strokedPath;
         result.encoded = &cache.strokeSlot->strokedEncode;
         result.persistent = true;
@@ -4419,14 +4448,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         // Rebuild the bounded NonZero stroke union when geometry or stroke parameters change.
         Path stroked = geometry.strokeToFill(strokeStyle, flattenTolerance);
         if (stroked.empty()) {
-          if (cache.strokeSlot.has_value() &&
-              pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
-            flushPendingBatch();
-          }
-          if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-            resident->strokeSlot.reset();
-            resident->gradientStrokeSlot.reset();
-          }
+          releaseCachedStrokeSlots(source, cache);
           cache.strokeReservation.reset();
           cache.strokeSlot.reset();
           return result;  // strokedPath stays null.
@@ -4440,6 +4462,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         geode::GeodePathCacheComponent::StrokeSlot candidate{
             .strokeKey = strokeStyle,
             .flattenTolerance = flattenTolerance,
+            .hostFromLocal = hostFromLocal,
             .strokedPath = std::move(stroked),
             .strokedEncode = std::move(*encoded),
             .strokeFillRule = fillRule,
@@ -4454,14 +4477,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           result.fillRule = fillRule;
           return result;
         }
-        if (cache.strokeSlot.has_value() &&
-            pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
-          flushPendingBatch();
-        }
-        if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-          resident->strokeSlot.reset();
-          resident->gradientStrokeSlot.reset();
-        }
+        releaseCachedStrokeSlots(source, cache);
         cache.strokeSlot = std::move(candidate);
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
@@ -4821,8 +4837,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       gpu::Result<gpu::Texture> created =
           device->adapterDevice().createTexture(gpu::TextureDescriptor{
               "RendererGeodeTarget",
-              gpu::Extent2d{static_cast<uint32_t>(pixelWidth),
-                            static_cast<uint32_t>(pixelHeight)},
+              gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
               geode::GpuTextureFormatFromWgpu(textureFormat),
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                   gpu::TextureUsage::Sampled});
@@ -6475,7 +6490,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // by `StrokeStyle` equality. A cache hit skips all three computations.
   const StrokeStyle strokeStyle = toStrokeStyle(stroke);
   const Impl::StrokeDerived strokeDerived =
-      impl_->getStrokeDerived(path.sourceEntity, drawPathGeometry, strokeStyle);
+      impl_->getStrokeDerived(path.sourceEntity, drawPathGeometry, strokeStyle, path.hostFromLocal);
   if (!strokeDerived.strokedPath) {
     return;
   }

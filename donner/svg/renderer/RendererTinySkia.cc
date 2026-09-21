@@ -448,7 +448,26 @@ void EnsureCacheInvalidationWired(Registry& registry, const Registry*& checkedTh
 /// slot, which would serve one behavior's outline for another - a wrong-pixels bug that no test
 /// of the existing two behaviors can see. Here `-Wswitch` names the missing case instead.
 std::optional<tiny_skia::Path>& cacheSlotFor(components::TinySkiaPathCacheComponent& cache,
-                                             TinyPathCloseBehavior closeBehavior) {
+                                             TinyPathCloseBehavior closeBehavior,
+                                             const std::optional<Transform2d>& hostFromLocal) {
+  if (hostFromLocal.has_value()) {
+    // The host-space geometry is a function of the CTM as well as the spline, and only the spline
+    // is covered by the `ComputedPathComponent` invalidation above. Drop both host slots when the
+    // producing transform changes.
+    if (!cache.hostFromLocal.has_value() || *cache.hostFromLocal != *hostFromLocal) {
+      cache.hostFromLocal = *hostFromLocal;
+      cache.hostSpaceClosedPath.reset();
+      cache.hostSpaceOpenedPath.reset();
+    }
+
+    switch (closeBehavior) {
+      case TinyPathCloseBehavior::Preserve: return cache.hostSpaceClosedPath;
+      case TinyPathCloseBehavior::EndWithLine: return cache.hostSpaceOpenedPath;
+    }
+
+    UTILS_UNREACHABLE();
+  }
+
   switch (closeBehavior) {
     case TinyPathCloseBehavior::Preserve: return cache.closedPath;
     case TinyPathCloseBehavior::EndWithLine: return cache.openedPath;
@@ -475,7 +494,7 @@ const tiny_skia::Path& ResolveTinyPath(const PathShape& shape, TinyPathCloseBeha
 
   EnsureCacheInvalidationWired(*source.registry(), checkedThisFrame);
   auto& cache = source.get_or_emplace<components::TinySkiaPathCacheComponent>();
-  std::optional<tiny_skia::Path>& slot = cacheSlotFor(cache, closeBehavior);
+  std::optional<tiny_skia::Path>& slot = cacheSlotFor(cache, closeBehavior, shape.hostFromLocal);
   if (!slot.has_value()) {
     ++counters.pathConversions;
     slot = toTinyPath(shape.pathOrEmpty(), closeBehavior);

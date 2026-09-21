@@ -8,6 +8,8 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -917,6 +919,74 @@ TEST_F(RendererDriverTest, AppliesSurfaceTransformAfterEntityTransform) {
       Transform2d::Translate(Vector2d(10.0, 0.0)) * Transform2d::Scale(2.0);
   EXPECT_THAT(setTransformCalls, testing::Contains(TransformNear(expectedTransform, 1e-6)))
       << "The editor output surface transform must be applied after entity-to-canvas transforms.";
+}
+
+// Every pass of a shape draw is placed with the shape's own CTM, `worldFromEntity *
+// surfaceFromCanvas`. The `non-scaling-stroke` host-space stroke pass is the one pass that leaves
+// that CTM to draw the mapped centerline, so it has to put it back: under `paint-order: stroke
+// fill` the fill that follows draws with whatever the stroke pass left behind, and any reversal of
+// the composition is visible once `surfaceFromCanvas` is not identity. The default paint order
+// draws the fill before the stroke pass and is the control.
+TEST_F(RendererDriverTest, HostSpaceStrokeRestoresShapeTransformForFollowingFill) {
+  const Transform2d surfaceFromCanvas = Transform2d::Translate(Vector2d(10, 20));
+  const Transform2d entityFromLocal = Transform2d::Scale(Vector2d(2, 1));
+  const Transform2d expectedFillTransform = entityFromLocal * surfaceFromCanvas;
+
+  // Records the renderer transform in effect at the fill-only `drawPath` of a single-shape
+  // document, which is the CTM the fill is actually placed with.
+  const auto fillTransformFor = [&](std::string_view paintOrderStyle) {
+    ::testing::NiceMock<MockRendererInterface> probeRenderer;
+    RendererDriver probeDriver{probeRenderer};
+
+    SVGDocument document = makeDocument(
+        std::string(
+            R"svg(<path d="M 4 4 L 20 4" fill="red" stroke="black" stroke-width="4")svg"
+            R"svg( transform="scale(2, 1)" vector-effect="non-scaling-stroke" style=")svg") +
+            std::string(paintOrderStyle) + R"svg(" />)svg",
+        Vector2i(80, 40));
+
+    Transform2d currentTransform;
+    bool fillOnlyPaint = false;
+    std::optional<Transform2d> fillTransform;
+
+    EXPECT_CALL(probeRenderer, setTransform(_)).WillRepeatedly([&](const Transform2d& transform) {
+      currentTransform = transform;
+    });
+    EXPECT_CALL(probeRenderer, setPaint(_)).WillRepeatedly([&](const PaintParams& paint) {
+      fillOnlyPaint = paint.drawFillComponent && !paint.drawStrokeComponent;
+    });
+    EXPECT_CALL(probeRenderer, drawPath(_, _))
+        .WillRepeatedly([&](const PathShape& shape, const StrokeParams&) {
+          if (fillOnlyPaint) {
+            fillTransform = currentTransform;
+          } else if (shape.hostFromLocal.has_value()) {
+            // The host-space centerline is already in canvas space, so it is drawn with the
+            // canvas-to-surface transform alone, and it carries the CTM that produced it.
+            EXPECT_THAT(currentTransform, TransformNear(surfaceFromCanvas, 1e-6))
+                << "the host-space stroke must be drawn with surfaceFromCanvas alone";
+            EXPECT_THAT(*shape.hostFromLocal, TransformNear(entityFromLocal, 1e-6))
+                << "the host-space geometry must carry the CTM that produced it";
+          }
+        });
+
+    RenderViewport viewport;
+    viewport.size = Vector2d(80, 40);
+    viewport.devicePixelRatio = 1.0;
+    probeDriver.draw(document, viewport, surfaceFromCanvas);
+    return fillTransform;
+  };
+
+  const std::optional<Transform2d> defaultOrderFill = fillTransformFor("");
+  ASSERT_TRUE(defaultOrderFill.has_value())
+      << "the default paint order must emit a fill-only drawPath for this shape";
+  EXPECT_THAT(*defaultOrderFill, TransformNear(expectedFillTransform, 1e-6))
+      << "the control fill must use worldFromEntity * surfaceFromCanvas";
+
+  const std::optional<Transform2d> strokeFirstFill = fillTransformFor("paint-order: stroke fill;");
+  ASSERT_TRUE(strokeFirstFill.has_value())
+      << "paint-order: stroke fill must emit a fill-only drawPath for this shape";
+  EXPECT_THAT(*strokeFirstFill, TransformNear(expectedFillTransform, 1e-6))
+      << "a fill drawn after the host-space stroke pass must keep the shape's own CTM";
 }
 
 TEST_F(RendererDriverTest, SurfaceTransformCullUsesEntityThenSurfaceOrder) {

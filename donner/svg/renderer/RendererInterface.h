@@ -767,6 +767,15 @@ struct PathShape {
   /// it null and backends fall back to the un-cached path.
   EntityHandle sourceEntity;
 
+  /// Set when this geometry is a `vector-effect: non-scaling-stroke` centerline already
+  /// transformed into host (root canvas) space, to the transform that produced it; unset for the
+  /// element's own local-space geometry. Backends cache per-entity geometry, so they must keep
+  /// this variant in a distinct slot from the local-space fill/stroke conversion of the same
+  /// entity, and must treat the transform as part of that slot's key: the same entity is drawn
+  /// with a different one after a transform-only mutation, a canvas resize, or from a second
+  /// `<use>` instance in the same frame.
+  std::optional<Transform2d> hostFromLocal;
+
   /// Geometry to draw, with a null `path` reading as the empty path. The returned reference
   /// is not bound to this `PathShape`: it names either the pointee or a shared empty path
   /// with static storage, so it stays valid after the view itself goes away.

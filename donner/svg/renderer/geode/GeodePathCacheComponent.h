@@ -20,6 +20,7 @@
 #include <optional>
 
 #include "donner/base/Path.h"
+#include "donner/base/Transform.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 
@@ -65,6 +66,20 @@ struct GeodePathCacheComponent {
     /// upstream to power-of-two scale buckets, so exact comparison is
     /// stable across a continuous zoom.
     double flattenTolerance = 0.0;
+
+    /// Third part of the equality key: set when the cached outline was built from a
+    /// `vector-effect: non-scaling-stroke` centerline already transformed into host space, to the
+    /// transform that produced it. A runtime change of the element's `vector-effect` keeps the
+    /// same `StrokeStyle`, so without this the slot could serve a local-space outline for a
+    /// host-space draw; and the entity-level invalidation only watches the spline, so a
+    /// transform-only attribute write, a canvas resize, or a second `<use>` instance in the same
+    /// frame would otherwise be served the previous CTM's geometry.
+    ///
+    /// One slot serves both the local-space and host-space variants of an entity, so an element
+    /// that draws both in a frame rebuilds the outline each time. The tiny-skia backend keeps the
+    /// two variants in separate slots. That is a cache-effectiveness asymmetry, not a correctness
+    /// one: the key below distinguishes the variants, so a mismatched slot is always rebuilt.
+    std::optional<Transform2d> hostFromLocal;
 
     /// Cached `Path::strokeToFill` output. Reused across draws of
     /// the same entity + stroke-key combination.

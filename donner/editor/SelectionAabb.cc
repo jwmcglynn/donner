@@ -2,7 +2,11 @@
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
 
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
@@ -12,6 +16,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/core/NonScalingStroke.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/VectorEffect.h"
 
@@ -63,16 +68,68 @@ LineJoin ToLineJoin(svg::StrokeLinejoin join) {
   return LineJoin::Miter;
 }
 
-double EffectiveLocalStrokeWidth(const svg::PropertyRegistry& style,
-                                 const Transform2d& documentFromElement) {
-  double strokeWidth = style.strokeWidth.get().value().value;
-  if (style.vectorEffect.getOr(svg::VectorEffect::None) == svg::VectorEffect::NonScalingStroke) {
-    const double scale = std::sqrt(std::abs(documentFromElement.determinant()));
-    if (std::isfinite(scale) && scale > 0.0) {
-      strokeWidth /= scale;
+/// Serializes \p identifier as a CSS identifier, per CSS Syntax Level 3 "serialize an
+/// identifier".
+///
+/// An SVG id is an arbitrary string, but a selector gives several characters meaning: `pat.a`
+/// parses as id `pat` with class `a`, and `1foo` is not a parseable identifier at all. Every
+/// character outside `[A-Za-z0-9_-]` and the non-ASCII range is emitted as a hex escape, as is a
+/// leading digit (or a digit after a leading hyphen), which makes the result parse back to exactly
+/// the input string.
+std::string SerializeCssIdentifier(std::string_view identifier) {
+  const auto appendHexEscape = [](std::string& out, unsigned char c) {
+    char buffer[8] = {};
+    std::snprintf(buffer, sizeof(buffer), "\\%x ", c);
+    out += buffer;
+  };
+
+  std::string result;
+  result.reserve(identifier.size());
+  for (size_t i = 0; i < identifier.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(identifier[i]);
+    const bool isDigit = c >= '0' && c <= '9';
+    const bool bare = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isDigit || c == '_' ||
+                      c == '-' || c >= 0x80;
+    const bool leadingDigit = isDigit && (i == 0 || (i == 1 && identifier[0] == '-'));
+    if (bare && !leadingDigit) {
+      result += static_cast<char>(c);
+    } else {
+      appendHexEscape(result, c);
     }
   }
-  return strokeWidth;
+
+  return result;
+}
+
+/// Returns whether a `<pattern>` paints \p style's stroke, which keeps the stroke in local space
+/// even under an anisotropic CTM. Same-document references only: an external reference cannot be
+/// resolved here, and is treated as not a pattern.
+bool StrokeIsPatternPainted(const svg::PropertyRegistry& style, svg::SVGElement element) {
+  const svg::PaintServer stroke = style.stroke.get().value();
+  const auto* reference = std::get_if<svg::PaintServer::ElementReference>(&stroke.value);
+  if (reference == nullptr || reference->reference.isExternal()) {
+    return false;
+  }
+
+  const std::string_view fragment = reference->reference.fragment();
+  if (fragment.empty()) {
+    return false;
+  }
+
+  const std::optional<svg::SVGElement> target =
+      element.ownerDocument().querySelector("#" + SerializeCssIdentifier(fragment));
+  return target.has_value() && target->tryType() == svg::ElementType::Pattern;
+}
+
+/// Resolves how \p element's stroke is realized under \p documentFromElement. @see
+/// donner::svg::NonScalingStrokeMode.
+svg::NonScalingStrokeMode ElementStrokeMode(const svg::PropertyRegistry& style,
+                                            const svg::SVGElement& element,
+                                            const Transform2d& documentFromElement,
+                                            bool geometryMustStayLocal) {
+  return svg::ResolveNonScalingStrokeMode(
+      style.vectorEffect.getOr(svg::VectorEffect::None), documentFromElement,
+      geometryMustStayLocal || StrokeIsPatternPainted(style, element));
 }
 
 std::optional<svg::SVGElement> SafeFirstChild(const svg::SVGElement& element) {
@@ -264,7 +321,10 @@ std::optional<Box2d> GeometryWorldFrameBounds(const svg::SVGGeometryElement& geo
   }
 
   const Transform2d documentFromGeometry = geometry.elementFromWorld();
-  const double strokeWidth = EffectiveLocalStrokeWidth(style, documentFromGeometry);
+  const svg::NonScalingStrokeMode strokeMode =
+      ElementStrokeMode(style, geometry, documentFromGeometry, /*geometryMustStayLocal=*/false);
+  const double strokeWidth = svg::EffectiveStrokeWidth(style.strokeWidth.get().value().value,
+                                                       strokeMode, documentFromGeometry);
   if (strokeWidth <= 0.0) {
     return result;
   }
@@ -279,15 +339,25 @@ std::optional<Box2d> GeometryWorldFrameBounds(const svg::SVGGeometryElement& geo
   strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
   strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
   strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
+
+  // A host-space stroke is expanded after the element transform is applied, so its outline has to
+  // be built from the document-space centerline; expanding in local space and transforming the
+  // outline would rescale the width anisotropically and report the wrong bounds.
+  const bool strokeInDocumentSpace = strokeMode == svg::NonScalingStrokeMode::HostSpace;
+  const Path strokeSource =
+      strokeInDocumentSpace ? spline->transformed(documentFromGeometry) : *spline;
+
   // World-space ink bounds are a document-space quantity, not a rasterization:
   // the outline is only used for its bounding box, so a path-local tolerance is
   // correct and keeps the reported bounds independent of the view zoom.
-  const Path strokeOutline = spline->strokeToFill(strokeStyle, Path::kLocalFlattenTolerance);
+  const Path strokeOutline = strokeSource.strokeToFill(strokeStyle, Path::kLocalFlattenTolerance);
   if (strokeOutline.empty()) {
     return result;
   }
 
-  const Box2d strokeBounds = strokeOutline.transformedBounds(documentFromGeometry);
+  const Box2d strokeBounds = strokeInDocumentSpace
+                                 ? strokeOutline.bounds()
+                                 : strokeOutline.transformedBounds(documentFromGeometry);
   if (result.has_value()) {
     result->addBox(strokeBounds);
   } else {
@@ -337,15 +407,21 @@ std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text) {
 
   const svg::PropertyRegistry style = text.getComputedStyle();
   if (!style.stroke.get().value().is<svg::PaintServer::None>()) {
-    const double strokeWidth = EffectiveLocalStrokeWidth(style, text.elementFromWorld());
+    // A text stroke expands glyph outlines in local space, so it never reaches host space.
+    const Transform2d documentFromText = text.elementFromWorld();
+    const double strokeWidth = svg::EffectiveStrokeWidth(
+        style.strokeWidth.get().value().value,
+        ElementStrokeMode(style, text, documentFromText, /*geometryMustStayLocal=*/true),
+        documentFromText);
     if (strokeWidth > 0.0) {
       const Box2d inkLocal = text.inkBoundingBox();
       if (!inkLocal.isEmpty()) {
-        double padding = strokeWidth * 0.5;
-        if (ToLineJoin(style.strokeLinejoin.get().value()) == LineJoin::Miter) {
-          padding *= style.strokeMiterlimit.get().value();
+        const double padding = svg::StrokeCullHalfExtent(
+            strokeWidth, style.strokeLinecap.get().value(), style.strokeLinejoin.get().value(),
+            style.strokeMiterlimit.get().value());
+        if (std::isfinite(padding)) {
+          frameLocal->addBox(inkLocal.inflatedBy(padding));
         }
-        frameLocal->addBox(inkLocal.inflatedBy(padding));
       }
     }
   }

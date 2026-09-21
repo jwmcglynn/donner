@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/SVGImageElement.h"
@@ -43,6 +44,17 @@ constexpr std::string_view kBlueImageDataUri =
     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYPgPRmAKABf2A/1+6zfzAAAAAElFTkSu"
     "QmCC";
 
+/// Parses a complete SVG document, failing the test on a parse error.
+SVGDocument ParseSvg(std::string_view svg) {
+  ParseWarningSink warnings;
+  auto maybeResult = parser::SVGParser::ParseSVG(svg, warnings);
+  if (maybeResult.hasError()) {
+    ADD_FAILURE() << "SVG parse error: " << maybeResult.error();
+    return SVGDocument();
+  }
+  return std::move(maybeResult.result());
+}
+
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap. Returns transparent for a pixel
 /// outside the bitmap so an assertion fails cleanly instead of reading out of bounds.
 std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
@@ -52,6 +64,163 @@ std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
   }
   return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
           bitmap.pixels[offset + 3]};
+}
+
+/// Counts pixels with alpha above \p threshold in the given device row.
+int CountOpaqueInRow(const RendererBitmap& bitmap, int y, uint8_t threshold = 128) {
+  int count = 0;
+  for (int x = 0; x < bitmap.dimensions.x; ++x) {
+    if (PixelAt(bitmap, x, y)[3] > threshold) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+/// Counts pixels with alpha above \p threshold in the given device column.
+int CountOpaqueInColumn(const RendererBitmap& bitmap, int x, uint8_t threshold = 128) {
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    if (PixelAt(bitmap, x, y)[3] > threshold) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+/// Length of the first run of pixels with alpha above \p threshold in device row \p y, at or after
+/// \p startX. Leading transparent pixels are skipped; returns 0 when the row has no opaque pixel
+/// at or after \p startX.
+int FirstOpaqueRunLengthInRow(const RendererBitmap& bitmap, int y, int startX,
+                              uint8_t threshold = 128) {
+  int length = 0;
+  for (int x = startX; x < bitmap.dimensions.x; ++x) {
+    if (PixelAt(bitmap, x, y)[3] > threshold) {
+      ++length;
+    } else if (length > 0) {
+      break;
+    }
+  }
+  return length;
+}
+
+MATCHER_P2(IsWithin, expected, tolerance,
+           "is within " + testing::PrintToString(tolerance) + " of " +
+               testing::PrintToString(expected)) {
+  return arg >= expected - tolerance && arg <= expected + tolerance;
+}
+
+/// Asserts a measured device extent, writing the bitmap that produced it as an undeclared output
+/// when the measurement is off.
+///
+/// These measurements are geometric quantities pixelmatch cannot express (a stroke's device width,
+/// a dash run length), so they are not bitmap comparisons - but a CI failure still has to ship the
+/// image, which is what \ref WriteBitmapToTestOutputs is for.
+///
+/// A macro rather than a function so the failure names the asserting line rather than this one.
+#define EXPECT_MEASURED_EXTENT(measured, expected, tolerance, bitmap, label, why) \
+  EXPECT_THAT(measured, IsWithin(expected, tolerance))                            \
+      << (why) << "; rendered bitmap: " << WriteBitmapToTestOutputs((bitmap), (label))
+
+/// Markup for a single `vector-effect: non-scaling-stroke` path carrying \p transform, used to
+/// compare a mutated document against a freshly parsed one.
+std::string NonScalingStrokeMarkup(std::string_view transform) {
+  return std::string(R"(<path id="p" d="M 10 10 L 10 26" fill="none" stroke="black")"
+                     R"( stroke-width="12" vector-effect="non-scaling-stroke" transform=")") +
+         std::string(transform) + R"(" />)";
+}
+
+/// A pattern-painted `non-scaling-stroke` under `scale(2, 1)` whose drawn stroke reaches device
+/// columns 0..4 while its authored-width cull box ends at device x = -4. \p guardSubpath is
+/// prepended to the path data; an off-canvas subpath there widens the cull box without drawing
+/// anything inside the viewport, which isolates the culling decision.
+std::string PatternEdgeStrokeSvg(std::string_view guardSubpath) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60">
+      <defs>
+        <pattern id="pat" width="4" height="4" patternUnits="userSpaceOnUse">
+          <rect width="4" height="4" fill="black"/>
+        </pattern>
+      </defs>
+      <g transform="scale(2, 1)">
+        <path d=")svg") +
+         std::string(guardSubpath) +
+         R"svg(M -12.5 5 L -12 55" fill="none" stroke="url(#pat)" stroke-width="40"
+              vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg";
+}
+
+/// A `non-scaling-stroke` sharp miter whose centerline bounds start at device x = 40, outside the
+/// 28px canvas, but whose miter tip reaches device x = 17.6. @see PatternEdgeStrokeSvg for
+/// \p guardSubpath.
+std::string MiterTipStrokeSvg(std::string_view guardSubpath) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="28" height="60">
+      <path d=")svg") +
+         std::string(guardSubpath) +
+         R"svg(M 100 0 L 40 30 L 100 60" fill="none" stroke="black" stroke-width="20"
+            stroke-linejoin="miter" vector-effect="non-scaling-stroke"/>
+    </svg>)svg";
+}
+
+/// A `non-scaling-stroke` diagonal whose square cap reaches into the viewport while its centerline
+/// bounds, inflated by half the stroke width, sit entirely to the right of the canvas. The join is
+/// round so the miter allowance cannot mask the cap's contribution. @see PatternEdgeStrokeSvg for
+/// \p guardSubpath.
+std::string SquareCapStrokeSvg(std::string_view guardSubpath) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="28" height="60">
+      <path d=")svg") +
+         std::string(guardSubpath) +
+         R"svg(M 100 100 L 40 40" fill="none" stroke="black" stroke-width="20"
+            stroke-linecap="square" stroke-linejoin="round"
+            vector-effect="non-scaling-stroke"/>
+    </svg>)svg";
+}
+
+/// One `vector-effect: non-scaling-stroke` shape drawn twice under different anisotropic CTMs,
+/// either as two `<use>` copies of a single shape entity or as two independent copies of the same
+/// markup. The two documents must render identically.
+std::string TwoInstanceStrokeSvg(bool useShadowTrees) {
+  constexpr std::string_view kShapeAttributes =
+      R"svg(d="M 10 10 L 40 10 L 40 40" fill="none" stroke="black" stroke-width="8"
+            vector-effect="non-scaling-stroke")svg";
+
+  const std::string shapeAttributes(kShapeAttributes);
+  const std::string instance =
+      useShadowTrees ? R"svg(<use href="#shape"/>)svg"
+                     : std::string(R"svg(<path )svg") + shapeAttributes + R"svg(/>)svg";
+  const std::string defs = useShadowTrees ? std::string(R"svg(<defs><path id="shape" )svg") +
+                                                shapeAttributes + R"svg(/></defs>)svg"
+                                          : std::string();
+
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="240">)svg") +
+         defs + R"svg(<g transform="scale(2, 1)">)svg" + instance +
+         R"svg(</g><g transform="translate(0, 60) scale(1, 3)">)svg" + instance +
+         R"svg(</g></svg>)svg";
+}
+
+/// A `non-scaling-stroke` shape under `scale(2, 1)` with an opaque fill and a fully transparent
+/// stroke, carrying \p paintOrder. The stroke contributes no pixels, so the two paint orders can
+/// only differ in where the fill lands.
+std::string PaintOrderFillPlacementSvg(std::string_view paintOrder) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+      <g transform="scale(2, 1)">
+        <path d="M 10 10 L 50 10 L 50 60 L 10 60 Z" fill="green" stroke="rgba(0, 0, 0, 0)"
+              stroke-width="12" vector-effect="non-scaling-stroke" style="paint-order: )svg") +
+         std::string(paintOrder) + R"svg(" />
+      </g>
+    </svg>)svg";
+}
+
+/// A dashed `non-scaling-stroke` line with `pathLength`, mapped through \p viewBox into a fixed
+/// 200x100 viewport. A viewBox of `0 0 100 50` is a uniform 2x scale; nudging its height makes the
+/// same document anisotropic by one part in 5e8.
+std::string PathLengthDashSvg(std::string_view viewBox) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"
+         preserveAspectRatio="none" viewBox=")svg") +
+         std::string(viewBox) + R"svg(">
+      <path d="M 0 25 L 50 25" fill="none" stroke="black" stroke-width="4" pathLength="100"
+            stroke-dasharray="20 20" vector-effect="non-scaling-stroke"/>
+    </svg>)svg";
 }
 
 ImageComparisonParams GoldenParams() {
@@ -474,6 +643,305 @@ TEST_F(RendererRegressionTests, VectorEffectNonScalingStrokeChangesOutput) {
   ASSERT_EQ(nonScaling.pixels.size(), control.pixels.size());
   EXPECT_NE(nonScaling.pixels, control.pixels)
       << "vector-effect: non-scaling-stroke had no effect on the rendered output";
+}
+
+// `vector-effect: non-scaling-stroke` must hold the authored width under a non-uniform CTM.
+// `scale(2, 1)` doubles a vertical stroke's device x extent while leaving a horizontal stroke's y
+// extent unchanged; a single area-average scale factor cannot satisfy both. Both strokes must
+// measure the authored 10px.
+TEST_F(RendererRegressionTests, NonScalingStrokeIsExactUnderAnisotropicScale) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="60">
+      <g transform="scale(2, 1)">
+        <line x1="20" y1="5" x2="20" y2="55" stroke="black" stroke-width="10"
+              vector-effect="non-scaling-stroke"/>
+        <line x1="5" y1="40" x2="55" y2="40" stroke="black" stroke-width="10"
+              vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  ASSERT_FALSE(bitmap.empty());
+
+  // Device row 30 crosses only the vertical stroke (device x = 40).
+  EXPECT_MEASURED_EXTENT(CountOpaqueInRow(bitmap, 30), 10, 2, bitmap,
+                         "non_scaling_stroke_anisotropic_scale",
+                         "A vertical non-scaling stroke must keep its authored width under "
+                         "scale(2, 1)");
+  // Device column 100 crosses only the horizontal stroke (device y = 40).
+  EXPECT_MEASURED_EXTENT(CountOpaqueInColumn(bitmap, 100), 10, 2, bitmap,
+                         "non_scaling_stroke_anisotropic_scale",
+                         "A horizontal non-scaling stroke must keep its authored width under "
+                         "scale(2, 1)");
+}
+
+// The same contract through a non-uniform `viewBox` mapping: a 60x60 viewBox stretched to 120x60
+// with `preserveAspectRatio="none"` scales x by 2 and y by 1, so the non-scaling strokes must
+// still measure the authored 10px on both axes.
+TEST_F(RendererRegressionTests, NonScalingStrokeIsExactUnderNonUniformViewBox) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 60 60"
+         preserveAspectRatio="none">
+      <line x1="20" y1="5" x2="20" y2="55" stroke="black" stroke-width="10"
+            vector-effect="non-scaling-stroke"/>
+      <line x1="5" y1="40" x2="55" y2="40" stroke="black" stroke-width="10"
+            vector-effect="non-scaling-stroke"/>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  ASSERT_FALSE(bitmap.empty());
+
+  EXPECT_MEASURED_EXTENT(CountOpaqueInRow(bitmap, 30), 10, 2, bitmap,
+                         "non_scaling_stroke_non_uniform_viewbox",
+                         "A vertical non-scaling stroke must keep its authored width under a "
+                         "non-uniform viewBox");
+  EXPECT_MEASURED_EXTENT(CountOpaqueInColumn(bitmap, 100), 10, 2, bitmap,
+                         "non_scaling_stroke_non_uniform_viewbox",
+                         "A horizontal non-scaling stroke must keep its authored width under a "
+                         "non-uniform viewBox");
+}
+
+// Dash lengths are host-space CSS pixels for `non-scaling-stroke`, so an anisotropic CTM must not
+// stretch them along the axis it scales. Under scale(2, 1) a horizontal dashed stroke would render
+// each 10px dash as ~14px if the scalar compensation were still in effect.
+TEST_F(RendererRegressionTests, NonScalingStrokeDashLengthIsExactUnderAnisotropicScale) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="160" height="40">
+      <g transform="scale(2, 1)">
+        <line x1="10" y1="20" x2="60" y2="20" stroke="black" stroke-width="4"
+              stroke-dasharray="10 10" vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  ASSERT_FALSE(bitmap.empty());
+
+  // The line starts at device x = 20 and the first dash is authored at 10px.
+  EXPECT_MEASURED_EXTENT(FirstOpaqueRunLengthInRow(bitmap, 20, 20), 10, 2, bitmap,
+                         "non_scaling_stroke_dash_length",
+                         "A non-scaling dashed stroke must keep its authored dash length under "
+                         "scale(2, 1)");
+}
+
+// A `vector-effect: non-scaling-stroke` stroke under a non-similarity CTM is stroked from a
+// centerline that the driver transforms into host space, so the element's own transform is baked
+// into the geometry both backends memoize per shape entity. Their invalidation only watches
+// `ComputedPathComponent`, which a transform-only DOM mutation never touches.
+TEST_F(RendererRegressionTests, NonScalingStrokeTransformMutationInvalidatesHostSpaceStrokeCache) {
+  const Vector2i canvasSize(64, 64);
+  SVGDocument document = instantiateSubtree(NonScalingStrokeMarkup("scale(2, 1)"), {}, canvasSize);
+
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap beforeMutation = renderer->takeSnapshot();
+  ASSERT_FALSE(beforeMutation.empty());
+
+  auto path = document.querySelector("#p");
+  ASSERT_TRUE(path.has_value());
+  path->setAttribute("transform", "scale(1, 2)");
+
+  renderer->draw(document);
+  const RendererBitmap afterMutation = renderer->takeSnapshot();
+  ASSERT_FALSE(afterMutation.empty());
+
+  SVGDocument freshDocument =
+      instantiateSubtree(NonScalingStrokeMarkup("scale(1, 2)"), {}, canvasSize);
+  const RendererBitmap fresh = RenderDocumentWithBackend(freshDocument, ActiveRendererBackend());
+  ASSERT_FALSE(fresh.empty());
+
+  // Guards against a vacuous pass: the mutation has to change the rendering for a stale
+  // host-space conversion to be distinguishable from a correctly invalidated one.
+  ExpectBitmapsDiffer(fresh, beforeMutation, "non_scaling_stroke_transform_mutation_control");
+  ExpectBitmapsIdentical(afterMutation, fresh, "non_scaling_stroke_transform_mutation");
+}
+
+// The cull bounds for a `non-scaling-stroke` shape inflate the centerline box in the space the
+// stroke is expanded in. A pattern-painted stroke is expanded in local space at
+// `authored / sqrt(|det|)`, which under `scale(2, 1)` reaches `2 / sqrt(2)` = ~1.41x the authored
+// half width along x. Inflating by the authored half width instead drops a stroke whose drawn
+// pixels are inside the viewport.
+//
+// The control adds an off-canvas subpath whose own stroke never reaches the viewport but whose
+// centerline widens the cull box enough to span it, so the only difference between the two
+// documents is whether the culling decision fires. The comparison is a device extent rather than
+// bitmap identity: the extra subpath perturbs pattern tiling and Geode's band layout by a pixel or
+// two, which says nothing about culling. Device row 50 is where the slanted centerline is closest
+// to the viewport, so the drawn stroke reaches roughly four columns there.
+TEST_F(RendererRegressionTests, PatternNonScalingStrokeAtViewportEdgeIsNotCulled) {
+  SVGDocument document = ParseSvg(PatternEdgeStrokeSvg(""));
+  SVGDocument controlDocument = ParseSvg(PatternEdgeStrokeSvg("M -5 -40 L -4 -40 "));
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  const RendererBitmap control = RenderDocumentWithActiveBackend(controlDocument);
+  ASSERT_FALSE(bitmap.empty());
+  ASSERT_FALSE(control.empty());
+
+  // Guards against a vacuous pass: the drawn stroke really does reach the left edge columns.
+  const int controlRun = FirstOpaqueRunLengthInRow(control, 50, 0);
+  ASSERT_THAT(controlRun, testing::Ge(3))
+      << "the uncullable control must paint into the viewport; rendered bitmap: "
+      << WriteBitmapToTestOutputs(control, "pattern_non_scaling_stroke_edge_cull_control");
+
+  EXPECT_MEASURED_EXTENT(
+      FirstOpaqueRunLengthInRow(bitmap, 50, 0), controlRun, 1, bitmap,
+      "pattern_non_scaling_stroke_edge_cull",
+      "A pattern-painted non-scaling stroke whose drawn pixels reach the viewport "
+      "must not be culled");
+}
+
+// A miter join's outer tip sits `strokeWidth / (2 * sin(theta/2))` past the vertex, clamped by
+// `stroke-miterlimit`. Here the legs meet at ~53.13 degrees, so the tip reaches 22.4px past the
+// vertex while half the stroke width is 10px: a cull box inflated by the half width alone sits
+// entirely to the right of the canvas while the tip is inside it. @see PatternEdgeStrokeSvg for
+// the control.
+TEST_F(RendererRegressionTests, NonScalingStrokeMiterTipInsideViewportIsNotCulled) {
+  SVGDocument document = ParseSvg(MiterTipStrokeSvg(""));
+  SVGDocument controlDocument = ParseSvg(MiterTipStrokeSvg("M -5 -40 L -4 -40 "));
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  const RendererBitmap control = RenderDocumentWithActiveBackend(controlDocument);
+  ASSERT_FALSE(bitmap.empty());
+  ASSERT_FALSE(control.empty());
+
+  const int controlRun = CountOpaqueInRow(control, 30);
+  ASSERT_THAT(controlRun, testing::Ge(3))
+      << "the uncullable control must paint the miter tip; rendered bitmap: "
+      << WriteBitmapToTestOutputs(control, "non_scaling_stroke_miter_tip_cull_control");
+
+  EXPECT_MEASURED_EXTENT(CountOpaqueInRow(bitmap, 30), controlRun, 1, bitmap,
+                         "non_scaling_stroke_miter_tip_cull",
+                         "A sharp miter whose tip reaches the viewport must not be culled");
+}
+
+// A square cap extends the segment by half the stroke width, so its far corner sits
+// sqrt(2) * halfStroke = 14.1px from the endpoint against a 10px half width. The centerline bounds
+// start at device x = 40 and the half-width inflate reaches only x = 30, both outside the 28px
+// canvas, while the cap corner reaches x = 25.9. @see
+// NonScalingStrokeMiterTipInsideViewportIsNotCulled for the control construction.
+TEST_F(RendererRegressionTests, NonScalingStrokeSquareCapInsideViewportIsNotCulled) {
+  SVGDocument document = ParseSvg(SquareCapStrokeSvg(""));
+  SVGDocument controlDocument = ParseSvg(SquareCapStrokeSvg("M -5 -40 L -4 -40 "));
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  const RendererBitmap control = RenderDocumentWithActiveBackend(controlDocument);
+  ASSERT_FALSE(bitmap.empty());
+  ASSERT_FALSE(control.empty());
+
+  const int controlRun = CountOpaqueInColumn(control, 27);
+  ASSERT_THAT(controlRun, testing::Ge(3))
+      << "the uncullable control must paint the cap corner; rendered bitmap: "
+      << WriteBitmapToTestOutputs(control, "non_scaling_stroke_square_cap_cull_control");
+
+  EXPECT_MEASURED_EXTENT(CountOpaqueInColumn(bitmap, 27), controlRun, 1, bitmap,
+                         "non_scaling_stroke_square_cap_cull",
+                         "A square cap reaching into the viewport must not be culled");
+}
+
+// One shape entity is drawn twice in a single frame through two `<use>` copies under different
+// anisotropic CTMs. Shadow instances share the shape's data entity, so both host-space geometry
+// caches are keyed on that entity and must key on the producing transform too; without that the
+// second copy is drawn with the first copy's geometry.
+TEST_F(RendererRegressionTests, NonScalingStrokeSharedShapeUnderTwoTransformsInOneFrame) {
+  SVGDocument document = ParseSvg(TwoInstanceStrokeSvg(/*useShadowTrees=*/true));
+  SVGDocument expandedDocument = ParseSvg(TwoInstanceStrokeSvg(/*useShadowTrees=*/false));
+
+  const RendererBitmap shared = RenderDocumentWithActiveBackend(document);
+  const RendererBitmap expanded = RenderDocumentWithActiveBackend(expandedDocument);
+  ASSERT_FALSE(shared.empty());
+  ASSERT_FALSE(expanded.empty());
+
+  ExpectVisibleBitmap(expanded, "non_scaling_stroke_two_instances_expected");
+  ExpectBitmapsIdentical(shared, expanded, "non_scaling_stroke_two_instances");
+}
+
+// A gradient-painted host-space stroke keeps the gradient authored in the element's user space and
+// remaps it onto the host-space outline, with `objectBoundingBox` units still resolving against the
+// element's own box. The control bakes the transform into the geometry and carries the same
+// gradient explicitly, which must produce the same pixels.
+//
+// The shape's local bounding box is exactly (0, 0)-(100, 100), so `objectBoundingBox` units and
+// `userSpaceOnUse` coordinates scaled by 100 name the same coordinate system, and a rotation
+// commutes with the uniform box mapping.
+TEST_F(RendererRegressionTests, NonScalingStrokeGradientMatchesPreBakedGeometry) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">
+      <defs>
+        <linearGradient id="grad" gradientUnits="objectBoundingBox" gradientTransform="rotate(30)"
+                        x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="red"/>
+          <stop offset="1" stop-color="blue"/>
+        </linearGradient>
+      </defs>
+      <g transform="scale(2, 1)">
+        <path d="M 0 0 L 100 0 L 100 100 L 0 100 Z" fill="none" stroke="url(#grad)"
+              stroke-width="16" vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg");
+
+  SVGDocument controlDocument = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">
+      <defs>
+        <linearGradient id="grad" gradientUnits="userSpaceOnUse"
+                        gradientTransform="scale(2, 1) rotate(30)"
+                        x1="0" y1="0" x2="100" y2="100">
+          <stop offset="0" stop-color="red"/>
+          <stop offset="1" stop-color="blue"/>
+        </linearGradient>
+      </defs>
+      <path d="M 0 0 L 200 0 L 200 100 L 0 100 Z" fill="none" stroke="url(#grad)"
+            stroke-width="16"/>
+    </svg>)svg");
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  const RendererBitmap control = RenderDocumentWithActiveBackend(controlDocument);
+  ASSERT_FALSE(bitmap.empty());
+  ASSERT_FALSE(control.empty());
+
+  ExpectVisibleBitmap(control, "non_scaling_stroke_gradient_control");
+  ExpectBitmapsIdentical(bitmap, control, "non_scaling_stroke_gradient");
+}
+
+// `paint-order: stroke fill` draws the fill after the host-space stroke pass, which has to leave
+// the renderer on the shape's own CTM. The control draws the same fill with the default paint
+// order, where it precedes the stroke pass; only the fill is visible in both because the stroke is
+// fully transparent.
+TEST_F(RendererRegressionTests, NonScalingStrokePaintOrderKeepsFillPlacement) {
+  SVGDocument document = ParseSvg(PaintOrderFillPlacementSvg("stroke fill"));
+  SVGDocument controlDocument = ParseSvg(PaintOrderFillPlacementSvg("normal"));
+
+  const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
+  const RendererBitmap control = RenderDocumentWithActiveBackend(controlDocument);
+  ASSERT_FALSE(bitmap.empty());
+  ASSERT_FALSE(control.empty());
+
+  ExpectVisibleBitmap(control, "non_scaling_stroke_paint_order_control");
+  ExpectBitmapsIdentical(bitmap, control, "non_scaling_stroke_paint_order");
+}
+
+// `pathLength` is authored against the element's own centerline, so the dash pattern it scales must
+// not depend on whether the stroke happens to be drawn in local or host space. These two documents
+// straddle the similarity threshold by one part in 5e8, which flips the branch; the rendered dash
+// run has to be the same.
+TEST_F(RendererRegressionTests, NonScalingStrokeDashPathLengthIsStableAcrossSimilarityBoundary) {
+  SVGDocument similarity = ParseSvg(PathLengthDashSvg("0 0 100 50"));
+  SVGDocument anisotropic = ParseSvg(PathLengthDashSvg("0 0 100 50.0000001"));
+
+  const RendererBitmap similarityBitmap = RenderDocumentWithActiveBackend(similarity);
+  const RendererBitmap anisotropicBitmap = RenderDocumentWithActiveBackend(anisotropic);
+  ASSERT_FALSE(similarityBitmap.empty());
+  ASSERT_FALSE(anisotropicBitmap.empty());
+
+  // The authored 20-unit dash is held constant in host units, and `pathLength=100` against the
+  // 50-unit local centerline scales it by 50 / 100, so each dash covers 10 host pixels. The
+  // host-space branch reaches that number only because the dash array is resolved against the
+  // local length before the geometry is mapped into host space.
+  const int similarityRun = FirstOpaqueRunLengthInRow(similarityBitmap, 50, 0);
+  EXPECT_MEASURED_EXTENT(similarityRun, 10, 2, similarityBitmap, "path_length_dash_similarity",
+                         "pathLength must resolve the dash pattern against the local centerline");
+  EXPECT_MEASURED_EXTENT(FirstOpaqueRunLengthInRow(anisotropicBitmap, 50, 0), similarityRun, 2,
+                         anisotropicBitmap, "path_length_dash_anisotropic",
+                         "a non-scaling dash run must not jump across the similarity threshold");
 }
 
 // The tiny-skia backend memoizes each shape's converted `tiny_skia::Path` on the shape's source

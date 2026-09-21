@@ -4,6 +4,7 @@ load("//build_defs:package.bzl", "donner_package")
 cc_library(
     name = "core",
     srcs = [
+        "NonScalingStroke.cc",
         "PreserveAspectRatio.cc",
     ],
     hdrs = [
@@ -30,6 +31,7 @@ cc_library(
         "MaskType.h",
         "MaskUnits.h",
         "MixBlendMode.h",
+        "NonScalingStroke.h",
         "Overflow.h",
         "PaintOrder.h",
         "Pattern.h",
