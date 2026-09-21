@@ -19,6 +19,7 @@
 #include <optional>
 #include <ostream>
 #include <string_view>
+#include <type_traits>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -137,9 +138,27 @@ public:
 /// Runtime handles a filter execution's recorded commands reference, moved to whatever outlives
 /// those commands.
 struct RetainedFilterResources {
+  RetainedFilterResources() = default;
+  ~RetainedFilterResources() = default;
+
+  // Move-only, explicitly. The handles this holds are move-only, so a copy could never have
+  // worked; deleting it matters because a `std::deque` member advertises a copy constructor that
+  // fails only once instantiated, and its move is `noexcept` in one standard library but not
+  // another, so `std::vector` reallocation reached for that copy on one of them and not the other.
+  RetainedFilterResources(const RetainedFilterResources&) = delete;
+  RetainedFilterResources& operator=(const RetainedFilterResources&) = delete;
+  RetainedFilterResources(RetainedFilterResources&&) = default;
+  RetainedFilterResources& operator=(RetainedFilterResources&&) = default;
+
   std::deque<gpu::TextureView> textureViews;  //!< Views the commands attach to or sample.
   std::deque<gpu::BindGroup> bindGroups;      //!< Bind groups the commands bind.
 };
+
+static_assert(!std::is_copy_constructible_v<RetainedFilterResources>,
+              "RetainedFilterResources owns move-only handles: a copy must be rejected here on "
+              "every standard library, not only on one whose containers reach for it");
+static_assert(std::is_move_constructible_v<RetainedFilterResources>,
+              "RetainedFilterResources is moved into the frame that outlives the execution");
 
 /**
  * Renderer-owned collection point for the command buffers one frame records.

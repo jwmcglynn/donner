@@ -125,8 +125,10 @@ struct FilterResourceArena {
     // A frame submits long after this execution ends, and its submission re-validates every
     // resource the chunks name, so what they reference has to outlive the arena that made it.
     if (frameSink_ != nullptr && framePendingChunks_ != 0) {
-      frameSink_->retainUntilFrameSubmits(
-          RetainedFilterResources{std::move(textureViews_), std::move(bindGroups_)});
+      RetainedFilterResources retained;
+      retained.textureViews = std::move(textureViews_);
+      retained.bindGroups = std::move(bindGroups_);
+      frameSink_->retainUntilFrameSubmits(std::move(retained));
     }
     for (auto& owned : textures_) {
       // A detached output left its record behind with a null handle; the caller owns it now.
