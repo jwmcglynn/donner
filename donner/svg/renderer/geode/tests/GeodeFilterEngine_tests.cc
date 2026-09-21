@@ -202,6 +202,69 @@ svg::components::FilterGraph MakeDirectGraph(bool composite, bool distinctInputs
   return graph;
 }
 
+/// A host frame command encoder that rotates the way the renderer does: finish and queue-submit
+/// the filled encoder, then install a fresh one under a replacement lease.
+class RotatingHostEncoder {
+public:
+  /// @param device Device whose adapter the host encoder is installed on.
+  explicit RotatingHostEncoder(GeodeDevice& device)
+      : device_(device), encoder_(device.device().createCommandEncoder()) {
+    if (!encoder_) return;
+    lease_ = device_.adapterDevice().setHostCommandEncoder(encoder_.get());
+    rotationInstalled_ = static_cast<bool>(device_.adapterDevice().setHostCommandEncoderRotation(
+        lease_,
+        [this](GeodeWgpuAdapterDevice::HostEncoderLease expected) { return rotate(expected); }));
+  }
+
+  /// Whether the encoder was created and both its lease and its rotation installed.
+  bool installed() const {
+    return static_cast<bool>(encoder_) && static_cast<bool>(lease_) && rotationInstalled_;
+  }
+
+  /// Lease of the host encoder currently installed on the adapter.
+  GeodeWgpuAdapterDevice::HostEncoderLease lease() const { return lease_; }
+
+  /// How many times the host command buffer was closed at a filter chunk boundary.
+  size_t rotations() const { return rotations_; }
+
+  /// Ends the frame the way the renderer does: submit whatever the host encoder still holds,
+  /// report it, and release the lease.
+  void submitAndRelease() {
+    ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder_.get().finish());
+    EXPECT_THAT(static_cast<bool>(commands), testing::IsTrue());
+    if (!commands) return;
+    device_.queue().submit(1, &commands.get());
+    EXPECT_THAT(device_.adapterDevice().notifyHostSubmitted(lease_), testing::IsTrue());
+    EXPECT_THAT(device_.adapterDevice().clearHostCommandEncoder(lease_), testing::IsTrue());
+  }
+
+private:
+  GeodeWgpuAdapterDevice::HostRotationResult rotate(
+      GeodeWgpuAdapterDevice::HostEncoderLease expected) {
+    ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder_.get().finish());
+    if (!commands) return {};
+    device_.queue().submit(1, &commands.get());
+    device_.countSubmit();
+    if (!device_.adapterDevice().notifyHostSubmitted(expected)) return {};
+    encoder_.reset(device_.device().createCommandEncoder());
+    const std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> replacement =
+        device_.adapterDevice().replaceHostCommandEncoder(expected, encoder_.get());
+    if (!replacement.has_value()) {
+      return {GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedReplacementFailed,
+              std::nullopt};
+    }
+    ++rotations_;
+    lease_ = *replacement;
+    return {GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedAndReplaced, replacement};
+  }
+
+  GeodeDevice& device_;
+  ScopedWgpuHandle<wgpu::CommandEncoder> encoder_;
+  GeodeWgpuAdapterDevice::HostEncoderLease lease_;
+  bool rotationInstalled_ = false;
+  size_t rotations_ = 0;
+};
+
 /// What an execution produced, captured before its output goes back to the pool.
 struct ExecutedFilter {
   FilterExecutionResult::Kind kind = FilterExecutionResult::Kind::Failed;
@@ -422,93 +485,66 @@ TEST_F(GeodeFilterEngineTest, FinalPartialRecordsIntoTheExactHostWithoutQueueSub
 TEST_F(GeodeFilterEngineTest, HostRotationOccursOnlyWhenPassSixtyFiveCrossesTheBoundary) {
   for (const size_t passCount : {63u, 64u, 65u}) {
     SCOPED_TRACE(passCount);
-    ScopedWgpuHandle<wgpu::CommandEncoder> host(device_->device().createCommandEncoder());
-    ASSERT_THAT(static_cast<bool>(host), testing::IsTrue());
-    GeodeWgpuAdapterDevice::HostEncoderLease activeLease =
-        device_->adapterDevice().setHostCommandEncoder(host.get());
-    size_t rotations = 0;
-    device_->adapterDevice().setHostCommandEncoderRotation(
-        activeLease, [&](GeodeWgpuAdapterDevice::HostEncoderLease expected) {
-          ScopedWgpuHandle<wgpu::CommandBuffer> commands(host.get().finish());
-          if (!commands) return GeodeWgpuAdapterDevice::HostRotationResult{};
-          device_->queue().submit(1, &commands.get());
-          device_->countSubmit();
-          if (!device_->adapterDevice().notifyHostSubmitted(expected)) {
-            return GeodeWgpuAdapterDevice::HostRotationResult{};
-          }
-          host.reset(device_->device().createCommandEncoder());
-          std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> replacement =
-              device_->adapterDevice().replaceHostCommandEncoder(expected, host.get());
-          if (!replacement.has_value()) {
-            return GeodeWgpuAdapterDevice::HostRotationResult{
-                GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedReplacementFailed,
-                std::nullopt};
-          }
-          ++rotations;
-          activeLease = *replacement;
-          return GeodeWgpuAdapterDevice::HostRotationResult{
-              GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedAndReplaced, replacement};
-        });
+    engine_->beginFrame();
+    RotatingHostEncoder host(*device_);
+    ASSERT_THAT(host.installed(), testing::IsTrue());
     size_t acceptedChunks = 0;
     engine_->setChunkSubmittedHookForTesting([&](size_t chunk) { acceptedChunks = chunk; });
     RefusingTextureAllocator allocator(device_->adapterDevice(), "");
 
-    const bool recorded = engine_->recordPassesForTesting(passCount, allocator, activeLease);
+    const bool recorded = engine_->recordPassesForTesting(passCount, allocator, host.lease());
 
     EXPECT_THAT(recorded, testing::IsTrue());
     const size_t expectedRotations = passCount == 65 ? 1u : 0u;
-    EXPECT_THAT(rotations, testing::Eq(expectedRotations));
+    EXPECT_THAT(host.rotations(), testing::Eq(expectedRotations));
     EXPECT_THAT(acceptedChunks, testing::Eq(expectedRotations));
-    ScopedWgpuHandle<wgpu::CommandBuffer> finalCommands(host.get().finish());
-    ASSERT_THAT(static_cast<bool>(finalCommands), testing::IsTrue());
-    device_->queue().submit(1, &finalCommands.get());
-    EXPECT_THAT(device_->adapterDevice().notifyHostSubmitted(activeLease), testing::IsTrue());
-    EXPECT_THAT(device_->adapterDevice().clearHostCommandEncoder(activeLease), testing::IsTrue());
+    host.submitAndRelease();
   }
 }
 
-TEST_F(GeodeFilterEngineTest, RotationAcceptsEarlierFilterRangesOnTheSameExactHost) {
-  ScopedWgpuHandle<wgpu::CommandEncoder> host(device_->device().createCommandEncoder());
-  ASSERT_THAT(static_cast<bool>(host), testing::IsTrue());
-  GeodeWgpuAdapterDevice::HostEncoderLease activeLease =
-      device_->adapterDevice().setHostCommandEncoder(host.get());
-  size_t rotations = 0;
-  device_->adapterDevice().setHostCommandEncoderRotation(
-      activeLease, [&](GeodeWgpuAdapterDevice::HostEncoderLease expected) {
-        ScopedWgpuHandle<wgpu::CommandBuffer> commands(host.get().finish());
-        if (!commands) return GeodeWgpuAdapterDevice::HostRotationResult{};
-        device_->queue().submit(1, &commands.get());
-        device_->countSubmit();
-        if (!device_->adapterDevice().notifyHostSubmitted(expected)) {
-          return GeodeWgpuAdapterDevice::HostRotationResult{};
-        }
-        host.reset(device_->device().createCommandEncoder());
-        std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> replacement =
-            device_->adapterDevice().replaceHostCommandEncoder(expected, host.get());
-        if (!replacement.has_value()) return GeodeWgpuAdapterDevice::HostRotationResult{};
-        activeLease = *replacement;
-        ++rotations;
-        return GeodeWgpuAdapterDevice::HostRotationResult{
-            GeodeWgpuAdapterDevice::HostRotationStage::QueueAcceptedAndReplaced, replacement};
-      });
+TEST_F(GeodeFilterEngineTest, ShortExecutionsShareOneFrameCommandBufferBound) {
+  engine_->beginFrame();
+  RotatingHostEncoder host(*device_);
+  ASSERT_THAT(host.installed(), testing::IsTrue());
   RefusingTextureAllocator allocator(device_->adapterDevice(), "");
-  const bool first = engine_->recordPassesForTesting(1, allocator, activeLease);
+
+  // Every execution stays far below the chunk bound on its own, but their passes all land in the
+  // one host frame command buffer, so the third crosses the bound at pass 65 of the frame.
+  for (size_t execution = 1; execution <= 3; ++execution) {
+    SCOPED_TRACE(execution);
+    EXPECT_THAT(engine_->recordPassesForTesting(32, allocator, host.lease()), testing::IsTrue());
+    EXPECT_THAT(host.rotations(), testing::Eq(execution < 3 ? 0u : 1u))
+        << "after " << (execution * 32) << " filter passes in one frame";
+  }
+
+  // A new frame restarts the count on the same host command encoder: 33 further passes would
+  // cross the bound if the 32 already recorded still counted, and must not once they do not.
+  engine_->beginFrame();
+  EXPECT_THAT(engine_->recordPassesForTesting(33, allocator, host.lease()), testing::IsTrue());
+  EXPECT_THAT(host.rotations(), testing::Eq(1u))
+      << "33 filter passes in a fresh frame must batch below the bound";
+
+  host.submitAndRelease();
+}
+
+TEST_F(GeodeFilterEngineTest, RotationAcceptsEarlierFilterRangesOnTheSameExactHost) {
+  engine_->beginFrame();
+  RotatingHostEncoder host(*device_);
+  ASSERT_THAT(host.installed(), testing::IsTrue());
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  const bool first = engine_->recordPassesForTesting(1, allocator, host.lease());
   const uint64_t firstSerial = device_->adapterDevice().lastSubmittedSerial();
   size_t secondAcceptedChunks = 0;
   engine_->setChunkSubmittedHookForTesting([&](size_t chunk) { secondAcceptedChunks = chunk; });
 
-  const bool second = engine_->recordPassesForTesting(65, allocator, activeLease);
+  const bool second = engine_->recordPassesForTesting(65, allocator, host.lease());
 
   EXPECT_THAT(first, testing::IsTrue());
   EXPECT_THAT(second, testing::IsTrue());
-  EXPECT_THAT(rotations, testing::Eq(1u));
+  EXPECT_THAT(host.rotations(), testing::Eq(1u));
   EXPECT_THAT(secondAcceptedChunks, testing::Eq(1u));
   EXPECT_THAT(device_->runtimeDevice().waitForSerial(firstSerial, 2.0), testing::IsTrue());
-  ScopedWgpuHandle<wgpu::CommandBuffer> finalCommands(host.get().finish());
-  ASSERT_THAT(static_cast<bool>(finalCommands), testing::IsTrue());
-  device_->queue().submit(1, &finalCommands.get());
-  EXPECT_THAT(device_->adapterDevice().notifyHostSubmitted(activeLease), testing::IsTrue());
-  EXPECT_THAT(device_->adapterDevice().clearHostCommandEncoder(activeLease), testing::IsTrue());
+  host.submitAndRelease();
 }
 
 TEST_F(GeodeFilterEngineTest, AcceptedRotationReplacementFailureRetainsAndLeavesForeignHost) {
