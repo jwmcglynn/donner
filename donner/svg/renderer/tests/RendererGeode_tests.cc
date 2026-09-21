@@ -640,6 +640,61 @@ TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
   device->setQueueWaitResultForTesting(std::nullopt);
 }
 
+/// Closing the frame's recorded draws can fail at any encoder retire, which abandons the frame.
+/// Every pop that retires an encoder records through the frame right afterwards, so each has to
+/// notice the abandonment its own retire caused rather than the one it checked for on entry.
+class FrameEncoderCloseFailureTest : public RendererGeodeTest,
+                                     public testing::WithParamInterface<const char*> {};
+
+TEST_P(FrameEncoderCloseFailureTest, APopWhoseCloseFailsAbandonsInsteadOfRecording) {
+  using namespace components;
+  const std::string_view kind = GetParam();
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+
+  if (kind == "IsolatedLayer") {
+    renderer.pushIsolatedLayer(0.8, MixBlendMode::Normal);
+  } else if (kind == "BlendedLayer") {
+    renderer.pushIsolatedLayer(0.8, MixBlendMode::Multiply);
+  } else if (kind == "Mask") {
+    renderer.pushMask(std::nullopt, MaskType::Luminance);
+  } else {
+    renderer.pushFilterLayer(FilterGraph{}, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  }
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectFrameEncoderCloseFailureForTesting();
+
+  if (kind == "Mask") {
+    renderer.transitionMaskToContent();
+    renderer.popMask();
+  } else if (kind == "Filter") {
+    renderer.popFilterLayer();
+  } else {
+    renderer.popIsolatedLayer();
+  }
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+
+  renderer.endFrame();
+
+  EXPECT_THAT(counters->submits, testing::Eq(0u))
+      << "a frame abandoned by a failed close must reach the queue with nothing";
+  EXPECT_THAT(counters->commandBuffers, testing::Eq(0u));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+INSTANTIATE_TEST_SUITE_P(EveryPopThatRetires, FrameEncoderCloseFailureTest,
+                         testing::Values("IsolatedLayer", "BlendedLayer", "Mask", "Filter"),
+                         [](const testing::TestParamInfo<const char*>& info) {
+                           return std::string(info.param);
+                         });
+
 TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());

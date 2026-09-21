@@ -504,6 +504,9 @@ public:
   /// Inject transformed-filter suspension and following encoder-restoration failure once.
   void injectFilterFrameSuspensionAndRestoreFailureForTesting();
 
+  /// Fail the next close of the frame's recorded draws once, as a backend refusal would.
+  void injectFrameEncoderCloseFailureForTesting();
+
   /// Number of filter textures retained outside reusable pools after an uncertain failure.
   [[nodiscard]] size_t failedFilterTextureCountForTesting() const;
 

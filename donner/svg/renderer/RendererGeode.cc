@@ -1399,6 +1399,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
   bool failFilterFrameSuspensionForTesting = false;
+  /// One-shot: the next close of the frame's recorded draws fails, as a backend refusal would.
+  bool failFrameEncoderCloseForTesting = false;
   bool failFilterFrameRestoreForTesting = false;
   bool frameRecordingAbandoned = false;
 
@@ -1700,6 +1702,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   [[nodiscard]] bool closeFrameGpuEncoder(bool reopen) {
     if (frameGpuEncoder == nullptr) {
       return true;
+    }
+    if (std::exchange(failFrameEncoderCloseForTesting, false)) {
+      return false;
     }
     if (frameGpuEncoder->recordedCommandCount() == 0) {
       // Finishing an encoder that recorded nothing would spend one of the submission's command
@@ -7850,6 +7855,10 @@ void RendererGeode::injectDeviceLossForTesting() {
 void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
   impl_->failFilterFrameSuspensionForTesting = true;
   impl_->failFilterFrameRestoreForTesting = true;
+}
+
+void RendererGeode::injectFrameEncoderCloseFailureForTesting() {
+  impl_->failFrameEncoderCloseForTesting = true;
 }
 
 size_t RendererGeode::failedFilterTextureCountForTesting() const {
