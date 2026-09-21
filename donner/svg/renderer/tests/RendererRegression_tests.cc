@@ -255,6 +255,14 @@ void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label) {
   EXPECT_THAT(differences.size(), testing::Eq(1)) << "Expected visible rendered content";
 }
 
+/// Renders \p body at 200x200 with the hermetic test fonts, through the backend this build is
+/// configured around.
+RendererBitmap RenderTextOpacityCase(std::string_view body) {
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
 class RendererRegressionTests : public ImageComparisonTestFixture {};
 
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
@@ -586,6 +594,89 @@ TEST_F(RendererRegressionTests, SpanGradientOverridesElementPatternStroke) {
 
   SVGDocument document = loadSVG(svg, ResvgResourceRoot());
   renderAndCompare(document, svg, golden, GoldenParams());
+}
+
+TEST_F(RendererRegressionTests, TextOpacityAppliesOnceLikeGroupOpacity) {
+  const RendererBitmap textOpacity = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120"
+                  opacity="0.5">S</text>)svg");
+  const RendererBitmap groupOpacity = RenderTextOpacityCase(
+      R"svg(<g opacity="0.5"><text x="20" y="150" font-family="Noto Sans"
+                                   font-size="120">S</text></g>)svg");
+  const RendererBitmap opaque = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">S</text>)svg");
+
+  ExpectVisibleBitmap(textOpacity, "text_opacity_visible");
+  ExpectBitmapsDiffer(textOpacity, opaque, "text_opacity_differs_from_opaque");
+  ExpectBitmapsIdentical(textOpacity, groupOpacity, "text_opacity_matches_group_opacity");
+}
+
+TEST_F(RendererRegressionTests, TextOpacityWithSpanWrapperAppliesOnceLikeGroupOpacity) {
+  const RendererBitmap textOpacity = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120" opacity="0.5">
+              <tspan>S</tspan></text>)svg");
+  const RendererBitmap groupOpacity = RenderTextOpacityCase(
+      R"svg(<g opacity="0.5"><text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan>S</tspan></text></g>)svg");
+  const RendererBitmap opaque = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan>S</tspan></text>)svg");
+
+  ExpectVisibleBitmap(textOpacity, "text_opacity_span_wrapper_visible");
+  ExpectBitmapsDiffer(textOpacity, opaque, "text_opacity_span_wrapper_differs_from_opaque");
+  ExpectBitmapsIdentical(textOpacity, groupOpacity,
+                         "text_opacity_span_wrapper_matches_group_opacity");
+}
+
+TEST_F(RendererRegressionTests, NestedSpanOpacityComposesAsProduct) {
+  const RendererBitmap nested = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan opacity="0.5"><tspan opacity="0.5">S</tspan></tspan></text>)svg");
+  const RendererBitmap product = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan opacity="0.25">S</tspan></text>)svg");
+  const RendererBitmap innerOnly = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan opacity="0.5">S</tspan></text>)svg");
+
+  ExpectVisibleBitmap(nested, "nested_span_opacity_visible");
+  ExpectBitmapsDiffer(nested, innerOnly, "nested_span_opacity_keeps_the_intermediate");
+  ExpectBitmapsIdentical(nested, product, "nested_span_opacity_is_the_product");
+}
+
+TEST_F(RendererRegressionTests, SpanOpacityWithClipPathAppliesOnce) {
+  const RendererBitmap spanOpacity = RenderTextOpacityCase(
+      R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+            <text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan opacity="0.5" clip-path="url(#clip)">S</tspan></text>)svg");
+  const RendererBitmap groupOpacity = RenderTextOpacityCase(
+      R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+            <g opacity="0.5"><text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan clip-path="url(#clip)">S</tspan></text></g>)svg");
+  const RendererBitmap opaque = RenderTextOpacityCase(
+      R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+            <text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan clip-path="url(#clip)">S</tspan></text>)svg");
+
+  ExpectVisibleBitmap(spanOpacity, "span_opacity_clip_path_visible");
+  ExpectBitmapsDiffer(spanOpacity, opaque, "span_opacity_clip_path_differs_from_opaque");
+  ExpectBitmapsIdentical(spanOpacity, groupOpacity, "span_opacity_clip_path_applies_once");
+}
+
+TEST_F(RendererRegressionTests, OpaqueIntermediateSpanLeavesSpanOpacityUnchanged) {
+  const RendererBitmap direct = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan opacity="0.5">S</tspan></text>)svg");
+  const RendererBitmap throughOpaqueSpan = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan opacity="0.5"><tspan>S</tspan></tspan></text>)svg");
+  const RendererBitmap opaque = RenderTextOpacityCase(
+      R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120">
+              <tspan><tspan>S</tspan></tspan></text>)svg");
+
+  ExpectVisibleBitmap(direct, "span_opacity_visible");
+  ExpectBitmapsDiffer(throughOpaqueSpan, opaque, "opaque_intermediate_span_differs_from_opaque");
+  ExpectBitmapsIdentical(throughOpaqueSpan, direct, "opaque_intermediate_span_is_transparent");
 }
 
 TEST_F(RendererRegressionTests, NestedBaselineShiftRedrawIsIdempotent) {

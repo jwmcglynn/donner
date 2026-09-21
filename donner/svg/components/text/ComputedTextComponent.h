@@ -166,8 +166,10 @@ struct ComputedTextComponent {
     /// Populated by RendererDriver from sourceEntity.
     Visibility visibility = Visibility::Visible;
 
-    /// CSS `opacity` value for this span (0.0-1.0). Populated by RendererDriver from
-    /// sourceEntity.
+    /// Product of the CSS `opacity` of every text content element from \ref sourceEntity up to,
+    /// but excluding, the element whose rendering instance paints this span - the text root, or
+    /// \ref effectOwner when set. That element applies its own `opacity` through its isolated
+    /// layer, so counting it here would apply it twice. Populated by RendererDriver.
     double opacity = 1.0;
 
     /// CSS `letter-spacing` for this span, resolved to pixels. Populated by RendererDriver.

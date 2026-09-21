@@ -2878,12 +2878,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
   std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
-  const auto makeSolidPaint = [&](const css::Color& color, double opacityScale = 1.0) {
+  // The text element's own `opacity` belongs to the isolated layer the driver pushes for it, so
+  // glyph alpha carries only the span's own product and never `paint_.opacity`.
+  const auto makeSolidPaint = [&](const css::Color& color, double spanOpacity) {
     tiny_skia::Paint paint = makeBasePaint(antialias_);
 
     css::RGBA rgba = color.rgba();
-    rgba.a = static_cast<uint8_t>(
-        std::round(static_cast<double>(rgba.a) * params.opacity * paintOpacity_ * opacityScale));
+    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) * spanOpacity));
     paint.shader = toTinyColor(rgba);
     return paint;
   };
@@ -2919,6 +2920,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     std::optional<tiny_skia::Paint> spanStrokePaint = strokePaint;
     tiny_skia::Stroke spanTinyStroke = tinyStroke;
     PaintOrder spanPaintOrder;
+    double spanOpacity = 1.0;
     // Outline glyph paths for this run, collected so fill and stroke can be painted as
     // two whole-run passes in `paint-order` (matching resvg, which paints the text's
     // fill then the text's stroke as units rather than per-glyph).
@@ -2926,6 +2928,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     if (runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
       spanPaintOrder = span.paintOrder;
+      spanOpacity = span.opacity;
       const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
       const float spanFillOpacity = NarrowToFloat(span.fillOpacity);
       const float spanStrokeOpacity = NarrowToFloat(span.strokeOpacity);
@@ -3064,7 +3067,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
           tiny_skia::PixmapPaint paint =
               makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
-          paint.opacity = NarrowToFloat(paintOpacity_);
+          paint.opacity = NarrowToFloat(spanOpacity);
           paint.blendMode = tiny_skia::BlendMode::SourceOver;
 
           const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
