@@ -23,6 +23,32 @@
 ///   `stroke`, `stroke-width`, `stroke-opacity`, `opacity`, and `transform`;
 ///   per-`<tspan>` paint that differs from the group is applied on the
 ///   individual glyph `<path>`s so multi-color runs are not collapsed.
+/// - `opacity` is the one property that multiplies rather than overrides: the
+///   group carries the `<text>` element's own `opacity`, and each glyph
+///   `<path>` carries the product of the `opacity` of the spans between it and
+///   that `<text>`, so a translucent `<tspan>` stays translucent and the root's
+///   opacity is applied exactly once.
+///
+/// Two `opacity` cases the emitted form cannot express exactly, both bounded to
+/// a translucent run and measured against the text this conversion replaces:
+///
+/// - A run's `opacity` is written on each of its glyph `<path>`s rather than on
+///   a per-run `<g opacity>`. The two differ only where glyphs of one run
+///   overlap: per-path each glyph composites separately, a per-run group
+///   composites the run once. Donner's text renderer folds a span's `opacity`
+///   into each glyph's paint alpha, so it composites overlapping glyphs of a
+///   translucent span twice as well (measured: two glyphs of one `opacity="0.5"`
+///   span overlap at 0.75, matching two `<path opacity="0.5">`, where a single
+///   layer would be 0.5). Per-path therefore keeps the outlines identical to the
+///   text they replace. The group form is what the SVG group model describes, so
+///   once a span composites as one layer this should become a per-run
+///   `<g opacity>`.
+/// - A run that both fills and strokes composites the two as one isolated layer
+///   through the path's `opacity`, which is the spec-correct reading. The text
+///   renderer instead multiplies the span's `opacity` into the fill alpha and
+///   the stroke alpha separately, so its stroke-over-fill overlap is the
+///   approximation, and a stroked translucent run renders slightly differently
+///   there after conversion.
 ///
 /// The conversion is DOM-first: it builds unattached DOM elements and never
 /// changes the authored tree or source. Detached elements share document storage.
