@@ -55,7 +55,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 31;
+  constexpr std::size_t kValueCount = 32;
   static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
@@ -88,7 +88,8 @@ void PublishWorkerTimingStats(
       static_cast<double>(result.version),
       static_cast<double>(result.fontResourceRevision),
       static_cast<double>(app.document().document().sourceVersion()),
-      static_cast<double>(app.undoTimeline().entryCount())};
+      static_cast<double>(app.undoTimeline().entryCount()),
+      static_cast<double>(timing.fullCanvasTextureAllocationFailureCount)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -137,6 +138,7 @@ void PublishWorkerTimingStats(
         stats['fontResourceRevision'] = heap[b + 28];
         stats['sourceVersion'] = heap[b + 29];
         stats['undoEntryCount'] = heap[b + 30];
+        stats['fullCanvasTextureAllocationFailureCount'] = heap[b + 31];
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },

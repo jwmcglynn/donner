@@ -83,6 +83,16 @@ struct ImmediateLayerPlan {
   bool dynamicHeuristicImmediate = false;
   /// True when this layer left dynamic immediate mode because the latest render was over budget.
   bool demotedDynamicImmediate = false;
+  /// True when the latest allocation at `budgetCanvasSize` was the first rejection of a frame's
+  /// surface budget. That does not prove the tile alone exceeds the budget (earlier tiles in the
+  /// same frame consume it too); it is one strike toward giving up on retained presentation.
+  bool budgetRejected = false;
+  /// True when two consecutive first-of-frame rejections at `budgetCanvasSize` switched the
+  /// layer to direct compose: retries stop and the content stays visible until the canvas size
+  /// changes.
+  bool budgetImmediate = false;
+  /// Canvas size at which `budgetRejected` and `budgetImmediate` were observed.
+  Vector2i budgetCanvasSize = Vector2i::Zero();
   /// Snapped canvas-space bounds used by the immediate/cached heuristic.
   Box2d boundsCanvas;
   /// Estimated number of direct geometry draws in the layer.
@@ -235,6 +245,26 @@ public:
   /// Clear the dirty flag after re-rasterization.
   void clearDirty() { dirty_ = false; }
 
+  /// Drop the retained bitmap and texture without touching the compose transform or
+  /// generation. Used when the layer switches to direct compose so a payload nothing will draw
+  /// again stops holding GPU memory.
+  void releasePayload() {
+    bitmap_ = RendererBitmap{};
+    textureSnapshot_.reset();
+  }
+
+  /// Record that the main renderer declined to draw this layer's texture payload; returns the
+  /// consecutive decline count so the compositor can stop re-rasterizing after two strikes.
+  uint8_t recordComposeDecline() {
+    if (composeDeclines_ < 2) {
+      ++composeDeclines_;
+    }
+    return composeDeclines_;
+  }
+
+  /// Reset the consecutive decline count after a payload draws successfully.
+  void clearComposeDeclines() { composeDeclines_ = 0; }
+
   /// Set the cached bitmap for this layer, along with the entity's
   /// absolute transform at the moment of rasterization. Stored so a
   /// subsequent fast-path DOM translation mutation can detect that the
@@ -372,6 +402,7 @@ private:
   bool dirty_ = true;
   uint64_t generation_ = 0;
   uint32_t rasterizeCount_ = 0;
+  uint8_t composeDeclines_ = 0;
   double lastRasterizeMs_ = 0.0;
   Vector2d canvasOffset_ = Vector2d::Zero();
   ImmediateLayerPlan immediatePlan_;

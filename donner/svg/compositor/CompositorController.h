@@ -694,6 +694,16 @@ public:
     bool hasExpensiveEffect = false;
     /// True when the span has a visible, bounded contribution to the canvas.
     bool visible = false;
+    /// True when the latest allocation at `budgetCanvasSize` was the first rejection of a
+    /// frame's surface budget: one strike toward giving up on retained presentation, not proof
+    /// that the span alone exceeds the budget.
+    bool budgetRejected = false;
+    /// True when two consecutive first-of-frame rejections at `budgetCanvasSize` switched the
+    /// span to immediate presentation: retries stop and the content stays visible until the
+    /// canvas size changes.
+    bool budgetImmediate = false;
+    /// Canvas size at which `budgetRejected` and `budgetImmediate` were observed.
+    Vector2i budgetCanvasSize = Vector2i::Zero();
     /// Estimated presentation texture bytes retained by a cached tile.
     uint64_t estimatedRetainedBytes = 0;
     /// Relative redraw cost from tight area and geometry complexity.
@@ -865,6 +875,17 @@ public:
     /// without sampling the exact re-rasterize frame.
     int offscreenCreateTotal = 0;
     int offscreenRecycleTotal = 0;
+    /// Tile rasterizations whose GPU texture allocation failed this frame. The tile stays dirty
+    /// for the next frame, or switches to direct compose after two first-of-frame budget
+    /// rejections at the same canvas size.
+    int textureAllocationFailureCount = 0;
+    /// Controller-lifetime total of `textureAllocationFailureCount`.
+    int textureAllocationFailureTotal = 0;
+    /// Compose payloads refused this frame: a texture draw the renderer declined, or a CPU
+    /// bitmap offered in texture-presentation mode. Neither is repaired by a CPU upload.
+    int composePayloadRefusalCount = 0;
+    /// Controller-lifetime total of `composePayloadRefusalCount`.
+    int composePayloadRefusalTotal = 0;
   };
 
   /// Return the current render-frame raster cost split.
@@ -1057,6 +1078,46 @@ private:
 
   /// Return a cleanly-finished offscreen renderer to the single-slot pool.
   void recycleOffscreen(std::unique_ptr<RendererInterface> offscreen);
+  /// Records a failed texture allocation for `offscreen` and destroys it: a snapshot that
+  /// failed left the drawn target attached, which the pool contract excludes. Returns true
+  /// when the failure was a surface-budget rejection, which latches for the rest of the frame.
+  bool discardFailedOffscreen(std::unique_ptr<RendererInterface> offscreen);
+  /// Returns true when `layer` must not allocate this frame: it is presented directly after two
+  /// budget rejections at `canvasSize`, or the frame's budget has already latched a rejection.
+  bool skipRasterizeUnderBudget(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
+                                const Vector2i& canvasSize);
+  /// Discards the offscreen whose texture snapshot failed for `layer` and, on a budget
+  /// rejection, records the strike on the layer's plan (switching to direct compose on the
+  /// second strike at the same canvas size).
+  void recordLayerAllocationFailure(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
+                                    const ImmediateLayerPlan& freshPlan, const Vector2i& canvasSize,
+                                    std::unique_ptr<RendererInterface> offscreen);
+  /// Carries a span that was switched to immediate presentation at `canvasSize` into this
+  /// frame's plan without allocating; returns false when the span rasterizes normally.
+  bool adoptBudgetImmediateSpan(size_t slotIndex, const StaticSpanPlan& previousPlan,
+                                const StaticSpanPlan& freshPlan, const Vector2i& canvasSize);
+  /// Segment counterpart of `recordLayerAllocationFailure`.
+  void recordSegmentAllocationFailure(size_t slotIndex, const StaticSpanPlan& previousPlan,
+                                      const StaticSpanPlan& freshPlan, const Vector2i& canvasSize,
+                                      std::unique_ptr<RendererInterface> offscreen);
+  /// Draws one static segment slot into `offscreen` and takes its payload. Returns false when
+  /// the draw was cancelled or the payload allocation failed; the offscreen is recycled only on
+  /// success.
+  bool rasterizeSegmentSlot(size_t slotIndex, std::unique_ptr<RendererInterface> offscreen,
+                            Entity firstEntity, Entity lastEntity, const RenderViewport& viewport,
+                            const Transform2d& surfaceFromCanvas,
+                            const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
+                            const Vector2i& canvasSize);
+  /// Draws one composed payload into the main renderer. Returns false when the renderer
+  /// declined a texture payload in texture mode, so the caller can re-rasterize the tile.
+  bool composePayload(const RendererBitmap* bitmap,
+                      const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                      const Transform2d& canvasFromPayload, bool textureMode);
+  /// Counts a compose payload the main renderer could not present.
+  void recordComposePayloadRefusal();
+  /// Marks tiles whose texture draw was declined dirty so the next frame re-rasterizes them.
+  void markRefusedTilesDirty(const std::vector<Entity>& refusedLayers,
+                             const std::vector<size_t>& refusedSegments);
 
   /// Invoke `config_.yieldBetweenTiles` if installed. Called at the coarse
   /// per-tile safe points, after a tile's snapshot is taken and before the
@@ -1358,6 +1419,12 @@ private:
   /// `acquireOffscreen`. Destroyed with the controller (one teardown per
   /// compositor lifetime instead of one per tile).
   std::unique_ptr<RendererInterface> pooledOffscreen_;
+  /// Set when a tile allocation was rejected by the per-frame surface budget. The budget
+  /// latches its rejection until the next frame scope, so remaining tiles skip allocation.
+  bool surfaceBudgetExhaustedThisFrame_ = false;
+  /// Consecutive frames in which the main renderer declined each static segment's texture
+  /// payload; a slot stops re-rasterizing after two strikes. Sized lazily in `composeLayers`.
+  std::vector<uint8_t> staticSegmentComposeDeclines_;
   /// When true, `composeLayers` skips the main-renderer draw calls while
   /// the split bg/drag/fg cache is populated - the editor reads those
   /// bitmaps directly, so the main-renderer output would go unconsumed.

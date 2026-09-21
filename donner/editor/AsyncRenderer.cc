@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
-#include <cstdio>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -308,7 +307,7 @@ bool CanSkipPreviewMainCompose(bool hasPreview, bool promotionComplete, bool has
 }
 
 class ScopedFrameResourceScope {
- public:
+public:
   explicit ScopedFrameResourceScope(svg::RendererInterface& renderer) : renderer_(renderer) {
     renderer_.beginFrameResourceScope();
   }
@@ -318,34 +317,37 @@ class ScopedFrameResourceScope {
   ScopedFrameResourceScope(const ScopedFrameResourceScope&) = delete;
   ScopedFrameResourceScope& operator=(const ScopedFrameResourceScope&) = delete;
 
- private:
+private:
   svg::RendererInterface& renderer_;
 };
 
-// Captures the full-canvas GPU texture, falling back to a CPU snapshot when
-// allocation fails so the worker never aborts. Extracted to keep
-// `AsyncRenderer::workerLoop` at its complexity baseline.
-void CaptureFullCanvasTextureSnapshot(svg::RendererInterface& renderer,
-                                      const PresentationSnapshotPlan& plan,
-                                      svg::RendererBitmap& bitmap,
-                                      std::shared_ptr<const svg::RendererTextureSnapshot>& texture) {
-  ZoneScopedN("Renderer::takeTextureSnapshot");
-  texture = renderer.takeTextureSnapshot();
-  if (texture != nullptr) {
-    return;
-  }
-  const svg::RendererResourceStats stats = renderer.resourceStats();
-  std::fprintf(stderr,
-               "[AsyncRenderer] Full-canvas GPU texture allocation failed (budgetRejected=%d), "
-               "falling back to CPU snapshot\n",
-               static_cast<int>(stats.surfaceBudgetRejected));
-  if (!plan.captureCpuSnapshot) {
-    ZoneScopedN("Renderer::takeSnapshot (texture-fallback)");
-    bitmap = renderer.takeSnapshot();
+// Captures the full-canvas texture for a result and counts an allocation failure.
+void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
+                                       const PresentationSnapshotPlan& plan,
+                                       svg::RendererBitmap& bitmap,
+                                       std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                                       int& allocationFailureCount) {
+  if (CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture)) {
+    ++allocationFailureCount;
   }
 }
 
 }  // namespace
+
+bool CaptureFullCanvasTextureSnapshot(
+    svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
+    svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture) {
+  ZoneScopedN("Renderer::takeTextureSnapshot");
+  texture = renderer.takeTextureSnapshot();
+  if (texture != nullptr) {
+    return false;
+  }
+  if (!plan.captureCpuSnapshot) {
+    ZoneScopedN("Renderer::takeSnapshot (texture-fallback)");
+    bitmap = renderer.takeSnapshot();
+  }
+  return true;
+}
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
                                                         bool requiresTextureSnapshotPresentation,
@@ -1683,7 +1685,8 @@ void AsyncRenderer::workerLoop() {
         bitmap = requestRenderer.takeSnapshot();
       }
       if (snapshotPlan.captureTextureSnapshot) {
-        CaptureFullCanvasTextureSnapshot(requestRenderer, snapshotPlan, bitmap, fullCanvasTexture);
+        CaptureFullCanvasTextureForResult(requestRenderer, snapshotPlan, bitmap, fullCanvasTexture,
+                                          workerTiming.fullCanvasTextureAllocationFailureCount);
       }
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }

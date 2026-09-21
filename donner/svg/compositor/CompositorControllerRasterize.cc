@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -42,37 +41,27 @@ uint64_t SegmentTileId(Entity left, Entity right) {
   return (l << 32) | r;  // bit 63 stays 0 - doesn't collide with layer ids.
 }
 
-// Sets a layer payload from a drawn offscreen, returning false when a Geode
-// texture allocation fails so the caller leaves the tile dirty for retry.
-// Extracted to keep `rasterizeLayer` at its complexity baseline.
+// Sets a layer payload from a drawn offscreen. Returns false when the texture
+// snapshot failed, leaving the offscreen's drawn target attached.
 bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& offscreen,
-                                  const Transform2d& surfaceFromEntity,
-                                  const RenderViewport& viewport) {
+                                  const Transform2d& surfaceFromEntity) {
   if (!offscreen.requiresTextureSnapshotPresentation()) {
     layer.setBitmap(offscreen.takeSnapshot(), surfaceFromEntity);
     return true;
   }
   std::shared_ptr<const RendererTextureSnapshot> texture = offscreen.takeTextureSnapshot();
   if (texture == nullptr) {
-    const RendererResourceStats stats = offscreen.resourceStats();
-    std::fprintf(stderr,
-                 "[Compositor] rasterizeLayer: GPU texture allocation failed for entity %u "
-                 "(viewport %.0fx%.0f, budgetRejected=%d), leaving dirty for retry\n",
-                 static_cast<unsigned>(layer.entity()), viewport.size.x, viewport.size.y,
-                 static_cast<int>(stats.surfaceBudgetRejected));
     return false;
   }
   layer.setTextureSnapshot(std::move(texture), surfaceFromEntity);
   return true;
 }
 
-// Sets a static-segment payload from a drawn offscreen, returning false when
-// a Geode texture allocation fails so the caller leaves the slot dirty.
-// Extracted to keep `rasterizeDirtyStaticSegments` at its baseline.
+// Sets a static-segment payload from a drawn offscreen. Returns false when the
+// texture snapshot failed, leaving the offscreen's drawn target attached.
 bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
                                     std::shared_ptr<const RendererTextureSnapshot>& segmentTexture,
-                                    RendererInterface& offscreen, size_t index,
-                                    const RenderViewport& viewport) {
+                                    RendererInterface& offscreen) {
   if (!offscreen.requiresTextureSnapshotPresentation()) {
     segment = offscreen.takeSnapshot();
     segmentTexture.reset();
@@ -80,12 +69,6 @@ bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
   }
   std::shared_ptr<const RendererTextureSnapshot> texture = offscreen.takeTextureSnapshot();
   if (texture == nullptr) {
-    const RendererResourceStats stats = offscreen.resourceStats();
-    std::fprintf(stderr,
-                 "[Compositor] rasterizeDirtyStaticSegments: GPU texture allocation failed for "
-                 "segment %zu (viewport %.0fx%.0f, budgetRejected=%d), leaving dirty for retry\n",
-                 index, viewport.size.x, viewport.size.y,
-                 static_cast<int>(stats.surfaceBudgetRejected));
     return false;
   }
   segment = RendererBitmap{};
@@ -93,15 +76,14 @@ bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
   return true;
 }
 
-// Logs CPU-bitmap composition in Geode presentation mode. Extracted so the
-// `composeLayers` call site stays at its complexity baseline.
-void LogGeodeComposeCpuFallback(const RendererBitmap* bitmap, bool requiresTexture) {
-  if (requiresTexture && bitmap != nullptr && HasPublicTileBitmap(*bitmap)) {
-    std::fprintf(stderr,
-                 "[Compositor] composeLayers: CPU bitmap payload in Geode presentation mode "
-                 "(%dx%d), drawing via upload fallback instead of crashing\n",
-                 bitmap->dimensions.x, bitmap->dimensions.y);
+// Size of the payload a compose step will draw: the public bitmap when present, else the
+// texture, else zero.
+Vector2i ComposePayloadDimensions(const RendererBitmap* bitmap,
+                                  const std::shared_ptr<const RendererTextureSnapshot>& texture) {
+  if (bitmap != nullptr && HasPublicTileBitmap(*bitmap)) {
+    return bitmap->dimensions;
   }
+  return texture != nullptr ? texture->dimensions() : Vector2i::Zero();
 }
 
 }  // namespace
@@ -121,6 +103,146 @@ void CompositorController::recycleOffscreen(std::unique_ptr<RendererInterface> o
   pooledOffscreen_ = std::move(offscreen);
 }
 
+bool CompositorController::discardFailedOffscreen(std::unique_ptr<RendererInterface> offscreen) {
+  const bool budgetRejected = offscreen->resourceStats().surfaceBudgetRejected;
+  ++lastRenderFrameStats_.textureAllocationFailureCount;
+  ++lastRenderFrameStats_.textureAllocationFailureTotal;
+  if (budgetRejected) {
+    surfaceBudgetExhaustedThisFrame_ = true;
+  }
+  return budgetRejected;
+}
+
+bool CompositorController::skipRasterizeUnderBudget(CompositorLayer& layer,
+                                                    const ImmediateLayerPlan& previousPlan,
+                                                    const Vector2i& canvasSize) {
+  // Direct compose presents a layer the budget rejected twice at this canvas size, so no
+  // further allocation is attempted until the size changes.
+  const bool presentedDirectly =
+      previousPlan.budgetImmediate && previousPlan.budgetCanvasSize == canvasSize;
+  if (!presentedDirectly && !surfaceBudgetExhaustedThisFrame_) {
+    return false;
+  }
+  if (!presentedDirectly && !(layer.isImmediate() && layer.hasRenderablePayload())) {
+    // A latched rejection would refuse this allocation too. The layer may have reached this
+    // point only because the whole tree was dirty, which no later frame repeats, so mark it
+    // dirty explicitly. A clean immediate layer keeps its payload so the drag fast path can
+    // still reuse it.
+    layer.markDirty();
+  }
+  layer.setLastRasterizeMs(0.0);
+  return true;
+}
+
+void CompositorController::recordLayerAllocationFailure(
+    CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
+    const ImmediateLayerPlan& freshPlan, const Vector2i& canvasSize,
+    std::unique_ptr<RendererInterface> offscreen) {
+  if (!discardFailedOffscreen(std::move(offscreen))) {
+    return;
+  }
+  // First rejection of this frame's budget (a latched one never reaches here). Keep the
+  // previous plan's presentation choice and refresh only the geometry and cost estimates; a
+  // second strike at the same canvas size stops retrying and presents the layer directly so
+  // its content stays visible.
+  ImmediateLayerPlan plan = previousPlan;
+  plan.visible = freshPlan.visible;
+  plan.boundsCanvas = freshPlan.boundsCanvas;
+  plan.estimatedDrawOps = freshPlan.estimatedDrawOps;
+  plan.estimatedPathVerbs = freshPlan.estimatedPathVerbs;
+  plan.estimatedUsesAreaCostlyPaint = freshPlan.estimatedUsesAreaCostlyPaint;
+  plan.hasExpensiveEffect = freshPlan.hasExpensiveEffect;
+  plan.estimatedRetainedBytes = freshPlan.estimatedRetainedBytes;
+  plan.estimatedRedrawCost = freshPlan.estimatedRedrawCost;
+  plan.estimatedCacheOverheadCost = freshPlan.estimatedCacheOverheadCost;
+  plan.staticHeuristicImmediate = freshPlan.staticHeuristicImmediate;
+  plan.budgetImmediate = previousPlan.budgetRejected && previousPlan.budgetCanvasSize == canvasSize;
+  plan.immediate = previousPlan.immediate || plan.budgetImmediate;
+  plan.budgetRejected = true;
+  plan.budgetCanvasSize = canvasSize;
+  if (plan.budgetImmediate) {
+    // Nothing draws a directly presented layer's retained payload; drop it so it stops
+    // holding the memory the budget ran out of.
+    layer.releasePayload();
+  }
+  layer.setImmediatePlan(plan);
+}
+
+bool CompositorController::adoptBudgetImmediateSpan(size_t slotIndex,
+                                                    const StaticSpanPlan& previousPlan,
+                                                    const StaticSpanPlan& freshPlan,
+                                                    const Vector2i& canvasSize) {
+  if (!previousPlan.budgetImmediate || previousPlan.budgetCanvasSize != canvasSize) {
+    return false;
+  }
+  // The budget rejected this span twice at this canvas size; immediate presentation keeps its
+  // content visible without another allocation attempt until the size changes.
+  StaticSpanPlan plan = previousPlan;
+  plan.slotIndex = slotIndex;
+  plan.firstEntity = freshPlan.firstEntity;
+  plan.lastEntity = freshPlan.lastEntity;
+  plan.spanRangeLabel = freshPlan.spanRangeLabel;
+  plan.mode = StaticSpanMode::Immediate;
+  staticSpanPlans_[slotIndex] = plan;
+  staticSegmentDirty_[slotIndex] = false;
+  return true;
+}
+
+void CompositorController::recordSegmentAllocationFailure(
+    size_t slotIndex, const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
+    const Vector2i& canvasSize, std::unique_ptr<RendererInterface> offscreen) {
+  if (!discardFailedOffscreen(std::move(offscreen))) {
+    return;
+  }
+  // A first-of-frame rejection is one strike; a second at the same canvas size switches the
+  // span to immediate presentation. The previous plan's mode and cost telemetry survive a
+  // failure so a span that was already immediate stays so.
+  StaticSpanPlan plan = previousPlan;
+  plan.slotIndex = slotIndex;
+  plan.firstEntity = freshPlan.firstEntity;
+  plan.lastEntity = freshPlan.lastEntity;
+  plan.spanRangeLabel = freshPlan.spanRangeLabel;
+  plan.visible = freshPlan.visible;
+  plan.boundsCanvas = freshPlan.boundsCanvas;
+  plan.estimatedDrawOps = freshPlan.estimatedDrawOps;
+  plan.estimatedPathVerbs = freshPlan.estimatedPathVerbs;
+  plan.estimatedUsesAreaCostlyPaint = freshPlan.estimatedUsesAreaCostlyPaint;
+  plan.hasExpensiveEffect = freshPlan.hasExpensiveEffect;
+  plan.budgetImmediate = previousPlan.budgetRejected && previousPlan.budgetCanvasSize == canvasSize;
+  plan.budgetRejected = true;
+  plan.budgetCanvasSize = canvasSize;
+  if (plan.budgetImmediate) {
+    plan.mode = StaticSpanMode::Immediate;
+    // Nothing draws an immediately presented span's retained payload; release it.
+    staticSegments_[slotIndex] = RendererBitmap{};
+    staticSegmentTextures_[slotIndex].reset();
+  }
+  staticSpanPlans_[slotIndex] = plan;
+}
+
+bool CompositorController::rasterizeSegmentSlot(
+    size_t slotIndex, std::unique_ptr<RendererInterface> offscreen, Entity firstEntity,
+    Entity lastEntity, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
+    const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
+    const Vector2i& canvasSize) {
+  {
+    RendererDriver driver(*offscreen);
+    if (!driver.drawEntityRangeInterruptibly(document().registry(), firstEntity, lastEntity,
+                                             viewport, surfaceFromCanvas,
+                                             [this]() { return isCancelled(); })) {
+      return false;
+    }
+  }
+  if (!SetSegmentPayloadFromOffscreen(staticSegments_[slotIndex], staticSegmentTextures_[slotIndex],
+                                      *offscreen)) {
+    recordSegmentAllocationFailure(slotIndex, previousPlan, freshPlan, canvasSize,
+                                   std::move(offscreen));
+    return false;
+  }
+  recycleOffscreen(std::move(offscreen));
+  return true;
+}
+
 void CompositorController::yieldBetweenTiles() {
   if (config_.yieldBetweenTiles) {
     config_.yieldBetweenTiles();
@@ -135,6 +257,10 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   const bool wasDynamicImmediate = previousImmediatePlan.immediate &&
                                    previousImmediatePlan.dynamicHeuristicImmediate &&
                                    !previousImmediatePlan.staticHeuristicImmediate;
+  const Vector2i canvasSize = BitmapDimensionsForViewport(viewport);
+  if (skipRasterizeUnderBudget(layer, previousImmediatePlan, canvasSize)) {
+    return;
+  }
 
   Registry& registry = document().registry();
   const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
@@ -173,16 +299,10 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // latches off before any rasterize runs when creation fails, so a null here
   // is unreachable in practice. Keep the assert to catch pool corruption.
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
-  RendererDriver driver(*offscreen);
 
-  if (geometry.tight) {
-    ZoneScopedN("Compositor::rasterizeLayer::drawEntityRangeTight");
-    if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
-                                             geometry.viewport, geometry.surfaceFromCanvas,
-                                             [this]() { return isCancelled(); })) {
-      return;
-    }
-  } else {
+  {
+    ZoneScopedN("Compositor::rasterizeLayer::drawEntityRange");
+    RendererDriver driver(*offscreen);
     if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
                                              geometry.viewport, geometry.surfaceFromCanvas,
                                              [this]() { return isCancelled(); })) {
@@ -204,9 +324,9 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                             .worldFromEntityTransform *
                         surfaceFromCanvas;
   }
-  if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity,
-                                     geometry.viewport)) {
-    recycleOffscreen(std::move(offscreen));
+  if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity)) {
+    recordLayerAllocationFailure(layer, previousImmediatePlan, immediatePlan, canvasSize,
+                                 std::move(offscreen));
     layer.markDirty();
     return;
   }
@@ -475,47 +595,40 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
             presentationCost.redrawCost <= presentationCost.cacheOverheadCost;
       }
 
+      const Vector2i canvasSize = BitmapDimensionsForViewport(viewport);
+      if (adoptBudgetImmediateSpan(i, previousSpanPlan, spanPlan, canvasSize)) {
+        continue;
+      }
+      if (surfaceBudgetExhaustedThisFrame_) {
+        // The latched budget rejects every further allocation this frame; the remaining dirty
+        // slots complete in the next frame.
+        return;
+      }
       std::unique_ptr<RendererInterface> offscreen;
       {
         ZoneScopedN("Compositor::segment::createOffscreen");
         offscreen = acquireOffscreen();
       }
       UTILS_RELEASE_ASSERT(offscreen != nullptr);
+      // A tight slot draws into a crop of the canvas shifted by the crop origin.
+      RenderViewport slotViewport = viewport;
+      Transform2d slotSurfaceFromCanvas = surfaceFromCanvas;
+      Vector2d slotOffset = Vector2d::Zero();
       if (useTight) {
-        ZoneScopedN("Compositor::segment::drawEntityRangeTight");
-        RenderViewport tightViewport;
-        tightViewport.size = tightBoundsSnapped.size();
-        tightViewport.devicePixelRatio = viewport.devicePixelRatio;
-        RendererDriver driver(*offscreen);
-        if (!driver.drawEntityRangeInterruptibly(
-                registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
-                surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft),
-                [this]() { return isCancelled(); })) {
-          return;
-        }
-        if (!SetSegmentPayloadFromOffscreen(staticSegments_[i], staticSegmentTextures_[i],
-                                            *offscreen, i, tightViewport)) {
-          recycleOffscreen(std::move(offscreen));
-          return;
-        }
-        recycleOffscreen(std::move(offscreen));
-        staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
-      } else {
-        ZoneScopedN("Compositor::segment::drawEntityRange");
-        RendererDriver driver(*offscreen);
-        if (!driver.drawEntityRangeInterruptibly(registry, paintOrder[startIdx], paintOrder[endIdx],
-                                                 viewport, surfaceFromCanvas,
-                                                 [this]() { return isCancelled(); })) {
-          return;
-        }
-        if (!SetSegmentPayloadFromOffscreen(staticSegments_[i], staticSegmentTextures_[i],
-                                            *offscreen, i, viewport)) {
-          recycleOffscreen(std::move(offscreen));
-          return;
-        }
-        recycleOffscreen(std::move(offscreen));
-        staticSegmentOffsets_[i] = Vector2d::Zero();
+        slotViewport.size = tightBoundsSnapped.size();
+        slotSurfaceFromCanvas =
+            surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft);
+        slotOffset = tightBoundsSnapped.topLeft;
       }
+      {
+        ZoneScopedN("Compositor::segment::drawEntityRange");
+        if (!rasterizeSegmentSlot(i, std::move(offscreen), paintOrder[startIdx], paintOrder[endIdx],
+                                  slotViewport, slotSurfaceFromCanvas, previousSpanPlan, spanPlan,
+                                  canvasSize)) {
+          return;
+        }
+      }
+      staticSegmentOffsets_[i] = slotOffset;
     }
     const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
     const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -861,6 +974,76 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
   return tiles;
 }
 
+void CompositorController::recordComposePayloadRefusal() {
+  ++lastRenderFrameStats_.composePayloadRefusalCount;
+  ++lastRenderFrameStats_.composePayloadRefusalTotal;
+}
+
+bool CompositorController::composePayload(
+    const RendererBitmap* bitmap, const std::shared_ptr<const RendererTextureSnapshot>& texture,
+    const Transform2d& canvasFromPayload, bool textureMode) {
+  const Vector2i payloadDims = ComposePayloadDimensions(bitmap, texture);
+  if (payloadDims.x <= 0 || payloadDims.y <= 0) {
+    return true;
+  }
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(payloadDims.x),
+                                                       static_cast<double>(payloadDims.y)));
+  // Reset the renderer's per-element paint state to defaults (opacity 1.0)
+  // before blitting a composited tile. The renderer convention is that
+  // `setPaint` is called before every draw; this tile blit isn't a normal
+  // element draw, so without it the blit inherits whatever `paintOpacity_` the
+  // previous draw left behind. When the prior compose step direct-renders an
+  // immediate layer whose range ends inside an opacity group (e.g. the
+  // splash `#Clouds_with_gradients` group, opacity 0.75), that group opacity
+  // leaks into this blit and dims the (already fully-composited) tile -
+  // the #633 cached-segment drag divergence (the same tile drawn immediate
+  // sets its own paint, which is why caching it exposed the leak).
+  renderer().setPaint(PaintParams{});
+  renderer().setTransform(canvasFromPayload);
+  if (texture != nullptr) {
+    if (renderer().drawTextureSnapshot(*texture, params.targetRect)) {
+      return true;
+    }
+    if (textureMode) {
+      recordComposePayloadRefusal();
+      return false;
+    }
+  }
+  if (bitmap != nullptr && HasPublicTileBitmap(*bitmap)) {
+    if (textureMode) {
+      // A CPU bitmap in texture mode comes from an offscreen that cannot produce textures, so
+      // re-rasterizing would only yield another bitmap; the payload is skipped and counted
+      // every frame rather than uploaded every frame, and the tile stays absent.
+      recordComposePayloadRefusal();
+      return true;
+    }
+    // drawBitmap consumes the premultiplied raster directly. Routing this
+    // through the unpremultiplied ImageResource contract cost two full
+    // pixel-buffer conversions plus three allocations per layer/segment per
+    // composed frame - the dominant compose cost on drag-heavy replays.
+    renderer().drawBitmap(*bitmap, params);
+  }
+  return true;
+}
+
+void CompositorController::markRefusedTilesDirty(const std::vector<Entity>& refusedLayers,
+                                                 const std::vector<size_t>& refusedSegments) {
+  // A declined texture draw means the tile's backing is no longer presentable; re-rasterize it
+  // once rather than falling back to a CPU upload. The strike counts in `composeLayers` bound
+  // the retry.
+  for (const Entity entity : refusedLayers) {
+    if (CompositorLayer* layer = findLayer(entity)) {
+      layer->markDirty();
+    }
+  }
+  for (const size_t segmentIndex : refusedSegments) {
+    if (segmentIndex < staticSegmentDirty_.size()) {
+      staticSegmentDirty_[segmentIndex] = true;
+    }
+  }
+}
+
 void CompositorController::composeLayers(const RenderViewport& viewport,
                                          const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::composeLayersImpl");
@@ -910,52 +1093,19 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     return true;
   };
 
-  const auto drawPayload = [this](const RendererBitmap* bitmap,
-                                  const std::shared_ptr<const RendererTextureSnapshot>& texture,
-                                  const Transform2d& canvasFromPayload) {
-    const Vector2i payloadDims =
-        bitmap != nullptr && HasPublicTileBitmap(*bitmap)
-            ? bitmap->dimensions
-            : (texture != nullptr ? texture->dimensions() : Vector2i::Zero());
-    if (payloadDims.x <= 0 || payloadDims.y <= 0) {
-      return;
-    }
-    ImageParams params;
-    params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(payloadDims.x),
-                                                         static_cast<double>(payloadDims.y)));
-    // Reset the renderer's per-element paint state to defaults (opacity 1.0)
-    // before blitting a composited tile. The renderer convention is that
-    // `setPaint` is called before every draw; this tile blit isn't a normal
-    // element draw, so without it the blit inherits whatever `paintOpacity_` the
-    // previous draw left behind. When the prior compose step direct-renders an
-    // immediate layer whose range ends inside an opacity group (e.g. the
-    // splash `#Clouds_with_gradients` group, opacity 0.75), that group opacity
-    // leaks into this blit and dims the (already fully-composited) tile -
-    // the #633 cached-segment drag divergence (the same tile drawn immediate
-    // sets its own paint, which is why caching it exposed the leak).
-    renderer().setPaint(PaintParams{});
-    renderer().setTransform(canvasFromPayload);
-    if (texture != nullptr) {
-      const bool drewTexture = renderer().drawTextureSnapshot(*texture, params.targetRect);
-      if (drewTexture) {
-        return;
-      }
-      std::fprintf(stderr,
-                   "[Compositor] composeLayers: GPU texture draw failed (%dx%d), trying CPU "
-                   "bitmap fallback\n",
-                   payloadDims.x, payloadDims.y);
-    }
-    LogGeodeComposeCpuFallback(bitmap, renderer().requiresTextureSnapshotPresentation());
-    if (bitmap != nullptr && HasPublicTileBitmap(*bitmap)) {
-      // drawBitmap consumes the premultiplied raster directly. Routing this
-      // through the unpremultiplied ImageResource contract cost two full
-      // pixel-buffer conversions plus three allocations per layer/segment per
-      // composed frame - the dominant compose cost on drag-heavy replays.
-      renderer().drawBitmap(*bitmap, params);
-    }
+  const bool textureMode = renderer().requiresTextureSnapshotPresentation();
+  const auto drawPayload = [&](const RendererBitmap* bitmap,
+                               const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                               const Transform2d& canvasFromPayload) {
+    return composePayload(bitmap, texture, canvasFromPayload, textureMode);
   };
 
-  const auto drawLayer = [&](const CompositorLayer& layer) {
+  if (staticSegmentComposeDeclines_.size() != staticSegments_.size()) {
+    staticSegmentComposeDeclines_.assign(staticSegments_.size(), 0);
+  }
+  std::vector<Entity> refusedLayers;
+  std::vector<size_t> refusedSegments;
+  const auto drawLayer = [&](CompositorLayer& layer) {
     // A clean immediate drag layer may deliberately retain its raster while a pure translation
     // moves `canvasFromBitmap`. Direct-drawing that layer can reproduce its old pixels in the
     // flattened frame, so translate the retained payload below. Scale and rotation keep the
@@ -973,7 +1123,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
         FallbackReason::None;
     const bool shouldDirectComposeLayer =
         ShouldDirectComposeLayer(layer) || (nonTranslationTransform && resampleSensitiveEffect);
-    const bool blitRetainedTranslation = shouldDirectComposeLayer &&
+    const bool blitRetainedTranslation = shouldDirectComposeLayer && layer.hasRenderablePayload() &&
                                          !layer.canvasFromBitmap().isIdentity() &&
                                          layer.canvasFromBitmap().isTranslation();
     if (shouldDirectComposeLayer && !blitRetainedTranslation) {
@@ -1003,7 +1153,13 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
       canvasFromBitmap = Transform2d::Translate(offset) * canvasFromBitmap;
     }
     const RendererBitmap* bitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
-    drawPayload(bitmap, layer.textureSnapshot(), canvasFromBitmap);
+    if (drawPayload(bitmap, layer.textureSnapshot(), canvasFromBitmap)) {
+      layer.clearComposeDeclines();
+    } else if (layer.recordComposeDecline() < 2) {
+      // One re-rasterize recovers a texture the renderer can draw after a device change; a
+      // second decline of the fresh payload will not converge, so stop paying for it.
+      refusedLayers.push_back(layer.entity());
+    }
   };
 
   const auto drawSegment = [&](size_t segmentIndex) {
@@ -1017,8 +1173,13 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     const std::shared_ptr<const RendererTextureSnapshot> segmentTexture =
         segmentIndex < staticSegmentTextures_.size() ? staticSegmentTextures_[segmentIndex]
                                                      : nullptr;
-    drawPayload(&staticSegments_[segmentIndex], segmentTexture,
-                Transform2d::Translate(segmentOffset));
+    if (drawPayload(&staticSegments_[segmentIndex], segmentTexture,
+                    Transform2d::Translate(segmentOffset))) {
+      staticSegmentComposeDeclines_[segmentIndex] = 0;
+    } else if (staticSegmentComposeDeclines_[segmentIndex] < 2 &&
+               ++staticSegmentComposeDeclines_[segmentIndex] < 2) {
+      refusedSegments.push_back(segmentIndex);
+    }
   };
 
   // Compose static segments and promoted layers in
@@ -1031,6 +1192,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     }
     drawSegment(staticSegments_.size() - 1u);
   }
+  markRefusedTilesDirty(refusedLayers, refusedSegments);
 
   renderer().endFrame();
   lastRenderFrameStats_.mainComposeMs =

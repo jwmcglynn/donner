@@ -209,6 +209,22 @@ struct PresentationSnapshotPlan {
 [[nodiscard]] PresentationSnapshotPlan ChoosePresentationSnapshotPlan(
     bool hasCompositedPreview, bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
+/**
+ * Capture the full-canvas texture snapshot for a render result. When the renderer cannot
+ * allocate the texture, a CPU snapshot is captured instead (unless `plan` already captured one)
+ * so the frame stays presentable.
+ *
+ * @param renderer Worker renderer that just finished the frame.
+ * @param plan Snapshot plan for the result; `captureTextureSnapshot` must be set.
+ * @param bitmap Receives the CPU snapshot when allocation failed and the plan had none.
+ * @param texture Receives the texture snapshot, or null when allocation failed.
+ * @return True when the texture allocation failed, whether or not this call captured the CPU
+ *   snapshot itself.
+ */
+[[nodiscard]] bool CaptureFullCanvasTextureSnapshot(
+    svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
+    svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture);
+
 /// Attribution of one worker-to-UI handoff, in milliseconds.
 struct HandoffTimings {
   /// Total time from worker render completion until the UI thread accepted the result.
@@ -281,6 +297,9 @@ struct RenderResult {
     svg::GpuWaitTimeoutSite timedOutWaitSite = svg::GpuWaitTimeoutSite::None;
     /// Wall time that wait spent before giving up, in milliseconds.
     int timedOutWaitMs = 0;
+    /// Full-canvas texture captures whose GPU texture could not be allocated. The worker then
+    /// used a CPU snapshot (captured here unless the plan already captured one).
+    int fullCanvasTextureAllocationFailureCount = 0;
   };
 
   /// One composite tile from the worker's `CompositorController::

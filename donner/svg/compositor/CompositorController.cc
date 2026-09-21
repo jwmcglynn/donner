@@ -1135,8 +1135,11 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   lastRenderFrameStats_.cachedRasterizeMs = 0.0;
   lastRenderFrameStats_.immediateTileCount = 0;
   lastRenderFrameStats_.cachedTileCount = 0;
+  lastRenderFrameStats_.textureAllocationFailureCount = 0;
+  lastRenderFrameStats_.composePayloadRefusalCount = 0;
   const auto warmupStart = std::chrono::steady_clock::now();
   cancelToken_.emplace(token);
+  surfaceBudgetExhaustedThisFrame_ = false;
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
   const bool completed = !token.isCancelled();
   cancelToken_.reset();
@@ -1186,8 +1189,11 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     RenderFrameStats fresh;
     fresh.offscreenCreateTotal = lastRenderFrameStats_.offscreenCreateTotal;
     fresh.offscreenRecycleTotal = lastRenderFrameStats_.offscreenRecycleTotal;
+    fresh.textureAllocationFailureTotal = lastRenderFrameStats_.textureAllocationFailureTotal;
+    fresh.composePayloadRefusalTotal = lastRenderFrameStats_.composePayloadRefusalTotal;
     lastRenderFrameStats_ = fresh;
   }
+  surfaceBudgetExhaustedThisFrame_ = false;
   const auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
         .count();
