@@ -354,12 +354,14 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
   }
   accumulateTextBounds(handle);
 
-  // Iterate over all children and accumulate their bounds.
-  donner::components::ForAllChildrenRecursive(
+  // Iterate over all children and accumulate their bounds. `display: none` removes an element and
+  // its whole subtree from the rendering tree, so a hidden element prunes: skipping only the
+  // element itself would still let its descendants widen the box.
+  donner::components::ForAllChildrenRecursivePruned(
       handle, [this, &disabledSink, &accumulate, &accumulateTextBounds,
                &worldFromTarget](EntityHandle child) {
         if (IsDisplayNone(child, disabledSink)) {
-          return;
+          return false;
         }
 
         if (ComputedPathComponent* computedPath =
@@ -368,6 +370,7 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
               LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget));
         }
         accumulateTextBounds(child);
+        return true;
       });
 
   return overallBounds;

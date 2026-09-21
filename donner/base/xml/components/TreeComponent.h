@@ -121,14 +121,20 @@ private:
 
 // TODO(jwmcglynn): Find a better place for this helper
 /**
- * Iterate over all children of the given entity recursively and call the given functor for each
- * child. Iterates in pre-order traversal order.
+ * Iterate over the given entity and its descendants recursively, calling the given functor for
+ * each and skipping the descendants of any entity the functor rejects. Iterates in pre-order
+ * traversal order.
  *
- * @param handle Entity handle to iterate over.
- * @param func Functor to call for each child.
+ * Returning \c false from \p func prunes: neither that entity's children nor any deeper descendant
+ * is visited. Returning early from a \ref ForAllChildrenRecursive callback instead skips only the
+ * current entity, so a caller whose condition covers a whole subtree (for example `display: none`,
+ * which removes the subtree from the rendering tree) has to use this overload.
+ *
+ * @param handle Entity handle to iterate over, which is visited first.
+ * @param func Functor to call for each entity, returning whether to descend into its children.
  */
 template <typename Func>
-void ForAllChildrenRecursive(EntityHandle handle, const Func& func) {
+void ForAllChildrenRecursivePruned(EntityHandle handle, const Func& func) {
   assert(handle.valid());
   Registry& registry = *handle.registry();
 
@@ -139,8 +145,10 @@ void ForAllChildrenRecursive(EntityHandle handle, const Func& func) {
     EntityHandle currentHandle = EntityHandle(registry, stack[stack.size() - 1]);
     stack.pop_back();
 
-    // Call the functor for the current entity
-    func(currentHandle);
+    // Call the functor for the current entity, which decides whether its subtree is traversed.
+    if (!func(currentHandle)) {
+      continue;
+    }
 
     // Add all children to the stack
     auto& treeComponent = currentHandle.get<components::TreeComponent>();
@@ -149,6 +157,21 @@ void ForAllChildrenRecursive(EntityHandle handle, const Func& func) {
       stack.push_back(child);
     }
   }
+}
+
+/**
+ * Iterate over all children of the given entity recursively and call the given functor for each
+ * child. Iterates in pre-order traversal order.
+ *
+ * @param handle Entity handle to iterate over.
+ * @param func Functor to call for each child.
+ */
+template <typename Func>
+void ForAllChildrenRecursive(EntityHandle handle, const Func& func) {
+  ForAllChildrenRecursivePruned(handle, [&func](EntityHandle currentHandle) {
+    func(currentHandle);
+    return true;
+  });
 }
 
 /**

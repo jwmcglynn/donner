@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <deque>
+#include <vector>
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
@@ -292,6 +293,62 @@ TEST_F(TreeComponentTests, Remove) {
   // Remove last.
   tree(child2).remove(registry_);
   EXPECT_THAT(children(root), ElementsAre(child3));
+}
+
+TEST_F(TreeComponentTests, ForAllChildrenRecursiveVisitsWholeSubtree) {
+  auto root = createEntity();
+  auto a = createEntity();
+  auto a1 = createEntity();
+  auto b = createEntity();
+  auto b1 = createEntity();
+  tree(root).appendChild(registry_, a);
+  tree(a).appendChild(registry_, a1);
+  tree(root).appendChild(registry_, b);
+  tree(b).appendChild(registry_, b1);
+
+  std::vector<Entity> visited;
+  ForAllChildrenRecursive(EntityHandle(registry_, root),
+                          [&visited](EntityHandle handle) { visited.push_back(handle.entity()); });
+
+  EXPECT_THAT(visited, ElementsAre(root, a, a1, b, b1));
+}
+
+TEST_F(TreeComponentTests, ForAllChildrenRecursivePrunedSkipsRejectedSubtrees) {
+  auto root = createEntity();
+  auto a = createEntity();
+  auto a1 = createEntity();
+  auto a1a = createEntity();
+  auto b = createEntity();
+  auto b1 = createEntity();
+  tree(root).appendChild(registry_, a);
+  tree(a).appendChild(registry_, a1);
+  tree(a1).appendChild(registry_, a1a);
+  tree(root).appendChild(registry_, b);
+  tree(b).appendChild(registry_, b1);
+
+  std::vector<Entity> visited;
+  ForAllChildrenRecursivePruned(EntityHandle(registry_, root), [&](EntityHandle handle) {
+    visited.push_back(handle.entity());
+    return handle.entity() != a;
+  });
+
+  // `a1` and its own child are both dropped: rejecting an entity removes its entire subtree, not
+  // just its direct children.
+  EXPECT_THAT(visited, ElementsAre(root, a, b, b1));
+}
+
+TEST_F(TreeComponentTests, ForAllChildrenRecursivePrunedRejectingRootVisitsOnlyRoot) {
+  auto root = createEntity();
+  auto a = createEntity();
+  tree(root).appendChild(registry_, a);
+
+  std::vector<Entity> visited;
+  ForAllChildrenRecursivePruned(EntityHandle(registry_, root), [&visited](EntityHandle handle) {
+    visited.push_back(handle.entity());
+    return false;
+  });
+
+  EXPECT_THAT(visited, ElementsAre(root));
 }
 
 TEST_F(TreeComponentTests, TypeString) {
