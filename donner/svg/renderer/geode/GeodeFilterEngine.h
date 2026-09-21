@@ -13,6 +13,7 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <array>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -134,6 +135,13 @@ public:
                                          const gpu::TextureDescriptor& desc) = 0;
 };
 
+/// Runtime handles a filter execution's recorded commands reference, moved to whatever outlives
+/// those commands.
+struct RetainedFilterResources {
+  std::deque<gpu::TextureView> textureViews;  //!< Views the commands attach to or sample.
+  std::deque<gpu::BindGroup> bindGroups;      //!< Bind groups the commands bind.
+};
+
 /**
  * Renderer-owned collection point for the command buffers one frame records.
  *
@@ -149,6 +157,15 @@ public:
   /// @param commandBuffer Finished command buffer; consumed.
   /// @return False when the frame cannot take it, which fails the execution recording it.
   [[nodiscard]] virtual bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) = 0;
+
+  /// Keeps the handles a command buffer added here references alive until the frame submits.
+  ///
+  /// A submission re-validates every resource a recorded command names, so anything an execution
+  /// would otherwise drop when it finishes has to outlive the frame it recorded into rather than
+  /// the execution that recorded it.
+  ///
+  /// @param resources Handles the added command buffers reference; consumed.
+  virtual void retainUntilFrameSubmits(RetainedFilterResources resources) = 0;
 };
 
 /**

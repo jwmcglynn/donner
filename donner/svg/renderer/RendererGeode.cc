@@ -1497,9 +1497,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // and a filter execution inside the frame adds the chunks it closes here.
   std::vector<gpu::CommandBuffer> frameCommandBuffers;
 
+  // Runtime handles the filter executions of this frame recorded against. They belong to
+  // executions that have already finished, and the frame's submission re-validates every resource
+  // its command buffers name, so they are dropped only once that submission has happened.
+  std::vector<geode::RetainedFilterResources> frameRetainedFilterResources;
+
   // Whether a frame is open for recording. Distinct from `frameGpuEncoder`, which is null while
   // a filter executes between the frame's own encoders.
   bool frameRecordingOpen = false;
+
+  // Most command buffers this renderer puts in one submission.
+  //
+  // Well below what the runtime refuses, because the wgpu backend acquires a backend command
+  // buffer per element and commits none of them until the whole span has encoded, while the
+  // backend queue caps how many may be outstanding at once and blocks the encoding thread at
+  // that cap. Measured on the wgpu Metal path (2026-09-21): a span of 54 blocks indefinitely,
+  // and 32 blocks as well, while 16 leaves room for the readback contexts and sibling renderers
+  // sharing the same queue. Ordinary frames run to a handful of buffers, so only a pathological
+  // one - a filter graph of thousands of passes - is split across submissions at all, and the
+  // split keeps recording order because submissions execute in the order they are made.
+  static constexpr size_t kMaxFrameCommandBuffersPerSubmission = 16;
 
   // Runtime command encoder the frame is recording into right now.
   //
@@ -1633,16 +1650,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Add \p commandBuffer to the frame, submitting what has accumulated first when the frame has
-  /// already reached the most buffers one submission carries. A document of very many filter
-  /// graphs or isolated layers can reach that bound; splitting there keeps every buffer in
-  /// recording order across the two submissions.
+  /// already reached \ref kMaxFrameCommandBuffersPerSubmission.
   [[nodiscard]] bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
-    if (frameCommandBuffers.size() >= gpu::Device::kMaxCommandBuffersPerSubmission &&
+    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission &&
         !submitFrameCommandBuffers()) {
       return false;
     }
     frameCommandBuffers.push_back(std::move(commandBuffer));
     return true;
+  }
+
+  /// Keep what a filter execution's command buffers reference alive until the frame submits.
+  void retainUntilFrameSubmits(geode::RetainedFilterResources resources) override {
+    frameRetainedFilterResources.push_back(std::move(resources));
   }
 
   /// Submit every command buffer the frame has accumulated as one submission, in recording order.
@@ -1722,6 +1742,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandBuffers.clear();
+    frameRetainedFilterResources.clear();
     frameRecordingOpen = false;
     frameSnapshotImports.clear();
     frameSnapshotBackings.clear();
@@ -1745,6 +1766,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (finishedEncoder) {
       frameFinishedEncoders.push_back(std::move(finishedEncoder));
     }
+  }
+
+  /// Installs \p nextEncoder as the active one, keeping whatever it replaces alive until the
+  /// frame ends. A GeoEncoder owns runtime handles - its target view above all - that its
+  /// recorded draws reference, and the frame's submission re-validates every one of them, so one
+  /// destroyed mid-frame would fail the submission of work it had already recorded.
+  /// @param nextEncoder Encoder to make active, or null to leave none active.
+  void replaceActiveEncoder(std::unique_ptr<geode::GeoEncoder> nextEncoder) {
+    retireFinishedEncoder(std::move(encoder));
+    encoder = std::move(nextEncoder);
   }
 
   void retireActiveEncoder() {
@@ -2304,7 +2335,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     configurePathEncoder(*newEncoder, /*collectGeometry=*/true, admission.bufferOffsetX,
                          admission.bufferOffsetY);
     newEncoder->clear(css::RGBA(0, 0, 0, 0));
-    encoder = std::move(newEncoder);
+    replaceActiveEncoder(std::move(newEncoder));
     if (admission.bufferOffsetX != 0 || admission.bufferOffsetY != 0) {
       deviceFromLocalTransform =
           deviceFromLocalTransform *
@@ -2356,16 +2387,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                         Transform2d::Translate(-geometry->paddedRegion.topLeft.x,
                                                                -geometry->paddedRegion.topLeft.y) *
                                         Transform2d::Scale(geometry->scaleX, geometry->scaleY);
-    geode::GeoEncoder resampleEncoder(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                      localTexture, localDesc.size, *frameGpuEncoder);
-    configureEncoder(resampleEncoder);
-    resampleEncoder.setTransform(localFromDevice);
-    resampleEncoder.drawTexture(
+    auto resampleEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            localTexture, localDesc.size, *frameGpuEncoder);
+    configureEncoder(*resampleEncoder);
+    resampleEncoder->setTransform(localFromDevice);
+    resampleEncoder->drawTexture(
         frame.layerTexture,
         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
                         static_cast<double>(frame.layerDesc.size.height)),
         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
-    resampleEncoder.finish();
+    resampleEncoder->finish();
+    retireFinishedEncoder(std::move(resampleEncoder));
 
     const Transform2d localDeviceFromFilter =
         Transform2d::Scale(geometry->scaleX, geometry->scaleY);
@@ -2405,7 +2438,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         targetExtent(), *frameGpuEncoder);
     configurePathEncoder(*compositeEncoder);
     compositeEncoder->setLoadPreserve();
-    encoder = std::move(compositeEncoder);
+    replaceActiveEncoder(std::move(compositeEncoder));
     updateEncoderScissor();
     if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
       encoder->setTransform(deviceFromLocal);
@@ -5317,6 +5350,7 @@ void RendererGeode::endFrame() {
     impl_->frameFinishedEncoders.clear();
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
+    impl_->frameRetainedFilterResources.clear();
     impl_->frameImportedTextureViews.clear();
     impl_->frameImportedTextures.clear();
     impl_->frameSnapshotImports.clear();
@@ -5618,7 +5652,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
       impl_->importTarget(impl_->target), td.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->layerStack.push_back(std::move(frame));
   // The layer inherits the outer clip stack - reapply it to the new
   // encoder so scissors carry through.
@@ -5638,7 +5672,7 @@ void RendererGeode::popIsolatedLayer() {
   }
   if (impl_->frameRecordingAbandoned) {
     impl_->target = frame.savedTarget;
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
@@ -5698,7 +5732,7 @@ void RendererGeode::popIsolatedLayer() {
           savedTargetHandle, impl_->targetExtent(), *impl_->frameGpuEncoder);
       impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
-      impl_->encoder = std::move(newEncoder);
+      impl_->replaceActiveEncoder(std::move(newEncoder));
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshotHandle,
                                             static_cast<uint32_t>(frame.blendMode), frame.opacity);
@@ -5722,7 +5756,7 @@ void RendererGeode::popIsolatedLayer() {
       impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
   // Same deferred-release rationale as the blend-mode branch above.
@@ -5779,7 +5813,7 @@ void RendererGeode::popFilterLayer() {
     }
     if (frame.savedEncoder) {
       impl_->target = frame.savedTarget;
-      impl_->encoder = std::move(frame.savedEncoder);
+      impl_->replaceActiveEncoder(std::move(frame.savedEncoder));
       impl_->updateEncoderScissor();
     }
     return;
@@ -5790,7 +5824,7 @@ void RendererGeode::popFilterLayer() {
   }
   if (impl_->frameRecordingAbandoned) {
     impl_->target = frame.savedTarget;
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
     impl_->filterExecutionBudget->release(frame.filterReservation);
     return;
@@ -5840,7 +5874,7 @@ void RendererGeode::popFilterLayer() {
       impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
   if (filteredTexture == nullptr) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
@@ -5937,7 +5971,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
       impl_->importTarget(impl_->target), frame.maskDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*captureEncoder);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(captureEncoder);
+  impl_->replaceActiveEncoder(std::move(captureEncoder));
   impl_->maskStack.push_back(std::move(frame));
   impl_->updateEncoderScissor();
 }
@@ -5966,7 +6000,7 @@ void RendererGeode::transitionMaskToContent() {
       impl_->importTarget(impl_->target), frame.contentDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*contentEncoder);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(contentEncoder);
+  impl_->replaceActiveEncoder(std::move(contentEncoder));
   frame.phase = Impl::MaskStackFrame::Phase::Content;
   impl_->updateEncoderScissor();
 }
@@ -5985,7 +6019,7 @@ void RendererGeode::popMask() {
   }
   if (impl_->frameRecordingAbandoned) {
     impl_->target = frame.savedTarget;
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
     impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
     return;
@@ -6004,7 +6038,7 @@ void RendererGeode::popMask() {
       impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
 
   // Lift the raw mask-bounds rect into device-pixel space using the
@@ -6140,7 +6174,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/false);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   // Apply the (now-empty) clip stack so the fresh tile encoder has no scissor.
   impl_->updateEncoderScissor();
 
@@ -6175,7 +6209,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   impl_->clipStack = std::move(frame.savedClipStack);
 
   if (impl_->frameRecordingAbandoned) {
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
     if (frame.tileTexture) impl_->failedRawTextures.push_back(std::move(frame.tileTexture));
@@ -6219,7 +6253,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     // transparent clearValue; call setLoadPreserve() to switch it to
     // LoadOp::Load for the next render pass.
     newEncoder->setLoadPreserve();
-    impl_->encoder = std::move(newEncoder);
+    impl_->replaceActiveEncoder(std::move(newEncoder));
     // Re-apply the active clip stack to the freshly-created encoder.
     // The scissor state lived on the OLD encoder (finished inside
     // beginPatternTile) and doesn't carry over automatically - without
@@ -6229,7 +6263,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     // popIsolatedLayer.
     impl_->updateEncoderScissor();
   } else {
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
   }
 
   impl_->promotePatternTile(frame, forStroke);

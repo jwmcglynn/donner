@@ -188,14 +188,13 @@ public:
    * Uses the provided `sharedCommandEncoder` instead of creating its own.
    * When this overload is used, `finish()` only ends any open render
    * pass - it does NOT finish the CommandEncoder or submit to the
-   * queue. The caller (typically `RendererGeode`) owns the lifetime of
-   * the shared encoder and is responsible for calling
-   * `sharedCommandEncoder.finish()` + `queue.submit()` exactly once at
-   * the end of the frame.
+   * queue. The caller (typically `RendererGeode`) owns the encoder's
+   * lifetime, finishes it into one of the frame's command buffers, and
+   * submits the frame's buffers together.
    *
    * Enables push/pop of isolated layers / filter layers / mask layers
    * without forcing a queue submit per layer boundary - the whole
-   * frame's render passes batch into a single command buffer.
+   * frame's render passes reach the queue as one submission.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,

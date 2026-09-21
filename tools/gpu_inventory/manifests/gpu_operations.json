@@ -446,7 +446,6 @@
         "createTexture",
         "createView",
         "draw",
-        "finish",
         "submit"
       ],
       "wgpuCFunctions": [
@@ -463,9 +462,6 @@
         "WGPUTextureUsage"
       ],
       "wgpuCppTokens": [
-        "CommandBuffer",
-        "CommandEncoder",
-        "CommandEncoderDescriptor",
         "Texture",
         "TextureDescriptor",
         "TextureDimension",
@@ -664,7 +660,6 @@
         "WGPUBufferUsage",
         "WGPUColorWriteMask",
         "WGPUCommandBuffer",
-        "WGPUCommandEncoder",
         "WGPUCompositeAlphaMode",
         "WGPUCompositeAlphaMode_Inherit",
         "WGPUCompositeAlphaMode_Premultiplied",
@@ -708,7 +703,6 @@
         "ColorTargetState",
         "ColorWriteMask",
         "CommandBuffer",
-        "CommandEncoder",
         "CompositeAlphaMode",
         "ComputePassDescriptor",
         "ComputePipeline",
@@ -773,9 +767,6 @@
       "wgpuCFunctions": [
         "wgpuTextureOf",
         "wgpuTextureViewOf"
-      ],
-      "wgpuCTypes": [
-        "WGPUCommandEncoder"
       ],
       "wgpuCppTokens": [
         "BindGroup",
@@ -934,18 +925,6 @@
         "TextureUsage"
       ]
     },
-    "donner/svg/renderer/geode/tests/GeodeFilterEngine_tests.cc": {
-      "operations": [
-        "createCommandEncoder",
-        "createTexture",
-        "finish",
-        "submit"
-      ],
-      "wgpuCppTokens": [
-        "CommandBuffer",
-        "CommandEncoder"
-      ]
-    },
     "donner/svg/renderer/geode/tests/GeodePerf_tests.cc": {
       "operations": [
         "draw"
@@ -1073,7 +1052,6 @@
         "CallbackMode",
         "CommandBuffer",
         "CommandEncoder",
-        "CommandEncoderDescriptor",
         "Default",
         "Extent3D",
         "MapMode",
