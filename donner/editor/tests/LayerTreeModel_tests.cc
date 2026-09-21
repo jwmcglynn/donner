@@ -83,6 +83,49 @@ constexpr std::string_view kVisibilitySvg =
   <rect id="visible" x="40" y="0" width="10" height="10"/>
 </svg>)";
 
+// Ancestor coverage for the two axes. `visibility` inherits, so it is
+// ancestor-aware; `display` does not, so it is element-local.
+constexpr std::string_view kAncestorEyeStateSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <g id="visibilityHiddenGroup" visibility="hidden">
+    <rect id="inheritsHiddenVisibility" x="0" y="0" width="10" height="10"/>
+    <rect id="overridesVisibility" visibility="visible" x="20" y="0" width="10" height="10"/>
+  </g>
+  <g id="displayNoneGroup" display="none">
+    <rect id="childOfDisplayNoneGroup" x="40" y="0" width="10" height="10"/>
+    <rect id="displayInheritInNoneGroup" display="inherit" x="60" y="0" width="10" height="10"/>
+  </g>
+</svg>)";
+
+// Eye-state contract coverage. Each row pairs a `display` source (local
+// attribute, stylesheet rule, or neither) with a `visibility` source, so the
+// two axes can be asserted independently. The uppercase and padded rows pin
+// that the local attribute is resolved the way the style system resolves it
+// rather than compared against the literal "none".
+constexpr std::string_view kEyeStateSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <style>
+    .cssVisibilityHidden { visibility: hidden; }
+    .cssDisplayNone { display: none; }
+    .cssDisplayInline { display: inline; }
+  </style>
+  <rect id="attrVisibilityHidden" display="inline" visibility="hidden"
+        x="0" y="0" width="10" height="10"/>
+  <rect id="cssVisibilityHiddenWithDisplay" class="cssVisibilityHidden" display="inline"
+        x="20" y="0" width="10" height="10"/>
+  <rect id="cssVisibilityHidden" class="cssVisibilityHidden"
+        x="40" y="0" width="10" height="10"/>
+  <rect id="attrDisplayNone" display="none" x="60" y="0" width="10" height="10"/>
+  <rect id="attrDisplayNoneUppercase" display="NONE" x="160" y="0" width="10" height="10"/>
+  <rect id="attrDisplayNonePadded" display=" none " x="180" y="0" width="10" height="10"/>
+  <rect id="cssDisplayNone" class="cssDisplayNone" x="80" y="0" width="10" height="10"/>
+  <rect id="cssDisplayNoneLocalInline" class="cssDisplayNone" display="inline"
+        x="100" y="0" width="10" height="10"/>
+  <rect id="cssDisplayInlineLocalNone" class="cssDisplayInline" display="none"
+        x="120" y="0" width="10" height="10"/>
+  <rect id="plain" x="140" y="0" width="10" height="10"/>
+</svg>)";
+
 constexpr std::string_view kNonRenderableFallbackSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <a id="link"><rect id="linkedRect" x="0" y="0" width="10" height="10"/></a>
@@ -124,6 +167,41 @@ std::vector<std::string> RowNames(const LayerTreeModel& model) {
     names.push_back(row.displayName);
   }
   return names;
+}
+
+// Refresh with every group expanded, so descendant rows are present. Repeats
+// the walk because expanding a row can reveal further collapsed groups (the
+// same multi-pass approach `FindElement` uses).
+void RefreshExpanded(LayerTreeModel& model, EditorApp& app) {
+  for (int pass = 0; pass < 3; ++pass) {
+    model.refresh(app);
+    for (const LayerTreeRow& row : model.rows()) {
+      if (row.hasChildren) {
+        model.setExpanded(row.stableId, true);
+      }
+    }
+  }
+  model.refresh(app);
+}
+
+// Eye state of every row, as "<name>: visible" or "<name>: hidden". A failure
+// prints the whole eye-state table instead of a bare boolean for one row.
+std::vector<std::string> EyeStates(const LayerTreeModel& model) {
+  std::vector<std::string> states;
+  for (const LayerTreeRow& row : model.rows()) {
+    states.push_back(row.displayName + (row.isVisible ? ": visible" : ": hidden"));
+  }
+  return states;
+}
+
+// Eye state of the single row named `name`, in the same "<name>: state" form,
+// or a "<no row>" marker so a missing row is distinguishable from a hidden one.
+std::string EyeStateOf(const LayerTreeModel& model, std::string_view name) {
+  const LayerTreeRow* row = FindRow(model, name);
+  if (row == nullptr) {
+    return std::string(name) + ": <no row>";
+  }
+  return std::string(name) + (row->isVisible ? ": visible" : ": hidden");
 }
 
 // Index of the first row with display name `name`, or -1.
@@ -387,6 +465,147 @@ TEST(LayerTreeModelTest, EyeStateMatchesToggleForCssHiddenElement) {
   EXPECT_TRUE(target->isVisible)
       << "eye state must match what the toggle just wrote (a local display override), not "
          "whatever the stylesheet rule would otherwise compute";
+}
+
+// The eye combines two axes. The `display` axis reads the element's own
+// `display` attribute when it has one (that is what the eye toggle writes) and
+// the cascaded computed `display` otherwise; the `visibility` axis always reads
+// computed style, since the toggle never writes `visibility`. Hidden on either
+// axis closes the eye.
+TEST(LayerTreeModelTest, EyeStateCombinesLocalDisplayWithComputedVisibility) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kEyeStateSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  EXPECT_THAT(
+      EyeStates(model),
+      testing::ElementsAre("attrVisibilityHidden: hidden", "cssVisibilityHiddenWithDisplay: hidden",
+                           "cssVisibilityHidden: hidden", "attrDisplayNone: hidden",
+                           "attrDisplayNoneUppercase: hidden", "attrDisplayNonePadded: hidden",
+                           "cssDisplayNone: hidden", "cssDisplayNoneLocalInline: visible",
+                           "cssDisplayInlineLocalNone: hidden", "plain: visible"));
+}
+
+// The two axes are asymmetric about ancestors because CSS inheritance is.
+// `visibility` inherits, so a row inside a hidden group reads hidden unless it
+// sets `visibility="visible"` itself. `display` does not inherit, so a row
+// inside a `display="none"` group keeps an open eye even though nothing in that
+// group is painted - the eye is element-local on that axis, which is also what
+// the toggle can act on. A local `display="inherit"` names no value of its own,
+// so it falls through to computed display and does read as hidden there.
+TEST(LayerTreeModelTest, EyeStateAncestorAsymmetryFollowsCssInheritance) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kAncestorEyeStateSvg));
+
+  LayerTreeModel model;
+  RefreshExpanded(model, app);
+
+  EXPECT_THAT(EyeStates(model),
+              testing::ElementsAre(
+                  "visibilityHiddenGroup: hidden", "inheritsHiddenVisibility: hidden",
+                  "overridesVisibility: visible", "displayNoneGroup: hidden",
+                  "childOfDisplayNoneGroup: visible", "displayInheritInNoneGroup: hidden"));
+}
+
+// Hide then Show returns the eye to the state it started from and restores the
+// author's `display` value instead of forcing `inline` over it.
+TEST(LayerTreeModelTest, HideShowRoundTripRestoresEyeStateAndAuthorDisplay) {
+  constexpr std::string_view kRoundTripSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect id="authored" display="block" x="0" y="0" width="10" height="10"/>
+  <rect id="plain" x="20" y="0" width="10" height="10"/>
+</svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRoundTripSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+  EXPECT_THAT(EyeStates(model), testing::ElementsAre("authored: visible", "plain: visible"));
+
+  std::optional<svg::SVGElement> authored = FindElement(app, "authored");
+  ASSERT_TRUE(authored.has_value());
+
+  app.setElementVisible(*authored, /*visible=*/false);
+  ASSERT_TRUE(app.flushFrame());
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "authored"), "authored: hidden");
+  EXPECT_EQ(authored->getAttribute("display"), "none");
+
+  app.setElementVisible(*authored, /*visible=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "authored"), "authored: visible");
+  EXPECT_EQ(authored->getAttribute("display"), "block");
+}
+
+// An element hidden by `visibility` is not something the eye toggle can show:
+// Show writes `display`, which leaves the computed `visibility` hide in place,
+// so the eye stays closed across the round trip.
+TEST(LayerTreeModelTest, HideShowRoundTripLeavesVisibilityHiddenElementClosed) {
+  constexpr std::string_view kVisibilityHiddenSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect id="target" visibility="hidden" x="0" y="0" width="10" height="10"/>
+</svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kVisibilityHiddenSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "target"), "target: hidden");
+
+  std::optional<svg::SVGElement> target = FindElement(app, "target");
+  ASSERT_TRUE(target.has_value());
+
+  app.setElementVisible(*target, /*visible=*/false);
+  ASSERT_TRUE(app.flushFrame());
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "target"), "target: hidden");
+  EXPECT_EQ(target->getAttribute("display"), "none");
+
+  app.setElementVisible(*target, /*visible=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "target"), "target: hidden")
+      << "Show writes `display`; it cannot clear a `visibility` hide";
+  EXPECT_EQ(target->getAttribute("display"), "inline");
+}
+
+// When a stylesheet `display` rule outranks the local `display` attribute, the
+// eye reports the local attribute, because that is the value the toggle owns.
+// Hide and Show therefore still round trip even though the stylesheet, not the
+// eye, decides whether the element is painted.
+TEST(LayerTreeModelTest, EyeToggleRoundTripsWhenStylesheetDisplayOutranksLocalAttribute) {
+  constexpr std::string_view kCssOutranksSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <style>.cssDisplayNone { display: none; }</style>
+  <rect id="target" class="cssDisplayNone" display="inline" x="0" y="0" width="10" height="10"/>
+</svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCssOutranksSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "target"), "target: visible");
+
+  std::optional<svg::SVGElement> target = FindElement(app, "target");
+  ASSERT_TRUE(target.has_value());
+
+  app.setElementVisible(*target, /*visible=*/false);
+  ASSERT_TRUE(app.flushFrame());
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "target"), "target: hidden");
+  EXPECT_EQ(target->getAttribute("display"), "none");
+
+  app.setElementVisible(*target, /*visible=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  model.refresh(app);
+  EXPECT_EQ(EyeStateOf(model, "target"), "target: visible");
+  EXPECT_EQ(target->getAttribute("display"), "inline");
 }
 
 TEST(LayerTreeModelTest, LockedRowsReflectAncestorLockState) {

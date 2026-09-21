@@ -1,6 +1,7 @@
 #include "donner/editor/LayerTreeModel.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -8,6 +9,8 @@
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/core/Display.h"
+#include "donner/svg/core/Visibility.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
@@ -171,32 +174,85 @@ std::string BuildDisplayName(const svg::SVGElement& element) {
   return name;
 }
 
+/**
+ * The `display` value the element's own `display` presentation attribute names.
+ *
+ * Resolved through the same presentation-attribute parser the style system
+ * uses, so casing, surrounding whitespace, comments and invalid values are read
+ * back the way the cascade reads them rather than compared as text. The
+ * CSS-wide keywords (`inherit`, `initial`, `unset`) name no value of their own
+ * and are reported as absent, so callers fall through to computed style for
+ * them.
+ *
+ * @param element Element to read the attribute from.
+ * @return The display value named by the local attribute, or `std::nullopt`
+ *   when the element has no `display` attribute or the attribute names no
+ *   concrete value.
+ */
+std::optional<svg::Display> LocalDisplayOverride(const svg::SVGElement& element) {
+  const std::optional<RcString> localDisplay = element.getAttribute("display");
+  if (!localDisplay.has_value()) {
+    return std::nullopt;
+  }
+
+  svg::PropertyRegistry localOnly;
+  if (localOnly.parsePresentationAttribute("display", *localDisplay).hasError()) {
+    return std::nullopt;
+  }
+
+  const svg::Display* value = localOnly.display.getStoredValue();
+  return value != nullptr ? std::optional<svg::Display>(*value) : std::nullopt;
+}
+
+/**
+ * Whether the Layers panel draws an open eye for \p element.
+ *
+ * The eye state is the conjunction of two axes, read from different places
+ * because the eye toggle (`EditorApp::setElementVisible`) writes only the
+ * element's own `display` presentation attribute:
+ *
+ * - `display` comes from the element's own `display` attribute when that
+ *   attribute names a value, and from the cascaded computed `display`
+ *   otherwise. Preferring the local attribute keeps the eye in agreement with
+ *   the value the toggle owns, so Hide followed by Show returns the eye to the
+ *   state it started from even when a stylesheet rule wins the cascade.
+ * - `visibility` always comes from the cascaded computed style, whether it was
+ *   authored as a presentation attribute or as a stylesheet rule. The toggle
+ *   never writes `visibility`, so a local `display` override must not be read
+ *   as a claim that the element is visible.
+ *
+ * Hidden on either axis closes the eye.
+ *
+ * The axes are asymmetric about ancestors because CSS inheritance is.
+ * `visibility` inherits, so a row inside a `visibility="hidden"` group reads
+ * hidden unless it sets `visibility="visible"` itself. `display` does not
+ * inherit, so a row inside a `display="none"` group keeps an open eye even
+ * though nothing in that group is painted; the display axis is element-local,
+ * which is also the only thing the toggle can act on.
+ *
+ * Two consequences are part of the contract the panel presents. An element kept
+ * hidden by a stylesheet `display` rule that outranks its local attribute still
+ * shows an open eye: the eye reports what the toggle controls, not what is
+ * painted, and the toggle keeps round tripping the local attribute. An element
+ * hidden by `visibility` shows a closed eye whose Show action writes `display`
+ * without making the element appear, so the panel keeps offering Show.
+ *
+ * @param element Element the row is built from.
+ * @return True when the panel should draw an open eye for the row.
+ */
 bool IsVisible(const svg::SVGElement& element) {
-  // `EditorApp::setElementVisible` (the Layers panel eye toggle) reads and
-  // writes the element's own `display` presentation attribute directly - not
-  // the cascaded computed style. Check that same local override first so the
-  // eye state agrees with what the toggle actually controls: an element the
-  // user just hid (or showed) reads correctly even if a stylesheet rule with
-  // higher specificity would otherwise win the cascade and make computed
-  // style disagree with the attribute. Only when there is no local `display`
-  // override does this fall back to computed style (which also covers
-  // `visibility`), so an element hidden purely via a stylesheet rule - no
-  // local `display` attribute at all - still shows a closed eye.
-  if (const std::optional<RcString> localDisplay = element.getAttribute("display");
-      localDisplay.has_value()) {
-    return *localDisplay != "none";
+  const std::optional<svg::Display> localDisplay = LocalDisplayOverride(element);
+  if (localDisplay == svg::Display::None) {
+    return false;
   }
 
   const svg::PropertyRegistry& style = element.getComputedStyle();
-  if (const auto display = style.display.get();
-      display.has_value() && *display == svg::Display::None) {
+  if (!localDisplay.has_value() &&
+      style.display.getOr(svg::Display::Inline) == svg::Display::None) {
     return false;
   }
-  if (const auto visibility = style.visibility.get();
-      visibility.has_value() && *visibility != svg::Visibility::Visible) {
-    return false;
-  }
-  return true;
+
+  return style.visibility.getOr(svg::Visibility::Visible) == svg::Visibility::Visible;
 }
 
 bool IsInSelection(const std::vector<svg::SVGElement>& selection, const svg::SVGElement& element) {

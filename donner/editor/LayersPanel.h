@@ -215,6 +215,10 @@ public:
   /// Hide/Show items use). Factored out so the eye-button affordance is
   /// unit-testable without an ImGui frame. No-op for an out-of-range index.
   ///
+  /// The request inverts the row's `LayerTreeRow::isVisible` eye state and is
+  /// carried out by writing the element's own `display` attribute, so it
+  /// cannot reveal an element that computed `visibility` hides.
+  ///
   /// @param app Live editor app the mutation is applied to.
   /// @param rowIndex Index into `rows()`.
   void handleEyeClick(EditorApp& app, std::size_t rowIndex);

@@ -58,7 +58,18 @@ struct LayerTreeRow {
   /// True when this row is currently expanded (only meaningful when
   /// `hasChildren`).
   bool isExpanded = false;
-  /// True when the element is visible (display != none, visibility != hidden).
+  /// The eye state the Layers panel draws for this row, and the value the eye
+  /// toggle inverts. True when the element is shown on both axes: the
+  /// `display` axis, read from the element's own `display` attribute when that
+  /// attribute names a value and from computed style otherwise, and the
+  /// `visibility` axis, always read from computed style. The axes are
+  /// asymmetric about ancestors, following CSS inheritance: `visibility`
+  /// inherits, so a row inside a `visibility="hidden"` group reads hidden
+  /// unless it overrides it, while `display` does not, so a row inside a
+  /// `display="none"` group keeps an open eye. Because the toggle writes only
+  /// `display`, this can report an open eye for an element a higher-priority
+  /// stylesheet `display` rule keeps unpainted, and a closed eye the toggle
+  /// cannot open for an element hidden by `visibility`.
   bool isVisible = true;
   /// True when the element (or one of its ancestors) is locked via the
   /// `data-donner-locked="true"` marker attribute. Locked rows are protected
