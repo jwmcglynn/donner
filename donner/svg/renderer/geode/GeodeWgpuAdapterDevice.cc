@@ -2002,6 +2002,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(
   completionState_->record(nullptr, submissionSerial);
   geodeDevice_.queue().submit(rawCommandBuffers);
   geodeDevice_.countSubmit();
+  geodeDevice_.countCommandBuffers(rawCommandBuffers.size());
 
   completeWhenQueueDrains(submissionSerial);
   return OkStatus();

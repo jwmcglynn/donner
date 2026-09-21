@@ -487,7 +487,10 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
   renderer.popFilterLayer();
 
   EXPECT_THAT(acceptedChunks, testing::Eq(1u));
-  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary))
+      << "a chunk boundary inside a frame closes a command buffer, so losing the device there "
+         "must leave the frame's work unsubmitted";
+  EXPECT_THAT(device->counters()->commandBuffers, testing::Eq(0u));
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
@@ -522,7 +525,10 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
   renderer.popFilterLayer();
 
   EXPECT_THAT(acceptedChunks, testing::Eq(1u));
-  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary))
+      << "a chunk boundary inside a frame closes a command buffer, so losing the device there "
+         "must leave the frame's work unsubmitted";
+  EXPECT_THAT(device->counters()->commandBuffers, testing::Eq(0u));
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
@@ -533,6 +539,67 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterLoss));
   EXPECT_THAT(device->counters()->submits, testing::Eq(submitsAfterLoss));
   renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, FilterChunkBoundaryInsideAFrameClosesBuffersWithoutSubmittingOrWaiting) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  // Armed one-shot: the completion wait a chunk boundary used to force would consume it and
+  // report a hang, which is terminal. Nothing inside a frame may take that wait now, because the
+  // passes on both sides of the boundary belong to one submission and are ordered by it.
+  device->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
+
+  renderer.pushFilterLayer(MultiChunkMorphologyGraph(),
+                           Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse())
+      << "crossing the per-command-buffer pass bound inside a frame must not wait on the queue";
+  EXPECT_THAT(counters->submits, testing::Eq(0u))
+      << "crossing that bound must close a command buffer, not submit one";
+  device->setQueueWaitResultForTesting(std::nullopt);
+
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(counters->submits, testing::Eq(1u));
+  EXPECT_THAT(counters->commandBuffers, testing::Ge(3u))
+      << "the graph's passes must still be spread across several command buffers";
+}
+
+TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  const uint64_t serialBefore = device->adapterDevice().lastSubmittedSerial();
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.injectFilterFrameSuspensionAndRestoreFailureForTesting();
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(counters->submits, testing::Eq(0u));
+  EXPECT_THAT(counters->commandBuffers, testing::Eq(0u));
+  EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(serialBefore))
+      << "an abandoned frame must consume no submission serial";
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
 }
 
@@ -1256,7 +1323,7 @@ TEST_F(RendererGeodeTest, CheckerboardOriginOffsetShiftsTheAnchor) {
   EXPECT_THAT(shiftedNegative.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
 }
 
-TEST_F(RendererGeodeTest, CheckerboardRefusesWhileAnotherFrameOwnsTheDeviceCommandStream) {
+TEST_F(RendererGeodeTest, CheckerboardReachesItsTargetWhileAnotherFrameIsOpen) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.endFrame();
@@ -1264,32 +1331,29 @@ TEST_F(RendererGeodeTest, CheckerboardRefusesWhileAnotherFrameOwnsTheDeviceComma
   const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
   ASSERT_NE(frame, nullptr);
 
-  // A second renderer sharing the device opens a frame. From here until its `endFrame`, that
-  // frame owns the device's command stream: every submission through the shared runtime device
-  // is appended to the frame's command buffer instead of reaching the queue. A checkerboard
-  // spliced in there would neither reach the target now nor land where its caller asked for it.
+  // A second renderer sharing the device opens a frame. What that frame records accumulates in
+  // command buffers of its own, so a submission asked for here is its own command buffer on the
+  // queue rather than a span spliced into someone else's recording.
   RendererGeode other = createRenderer();
   beginFrame(other);
 
-  EXPECT_FALSE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}))
-      << "Drawing while another frame owns the device's command stream must fail, not report "
-         "success for a pass that never reaches the queue";
+  ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
 
   const RendererBitmap duringOtherFrame = frame->takeSnapshot();
   ASSERT_FALSE(duringOtherFrame.empty());
-  EXPECT_THAT(pixelAt(duringOtherFrame, kCheckerCell / 2, kCheckerCell / 2), RgbaEq(0, 0, 0, 0))
-      << "A refused pass must leave the target exactly as it was";
+  EXPECT_THAT(pixelAt(duringOtherFrame, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "An open frame elsewhere on the device must not keep a checkerboard from its target";
 
   other.endFrame();
 
-  // With that frame closed the identical call succeeds and the pixels land, so the refusal is
-  // scoped to the overlap rather than disabling the pass for the rest of the device's life.
+  // The same call after that frame closes behaves identically, so nothing about it depended on
+  // the overlap.
   ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
   const RendererBitmap afterOtherFrame = frame->takeSnapshot();
   ASSERT_FALSE(afterOtherFrame.empty());
   EXPECT_THAT(pixelAt(afterOtherFrame, kCheckerCell / 2, kCheckerCell / 2),
-              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
-      << "Once the device's command stream is free the checkerboard must reach the target";
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
 }
 
 TEST_F(RendererGeodeTest, CheckerboardCellsAreLogicalPixelsNotDevicePixels) {

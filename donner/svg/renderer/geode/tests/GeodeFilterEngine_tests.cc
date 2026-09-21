@@ -733,6 +733,36 @@ TEST_F(GeodeFilterEngineTest, FinalAcceptedChunkLossReturnsNoReusableOutput) {
   EXPECT_THAT(allocator.reissued, testing::IsEmpty());
 }
 
+TEST_F(GeodeFilterEngineTest, StandaloneExecutionSubmitsEveryChunkOnItsOwn) {
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  std::vector<size_t> acceptedChunks;
+  engine_->setChunkSubmittedHookForTesting([&](size_t chunk) { acceptedChunks.push_back(chunk); });
+
+  // 65 passes cross the bound on one command buffer once, so two chunks close. With no frame
+  // collecting them, each one is a submission of its own and its work reaches the queue there.
+  EXPECT_THAT(engine_->recordPassesForTesting(65, allocator), testing::IsTrue());
+
+  device_->setCounters(nullptr);
+  EXPECT_THAT(acceptedChunks, testing::ElementsAre(1u, 2u));
+  EXPECT_THAT(counters.submits, testing::Eq(2u));
+  EXPECT_THAT(counters.commandBuffers, testing::Eq(2u));
+}
+
+TEST_F(GeodeFilterEngineTest, StandaloneChunkBoundaryStillForcesTheCompletionWait) {
+  if (!device_->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  device_->setQueueWaitResultForTesting(GpuWaitResult::TimedOut);
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+
+  // The pass that samples what the submitted chunk wrote is in the next submission, which the
+  // automatic cross-submit barrier does not order against on hardware Vulkan, so the boundary
+  // must still wait the submitted work out.
+  EXPECT_THAT(engine_->recordPassesForTesting(65, allocator), testing::IsFalse());
+
+  EXPECT_THAT(device_->isDeviceLost(), testing::IsTrue());
+}
+
 TEST_F(GeodeFilterEngineTest, VulkanFinalChunkTimeoutRetainsEveryAcceptedTexture) {
   if (!device_->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
   device_->setQueueWaitResultForTesting(GpuWaitResult::TimedOut);

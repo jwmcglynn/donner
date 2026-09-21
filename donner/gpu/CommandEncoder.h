@@ -303,6 +303,12 @@ public:
    */
   Result<CommandBuffer> finish();
 
+  /// Commands recorded so far. A caller splitting one frame across several command buffers reads
+  /// it to leave an encoder that has recorded nothing open: finishing it would spend one of the
+  /// submission's \ref Device::kMaxCommandBuffersPerSubmission slots on a buffer with no work in
+  /// it.
+  size_t recordedCommandCount() const { return commands_.size(); }
+
 private:
   friend class Device;
   friend class RenderPassEncoder;

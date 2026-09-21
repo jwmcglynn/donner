@@ -1716,6 +1716,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!commands) return {};
     device->queue().submit(1, &commands.get());
     device->countSubmit();
+    device->countCommandBuffers(1);
     device->adapterDevice().notifyHostSubmitted(expected);
     frameFinishedEncoders.clear();
     frameGpuEncoders.clear();
@@ -2109,6 +2110,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     device->queue().submit(1, &commandBuffer.get());
     device->countSubmit();
+    device->countCommandBuffers(1);
     closeFrameGpuEncoderAfterSubmit();
 
     frameFinishedEncoders.clear();
@@ -5382,6 +5384,7 @@ void RendererGeode::endFrame() {
           impl_->frameCommandEncoder.get().finish());
       impl_->device->queue().submit(1, &cmdBuf.get());
       impl_->device->countSubmit();
+      impl_->device->countCommandBuffers(1);
     }
     impl_->closeFrameGpuEncoderAfterSubmit();
     impl_->frameCommandEncoder.reset();
