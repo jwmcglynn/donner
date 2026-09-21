@@ -9,6 +9,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import coverage_instrumentable_targets as mod
 
+# The build-configuration guard tests emitted by
+# donner/editor/editor_product_dependency_tests.bzl, as
+# `bazel query --output label_kind` reports them.
+_GUARD_TEST_LINES = [
+    "_guard_accepts_full_text_test rule "
+    "//donner/editor/tests:editor_guard_accepts_full_text_test",
+    "_guard_rejects_basic_test rule "
+    "//donner/editor/tests:editor_guard_rejects_basic_test",
+    "_guard_rejects_no_text_test rule "
+    "//donner/editor/tests:editor_guard_rejects_no_text_test",
+    "_guard_rejects_text_full_without_text_test rule "
+    "//donner/editor/tests:editor_guard_rejects_text_full_without_text_test",
+]
+
 
 class ClassifyTest(unittest.TestCase):
     def test_docs_and_tools_only_is_not_instrumentable(self):
@@ -162,6 +176,64 @@ class ClassifyTest(unittest.TestCase):
         result = mod.classify(lines)
         self.assertTrue(result.instrumentable_present)
         self.assertEqual(result.instrumentable, ["//donner/svg:mystery"])
+
+    def test_configuration_guard_tests_alone_do_not_force_a_coverage_run(self):
+        # Observed coverage-lane failure: on a change confined to the editor
+        # test package the classifier reported `total=49 instrumentable=4`, the
+        # four being the text-configuration guards below. `bazel query --output
+        # label_kind` reports them under their Starlark rule names, which the
+        # classifier did not recognize, so `bazel coverage` ran over a set that
+        # compiles nothing and the report check failed with "Coverage report
+        # has no executable line data (records=896, source_files=896, DA=0,
+        # LF=0, LH=0)" - a red no rerun can clear. The sh_test labels here are
+        # synthetic stand-ins for the other 45 targets in that set, whose kinds
+        # the classifier already recognized.
+        audits = [
+            f"sh_test rule //donner/editor/tests:editor_audit_{index}_dependency_test"
+            for index in range(45)
+        ]
+        result = mod.classify(audits + _GUARD_TEST_LINES)
+        self.assertEqual(result.total, 49)
+        self.assertEqual(result.instrumentable, [])
+        self.assertFalse(result.instrumentable_present)
+
+    def test_configuration_guard_tests_never_mask_a_real_cpp_test(self):
+        # The guard-rule exemption must not weaken the empty-report guard for
+        # an affected set that also compiles C++.
+        result = mod.classify(
+            _GUARD_TEST_LINES + ["cc_test rule //donner/editor/tests:editor_shell_tests"]
+        )
+        self.assertEqual(
+            result.instrumentable, ["//donner/editor/tests:editor_shell_tests"]
+        )
+        self.assertTrue(result.instrumentable_present)
+
+    def test_any_kind_following_the_guard_convention_is_exempt(self):
+        # The exemption applies to the naming convention, not to the four rules
+        # that carry it today, so a guard added later needs no edit here. The
+        # cost is stated where the convention is defined: a rule that compiles
+        # or wraps C/C++ must not take the name.
+        result = mod.classify(
+            ["_guard_future_backend_test rule //donner/editor/tests:future_guard"]
+        )
+        self.assertEqual(result.instrumentable, [])
+        self.assertFalse(result.instrumentable_present)
+
+    def test_guard_kind_lookalikes_still_fail_closed(self):
+        # The exemption is anchored at both ends of the rule kind, so a kind
+        # outside the guard naming convention keeps forcing a coverage run.
+        for kind in (
+            "guard_rejects_basic_test",
+            "_guardian_cc_test",
+            "_guard_rejects_basic",
+            "_donner_guard_cc_test",
+        ):
+            with self.subTest(kind=kind):
+                result = mod.classify([f"{kind} rule //donner/editor/tests:lookalike"])
+                self.assertEqual(
+                    result.instrumentable, ["//donner/editor/tests:lookalike"]
+                )
+                self.assertTrue(result.instrumentable_present)
 
     def test_alias_only_set_is_instrumentable(self):
         # Regression: a BUILD-only change whose affected set is a single alias

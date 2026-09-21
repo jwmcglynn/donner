@@ -1,4 +1,4 @@
-"""Replays the coverage lane's three target-selection failures.
+"""Replays the coverage lane's target-selection and kind-classification failures.
 
 The coverage lane picks a PR target subset and then decides whether that subset
 is worth instrumenting. Three production failures came from taking that decision
@@ -22,12 +22,18 @@ at three different pipeline stages, each about a DIFFERENT set than the one
 All three end the same way: coverage runs, every target is dropped or produces
 no data, and the lane dies on an empty/absent report that no rerun can clear.
 
+A fourth failure ends the same way from a different cause. The set was the right
+one and every member was host-compatible, but its only unrecognized members were
+`analysistest.make` build-configuration guards, which compile nothing: the
+decision was taken at the right stage with incomplete KIND knowledge rather than
+about the wrong set.
+
 These tests exercise the CONSOLIDATED decision as it exists in coverage.yml --
 the shell function is extracted from the workflow and run against the real
 classifier, with `bazelisk cquery` stubbed to return each incident's recorded
-compatibility answer. They also pin the shape that makes a fourth sibling
-impossible: exactly one classifier call, exactly one cquery, both after every
-narrowing step.
+compatibility answer. They also pin the shape that makes a fourth WRONG-SET
+sibling impossible: exactly one classifier call, exactly one cquery, both after
+every narrowing step.
 """
 
 import os
@@ -219,6 +225,56 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
                     ],
                 )
                 self.assertEqual("run", verdict)
+
+    def test_build_configuration_guard_tests_skip(self):
+        """A host-compatible analysis test is judged by kind, not by the cquery.
+
+        The editor's text-configuration guards are `analysistest.make` rules:
+        they run a generated script on the host, so the cquery reports them
+        HOST_COMPATIBLE, and only the kind classification can tell that they
+        compile nothing. Before the guard kinds were recognized a set like this
+        one resolved to `run`, `bazel coverage` measured nothing, and the lane
+        died on an empty report.
+        """
+        guards = {
+            "_guard_accepts_full_text_test": (
+                "//donner/editor/tests:editor_guard_accepts_full_text_test"
+            ),
+            "_guard_rejects_basic_test": (
+                "//donner/editor/tests:editor_guard_rejects_basic_test"
+            ),
+            "_guard_rejects_no_text_test": (
+                "//donner/editor/tests:editor_guard_rejects_no_text_test"
+            ),
+            "_guard_rejects_text_full_without_text_test": (
+                "//donner/editor/tests:editor_guard_rejects_text_full_without_text_test"
+            ),
+        }
+        audit = "//donner/editor/tests:editor_native_basic_dependency_test"
+        labels = [*guards.values(), audit]
+        verdict = self._decide(
+            label_kinds=[
+                *(f"{kind} rule {label}" for kind, label in guards.items()),
+                f"sh_test rule {audit}",
+            ],
+            final_targets=labels,
+            host_compat=[f"@@{label} HOST_COMPATIBLE" for label in labels],
+        )
+        self.assertEqual("skip", verdict)
+
+    def test_a_guard_test_never_cancels_a_real_cpp_test(self):
+        """A guard in the set must not turn a real cc_test's verdict into skip."""
+        native = "//donner/editor/tests:editor_shell_tests"
+        guard = "//donner/editor/tests:editor_guard_rejects_basic_test"
+        verdict = self._decide(
+            label_kinds=[
+                f"_guard_rejects_basic_test rule {guard}",
+                f"cc_test rule {native}",
+            ],
+            final_targets=[guard, native],
+            host_compat=[f"@@{guard} HOST_COMPATIBLE", f"@@{native} HOST_COMPATIBLE"],
+        )
+        self.assertEqual("run", verdict)
 
     def test_incident_one_py_test_only_survivor_skips(self):
         """The manual-tagged cc_test is not in the final list, so it cannot vote."""
