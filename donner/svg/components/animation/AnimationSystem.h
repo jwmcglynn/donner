@@ -32,6 +32,21 @@ public:
    */
   void advance(Registry& registry, double documentTime,
                std::vector<ParseDiagnostic>* outWarnings = nullptr);
+
+  /**
+   * Return true when any animation element targets \p targetEntity.
+   *
+   * An animation targets the entity named by its `href`, or its own parent when `href` is absent,
+   * so a container holding an animation element is a target without naming itself anywhere.
+   * Resolved targets are read from \ref AnimationStateComponent where \ref advance has already
+   * computed them, and resolved the same way as \ref advance where it has not, so the answer does
+   * not depend on whether the document has been advanced yet.
+   *
+   * @param registry The ECS registry.
+   * @param targetEntity Entity to test.
+   * @return True when an animation element targets \p targetEntity.
+   */
+  bool isAnimationTarget(Registry& registry, Entity targetEntity) const;
 };
 
 }  // namespace donner::svg::components

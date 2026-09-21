@@ -15,11 +15,13 @@
 #include "donner/editor/LockState.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/ElementType.h"
+#include "donner/svg/SVGAnimationQuery.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -700,6 +702,16 @@ std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std
   return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
 }
 
+/// Whether @p value points at @p id, as a `url(#id)` occurrence or a whole-value `#id` href
+/// target. Rewriting the id to itself reports the reference without changing the value.
+bool ValueReferencesId(std::string_view value, std::string_view id) {
+  if (value.find('#') == std::string_view::npos) {
+    return false;  // Both reference forms contain a '#'; skip the rewrite for the common case.
+  }
+
+  return RewriteIdReferenceInValue(value, id, id).has_value();
+}
+
 /// Rewrite `#oldId` CSS id tokens to `#newId` inside a `<style>` element's
 /// text content, in the positions where a `#token` can actually reference the
 /// element: id selectors (selector preludes, including inside conditional
@@ -838,11 +850,44 @@ bool ArrangeElementPaints(const svg::SVGElement& element) {
   }
 }
 
-/// A `<g>` a child can be lifted out of without changing how it paints: it
-/// carries only structural attributes (an `id` and the editor lock marker).
-/// Any transform, paint, style/class, clip/mask/filter, opacity, or visibility
-/// attribute means the child inherits state from the group, so lifting it out
-/// would silently change the rendering - we refuse to cross such a group.
+/// Whether any element in the document under @p root points at one of @p ids through an
+/// attribute, such as `<use href="#layer">`. A reference to a group makes the group's child list
+/// observable somewhere else in the document.
+bool AnyElementReferencesId(const svg::SVGElement& root, std::span<const RcString> ids) {
+  std::vector<svg::SVGElement> all;
+  CollectElements(root, all);
+  for (const svg::SVGElement& element : all) {
+    for (const xml::XMLQualifiedNameRef& attrName : element.attributes()) {
+      const std::optional<RcString> value = element.getAttribute(attrName);
+      if (!value.has_value() || value->str().find('#') == std::string_view::npos) {
+        continue;  // One scan per value decides it for every id.
+      }
+
+      for (const RcString& id : ids) {
+        if (ValueReferencesId(value->str(), id.str())) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/// Whether an author stylesheet rule styles @p element. The user agent stylesheet is excluded: it
+/// applies to every document and carries no author intent.
+bool HasAuthorStyleRule(const svg::SVGElement& element) {
+  const std::vector<svg::SVGMatchedStyleRule> rules = svg::CollectMatchedStyleRules(element);
+  return std::any_of(rules.begin(), rules.end(), [](const svg::SVGMatchedStyleRule& rule) {
+    return !rule.isUserAgentStylesheet;
+  });
+}
+
+/// A `<g>` whose attributes alone say a child can be lifted out of it: it carries only structural
+/// attributes (an `id` and the editor lock marker). Any transform, paint, style/class,
+/// clip/mask/filter, opacity, or visibility attribute means the child inherits state from the
+/// group, so lifting it out would silently change the rendering - we refuse to cross such a group.
+/// The `id` is only structural once \ref CanLiftToRoot establishes that nothing depends on it.
 bool IsLiftableStructuralGroup(const svg::SVGElement& element) {
   if (element.tryType() != svg::ElementType::G) {
     return false;
@@ -860,18 +905,51 @@ bool IsLiftableStructuralGroup(const svg::SVGElement& element) {
   return true;
 }
 
-/// Whether @p element can be losslessly lifted out to @p root: every ancestor
-/// strictly between it and the root is a liftable structural `<g>`, and the
-/// chain terminates at the root.
-bool CanLiftToRoot(const svg::SVGElement& element, const svg::SVGElement& root) {
+/// Whether @p element can be losslessly lifted out to @p root: every ancestor strictly between it
+/// and the root is a `<g>` that nothing in @p document depends on, and the chain terminates at the
+/// root.
+///
+/// Ancestry independence has to be established, not assumed, so every crossed group must pass all
+/// of these:
+/// - It carries structural attributes only (`id` and the editor lock marker), so the child
+///   inherits no transform, paint, clip, opacity, or visibility from it.
+/// - No author stylesheet rule styles it: `#layer { opacity: 0.5 }` is inherited state that lives
+///   in the stylesheet rather than on the element.
+/// - Nothing references its id from an attribute, since a `<use>` instance of the group renders
+///   whichever children the group holds.
+/// - No animation targets it, since an animation element inside the group animates the group by
+///   default and a child moved out stops inheriting the animated value.
+///
+/// One document-wide condition applies on top of those: no author selector may match on tree
+/// position, because `#layer rect` stops matching the moment the child leaves `#layer` and
+/// `svg > rect` starts matching the moment it arrives at the root.
+///
+/// Known limits: a `url(#id)` reference written inside a `<style>` rule is not counted, since a
+/// `<g>` is not a valid CSS resource target; and the selector test fails closed on pseudo-classes
+/// it does not recognize, so such a document keeps every arrange operation inside the parent.
+bool CanLiftToRoot(const svg::SVGDocument& document, const svg::SVGElement& element,
+                   const svg::SVGElement& root) {
+  std::vector<RcString> crossedGroupIds;
   std::optional<svg::SVGElement> cur = element.parentElement();
   while (cur.has_value() && *cur != root) {
-    if (!IsLiftableStructuralGroup(*cur)) {
+    if (!IsLiftableStructuralGroup(*cur) || HasAuthorStyleRule(*cur) ||
+        svg::IsAnimationTarget(*cur)) {
       return false;
+    }
+    if (const RcString id = cur->id(); !id.empty()) {
+      crossedGroupIds.push_back(id);
     }
     cur = cur->parentElement();
   }
-  return cur.has_value() && *cur == root;
+
+  if (!cur.has_value() || *cur != root) {
+    return false;
+  }
+  if (svg::AuthorStyleDependsOnTreePosition(document)) {
+    return false;
+  }
+
+  return crossedGroupIds.empty() || !AnyElementReferencesId(document.svgElement(), crossedGroupIds);
 }
 
 /// Whether any painting element is stacked after @p element anywhere in the
@@ -1170,16 +1248,16 @@ bool EditorApp::reorderSelectedElement(ZOrder direction) {
   // Tree-aware Bring to Front / Send to Back. A naive sibling swap only reaches
   // the front/back of the element's *own* group, so for a nested element "Bring
   // to Front" appeared to do nothing (or left it behind other groups) - the
-  // "does not do what it says" report. When the element is nested inside
-  // purely-structural groups, lift it out to the document root so it lands at
-  // the absolute front/back of the whole paint-order tree. We only lift when it
-  // is visually lossless (every crossed group carries nothing but id/lock, so
-  // the child inherits no transform, paint, clip, or opacity from it);
+  // "does not do what it says" report. When the element is nested inside groups
+  // that nothing depends on, lift it out to the document root so it lands at
+  // the absolute front/back of the whole paint-order tree. We only lift when
+  // `CanLiftToRoot` establishes that the crossed groups contribute no inherited
+  // state and that no stylesheet selector or reference observes the ancestry;
   // otherwise we fall through to the within-parent sibling reorder below, which
-  // never changes how the element paints.
+  // never moves the element across an ancestor.
   const svg::SVGElement root = editingScope_.value_or(document_.document().svgElement());
   if (parent != root && (direction == ZOrder::BringToFront || direction == ZOrder::SendToBack) &&
-      CanLiftToRoot(element, root)) {
+      CanLiftToRoot(document_.document(), element, root)) {
     if (direction == ZOrder::BringToFront) {
       if (!HasLaterPaintingElement(element, root)) {
         return false;  // Already the front-most painted element in the document.

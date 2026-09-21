@@ -637,6 +637,17 @@ std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
       "transform", interpolateTransformValue(progress, *transformComp)};
 }
 
+/// The `href` of an animation element, taken from whichever animation component carries it.
+const std::optional<std::string>& AnimationHref(Registry& registry, Entity entity) {
+  if (const auto* setComp = registry.try_get<SetAnimationComponent>(entity)) {
+    return setComp->href;
+  }
+  if (const auto* valueComp = registry.try_get<AnimateValueComponent>(entity)) {
+    return valueComp->href;
+  }
+  return registry.get<AnimateTransformComponent>(entity).href;
+}
+
 bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
                       AnimationResourceBudget& resourceBudget) {
   const auto& timing = registry.get<AnimationTimingComponent>(entity);
@@ -649,9 +660,8 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
     return false;
   }
   if (state.targetEntity == entt::null) {
-    const std::optional<std::string>& href =
-        setComp ? setComp->href : (valueComp ? valueComp->href : transformComp->href);
-    state.targetEntity = resolveTargetByHrefOrParent(registry, entity, href);
+    state.targetEntity =
+        resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
   }
   computeTimingState(state, timing, documentTime, /*isSetElement=*/setComp != nullptr);
   if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
@@ -689,6 +699,25 @@ std::vector<Entity> CollectAnimationEntities(Registry& registry) {
 }
 
 }  // namespace
+
+bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity) const {
+  if (targetEntity == entt::null) {
+    return false;
+  }
+
+  for (const Entity entity : CollectAnimationEntities(registry)) {
+    const auto* state = registry.try_get<AnimationStateComponent>(entity);
+    const Entity resolved =
+        (state != nullptr && state->targetEntity != entt::null)
+            ? state->targetEntity
+            : resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
+    if (resolved == targetEntity) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 void AnimationSystem::advance(Registry& registry, double documentTime,
                               std::vector<ParseDiagnostic>* /*outWarnings*/) {

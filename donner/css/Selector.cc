@@ -1,6 +1,7 @@
 #include "donner/css/Selector.h"
 
 #include <algorithm>
+#include <array>
 
 namespace donner::css {
 
@@ -36,11 +37,72 @@ void CollectAttributeNames(const Selector& selector, std::vector<RcString>& outN
   }
 }
 
+bool SelectorDependsOnTreePosition(const Selector& selector);
+
+/// Whether a pseudo-class matches on element state alone, so that moving the element cannot change
+/// whether it matches. Any name not listed here is treated as tree-positional, so an unrecognized
+/// or newly-specified pseudo-class fails closed.
+bool IsElementLocalPseudoClass(const RcString& ident) {
+  static constexpr std::array<std::string_view, 12> kElementLocalPseudoClasses = {
+      "hover", "focus",  "focus-visible", "active",   "link",    "visited",
+      "lang",  "target", "any-link",      "disabled", "enabled", "checked",
+  };
+
+  return std::any_of(
+      kElementLocalPseudoClasses.begin(), kElementLocalPseudoClasses.end(),
+      [&ident](std::string_view candidate) { return ident.equalsLowercase(candidate); });
+}
+
+bool PseudoClassDependsOnTreePosition(const PseudoClassSelector& pseudoClass) {
+  // `:is()`, `:not()` and `:where()` are as positional as the selectors inside them.
+  if (pseudoClass.ident.equalsLowercase("is") || pseudoClass.ident.equalsLowercase("not") ||
+      pseudoClass.ident.equalsLowercase("where")) {
+    return pseudoClass.selector && SelectorDependsOnTreePosition(*pseudoClass.selector);
+  }
+
+  return !IsElementLocalPseudoClass(pseudoClass.ident);
+}
+
+bool CompoundDependsOnTreePosition(const CompoundSelector& compound) {
+  return std::any_of(
+      compound.entries.begin(), compound.entries.end(), [](const CompoundSelector::Entry& entry) {
+        const auto* pseudoClass = std::get_if<PseudoClassSelector>(&entry);
+        return pseudoClass != nullptr && PseudoClassDependsOnTreePosition(*pseudoClass);
+      });
+}
+
+bool SelectorDependsOnTreePosition(const Selector& selector) {
+  for (const ComplexSelector& complexSelector : selector.entries) {
+    if (complexSelector.entries.size() > 1) {
+      return true;  // A combinator matches on ancestors or siblings.
+    }
+    // A relative selector such as `> div` is matched against a reference element, so it is
+    // positional even with a single compound. A regular selector list stores Descendant here,
+    // where the leading combinator has no effect.
+    if (!complexSelector.entries.empty() &&
+        complexSelector.entries.front().combinator != Combinator::Descendant) {
+      return true;
+    }
+
+    for (const ComplexSelector::Entry& entry : complexSelector.entries) {
+      if (CompoundDependsOnTreePosition(entry.compoundSelector)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 }  // namespace
 
 void Selector::collectAttributeSelectorNames(std::vector<RcString>& outNames,
                                              bool& outMatchesAnyName) const {
   CollectAttributeNames(*this, outNames, outMatchesAnyName);
+}
+
+bool Selector::dependsOnTreePosition() const {
+  return SelectorDependsOnTreePosition(*this);
 }
 
 Selector::Selector() = default;

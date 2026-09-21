@@ -35,6 +35,16 @@ protected:
     return maybeSelector.result().matches(element).matched;
   }
 
+  bool dependsOnTreePosition(std::string_view selector) {
+    auto maybeSelector = SelectorParser::Parse(selector);
+    EXPECT_THAT(maybeSelector, NoParseError());
+    if (maybeSelector.hasError()) {
+      return false;
+    }
+
+    return maybeSelector.result().dependsOnTreePosition();
+  }
+
   bool doesNotMatch(std::string_view selector, const FakeElement& element) {
     auto maybeSelector = SelectorParser::Parse(selector);
     EXPECT_THAT(maybeSelector, NoParseError());
@@ -692,6 +702,48 @@ TEST_F(SelectorTests, PseudoClassSelectorValidityCoversAnbFunctionNames) {
   invalidAnbFunction.argsIfFunction.emplace();
   invalidAnbFunction.anbValueIfAnb = AnbValue{2, 1};
   EXPECT_FALSE(invalidAnbFunction.isValid());
+}
+
+TEST_F(SelectorTests, DependsOnTreePosition) {
+  EXPECT_FALSE(dependsOnTreePosition("rect"));
+  EXPECT_FALSE(dependsOnTreePosition("#layer"));
+  EXPECT_FALSE(dependsOnTreePosition(".cls"));
+  EXPECT_FALSE(dependsOnTreePosition("rect#r1.cls[fill]"));
+  EXPECT_FALSE(dependsOnTreePosition("rect, circle, #layer"));
+
+  // Combinators match on ancestors or siblings.
+  EXPECT_TRUE(dependsOnTreePosition("#layer rect"));
+  EXPECT_TRUE(dependsOnTreePosition("svg > rect"));
+  EXPECT_TRUE(dependsOnTreePosition("rect + rect"));
+  EXPECT_TRUE(dependsOnTreePosition("rect ~ circle"));
+  EXPECT_TRUE(dependsOnTreePosition("rect, #layer circle")) << "any entry in the list counts";
+
+  // Structural pseudo-classes match on the element's place among its siblings.
+  EXPECT_TRUE(dependsOnTreePosition("rect:first-child"));
+  EXPECT_TRUE(dependsOnTreePosition(":nth-child(2)"));
+  EXPECT_TRUE(dependsOnTreePosition("g:empty"));
+  EXPECT_TRUE(dependsOnTreePosition(":root"));
+
+  EXPECT_TRUE(dependsOnTreePosition(":scope"));
+  EXPECT_TRUE(dependsOnTreePosition("rect:focus-within"));
+  EXPECT_TRUE(dependsOnTreePosition("g:has(> rect)"));
+
+  // State pseudo-classes and pseudo-elements match on the element alone.
+  EXPECT_FALSE(dependsOnTreePosition("rect:hover"));
+  EXPECT_FALSE(dependsOnTreePosition("a:visited"));
+  EXPECT_FALSE(dependsOnTreePosition("a:any-link"));
+  EXPECT_FALSE(dependsOnTreePosition("rect:lang(en)"));
+  EXPECT_FALSE(dependsOnTreePosition("rect::before"));
+
+  // `:is()`, `:not()` and `:where()` inherit the answer from the selectors inside them.
+  EXPECT_FALSE(dependsOnTreePosition("rect:not(.cls)"));
+  EXPECT_FALSE(dependsOnTreePosition("rect:is(.cls, #layer)"));
+  EXPECT_TRUE(dependsOnTreePosition("rect:not(#layer circle)"));
+  EXPECT_TRUE(dependsOnTreePosition("rect:is(circle, :first-child)"));
+  EXPECT_TRUE(dependsOnTreePosition("rect:where(#layer > circle)"));
+
+  // An unrecognized pseudo-class fails closed.
+  EXPECT_TRUE(dependsOnTreePosition("rect:future-pseudo-class"));
 }
 
 TEST_F(SelectorTests, Specificity) {

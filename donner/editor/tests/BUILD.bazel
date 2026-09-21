@@ -820,6 +820,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_zorder_style_dependency_tests",
+    srcs = ["EditorZOrderStyleDependency_tests.cc"],
+    renderer_backend = "tiny_skia",
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:editor_app",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "sidebar_presenter_tests",
     srcs = ["SidebarPresenter_tests.cc"],
     deps = [
