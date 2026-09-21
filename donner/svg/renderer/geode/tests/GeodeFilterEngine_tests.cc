@@ -507,24 +507,57 @@ TEST_F(GeodeFilterEngineTest, ShortExecutionsShareOneFrameCommandBufferBound) {
   RotatingHostEncoder host(*device_);
   ASSERT_THAT(host.installed(), testing::IsTrue());
   RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  size_t reportedChunks = 0;
+  engine_->setChunkSubmittedHookForTesting([&](size_t) { ++reportedChunks; });
 
   // Every execution stays far below the chunk bound on its own, but their passes all land in the
   // one host frame command buffer, so the third crosses the bound at pass 65 of the frame.
   for (size_t execution = 1; execution <= 3; ++execution) {
     SCOPED_TRACE(execution);
-    EXPECT_THAT(engine_->recordPassesForTesting(32, allocator, host.lease()), testing::IsTrue());
+    ASSERT_THAT(engine_->recordPassesForTesting(32, allocator, host.lease()), testing::IsTrue());
     EXPECT_THAT(host.rotations(), testing::Eq(execution < 3 ? 0u : 1u))
         << "after " << (execution * 32) << " filter passes in one frame";
   }
+  EXPECT_THAT(reportedChunks, testing::Eq(0u))
+      << "the rotation carried only earlier executions' passes, so no execution here has had a "
+         "chunk of its own accepted and none may report one";
 
   // A new frame restarts the count on the same host command encoder: 33 further passes would
-  // cross the bound if the 32 already recorded still counted, and must not once they do not.
+  // cross the bound if the 32 already recorded still counted, and must not once they do not. The
+  // renderer always replaces the frame command encoder before beginning a frame, so reusing it
+  // here is what isolates the reset.
   engine_->beginFrame();
   EXPECT_THAT(engine_->recordPassesForTesting(33, allocator, host.lease()), testing::IsTrue());
   EXPECT_THAT(host.rotations(), testing::Eq(1u))
       << "33 filter passes in a fresh frame must batch below the bound";
 
   host.submitAndRelease();
+}
+
+TEST_F(GeodeFilterEngineTest, AStaleLeaseCountsNoPassesOfTheBufferItNoLongerNames) {
+  engine_->beginFrame();
+  RotatingHostEncoder host(*device_);
+  ASSERT_THAT(host.installed(), testing::IsTrue());
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  ASSERT_THAT(engine_->recordPassesForTesting(64, allocator, host.lease()), testing::IsTrue());
+  const GeodeWgpuAdapterDevice::HostEncoderLease staleLease = host.lease();
+
+  // A second renderer installing its own frame command encoder leaves the first lease stale. The
+  // count still describes the first renderer's buffer, which an execution holding that lease can
+  // neither fill nor close, so it must fail alone rather than take the device down with it.
+  RotatingHostEncoder foreign(*device_);
+  ASSERT_THAT(foreign.installed(), testing::IsTrue());
+
+  EXPECT_THAT(engine_->recordPassesForTesting(1, allocator, staleLease), testing::IsFalse());
+
+  EXPECT_THAT(device_->isDeviceLost(), testing::IsFalse())
+      << "a stale lease must fail its own execution, not rotate a command buffer it does not "
+         "hold";
+  EXPECT_THAT(foreign.rotations(), testing::Eq(0u));
+  // The first renderer's command buffer is still open and nothing here can submit it, which is
+  // what abandoning a frame looks like from the runtime's side.
+  EXPECT_THAT(device_->adapterDevice().notifyHostDiscarded(staleLease), testing::IsTrue());
+  foreign.submitAndRelease();
 }
 
 TEST_F(GeodeFilterEngineTest, ASubmittedFrameCommandBufferNoLongerCountsAgainstTheBound) {
