@@ -1189,8 +1189,8 @@ TEST_F(RendererRegressionTests, VisibleSpanInsideHiddenTextRootStillPaints) {
   const RendererBitmap expected = RenderDocumentWithBackend(visibleRoot, ActiveRendererBackend());
   const RendererBitmap inherited = RenderDocumentWithBackend(noOverride, ActiveRendererBackend());
   const RendererBitmap blank = RenderDocumentWithBackend(noText, ActiveRendererBackend());
-  ASSERT_THAT(actual.empty(), testing::IsFalse());
-  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.empty(), testing::IsFalse()) << "the hidden-root document rendered nothing";
+  ASSERT_THAT(expected.empty(), testing::IsFalse()) << "the visible-root document rendered nothing";
 
   // The span paints at all, so the comparison below cannot hold with nothing painted on either
   // side.

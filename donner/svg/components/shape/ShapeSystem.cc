@@ -347,15 +347,7 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
 #endif
   };
 
-  if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
-    overallBounds = computedPath->transformedBounds(
-        LayoutSystem().getEntityFromWorldTransform(handle) * worldFromTarget);
-  }
-  accumulateTextBounds(handle);
-
-  // Accumulate the rest of the subtree. The walk visits `handle` again ahead of its descendants,
-  // which changes nothing because the accumulation above is idempotent under union. `display: none`
+  // Accumulate `handle` and its descendants; the walk visits `handle` itself first. `display: none`
   // removes an element and its whole subtree from the rendering tree, so a hidden element prunes:
   // skipping only the element itself would still let its descendants widen the box.
   donner::components::ForAllChildrenRecursivePruned(

@@ -482,6 +482,11 @@ public:
    * carry \ref RenderingBehavior::NoTraverseChildren, and the instance of a span that declared
    * `clip-path`, `mask` or `filter`, which paints every span in its own subtree.
    *
+   * A shadow entity never carries \ref TextRootComponent, so the test is on the data handle: a
+   * `<use>` copy of a text element keeps its data on the light entity. `TextRootComponent` and
+   * `ComputedTextComponent` mark the same entities, since the text system emplaces the computed
+   * component only on a text root, and the draw side selects on the computed one.
+   *
    * @param textSpanRoot Text root whose spans this instance paints, or `entt::null` when the
    *   instance is not a span instance.
    * @param dataHandle Handle supplying the instance's data components.
@@ -511,7 +516,14 @@ public:
    * empty layer is the safe direction; the exact span set is not resolved until draw time.
    *
    * An entity with no computed style of its own inherits its nearest styled ancestor's visibility,
-   * which the walk already covers, so it needs no entry of its own.
+   * which the walk already covers, so it needs no entry of its own. The walk reads the styles of
+   * the copy being instantiated, which for a `<use>` copy are the shadow tree's, while the per-span
+   * filter reads the light tree's spans; the two differ only when a selector matches one and not
+   * the other.
+   *
+   * `visible` also gates hit-testing and the bounds of an instance range, so a text root kept alive
+   * for a visible span is hit-testable and contributes bounds over the element's laid-out ink, the
+   * same coarseness a visible element containing a hidden span already has.
    *
    * @param textSpanRoot Text root whose spans this instance paints, or `entt::null` when the
    *   instance is not a span instance.
