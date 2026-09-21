@@ -70,19 +70,40 @@ std::string FormatNumber(double value) {
   return text;
 }
 
-/// Escape a string for inclusion in an XML attribute value or text content.
+/// Append \p ch to \p out, escaped for XML. When \p inAttributeValue, tab, line feed and
+/// carriage return become numeric character references: attribute-value normalization turns a
+/// literal one into a space when the document is re-parsed, so an export carrying one literally
+/// would not round-trip.
+void AppendEscapedXmlChar(std::string& out, char ch, bool inAttributeValue) {
+  switch (ch) {
+    case '&': out += "&amp;"; return;
+    case '<': out += "&lt;"; return;
+    case '>': out += "&gt;"; return;
+    case '"': out += "&quot;"; return;
+    case '\'': out += "&apos;"; return;
+    case '\t': out += inAttributeValue ? "&#9;" : "\t"; return;
+    case '\n': out += inAttributeValue ? "&#10;" : "\n"; return;
+    case '\r': out += inAttributeValue ? "&#13;" : "\r"; return;
+    default: out += ch; return;
+  }
+}
+
+/// Escape a string for inclusion in XML text content or a comment body.
 std::string EscapeXml(std::string_view input) {
   std::string output;
   output.reserve(input.size());
   for (const char ch : input) {
-    switch (ch) {
-      case '&': output += "&amp;"; break;
-      case '<': output += "&lt;"; break;
-      case '>': output += "&gt;"; break;
-      case '"': output += "&quot;"; break;
-      case '\'': output += "&apos;"; break;
-      default: output += ch; break;
-    }
+    AppendEscapedXmlChar(output, ch, /*inAttributeValue=*/false);
+  }
+  return output;
+}
+
+/// Escape a string for inclusion in an XML attribute value.
+std::string EscapeXmlAttributeValue(std::string_view input) {
+  std::string output;
+  output.reserve(input.size());
+  for (const char ch : input) {
+    AppendEscapedXmlChar(output, ch, /*inAttributeValue=*/true);
   }
   return output;
 }
@@ -232,9 +253,19 @@ RootTag DeriveRootTagFromTree(std::string_view source, const xml::XMLNode& root)
   for (auto& entry : ordered) {
     result.attributes.push_back(std::move(entry.attribute));
   }
-  result.qualifiedName = SerializeQualifiedName(root.tagName());
-  if (!root.tagName().namespacePrefix.empty()) {
-    result.injectedPrefix = std::string(std::string_view(root.tagName().namespacePrefix)) + ":";
+  // A prefixed root is only re-emitted prefixed when the prefix is actually bound to the SVG
+  // namespace. Inline-SVG parsing repairs an unbound root by injecting a default `xmlns`, which
+  // leaves the prefix undeclared: re-emitting it, and prefixing the injected elements with it,
+  // would produce markup no consumer can resolve.
+  const xml::XMLQualifiedNameRef rootName = root.tagName();
+  const bool prefixBoundToSvg =
+      !rootName.namespacePrefix.empty() &&
+      root.getNamespaceUri(rootName.namespacePrefix) == "http://www.w3.org/2000/svg";
+  if (prefixBoundToSvg) {
+    result.qualifiedName = SerializeQualifiedName(rootName);
+    result.injectedPrefix = std::string(std::string_view(rootName.namespacePrefix)) + ":";
+  } else {
+    result.qualifiedName = std::string(std::string_view(rootName.name));
   }
   result.locationsResolved = true;
   return result;
@@ -243,7 +274,7 @@ RootTag DeriveRootTagFromTree(std::string_view source, const xml::XMLNode& root)
 /// Returns true when an attribute local name ends with "href" (case-sensitive), preserving
 /// the historical match for `href`, `xlink:href`, `data-href`, and friends.
 bool IsHrefAttributeName(std::string_view localName) {
-  return localName.size() >= 4 && localName.substr(localName.size() - 4) == "href";
+  return StringUtils::EndsWith(localName, std::string_view("href"));
 }
 
 /// Check every element attribute in the parsed tree for external `href` references over
@@ -340,10 +371,10 @@ void AppendOrientedBox(std::string* out, std::string_view prefix,
     d += " L " + FormatNumber(cornersDoc[i].x) + " " + FormatNumber(cornersDoc[i].y);
   }
   d += " Z";
-  *out += "<" + std::string(prefix) + "path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" +
-          std::string(kOverlayStroke) + "\" stroke-width=\"1\" class=\"" +
-          std::string(kOverlayLineClass) + "\"" + OverlayPaintStyle("none", kOverlayStroke, "1") +
-          "/>";
+  *out += "<" + std::string(prefix) + "path d=\"" + EscapeXmlAttributeValue(d) +
+          "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
+          "\" stroke-width=\"1\" class=\"" + std::string(kOverlayLineClass) + "\"" +
+          OverlayPaintStyle("none", kOverlayStroke, "1") + "/>";
 }
 
 /// Append an open line path for a path control-handle guide.
@@ -352,9 +383,10 @@ void AppendControlLine(std::string* out, std::string_view prefix,
   const std::string d =
       "M " + FormatNumber(lineDoc.anchorDoc.x) + " " + FormatNumber(lineDoc.anchorDoc.y) + " L " +
       FormatNumber(lineDoc.controlDoc.x) + " " + FormatNumber(lineDoc.controlDoc.y);
-  *out += "<" + std::string(prefix) + "path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" +
-          std::string(kOverlayStroke) + "\" stroke-width=\"1\" class=\"" +
-          std::string(kOverlayLineClass) + "\"" + OverlayPaintStyle("none", kOverlayStroke, "1") +
+  *out += "<" + std::string(prefix) + "path d=\"" + EscapeXmlAttributeValue(d) +
+          "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
+          "\" stroke-width=\"1\" class=\"" + std::string(kOverlayLineClass) + "\"" +
+          OverlayPaintStyle("none", kOverlayStroke, "1") +
           " vector-effect=\"non-scaling-stroke\"/>";
 }
 
@@ -394,9 +426,10 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
     if (pathData.empty()) {
       continue;
     }
-    out += "<" + std::string(elementPrefix) + "path d=\"" + EscapeXml(pathData.str()) +
-           "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
-           "\" stroke-width=\"1.5\" class=\"" + std::string(kOverlayOutlineClass) + "\"" +
+    out += "<" + std::string(elementPrefix) + "path d=\"" +
+           EscapeXmlAttributeValue(pathData.str()) + "\" fill=\"none\" stroke=\"" +
+           std::string(kOverlayStroke) + "\" stroke-width=\"1.5\" class=\"" +
+           std::string(kOverlayOutlineClass) + "\"" +
            OverlayPaintStyle("none", kOverlayStroke, "1.5") +
            " vector-effect=\"non-scaling-stroke\"/>";
   }
@@ -556,7 +589,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
   bool wroteHeight = false;
   for (const Attribute& attribute : rootTag.attributes) {
     if (attribute.name == "viewBox") {
-      output += " viewBox=\"" + EscapeXml(viewBoxValue) + "\"";
+      output += " viewBox=\"" + EscapeXmlAttributeValue(viewBoxValue) + "\"";
       wroteViewBox = true;
     } else if (attribute.name == "width") {
       output += " width=\"" + std::to_string(outputWidth) + "\"";
@@ -565,7 +598,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
       output += " height=\"" + std::to_string(outputHeight) + "\"";
       wroteHeight = true;
     } else {
-      output += " " + attribute.name + "=\"" + EscapeXml(attribute.value) + "\"";
+      output += " " + attribute.name + "=\"" + EscapeXmlAttributeValue(attribute.value) + "\"";
     }
   }
   if (!wroteWidth) {
@@ -575,7 +608,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
     output += " height=\"" + std::to_string(outputHeight) + "\"";
   }
   if (!wroteViewBox) {
-    output += " viewBox=\"" + EscapeXml(viewBoxValue) + "\"";
+    output += " viewBox=\"" + EscapeXmlAttributeValue(viewBoxValue) + "\"";
   }
   output += ">\n";
 

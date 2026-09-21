@@ -510,6 +510,12 @@ private:
   SVGDocument::Settings settings_;
   std::size_t visitedTreeNodes_ = 0;
 
+  /// Nesting depth of retained foreign-namespace subtrees currently being converted; nonzero
+  /// means the unsupported-namespace warning was already reported at the subtree's top.
+  /// Counted rather than a flag so a foreign element nested in a foreign element restores the
+  /// enclosing state instead of clearing it.
+  int foreignSubtreeDepth_ = 0;
+
   /// Creates an element of type \p ElementT on \p node and parses its attributes. Experimental
   /// types fall back to an unknown element unless experimental support is enabled, matching the
   /// behavior of the tag scan the factory table replaces. Element constructors are only reachable
@@ -580,10 +586,6 @@ public:
   }
 
   std::optional<SVGDocument> document() const { return document_; }
-
-  /// Nesting depth of retained foreign-namespace subtrees currently being converted; nonzero
-  /// means the unsupported-namespace warning was already reported at the subtree's top.
-  int foreignSubtreeDepth_ = 0;
 
   /**
    * Create the SVG element matching \p tagName on \p node, or an unknown element if no type

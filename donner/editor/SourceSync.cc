@@ -266,7 +266,10 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
                            StructuralFingerprint(app.document().document().svgElement()) !=
                                StructuralFingerprint(freshParse.result().svgElement());
     if (treeStale) {
-      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+      // A remount here is reconciliation for an ordinary keystroke, not a document load, so it
+      // keeps the undo timeline the same way the writeback reparse below does.
+      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource),
+                                                              /*preserveUndoOnReparse=*/true));
     }
   }
 
