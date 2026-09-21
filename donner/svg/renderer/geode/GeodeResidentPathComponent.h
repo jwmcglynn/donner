@@ -37,8 +37,6 @@
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
@@ -160,7 +158,7 @@ public:
       if (budget_ && !budget_->reserveResidentBytes(newSize)) {
         return false;
       }
-      gpu::Result<gpu::Buffer> created = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+      gpu::Result<gpu::Buffer> created = device.runtimeDevice().createBuffer(gpu::BufferDescriptor{
           "GeodeRecordSlab", newSize, gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
       if (created.hasError()) {
         if (budget_) {
@@ -282,7 +280,7 @@ public:
       }
       return BatchUniformHandle{};
     }
-    gpu::Result<gpu::Buffer> created = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+    gpu::Result<gpu::Buffer> created = device.runtimeDevice().createBuffer(gpu::BufferDescriptor{
         "GeodeSceneBatchUniform", size, gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
     if (created.hasError()) {
       if (budget_) {
@@ -292,7 +290,7 @@ public:
       return BatchUniformHandle{};
     }
     gpu::Buffer buffer = std::move(created).result();
-    (void)device.adapterDevice().writeBuffer(buffer, 0, std::span<const uint8_t>(first, size));
+    (void)device.runtimeDevice().writeBuffer(buffer, 0, std::span<const uint8_t>(first, size));
     batchUniforms_.push_back(
         BatchUniform{std::move(buffer), std::move(retainedBytes), GeodeDevice::AllocateBufferId()});
     cpuPayloadBytes_ += retainedCapacity;
@@ -587,7 +585,7 @@ public:
       if (budget_ && !budget_->reserveResidentBytes(newSize)) {
         return false;
       }
-      gpu::Result<gpu::Buffer> created = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+      gpu::Result<gpu::Buffer> created = device.runtimeDevice().createBuffer(gpu::BufferDescriptor{
           "GeodeResidentSlab", newSize,
           gpu::BufferUsage::Storage | gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
       if (created.hasError()) {

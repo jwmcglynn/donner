@@ -957,9 +957,13 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
     // Lazy: most documents never hit the clip-path mask pass, and
     // production WASM callers that never need it should not pay the
     // pipeline-compile cost at startup.
-    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(*impl_->adapterDevice);
+    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(runtimeDevice());
   }
   return *impl_->maskPipeline;
+}
+
+gpu::Device& GeodeDevice::runtimeDevice() const {
+  return *impl_->adapterDevice;
 }
 
 GeodeWgpuAdapterDevice& GeodeDevice::adapterDevice() const {
@@ -972,7 +976,7 @@ GeodeSnapshotReadbackPipeline& GeodeDevice::snapshotReadbackPipeline() const {
   UTILS_RELEASE_ASSERT(readbackOnly_);
   if (!impl_->snapshotReadbackPipeline) {
     impl_->snapshotReadbackPipeline =
-        std::make_unique<GeodeSnapshotReadbackPipeline>(adapterDevice());
+        std::make_unique<GeodeSnapshotReadbackPipeline>(runtimeDevice());
   }
   return *impl_->snapshotReadbackPipeline;
 }
@@ -1000,12 +1004,12 @@ SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t
   // Created through the runtime, which counts the allocation itself, so neither this nor the
   // buffer below ticks a counter explicitly; a second tick would double-count every readback set
   // against the ceilings the steady-state gates ratchet on.
-  gpu::Result<gpu::Texture> staging = adapterDevice().createTexture(gpu::TextureDescriptor{
+  gpu::Result<gpu::Texture> staging = runtimeDevice().createTexture(gpu::TextureDescriptor{
       "RendererGeodeReadbackStaging", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::CopySrc});
   if (staging.hasResult()) {
     resources.staging = std::move(staging).result();
-    gpu::Result<gpu::TextureView> stagingView = adapterDevice().createTextureView(
+    gpu::Result<gpu::TextureView> stagingView = runtimeDevice().createTextureView(
         resources.staging, gpu::TextureViewDescriptor{"RendererGeodeReadbackStagingView"});
     if (stagingView.hasResult()) {
       resources.stagingView = std::move(stagingView).result();
@@ -1015,7 +1019,7 @@ SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t
   const uint32_t bytesPerRow = AlignReadbackBytesPerRow(width * 4u);
   // Created through the runtime, which counts the allocation itself, so there is no explicit
   // tick here; a second one would double-count every readback set against the buffer ceilings.
-  gpu::Result<gpu::Buffer> readback = adapterDevice().createBuffer(gpu::BufferDescriptor{
+  gpu::Result<gpu::Buffer> readback = runtimeDevice().createBuffer(gpu::BufferDescriptor{
       "RendererGeodeReadback", static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height),
       gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
   if (readback.hasResult()) {
@@ -1063,7 +1067,7 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
     // checkerboard; other consumers should not pay the pipeline-compile cost
     // at startup.
     impl_->checkerboardPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        *impl_->adapterDevice, GpuTextureFormatFromWgpu(textureFormat_),
+        runtimeDevice(), GpuTextureFormatFromWgpu(textureFormat_),
         GeodeCheckerboardPipeline::BlendMode::Replace);
   }
   return *impl_->checkerboardPipeline;
@@ -1074,7 +1078,7 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
     // it because a consumer normally draws through exactly one of the two:
     // before the document pixels (replace) or after them (destination-over).
     impl_->checkerboardUnderlayPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        *impl_->adapterDevice, GpuTextureFormatFromWgpu(textureFormat_),
+        runtimeDevice(), GpuTextureFormatFromWgpu(textureFormat_),
         GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }
   return *impl_->checkerboardUnderlayPipeline;
@@ -1082,6 +1086,10 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 
 namespace {
 
+/// Whether every root the config names matches the shared physical owner it also names. Each
+/// field compared here has an arm in
+/// `GeodeDevice_tests.SharedPhysicalOwnerRejectsConflictingRoots`; a new field needs one too, or it
+/// is unenforced.
 bool EmbedConfigMatchesPhysicalDevice(const GeodeEmbedConfig& config,
                                       const std::shared_ptr<GeodeDeviceLostState>& lostState,
                                       const wgpu::Instance& instance, const wgpu::Adapter& adapter,
@@ -1161,7 +1169,7 @@ void GeodeDevice::initSharedResources() {
 }
 
 void GeodeDevice::initSharedBindSlotResources() {
-  GeodeWgpuAdapterDevice& adapterDevice = *impl_->adapterDevice;
+  gpu::Device& device = runtimeDevice();
 
   // Unwraps a shared-resource creation, halting on failure: these are compile-time-constant 1x1
   // descriptors, so an error here is a build defect or a lost device, not recoverable state.
@@ -1189,7 +1197,7 @@ void GeodeDevice::initSharedBindSlotResources() {
 
   // Opaque black: a pattern slot bound to this contributes nothing when the shader's paint-mode
   // gate is off.
-  impl_->gpuDummyPatternTexture = unwrap(adapterDevice.createTexture(gpu::TextureDescriptor{
+  impl_->gpuDummyPatternTexture = unwrap(device.createTexture(gpu::TextureDescriptor{
                                              "GeodeDeviceDummyPattern", gpu::Extent2d{1, 1},
                                              gpu::TextureFormat::RGBA8Unorm, kDummyTextureUsage}),
                                          "GeodeDeviceDummyPattern createTexture");
@@ -1200,22 +1208,22 @@ void GeodeDevice::initSharedBindSlotResources() {
   std::array<uint8_t, kSingleTexelRowBytes> patternRow = {};
   const std::array<uint8_t, 4> patternPixel = {0, 0, 0, 255};
   std::copy(patternPixel.begin(), patternPixel.end(), patternRow.begin());
-  require(adapterDevice.writeTexture(impl_->gpuDummyPatternTexture, patternRow,
-                                     gpu::TexelCopyBufferLayout{0, kSingleTexelRowBytes, 1},
-                                     gpu::Extent2d{1, 1}),
+  require(device.writeTexture(impl_->gpuDummyPatternTexture, patternRow,
+                              gpu::TexelCopyBufferLayout{0, kSingleTexelRowBytes, 1},
+                              gpu::Extent2d{1, 1}),
           "GeodeDeviceDummyPattern writeTexture");
-  impl_->gpuDummyPatternTextureView = unwrap(
-      adapterDevice.createTextureView(impl_->gpuDummyPatternTexture,
+  impl_->gpuDummyPatternTextureView =
+      unwrap(device.createTextureView(impl_->gpuDummyPatternTexture,
                                       gpu::TextureViewDescriptor{"GeodeDeviceDummyPatternView"}),
-      "GeodeDeviceDummyPatternView createTextureView");
+             "GeodeDeviceDummyPatternView createTextureView");
   impl_->gpuDummyPatternSampler =
-      unwrap(adapterDevice.createSampler(gpu::SamplerDescriptor{
+      unwrap(device.createSampler(gpu::SamplerDescriptor{
                  "GeodeDeviceDummyPatternSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
                  gpu::AddressMode::Repeat, gpu::AddressMode::Repeat}),
              "GeodeDeviceDummyPatternSampler createSampler");
 
   // Full coverage: a clip-mask slot bound to this passes everything through.
-  impl_->gpuDummyClipMaskTexture = unwrap(adapterDevice.createTexture(gpu::TextureDescriptor{
+  impl_->gpuDummyClipMaskTexture = unwrap(device.createTexture(gpu::TextureDescriptor{
                                               "GeodeDeviceDummyClipMask", gpu::Extent2d{1, 1},
                                               gpu::TextureFormat::RGBA8Unorm, kDummyTextureUsage}),
                                           "GeodeDeviceDummyClipMask createTexture");
@@ -1223,14 +1231,14 @@ void GeodeDevice::initSharedBindSlotResources() {
   std::array<uint8_t, kSingleTexelRowBytes> clipMaskRow = {};
   const std::array<uint8_t, 4> clipMaskPixel = {0xFF, 0xFF, 0xFF, 0xFF};
   std::copy(clipMaskPixel.begin(), clipMaskPixel.end(), clipMaskRow.begin());
-  require(adapterDevice.writeTexture(impl_->gpuDummyClipMaskTexture, clipMaskRow,
-                                     gpu::TexelCopyBufferLayout{0, kSingleTexelRowBytes, 1},
-                                     gpu::Extent2d{1, 1}),
+  require(device.writeTexture(impl_->gpuDummyClipMaskTexture, clipMaskRow,
+                              gpu::TexelCopyBufferLayout{0, kSingleTexelRowBytes, 1},
+                              gpu::Extent2d{1, 1}),
           "GeodeDeviceDummyClipMask writeTexture");
-  impl_->gpuDummyClipMaskTextureView = unwrap(
-      adapterDevice.createTextureView(impl_->gpuDummyClipMaskTexture,
+  impl_->gpuDummyClipMaskTextureView =
+      unwrap(device.createTextureView(impl_->gpuDummyClipMaskTexture,
                                       gpu::TextureViewDescriptor{"GeodeDeviceDummyClipMaskView"}),
-      "GeodeDeviceDummyClipMaskView createTextureView");
+             "GeodeDeviceDummyClipMaskView createTextureView");
 
   {
     // One full-size record: the identity affine in the leading two rows and zeroes everywhere
@@ -1243,11 +1251,11 @@ void GeodeDevice::initSharedBindSlotResources() {
     identityRecord[0] = 1.0f;
     identityRecord[5] = 1.0f;
     impl_->gpuIdentityInstanceRecordBuffer =
-        unwrap(adapterDevice.createBuffer(gpu::BufferDescriptor{
+        unwrap(device.createBuffer(gpu::BufferDescriptor{
                    "GeodeDeviceIdentityInstanceRecord", sizeof(identityRecord),
                    gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst}),
                "GeodeDeviceIdentityInstanceRecord createBuffer");
-    require(adapterDevice.writeBuffer(
+    require(device.writeBuffer(
                 impl_->gpuIdentityInstanceRecordBuffer, 0,
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(identityRecord.data()),
                                          sizeof(identityRecord))),
@@ -1261,11 +1269,11 @@ void GeodeDevice::initSharedBindSlotResources() {
     constexpr size_t kPaintBlockFloats = kGradientPaintBlockRows * 4;
     const std::array<float, kPaintBlockFloats> zeroPaint = {};
     impl_->gpuDummyPaintDataBuffer =
-        unwrap(adapterDevice.createBuffer(
+        unwrap(device.createBuffer(
                    gpu::BufferDescriptor{"GeodeDeviceDummyPaintData", sizeof(zeroPaint),
                                          gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst}),
                "GeodeDeviceDummyPaintData createBuffer");
-    require(adapterDevice.writeBuffer(
+    require(device.writeBuffer(
                 impl_->gpuDummyPaintDataBuffer, 0,
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(zeroPaint.data()),
                                          sizeof(zeroPaint))),
@@ -1273,7 +1281,7 @@ void GeodeDevice::initSharedBindSlotResources() {
   }
 
   impl_->gpuContext = GeodeGpuContext{};
-  impl_->gpuContext.gpuDevice = &adapterDevice;
+  impl_->gpuContext.gpuDevice = &device;
   impl_->gpuContext.geodeDevice = this;
   impl_->gpuContext.dummyPatternTextureView = &impl_->gpuDummyPatternTextureView;
   impl_->gpuContext.dummyPatternSampler = &impl_->gpuDummyPatternSampler;
@@ -1328,9 +1336,9 @@ void GeodeDevice::initSharedPipelines() {
   impl_->adapterDevice = std::make_unique<GeodeWgpuAdapterDevice>(*this);
   impl_->runtimeDeviceId = impl_->adapterDevice->deviceId();
   initSharedBindSlotResources();
-  impl_->pipeline = std::make_unique<GeodePipeline>(*impl_->adapterDevice, fmt);
-  impl_->gradientPipeline = std::make_unique<GeodeGradientPipeline>(*impl_->adapterDevice, fmt);
-  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(*impl_->adapterDevice, fmt);
+  impl_->pipeline = std::make_unique<GeodePipeline>(runtimeDevice(), fmt);
+  impl_->gradientPipeline = std::make_unique<GeodeGradientPipeline>(runtimeDevice(), fmt);
+  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(runtimeDevice(), fmt);
   // Mask pipeline is built on first `maskPipeline()` access - see header.
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }

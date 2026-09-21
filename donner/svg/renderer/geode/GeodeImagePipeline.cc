@@ -7,7 +7,6 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
@@ -26,21 +25,19 @@ T UnwrapOrAbort(gpu::Result<T>&& result, const char* what) {
 
 }  // namespace
 
-GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
-                                       gpu::TextureFormat colorFormat)
+GeodeImagePipeline::GeodeImagePipeline(gpu::Device& device, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   const auto& shader = gpu::shader::programs::ImageBlitShader();
   const auto entries = gpu::shader::MakeBindingLayout(shader);
-  bindGroupLayout_ =
-      UnwrapOrAbort(adapterDevice.createBindGroupLayout(
-                        gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
-                    "GeodeImageBlitBGL createBindGroupLayout");
+  bindGroupLayout_ = UnwrapOrAbort(
+      device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
+      "GeodeImageBlitBGL createBindGroupLayout");
 
-  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+  pipelineLayout_ = UnwrapOrAbort(device.createPipelineLayout(gpu::PipelineLayoutDescriptor{
                                       "GeodeImageBlitPL", {bindGroupLayout_}}),
                                   "GeodeImageBlitPL createPipelineLayout");
 
-  shaderModule_ = UnwrapOrAbort(createImageBlitShader(adapterDevice), "ImageBlit shader module");
+  shaderModule_ = UnwrapOrAbort(createImageBlitShader(device), "ImageBlit shader module");
 
   // ----- Fragment / blending -----
   // Same premultiplied-source-over as the Slug fill pipeline. The fragment
@@ -55,7 +52,7 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
   // ----- Render pipeline -----
   // No vertex buffers - the shader generates corners from vertex_index.
   pipeline_ = UnwrapOrAbort(
-      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+      device.createRenderPipeline(gpu::RenderPipelineDescriptor{
           "GeodeImageBlit", pipelineLayout_,
           gpu::VertexState{shaderModule_, RcString(shader.entryPoints[0].name.view()), {}},
           gpu::FragmentState{shaderModule_,
@@ -68,14 +65,14 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
   // Linear (bilinear) sampler - the default for SVG's "smooth" image
   // rendering. Clamp-to-edge addressing matches the previous wgpu defaults.
   linearSampler_ =
-      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+      UnwrapOrAbort(device.createSampler(gpu::SamplerDescriptor{
                         "GeodeImageBlitLinear", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitLinear createSampler");
 
   // Nearest sampler for crisp-edge and explicit nearest sampling.
   nearestSampler_ =
-      UnwrapOrAbort(adapterDevice.createSampler(gpu::SamplerDescriptor{
+      UnwrapOrAbort(device.createSampler(gpu::SamplerDescriptor{
                         "GeodeImageBlitNearest", gpu::FilterMode::Nearest, gpu::FilterMode::Nearest,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitNearest createSampler");

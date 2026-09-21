@@ -2,13 +2,9 @@
 /// @file
 /// Render pipeline for the image-blit shader (textured quad).
 
-#include <webgpu/webgpu.hpp>
-
 #include "donner/gpu/Device.h"
 
 namespace donner::geode {
-
-class GeodeWgpuAdapterDevice;
 
 /**
  * Caches a compiled render pipeline for the image-blit shader plus its bind group layout and
@@ -34,11 +30,11 @@ public:
   /**
    * Create an image-blit pipeline for the given device and target format.
    *
-   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
+   * @param device Runtime device the pipeline, its layouts, and its samplers are created on.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
+  GeodeImagePipeline(gpu::Device& device, gpu::TextureFormat colorFormat);
 
   ~GeodeImagePipeline() = default;
   GeodeImagePipeline(const GeodeImagePipeline&) = delete;

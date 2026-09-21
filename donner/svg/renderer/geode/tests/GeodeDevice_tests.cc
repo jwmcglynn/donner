@@ -16,14 +16,18 @@
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::geode {
 
 using svg::test::RgbaEq;
+using testing::Eq;
 using testing::HasSubstr;
+using testing::IsNull;
 using testing::Not;
+using testing::NotNull;
 
 /// Marker that `GeodeDevice`'s uncaptured-error callback prints when wgpu
 /// rejects a descriptor. wgpu still returns a non-null handle in that case, so
@@ -69,14 +73,75 @@ TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
   EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before);
 }
 
-TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingLostState) {
+namespace {
+
+/// One `GeodeEmbedConfig` field that must agree with the shared physical owner the same config
+/// names.
+struct EmbedConfigConflictArm {
+  /// Field name, so a failure says which check is missing.
+  std::string_view field;
+  /// Overwrites that field with state that cannot belong to the owner.
+  void (*applyConflict)(GeodeEmbedConfig& config, GeodeDevice& foreign);
+};
+
+constexpr auto kEmbedConfigConflictArms = std::to_array<EmbedConfigConflictArm>(
+    {{"device",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.device = foreign.device(); }},
+     {"queue",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.queue = foreign.queue(); }},
+     {"instance",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.instance = foreign.instance(); }},
+     {"adapter",
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.adapter = foreign.adapter(); }},
+     // The owner's own loss state is private to GeodeDevice and EditorWindow, so a second
+     // context's flag is not reachable here. The check is shared_ptr identity, so any distinct
+     // state is a faithful conflict.
+     {"lostState", [](GeodeEmbedConfig& config, GeodeDevice&) {
+        config.lostState = std::make_shared<GeodeDeviceLostState>();
+      }}});
+
+}  // namespace
+
+/// A config that names a shared physical owner may also repeat that owner's roots, but every
+/// repeated field has to name the same object. Mixing in a root that belongs elsewhere is a caller
+/// error with no safe resolution - silently preferring either side would hand the context a queue,
+/// instance, or loss flag that does not belong to the device it renders on - so creation is
+/// refused for each field independently, and accepted when the repeated roots agree.
+TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
   auto ownerContext = GeodeDevice::CreateHeadless();
   ASSERT_NE(ownerContext, nullptr);
+  auto foreignContext = GeodeDevice::CreateHeadless();
+  ASSERT_NE(foreignContext, nullptr);
+  // Each root the arms below borrow has to be non-null, because the comparison skips a field the
+  // config leaves empty. A headless context imported from the browser leaves its adapter on the
+  // JavaScript side, and borrowing that null adapter would make the adapter arm assert nothing
+  // about the adapter comparison and then fail for a reason that has nothing to do with it. Say so
+  // here instead.
+  ASSERT_THAT(static_cast<WGPUAdapter>(foreignContext->adapter()), NotNull())
+      << "the conflict arms need a second context with every root populated";
 
-  GeodeEmbedConfig config;
-  config.physicalDevice = ownerContext->physicalDeviceOwner();
-  config.lostState = std::make_shared<GeodeDeviceLostState>();
-  EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
+  for (const EmbedConfigConflictArm& arm : kEmbedConfigConflictArms) {
+    SCOPED_TRACE(arm.field);
+
+    GeodeEmbedConfig config;
+    config.physicalDevice = ownerContext->physicalDeviceOwner();
+    arm.applyConflict(config, *foreignContext);
+
+    EXPECT_THAT(GeodeDevice::CreateFromExternal(config), IsNull())
+        << "CreateFromExternal accepted a config whose " << arm.field
+        << " belongs to a different physical device than its physical owner";
+  }
+
+  // Positive control: without it, a change that refused every config naming a physical owner
+  // would leave all five arms green while the comparisons they cover stopped running.
+  GeodeEmbedConfig agreeing;
+  agreeing.physicalDevice = ownerContext->physicalDeviceOwner();
+  agreeing.device = ownerContext->device();
+  agreeing.queue = ownerContext->queue();
+  agreeing.instance = ownerContext->instance();
+  agreeing.adapter = ownerContext->adapter();
+  EXPECT_THAT(GeodeDevice::CreateFromExternal(agreeing), NotNull())
+      << "CreateFromExternal refused a config that repeats its own physical owner's roots";
 }
 
 TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
@@ -332,6 +397,21 @@ TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
   wgpu::CommandEncoder encoder2 = device.createCommandEncoder();
   wgpu::CommandBuffer cmdBuf2 = encoder2.finish();
   queue.submit(1, &cmdBuf2);
+}
+
+/// `runtimeDevice()` and `adapterDevice()` are two names for one object: the second only widens
+/// the static type for the callers that still need operations the runtime contract does not carry.
+/// If they ever came apart, renderer services would create resources in one handle table and the
+/// remaining raw callers would validate them against another, so a handle would go foreign for no
+/// visible reason. Pin the identity while both accessors exist.
+TEST(GeodeDevice, RuntimeAndAdapterAccessorsNameOneDevice) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  EXPECT_THAT(device->runtimeDevice().deviceId(), Eq(device->adapterDevice().deviceId()));
+  EXPECT_EQ(&device->runtimeDevice(), static_cast<gpu::Device*>(&device->adapterDevice()))
+      << "the two accessors named different objects, so renderer services would create resources "
+         "in one handle table while the remaining raw callers validate them against another";
 }
 
 /// Regression test for issue #575 (pipeline leak through wgpu-native):

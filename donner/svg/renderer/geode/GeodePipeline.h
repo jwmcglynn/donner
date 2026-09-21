@@ -3,14 +3,10 @@
 /// Render pipeline for the Slug fill algorithm.
 
 #include <string_view>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/gpu/Device.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
-
-class GeodeWgpuAdapterDevice;
 
 /**
  * Caches a compiled render pipeline for the Slug fill shader, plus its bind group layout.
@@ -31,11 +27,11 @@ public:
   /**
    * Create a Slug fill pipeline for the given device and color target format.
    *
-   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
+   * @param device Runtime device the pipeline and its layouts are created on.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
+  GeodePipeline(gpu::Device& device, gpu::TextureFormat colorFormat);
 
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
@@ -72,7 +68,7 @@ private:
 
   /// The device both pipeline variants are created through. Owned by the GeodeDevice that owns
   /// this pipeline, so it outlives every use here.
-  GeodeWgpuAdapterDevice* adapterDevice_ = nullptr;
+  gpu::Device* device_ = nullptr;
   gpu::TextureFormat colorFormat_ = gpu::TextureFormat::RGBA8Unorm;
   gpu::ShaderModule shaderModule_;
   gpu::BindGroupLayout bindGroupLayout_;
@@ -103,7 +99,9 @@ private:
 class GeodeGradientPipeline {
 public:
   /// Construct a gradient pipeline for the given device and color target format.
-  GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
+  /// @param device Runtime device the pipeline and its layouts are created on.
+  /// @param colorFormat Pixel format of the render target this pipeline draws into.
+  GeodeGradientPipeline(gpu::Device& device, gpu::TextureFormat colorFormat);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
@@ -155,8 +153,10 @@ public:
   /**
    * Create a Slug mask pipeline for the given device. Renders into a
    * single-sampled RGBA8Unorm texture.
+   *
+   * @param device Runtime device the pipeline and its layouts are created on.
    */
-  explicit GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice);
+  explicit GeodeMaskPipeline(gpu::Device& device);
 
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;

@@ -1,9 +1,9 @@
 /// @file
-/// The Vulkan solid-fill vertical slice (design 0053 packet 7): renders the shared baseline
-/// scene through donner::gpu::vulkan::VulkanDevice with the SPIR-V emitted from the solid-fill
-/// IR program, renders the IDENTICAL scene through the production wgpu path in the same process
-/// (GeodeDevice::CreateHeadless + GeoEncoder, exactly like the baseline capture tool), and
-/// compares the two renders with the blessed pixelmatch comparator at strict identity.
+/// The Vulkan solid-fill vertical slice: renders the shared baseline scene through
+/// donner::gpu::vulkan::VulkanDevice with the SPIR-V emitted from the solid-fill IR program,
+/// renders the IDENTICAL scene through the production wgpu path in the same process
+/// (GeodeDevice::CreateHeadless + GeoEncoder, exactly like the baseline capture tool), and compares
+/// the two renders with the blessed pixelmatch comparator at strict identity.
 ///
 /// Why a same-process A/B instead of a committed PNG: this is the frozen-baseline pattern
 /// executed per-device. Both halves run on the same physical (or software) Vulkan
@@ -50,6 +50,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::gpu::vulkan::tests {

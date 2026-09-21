@@ -54,6 +54,7 @@
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
@@ -4674,7 +4675,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // verbose callers can see it.
       if (verbose && !warnedGradient) {
         std::cerr << "RendererGeode: paint server is neither linear nor radial gradient and "
-                     "has no fallback (patterns and sweep gradients are Phase 2H+)\n";
+                     "has no fallback (patterns and sweep gradients are not drawn here)\n";
         warnedGradient = true;
       }
     }
