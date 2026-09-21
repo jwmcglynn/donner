@@ -697,6 +697,16 @@ export interface DragRegression {
   /** Presented bounding-box movement over the same interval, read-back px. */
   extentDx: number;
   extentDy: number;
+  /**
+   * Masked pixel count in each sample.
+   *
+   * A shape that translated keeps its population; a shape something was drawn
+   * over loses the pixels that were covered. Printing both is what lets a
+   * reader tell the two apart from the failure message alone, without
+   * downloading the retained images.
+   */
+  previousColoredPixels: number;
+  coloredPixels: number;
   /** Pointer movement over the same interval, CSS px. */
   pointerDx: number;
   pointerDy: number;
@@ -745,6 +755,20 @@ function contentExtentCenter(sample: CompositedSample): { x: number; y: number }
  * the extent is only its sign: quantising the box to whole read-back pixels
  * costs it precision the centroid does not have, so the magnitude test stays
  * on the centroid.
+ *
+ * What that quantising costs, swept over a rigid 25x34 shape at 625 sub-pixel
+ * phases per direction and every direction in 3 degree steps: once a rigid
+ * pop-back's centroid projection reaches 1.4 read-back px it opposes the
+ * pointer in the quantised box at EVERY phase, so nothing above that is lost.
+ * Between the 1.0 tolerance and 1.2 about 0.45% of phases do not, because
+ * rounding each box edge can move the projection by up to half a pixel per
+ * axis. All three of the frame pairs this rule was built from projected past
+ * 1.5, so the carve-out costs nothing at the magnitude that produced them.
+ *
+ * It does not make a candidate proof on its own. Chrome that reaches a masked
+ * EDGE, rather than sitting inside the shape, moves the box too; the masked
+ * pixel counts reported alongside separate that case from a real move, and the
+ * retained images settle it.
  *
  * Latency carve-out: presentation legitimately lags the pointer, and no
  * pointer-relative observer can distinguish lag from an out-of-order frame
@@ -827,6 +851,8 @@ export function dragRegressions(
                 presentedDy,
                 extentDx,
                 extentDy,
+                previousColoredPixels: previous.coloredPixels,
+                coloredPixels: sample.coloredPixels,
                 pointerDx,
                 pointerDy,
               });
