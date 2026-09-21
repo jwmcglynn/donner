@@ -186,7 +186,18 @@ protected:
 
   Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
                           uint64_t offsetBytes, uint64_t byteCount) override;
-  MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+
+  /**
+   * Yields the thread to the browser until it reports \p serial complete, the device is lost, or
+   * the budget runs out. Nothing completes while this thread holds the event loop, so the wait is
+   * spent handing it over rather than resting on it; a wait entered from inside this device's own
+   * yield is refused, like the mapping slice path.
+   *
+   * @param serial Submission serial to wait for.
+   * @param timeoutSeconds Longest to wait, in seconds.
+   */
+  bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
   Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 

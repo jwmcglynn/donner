@@ -174,17 +174,6 @@ public:
   uint64_t completedSerial() const override;
 
   /**
-   * Blocks until \ref completedSerial reaches \p serial or \p timeoutSeconds elapses, using
-   * vkWaitForFences on the pending submission fences.
-   *
-   * Returns false on timeout or if any Vulkan wait call fails (see \ref lastErrorForTest).
-   *
-   * @param serial Submission serial to wait for.
-   * @param timeoutSeconds Maximum time to wait, in seconds.
-   */
-  bool waitForSerial(uint64_t serial, double timeoutSeconds);
-
-  /**
    * Copies the full contents of \p buffer back to the host and returns the bytes.
    *
    * Test/readback convenience for the vertical slice, pending the buffer mapping API: validates
@@ -405,7 +394,17 @@ protected:
   // memory object may only be mapped once at a time.
   Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
                           uint64_t offsetBytes, uint64_t byteCount) override;
-  MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+
+  /**
+   * Blocks on the pending submission's fence with `vkWaitForFences`, so the wait is woken by the
+   * submission completing rather than by rechecking. Returns false on timeout, if the serial was
+   * never submitted, or if a Vulkan call fails (see \ref lastErrorForTest).
+   *
+   * @param serial Submission serial to wait for.
+   * @param timeoutSeconds Longest to wait, in seconds.
+   */
+  bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
   Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 

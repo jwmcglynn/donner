@@ -216,6 +216,39 @@ enum class MapWaitOutcome : uint8_t {
   Failed,      //!< The backend reported the mapping itself failed.
 };
 
+/// How a backend spent a wait for a pending buffer mapping.
+///
+/// A completion-event wait is woken by the backend the moment the map settles. A polled wait
+/// rechecks readiness itself and rests or yields in between, which costs orders of magnitude more
+/// wall time to observe the same completion, so a caller reporting readback timings needs the two
+/// apart rather than averaged together.
+enum class MapWaitKind : uint8_t {
+  Polled,           //!< The wait rechecked readiness itself between rests or yields.
+  CompletionEvent,  //!< The wait blocked on a signal raised when the map settles.
+};
+
+/// What one backend wait slice found, and how it spent the slice.
+struct MapSliceReport {
+  MapSliceState state = MapSliceState::Pending;  //!< What the slice found.
+  MapWaitKind waitKind = MapWaitKind::Polled;    //!< How the slice waited.
+
+  /// Equality comparison. @param other Report to compare against.
+  bool operator==(const MapSliceReport& other) const = default;
+};
+
+/// How a bounded wait for a mapping ended, and how its slices were spent.
+///
+/// \ref waitKind is \ref MapWaitKind::CompletionEvent when any slice of the wait used one: a
+/// single event wait is what tells a diagnostic the path was not reduced to polling, and a later
+/// polled slice does not undo that.
+struct MapWaitReport {
+  MapWaitOutcome outcome = MapWaitOutcome::TimedOut;  //!< How the wait ended.
+  MapWaitKind waitKind = MapWaitKind::Polled;         //!< How its slices were spent.
+
+  /// Equality comparison. @param other Report to compare against.
+  bool operator==(const MapWaitReport& other) const = default;
+};
+
 /// Bounds of a wait for a pending buffer mapping.
 ///
 /// Both durations belong to the caller. A slice short enough to keep a UI responsive is a
@@ -400,6 +433,18 @@ std::ostream& operator<<(std::ostream& os, NativeSurfaceKind value);
 std::ostream& operator<<(std::ostream& os, PresentMode value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, SurfaceAlphaMode value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, MapSliceState value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, MapWaitOutcome value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, MapWaitKind value);
+/// Ostream output operator, e.g. `{Pending, Polled}`.
+/// @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, const MapSliceReport& value);
+/// Ostream output operator, e.g. `{Ready, CompletionEvent}`.
+/// @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, const MapWaitReport& value);
 
 /// Returns true if \p value is a known enumerator. Every enum arriving through a descriptor is
 /// checked with these overloads so out-of-range casts fail closed with

@@ -33,7 +33,7 @@ gpu::Result<std::vector<uint8_t>> ReadSlugBuffer(gpu::Device& device, const gpu:
   if (mapping.hasError()) return mapping.error();
   const auto waited = device.waitForMapping(mapping.result(), {0.01, 5.0}, {});
   if (waited.hasError()) return waited.error();
-  if (waited.result() != gpu::MapWaitOutcome::Ready)
+  if (waited.result().outcome != gpu::MapWaitOutcome::Ready)
     return gpu::GpuError{gpu::GpuErrorType::InvalidState, "Slug readback did not complete"};
   const auto bytes = device.mappedBytes(mapping.result());
   if (bytes.hasError()) return bytes.error();

@@ -38,14 +38,18 @@ public:
   virtual uint64_t completedSubmissionSerial() const = 0;
 
   /**
-   * Waits at most \p sliceSeconds for \p serial to complete and reports whether it did. A false
-   * return is either a slice that elapsed or a terminal device failure; the table asks
-   * \ref deviceLost which one it was.
+   * Waits at most \p sliceSeconds for \p serial to complete, and reports how it spent the slice.
+   *
+   * Whether the submission completed is not reported here: the table re-reads readiness
+   * afterwards anyway, because a wait hands control to the backend and the mapped buffer can be
+   * retired while the slice is blocked. What only this call can say is whether it blocked on a
+   * completion signal or rechecked readiness itself, which is the difference the readback
+   * statistics carry.
    *
    * @param serial Submission serial to wait for.
    * @param sliceSeconds Longest this call may block.
    */
-  virtual bool waitForSubmission(uint64_t serial, double sliceSeconds) = 0;
+  virtual MapWaitKind waitForSubmission(uint64_t serial, double sliceSeconds) = 0;
 
   /// Whether the device has taken a terminal failure, after which no submission can ever complete.
   virtual bool deviceLost() const = 0;
@@ -83,12 +87,12 @@ public:
                uint64_t byteCount, uint64_t readySerial);
 
   /**
-   * Waits up to \p sliceSeconds for one mapping and reports what it found.
+   * Waits up to \p sliceSeconds for one mapping, and reports what it found and how it waited.
    *
    * @param mappingSlotIndex Slot of the mapping.
    * @param sliceSeconds Longest this call may block.
    */
-  MapSliceState waitSlice(uint32_t mappingSlotIndex, double sliceSeconds);
+  MapSliceReport waitSlice(uint32_t mappingSlotIndex, double sliceSeconds);
 
   /**
    * Bytes of a completed mapping, or a failure while it is pending, released, or invalidated.

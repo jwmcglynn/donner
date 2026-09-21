@@ -96,84 +96,15 @@ public:
   ~GeodeWgpuAdapterDevice() override;
 
   /// Serial of the most recent submission whose queue work-done callback has fired (0 if none).
-  /// wgpu delivers the callbacks during \ref waitForSerial's polling (and opportunistically on
-  /// submit), so call \ref waitForSerial to guarantee progress.
+  /// wgpu delivers the callbacks during \ref gpu::Device::waitForSerial's polling (and
+  /// opportunistically on submit), so call it to guarantee progress.
   ///
   /// \warning The base class's `Device::poll()` does NOT drive wgpu polling - it only processes
   /// deferred destructions against the serial this method reports. Per-frame destroy+poll churn
   /// therefore defers unboundedly until something waits: a frame loop must call
-  /// \ref waitForSerial on its frame cadence (or extend the adapter with a non-blocking wgpu
-  /// poll) so completions are observed and deferred destroys drain.
+  /// \ref gpu::Device::waitForSerial on its frame cadence (or extend the adapter with a
+  /// non-blocking wgpu poll) so completions are observed and deferred destroys drain.
   uint64_t completedSerial() const override;
-
-  /**
-   * Blocks until \ref completedSerial reaches \p serial or \p timeoutSeconds elapses, driving
-   * `wgpu::Device::poll` so queued work-done callbacks are delivered (on Emscripten the poll
-   * shim yields through Asyncify, mirroring \ref GeodeDevice's wait machinery). This is the
-   * only entry point that drives wgpu polling for this adapter - see the warning on
-   * \ref completedSerial.
-   *
-   * @param serial Submission serial to wait for.
-   * @param timeoutSeconds Maximum time to wait, in seconds.
-   * @return True once \ref completedSerial reached \p serial; false if the timeout (or the
-   *   bounded poll-iteration budget) elapsed first.
-   */
-  bool waitForSerial(uint64_t serial, double timeoutSeconds);
-
-  /**
-   * TEMPORARY escape hatch (deleted with the readback and presentation migration): registers an
-   * externally owned wgpu texture - e.g. a render target created by the host or an earlier
-   * non-migrated subsystem - as a \c donner::gpu::Texture of this adapter so migrated code can
-   * reference it in render passes and copies. The adapter does NOT take ownership; destroying
-   * the returned handle only forgets the registration.
-   *
-   * @param texture Externally owned wgpu texture; must remain valid while registered.
-   * @param size Texture extent in texels.
-   * @param format Texel format matching the wgpu texture.
-   * @param usage Usage flags matching the wgpu texture's capabilities.
-   */
-  /**
-   * Destroys the backend object behind \p texture explicitly, then releases its slot.
-   *
-   * Releasing a texture handle on its own only drops this adapter's reference, which leaves the
-   * backend object resident until the host runtime collects it; a succession of resized render
-   * targets is exactly where that shows up as retained memory. Externally imported textures are
-   * left alone: their owner is the embedder, not this adapter.
-   *
-   * @param texture Live texture handle of this adapter; consumed either way.
-   */
-  gpu::Status destroyTextureBacking(gpu::Texture&& texture);
-
-  /// Whether a live handle owns adapter-allocated backing, rather than an external registration.
-  /// @param texture Handle whose device and generation are validated before inspecting ownership.
-  [[nodiscard]] bool ownsTextureBacking(const gpu::Texture& texture) const;
-
-  /**
-   * Destroys the backend object behind \p buffer explicitly, then releases its slot.
-   *
-   * The buffer counterpart of \ref destroyTextureBacking, and needed for the same reason:
-   * releasing a buffer handle on its own only drops this adapter's reference, which leaves the
-   * backend object resident until the host runtime collects it. A readback buffer whose map was
-   * cancelled, and a pooled readback set evicted to keep the pool inside its ceiling, both have
-   * to release their memory at that moment rather than whenever a collector next runs.
-   *
-   * @param buffer Live buffer handle of this adapter; consumed either way.
-   */
-  gpu::Status destroyBufferBacking(gpu::Buffer&& buffer);
-
-  /**
-   * Whether any wait slice of \p mapping waited on the map's completion event rather than
-   * polling for it.
-   *
-   * The distinction is a property of how this adapter waited, so it is reported here rather than
-   * inferred by the caller; the readback statistics carry it because a browser frame that fell
-   * back to polling takes orders of magnitude longer to observe the same completion.
-   *
-   * @param mapping Live mapping handle of this adapter.
-   * @return True if a completion-event wait was used; false for a polled wait, an unknown
-   *   handle, or a mapping no slice ever waited on.
-   */
-  bool mappingUsedTimedWaitAny(const gpu::BufferMapping& mapping) const;
 
   /**
    * Test seam: makes a wait slice behave as the browser's timed wait does when it expires
@@ -186,6 +117,19 @@ public:
    */
   void setSimulateEventWaitForTest(bool simulate) { simulateEventWaitForTest_ = simulate; }
 
+  /**
+   * TEMPORARY escape hatch (deleted with the readback and presentation migration): registers an
+   * externally owned wgpu texture - e.g. a render target created by the host or an earlier
+   * non-migrated subsystem - as a \c donner::gpu::Texture of this adapter so migrated code can
+   * reference it in render passes and copies. The adapter does NOT take ownership; destroying
+   * the returned handle only forgets the registration, and
+   * \ref gpu::Device::ownsTextureBacking reports false for it.
+   *
+   * @param texture Externally owned wgpu texture; must remain valid while registered.
+   * @param size Texture extent in texels.
+   * @param format Texel format matching the wgpu texture.
+   * @param usage Usage flags matching the wgpu texture's capabilities.
+   */
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
                                                   gpu::TextureUsage usage);
@@ -331,7 +275,31 @@ protected:
   gpu::Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
                                gpu::MapMode mode, uint64_t offsetBytes,
                                uint64_t byteCount) override;
-  gpu::MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  gpu::MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+
+  /**
+   * Drives `wgpu::Device::poll` until \ref completedSerial reaches \p serial, the device is
+   * lost, or the budget elapses. On Emscripten the poll shim yields through Asyncify, mirroring
+   * \ref GeodeDevice's wait machinery. This is the only entry point that drives wgpu polling for
+   * this adapter - see the warning on \ref completedSerial.
+   *
+   * @param serial Submission serial to wait for.
+   * @param timeoutSeconds Longest to wait, in seconds.
+   */
+  bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
+
+  /// Destroys the wgpu buffer in \p slotIndex, so the allocation goes back now rather than when
+  /// the host runtime next collects. @param slotIndex Validated live buffer slot.
+  void onDestroyBufferBacking(uint32_t slotIndex) override;
+
+  /// Destroys the wgpu texture in \p slotIndex if this adapter allocated it; an external
+  /// registration belongs to the embedder and is left alone.
+  /// @param slotIndex Validated live texture slot.
+  void onDestroyTextureBacking(uint32_t slotIndex) override;
+
+  /// Whether \p slotIndex holds a texture this adapter allocated, rather than one registered
+  /// through \ref importExternalTexture. @param slotIndex Validated live texture slot.
+  [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
   gpu::Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 
@@ -574,11 +542,6 @@ private:
     /// Future the map request returned, so a wait slice can wait on the completion event itself
     /// where the platform supports it rather than polling for it.
     wgpu::Future mapFuture{};
-    /// Whether any slice of this mapping waited on \ref mapFuture instead of polling. Reported
-    /// out through \ref GeodeWgpuAdapterDevice::mappingUsedTimedWaitAny, because the readback
-    /// stats distinguish the two and a browser frame that fell back to polling is a regression
-    /// worth seeing.
-    bool usedTimedWaitAny = false;
   };
 
   /// The mapping's state right now: Ready or Failed once the map has completed, DeviceLost on a

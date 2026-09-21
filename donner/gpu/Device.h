@@ -408,6 +408,59 @@ public:
   /// @param computePipeline Handle to destroy.
   Status destroyComputePipeline(ComputePipeline&& computePipeline);
 
+  /**
+   * Destroys \p buffer and releases its backend allocation at once, rather than leaving the
+   * allocation to the backend's own collector.
+   *
+   * \ref destroyBuffer ends the handle; on a backend that reference-counts its allocations, the
+   * memory behind it stays resident until whatever else still names it lets go. A readback buffer
+   * whose map was cancelled, and a pooled readback set evicted to keep a pool inside its ceiling,
+   * both have to give their memory back at that moment instead of whenever a collector next runs,
+   * so this operation says so explicitly.
+   *
+   * \warning Releasing now is only safe once no unfinished submission still reads the buffer,
+   * which is a fact only the caller has: the ordinary \ref destroyBuffer defers the release until
+   * the last submission naming the resource completes, and this operation gives that up in
+   * exchange for reclaiming the memory immediately. Callers satisfy it by construction - a
+   * cancelled map has no submission left to finish, and a pooled entry is idle before it can be
+   * evicted.
+   *
+   * The handle is validated before anything is freed, so a stale, foreign, or already-destroyed
+   * handle is reported and reaches nothing - in particular not whatever now occupies its slot.
+   * The destroy contract above still applies in full: the handle is consumed either way, and one
+   * naming a live resource of another device is released on that device.
+   *
+   * @param buffer Live buffer handle of this device; consumed either way.
+   */
+  Status destroyBufferBacking(Buffer&& buffer);
+
+  /**
+   * Destroys \p texture and releases its backend allocation at once, the texture counterpart of
+   * \ref destroyBufferBacking; a succession of resized render targets is where the deferred
+   * release shows up as retained memory. The same caller precondition applies.
+   *
+   * A texture whose backing this device does not own (see \ref ownsTextureBacking) keeps its
+   * allocation: the owner is whoever registered it or handed the frame out, and destroying the
+   * handle only forgets this device's name for it. That is enforced here rather than left to each
+   * backend, so the guarantee holds for every one of them.
+   *
+   * @param texture Live texture handle of this device; consumed either way.
+   */
+  Status destroyTextureBacking(Texture&& texture);
+
+  /**
+   * Whether \p texture names backing this device allocated, rather than memory some other owner
+   * holds and this device only named.
+   *
+   * False for a null, stale, or foreign handle, so this answers "may I take this texture's
+   * allocation over?" rather than "does this handle resolve?". It is also false for a frame
+   * acquired from a surface: the presentation surface hands that texture out and takes it back,
+   * and a caller that freed it would free memory the swapchain still owns.
+   *
+   * @param texture Handle to inspect; its device and generation are validated first.
+   */
+  [[nodiscard]] bool ownsTextureBacking(const Texture& texture) const;
+
   /// Creates a command encoder recording against this device. The encoder must not outlive the
   /// device.
   Result<std::unique_ptr<CommandEncoder>> createCommandEncoder();
@@ -515,6 +568,10 @@ public:
    * one destroyed during the wait ends it with \ref MapWaitOutcome::Failed, because by then the
    * call has a wait to report the outcome of rather than a handle to reject.
    *
+   * The report carries how the backend spent the wait alongside how it ended, because a wait that
+   * blocked on the map's completion signal and one that polled for it take wall times orders of
+   * magnitude apart, and only the backend knows which it did.
+   *
    * @param mapping Live mapping of this device.
    * @param params Slice length and total budget; both must be greater than zero.
    * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
@@ -528,9 +585,9 @@ public:
     std::function<void(std::chrono::microseconds)> rest;
   };
 
-  Result<MapWaitOutcome> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,
-                                        const std::function<bool()>& shouldCancel,
-                                        const MapWaitTestHooks& testHooks = {});
+  Result<MapWaitReport> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,
+                                       const std::function<bool()>& shouldCancel,
+                                       const MapWaitTestHooks& testHooks = {});
 
   /**
    * Returns the mapped bytes of a completed mapping.
@@ -641,6 +698,33 @@ public:
   /// recording backend completes instantly, so this equals \ref lastSubmittedSerial there.
   virtual uint64_t completedSerial() const = 0;
 
+  /// Longest a single \ref waitForSerial may block, in seconds. A budget above this is clamped to
+  /// it; the value is far past any deadline a caller has, and keeps the conversion to the clock's
+  /// own duration from overflowing on a caller that means "wait indefinitely" and says so with a
+  /// very large number.
+  static constexpr double kMaxWaitSeconds = 1.0e6;
+
+  /**
+   * Blocks until \ref completedSerial reaches \p serial, \p timeoutSeconds elapses, or the
+   * backend gives up on the work, and reports whether the submission completed.
+   *
+   * The budget is the caller's and it is always bounded: a wait never outlives it, so a driver
+   * that stops answering costs one deadline rather than the process. A backend that can tell it
+   * has failed terminally returns false at once instead of spending the budget, because no
+   * submission can complete afterwards and reporting that as a timeout would describe a permanent
+   * failure as a slow one.
+   *
+   * A false return is therefore "not completed, and not within this budget", never "completed but
+   * unreadable"; a caller that needs to tell a timeout from a dead device asks the backend which
+   * it was.
+   *
+   * @param serial Submission serial to wait for.
+   * @param timeoutSeconds Longest to wait, in seconds; clamped to the range zero to
+   *   \ref kMaxWaitSeconds, so a budget of zero reports what is already known without blocking.
+   * @return True once this device has completed \p serial.
+   */
+  bool waitForSerial(uint64_t serial, double timeoutSeconds);
+
 protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
@@ -704,6 +788,49 @@ protected:
   /// @param resourceName Resource type name, e.g. `"buffer"`.
   /// @param slotIndex Slot index of the destroyed resource.
   virtual void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) = 0;
+
+  /**
+   * Backend hook: \ref destroyBufferBacking validated \p slotIndex and is about to destroy its
+   * handle; release the allocation now rather than when the slot is recycled.
+   *
+   * The default does nothing, which is the whole answer for a backend that already frees the
+   * allocation as soon as the last submission naming it completes - there is nothing left to give
+   * back earlier, and a backend must never free memory a submitted command still reads.
+   *
+   * @param slotIndex Validated live buffer slot.
+   */
+  virtual void onDestroyBufferBacking(uint32_t slotIndex);
+
+  /// Backend hook: the texture counterpart of \ref onDestroyBufferBacking, with the same default.
+  /// A slot whose backing this device does not own keeps its allocation.
+  /// @param slotIndex Validated live texture slot.
+  virtual void onDestroyTextureBacking(uint32_t slotIndex);
+
+  /**
+   * Backend hook: whether \p slotIndex holds backing this device allocated.
+   *
+   * Asked only for a slot the public \ref ownsTextureBacking has already validated and already
+   * found not to be a surface's acquired frame, so the default is true: every other texture a
+   * backend holds is one it created. A backend that can also name memory belonging to someone
+   * else - a registration of a host-owned object, say - overrides this and says which is which.
+   *
+   * @param slotIndex Validated live texture slot.
+   */
+  [[nodiscard]] virtual bool onOwnsTextureBacking(uint32_t slotIndex) const;
+
+  /**
+   * Backend hook: \ref waitForSerial with a budget already clamped to zero or more.
+   *
+   * The default rechecks \ref completedSerial until the budget runs out, resting between checks,
+   * which is what a backend whose completions arrive on their own thread needs and nothing more.
+   * A backend that can block on a completion signal, or that knows it has failed terminally,
+   * overrides this.
+   *
+   * @param serial Submission serial to wait for.
+   * @param timeoutSeconds Longest to wait, in seconds; already clamped to a usable range.
+   * @return True once this device has completed \p serial.
+   */
+  virtual bool onWaitForSerial(uint64_t serial, double timeoutSeconds);
 
   /// Backend hook: a validated buffer write.
   /// @param slotIndex Destination buffer slot. @param offsetBytes Destination byte offset.
@@ -770,13 +897,14 @@ protected:
                                   uint64_t offsetBytes, uint64_t byteCount);
 
   /**
-   * Backend hook: wait up to \p sliceSeconds for a pending mapping and report what it found.
-   * The runtime owns the deadline and the caller's cancellation; this reports only the mapping.
+   * Backend hook: wait up to \p sliceSeconds for a pending mapping, and report what it found and
+   * how it spent the slice. The runtime owns the deadline and the caller's cancellation; this
+   * reports only the mapping.
    *
    * @param mappingSlotIndex Slot of the pending mapping.
    * @param sliceSeconds Longest this call may block.
    */
-  virtual MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds);
+  virtual MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds);
 
   /// Backend hook: bytes of a completed mapping. @param mappingSlotIndex Slot of the mapping.
   virtual Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const;
@@ -1024,6 +1152,11 @@ private:
   ///
   /// @param record Already-resolved surface record.
   bool hasOutstandingFrame(const SurfaceRecord& record) const;
+
+  /// Whether \p texture is the frame a surface of this device currently has out, which belongs to
+  /// that surface rather than to whoever holds the handle.
+  /// @param texture Already-validated live texture handle.
+  bool namesAcquiredSurfaceFrame(const Texture& texture) const;
 
   /// Mutable access to an already-validated surface's record, or null if it is not live.
   /// @param surface Already-validated surface handle.

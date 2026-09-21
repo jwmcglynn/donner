@@ -118,7 +118,7 @@ inline void ExpectMappingWaitsForItsSubmission(Device& device) {
 
   BufferMapping mapping = GetResultOrFail(
       device.mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
 
   ASSERT_NO_FATAL_FAILURE(
@@ -135,7 +135,7 @@ inline void ExpectSubrangeMappingReadsItsOwnBytes(Device& device) {
   // The second row of the copy, which holds the texels of scene row 1.
   BufferMapping mapping = GetResultOrFail(device.mapBufferAsync(
       scene.readback, MapMode::Read, kMappingSceneBytesPerRow, kMappingSceneBytesPerRow));
-  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
 
   const std::span<const uint8_t> bytes = GetResultOrFail(device.mappedBytes(mapping));
@@ -184,7 +184,7 @@ inline void ExpectUnmapEndsAccess(Device& device) {
 
   BufferMapping mapping = GetResultOrFail(
       device.mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
   ASSERT_THAT(device.mappedBytes(mapping), HasResult());
 
@@ -203,7 +203,7 @@ inline void ExpectDestroyedBufferInvalidatesMapping(Device& device) {
 
   BufferMapping mapping = GetResultOrFail(
       device.mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device.waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
 
   ASSERT_THAT(device.destroyBuffer(std::move(scene.readback)), IsOk());

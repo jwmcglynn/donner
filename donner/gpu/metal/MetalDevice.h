@@ -75,7 +75,7 @@ namespace donner::gpu::metal {
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The one
  * exception is command-buffer completion handlers, which Metal invokes on an internal queue;
  * they touch only atomics and a mutex-protected error string, observable through
- * \ref completedSerial, \ref waitForSerial, and \ref lastErrorForTest.
+ * \ref completedSerial, \ref Device::waitForSerial, and \ref lastErrorForTest.
  *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
@@ -155,26 +155,13 @@ public:
   uint64_t completedSerial() const override;
 
   /**
-   * Blocks until \ref completedSerial reaches \p serial or \p timeoutSeconds elapses, by polling
-   * the completion counter (the completion handler runs on a Metal-internal thread, so a poll
-   * loop with a short sleep is sufficient and keeps this backend free of extra sync primitives).
-   *
-   * Returns false on timeout, and also returns false if any completed command buffer reported an
-   * execution error (see \ref lastErrorForTest).
-   *
-   * @param serial Submission serial to wait for.
-   * @param timeoutSeconds Maximum time to wait, in seconds.
-   */
-  bool waitForSerial(uint64_t serial, double timeoutSeconds);
-
-  /**
    * Copies the full contents of \p buffer back to the host and returns the bytes.
    *
    * Test/readback convenience, pending a buffer mapping API: it validates device identity, slot
    * liveness, and the handle generation, then reads
    * the shared-storage Metal buffer contents directly. Callers must ensure relevant GPU work has
-   * completed first (see \ref waitForSerial). Queued writes become visible after a subsequent
-   * ordinary submission completes; this accessor does not submit them.
+   * completed first (see \ref Device::waitForSerial). Queued writes become visible after a
+   * subsequent ordinary submission completes; this accessor does not submit them.
    *
    * @param buffer Buffer to read back; must be a live buffer of this device.
    */
@@ -241,7 +228,18 @@ protected:
   // that bookkeeping and this backend answers only the Metal-specific facts.
   Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
                           uint64_t offsetBytes, uint64_t byteCount) override;
-  MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+
+  /**
+   * Polls the completion counter until it reaches \p serial, the budget runs out, or a completed
+   * command buffer reports an execution error (see \ref lastErrorForTest). Completion handlers
+   * run on a Metal-internal thread, so rechecking a counter is enough and keeps this backend free
+   * of extra synchronization primitives.
+   *
+   * @param serial Submission serial to wait for.
+   * @param timeoutSeconds Longest to wait, in seconds.
+   */
+  bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
   Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 

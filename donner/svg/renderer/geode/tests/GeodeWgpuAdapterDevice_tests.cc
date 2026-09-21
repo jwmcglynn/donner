@@ -9,7 +9,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -56,8 +58,12 @@ struct GeodeWgpuAdapterDeviceTestAccess {
     adapter.timedMapWaitForTest_ = std::move(wait);
   }
 
-  static gpu::MapSliceState waitSlice(GeodeWgpuAdapterDevice& adapter) {
+  static gpu::MapSliceReport waitSliceReport(GeodeWgpuAdapterDevice& adapter) {
     return adapter.onWaitMappingSlice(0, 0.000001);
+  }
+
+  static gpu::MapSliceState waitSlice(GeodeWgpuAdapterDevice& adapter) {
+    return waitSliceReport(adapter).state;
   }
 
   static void completeMap(GeodeWgpuAdapterDevice& adapter) {
@@ -928,7 +934,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FloatTextureDispatchPreservesSubBytePrecisio
         const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
         EXPECT_THAT(wait, gpu::HasResult());
         if (!wait.hasError()) {
-          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+          EXPECT_EQ(wait.result().outcome, gpu::MapWaitOutcome::Ready);
         }
         const auto bytes = adapter_->mappedBytes(mapping.result());
         std::vector<uint8_t> result;
@@ -962,7 +968,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests,
         const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
         EXPECT_THAT(wait, gpu::HasResult());
         if (!wait.hasError()) {
-          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+          EXPECT_EQ(wait.result().outcome, gpu::MapWaitOutcome::Ready);
         }
         const auto bytes = adapter_->mappedBytes(mapping.result());
         std::vector<uint8_t> result;
@@ -997,7 +1003,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, VectorCeilAndExpRunThroughWebGpu) {
         const auto wait = adapter_->waitForMapping(mapping.result(), {0.01, 2.0}, {});
         EXPECT_THAT(wait, gpu::HasResult());
         if (!wait.hasError()) {
-          EXPECT_EQ(wait.result(), gpu::MapWaitOutcome::Ready);
+          EXPECT_EQ(wait.result().outcome, gpu::MapWaitOutcome::Ready);
         }
         const auto bytes = adapter_->mappedBytes(mapping.result());
         std::vector<uint8_t> result;
@@ -1198,6 +1204,65 @@ TEST_F(GeodeWgpuAdapterDeviceTests, MisalignedBindOffsetFailsClosedBeforeWgpu) {
                                            "binding offset alignment")));
 }
 
+/// A wait slice reports how it was spent, and that is what tells a readback whose completion
+/// arrived through the map's own event from one that had to keep asking. The two answers cost
+/// wall times orders of magnitude apart, so the statistics would be meaningless if a polled
+/// fallback could report itself as an event wait.
+TEST_F(GeodeWgpuAdapterDeviceTests, AWaitSliceReportsWhetherItUsedTheMapsCompletionEvent) {
+  TimedMapProbe probe(*adapter_, *geodeDevice_);
+  GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_,
+                                                 [] { return wgpu::WaitStatus::Success; });
+  EXPECT_THAT(GeodeWgpuAdapterDeviceTestAccess::waitSliceReport(*adapter_),
+              testing::Eq(gpu::MapSliceReport{.state = gpu::MapSliceState::Pending,
+                                              .waitKind = gpu::MapWaitKind::CompletionEvent}));
+}
+
+/// Nothing completes on a lost device, so a wait for a submission serial has nothing to wait
+/// for. Spending the budget anyway would cost a caller its whole deadline at the exact moment it
+/// most needs to give up, and polling a lost wgpu device is what hangs on some drivers.
+TEST_F(GeodeWgpuAdapterDeviceTests, WaitingForASerialOnALostDeviceGivesUpWithoutSpendingTheBudget) {
+  const gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(
+      gpu::BufferDescriptor{"probe", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+  const std::array<uint8_t, 4> bytes{1, 2, 3, 4};
+  ASSERT_THAT(adapter_->writeBuffer(buffer, 0, bytes), gpu::IsOk());
+
+  geodeDevice_->markDeviceLost("serial wait test");
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(adapter_->waitForSerial(adapter_->lastSubmittedSerial() + 1, 30.0),
+              testing::IsFalse());
+  EXPECT_THAT(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+              Lt(1.0))
+      << "a lost device can never complete the work, so the wait must not be spent on it";
+}
+
+/// Adopting a snapshot takes over a texture's allocation, so it has to tell an allocation this
+/// device made from a registration whose memory belongs to the embedder. Getting that backwards
+/// would either destroy someone else's texture or leak one of ours.
+TEST_F(GeodeWgpuAdapterDeviceTests, OwnershipSeparatesAnAllocatedTextureFromAnImportedOne) {
+  gpu::Device& runtime = *adapter_;
+  gpu::Texture allocated = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"allocated",
+                             {4, 4},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  gpu::Texture imported = gpu::GetResultOrFail(adapter_->importExternalTexture(
+      adapter_->wgpuTextureOf(allocated), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc));
+
+  EXPECT_THAT(runtime.ownsTextureBacking(allocated), testing::IsTrue());
+  EXPECT_THAT(runtime.ownsTextureBacking(imported), testing::IsFalse())
+      << "an imported registration names memory this adapter did not allocate";
+
+  // Destroying the registration forgets it without touching the embedder's texture, which is
+  // still the one the allocated handle names.
+  EXPECT_THAT(runtime.destroyTextureBacking(std::move(imported)), gpu::IsOk());
+  EXPECT_THAT(static_cast<bool>(adapter_->wgpuTextureOf(allocated)), testing::IsTrue());
+  EXPECT_THAT(runtime.ownsTextureBacking(allocated), testing::IsTrue());
+
+  EXPECT_THAT(runtime.destroyTextureBacking(std::move(allocated)), gpu::IsOk());
+}
+
 TEST_F(GeodeWgpuAdapterDeviceTests, TimedMapTimeoutSubmitsQueueProgressWithoutARuntimeSerial) {
   TimedMapProbe probe(*adapter_, *geodeDevice_);
   GeodeWgpuAdapterDeviceTestAccess::setTimedWait(*adapter_,
@@ -1328,34 +1393,30 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AMappingReleasedBeforeItsCallbackStillUnmaps
   gpu::BufferMapping second =
       gpu::GetResultOrFail(adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256));
   EXPECT_EQ(
-      gpu::GetResultOrFail(adapter_->waitForMapping(second, gpu::MapWaitParams{0.01, 2.0}, {})),
+      gpu::GetResultOrFail(adapter_->waitForMapping(second, gpu::MapWaitParams{0.01, 2.0}, {}))
+          .outcome,
       gpu::MapWaitOutcome::Ready)
       << "the mapping released while in flight left the buffer mapped with no owner";
   EXPECT_THAT(adapter_->unmapBuffer(std::move(second)), gpu::IsOk());
 }
 
 /// The readback path reports whether the backend waited on the map's completion event or polled
-/// for it, and that answer belongs to the adapter that did the waiting. On a platform with no
-/// event wait the answer must be a plain false rather than an assumption baked into the caller,
-/// and a handle that no longer names a live mapping must not be able to read the flag out of
-/// whatever occupies that slot now.
-TEST_F(GeodeWgpuAdapterDeviceTests, TimedWaitReportingIsFalseForAPolledWaitAndForADeadHandle) {
+/// for it, and that answer belongs to the backend that did the waiting. On a platform with no
+/// event wait the wait must say it polled, rather than the caller assuming either answer.
+TEST_F(GeodeWgpuAdapterDeviceTests, AWaitWithNoEventToWaitOnReportsThatItPolled) {
   const gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
       "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
 
   gpu::BufferMapping mapping =
       gpu::GetResultOrFail(adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256));
-  EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(mapping))
-      << "no slice has run yet, so nothing can have waited on the completion event";
 
-  EXPECT_EQ(
+  // This build has no completion-event wait, so every slice of this wait polled.
+  EXPECT_THAT(
       gpu::GetResultOrFail(adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.01, 2.0}, {})),
-      gpu::MapWaitOutcome::Ready);
-  // This build has no completion-event wait, so the slice above polled.
-  EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(mapping));
+      testing::Eq(gpu::MapWaitReport{.outcome = gpu::MapWaitOutcome::Ready,
+                                     .waitKind = gpu::MapWaitKind::Polled}));
 
   EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping)), gpu::IsOk());
-  EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(gpu::BufferMapping()));
 }
 
 /// The browser waits out a map slice on the map's completion event, and that wait returns for
@@ -1375,18 +1436,19 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AnEventWaitThatLearnedNothingReportsPendingN
 
   // Nothing has polled since the map was requested, so the map cannot already be complete.
   adapter_->setSimulateEventWaitForTest(true);
-  const gpu::Result<gpu::MapWaitOutcome> expired =
+  const gpu::Result<gpu::MapWaitReport> expired =
       adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.0001, 0.0001}, {});
   adapter_->setSimulateEventWaitForTest(false);
 
   ASSERT_THAT(expired, gpu::HasResult());
-  EXPECT_EQ(expired.result(), gpu::MapWaitOutcome::TimedOut)
+  EXPECT_EQ(expired.result().outcome, gpu::MapWaitOutcome::TimedOut)
       << "a slice that waited and learned nothing must leave the map waitable, not report it "
          "failed";
 
   // The mapping is still usable: a real wait now completes it.
   EXPECT_EQ(
-      gpu::GetResultOrFail(adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.01, 2.0}, {})),
+      gpu::GetResultOrFail(adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.01, 2.0}, {}))
+          .outcome,
       gpu::MapWaitOutcome::Ready);
   EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping)), gpu::IsOk());
 }

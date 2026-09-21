@@ -117,7 +117,7 @@ RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     wgpu::TextureFormat format, AlphaType alphaType)
     : device_(std::move(device)), format_(format), alphaType_(alphaType) {
   if (device_) {
-    runtimeDeviceId_ = device_->adapterDevice().deviceId();
+    runtimeDeviceId_ = device_->runtimeDevice().deviceId();
     nativeDevice_ = static_cast<WGPUDevice>(device_->device());
     nativeQueue_ = static_cast<WGPUQueue>(device_->queue());
   }
@@ -142,7 +142,7 @@ RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
     wgpu::TextureFormat format, AlphaType alphaType) {
   RendererGeodeTextureSnapshot result(nullptr, {}, Vector2i::Zero(),
                                       wgpu::TextureFormat::Undefined);
-  if (!device || !device->adapterDevice().ownsTextureBacking(texture)) {
+  if (!device || !device->runtimeDevice().ownsTextureBacking(texture)) {
     return result;
   }
   const wgpu::Texture backend = device->adapterDevice().wgpuTextureOf(texture);
@@ -1008,7 +1008,7 @@ public:
       }
     }
 
-    gpu::Result<gpu::Texture> created = device_->adapterDevice().createTexture(desc);
+    gpu::Result<gpu::Texture> created = device_->runtimeDevice().createTexture(desc);
     if (created.hasError()) {
       return gpu::Texture{};
     }
@@ -1074,7 +1074,7 @@ private:
       return;
     }
     const gpu::Status destroyed =
-        device_->adapterDevice().destroyTextureBacking(std::move(texture));
+        device_->runtimeDevice().destroyTextureBacking(std::move(texture));
     (void)destroyed;  // A texture this pool owns is always live; a stale handle is already gone.
   }
 
@@ -1543,7 +1543,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// cover the whole texture, so this addresses exactly the texels any other full-texture view of
   /// the same texture would.
   const gpu::TextureView& importTextureView(const gpu::Texture& texture) {
-    gpu::Result<gpu::TextureView> view = device->adapterDevice().createTextureView(
+    gpu::Result<gpu::TextureView> view = device->runtimeDevice().createTextureView(
         texture, gpu::TextureViewDescriptor{"RendererGeodeImportedView"});
     UTILS_RELEASE_ASSERT_MSG(view.hasResult(), "Failed to open a view of a render target");
     frameImportedTextureViews.push_back(std::move(view).result());
@@ -1641,7 +1641,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   [[nodiscard]] bool openFrameGpuEncoder() {
     if (!publishFrameHostEncoder()) return false;
     gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
-        device->adapterDevice().createCommandEncoder();
+        device->runtimeDevice().createCommandEncoder();
     if (!created.hasResult()) {
       return false;
     }
@@ -2042,7 +2042,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // No pool to return it to, so the backend object is destroyed here rather than left
       // resident until the host runtime collects it.
       const gpu::Status destroyed =
-          device->adapterDevice().destroyTextureBacking(std::move(texture));
+          device->runtimeDevice().destroyTextureBacking(std::move(texture));
       (void)destroyed;
     }
   }
@@ -4835,7 +4835,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!canReuseTargets) {
       retireOwnedTargetAtFrameBoundary();
       gpu::Result<gpu::Texture> created =
-          device->adapterDevice().createTexture(gpu::TextureDescriptor{
+          device->runtimeDevice().createTexture(gpu::TextureDescriptor{
               "RendererGeodeTarget",
               gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
               geode::GpuTextureFormatFromWgpu(textureFormat),
@@ -6608,7 +6608,7 @@ bool RendererGeodeTextureSnapshot::canSampleWith(const geode::GeodeDevice& devic
        static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) == 0u) {
     return false;
   }
-  if (runtimeDeviceId_ == device.adapterDevice().deviceId()) {
+  if (runtimeDeviceId_ == device.runtimeDevice().deviceId()) {
     const gpu::Texture* runtime = runtimeTexture();
     return runtime == nullptr ||
            static_cast<WGPUTexture>(device.adapterDevice().wgpuTextureOf(*runtime)) ==
@@ -6652,7 +6652,7 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
     impl_->frameSnapshotBackings.insert(geodeTexture->backing_);
   }
   const gpu::Texture* source = geodeTexture->runtimeTexture();
-  if (source == nullptr || source->deviceId() != impl_->device->adapterDevice().deviceId()) {
+  if (source == nullptr || source->deviceId() != impl_->device->runtimeDevice().deviceId()) {
     const auto key = geodeTexture->backing_.get();
     auto found = impl_->frameSnapshotImports.find(key);
     if (found == impl_->frameSnapshotImports.end()) {
@@ -7455,7 +7455,7 @@ ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& bu
     return ReadbackMapResult{ReadbackMapStatus::TimedOut, {}};
   }
 
-  geode::GeodeWgpuAdapterDevice& runtime = device.adapterDevice();
+  gpu::Device& runtime = device.runtimeDevice();
   gpu::Result<gpu::BufferMapping> mapping =
       runtime.mapBufferAsync(buffer, gpu::MapMode::Read, 0, mapSize);
   if (mapping.hasError()) {
@@ -7472,6 +7472,9 @@ ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& bu
   bool cancelled = false;
   bool timedOut = false;
   gpu::MapWaitOutcome outcome = gpu::MapWaitOutcome::TimedOut;
+  // Sticky across the loop: one slice that waited on the map's completion event is what says this
+  // readback was not reduced to polling, and a later polled slice does not take that back.
+  bool usedCompletionEvent = false;
   const auto readbackWaitStart = std::chrono::steady_clock::now();
   while (true) {
     if (shouldCancel && shouldCancel()) {
@@ -7494,14 +7497,16 @@ ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& bu
     // from "waited and then gave up".
     ++pollIter;
 
-    const gpu::Result<gpu::MapWaitOutcome> slice =
+    const gpu::Result<gpu::MapWaitReport> slice =
         runtime.waitForMapping(liveMapping, gpu::MapWaitParams{sliceSeconds, sliceSeconds},
                                /*shouldCancel=*/{});
     if (slice.hasError()) {
       outcome = gpu::MapWaitOutcome::Failed;
       break;
     }
-    outcome = slice.result();
+    usedCompletionEvent =
+        usedCompletionEvent || slice.result().waitKind == gpu::MapWaitKind::CompletionEvent;
+    outcome = slice.result().outcome;
     // A slice budget equal to one slice reports TimedOut for "not ready yet"; every other
     // outcome is terminal.
     if (outcome != gpu::MapWaitOutcome::TimedOut) {
@@ -7509,7 +7514,7 @@ ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& bu
     }
   }
 
-  device.recordReadback(runtime.mappingUsedTimedWaitAny(liveMapping), pollIter);
+  device.recordReadback(usedCompletionEvent, pollIter);
 
   if (cancelled || timedOut) {
     if (timedOut) {
@@ -7667,9 +7672,9 @@ struct RendererGeodeTextureSnapshot::ReadbackControl {
 RendererBitmap RendererGeodeTextureSnapshot::readMappedTexture(
     geode::GeodeDevice& context, gpu::BufferMapping& mapping, uint32_t width, uint32_t height,
     wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
-  auto mappedBytes = context.adapterDevice().mappedBytes(mapping);
+  auto mappedBytes = context.runtimeDevice().mappedBytes(mapping);
   if (mappedBytes.hasError()) {
-    (void)context.adapterDevice().unmapBuffer(std::move(mapping));
+    (void)context.runtimeDevice().unmapBuffer(std::move(mapping));
     return {};
   }
   RendererBitmap bitmap;
@@ -7680,14 +7685,14 @@ RendererBitmap RendererGeodeTextureSnapshot::readMappedTexture(
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
   for (uint32_t y = 0; y < height; ++y) {
     if (control.stopped()) {
-      (void)context.adapterDevice().unmapBuffer(std::move(mapping));
+      (void)context.runtimeDevice().unmapBuffer(std::move(mapping));
       return {};
     }
     CopyReadbackRow(bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes,
                     mappedBytes.result().data() + static_cast<size_t>(y) * bytesPerRow, width,
                     IsBgraTextureFormat(format), alphaType);
   }
-  (void)context.adapterDevice().unmapBuffer(std::move(mapping));
+  (void)context.runtimeDevice().unmapBuffer(std::move(mapping));
   return bitmap;
 }
 

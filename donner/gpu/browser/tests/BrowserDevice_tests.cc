@@ -603,6 +603,106 @@ TEST(BrowserDevice, ReportsTheSerialTheBrowserHasFinished) {
   EXPECT_THAT(fixture.device->completedSerial(), 7u);
 }
 
+TEST(BrowserDevice, WaitingForASerialGivesTheBrowserTheThreadUntilItReportsTheWorkDone) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  // Nothing completes while this thread holds the event loop, so a wait that only rested would
+  // spend its whole budget without the browser ever getting the chance to finish the work.
+  fixture.bridge->onYield = [&] { fixture.bridge->completed = 5; };
+
+  EXPECT_THAT(fixture.device->waitForSerial(5, 10.0), testing::IsTrue());
+  EXPECT_THAT(fixture.bridge->yieldCount, 1u);
+}
+
+TEST(BrowserDevice, WaitingForAnAlreadyFinishedSerialNeedsNoYield) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  fixture.bridge->completed = 5;
+
+  EXPECT_THAT(fixture.device->waitForSerial(5, 10.0), testing::IsTrue());
+  EXPECT_THAT(fixture.bridge->yieldCount, 0u);
+}
+
+TEST(BrowserDevice, WaitingForASerialOnALostDeviceGivesUpAtOnce) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  fixture.bridge->lost = true;
+
+  // A budget large enough that spending it would hang the test rather than fail it.
+  EXPECT_THAT(fixture.device->waitForSerial(5, 3600.0), testing::IsFalse());
+  EXPECT_THAT(fixture.bridge->yieldCount, 0u)
+      << "a lost device can never finish the work, so the browser must not be handed the thread";
+}
+
+TEST(BrowserDevice, RefusesASerialWaitEnteredFromInsideItsOwnYield) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  // Handing the thread over a second time would stack one unwind on another, which the runtime
+  // underneath cannot represent.
+  bool nested = true;
+  fixture.bridge->onYield = [&] {
+    nested = fixture.device->waitForSerial(5, 1.0);
+    fixture.bridge->completed = 5;
+  };
+
+  EXPECT_THAT(fixture.device->waitForSerial(5, 10.0), testing::IsTrue());
+  EXPECT_THAT(nested, testing::IsFalse());
+  EXPECT_THAT(fixture.device->nestedWaitRefusalsForTest(), 1u);
+}
+
+TEST(BrowserDevice, DestroyingABackingReleasesTheBrowserObjectAndFailsClosedOnAStaleHandle) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects =
+      fixture.bridge->objects;
+
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<Texture> texture = fixture.device->createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc});
+  ASSERT_THAT(texture, HasResult());
+  const uint32_t textureSlotIndex = texture.result().slotIndex();
+  const uint32_t textureGeneration = texture.result().generation();
+  const uint64_t deviceId = texture.result().deviceId();
+  ASSERT_THAT(objects->size(), 2u);
+
+  EXPECT_THAT(fixture.device->destroyBufferBacking(std::move(buffer).result()), IsOk());
+  EXPECT_THAT(fixture.device->destroyTextureBacking(std::move(texture).result()), IsOk());
+  EXPECT_THAT(objects->size(), 0u);
+
+  // The freed slot is handed to the next texture, which is what the stale handle must not reach.
+  Result<Texture> replacement = fixture.device->createTexture(TextureDescriptor{
+      "replacement", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc});
+  ASSERT_THAT(replacement, HasResult());
+  ASSERT_THAT(replacement.result().slotIndex(), textureSlotIndex);
+
+  EXPECT_THAT(fixture.device->destroyTextureBacking(
+                  Texture::CreateForBackend(textureSlotIndex, textureGeneration, deviceId)),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(objects->size(), 1u) << "a stale handle must not release the slot's new occupant";
+  EXPECT_THAT(fixture.device->ownsTextureBacking(replacement.result()), testing::IsTrue());
+}
+
+TEST(BrowserDevice, OwnsTheBackingOfATextureItAllocatedButNotOfAHandleThatNamesNothingHere) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> texture = fixture.device->createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc});
+  ASSERT_THAT(texture, HasResult());
+
+  EXPECT_THAT(fixture.device->ownsTextureBacking(texture.result()), testing::IsTrue());
+  EXPECT_THAT(fixture.device->ownsTextureBacking(Texture()), testing::IsFalse());
+  EXPECT_THAT(fixture.device->ownsTextureBacking(Texture::CreateForBackend(
+                  texture.result().slotIndex(), texture.result().generation(),
+                  texture.result().deviceId() + 1)),
+              testing::IsFalse())
+      << "a handle from another device names nothing here";
+}
+
 TEST(BrowserDevice, MappingIsUnreadableUntilTheBrowserCompletesIt) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
@@ -622,10 +722,10 @@ TEST(BrowserDevice, MappingIsUnreadableUntilTheBrowserCompletesIt) {
               IsGpuError(GpuErrorType::InvalidState));
 
   fixture.bridge->completeMapping(2, std::vector<uint8_t>{1, 2, 3, 4});
-  Result<MapWaitOutcome> outcome =
+  Result<MapWaitReport> outcome =
       fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
   ASSERT_THAT(outcome, HasResult());
-  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
 
   Result<std::span<const uint8_t>> bytes = fixture.device->mappedBytes(mapping.result());
   ASSERT_THAT(bytes, HasResult());
@@ -649,10 +749,10 @@ TEST(BrowserDevice, GivesTheBrowserTheThreadWhileAMappingIsPending) {
   // exactly the progress a wait that merely rested would never allow.
   fixture.bridge->onYield = [&] { fixture.bridge->completeMapping(2, std::vector<uint8_t>{7}); };
 
-  Result<MapWaitOutcome> outcome =
+  Result<MapWaitReport> outcome =
       fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
   ASSERT_THAT(outcome, HasResult());
-  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
   EXPECT_THAT(fixture.bridge->yieldCount, 1u);
 }
 
@@ -670,10 +770,10 @@ TEST(BrowserDevice, BoundsTheSliceItHandsToTheBrowser) {
   // The runtime only checks that a slice is above zero, so a caller can ask for one no fixed-width
   // unit could hold. Complete the mapping from the yield so the wait ends after one slice.
   fixture.bridge->onYield = [&] { fixture.bridge->completeMapping(2, std::vector<uint8_t>{1}); };
-  Result<MapWaitOutcome> outcome =
+  Result<MapWaitReport> outcome =
       fixture.device->waitForMapping(mapping.result(), MapWaitParams{1.0e12, 1.0e12}, {});
   ASSERT_THAT(outcome, HasResult());
-  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
 
   // Bounded, and the bound does not shorten the wait: the runtime re-enters until its own budget
   // elapses, so a clamped slice only hands the thread back more often.
@@ -696,19 +796,19 @@ TEST(BrowserDevice, RefusesAWaitEnteredFromInsideItsOwnYield) {
   // Waiting again from inside the yield is what a callback running on the browser's thread could
   // do. Handing the thread over a second time would stack one unwind on another, which the runtime
   // underneath cannot represent, so the nested wait is refused rather than taken.
-  Result<MapWaitOutcome> nested = Result<MapWaitOutcome>(GpuError{GpuErrorType::InvalidState, ""});
+  Result<MapWaitReport> nested = Result<MapWaitReport>(GpuError{GpuErrorType::InvalidState, ""});
   fixture.bridge->onYield = [&] {
     nested = fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
     fixture.bridge->completeMapping(2, std::vector<uint8_t>{1});
   };
 
-  Result<MapWaitOutcome> outcome =
+  Result<MapWaitReport> outcome =
       fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
   ASSERT_THAT(outcome, HasResult());
-  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
 
   ASSERT_THAT(nested, HasResult());
-  EXPECT_THAT(nested.result(), MapWaitOutcome::Failed);
+  EXPECT_THAT(nested.result().outcome, MapWaitOutcome::Failed);
   EXPECT_THAT(fixture.device->nestedWaitRefusalsForTest(), 1u);
   // Only the outer wait handed the thread over; the refused one did not.
   EXPECT_THAT(fixture.bridge->yieldCount, 1u);
@@ -727,10 +827,10 @@ TEST(BrowserDevice, DoesNotYieldOnceAMappingHasSettled) {
   fixture.bridge->completeMapping(2, std::vector<uint8_t>{7});
 
   // Already readable, so there is nothing to wait for and no reason to give up the thread.
-  Result<MapWaitOutcome> outcome =
+  Result<MapWaitReport> outcome =
       fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
   ASSERT_THAT(outcome, HasResult());
-  EXPECT_THAT(outcome.result(), MapWaitOutcome::Ready);
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
   EXPECT_THAT(fixture.bridge->yieldCount, 0u);
 }
 
@@ -776,10 +876,10 @@ TEST(BrowserDevice, LosingTheDeviceEndsAPendingMappingImmediately) {
 
   fixture.bridge->lost = true;
 
-  Result<MapWaitOutcome> outcome =
+  Result<MapWaitReport> outcome =
       fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 10.0}, {});
   ASSERT_THAT(outcome, HasResult());
-  EXPECT_THAT(outcome.result(), MapWaitOutcome::DeviceLost);
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::DeviceLost);
 }
 
 TEST(BrowserDevice, UnmappingMakesTheMappedBytesUnreachable) {

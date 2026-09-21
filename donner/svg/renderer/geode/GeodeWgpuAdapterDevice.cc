@@ -350,7 +350,7 @@ uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
   return completionState_->completedSerial.load(std::memory_order_acquire);
 }
 
-bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
+bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                             std::chrono::duration<double>(timeoutSeconds));
@@ -360,6 +360,11 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
     if (completedSerial() >= serial) {
       return true;
     }
+    if (geodeDevice_.isDeviceLost()) {
+      // Nothing will complete on a lost device, so the budget is not spent waiting for something
+      // that can never arrive - and polling a lost wgpu device is what hangs on some drivers.
+      return false;
+    }
     if (std::chrono::steady_clock::now() >= deadline) {
       return false;
     }
@@ -368,34 +373,23 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
   return completedSerial() >= serial;
 }
 
-bool GeodeWgpuAdapterDevice::ownsTextureBacking(const gpu::Texture& texture) const {
-  return !validateTextureHandleForBackend(texture).hasError() &&
-         texture.slotIndex() < slotTextures_.size() &&
-         static_cast<bool>(slotTextures_[texture.slotIndex()].ownedTexture);
+bool GeodeWgpuAdapterDevice::onOwnsTextureBacking(uint32_t slotIndex) const {
+  return slotIndex < slotTextures_.size() &&
+         static_cast<bool>(slotTextures_[slotIndex].ownedTexture);
 }
 
-gpu::Status GeodeWgpuAdapterDevice::destroyTextureBacking(gpu::Texture&& texture) {
-  // Validate before touching the slot so a stale or foreign handle cannot destroy whatever
-  // occupies that slot now.
-  if (gpu::Status status = validateTextureHandleForBackend(texture); status.hasError()) {
-    return status;
+void GeodeWgpuAdapterDevice::onDestroyTextureBacking(uint32_t slotIndex) {
+  if (slotIndex < slotTextures_.size()) {
+    // An external registration leaves `ownedTexture` empty, so this destroys only what this
+    // adapter allocated; the embedder's texture is left to the embedder.
+    slotTextures_[slotIndex].ownedTexture.destroyBackingAndReset();
   }
-  if (texture.slotIndex() < slotTextures_.size()) {
-    slotTextures_[texture.slotIndex()].ownedTexture.destroyBackingAndReset();
-  }
-  return destroyTexture(std::move(texture));
 }
 
-gpu::Status GeodeWgpuAdapterDevice::destroyBufferBacking(gpu::Buffer&& buffer) {
-  // Validate before touching the slot so a stale or foreign handle cannot destroy whatever
-  // occupies that slot now.
-  if (gpu::Status status = validateBufferHandleForBackend(buffer); status.hasError()) {
-    return status;
+void GeodeWgpuAdapterDevice::onDestroyBufferBacking(uint32_t slotIndex) {
+  if (slotIndex < slotBuffers_.size()) {
+    slotBuffers_[slotIndex].destroyBackingAndReset();
   }
-  if (buffer.slotIndex() < slotBuffers_.size()) {
-    slotBuffers_[buffer.slotIndex()].destroyBackingAndReset();
-  }
-  return destroyBuffer(std::move(buffer));
 }
 
 gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Texture texture,
@@ -836,7 +830,6 @@ bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
   if (!mappingStillMatches(mappingSlotIndex, completion, future)) {
     return true;
   }
-  slotMappings_[mappingSlotIndex].usedTimedWaitAny = true;
   if (status == wgpu::WaitStatus::TimedOut && !completion->done.load(std::memory_order_acquire) &&
       !geodeDevice_.isDeviceLost()) {
     // A browser can defer pending map completion until another queue submission arrives.
@@ -846,15 +839,18 @@ bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
   return true;
 }
 
-gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
-                                                              double sliceSeconds) {
+gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
+                                                               double sliceSeconds) {
   if (mappingSlotIndex >= slotMappings_.size() ||
       slotMappings_[mappingSlotIndex].completion == nullptr) {
-    return gpu::MapSliceState::Failed;
+    return gpu::MapSliceReport{.state = gpu::MapSliceState::Failed,
+                               .waitKind = gpu::MapWaitKind::Polled};
   }
   MappingSlot::Completion& completion = *slotMappings_[mappingSlotIndex].completion;
   if (completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost()) {
-    return sliceStateOf(completion);
+    // Nothing was waited on, so no completion event was used to learn it.
+    return gpu::MapSliceReport{.state = sliceStateOf(completion),
+                               .waitKind = gpu::MapWaitKind::Polled};
   }
 
   // Asyncify may run completion or abandonment callbacks before this stack resumes.
@@ -874,11 +870,13 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
       std::chrono::duration<double>(sliceSeconds));
 
   const bool usedEventWait = waitOnMapFutureSlice(mappingSlotIndex, slice);
+  const gpu::MapWaitKind waitKind =
+      usedEventWait ? gpu::MapWaitKind::CompletionEvent : gpu::MapWaitKind::Polled;
   if (!mappingStillMatches(mappingSlotIndex, &completion, future)) {
-    return gpu::MapSliceState::Failed;
+    return gpu::MapSliceReport{.state = gpu::MapSliceState::Failed, .waitKind = waitKind};
   }
   if (usedEventWait) {
-    return sliceStateOf(completion);
+    return gpu::MapSliceReport{.state = sliceStateOf(completion), .waitKind = waitKind};
   }
 
   (void)BoundedGpuWait(
@@ -889,16 +887,10 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
       },
       std::max(slice, std::chrono::microseconds(1)));
 
-  return mappingStillMatches(mappingSlotIndex, &completion, future) ? sliceStateOf(completion)
-                                                                    : gpu::MapSliceState::Failed;
-}
-
-bool GeodeWgpuAdapterDevice::mappingUsedTimedWaitAny(const gpu::BufferMapping& mapping) const {
-  if (validateBufferMappingHandleForBackend(mapping).hasError() ||
-      mapping.slotIndex() >= slotMappings_.size()) {
-    return false;
-  }
-  return slotMappings_[mapping.slotIndex()].usedTimedWaitAny;
+  return gpu::MapSliceReport{.state = mappingStillMatches(mappingSlotIndex, &completion, future)
+                                          ? sliceStateOf(completion)
+                                          : gpu::MapSliceState::Failed,
+                             .waitKind = waitKind};
 }
 
 gpu::Result<std::span<const uint8_t>> GeodeWgpuAdapterDevice::onMappedBytes(

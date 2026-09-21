@@ -242,11 +242,14 @@ commits and their fixes together in a focused reviewable change.
       serial, bounded waits, cancellation, and device-loss outcomes. `RendererGeode` already
       expresses its readback entirely in runtime mapping calls, with a caller-owned deadline, one
       slice per wait, a cancellation predicate and distinct device-loss handling, and those hooks
-      now have native implementations. The renderer still binds the transitional adapter type
-      statically for four operations with no runtime equivalent (`destroyBufferBacking`,
-      `mappingUsedTimedWaitAny`, `importExternalTexture`, `submitStandalone`), so a native device
-      does not yet serve production readback; replacing that reference belongs with device
-      ownership below.
+      now have native implementations. Explicit release of a handle's backend allocation, the
+      ownership question that separates an allocation from a registration, a bounded wait for a
+      submission serial, and the wait kind a mapping's slices used are runtime operations
+      implemented on Metal, Vulkan, the browser bridge and the transitional adapter, so the
+      renderer expresses them without naming a backend. It still binds the transitional adapter
+      type statically for the two operations that remain without a runtime equivalent
+      (`importExternalTexture` and `submitStandalone`), so a native device does not yet serve
+      production readback; replacing that reference belongs with device ownership below.
 - [ ] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
       and that unmap, retirement, and loss invalidate access at the documented boundary. Native
       cancellation, device-loss and invalidation tests pass with the merged mapping hooks. Renderer

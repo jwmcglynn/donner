@@ -1297,7 +1297,7 @@ struct VulkanDevice::Impl {
 
     std::span<const uint8_t> mappableBytes(uint32_t bufferSlotIndex) const override;
     uint64_t completedSubmissionSerial() const override;
-    bool waitForSubmission(uint64_t serial, double sliceSeconds) override;
+    MapWaitKind waitForSubmission(uint64_t serial, double sliceSeconds) override;
     bool deviceLost() const override;
 
   private:
@@ -2220,7 +2220,7 @@ uint64_t VulkanDevice::completedSerial() const {
   return impl_->completedSerialValue;
 }
 
-bool VulkanDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
+bool VulkanDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   Impl& impl = *impl_;
   impl.pollCompleted();
   if (impl.hasError()) {
@@ -4051,8 +4051,17 @@ uint64_t VulkanDevice::Impl::MappingHost::completedSubmissionSerial() const {
   return device_.completedSerial();
 }
 
-bool VulkanDevice::Impl::MappingHost::waitForSubmission(uint64_t serial, double sliceSeconds) {
-  return device_.waitForSerial(serial, sliceSeconds);
+MapWaitKind VulkanDevice::Impl::MappingHost::waitForSubmission(uint64_t serial,
+                                                               double sliceSeconds) {
+  if (device_.completedSerial() >= serial) {
+    // Already done, so the wait below would return without blocking on anything; saying it used a
+    // completion signal would credit the statistics with a wait that never happened.
+    return MapWaitKind::Polled;
+  }
+  // vkWaitForFences blocks until the submission itself signals, so the slice is spent waiting on
+  // a completion signal rather than rechecking readiness.
+  (void)device_.waitForSerial(serial, sliceSeconds);
+  return MapWaitKind::CompletionEvent;
 }
 
 bool VulkanDevice::Impl::MappingHost::deviceLost() const {
@@ -4087,9 +4096,9 @@ Status VulkanDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t buffer
                                     readySerial);
 }
 
-MapSliceState VulkanDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+MapSliceReport VulkanDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
   if (!impl_->mappingTable) {
-    return MapSliceState::Failed;
+    return MapSliceReport{.state = MapSliceState::Failed, .waitKind = MapWaitKind::Polled};
   }
   return impl_->mappingTable->waitSlice(mappingSlotIndex, sliceSeconds);
 }
