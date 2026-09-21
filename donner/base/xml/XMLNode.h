@@ -400,59 +400,49 @@ public:
    * Get this element's parent, if it exists. If the parent is not set, this document is either the
    * root element or has not been inserted into the document tree.
    *
+   * Entries of the shared tree that are not XML nodes are not returned; see \ref firstChild.
+   *
    * @return The parent element, or \c std::nullopt if the parent is not set.
    */
   std::optional<XMLNode> parentElement() const;
 
   /**
-   * Get the first child of this element, if it exists.
+   * Get the first child of this element that is part of the XML document, if it exists.
    *
-   * @return The first child element, or \c std::nullopt if the element has no children.
+   * Tree storage is shared with the layers above XML: \ref donner::svg::SVGElement creates elements
+   * that join the tree without XML node data until they are projected, and rendering attaches
+   * shadow-tree entities under their host element. Those entries are not part of the authored XML
+   * document and every XML accessor on them (\ref type included) is invalid, so this accessor and
+   * its siblings step over them.
+   *
+   * @return The first child element, or \c std::nullopt if the element has no XML children.
    */
   std::optional<XMLNode> firstChild() const;
 
   /**
-   * Get the last child of this element, if it exists.
+   * Get the last child of this element that is part of the XML document, if it exists. See
+   * \ref firstChild for why a shared tree can hold entries that are not XML nodes.
    *
-   * @return The last child element, or \c std::nullopt if the element has no children.
+   * @return The last child element, or \c std::nullopt if the element has no XML children.
    */
   std::optional<XMLNode> lastChild() const;
 
   /**
-   * Get the previous sibling of this element, if it exists.
+   * Get the previous sibling of this element that is part of the XML document, if it exists. See
+   * \ref firstChild for why a shared tree can hold entries that are not XML nodes.
    *
-   * @return The previous sibling element, or \c std::nullopt if the element has no previous
+   * @return The previous sibling element, or \c std::nullopt if the element has no previous XML
    * sibling.
    */
   std::optional<XMLNode> previousSibling() const;
 
   /**
-   * Get the next sibling of this element, if it exists.
+   * Get the next sibling of this element that is part of the XML document, if it exists. See
+   * \ref firstChild for why a shared tree can hold entries that are not XML nodes.
    *
-   * @return The next sibling element, or \c std::nullopt if the element has no next sibling.
+   * @return The next sibling element, or \c std::nullopt if the element has no next XML sibling.
    */
   std::optional<XMLNode> nextSibling() const;
-
-  /**
-   * Get the first child of this node that is an XML node, if it exists.
-   *
-   * Tree storage is shared with the layers above XML: \ref SVGElement creates elements that join
-   * the tree without XML node data until they are projected, and rendering attaches shadow-tree
-   * entities under their host element. \ref firstChild returns those raw tree entries, on which
-   * every XML accessor (\ref type included) is invalid. Consumers that walk the XML projection
-   * of a shared tree use this and \ref nextXmlSibling instead.
-   *
-   * @return The first child that is an XML node, or \c std::nullopt if there is none.
-   */
-  std::optional<XMLNode> firstXmlChild() const;
-
-  /**
-   * Get the next sibling of this node that is an XML node, if it exists. See \ref firstXmlChild
-   * for why a shared tree can hold entries that are not XML nodes.
-   *
-   * @return The next sibling that is an XML node, or \c std::nullopt if there is none.
-   */
-  std::optional<XMLNode> nextXmlSibling() const;
 
   /**
    * Insert \p newNode as a child, before \p referenceNode. If \p referenceNode is std::nullopt,
@@ -626,6 +616,14 @@ protected:
    * @param entity Entity to convert.
    */
   EntityHandle toHandle(Entity entity) const { return EntityHandle(registry(), entity); }
+
+  /**
+   * Wrap an Entity resolved by a tree accessor, for advanced use.
+   *
+   * @param entity Entity to wrap, or \c entt::null.
+   * @return The wrapped node, or \c std::nullopt for \c entt::null.
+   */
+  std::optional<XMLNode> toOptionalNode(Entity entity) const;
 
   /// The underlying ECS Entity for this element, which holds all data.
   EntityHandle handle_;

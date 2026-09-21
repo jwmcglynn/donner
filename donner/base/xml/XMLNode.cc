@@ -520,62 +520,65 @@ void XMLNode::removeAttribute(const XMLQualifiedNameRef& name) {
   handle_.get_or_emplace<AttributesComponent>().removeAttribute(*handle_.registry(), name);
 }
 
-std::optional<XMLNode> XMLNode::parentElement() const {
-  const auto& tree = handle_.get<TreeComponent>();
-  return tree.parent() != entt::null ? std::make_optional(XMLNode(toHandle(tree.parent())))
-                                     : std::nullopt;
-}
-
-std::optional<XMLNode> XMLNode::firstChild() const {
-  const auto& tree = handle_.get<TreeComponent>();
-  return tree.firstChild() != entt::null ? std::make_optional(XMLNode(toHandle(tree.firstChild())))
-                                         : std::nullopt;
-}
-
-std::optional<XMLNode> XMLNode::lastChild() const {
-  const auto& tree = handle_.get<TreeComponent>();
-  return tree.lastChild() != entt::null ? std::make_optional(XMLNode(toHandle(tree.lastChild())))
-                                        : std::nullopt;
-}
-
-std::optional<XMLNode> XMLNode::previousSibling() const {
-  const auto& tree = handle_.get<TreeComponent>();
-  return tree.previousSibling() != entt::null
-             ? std::make_optional(XMLNode(toHandle(tree.previousSibling())))
-             : std::nullopt;
-}
-
-std::optional<XMLNode> XMLNode::nextSibling() const {
-  const auto& tree = handle_.get<TreeComponent>();
-  return tree.nextSibling() != entt::null
-             ? std::make_optional(XMLNode(toHandle(tree.nextSibling())))
-             : std::nullopt;
-}
-
 namespace {
 
-/// Advance from \p node over siblings that are not XML nodes.
-std::optional<XMLNode> XmlNodeAtOrAfter(std::optional<XMLNode> node) {
-  while (node.has_value()) {
-    if (std::optional<XMLNode> xmlNode = XMLNode::TryCast(node->entityHandle())) {
-      return xmlNode;
-    }
-    if (!node->entityHandle().all_of<TreeComponent>()) {
-      return std::nullopt;
-    }
-    node = node->nextSibling();
+/// Returns true if \p entity holds XML node data, i.e. it is part of the authored XML document.
+bool IsXmlNodeEntity(const Registry& registry, Entity entity) {
+  return entity != entt::null && registry.all_of<TreeComponent, XMLNodeTypeComponent>(entity);
+}
+
+/**
+ * Advance from \p entity along \p step until reaching an entity that is part of the authored XML
+ * document, or running off the end of the tree.
+ *
+ * Tree storage is shared with the layers above XML, which attach entities that hold no XML node
+ * data: elements created through the SVG DOM before they are projected, and the shadow-tree
+ * entities rendering attaches under their host element. Every XML accessor on those is invalid, so
+ * the tree accessors below step over them instead of handing them to callers.
+ *
+ * @param registry Registry holding the tree.
+ * @param entity Entity to start from, which may be \c entt::null.
+ * @param step Tree link to follow, e.g. \ref TreeComponent::nextSibling.
+ * @return The first XML node at or beyond \p entity, or \c entt::null if there is none.
+ */
+Entity XmlNodeAtOrBeyond(const Registry& registry, Entity entity,
+                         Entity (TreeComponent::*step)() const) {
+  while (entity != entt::null && !IsXmlNodeEntity(registry, entity)) {
+    const auto* tree = registry.try_get<TreeComponent>(entity);
+    entity = tree != nullptr ? (tree->*step)() : entt::null;
   }
-  return std::nullopt;
+  return entity;
 }
 
 }  // namespace
 
-std::optional<XMLNode> XMLNode::firstXmlChild() const {
-  return XmlNodeAtOrAfter(firstChild());
+std::optional<XMLNode> XMLNode::toOptionalNode(Entity entity) const {
+  return entity != entt::null ? std::make_optional(XMLNode(toHandle(entity))) : std::nullopt;
 }
 
-std::optional<XMLNode> XMLNode::nextXmlSibling() const {
-  return XmlNodeAtOrAfter(nextSibling());
+std::optional<XMLNode> XMLNode::parentElement() const {
+  const Entity parent = handle_.get<TreeComponent>().parent();
+  return toOptionalNode(IsXmlNodeEntity(registry(), parent) ? parent : entt::null);
+}
+
+std::optional<XMLNode> XMLNode::firstChild() const {
+  return toOptionalNode(XmlNodeAtOrBeyond(registry(), handle_.get<TreeComponent>().firstChild(),
+                                          &TreeComponent::nextSibling));
+}
+
+std::optional<XMLNode> XMLNode::lastChild() const {
+  return toOptionalNode(XmlNodeAtOrBeyond(registry(), handle_.get<TreeComponent>().lastChild(),
+                                          &TreeComponent::previousSibling));
+}
+
+std::optional<XMLNode> XMLNode::previousSibling() const {
+  return toOptionalNode(XmlNodeAtOrBeyond(
+      registry(), handle_.get<TreeComponent>().previousSibling(), &TreeComponent::previousSibling));
+}
+
+std::optional<XMLNode> XMLNode::nextSibling() const {
+  return toOptionalNode(XmlNodeAtOrBeyond(registry(), handle_.get<TreeComponent>().nextSibling(),
+                                          &TreeComponent::nextSibling));
 }
 
 // `TreeMutationContext` is an invariant of any registry created through the document facades
