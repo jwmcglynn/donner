@@ -12,7 +12,11 @@
 //     loader and the fatal-error surface).
 //   - `main()` runs on a worker. Everything below runs on the browser main
 //     thread and must stay side-effect free with respect to the canvas backing
-//     store, because touching `canvas.width` after the transfer throws.
+//     store, because touching `canvas.width` after the transfer throws. The
+//     page only READS that size, and reads it for one purpose: the browser
+//     rewriting it is this thread's only evidence that a frame the app thread
+//     presented has actually reached this element. See
+//     `RevealEditorAfterFirstFrame`.
 //   - The `__donner*` probe surface stays on `window` so the browser suites and
 //     the perf lane keep reading the page. The app thread posts into it through
 //     `MAIN_THREAD_ASYNC_EM_ASM` / shared-memory mirrors (see
@@ -32,6 +36,40 @@ const loadingDetail = document.getElementById("loading-detail");
 const capabilityError = document.getElementById("capability-error");
 const capabilityErrorDetail = document.getElementById("capability-error-detail");
 let editorRevealed = false;
+let awaitingPresentedFrame = false;
+// The backing store before anything has presented into it. Emscripten transfers
+// this element to the app thread, which sizes it for the viewport, so the
+// browser replacing this size is the page-side evidence that the app's first
+// presented frame reached the placeholder.
+//
+// That inference holds only because this thread never writes the size: the page
+// does not, and every write after the transfer throws, so a committed frame is
+// the only thing left that can change it. A main-thread write added here later
+// would not be a resize, it would forge the reveal evidence.
+//
+// A viewport whose backing size happens to equal this default (300x150 at
+// devicePixelRatio 1, so a 300x150 embed) leaves the change unobservable and
+// falls to the frame bound below: one bounded hitch, then a normal boot.
+const bootBackingWidth = canvas.width;
+const bootBackingHeight = canvas.height;
+// The loader's opacity transition is 160ms (`#loading-screen` in editor.css).
+// Take the element out of the page once it has finished.
+const kLoadingFadeOutMs = 220;
+// How many delivered animation frames to wait for that evidence before
+// revealing without it.
+//
+// Frames rather than wall-clock, because the watch below only runs inside an
+// animation frame and a hidden tab is delivered none. A wall-clock bound would
+// expire unobserved while the page is hidden and then fire on the first frame
+// after it comes back, revealing with no evidence and warning about a wait the
+// page never experienced, and a tab switch during the download is the most
+// ordinary interruption there is. A count of delivered frames does not advance
+// while hidden.
+//
+// 120 frames is two seconds of a 60Hz page and two orders of magnitude above
+// the three-frame gap this was built for, so reaching it means the engine is
+// not going to report the size at all.
+const kPresentedFrameBoundFrames = 120;
 
 window.__donnerBootstrapStartedAtMs = performance.now();
 window.__donnerBackend = "geode";
@@ -65,18 +103,65 @@ function ShowCapabilityError(message) {
   console.error(message);
 }
 
-function RevealEditorAfterFirstFrame() {
-  if (editorRevealed || !window.__donnerFirstFramePresented) {
-    return;
-  }
+function PresentedFrameReachedPage() {
+  return canvas.width !== bootBackingWidth || canvas.height !== bootBackingHeight;
+}
+
+function RevealEditor(framesAwaitingPresentedFrame) {
   editorRevealed = true;
+  // How many frames the reveal waited for its evidence. The browser suites read
+  // this to keep the bound a backstop rather than the path.
+  window.__donnerFramesAwaitingPresentedFrame = framesAwaitingPresentedFrame;
   window.__donnerEditorRevealedAtMs = performance.now();
   loadingScreen.classList.add("is-complete");
   canvas.focus();
   setTimeout(() => {
     window.__donnerLoadingScreenHiddenAtMs = performance.now();
     loadingScreen.hidden = true;
-  }, 220);
+  }, kLoadingFadeOutMs);
+}
+
+// The app thread reports its first presented frame through the shared-memory
+// bridge, which lands here as a posted message. The frame itself reaches this
+// element on a different channel: the browser hands the worker's committed
+// OffscreenCanvas frame to the placeholder and rewrites its backing size.
+// Nothing orders those two against each other, so the report can arrive first
+// and uncovering the editor on the report alone shows the page background where
+// the first frame should be. Wait for the size to change instead.
+function RevealEditorAfterFirstFrame() {
+  if (
+    editorRevealed || awaitingPresentedFrame || !window.__donnerCanStartWasm
+    || !window.__donnerFirstFramePresented
+  ) {
+    return;
+  }
+  awaitingPresentedFrame = true;
+  if (PresentedFrameReachedPage()) {
+    RevealEditor(0);
+    return;
+  }
+  let framesAwaitingPresentedFrame = 0;
+  const waitForPresentedFrame = () => {
+    if (editorRevealed) {
+      return;
+    }
+    if (PresentedFrameReachedPage()) {
+      RevealEditor(framesAwaitingPresentedFrame);
+      return;
+    }
+    framesAwaitingPresentedFrame += 1;
+    if (framesAwaitingPresentedFrame >= kPresentedFrameBoundFrames) {
+      console.warn(
+        "Donner: revealing the editor without evidence that its first frame reached the page. "
+          + `The canvas backing store is still ${canvas.width}x${canvas.height} after `
+          + `${kPresentedFrameBoundFrames} animation frames.`,
+      );
+      RevealEditor(framesAwaitingPresentedFrame);
+      return;
+    }
+    requestAnimationFrame(waitForPresentedFrame);
+  };
+  requestAnimationFrame(waitForPresentedFrame);
 }
 
 window.addEventListener(
