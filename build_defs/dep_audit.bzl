@@ -3,6 +3,10 @@
 `configured_dependency_audit_test` follows selected binary/library dependencies
 through build transitions, so it also audits product dispatchers and Wasm packages.
 
+`configured_dependency_labels` exposes the same configured closure as a text
+file, for tests that need to ask a question the forbidden/required lists cannot
+express.
+
 Companion to `banned_deps.bzl`. Where `banned_deps_test` checks *direct*
 (depth-1) dependencies on external libraries, `forbidden_transitive_dep_test`
 asserts that `target` has **no path at all** (transitive) to `forbidden` in the
@@ -110,6 +114,20 @@ def _configured_deps_impl(target, ctx):
 _configured_deps = aspect(
     implementation = _configured_deps_impl,
     attr_aspects = _CONFIGURED_DEP_ATTRS,
+)
+
+def _configured_dependency_labels_impl(ctx):
+    labels = sorted([str(label) for label in ctx.attr.target[_ConfiguredDepsInfo].labels.to_list()])
+    output = ctx.actions.declare_file(ctx.label.name + ".txt")
+    ctx.actions.write(output, "\n".join(labels) + "\n")
+    return [DefaultInfo(files = depset([output]))]
+
+configured_dependency_labels = rule(
+    implementation = _configured_dependency_labels_impl,
+    attrs = {
+        "target": attr.label(mandatory = True, aspects = [_configured_deps]),
+    },
+    doc = "Writes one configured dependency label per line, resolving select() without compiling.",
 )
 
 def _audit_configuration_impl(settings, attr):
