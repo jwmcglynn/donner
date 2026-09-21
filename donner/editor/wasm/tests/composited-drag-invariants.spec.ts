@@ -424,7 +424,10 @@ const kMinimumProbeSamples = process.env.CI ? 12 : 16;
 
 test.describe("composited drag invariants", () => {
   test("g: a shape drag never presents a position it already left", async ({ browserName, page }) => {
-    // Preserve same-frame images while the aggregate drag-ordering candidates are investigated.
+    // Keep the read-backs behind every candidate: this gesture drags the
+    // rectangle past the artboard's top-left corner, where the editor pins the
+    // selection position chip on top of it, and the images are what separate a
+    // shape that moved from a shape with chrome over it.
     test.setTimeout(scaledMs(120_000));
     const failures = await openEditor(page);
     const { editorBounds, blueBounds } = await openBasicShapes(page);
@@ -452,7 +455,12 @@ test.describe("composited drag invariants", () => {
       sampleHeight: measurement.sampleHeight,
       minColorAlpha: 64,
       minColorSpread: 60,
-      // Basic Shapes contains exactly one pixel population matching this established predicate.
+      // Basic Shapes authors exactly one object in this colour, so the predicate
+      // isolates the dragged rectangle from every other fixture shape. It does
+      // not isolate it from the editor's own chrome: the selection position
+      // chip paints over the rectangle here, which removes matching pixels
+      // without moving the rectangle. That is why the ordering verdict needs
+      // the extent as well as the centroid.
       colorMask: "basic-blue",
     });
     await startCompositedProbe(page);
@@ -820,17 +828,37 @@ test.describe("composited drag invariants", () => {
 
 // Pure-function coverage for the regression classifier itself. No page, no
 // browser state: these pin the measurement physics that test (g) stands on,
-// after a CI flake showed the classifier counting pipeline latency at a drag
-// REVERSAL as an out-of-order frame (presented content finishing the old
-// direction for one sample after the pointer turned around).
+// after two CI flakes showed the classifier reading something other than a
+// presented position. The first counted pipeline latency at a drag REVERSAL as
+// an out-of-order frame (presented content finishing the old direction for one
+// sample after the pointer turned around). The second counted a change in the
+// matching pixel POPULATION as a change in position: the editor's selection
+// position chip covers part of the dragged rectangle, so the frames that draw
+// it are missing those pixels and the centroid moves while the rectangle does
+// not.
 test.describe("dragRegressions classifier (pure)", () => {
-  /** Sample with only the fields the classifier reads. */
+  /** Side of the synthetic shape these fixtures present, read-back px. */
+  const kSyntheticExtentPx = 24;
+
+  /**
+   * Sample with only the fields the classifier reads.
+   *
+   * The masked population is a rigid square centred on the centroid, because
+   * that is what a dragged shape is: its extent travels with it. Fixtures that
+   * need the centroid and the extent to DISAGREE - a shape with editor chrome
+   * over part of it - build their samples with `partlyHiddenSample`.
+   */
   function sampleAt(t: number, centroidX: number): CompositedSample {
     return {
       t,
       drawOk: true,
       coloredCentroidX: centroidX,
       coloredCentroidY: 50,
+      coloredPixels: kSyntheticExtentPx * kSyntheticExtentPx,
+      coloredMinX: centroidX - (kSyntheticExtentPx - 1) / 2,
+      coloredMinY: 50 - (kSyntheticExtentPx - 1) / 2,
+      coloredWidth: kSyntheticExtentPx,
+      coloredHeight: kSyntheticExtentPx,
     } as unknown as CompositedSample;
   }
 
@@ -941,6 +969,10 @@ test.describe("dragRegressions classifier (pure)", () => {
     }
     const violations = dragRegressions(samples, trace);
     expect(violations.map((v) => v.sampleIndex)).toEqual([6]);
+    // A real older frame carries the whole shape back, so the reported extent
+    // travels with the centroid rather than staying put.
+    expect(violations.map((v) => ({ presentedDx: v.presentedDx, extentDx: v.extentDx })))
+      .toEqual([{ presentedDx: -36, extentDx: -36 }]);
   });
 
   test("evidence names the prior usable sample across an unreadable frame", () => {
@@ -1033,6 +1065,209 @@ test.describe("dragRegressions classifier (pure)", () => {
     samples[29] = sampleAt(samples[29].t, samples[29].coloredCentroidX + 20);
     const violations = dragRegressions(samples, trace, 1.0, 2.0, 600);
     expect(violations.map((v) => v.sampleIndex)).toEqual([29]);
+  });
+
+  /**
+   * A consecutive frame pair retained from a red run of this lane on CI.
+   *
+   * Everything here is measured, not modelled: `trace` is the recorded pointer
+   * stream around the pair, and the centroids and the bounding box come from
+   * the two read-back images the run attached. In every pair the later frame's
+   * masked pixels are a strict SUBSET of the earlier frame's and the two
+   * bounding boxes are identical - the shape did not move at all. What changed
+   * is the editor's own chrome: the selection position chip clamps to the
+   * artboard's top-left corner once a drag carries the selection off the
+   * artboard, so it lands on the dragged rectangle, and the frames where it is
+   * drawn are missing exactly the pixels it covers. Reading that as a position
+   * is what reported an older frame in a document that never moved.
+   */
+  interface MeasuredFrame {
+    t: number;
+    centroidX: number;
+    centroidY: number;
+    pixels: number;
+  }
+
+  interface PartlyHiddenFramePair {
+    name: string;
+    trace: Array<readonly [number, number, number]>;
+    boundingBox: { minX: number; minY: number; width: number; height: number };
+    earlier: MeasuredFrame;
+    later: MeasuredFrame;
+  }
+
+  function partlyHiddenSample(
+    boundingBox: PartlyHiddenFramePair["boundingBox"],
+    frame: MeasuredFrame,
+  ): CompositedSample {
+    return {
+      t: frame.t,
+      drawOk: true,
+      coloredPixels: frame.pixels,
+      coloredCentroidX: frame.centroidX,
+      coloredCentroidY: frame.centroidY,
+      coloredMinX: boundingBox.minX,
+      coloredMinY: boundingBox.minY,
+      coloredWidth: boundingBox.width,
+      coloredHeight: boundingBox.height,
+    } as unknown as CompositedSample;
+  }
+
+  const kPartlyHiddenFramePairs: PartlyHiddenFramePair[] = [
+    {
+      name: "chip drawn over the rectangle's top-left corner",
+      trace: [
+        [36602.42, 297.875567, 298.438351],
+        [36654.60, 297.118639, 297.331977],
+        [36699.98, 295.322267, 296.217313],
+        [36736.82, 293.205649, 296.346521],
+        [36766.36, 292.199876, 294.818285],
+        [36807.70, 291.217578, 294.247043],
+        [36835.56, 289.108474, 294.050686],
+        [36883.86, 287.256958, 292.390915],
+      ],
+      boundingBox: { minX: 43, minY: 22, width: 25, height: 34 },
+      earlier: { t: 36864.36, centroidX: 54.944444, centroidY: 38.425532, pixels: 846 },
+      later: { t: 36883.96, centroidX: 55.533069, centroidY: 40.083333, pixels: 756 },
+    },
+    {
+      name: "chip drawn while the rectangle still spans the artboard corner",
+      trace: [
+        [27330.56, 304.530555, 300.995808],
+        [27389.02, 303.733552, 300.494740],
+        [27422.30, 301.822677, 300.408923],
+        [27467.40, 300.167322, 298.850920],
+        [27513.08, 299.584132, 298.857245],
+        [27561.64, 298.493788, 298.269401],
+        [27599.26, 296.487127, 296.927561],
+      ],
+      boundingBox: { minX: 40, minY: 20, width: 31, height: 38 },
+      earlier: { t: 27562.00, centroidX: 54.926621, centroidY: 38.408703, pixels: 1172 },
+      later: { t: 27599.46, centroidX: 55.772595, centroidY: 40.414966, pixels: 1029 },
+    },
+    {
+      name: "chip drawn later in the same drag, one sample apart",
+      trace: [
+        [43508.84, 293.205649, 296.346521],
+        [43540.54, 292.199876, 294.818285],
+        [43571.54, 291.217578, 294.247043],
+        [43634.66, 289.108474, 294.050686],
+        [43673.98, 287.256958, 292.390915],
+        [43713.02, 286.457179, 292.299920],
+        [43744.12, 285.120714, 291.575901],
+        [43783.36, 282.863346, 290.121135],
+      ],
+      boundingBox: { minX: 42, minY: 21, width: 25, height: 34 },
+      earlier: { t: 43744.42, centroidX: 53.972813, centroidY: 37.462175, pixels: 846 },
+      later: { t: 43783.50, centroidX: 54.595628, centroidY: 39.435792, pixels: 732 },
+    },
+  ];
+
+  test("editor chrome hiding part of the shape is not an older frame", () => {
+    const verdicts = Object.fromEntries(kPartlyHiddenFramePairs.map((pair) => [
+      pair.name,
+      dragRegressions(
+        [
+          partlyHiddenSample(pair.boundingBox, pair.earlier),
+          partlyHiddenSample(pair.boundingBox, pair.later),
+        ],
+        pair.trace,
+        1.0,
+        2.0,
+        150,
+      ),
+    ]));
+    expect(
+      verdicts,
+      "each pair's two frames share one bounding box, so the shape held its position"
+        + " and the centroid shift is the hidden pixels, not a presented position",
+    ).toEqual(Object.fromEntries(kPartlyHiddenFramePairs.map((pair) => [pair.name, []])));
+  });
+
+  test("a shape that really moved back is still reported", () => {
+    // The same centroid shift as the pairs above, with the bounding box carried
+    // back by it and rounded the way the probe reports one: that is a shape at
+    // an earlier position, and the extent evidence must not excuse it.
+    const pair = kPartlyHiddenFramePairs[0];
+    const shiftX = pair.later.centroidX - pair.earlier.centroidX;
+    const shiftY = pair.later.centroidY - pair.earlier.centroidY;
+    const samples = [
+      partlyHiddenSample(pair.boundingBox, pair.earlier),
+      partlyHiddenSample({
+        ...pair.boundingBox,
+        minX: Math.round(pair.boundingBox.minX + shiftX),
+        minY: Math.round(pair.boundingBox.minY + shiftY),
+      }, pair.later),
+    ];
+    const violations = dragRegressions(samples, pair.trace, 1.0, 2.0, 150);
+    expect(violations.map((v) => ({
+      sampleIndex: v.sampleIndex,
+      extentDx: v.extentDx,
+      extentDy: v.extentDy,
+    }))).toEqual([{ sampleIndex: 1, extentDx: 1, extentDy: 2 }]);
+  });
+
+  test("the quantised box keeps its verdict once a pop-back projects past 1.4 px", () => {
+    // The box is reported in whole read-back pixels, so rounding each edge can
+    // move its projection by up to half a pixel per axis and a pop-back barely
+    // past the 1.0 tolerance can round to no movement at all. Sweeping a rigid
+    // 25x34 shape over 625 sub-pixel phases and every direction in 3 degree
+    // steps puts that loss entirely below a projection of 1.4 read-back px,
+    // which is under every pair above. This pins the floor so a later change to
+    // the box or the tolerance cannot quietly raise it.
+    const pair = kPartlyHiddenFramePairs[0];
+    const pointerDx = pair.trace[pair.trace.length - 1][1]
+      - pair.trace[pair.trace.length - 2][1];
+    const pointerDy = pair.trace[pair.trace.length - 1][2]
+      - pair.trace[pair.trace.length - 2][2];
+    const pointerLength = Math.hypot(pointerDx, pointerDy);
+    const missedProjections: number[] = [];
+    for (let magnitude = 1.0; magnitude <= 6.0; magnitude += 0.1) {
+      for (let degrees = 0; degrees < 360; degrees += 3) {
+        const radians = (degrees * Math.PI) / 180;
+        const dx = Math.cos(radians) * magnitude;
+        const dy = Math.sin(radians) * magnitude;
+        const projection = (dx * pointerDx + dy * pointerDy) / pointerLength;
+        if (projection >= -1.4) continue;
+        for (let phase = 0; phase < 625; ++phase) {
+          // The shape sits at a sub-pixel offset the read-back cannot see; only
+          // its rounded box reaches the classifier, on both sides of the pair.
+          const offsetX = (phase % 25) / 25;
+          const offsetY = Math.floor(phase / 25) / 25;
+          const before = {
+            ...pair.boundingBox,
+            minX: Math.round(pair.boundingBox.minX + offsetX),
+            minY: Math.round(pair.boundingBox.minY + offsetY),
+          };
+          const after = {
+            ...pair.boundingBox,
+            minX: Math.round(pair.boundingBox.minX + offsetX + dx),
+            minY: Math.round(pair.boundingBox.minY + offsetY + dy),
+          };
+          const moved = dragRegressions(
+            [
+              partlyHiddenSample(before, pair.earlier),
+              partlyHiddenSample(after, {
+                ...pair.later,
+                centroidX: pair.earlier.centroidX + dx,
+                centroidY: pair.earlier.centroidY + dy,
+              }),
+            ],
+            pair.trace,
+            1.0,
+            2.0,
+            150,
+          );
+          if (moved.length === 0) missedProjections.push(projection);
+        }
+      }
+    }
+    expect(
+      missedProjections.slice(0, 5),
+      `${missedProjections.length} rigid pop-backs projecting past 1.4 read-back px`
+        + " were excused by the extent evidence; the quantised box lost a verdict the"
+        + " centroid tolerance had already accepted",
+    ).toEqual([]);
   });
 });
 

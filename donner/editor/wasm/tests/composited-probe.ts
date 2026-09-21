@@ -110,6 +110,21 @@ export interface CompositedSample {
   coloredCentroidX: number;
   coloredCentroidY: number;
   /**
+   * Top-left corner of the chromatic content's bounding box, in read-back
+   * pixels, or -1 when there was none.
+   *
+   * The EXTENT observable, and the one that separates a shape that MOVED from
+   * a shape that is partly HIDDEN. A color-masked centroid shifts whenever the
+   * matching population changes, and the editor draws its own chrome over the
+   * document: the selection position chip lands on the dragged shape once the
+   * gesture carries the selection past the artboard's top-left corner, so the
+   * chip appearing or disappearing moves the centroid while the shape stays
+   * exactly where it was. The bounding box does not move unless the shape
+   * does.
+   */
+  coloredMinX: number;
+  coloredMinY: number;
+  /**
    * Width of the chromatic content's bounding box, in read-back pixels, or 0
    * when there was none.
    *
@@ -315,6 +330,8 @@ export async function installCompositedProbe(
       coloredPixels: 0,
       coloredCentroidX: -1,
       coloredCentroidY: -1,
+      coloredMinX: -1,
+      coloredMinY: -1,
       coloredWidth: 0,
       coloredHeight: 0,
       sampledPixels: 0,
@@ -360,6 +377,8 @@ export async function installCompositedProbe(
       coloredPixels: number;
       coloredCentroidX: number;
       coloredCentroidY: number;
+      coloredMinX: number;
+      coloredMinY: number;
       coloredWidth: number;
       coloredHeight: number;
       sampledPixels: number;
@@ -393,6 +412,8 @@ export async function installCompositedProbe(
         coloredPixels: colored,
         coloredCentroidX: colored === 0 ? -1 : coloredX / colored,
         coloredCentroidY: colored === 0 ? -1 : coloredY / colored,
+        coloredMinX: colored === 0 ? -1 : minX,
+        coloredMinY: colored === 0 ? -1 : minY,
         coloredWidth: colored === 0 ? 0 : maxX - minX + 1,
         coloredHeight: colored === 0 ? 0 : maxY - minY + 1,
         sampledPixels: count,
@@ -673,16 +694,34 @@ export interface DragRegression {
   /** Presented centroid movement between the two samples, read-back px. */
   presentedDx: number;
   presentedDy: number;
+  /** Presented bounding-box movement over the same interval, read-back px. */
+  extentDx: number;
+  extentDy: number;
+  /**
+   * Masked pixel count in each sample.
+   *
+   * A shape that translated keeps its population; a shape something was drawn
+   * over loses the pixels that were covered. Printing both is what lets a
+   * reader tell the two apart from the failure message alone, without
+   * downloading the retained images.
+   */
+  previousColoredPixels: number;
+  coloredPixels: number;
   /** Pointer movement over the same interval, CSS px. */
   pointerDx: number;
   pointerDy: number;
 }
 
+/** Center of a sample's masked bounding box, in read-back px. */
+function contentExtentCenter(sample: CompositedSample): { x: number; y: number } {
+  return {
+    x: sample.coloredMinX + (sample.coloredWidth - 1) / 2,
+    y: sample.coloredMinY + (sample.coloredHeight - 1) / 2,
+  };
+}
+
 /**
  * Find frames in which the presented content moved AGAINST the drag.
- *
- * These are candidates for image inspection, not proof of an older frame. A mixed-color
- * population can move its centroid without the selected object moving backward.
  *
  * A pop-back cannot be tested as "the centroid decreased", because a real drag
  * reverses direction and the content is supposed to follow it. It also cannot
@@ -702,6 +741,34 @@ export interface DragRegression {
  * pixels and the pointer displacement is in CSS pixels. Only the SIGN of the
  * projection is used, so the scale factor between them cannot change the
  * verdict; the tolerance is applied to the presented magnitude alone.
+ *
+ * MOVED, not merely CHANGED. A centroid is a property of the matching pixel
+ * POPULATION, and the population changes for reasons that have nothing to do
+ * with where the shape is: the editor draws its own chrome over the document,
+ * and a chip that covers part of the shape takes those pixels out of the
+ * population and drags the centroid toward whatever is left. A frame that
+ * presents a position the drag already left shows the shape TRANSLATED back,
+ * so its bounding box moves back with it; a frame that merely hides part of
+ * the shape leaves the bounding box exactly where it was. The candidate is
+ * therefore required to move the extent against the pointer as well, which is
+ * the object-identity evidence a centroid alone cannot supply. The bound on
+ * the extent is only its sign: quantising the box to whole read-back pixels
+ * costs it precision the centroid does not have, so the magnitude test stays
+ * on the centroid.
+ *
+ * What that quantising costs, swept over a rigid 25x34 shape at 625 sub-pixel
+ * phases per direction and every direction in 3 degree steps: once a rigid
+ * pop-back's centroid projection reaches 1.4 read-back px it opposes the
+ * pointer in the quantised box at EVERY phase, so nothing above that is lost.
+ * Between the 1.0 tolerance and 1.2 about 0.45% of phases do not, because
+ * rounding each box edge can move the projection by up to half a pixel per
+ * axis. All three of the frame pairs this rule was built from projected past
+ * 1.5, so the carve-out costs nothing at the magnitude that produced them.
+ *
+ * It does not make a candidate proof on its own. Chrome that reaches a masked
+ * EDGE, rather than sitting inside the shape, moves the box too; the masked
+ * pixel counts reported alongside separate that case from a real move, and the
+ * retained images settle it.
  *
  * Latency carve-out: presentation legitimately lags the pointer, and no
  * pointer-relative observer can distinguish lag from an out-of-order frame
@@ -757,7 +824,12 @@ export function dragRegressions(
           const presentedDx = sample.coloredCentroidX - previous.coloredCentroidX;
           const presentedDy = sample.coloredCentroidY - previous.coloredCentroidY;
           const projection = (presentedDx * pointerDx + presentedDy * pointerDy) / pointerLength;
-          if (projection < -toleranceReadbackPx) {
+          const previousExtent = contentExtentCenter(previous);
+          const extent = contentExtentCenter(sample);
+          const extentDx = extent.x - previousExtent.x;
+          const extentDy = extent.y - previousExtent.y;
+          const extentProjection = (extentDx * pointerDx + extentDy * pointerDy) / pointerLength;
+          if (projection < -toleranceReadbackPx && extentProjection < 0) {
             const lagStepMs = 25;
             let excusedByLatency = false;
             for (let lag = lagStepMs; lag <= maxLatencyMs && !excusedByLatency; lag += lagStepMs) {
@@ -777,6 +849,10 @@ export function dragRegressions(
                 predecessorIndex: previousIndex,
                 presentedDx,
                 presentedDy,
+                extentDx,
+                extentDy,
+                previousColoredPixels: previous.coloredPixels,
+                coloredPixels: sample.coloredPixels,
                 pointerDx,
                 pointerDy,
               });
