@@ -479,7 +479,10 @@ public:
   }
   static size_t PendingCount(const VulkanSwapchain& surface) { return surface.pending_.size(); }
 
-  static Status Submit(VulkanDevice& device) { return device.onSubmit(1, 0, {}); }
+  static Status Submit(VulkanDevice& device) {
+    const SubmittedCommandBuffer commandBuffer{0, {}};
+    return device.onSubmit(1, {&commandBuffer, 1});
+  }
 
   static void RetireSurface(VulkanDevice& device, uint32_t index) {
     device.onDestroySurface(index);

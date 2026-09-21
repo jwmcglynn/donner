@@ -209,6 +209,18 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
                                            const Extent2d& copySize, TextureFormat format,
                                            std::string_view context);
 
+/// One command buffer of a submission, as a backend receives it: the slot the buffer occupied
+/// before it was consumed, plus its validated commands in recording order.
+///
+/// \ref commands aliases storage the submitting device owns for the duration of the
+/// \ref Device::onSubmit call this struct is handed to, and nothing else keeps it alive. A
+/// backend that needs the commands after that call returns copies them; it must not retain the
+/// span, or this struct, past the call.
+struct SubmittedCommandBuffer {
+  uint32_t slotIndex = 0;             //!< Slot the command buffer occupied before consumption.
+  std::span<const Command> commands;  //!< Validated commands, in recording order.
+};
+
 /// A texture acquired from a surface for one frame, with the state the surface reported while
 /// handing it over.
 ///
@@ -660,6 +672,17 @@ public:
                       const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
                       const Origin2d& destinationOrigin = {});
 
+  /// Most command buffers one submission may carry.
+  ///
+  /// A backend acquires a native command buffer per element and commits none of them until the
+  /// whole span has encoded, so that nothing reaches the queue when an element fails to encode.
+  /// Native queues cap how many command buffers may be outstanding at once and block the
+  /// acquiring thread at that cap, so a span large enough to reach it on its own would wait for
+  /// buffers only it could release. Refusing above this bound keeps that wait impossible and
+  /// leaves plenty of room: a frame split at the bound a backend needs runs to tens of buffers,
+  /// not hundreds.
+  static constexpr size_t kMaxCommandBuffersPerSubmission = 256;
+
   /**
    * Submits a finished command buffer, consuming it, and returns the assigned submission serial.
    * Serials start at 1 and increase by 1 per submission; a submission rejected here or by the
@@ -682,6 +705,32 @@ public:
    * @param commandBuffer Command buffer to submit; consumed even on failure.
    */
   Result<uint64_t> submit(CommandBuffer commandBuffer);
+
+  /**
+   * Submits finished command buffers as one submission, consuming them, and returns the single
+   * assigned submission serial.
+   *
+   * The buffers execute in the order they appear in \p commandBuffers, and the whole span is one
+   * backend submission with one completion: a caller that records a frame through several
+   * independently-owned encoders keeps the frame's ordering and its single completion without
+   * reaching a queue per encoder. Splitting a frame across buffers is therefore free to follow
+   * whatever bound a backend needs - a very large single command buffer stalls the Metal
+   * completion path - without changing what a frame costs on the queue.
+   *
+   * A span holds between one and \ref kMaxCommandBuffersPerSubmission buffers. Both size
+   * refusals carry \ref GpuErrorType::InvalidDescriptor and are decided before anything is
+   * consumed, so the caller still owns its buffers: an empty span names no work and would consume
+   * a serial nothing can wait on, and an oversized one is refused rather than submitted so the
+   * caller splits it across submissions instead.
+   *
+   * Once consumption starts every buffer is consumed, including after a refusal, so a span that
+   * was refused partway cannot be submitted again with the accepted part already gone. Refusals
+   * otherwise carry the same meanings as the single-buffer overload.
+   *
+   * @param commandBuffers Command buffers to submit in execution order; every element is
+   *   consumed, leaving the caller's handles null, unless the span's size refuses it outright.
+   */
+  Result<uint64_t> submit(std::span<CommandBuffer> commandBuffers);
 
   /**
    * Processes deferred destructions: releases the backend object of every destroyed resource
@@ -968,12 +1017,19 @@ protected:
    */
   virtual void onDestroySurface(uint32_t slotIndex);
 
-  /// Backend hook: a validated command buffer was submitted.
-  /// @param submissionSerial Serial assigned to this submission.
-  /// @param commandBufferSlotIndex Slot the command buffer occupied before being consumed.
-  /// @param commands Validated commands, in recording order.
-  virtual Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                          std::span<const Command> commands) = 0;
+  /**
+   * Backend hook: validated command buffers were submitted as one submission.
+   *
+   * The span holds at least one buffer and they execute in the order given. The backend owes the
+   * caller one completion for the whole span: whatever native objects it splits the work across,
+   * \ref completedSerial reaches \p submissionSerial only once all of them have finished, and a
+   * backend that reports the submission accepted has accepted all of it.
+   *
+   * @param submissionSerial Serial assigned to this submission.
+   * @param commandBuffers Command buffers of this submission, in execution order.
+   */
+  virtual Status onSubmit(uint64_t submissionSerial,
+                          std::span<const SubmittedCommandBuffer> commandBuffers) = 0;
 
 private:
   friend class CommandEncoder;
@@ -1077,6 +1133,25 @@ private:
   struct CommandBufferRecord {
     std::vector<Command> commands;  //!< Validated commands in recording order.
   };
+
+  /// A command buffer a submission has taken out of its slot, with the commands it carried.
+  struct ConsumedCommandBuffer {
+    uint32_t slotIndex = 0;         //!< Slot the buffer occupied before it was consumed.
+    std::vector<Command> commands;  //!< Commands the buffer carried, in recording order.
+  };
+
+  /**
+   * Takes every command buffer of a submission out of its slot, leaving the caller's handles
+   * null, and reports the first identity refusal.
+   *
+   * Consumption continues past a refusal, so a span refused partway cannot be submitted a second
+   * time with the buffers that were accepted the first time already gone.
+   *
+   * @param commandBuffers Handles to consume, in execution order.
+   * @param consumed Receives the buffers whose identities validated, in the same order.
+   */
+  Status consumeSubmissionCommandBuffers(std::span<CommandBuffer> commandBuffers,
+                                         std::vector<ConsumedCommandBuffer>& consumed);
 
   /**
    * Resolves a handle or handle reference against \p table: null handles and stale generations
@@ -1198,6 +1273,19 @@ private:
   /// @param commands Recorded commands.
   Result<std::vector<SubmissionUse>> validateSubmissionResources(
       std::span<const Command> commands) const;
+
+  /**
+   * Refuses a submission that uses a buffer with an open mapping.
+   *
+   * The mapped range aliases the buffer's own storage and its readiness was fixed at the
+   * submission it was taken against, so work accepted now would be written underneath a host that
+   * still reads the mapping as ready. This covers uses that only read the buffer as well: a
+   * reader cannot tell which parts of the range a submission will touch, so the buffer belongs
+   * either to the host or to the device and not to both at once.
+   *
+   * @param uses Resources the submission references.
+   */
+  Status checkSubmissionMappings(std::span<const SubmissionUse> uses) const;
 
   /// Resolves one recorded identity against \p table and records it in \p uses, failing closed
   /// with \ref GpuErrorType::InvalidHandle when the slot has been destroyed or reused.

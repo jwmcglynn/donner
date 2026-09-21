@@ -74,7 +74,7 @@ public:
                             const BrowserTexelLayout& layout,
                             const BrowserCopyRegion& region) override;
 
-  BridgeStatus beginCommandBuffer(uint64_t submissionSerial) override;
+  BridgeStatus beginCommandBuffer(uint64_t submissionSerial, uint32_t commandBufferIndex) override;
   BridgeStatus beginRenderPass(std::span<const BrowserColorAttachment> colorAttachments) override;
   BridgeStatus endRenderPass() override;
   BridgeStatus beginComputePass() override;
@@ -101,6 +101,7 @@ public:
                                     BrowserObjectId destinationTextureId,
                                     const BrowserCopyRegion& region) override;
   BridgeStatus endCommandBuffer(uint64_t submissionSerial) override;
+  BridgeStatus submitCommandBuffers(uint64_t submissionSerial) override;
 
   BridgeStatus mapBufferAsync(BrowserObjectId mappingId, BrowserObjectId bufferId,
                               uint64_t offsetBytes, uint64_t byteCount) override;

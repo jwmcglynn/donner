@@ -97,6 +97,7 @@ var LibraryDonnerGpu = {
     completedSerial: 0,
     encoder: null,
     recordingSerial: 0,
+    recordedBuffers: null,  // Finished command buffers of the open submission, in order.
     pass: null,
     attachments: null,
     pending: null,  // Descriptor being built by a sequence of item calls.
@@ -163,6 +164,7 @@ var LibraryDonnerGpu = {
       DonnerGpu.completedSerial = 0;
       DonnerGpu.encoder = null;
       DonnerGpu.recordingSerial = 0;
+      DonnerGpu.recordedBuffers = null;
       DonnerGpu.pass = null;
       DonnerGpu.attachments = null;
       DonnerGpu.pending = null;
@@ -1000,12 +1002,26 @@ var LibraryDonnerGpu = {
   // ----- Command recording --------------------------------------------------
 
   donner_gpu_begin_command_buffer__deps: ['$DonnerGpu'],
-  donner_gpu_begin_command_buffer: function(submissionSerial) {
+  donner_gpu_begin_command_buffer: function(submissionSerial, commandBufferIndex) {
+    // A later buffer must continue the submission the first one opened, and the two halves must
+    // agree on how many buffers have been finished under it; anything else means they disagree
+    // about what is being recorded, so nothing is kept.
+    if (commandBufferIndex !== 0 &&
+        (DonnerGpu.recordingSerial !== submissionSerial || DonnerGpu.recordedBuffers === null ||
+         DonnerGpu.recordedBuffers.length !== commandBufferIndex)) {
+      return DonnerGpu.kFailed;
+    }
     return DonnerGpu.perform(function() {
       // A recording left open by a submission that was refused partway is dropped here rather
-      // than continued, so nothing recorded before the refusal can reach the queue.
+      // than continued, so nothing recorded before the refusal can reach the queue. The first
+      // buffer of a submission starts the list empty, which drops whatever an earlier attempt
+      // finished but never submitted - a refused submission keeps its serial, so the retry
+      // arrives under the same one.
       DonnerGpu.pass = null;
       DonnerGpu.attachments = null;
+      if (commandBufferIndex === 0) {
+        DonnerGpu.recordedBuffers = [];
+      }
       // Drop the old encoder before asking for a new one. If that ask throws, what is left behind
       // is nothing rather than the previous recording sitting under the new serial.
       DonnerGpu.encoder = null;
@@ -1258,14 +1274,33 @@ var LibraryDonnerGpu = {
   donner_gpu_end_command_buffer__deps: ['$DonnerGpu'],
   donner_gpu_end_command_buffer: function(submissionSerial) {
     // The serial that opened the recording is the one that must close it. A mismatch means the two
-    // halves disagree about which submission this encoder belongs to, so nothing is submitted.
+    // halves disagree about which submission this encoder belongs to, so nothing is kept.
     if (DonnerGpu.encoder === null || DonnerGpu.recordingSerial !== submissionSerial) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(function() {
       var commandBuffer = DonnerGpu.encoder.finish();
       DonnerGpu.encoder = null;
-      DonnerGpu.queue.submit([commandBuffer]);
+      DonnerGpu.recordedBuffers.push(commandBuffer);
+    });
+  },
+
+  donner_gpu_submit_command_buffers__deps: ['$DonnerGpu'],
+  donner_gpu_submit_command_buffers: function(submissionSerial) {
+    // Every buffer of this submission must be finished and belong to this serial: an open encoder
+    // or a serial that never opened one means the two halves disagree about what is being
+    // submitted, and a submission with no buffers names no work to complete.
+    if (DonnerGpu.encoder !== null || DonnerGpu.recordingSerial !== submissionSerial ||
+        DonnerGpu.recordedBuffers === null || DonnerGpu.recordedBuffers.length === 0) {
+      return DonnerGpu.kFailed;
+    }
+    return DonnerGpu.perform(function() {
+      // One queue submission for the whole list, in recording order, so the buffers execute in
+      // that order and the submission completes once.
+      var commandBuffers = DonnerGpu.recordedBuffers;
+      DonnerGpu.recordedBuffers = [];
+      DonnerGpu.recordingSerial = 0;
+      DonnerGpu.queue.submit(commandBuffers);
       DonnerGpu.queue.onSubmittedWorkDone().then(function() {
         // Submissions complete in order, but the serial is recorded defensively as a maximum so a
         // completion observed out of order can never move the reported serial backwards.

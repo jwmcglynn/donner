@@ -1170,24 +1170,42 @@ Status BrowserDevice::replayCommand(const Command& command, std::string_view ope
   return std::visit([&](const auto& typed) { return replay(typed, operation); }, command);
 }
 
-Status BrowserDevice::onSubmit(uint64_t submissionSerial, uint32_t /*commandBufferSlotIndex*/,
-                               std::span<const Command> commands) {
-  static constexpr std::string_view kOperation = "submit";
-  if (Status status = checkUsable(kOperation); status.hasError()) {
-    return status;
-  }
-  if (Status status = StatusForBridge(bridge_->beginCommandBuffer(submissionSerial), kOperation);
+Status BrowserDevice::replayCommandBuffer(uint64_t submissionSerial, uint32_t commandBufferIndex,
+                                          std::span<const Command> commands,
+                                          std::string_view operation) {
+  if (Status status = StatusForBridge(
+          bridge_->beginCommandBuffer(submissionSerial, commandBufferIndex), operation);
       status.hasError()) {
     return status;
   }
   for (const Command& command : commands) {
-    // A refused command leaves the browser-side recording open and unsubmitted; the next
-    // beginCommandBuffer discards it, so nothing recorded before the refusal reaches the queue.
-    if (Status status = replayCommand(command, kOperation); status.hasError()) {
+    // A refused command leaves the browser-side recording open and unsubmitted, and the buffers
+    // this submission already finished are dropped when its first buffer is recorded again, so
+    // nothing recorded before the refusal reaches the queue.
+    if (Status status = replayCommand(command, operation); status.hasError()) {
       return status;
     }
   }
-  return StatusForBridge(bridge_->endCommandBuffer(submissionSerial), kOperation);
+  return StatusForBridge(bridge_->endCommandBuffer(submissionSerial), operation);
+}
+
+Status BrowserDevice::onSubmit(uint64_t submissionSerial,
+                               std::span<const SubmittedCommandBuffer> commandBuffers) {
+  static constexpr std::string_view kOperation = "submit";
+  if (Status status = checkUsable(kOperation); status.hasError()) {
+    return status;
+  }
+  // Each buffer is recorded through its own browser command encoder and finished without
+  // reaching the queue; the whole submission is handed over once below, so the buffers execute
+  // in recording order and the submission completes once.
+  for (size_t index = 0; index < commandBuffers.size(); ++index) {
+    if (Status status = replayCommandBuffer(submissionSerial, static_cast<uint32_t>(index),
+                                            commandBuffers[index].commands, kOperation);
+        status.hasError()) {
+      return status;
+    }
+  }
+  return StatusForBridge(bridge_->submitCommandBuffers(submissionSerial), kOperation);
 }
 
 Status BrowserDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,

@@ -2000,31 +2000,35 @@ Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> dat
   return onWriteTexture(texture.slotIndex(), data, dataLayout, writeSize, destinationOrigin);
 }
 
-Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
-  poll();
+Status Device::consumeSubmissionCommandBuffers(std::span<CommandBuffer> commandBuffers,
+                                               std::vector<ConsumedCommandBuffer>& consumed) {
+  Status firstRefusal = OkStatus();
+  consumed.reserve(commandBuffers.size());
+  for (CommandBuffer& element : commandBuffers) {
+    // Moving out of the caller's element is what consumes it: the handle is left null whether
+    // its slot is taken here or its own destructor releases a buffer this submission refused.
+    CommandBuffer taken = std::move(element);
+    auto record = resolve(commandBuffers_, taken, CommandBufferTag::kName);
+    if (record.hasError()) {
+      if (!firstRefusal.hasError()) {
+        firstRefusal = std::move(record).error();
+      }
+      continue;
+    }
 
-  auto record = resolve(commandBuffers_, commandBuffer, CommandBufferTag::kName);
-  if (record.hasError()) {
-    return std::move(record).error();
+    // Take ownership of the commands and release the slot: submission is one-shot, so a buffer
+    // named twice in one span is stale by the time the second mention resolves.
+    const uint32_t slotIndex = taken.slotIndex();
+    consumed.push_back(ConsumedCommandBuffer{
+        slotIndex,
+        std::move(commandBuffers_.findMutable(slotIndex, taken.generation())->commands)});
+    commandBuffers_.release(slotIndex);
   }
+  return firstRefusal;
+}
 
-  // Take ownership of the commands and consume the command buffer slot: submission is one-shot.
-  const uint32_t slotIndex = commandBuffer.slotIndex();
-  std::vector<Command> commands =
-      std::move(commandBuffers_.findMutable(slotIndex, commandBuffer.generation())->commands);
-  commandBuffers_.release(slotIndex);
-
-  // Re-validate every recorded resource identity: a resource destroyed between recording and
-  // submission fails closed here, before the backend sees the commands.
-  Result<std::vector<SubmissionUse>> uses = validateSubmissionResources(commands);
-  if (uses.hasError()) {
-    return std::move(uses).error();
-  }
-
-  // The mapped range aliases the buffer's own storage and its readiness was fixed at the
-  // submission it was taken against, so work accepted now would be written underneath a host that
-  // still reads the mapping as ready. The buffer comes back when the mapping is released.
-  for (const SubmissionUse& use : uses.result()) {
+Status Device::checkSubmissionMappings(std::span<const SubmissionUse> uses) const {
+  for (const SubmissionUse& use : uses) {
     if (use.kind == ResourceKind::Buffer && bufferHasOpenMapping(use.slotIndex)) {
       return GpuError{
           GpuErrorType::InvalidState,
@@ -2033,16 +2037,63 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
                       use.slotIndex)};
     }
   }
+  return OkStatus();
+}
+
+Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
+  return submit(std::span<CommandBuffer>(&commandBuffer, 1));
+}
+
+Result<uint64_t> Device::submit(std::span<CommandBuffer> commandBuffers) {
+  poll();
+
+  if (commandBuffers.empty()) {
+    return GpuError{GpuErrorType::InvalidDescriptor,
+                    "submit: a submission needs at least one command buffer"};
+  }
+  if (commandBuffers.size() > kMaxCommandBuffersPerSubmission) {
+    // Refused before anything is consumed, so the caller still owns every buffer and can submit
+    // them as several smaller spans.
+    return GpuError{
+        GpuErrorType::InvalidDescriptor,
+        std::format("submit: a submission carries at most {} command buffers, not {}; split it "
+                    "across submissions",
+                    kMaxCommandBuffersPerSubmission, commandBuffers.size())};
+  }
+
+  std::vector<ConsumedCommandBuffer> consumed;
+  if (Status refusal = consumeSubmissionCommandBuffers(commandBuffers, consumed);
+      refusal.hasError()) {
+    return std::move(refusal).error();
+  }
+
+  // Re-validate every recorded resource identity across the whole span: a resource destroyed
+  // between recording and submission fails closed here, before the backend sees the commands.
+  std::vector<SubmissionUse> uses;
+  std::vector<SubmittedCommandBuffer> submitted;
+  submitted.reserve(consumed.size());
+  for (const ConsumedCommandBuffer& buffer : consumed) {
+    Result<std::vector<SubmissionUse>> bufferUses = validateSubmissionResources(buffer.commands);
+    if (bufferUses.hasError()) {
+      return std::move(bufferUses).error();
+    }
+    uses.insert(uses.end(), bufferUses.result().begin(), bufferUses.result().end());
+    submitted.push_back(SubmittedCommandBuffer{buffer.slotIndex, buffer.commands});
+  }
+
+  if (Status mappings = checkSubmissionMappings(uses); mappings.hasError()) {
+    return std::move(mappings).error();
+  }
 
   // Advance the serial only after the backend accepts the submission: a failed submit must not
   // burn a serial, or completion waiters would treat the failed work as finished. Resources are
   // marked in-use only for accepted submissions for the same reason.
   const uint64_t serial = lastSubmittedSerial_ + 1;
-  if (Status status = onSubmit(serial, slotIndex, commands); status.hasError()) {
+  if (Status status = onSubmit(serial, submitted); status.hasError()) {
     return std::move(status).error();
   }
   lastSubmittedSerial_ = serial;
-  markSubmissionUses(uses.result(), serial);
+  markSubmissionUses(uses, serial);
   return serial;
 }
 

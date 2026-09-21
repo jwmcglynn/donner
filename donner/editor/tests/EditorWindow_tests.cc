@@ -1054,7 +1054,7 @@ protected:
                              const gpu::Extent2d&, const gpu::Origin2d&) override {
     return gpu::OkStatus();
   }
-  gpu::Status onSubmit(uint64_t, uint32_t, std::span<const gpu::Command>) override {
+  gpu::Status onSubmit(uint64_t, std::span<const gpu::SubmittedCommandBuffer>) override {
     return gpu::OkStatus();
   }
 
