@@ -302,12 +302,14 @@ BrowserDevice::~BrowserDevice() {
                            "thread to the browser; release the device from outside the wait");
 
   // Hand back any frame a surface still holds first: a frame texture belongs to the canvas that
-  // supplied it, so the sweep below must not reach one.
+  // supplied it, so the sweep below must not reach one. Unconditional, like that sweep: teardown
+  // releases everything this device holds, and skipping only the frames would leave the sweep
+  // destroying a texture the canvas owns.
   for (uint32_t surfaceSlotIndex = 0;
        surfaceSlotIndex < static_cast<uint32_t>(acquiredTextureBySurface_.size());
        ++surfaceSlotIndex) {
     if (acquiredTextureBySurface_[surfaceSlotIndex] != kNoAcquiredTexture) {
-      releaseAcquiredFrame(surfaceSlotIndex);
+      handBackAcquiredFrame(surfaceSlotIndex);
     }
   }
 
@@ -1389,6 +1391,12 @@ Result<SurfaceStatus> BrowserDevice::onAcquireCurrentTexture(uint32_t slotIndex,
   if (surfaceId.hasError()) {
     return std::move(surfaceId).error();
   }
+  if (acquiredTexture(slotIndex) != kNoAcquiredTexture) {
+    // A canvas holds one frame and refuses a second while the first is still named, so a frame
+    // this device still records against the surface goes back before the next is taken. The
+    // runtime refuses that above here, leaving only a hand-back refused on another thread.
+    releaseAcquiredFrame(slotIndex);
+  }
   Result<BrowserObjectId> textureId =
       registerObject(BrowserObjectKind::Texture, textureSlotIndex, kOperation);
   if (textureId.hasError()) {
@@ -1424,6 +1432,17 @@ Result<SurfaceStatus> BrowserDevice::onPresentSurface(uint32_t slotIndex) {
 }
 
 void BrowserDevice::releaseAcquiredFrame(uint32_t surfaceSlotIndex) {
+  if (!onOwnerThread()) {
+    // Same reasoning as \ref releaseObject: the canvas belongs to the owning context, so the
+    // frame record is kept for the owning thread to hand back rather than named to a worker that
+    // does not hold the device.
+    foreignThreadReleases_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  handBackAcquiredFrame(surfaceSlotIndex);
+}
+
+void BrowserDevice::handBackAcquiredFrame(uint32_t surfaceSlotIndex) {
   const std::optional<BrowserObjectId> surfaceId =
       objects_.find(BrowserObjectKind::Surface, surfaceSlotIndex);
   if (surfaceId.has_value()) {
@@ -1446,7 +1465,8 @@ void BrowserDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
 
 void BrowserDevice::onDestroySurface(uint32_t slotIndex) {
   // The frame is already back with the canvas by here: the runtime hands it over before it
-  // destroys the surface holding it. What is left is the canvas context itself, which the browser
+  // destroys the surface holding it, or it goes with the surface when a hand-back refused on
+  // another thread left it named. What is left is the canvas context itself, which the browser
   // side keeps configured against this device for as long as an identifier names it.
   releaseObject(BrowserObjectKind::Surface, slotIndex);
 }

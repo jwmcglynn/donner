@@ -273,9 +273,26 @@ private:
   /// @param surfaceSlotIndex Surface slot.
   uint32_t acquiredTexture(uint32_t surfaceSlotIndex) const;
 
-  /// Hands the frame \p surfaceSlotIndex has acquired back to its surface and stops naming it.
-  /// @param surfaceSlotIndex Surface slot holding the frame.
+  /**
+   * Hands the frame \p surfaceSlotIndex has acquired back to its surface and stops naming it.
+   *
+   * Refused when the caller is not the thread that owns the browser device, on the same terms as
+   * \ref releaseObject: the canvas belongs to the owning context, so handing its frame back from
+   * here would call the browser on behalf of a worker that does not hold the device. The frame
+   * record is kept rather than cleared and the refusal is counted for
+   * \ref foreignThreadReleasesForTest, so the owning thread hands the frame back at the next
+   * \ref onAcquireCurrentTexture for the surface, when the surface slot is reused, or at
+   * teardown.
+   *
+   * @param surfaceSlotIndex Surface slot holding the frame.
+   */
   void releaseAcquiredFrame(uint32_t surfaceSlotIndex);
+
+  /// Hands the frame \p surfaceSlotIndex has acquired back to its surface and stops naming it,
+  /// without the owner-thread check \ref releaseAcquiredFrame applies. For teardown, which
+  /// releases everything this device holds whatever thread it runs on.
+  /// @param surfaceSlotIndex Surface slot holding the frame.
+  void handBackAcquiredFrame(uint32_t surfaceSlotIndex);
 
   /// Hands back every frame recorded against \p textureSlotIndex, so no surface goes on naming a
   /// texture slot that is about to change hands.
