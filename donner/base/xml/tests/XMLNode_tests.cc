@@ -961,4 +961,16 @@ TEST_F(XMLNodeTests, SerializeToStringKeepsTextInlineWhenOnlyNonXmlTreeChildrenA
               Eq("<text>Hello</text>"));
 }
 
+TEST_F(XMLNodeTests, SerializeToStringStillIndentsAlongsideNonXmlTreeChildren) {
+  XMLDocument doc;
+  XMLNode text = XMLNode::CreateElementNode(doc, "text");
+  doc.root().appendChild(text);
+  text.appendChild(XMLNode::CreateDataNode(doc, "Hello"));
+  AppendNonXmlTreeChild(doc, text, "generated");
+  text.appendChild(XMLNode::CreateElementNode(doc, "tspan"));
+
+  EXPECT_THAT(std::string(std::string_view(text.serializeToString(0, /*prettyPrint=*/true))),
+              Eq("<text>\n  Hello\n  <tspan/>\n</text>"));
+}
+
 }  // namespace donner::xml

@@ -397,23 +397,24 @@ public:
   void removeAttribute(const XMLQualifiedNameRef& name);
 
   /**
-   * Get this element's parent, if it exists. If the parent is not set, this document is either the
-   * root element or has not been inserted into the document tree.
+   * Get this element's parent, if it exists.
    *
-   * Entries of the shared tree that are not XML nodes are not returned; see \ref firstChild.
+   * Reports nothing when this is the document root, when this node has not been inserted into the
+   * document tree, and when the enclosing node is not part of the authored XML document (see
+   * \ref firstChild) - in that last case this reports nothing rather than skipping outward to the
+   * nearest enclosing authored node.
    *
-   * @return The parent element, or \c std::nullopt if the parent is not set.
+   * @return The parent element, or \c std::nullopt if there is no authored parent.
    */
   std::optional<XMLNode> parentElement() const;
 
   /**
    * Get the first child of this element that is part of the XML document, if it exists.
    *
-   * Tree storage is shared with the layers above XML: \ref donner::svg::SVGElement creates elements
-   * that join the tree without XML node data until they are projected, and rendering attaches
-   * shadow-tree entities under their host element. Those entries are not part of the authored XML
-   * document and every XML accessor on them (\ref type included) is invalid, so this accessor and
-   * its siblings step over them.
+   * The document tree also holds nodes the XML layer never created: content the renderer
+   * synthesizes while drawing a reference such as `<use>`, and elements created through the SVG DOM
+   * that have not been projected into the document yet. Those are not part of the authored XML
+   * document, so neither this accessor nor the other tree accessors ever return one.
    *
    * @return The first child element, or \c std::nullopt if the element has no XML children.
    */
@@ -421,7 +422,7 @@ public:
 
   /**
    * Get the last child of this element that is part of the XML document, if it exists. See
-   * \ref firstChild for why a shared tree can hold entries that are not XML nodes.
+   * \ref firstChild for which nodes are left out.
    *
    * @return The last child element, or \c std::nullopt if the element has no XML children.
    */
@@ -429,7 +430,7 @@ public:
 
   /**
    * Get the previous sibling of this element that is part of the XML document, if it exists. See
-   * \ref firstChild for why a shared tree can hold entries that are not XML nodes.
+   * \ref firstChild for which nodes are left out.
    *
    * @return The previous sibling element, or \c std::nullopt if the element has no previous XML
    * sibling.
@@ -438,7 +439,7 @@ public:
 
   /**
    * Get the next sibling of this element that is part of the XML document, if it exists. See
-   * \ref firstChild for why a shared tree can hold entries that are not XML nodes.
+   * \ref firstChild for which nodes are left out.
    *
    * @return The next sibling element, or \c std::nullopt if the element has no next XML sibling.
    */

@@ -522,7 +522,13 @@ void XMLNode::removeAttribute(const XMLQualifiedNameRef& name) {
 
 namespace {
 
-/// Returns true if \p entity holds XML node data, i.e. it is part of the authored XML document.
+/**
+ * Returns true if \p entity holds XML node data, i.e. it is part of the authored XML document.
+ *
+ * @param registry Registry holding the tree.
+ * @param entity Entity to test, which may be \c entt::null.
+ * @return Whether \p entity is an XML node.
+ */
 bool IsXmlNodeEntity(const Registry& registry, Entity entity) {
   return entity != entt::null && registry.all_of<TreeComponent, XMLNodeTypeComponent>(entity);
 }
@@ -543,11 +549,17 @@ bool IsXmlNodeEntity(const Registry& registry, Entity entity) {
  */
 Entity XmlNodeAtOrBeyond(const Registry& registry, Entity entity,
                          Entity (TreeComponent::*step)() const) {
-  while (entity != entt::null && !IsXmlNodeEntity(registry, entity)) {
+  while (entity != entt::null) {
     const auto* tree = registry.try_get<TreeComponent>(entity);
-    entity = tree != nullptr ? (tree->*step)() : entt::null;
+    if (tree == nullptr) {
+      return entt::null;
+    }
+    if (registry.all_of<XMLNodeTypeComponent>(entity)) {
+      return entity;
+    }
+    entity = (tree->*step)();
   }
-  return entity;
+  return entt::null;
 }
 
 }  // namespace

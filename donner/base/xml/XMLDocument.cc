@@ -900,12 +900,19 @@ bool IsDocumentNode(const XMLDocument& document, const XMLNode& node) {
   return node.entityHandle().registry() == document.sharedRegistry().get();
 }
 
+// Walks raw tree links rather than XMLNode::parentElement: this is the cycle guard for the shared
+// entity tree, which does not detect cycles itself, so it has to see ancestors that hold no XML
+// node data and that the authored-tree accessors step over.
 bool IsAncestorOf(const XMLNode& ancestor, const XMLNode& node) {
-  for (std::optional<XMLNode> current = node.parentElement(); current.has_value();
-       current = current->parentElement()) {
-    if (*current == ancestor) {
+  const Registry& registry = *node.entityHandle().registry();
+  const Entity target = ancestor.entityHandle().entity();
+  Entity current = node.entityHandle().get<donner::components::TreeComponent>().parent();
+  while (current != entt::null) {
+    if (current == target) {
       return true;
     }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree != nullptr ? tree->parent() : entt::null;
   }
 
   return false;
