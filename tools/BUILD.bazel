@@ -198,7 +198,10 @@ py_test(
         "//:.github/workflows/lint.yml",
         "//:.github/workflows/main.yml",
         "//donner/editor/wasm:catalog_package_integrity_test.py",
+        "//donner/editor/wasm:wasm_package_dependency_labels",
+        "//donner/editor/wasm:wasm_package_size_test_arguments",
         "//tools:coverage.sh",
+        "//tools/ci:BUILD.bazel",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

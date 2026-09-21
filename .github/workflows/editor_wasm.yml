@@ -76,8 +76,10 @@ jobs:
             //tools/ci:editor_wasm_audits
           bazelisk test --config=wasm-size --test_output=errors \
             //tools/ci:wasm_size_tests
-          # Temporary RHI migration measurement. Remove only this test_arg when the transitional
-          # Rust WebGPU dependency is removed; the test and its numerical budgets stay strict.
+          # Temporary payload measurement while the package still links the transitional
+          # WebGPU implementation. Remove only this test_arg once that dependency is gone;
+          # //tools:ci_runtime_workflow_tests reads the configured dependency graph and fails
+          # until it is removed and the strict payload ceilings are restored.
           bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
             --test_arg=--payload-budget-mode=measure \
             //tools/ci:editor_wasm_size_tests

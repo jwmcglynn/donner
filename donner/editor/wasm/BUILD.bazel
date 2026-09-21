@@ -2,7 +2,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
-load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "configured_dependency_labels")
 load("//build_defs:package.bzl", "donner_package")
 load("//tools/http:serve_http.bzl", "serve_http")
 load(
@@ -275,6 +275,33 @@ configured_dependency_audit_test(
         "//third_party/roboto:roboto",
         "//third_party/fira-code:fira-code",
     ],
+    target = ":_wasm_web_package_for_serve",
+)
+
+genquery(
+    name = "_wasm_package_size_test_definition",
+    testonly = True,
+    expression = "//donner/editor/wasm:wasm_geode_package_size_tests",
+    opts = ["--output=build"],
+    scope = [":wasm_geode_package_size_tests"],
+    visibility = ["//visibility:private"],
+)
+
+# Only the argument list is extracted: the rest of the query output carries the
+# absolute paths of the workspace and the Bazel output base, which would make
+# every consumer's action inputs machine-specific. An argument list the pattern
+# no longer matches yields an empty file, which the consuming test reports.
+genrule(
+    name = "wasm_package_size_test_arguments",
+    testonly = True,
+    srcs = [":_wasm_package_size_test_definition"],
+    outs = ["wasm_package_size_test_arguments.txt"],
+    cmd = "grep -E '^[[:space:]]*args = ' $< > $@ || true",
+)
+
+configured_dependency_labels(
+    name = "wasm_package_dependency_labels",
+    testonly = True,
     target = ":_wasm_web_package_for_serve",
 )
 
