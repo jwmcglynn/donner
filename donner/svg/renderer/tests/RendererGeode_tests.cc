@@ -999,32 +999,27 @@ TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
     };
     beginFrame(*parent);
     drawFlood(*parent, css::RGBA(255, 0, 0, 255));
-    const uint64_t parentFilterSerial = device->adapterDevice().lastSubmittedSerial();
-    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
     const PendingHostCopy parentPending = registerPendingHostCopy();
-    ASSERT_THAT(parentPending.serial, testing::Gt(parentFilterSerial));
     beginFrame(sibling);
     drawFlood(sibling, css::RGBA(0, 0, 255, 255));
-    const uint64_t siblingFilterSerial = device->adapterDevice().lastSubmittedSerial();
-    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
     const PendingHostCopy siblingPending = registerPendingHostCopy();
-    ASSERT_THAT(siblingFilterSerial, testing::Gt(parentPending.serial));
-    ASSERT_THAT(siblingPending.serial, testing::Gt(siblingFilterSerial));
+    ASSERT_THAT(siblingPending.serial, testing::Gt(parentPending.serial));
+    // Neither frame has reached the queue, so nothing either of them recorded can have taken a
+    // serial of its own between the two copies above.
+    ASSERT_THAT(siblingPending.serial, testing::Eq(parentPending.serial + 1));
+
     if (destroy) {
       parent.reset();
     } else {
       beginFrame(*parent);
     }
-    ASSERT_THAT(device->runtimeDevice().waitForSerial(parentPending.serial, 2.0),
-                testing::IsTrue());
-    EXPECT_THAT(device->runtimeDevice().waitForSerial(siblingFilterSerial, 0.05),
-                testing::IsFalse());
-    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingFilterSerial));
-    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingPending.serial));
-    sibling.endFrame();
-    ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+
     ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingPending.serial, 2.0),
                 testing::IsTrue());
+    sibling.endFrame();
+    const uint64_t siblingFrameSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(siblingFrameSerial, testing::Gt(siblingPending.serial));
+    ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingFrameSerial, 2.0), testing::IsTrue());
     const RendererBitmap pixels = sibling.takeSnapshot();
     ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
     EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(0, 0, 255, 255));
