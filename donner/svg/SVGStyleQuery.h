@@ -72,6 +72,22 @@ std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& elem
 /// @return Source-backed stylesheet rules in document scan order.
 std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document);
 
+/// Return true when an author stylesheet rule in \p document matches on tree position.
+///
+/// Such a rule (`#layer rect`, `svg > rect`, `rect:first-child`) can start or stop matching when an
+/// element is moved to a different parent or a different place among its siblings, so a caller that
+/// must not change how the document paints has to treat a move as unsafe while one exists.
+///
+/// The user agent stylesheet is excluded. It is a fixed part of every document, and each of its
+/// position-based rules keys on the document root (`svg:not(:root)`), on a shadow host
+/// (`:host(use) > symbol`), or on having a `foreignObject` parent (`*:not(foreignObject) > svg`).
+/// Moving an element between a `<g>` and the document root changes none of those, so excluding
+/// them does not weaken the answer for a caller asking about such a move.
+///
+/// @param document SVG document to inspect.
+/// @return True when any author stylesheet rule depends on tree position.
+bool AuthorStyleDependsOnTreePosition(const SVGDocument& document);
+
 /// Find the author stylesheet rule at \p documentSourceOffset.
 ///
 /// @param document SVG document to inspect.

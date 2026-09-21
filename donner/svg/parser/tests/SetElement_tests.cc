@@ -28,6 +28,64 @@ SVGDocument parseSVGWithExperimental(std::string_view svg) {
 
 }  // namespace
 
+namespace {
+
+Entity EntityById(SVGDocument& document, std::string_view id) {
+  const std::optional<SVGElement> element = document.querySelector(std::string(id));
+  EXPECT_TRUE(element.has_value()) << "missing " << id;
+  return element.has_value() ? element->entityHandle().entity() : entt::null;
+}
+
+}  // namespace
+
+TEST(SVGSetElement, IsAnimationTargetResolvesParentAndHref) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="layer">
+        <rect id="r" width="10" height="10" />
+        <set attributeName="fill" to="blue" />
+      </g>
+      <g id="hashTarget" />
+      <g id="rawTarget" />
+      <g id="untouched" />
+      <set attributeName="fill" to="blue" href="#hashTarget" />
+      <set attributeName="fill" to="blue" href="rawTarget" />
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const components::AnimationSystem system;
+
+  EXPECT_TRUE(system.isAnimationTarget(registry, EntityById(document, "#layer")))
+      << "an animation with no href targets its parent";
+  EXPECT_TRUE(system.isAnimationTarget(registry, EntityById(document, "#hashTarget")));
+  EXPECT_TRUE(system.isAnimationTarget(registry, EntityById(document, "#rawTarget")))
+      << "href without a leading '#' names the same element";
+  EXPECT_FALSE(system.isAnimationTarget(registry, EntityById(document, "#untouched")));
+  EXPECT_FALSE(system.isAnimationTarget(registry, EntityById(document, "#r")));
+  EXPECT_FALSE(system.isAnimationTarget(registry, entt::null));
+}
+
+TEST(SVGSetElement, IsAnimationTargetMatchesBeforeAndAfterAdvance) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="layer">
+        <rect id="r" width="10" height="10" />
+        <set attributeName="fill" to="blue" />
+      </g>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const components::AnimationSystem system;
+  const Entity layer = EntityById(document, "#layer");
+
+  EXPECT_TRUE(system.isAnimationTarget(registry, layer)) << "before any advance resolved the state";
+
+  components::AnimationSystem().advance(registry, 0.0);
+  EXPECT_TRUE(system.isAnimationTarget(registry, layer)) << "after the state was resolved";
+}
+
 TEST(SVGSetElement, ParseBasic) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">

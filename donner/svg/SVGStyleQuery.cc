@@ -96,6 +96,26 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
   });
 }
 
+bool AuthorStyleDependsOnTreePosition(const SVGDocument& document) {
+  return document.withReadAccess([](DocumentReadAccess& access) {
+    Registry& registry = access.registry();
+    for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+      const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+      if (stylesheet.isUserAgentStylesheet) {
+        continue;
+      }
+
+      for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
+        if (rule.selector.dependsOnTreePosition()) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  });
+}
+
 std::optional<SVGStyleRuleAtSourceOffset> FindStyleRuleAtSourceOffset(
     const SVGDocument& document, std::size_t documentSourceOffset) {
   return document.withReadAccess([&document, documentSourceOffset](DocumentReadAccess&) {

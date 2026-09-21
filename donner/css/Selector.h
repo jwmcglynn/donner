@@ -54,6 +54,25 @@ struct Selector {
                                      bool& outMatchesAnyName) const;
 
   /**
+   * Return true when matching this selector depends on where an element sits in the tree, rather
+   * than on the element alone.
+   *
+   * A combinator makes matching depend on ancestors or siblings (`#layer rect`, `svg > rect`,
+   * `rect + rect`), as does a leading combinator on a relative selector (`> div`). So do the
+   * structural pseudo-classes (`:nth-child()`, `:first-child`, `:empty`, `:root`, `:scope`,
+   * `:host`, `:has()`, `:focus-within`). Callers use this to decide whether moving an element can
+   * change which rules match it, or which elements a rule matches.
+   *
+   * State pseudo-classes that inspect the element alone (`:hover`, `:focus`, `:visited`,
+   * `:lang()`, `:checked`, ...) and pseudo-elements do not count, and `:is()`, `:not()` and
+   * `:where()` are as positional as the selectors they contain. Any pseudo-class name this
+   * implementation does not recognize counts as positional, so the answer fails closed.
+   *
+   * @return True when a move can change whether this selector matches.
+   */
+  bool dependsOnTreePosition() const;
+
+  /**
    * Get the max specificity of all ComplexSelectors in the Selector.
    */
   Specificity::ABC maxSpecificity() const {

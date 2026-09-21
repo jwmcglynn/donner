@@ -4,6 +4,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::Optional;
@@ -337,6 +338,35 @@ TEST(SVGStyleCascadeTests, InheritedVisibility) {
 
   const auto& style = rect->getComputedStyle();
   EXPECT_THAT(style.visibility.get(), Optional(Visibility::Hidden));
+}
+
+// ---------------------------------------------------------------------------
+// Tree-position dependence of the author stylesheets in a document
+// ---------------------------------------------------------------------------
+
+TEST(SVGStyleCascadeTests, AuthorStyleDependsOnTreePositionIgnoresTheUserAgentStylesheet) {
+  // The user agent stylesheet is always present and does use combinators, so a document with no
+  // author rules must still report no dependence.
+  auto doc = instantiateSubtree(R"(
+    <rect id="r" width="10" height="10" />
+  )");
+  EXPECT_FALSE(AuthorStyleDependsOnTreePosition(doc));
+}
+
+TEST(SVGStyleCascadeTests, AuthorStyleDependsOnTreePositionReportsElementOnlySelectors) {
+  auto doc = instantiateSubtree(R"(
+    <style>rect { fill: red } #layer { fill: blue }</style>
+    <g id="layer"><rect id="r" width="10" height="10" /></g>
+  )");
+  EXPECT_FALSE(AuthorStyleDependsOnTreePosition(doc));
+}
+
+TEST(SVGStyleCascadeTests, AuthorStyleDependsOnTreePositionReportsDescendantSelectors) {
+  auto doc = instantiateSubtree(R"(
+    <style>#layer rect { fill: blue }</style>
+    <g id="layer"><rect id="r" width="10" height="10" /></g>
+  )");
+  EXPECT_TRUE(AuthorStyleDependsOnTreePosition(doc));
 }
 
 }  // namespace
