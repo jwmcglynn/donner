@@ -17,7 +17,9 @@ classified target is a recognized, definitely-non-instrumentable kind. Any rule
 kind outside the non-instrumentable allowlist (every cc_* kind, the donner C++
 wrapper rules, and any kind this tool does not recognize) counts as
 instrumentable, so an unknown or newly-added C++ rule keeps the coverage guard at
-full strength rather than silently skipping it.
+full strength rather than silently skipping it. The allowlist is a set of exact
+kinds plus one naming convention for build-configuration guard tests, described
+below; both are matched in the same place.
 
 Host-instrumentability refinement: "instrumentable" means HOST-instrumentable.
 Wasm-platform targets never produce host profile data: the emsdk wasm_cc_binary
@@ -108,6 +110,20 @@ NON_INSTRUMENTABLE_RULE_KINDS = frozenset(
     }
 )
 
+# Build-configuration guard tests, matched by rule-kind naming convention.
+# `donner/editor/editor_product_dependency_tests.bzl` builds its guards with
+# bazel_skylib's `analysistest.make` and names every such rule
+# `_guard_<expectation>_test`; `bazel query --output label_kind` reports a
+# Starlark rule under exactly that name. An analysis test asserts that a target
+# analyzes, or fails to analyze, under a set of build settings: it compiles no
+# sources, links nothing, and runs a generated script, so it can never emit host
+# profile data. The match is anchored at both ends of the kind, and the name
+# means "analysis-time build-configuration guard": a rule that compiles or wraps
+# C/C++ must not adopt it, because this exemption applies to the convention
+# rather than to the guards that carry it today.
+GUARD_RULE_KIND_PREFIX = "_guard_"
+GUARD_RULE_KIND_SUFFIX = "_test"
+
 # `bazel query --output label_kind` phrases for non-rule targets. These never
 # carry coverage either.
 NON_RULE_PHRASES = frozenset(
@@ -153,6 +169,25 @@ def _split_kind_and_label(line: str) -> tuple[str, str]:
     label = tokens[-1]
     kind_phrase = " ".join(tokens[:-1])
     return kind_phrase, label
+
+
+def _is_non_instrumentable_rule_kind(rule_kind: str) -> bool:
+    """Report whether a rule kind can never contribute host C/C++ line data.
+
+    Args:
+        rule_kind: The rule kind from `bazel query --output label_kind`, with
+            the trailing " rule" already stripped.
+
+    Returns:
+        True for a recognized non-instrumentable kind or a build-configuration
+        guard test. False for every cc_* kind, the donner C++ wrapper rules,
+        and every unrecognized kind (fail closed: uncertainty runs coverage).
+    """
+    if rule_kind in NON_INSTRUMENTABLE_RULE_KINDS:
+        return True
+    return rule_kind.startswith(GUARD_RULE_KIND_PREFIX) and rule_kind.endswith(
+        GUARD_RULE_KIND_SUFFIX
+    )
 
 
 def normalize_label(label: str) -> str:
@@ -253,7 +288,7 @@ def classify(
             continue
         if kind_phrase.endswith(" rule"):
             rule_kind = kind_phrase[: -len(" rule")]
-            if rule_kind in NON_INSTRUMENTABLE_RULE_KINDS:
+            if _is_non_instrumentable_rule_kind(rule_kind):
                 result.non_instrumentable.append(label)
             else:
                 # Every cc_* kind, the donner C++ wrapper rules, and any
