@@ -975,7 +975,7 @@ protected:
                         const Extent2d&, const Origin2d&) override {
     return OkStatus();
   }
-  Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }
+  Status onSubmit(uint64_t, std::span<const SubmittedCommandBuffer>) override { return OkStatus(); }
 
   Status onCreateSurface(uint32_t, const SurfaceDescriptor&) override { return OkStatus(); }
 

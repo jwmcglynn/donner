@@ -299,15 +299,24 @@ public:
     return status;
   }
 
-  BridgeStatus beginCommandBuffer(uint64_t submissionSerial) override {
-    const BridgeStatus status =
-        operate(std::format("beginCommandBuffer serial={}", submissionSerial));
+  BridgeStatus beginCommandBuffer(uint64_t submissionSerial, uint32_t commandBufferIndex) override {
+    // A later buffer must continue the submission the first one opened, and both halves must
+    // agree on how many buffers it has finished, as on the browser side.
+    if (commandBufferIndex != 0 &&
+        (recordingSerial_ != submissionSerial || finishedCommandBuffers_ != commandBufferIndex)) {
+      return BridgeStatus::Failed;
+    }
+    const BridgeStatus status = operate(
+        std::format("beginCommandBuffer serial={} index={}", submissionSerial, commandBufferIndex));
     if (status == BridgeStatus::Success) {
       // A recording left open by a submission that was refused partway is discarded here rather
       // than continued, so nothing recorded before the refusal can reach the queue.
       encoderOpen_ = true;
       passOpen_ = false;
       recordingSerial_ = submissionSerial;
+      if (commandBufferIndex == 0) {
+        finishedCommandBuffers_ = 0;
+      }
     }
     return status;
   }
@@ -472,7 +481,23 @@ public:
     }
     calls->push_back(line);
     encoderOpen_ = false;
+    ++finishedCommandBuffers_;
     return BridgeStatus::Success;
+  }
+
+  BridgeStatus submitCommandBuffers(uint64_t submissionSerial) override {
+    // Every buffer of the submission must be finished and belong to this serial, and a
+    // submission with no buffers names no work, as on the browser side.
+    if (encoderOpen_ || recordingSerial_ != submissionSerial || finishedCommandBuffers_ == 0) {
+      return BridgeStatus::Failed;
+    }
+    const BridgeStatus status = operate(std::format("submitCommandBuffers serial={} count={}",
+                                                    submissionSerial, finishedCommandBuffers_));
+    if (status == BridgeStatus::Success) {
+      finishedCommandBuffers_ = 0;
+      recordingSerial_ = 0;
+    }
+    return status;
   }
 
   BridgeStatus mapBufferAsync(BrowserObjectId mappingId, BrowserObjectId bufferId,
@@ -855,6 +880,7 @@ private:
   bool encoderOpen_ = false;
   bool passOpen_ = false;
   uint64_t recordingSerial_ = 0;
+  uint32_t finishedCommandBuffers_ = 0;  //!< Buffers finished under \ref recordingSerial_.
 };
 
 }  // namespace donner::gpu::browser

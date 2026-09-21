@@ -31,8 +31,9 @@ public:
 
   /**
    * Returns the deterministic line-based text capture of every recorded operation, in order.
-   * Creation, write, and destroy operations appear as one line each; submissions appear as a
-   * `submit` line followed by one indented line per command.
+   * Creation, write, and destroy operations appear as one line each; a submission appears as a
+   * `submit` line, then one indented line per command buffer it carried, each followed by one
+   * further-indented line per command.
    */
   std::string serialize() const;
 
@@ -62,8 +63,8 @@ protected:
   Status onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                         const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
                         const Origin2d& destinationOrigin) override;
-  Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                  std::span<const Command> commands) override;
+  Status onSubmit(uint64_t submissionSerial,
+                  std::span<const SubmittedCommandBuffer> commandBuffers) override;
 
 private:
   std::vector<std::string> lines_;

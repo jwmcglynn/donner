@@ -64,7 +64,7 @@ protected:
                         const Extent2d&, const Origin2d&) override {
     return OkStatus();
   }
-  Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override {
+  Status onSubmit(uint64_t, std::span<const SubmittedCommandBuffer>) override {
     return GpuError{GpuErrorType::InvalidState, "backend rejected the submission"};
   }
 };
@@ -239,16 +239,17 @@ writeBuffer buffer#0 offsetBytes=0 byteCount=48 dataHash=dd7a5e9540df1b95
 writeBuffer buffer#1 offsetBytes=0 byteCount=16 dataHash=7c84dc9477851775
 writeTexture texture#1 offsetBytes=0 bytesPerRow=256 rowsPerImage=4 writeSize=4x4 origin=(0, 0) byteCount=784 dataHash=aaaef608c2729075
 destroy buffer#3
-submit serial=1 commandBuffer#0 commandCount=9
-  beginRenderPass label="mainPass" colorAttachments=[{view=textureView#0 loadOp=Clear storeOp=Store clearColor=(0 0 0.5 1)}]
-  setPipeline renderPipeline#0
-  setBindGroup index=0 bindGroup=bindGroup#0
-  setVertexBuffer slot=0 buffer=buffer#0 offsetBytes=0
-  setScissorRect x=0 y=0 width=4 height=4
-  setViewport x=0 y=0 width=4 height=4 minDepth=0 maxDepth=1
-  draw vertexCount=6 instanceCount=1 firstVertex=0 firstInstance=0
-  endRenderPass
-  copyTextureToBuffer texture=texture#0 buffer=buffer#2 offsetBytes=0 bytesPerRow=256 rowsPerImage=4 copySize=4x4
+submit serial=1 commandBufferCount=1
+  commandBuffer#0 commandCount=9
+    beginRenderPass label="mainPass" colorAttachments=[{view=textureView#0 loadOp=Clear storeOp=Store clearColor=(0 0 0.5 1)}]
+    setPipeline renderPipeline#0
+    setBindGroup index=0 bindGroup=bindGroup#0
+    setVertexBuffer slot=0 buffer=buffer#0 offsetBytes=0
+    setScissorRect x=0 y=0 width=4 height=4
+    setViewport x=0 y=0 width=4 height=4 minDepth=0 maxDepth=1
+    draw vertexCount=6 instanceCount=1 firstVertex=0 firstInstance=0
+    endRenderPass
+    copyTextureToBuffer texture=texture#0 buffer=buffer#2 offsetBytes=0 bytesPerRow=256 rowsPerImage=4 copySize=4x4
 destroy renderPipeline#0
 destroy shaderModule#0
 destroy bindGroup#0
@@ -308,13 +309,13 @@ TEST(RecordingDeviceTests, IndexedDrawSerializesBindingAndDrawParameters) {
   // One line per command, slot identities only, every parameter spelled out including the
   // signed base vertex, so two draws differing in any field serialize differently.
   EXPECT_THAT(device.serialize(),
-              HasSubstr("  setIndexBuffer buffer=buffer#1 format=Uint16 offsetBytes=4\n"
-                        "  drawIndexed indexCount=6 instanceCount=2 firstIndex=1 baseVertex=-3 "
+              HasSubstr("    setIndexBuffer buffer=buffer#1 format=Uint16 offsetBytes=4\n"
+                        "    drawIndexed indexCount=6 instanceCount=2 firstIndex=1 baseVertex=-3 "
                         "firstInstance=1\n"
-                        "  setIndexBuffer buffer=buffer#1 format=Uint32 offsetBytes=8\n"
-                        "  drawIndexed indexCount=3 instanceCount=1 firstIndex=0 baseVertex=0 "
+                        "    setIndexBuffer buffer=buffer#1 format=Uint32 offsetBytes=8\n"
+                        "    drawIndexed indexCount=3 instanceCount=1 firstIndex=0 baseVertex=0 "
                         "firstInstance=0\n"
-                        "  endRenderPass\n"));
+                        "    endRenderPass\n"));
 }
 
 TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSourceDestinationAndSize) {

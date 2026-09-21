@@ -41,6 +41,7 @@
 #include "donner/gpu/shader/tests/CompiledCheckerboard.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
+#include "donner/gpu/tests/SubmissionOrderScene.h"
 #include "donner/gpu/tests/VertexInputSlice.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -668,6 +669,20 @@ TEST_F(VulkanSolidFillTest, ViewportAndScissorPreserveTopLeftOrientation) {
   gpu::tests::CheckVertexInputScene(
       *device_, ShaderModuleDescriptor{"attributes", {}, ShaderSourceKind::Spirv, emitted.result()},
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, true);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+/// A frame recorded by two independent encoder owners is one submission: the buffers execute in
+/// the order they were handed over, in one queue submission, and one fence covers both of them.
+TEST_F(VulkanSolidFillTest, ASpanOfCommandBuffersExecutesInOrderUnderOneSerial) {
+  const auto module = gpu::tests::BuildSubmissionOrderModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  const auto emitted = shader::EmitSpirv(module.result());
+  ASSERT_FALSE(emitted.hasError()) << emitted.error();
+  gpu::tests::CheckSubmissionOrderAcrossCommandBuffers(
+      *device_,
+      ShaderModuleDescriptor{"submissionOrder", {}, ShaderSourceKind::Spirv, emitted.result()},
+      [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

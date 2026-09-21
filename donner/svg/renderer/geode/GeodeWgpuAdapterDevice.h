@@ -329,8 +329,8 @@ protected:
                              const gpu::TexelCopyBufferLayout& dataLayout,
                              const gpu::Extent2d& writeSize,
                              const gpu::Origin2d& destinationOrigin) override;
-  gpu::Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                       std::span<const gpu::Command> commands) override;
+  gpu::Status onSubmit(uint64_t submissionSerial,
+                       std::span<const gpu::SubmittedCommandBuffer> commandBuffers) override;
 
 private:
   /// One texture slot: the borrowed alias used for encoding, plus a +1 owning reference when
@@ -453,6 +453,12 @@ private:
   /// @param state Encoding state.
   /// @param command Recorded command.
   gpu::Status encodeCommand(EncodingState& state, const gpu::Command& command);
+
+  /// Records one submitted command buffer into \p state's encoder, leaving it unfinished.
+  /// @param state Encoding state whose encoder is already open.
+  /// @param commands Commands to record, in recording order.
+  gpu::Status encodeSubmittedCommandBuffer(EncodingState& state,
+                                           std::span<const gpu::Command> commands);
 
   /// Clears the slot of one non-pipeline resource kind, or returns false when the name is not
   /// one of them.

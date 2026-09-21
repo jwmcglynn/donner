@@ -84,7 +84,7 @@ int donner_gpu_write_texture(unsigned int textureId, const void* data, double by
                              unsigned int rowsPerImage, unsigned int destinationX,
                              unsigned int destinationY, unsigned int width, unsigned int height);
 
-int donner_gpu_begin_command_buffer(double submissionSerial);
+int donner_gpu_begin_command_buffer(double submissionSerial, unsigned int commandBufferIndex);
 int donner_gpu_begin_render_pass();
 int donner_gpu_render_pass_attachment(unsigned int viewId, unsigned int loadOpCode,
                                       unsigned int storeOpCode, double clearRed, double clearGreen,
@@ -118,6 +118,7 @@ int donner_gpu_copy_texture_to_texture(unsigned int sourceTextureId,
                                        unsigned int destinationY, unsigned int width,
                                        unsigned int height);
 int donner_gpu_end_command_buffer(double submissionSerial);
+int donner_gpu_submit_command_buffers(double submissionSerial);
 
 int donner_gpu_map_buffer_async(unsigned int mappingId, unsigned int bufferId, double offsetBytes,
                                 double byteCount);
@@ -428,8 +429,10 @@ BridgeStatus EmscriptenBrowserBridge::writeTexture(BrowserObjectId textureId,
       region.destinationX, region.destinationY, region.width, region.height));
 }
 
-BridgeStatus EmscriptenBrowserBridge::beginCommandBuffer(uint64_t submissionSerial) {
-  return StatusFromBrowser(donner_gpu_begin_command_buffer(static_cast<double>(submissionSerial)));
+BridgeStatus EmscriptenBrowserBridge::beginCommandBuffer(uint64_t submissionSerial,
+                                                         uint32_t commandBufferIndex) {
+  return StatusFromBrowser(
+      donner_gpu_begin_command_buffer(static_cast<double>(submissionSerial), commandBufferIndex));
 }
 
 BridgeStatus EmscriptenBrowserBridge::beginRenderPass(
@@ -533,6 +536,11 @@ BridgeStatus EmscriptenBrowserBridge::copyTextureToTexture(BrowserObjectId sourc
 
 BridgeStatus EmscriptenBrowserBridge::endCommandBuffer(uint64_t submissionSerial) {
   return StatusFromBrowser(donner_gpu_end_command_buffer(static_cast<double>(submissionSerial)));
+}
+
+BridgeStatus EmscriptenBrowserBridge::submitCommandBuffers(uint64_t submissionSerial) {
+  return StatusFromBrowser(
+      donner_gpu_submit_command_buffers(static_cast<double>(submissionSerial)));
 }
 
 BridgeStatus EmscriptenBrowserBridge::mapBufferAsync(BrowserObjectId mappingId,

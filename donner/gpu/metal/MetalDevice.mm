@@ -546,8 +546,17 @@ struct MetalDevice::Impl {
   /// Encodes all queued writes ahead of this submission without submitting separate work.
   Status encodePendingWrites(EncodingState& state);
 
-  /// Creates a command buffer and encodes its optional pause and queued uploads.
-  Status beginSubmission(EncodingState& state);
+  /// Creates a command buffer and encodes its optional pause, and the queued uploads when this
+  /// is the submission's first buffer.
+  /// @param state Encoding state. @param encodeQueuedWrites Whether to encode the queued uploads.
+  Status beginSubmission(EncodingState& state, bool encodeQueuedWrites);
+
+  /// Encodes one submitted command buffer into its own native command buffer, leaving it
+  /// un-committed.
+  /// @param state Encoding state. @param commands Commands to encode, in recording order.
+  /// @param encodeQueuedWrites Whether to encode the queued uploads ahead of \p commands.
+  Status encodeSubmittedCommandBuffer(EncodingState& state, std::span<const Command> commands,
+                                      bool encodeQueuedWrites);
 
   /// Copies host bytes into an idle buffer and publishes managed-memory changes.
   void writeIdleBuffer(id<MTLBuffer> buffer, uint64_t offsetBytes, std::span<const uint8_t> bytes);
@@ -1849,9 +1858,17 @@ Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
   return OkStatus();
 }
 
-Status MetalDevice::Impl::beginSubmission(EncodingState& state) {
+Status MetalDevice::Impl::beginSubmission(EncodingState& state, bool encodeQueuedWrites) {
   if (commandQueue == nil) {
-    commandQueue = [device newCommandQueue];
+    // Sized above the runtime's per-submission command-buffer bound rather than left at the
+    // default. A submission acquires a buffer per element and commits none of them until every
+    // element has encoded; -[MTLCommandQueue commandBuffer] blocks once the queue's uncompleted
+    // buffers reach its maximum, and a buffer this submission is still holding uncommitted can
+    // never complete, so a queue no larger than the bound could block on its own work. One
+    // thread submits to a device at a time, so at most one submission ever holds uncommitted
+    // buffers; every slot above the bound belongs to a committed buffer, which completes.
+    commandQueue = [device
+        newCommandQueueWithMaxCommandBufferCount:2 * Device::kMaxCommandBuffersPerSubmission];
     if (commandQueue == nil) {
       return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
     }
@@ -1866,7 +1883,7 @@ Status MetalDevice::Impl::beginSubmission(EncodingState& state) {
     [state.commandBuffer encodeWaitForEvent:submissionGate value:1];
   }
 
-  return encodePendingWrites(state);
+  return encodeQueuedWrites ? encodePendingWrites(state) : OkStatus();
 }
 
 void MetalDevice::Impl::didSubmitWrites(uint64_t submissionSerial) {
@@ -1883,12 +1900,10 @@ void MetalDevice::Impl::didSubmitWrites(uint64_t submissionSerial) {
   }
 }
 
-Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                             std::span<const Command> commands) {
-  (void)commandBufferSlotIndex;
-
-  Impl::EncodingState state;
-  if (Status status = impl_->beginSubmission(state); status.hasError()) {
+Status MetalDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
+                                                       std::span<const Command> commands,
+                                                       bool encodeQueuedWrites) {
+  if (Status status = beginSubmission(state, encodeQueuedWrites); status.hasError()) {
     return status;
   }
 
@@ -1907,7 +1922,7 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
   };
 
   for (const Command& command : commands) {
-    Status encodeStatus = impl_->encodeCommand(state, command);
+    Status encodeStatus = encodeCommand(state, command);
     if (encodeStatus.hasError()) {
       return failEncoding(std::move(encodeStatus));
     }
@@ -1920,12 +1935,43 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
   }
 
   // Queued buffer uploads and readback copies are the only GPU buffer writers.
-  if (Status status = impl_->encodeHostCoherencySync(state); status.hasError()) {
+  if (Status status = encodeHostCoherencySync(state); status.hasError()) {
     return failEncoding(std::move(status));
   }
+  return OkStatus();
+}
 
-  impl_->attachCompletionHandler(state, submissionSerial);
-  [state.commandBuffer commit];
+Status MetalDevice::onSubmit(uint64_t submissionSerial,
+                             std::span<const SubmittedCommandBuffer> commandBuffers) {
+  // One native command buffer per submitted buffer, committed in order on the one queue this
+  // device owns, rather than one native buffer carrying the whole submission: command buffers
+  // committed to a queue execute in commit order, and a single very large command buffer stalls
+  // the completion path, so the caller's split is kept rather than flattened. Nothing is
+  // committed until every buffer has encoded, so an encoding failure partway through leaves the
+  // queue exactly as it was.
+  if (commandBuffers.empty()) {
+    // The runtime refuses an empty submission before it reaches a backend; fail closed anyway,
+    // because the completion handler below has to go on a command buffer that exists.
+    return GpuError{GpuErrorType::InvalidState, "submission carried no command buffer"};
+  }
+
+  std::vector<Impl::EncodingState> states(commandBuffers.size());
+  for (size_t i = 0; i < commandBuffers.size(); ++i) {
+    // Only the first buffer carries the queued uploads: they are one batch for the submission,
+    // and repeating them would copy each payload once per buffer.
+    if (Status status =
+            impl_->encodeSubmittedCommandBuffer(states[i], commandBuffers[i].commands, i == 0);
+        status.hasError()) {
+      return status;
+    }
+  }
+
+  // The handler goes on the last buffer alone: the queue finishes them in commit order, so the
+  // submission is complete exactly when that one is, and one serial gets one completion.
+  impl_->attachCompletionHandler(states.back(), submissionSerial);
+  for (Impl::EncodingState& state : states) {
+    [state.commandBuffer commit];
+  }
   impl_->didSubmitWrites(submissionSerial);
 
   return OkStatus();

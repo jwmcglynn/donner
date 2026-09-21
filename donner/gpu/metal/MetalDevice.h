@@ -212,8 +212,8 @@ protected:
   Status onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                         const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize,
                         const Origin2d& destinationOrigin) override;
-  Status onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                  std::span<const Command> commands) override;
+  Status onSubmit(uint64_t submissionSerial,
+                  std::span<const SubmittedCommandBuffer> commandBuffers) override;
   Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) override;
   Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
   Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration) override;

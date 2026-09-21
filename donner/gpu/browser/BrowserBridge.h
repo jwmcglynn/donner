@@ -298,14 +298,19 @@ public:
                                     const BrowserTexelLayout& layout,
                                     const BrowserCopyRegion& region) = 0;
 
-  // Command recording. One submission opens with beginCommandBuffer, replays its commands in
-  // recording order, and closes with endCommandBuffer, which finishes the encoder and submits it.
+  // Command recording. One submission records each of its command buffers between
+  // beginCommandBuffer and endCommandBuffer, in recording order, and then hands the finished
+  // buffers to the queue together with submitCommandBuffers.
 
-  /// Opens recording for the submission with \p submissionSerial. A recording left open by an
-  /// earlier submission that failed partway is discarded rather than continued, so a refused
-  /// command can never end up submitted as part of the next frame.
+  /// Opens recording for the command buffer at \p commandBufferIndex of the submission with
+  /// \p submissionSerial. Index zero starts the submission and discards whatever an earlier
+  /// attempt finished without submitting, so a refused command can never end up submitted as
+  /// part of a later frame; a later index must find exactly that many finished buffers under the
+  /// same serial, which is how the two halves agree on what is being recorded.
   /// @param submissionSerial Serial the runtime assigned.
-  virtual BridgeStatus beginCommandBuffer(uint64_t submissionSerial) = 0;
+  /// @param commandBufferIndex Position of this buffer within the submission.
+  virtual BridgeStatus beginCommandBuffer(uint64_t submissionSerial,
+                                          uint32_t commandBufferIndex) = 0;
 
   /// Begins a render pass. @param colorAttachments Attachments of the pass.
   virtual BridgeStatus beginRenderPass(
@@ -375,9 +380,16 @@ public:
                                             BrowserObjectId destinationTextureId,
                                             const BrowserCopyRegion& region) = 0;
 
-  /// Finishes the open command buffer and submits it.
+  /// Finishes the open command buffer and holds it for the submission, without reaching the
+  /// queue: a submission of several buffers reaches the queue once, in submitCommandBuffers.
   /// @param submissionSerial Serial the runtime assigned.
   virtual BridgeStatus endCommandBuffer(uint64_t submissionSerial) = 0;
+
+  /// Submits every command buffer finished under \p submissionSerial as one queue submission,
+  /// in the order they were recorded, and arranges for the reported completed serial to reach
+  /// \p submissionSerial once that submission finishes.
+  /// @param submissionSerial Serial the runtime assigned.
+  virtual BridgeStatus submitCommandBuffers(uint64_t submissionSerial) = 0;
 
   // Host mapping.
 

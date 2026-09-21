@@ -376,6 +376,20 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "submission_order_scene",
+    testonly = 1,
+    hdrs = ["tests/SubmissionOrderScene.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:programs",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_test(
     name = "gpu_tests",
     srcs = [
@@ -389,6 +403,7 @@ donner_cc_test(
         "tests/Handles_tests.cc",
         "tests/RecordingDevice_tests.cc",
         "tests/ResourceLifetime_tests.cc",
+        "tests/SubmissionSpan_tests.cc",
     ],
     deps = [
         ":gpu",

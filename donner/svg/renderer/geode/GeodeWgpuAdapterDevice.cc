@@ -1912,22 +1912,8 @@ gpu::Result<uint64_t> GeodeWgpuAdapterDevice::submitStandalone(gpu::CommandBuffe
   return serial;
 }
 
-gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
-                                             uint32_t commandBufferSlotIndex,
-                                             std::span<const gpu::Command> commands) {
-  (void)commandBufferSlotIndex;
-
-  // Replay into the host's encoder when one is installed, so a caller that also records spans
-  // this runtime cannot express keeps one command buffer covering the whole frame in order.
-  const bool replayingIntoHost = replaysIntoHostEncoder();
-
-  EncodingState state;
-  if (replayingIntoHost) {
-    state.encoder = hostCommandEncoder_;
-  } else {
-    state.ownedEncoder.reset(geodeDevice_.device().createCommandEncoder());
-    state.encoder = state.ownedEncoder.get();
-  }
+gpu::Status GeodeWgpuAdapterDevice::encodeSubmittedCommandBuffer(
+    EncodingState& state, std::span<const gpu::Command> commands) {
   if (!state.encoder) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command encoder creation failed"};
   }
@@ -1958,21 +1944,63 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     return failEncoding(
         GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
   }
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::onSubmit(
+    uint64_t submissionSerial, std::span<const gpu::SubmittedCommandBuffer> commandBuffers) {
+  // Replay into the host's encoder when one is installed, so a caller that also records spans
+  // this runtime cannot express keeps one command buffer covering the whole frame in order.
+  const bool replayingIntoHost = replaysIntoHostEncoder();
+
+  // Each submitted buffer gets its own encoder when this runtime owns the queue, so the caller's
+  // split survives to the queue; they are finished but not submitted until all of them encode,
+  // and then handed over together, which keeps the submission ordered and completing once.
+  std::vector<ScopedWgpuHandle<wgpu::CommandBuffer>> finished;
+  finished.reserve(commandBuffers.size());
+  for (const gpu::SubmittedCommandBuffer& commandBuffer : commandBuffers) {
+    EncodingState state;
+    if (replayingIntoHost) {
+      state.encoder = hostCommandEncoder_;
+    } else {
+      state.ownedEncoder.reset(geodeDevice_.device().createCommandEncoder());
+      state.encoder = state.ownedEncoder.get();
+    }
+
+    if (gpu::Status status = encodeSubmittedCommandBuffer(state, commandBuffer.commands);
+        status.hasError()) {
+      // Unlike the owned-queue path below, the host path cannot leave the queue as it was: the
+      // buffers encoded before this one are already in the host's encoder, which the host will
+      // finish and submit, while no serial is burned for them. The host owns that encoder and is
+      // the only thing that could drop it.
+      return status;
+    }
+    if (replayingIntoHost) {
+      continue;
+    }
+
+    finished.emplace_back(state.encoder.finish());
+    if (!finished.back()) {
+      return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
+    }
+  }
 
   if (replayingIntoHost) {
     // The host owns finish + submit for its encoder. Hold the serial back until it reports that
     // submit: reporting completion before the work is even submitted would be a lie the deferred
     // destruction and wait paths both act on.
-    completionState_->record(static_cast<WGPUCommandEncoder>(state.encoder), submissionSerial);
+    completionState_->record(static_cast<WGPUCommandEncoder>(hostCommandEncoder_),
+                             submissionSerial);
     return OkStatus();
   }
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(state.encoder.finish());
-  if (!commandBuffer) {
-    return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
+  std::vector<WGPUCommandBuffer> rawCommandBuffers;
+  rawCommandBuffers.reserve(finished.size());
+  for (ScopedWgpuHandle<wgpu::CommandBuffer>& commandBuffer : finished) {
+    rawCommandBuffers.push_back(static_cast<WGPUCommandBuffer>(commandBuffer.get()));
   }
   completionState_->record(nullptr, submissionSerial);
-  geodeDevice_.queue().submit(1, &commandBuffer.get());
+  geodeDevice_.queue().submit(rawCommandBuffers);
   geodeDevice_.countSubmit();
 
   completeWhenQueueDrains(submissionSerial);

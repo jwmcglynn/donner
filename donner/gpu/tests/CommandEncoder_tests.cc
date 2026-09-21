@@ -64,7 +64,7 @@ protected:
                         const Extent2d&, const Origin2d&) override {
     return OkStatus();
   }
-  Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }
+  Status onSubmit(uint64_t, std::span<const SubmittedCommandBuffer>) override { return OkStatus(); }
 };
 
 /// Creates the solid-fill scene used by the encoder tests: a render target with view, vertex and
@@ -395,11 +395,11 @@ TEST_F(CommandEncoderTests, IndexedPassEncodesBothFormatsAndSubmits) {
   ASSERT_THAT(finished, HasResult());
   EXPECT_THAT(device_.submit(std::move(finished).result()), HasResult());
   EXPECT_THAT(device_.serialize(),
-              AllOf(HasSubstr("  setIndexBuffer buffer=buffer#2 format=Uint16 offsetBytes=0\n"
-                              "  drawIndexed indexCount=12 instanceCount=1 firstIndex=0 "
+              AllOf(HasSubstr("    setIndexBuffer buffer=buffer#2 format=Uint16 offsetBytes=0\n"
+                              "    drawIndexed indexCount=12 instanceCount=1 firstIndex=0 "
                               "baseVertex=0 firstInstance=0\n"),
-                    HasSubstr("  setIndexBuffer buffer=buffer#2 format=Uint32 offsetBytes=0\n"
-                              "  drawIndexed indexCount=6 instanceCount=2 firstIndex=0 "
+                    HasSubstr("    setIndexBuffer buffer=buffer#2 format=Uint32 offsetBytes=0\n"
+                              "    drawIndexed indexCount=6 instanceCount=2 firstIndex=0 "
                               "baseVertex=0 firstInstance=0\n")));
 }
 

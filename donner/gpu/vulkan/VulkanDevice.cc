@@ -1121,13 +1121,13 @@ struct VulkanDevice::Impl {
   /// One submitted command buffer awaiting fence completion, with the transient render passes
   /// and framebuffers its encoding created.
   struct InFlightSubmission {
-    uint64_t serial = 0;                             //!< Submission serial.
-    VkFence fence = VK_NULL_HANDLE;                  //!< Signaled when the submission completes.
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;  //!< Submitted command buffer.
-    std::vector<VkRenderPass> renderPasses;          //!< Transient per-pass render passes.
-    std::vector<VkFramebuffer> framebuffers;         //!< Transient per-pass framebuffers.
-    BufferRecord bufferWriteStaging;                 //!< Packed queued-write payload.
-    std::vector<BufferRecord> retiredBuffers;  //!< Upload destinations whose slots were freed.
+    uint64_t serial = 0;                          //!< Submission serial.
+    VkFence fence = VK_NULL_HANDLE;               //!< Signaled when the submission completes.
+    std::vector<VkCommandBuffer> commandBuffers;  //!< Submitted buffers, in execution order.
+    std::vector<VkRenderPass> renderPasses;       //!< Transient per-pass render passes.
+    std::vector<VkFramebuffer> framebuffers;      //!< Transient per-pass framebuffers.
+    BufferRecord bufferWriteStaging;              //!< Packed queued-write payload.
+    std::vector<BufferRecord> retiredBuffers;     //!< Upload destinations whose slots were freed.
   };
 
   /// A copied host payload awaiting an ordinary submission, ordered by write call.
@@ -1308,18 +1308,21 @@ struct VulkanDevice::Impl {
   std::optional<MappingHost> mappingHost;          //!< Created with the first mapping.
   std::optional<BufferMappingTable> mappingTable;  //!< Open host mappings.
 
-  /// Submits one command buffer, with the shared one-shot native failure seam for tests.
-  /// @param commandBuffer Command buffer to submit.
-  /// @param fence Fence signaled by the submission.
+  /// Submits command buffers as one queue submission, with the shared one-shot native failure
+  /// seam for tests.
+  /// @param commandBuffers Command buffers to submit, in execution order.
+  /// @param fence Fence signaled once every buffer of the submission has finished.
   /// @param wait Semaphores this submission must wait on, empty for internal work; a frame
   ///   acquired from a surface comes back before the presentation engine has finished reading
   ///   it, so the submission that writes it waits here.
-  VkResult submitToQueue(VkCommandBuffer commandBuffer, VkFence fence,
+  VkResult submitToQueue(std::span<const VkCommandBuffer> commandBuffers, VkFence fence,
                          const SurfaceWaitSync& wait = {}) {
+    // One queue submission for the whole span: the buffers execute in the order given, and the
+    // fence signals once, when all of them have finished.
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
+    submitInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
+    submitInfo.pCommandBuffers = commandBuffers.data();
     submitInfo.waitSemaphoreCount = static_cast<uint32_t>(wait.semaphores.size());
     submitInfo.pWaitSemaphores = wait.semaphores.empty() ? nullptr : wait.semaphores.data();
     submitInfo.pWaitDstStageMask = wait.stages.empty() ? nullptr : wait.stages.data();
@@ -1362,8 +1365,10 @@ struct VulkanDevice::Impl {
     for (VkRenderPass renderPass : submission.renderPasses) {
       api->vkDestroyRenderPass(device, renderPass, nullptr);
     }
-    if (submission.commandBuffer != VK_NULL_HANDLE) {
-      api->vkFreeCommandBuffers(device, commandPool, 1, &submission.commandBuffer);
+    if (!submission.commandBuffers.empty()) {
+      api->vkFreeCommandBuffers(device, commandPool,
+                                static_cast<uint32_t>(submission.commandBuffers.size()),
+                                submission.commandBuffers.data());
     }
     if (submission.fence != VK_NULL_HANDLE) {
       api->vkDestroyFence(device, submission.fence, nullptr);
@@ -1727,7 +1732,10 @@ struct VulkanDevice::Impl {
 
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;    //!< Command buffer being recorded.
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;  //!< Command buffer being recorded.
+    /// Every command buffer allocated for this submission, in execution order; the one being
+    /// recorded is the last of them.
+    std::vector<VkCommandBuffer> commandBuffers;
     std::vector<VkRenderPass> transientRenderPasses;   //!< Render passes created while encoding.
     std::vector<VkFramebuffer> transientFramebuffers;  //!< Framebuffers created while encoding.
     bool inRenderPass = false;                         //!< True between begin and end pass.
@@ -1779,6 +1787,13 @@ struct VulkanDevice::Impl {
     destroyTransientEncodingObjects(state);
     destroyBufferRecord(state.bufferWriteStaging);
   }
+
+  /// Allocates and records one command buffer of a submission, leaving it unsubmitted.
+  /// @param state Encoding state the buffer is appended to.
+  /// @param commands Commands to record, in recording order.
+  /// @param encodeQueuedWrites Whether to record the queued writes ahead of \p commands.
+  Status encodeSubmittedCommandBuffer(EncodingState& state, std::span<const Command> commands,
+                                      bool encodeQueuedWrites);
 
   /// Transfers encoded objects to queue ownership or frees a proven rejected submission.
   Status finishSubmission(uint64_t submissionSerial, EncodingState& state, VkFence fence);
@@ -2167,7 +2182,7 @@ void VulkanDevice::attachWorkForTeardownTest(bool upload, uint64_t fenceHandle,
     Impl::InFlightSubmission submission;
     submission.serial = impl_->inFlight.size() + 1;
     submission.fence = fence;
-    submission.commandBuffer = commandBuffer;
+    submission.commandBuffers.push_back(commandBuffer);
     impl_->inFlight.push_back(std::move(submission));
   }
 }
@@ -3198,7 +3213,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
     return VkError("vkCreateFence", result);
   }
 
-  if (const VkResult result = submitToQueue(commandBuffer, fence); result != VK_SUCCESS) {
+  if (const VkResult result = submitToQueue({&commandBuffer, 1}, fence); result != VK_SUCCESS) {
     if (!SubmissionWasRejected(result) &&
         !drainAfterDeviceLoss(result, "vkQueueSubmit (writeTexture)")) {
       objectsStillInUse = true;
@@ -3374,7 +3389,11 @@ void VulkanDevice::Impl::destroyTransientEncodingObjects(EncodingState& state) {
     api->vkDestroyRenderPass(device, renderPass, nullptr);
   }
   // Freeing a command buffer in the recording state is legal; it has not been submitted.
-  api->vkFreeCommandBuffers(device, commandPool, 1, &state.commandBuffer);
+  if (!state.commandBuffers.empty()) {
+    api->vkFreeCommandBuffers(device, commandPool,
+                              static_cast<uint32_t>(state.commandBuffers.size()),
+                              state.commandBuffers.data());
+  }
 }
 
 void VulkanDevice::Impl::transitionBoundTextures(EncodingState& state,
@@ -3940,7 +3959,7 @@ Status VulkanDevice::Impl::finishSubmission(uint64_t submissionSerial, EncodingS
   // A frame acquired from a surface comes back before the presentation engine has finished
   // reading it, so the first submission that writes that frame carries its wait.
   const ClaimedSurfaceWaits claimed = claimSurfaceWaits(encodedTextureSlots);
-  const VkResult submitResult = submitToQueue(state.commandBuffer, fence, claimed.sync);
+  const VkResult submitResult = submitToQueue(state.commandBuffers, fence, claimed.sync);
   if (SubmissionWasRejected(submitResult)) {
     returnSurfaceWaits(claimed);
     api->vkDestroyFence(device, fence, nullptr);
@@ -3962,7 +3981,7 @@ Status VulkanDevice::Impl::finishSubmission(uint64_t submissionSerial, EncodingS
   InFlightSubmission submission;
   submission.serial = submissionSerial;
   submission.fence = fence;
-  submission.commandBuffer = state.commandBuffer;
+  submission.commandBuffers = std::move(state.commandBuffers);
   submission.renderPasses = std::move(state.transientRenderPasses);
   submission.framebuffers = std::move(state.transientFramebuffers);
   submission.bufferWriteStaging = state.bufferWriteStaging;
@@ -3971,20 +3990,52 @@ Status VulkanDevice::Impl::finishSubmission(uint64_t submissionSerial, EncodingS
   return submitResult == VK_SUCCESS ? OkStatus() : Status(VkError("vkQueueSubmit", submitResult));
 }
 
-Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                              std::span<const Command> commands) {
-  (void)commandBufferSlotIndex;
-  Impl& impl = *impl_;
-
-  Result<VkCommandBuffer> commandBufferResult = impl.allocateCommandBuffer();
+Status VulkanDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
+                                                        std::span<const Command> commands,
+                                                        bool encodeQueuedWrites) {
+  Result<VkCommandBuffer> commandBufferResult = allocateCommandBuffer();
   if (commandBufferResult.hasError()) {
     return std::move(commandBufferResult).error();
   }
+  state.commandBuffer = commandBufferResult.result();
+  state.commandBuffers.push_back(state.commandBuffer);
+
+  VkCommandBufferBeginInfo beginInfo = {};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (const VkResult result = api->vkBeginCommandBuffer(state.commandBuffer, &beginInfo);
+      result != VK_SUCCESS) {
+    return VkError("vkBeginCommandBuffer", result);
+  }
+
+  if (encodeQueuedWrites) {
+    if (Status status = encodePendingBufferWrites(state); status.hasError()) {
+      return status;
+    }
+  }
+
+  if (Status status = encodeCommands(state, commands); status.hasError()) {
+    return status;
+  }
+
+  if (state.inRenderPass || state.inComputePass) {
+    // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
+    return GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"};
+  }
+
+  if (const VkResult result = api->vkEndCommandBuffer(state.commandBuffer); result != VK_SUCCESS) {
+    return VkError("vkEndCommandBuffer", result);
+  }
+  return OkStatus();
+}
+
+Status VulkanDevice::onSubmit(uint64_t submissionSerial,
+                              std::span<const SubmittedCommandBuffer> commandBuffers) {
+  Impl& impl = *impl_;
 
   // Transient objects created while encoding; on success they move into the in-flight record
   // and are destroyed when the fence signals, on failure they are destroyed here.
   Impl::EncodingState state;
-  state.commandBuffer = commandBufferResult.result();
   impl.encodedTextureSlots.clear();
   const auto failEncoding = [&](Status error) -> Status {
     // Recoverable failures leave the queue unchanged. Device loss can execute work, but its
@@ -3993,31 +4044,17 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     return error;
   };
 
-  VkCommandBufferBeginInfo beginInfo = {};
-  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  if (const VkResult result = impl_->api->vkBeginCommandBuffer(state.commandBuffer, &beginInfo);
-      result != VK_SUCCESS) {
-    return failEncoding(VkError("vkBeginCommandBuffer", result));
-  }
-
-  if (Status status = impl.encodePendingBufferWrites(state); status.hasError()) {
-    return failEncoding(std::move(status));
-  }
-
-  if (Status status = impl.encodeCommands(state, commands); status.hasError()) {
-    return failEncoding(std::move(status));
-  }
-
-  if (state.inRenderPass || state.inComputePass) {
-    // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
-    return failEncoding(
-        GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
-  }
-
-  if (const VkResult result = impl_->api->vkEndCommandBuffer(state.commandBuffer);
-      result != VK_SUCCESS) {
-    return failEncoding(VkError("vkEndCommandBuffer", result));
+  // The staged image layouts carry across the boundary between buffers, because a later buffer
+  // of the same submission reads what an earlier one left behind: the barrier a sampled read
+  // needs after a render pass wrote its texture is recorded in the buffer that samples it.
+  for (size_t i = 0; i < commandBuffers.size(); ++i) {
+    // Only the first buffer carries the queued writes: they are one staged batch for the whole
+    // submission, and repeating them would copy each payload once per buffer.
+    if (Status status =
+            impl.encodeSubmittedCommandBuffer(state, commandBuffers[i].commands, i == 0);
+        status.hasError()) {
+      return failEncoding(std::move(status));
+    }
   }
 
   VkFence fence = VK_NULL_HANDLE;

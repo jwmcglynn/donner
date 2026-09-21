@@ -430,19 +430,24 @@ Status RecordingDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8
   return OkStatus();
 }
 
-Status RecordingDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                                 std::span<const Command> commands) {
+Status RecordingDevice::onSubmit(uint64_t submissionSerial,
+                                 std::span<const SubmittedCommandBuffer> commandBuffers) {
   std::ostringstream os = MakeLineStream();
-  os << "submit serial=" << submissionSerial << " "
-     << RefId(CommandBufferTag::kName, commandBufferSlotIndex)
-     << " commandCount=" << commands.size();
+  os << "submit serial=" << submissionSerial << " commandBufferCount=" << commandBuffers.size();
   lines_.push_back(os.str());
 
-  for (const Command& command : commands) {
-    std::ostringstream commandStream = MakeLineStream();
-    commandStream << "  ";
-    std::visit(CommandSerializer{commandStream}, command);
-    lines_.push_back(commandStream.str());
+  for (const SubmittedCommandBuffer& commandBuffer : commandBuffers) {
+    std::ostringstream bufferStream = MakeLineStream();
+    bufferStream << "  " << RefId(CommandBufferTag::kName, commandBuffer.slotIndex)
+                 << " commandCount=" << commandBuffer.commands.size();
+    lines_.push_back(bufferStream.str());
+
+    for (const Command& command : commandBuffer.commands) {
+      std::ostringstream commandStream = MakeLineStream();
+      commandStream << "    ";
+      std::visit(CommandSerializer{commandStream}, command);
+      lines_.push_back(commandStream.str());
+    }
   }
   return OkStatus();
 }

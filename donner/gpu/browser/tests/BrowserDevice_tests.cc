@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
@@ -361,10 +363,77 @@ TEST(BrowserDevice, DiscardsARecordingLeftOpenByARefusedSubmission) {
 
   const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
                                           fixture.bridge->calls->end());
-  EXPECT_THAT(replayed, ElementsAre("beginCommandBuffer serial=1",
+  EXPECT_THAT(replayed, ElementsAre("beginCommandBuffer serial=1 index=0",
                                     "beginRenderPass attachments=[(view=2 load=1 store=1 "
                                     "clear=[0.000,0.000,0.000,1.000])]",
-                                    "endRenderPass", "endCommandBuffer serial=1"));
+                                    "endRenderPass", "endCommandBuffer serial=1",
+                                    "submitCommandBuffers serial=1 count=1"));
+}
+
+TEST(BrowserDevice, RecordsEveryBufferOfASpanAndSubmitsThemTogether) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> target =
+      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  std::array<CommandBuffer, 2> span{RecordClearPass(*fixture.device, view.result()),
+                                    RecordClearPass(*fixture.device, view.result())};
+  const size_t beforeSubmit = fixture.bridge->calls->size();
+  ASSERT_THAT(fixture.device->submit(span), HasResult());
+
+  // Each buffer is recorded through its own browser encoder under the one serial, and the queue
+  // is reached once, with both of them, in recording order.
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
+                                          fixture.bridge->calls->end());
+  EXPECT_THAT(replayed, ElementsAre("beginCommandBuffer serial=1 index=0",
+                                    "beginRenderPass attachments=[(view=2 load=1 store=1 "
+                                    "clear=[0.000,0.000,0.000,1.000])]",
+                                    "endRenderPass", "endCommandBuffer serial=1",
+                                    "beginCommandBuffer serial=1 index=1",
+                                    "beginRenderPass attachments=[(view=2 load=1 store=1 "
+                                    "clear=[0.000,0.000,0.000,1.000])]",
+                                    "endRenderPass", "endCommandBuffer serial=1",
+                                    "submitCommandBuffers serial=1 count=2"));
+}
+
+TEST(BrowserDevice, DropsTheFinishedBuffersOfASpanRefusedPartway) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+
+  Result<Texture> target =
+      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // The browser refuses the second buffer's pass, so the submission stops with the first buffer
+  // already finished on the browser side.
+  fixture.bridge->failOperation = "beginCommandBuffer serial=1 index=1";
+  fixture.bridge->failStatus = BridgeStatus::Failed;
+  std::array<CommandBuffer, 2> refused{RecordClearPass(*fixture.device, view.result()),
+                                       RecordClearPass(*fixture.device, view.result())};
+  ASSERT_THAT(fixture.device->submit(refused), IsGpuError(GpuErrorType::InvalidState));
+
+  // A refused submission keeps its serial, so the retry arrives under the same one and must
+  // start its list over rather than submitting the buffer the refused attempt left finished.
+  fixture.bridge->failOperation.clear();
+  std::array<CommandBuffer, 1> retried{RecordClearPass(*fixture.device, view.result())};
+  const size_t beforeRetry = fixture.bridge->calls->size();
+  ASSERT_THAT(fixture.device->submit(retried), HasResult());
+
+  const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeRetry,
+                                          fixture.bridge->calls->end());
+  EXPECT_THAT(replayed, ElementsAre("beginCommandBuffer serial=1 index=0",
+                                    "beginRenderPass attachments=[(view=2 load=1 store=1 "
+                                    "clear=[0.000,0.000,0.000,1.000])]",
+                                    "endRenderPass", "endCommandBuffer serial=1",
+                                    "submitCommandBuffers serial=1 count=1"));
 }
 
 TEST(BrowserDevice, ClosesARecordingWithTheSerialThatOpenedIt) {
@@ -386,8 +455,8 @@ TEST(BrowserDevice, ClosesARecordingWithTheSerialThatOpenedIt) {
 
   const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSecond,
                                           fixture.bridge->calls->end());
-  EXPECT_THAT(replayed.front(), "beginCommandBuffer serial=2");
-  EXPECT_THAT(replayed.back(), "endCommandBuffer serial=2");
+  EXPECT_THAT(replayed.front(), "beginCommandBuffer serial=2 index=0");
+  EXPECT_THAT(replayed.back(), "submitCommandBuffers serial=2 count=1");
 }
 
 TEST(BrowserDevice, MapsBuffersForHostReadsOnly) {
@@ -508,12 +577,13 @@ TEST(BrowserDevice, MirrorsARecordedRenderPassOntoTheBridgeInRecordingOrder) {
   const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
                                           fixture.bridge->calls->end());
   EXPECT_THAT(replayed,
-              ElementsAre("beginCommandBuffer serial=1",
+              ElementsAre("beginCommandBuffer serial=1 index=0",
                           "beginRenderPass attachments=[(view=2 load=1 store=1 "
                           "clear=[0.000,0.000,0.000,1.000])]",
                           "setRenderPipeline pipeline=6",
                           "draw vertexCount=3 instanceCount=1 firstVertex=0 firstInstance=0",
-                          "endRenderPass", "endCommandBuffer serial=1"));
+                          "endRenderPass", "endCommandBuffer serial=1",
+                          "submitCommandBuffers serial=1 count=1"));
 }
 
 TEST(BrowserDevice, MirrorsARecordedComputePassOntoTheBridgeInRecordingOrder) {
@@ -579,11 +649,11 @@ TEST(BrowserDevice, MirrorsARecordedComputePassOntoTheBridgeInRecordingOrder) {
 
   const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
                                           fixture.bridge->calls->end());
-  EXPECT_THAT(
-      replayed,
-      ElementsAre("beginCommandBuffer serial=1", "beginComputePass",
-                  "setComputePipeline pipeline=6", "setBindGroup index=0 bindGroup=3",
-                  "dispatchWorkgroups count=2x3x1", "endComputePass", "endCommandBuffer serial=1"));
+  EXPECT_THAT(replayed,
+              ElementsAre("beginCommandBuffer serial=1 index=0", "beginComputePass",
+                          "setComputePipeline pipeline=6", "setBindGroup index=0 bindGroup=3",
+                          "dispatchWorkgroups count=2x3x1", "endComputePass",
+                          "endCommandBuffer serial=1", "submitCommandBuffers serial=1 count=1"));
 }
 
 TEST(BrowserDevice, MirrorsRecordedCopiesOntoTheBridge) {
@@ -621,12 +691,12 @@ TEST(BrowserDevice, MirrorsRecordedCopiesOntoTheBridge) {
   const std::vector<std::string> replayed(fixture.bridge->calls->begin() + beforeSubmit,
                                           fixture.bridge->calls->end());
   EXPECT_THAT(replayed,
-              ElementsAre("beginCommandBuffer serial=1",
+              ElementsAre("beginCommandBuffer serial=1 index=0",
                           "copyTextureToBuffer texture=1 buffer=3 offset=0 bytesPerRow=256 "
                           "rowsPerImage=4 size=4x4",
                           "copyTextureToTexture source=1 destination=2 sourceOrigin=(1,1) "
                           "destinationOrigin=(0,2) size=2x2",
-                          "endCommandBuffer serial=1"));
+                          "endCommandBuffer serial=1", "submitCommandBuffers serial=1 count=1"));
 }
 
 TEST(BrowserDevice, ReportsTheSerialTheBrowserHasFinished) {
