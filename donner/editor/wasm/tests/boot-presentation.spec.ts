@@ -80,33 +80,55 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
     }
 
     await expect(page.locator("#loading-screen")).toBeHidden({ timeout: 45000 });
-    await page.evaluate(() =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      })
-    );
+    // The claim below is about the uncovered samples, so wait until there are
+    // enough of them to carry it. Two animation frames is not enough of a wait:
+    // this suite runs on a software rasterizer that can be starved to a handful
+    // of frames per second, and an empty uncovered set would pass every filter.
+    await expect.poll(
+      () =>
+        page.evaluate(() =>
+          (window as BootWindow).__bootPresentationProbe.samples
+            .filter((sample) => !sample.covered).length
+        ),
+      { timeout: 10000 },
+    ).toBeGreaterThanOrEqual(5);
     const samples = await page.evaluate(() =>
       (window as BootWindow).__bootPresentationProbe.samples
     );
     expect(samples.some((sample) => !sample.firstFrame && sample.covered)).toBe(true);
-    expect(samples.some((sample) => !sample.covered)).toBe(true);
     expect(samples.filter((sample) => sample.canvasCount !== 1)).toEqual([]);
-    expect(samples.filter((sample) =>
-      !sample.covered && (
-        !sample.firstFrame || sample.width !== sample.expectedWidth
-        || sample.height !== sample.expectedHeight
-      )
+    // The claim below is about the uncovered samples, so it is only worth
+    // anything if there are some. The loader fades out over 160ms before it
+    // leaves the page, so an uncovered run of one or two frames means the probe
+    // stopped sampling, not that the editor was exposed for that long.
+    const uncovered = samples.filter((sample) => !sample.covered);
+    expect(uncovered.length).toBeGreaterThanOrEqual(5);
+    expect(uncovered.filter((sample) =>
+      !sample.firstFrame || sample.width !== sample.expectedWidth
+      || sample.height !== sample.expectedHeight
     )).toEqual([]);
+    // The reveal waits for the presented frame to reach the page and has a
+    // 120-frame bound behind it for an engine that never reports the size. That
+    // bound has to stay a backstop: if this ever climbs toward it, the engine
+    // running here is not propagating the placeholder size and the gate needs a
+    // capability probe rather than a larger bound.
+    const framesAwaited = await page.evaluate(() =>
+      (window as BootWindow).__donnerFramesAwaitingPresentedFrame
+    );
+    expect(framesAwaited).toBeGreaterThanOrEqual(0);
+    expect(framesAwaited).toBeLessThan(20);
     expect(errors).toEqual([]);
   } finally {
     releaseStartup();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const diagnostics = await Promise.race([
       page.evaluate(() => {
-        const probe = (window as BootWindow).__bootPresentationProbe;
+        const state = window as BootWindow;
+        const probe = state.__bootPresentationProbe;
         if (probe) probe.running = false;
         return {
           samples: probe?.samples ?? [],
+          framesAwaitingPresentedFrame: state.__donnerFramesAwaitingPresentedFrame,
           loader: document.getElementById("loading-screen")?.outerHTML,
           canvas: document.querySelector("canvas")?.outerHTML,
         };

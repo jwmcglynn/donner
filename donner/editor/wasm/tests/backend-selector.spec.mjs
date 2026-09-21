@@ -3,73 +3,131 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-async function runBootstrapWithoutThreads() {
-  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
-  const elements = {
-    canvas: {
-      addEventListener() {},
-      focus() {},
+const bootstrapUrl = new URL("../editor-bootstrap.js", import.meta.url);
+
+function makeCanvas(properties = {}) {
+  const canvas = {
+    addEventListener() {},
+    focusCount: 0,
+    focus() {
+      canvas.focusCount += 1;
+    },
+    height: 150,
+    hidden: false,
+    style: {},
+    transferControlToOffscreen() {},
+    width: 300,
+    ...properties,
+  };
+  return canvas;
+}
+
+function makeWindow(properties = {}) {
+  const windowHandlers = new Map();
+  const window = {
+    addEventListener(type, handler) {
+      windowHandlers.set(type, handler);
+    },
+    ...properties,
+  };
+  return { window, windowHandlers };
+}
+
+// Every harness below runs the same script in a fresh vm context and differs
+// only in which browser surfaces the script is allowed to see, so the context
+// is built once here. The page effects they all care about - appended nodes,
+// pending timers and animation frames, console output, loader classes - are
+// captured for every caller; a caller that does not read one simply ignores it.
+async function runBootstrap({ canvas, window, elements = {}, globals = {}, now } = {}) {
+  const source = await readFile(bootstrapUrl, "utf8");
+  const animationFrames = [];
+  const appended = [];
+  const consoleMessages = { error: [], log: [], warn: [] };
+  const loadingClasses = new Set();
+  const timers = [];
+  let defaultNowMs = 100;
+  const pageElements = {
+    canvas,
+    "loading-screen": {
+      classList: { add: (name) => loadingClasses.add(name) },
       hidden: false,
     },
-    "loading-screen": { hidden: false },
     status: { hidden: false, textContent: "" },
+    "loading-progress": {
+      classList: { add() {}, remove() {} },
+      removeAttribute() {},
+      setAttribute() {},
+    },
+    "loading-progress-fill": { style: {} },
+    "loading-detail": { textContent: "" },
     "capability-error": { hidden: true },
     "capability-error-detail": { textContent: "" },
-  };
-  const window = {
-    addEventListener() {},
-    isSecureContext: false,
+    ...elements,
   };
   const context = vm.createContext({
-    console,
-    document: {
-      body: { appendChild() {} },
-      getElementById: (id) => elements[id],
+    console: {
+      error: (...args) => consoleMessages.error.push(args.join(" ")),
+      log: (...args) => consoleMessages.log.push(args.join(" ")),
+      warn: (...args) => consoleMessages.warn.push(args.join(" ")),
     },
-    performance: { now: () => 0 },
-    SharedArrayBuffer: undefined,
+    document: {
+      body: { appendChild: (node) => appended.push(node) },
+      createElement: (tagName) => ({ tagName: tagName.toUpperCase(), addEventListener() {} }),
+      getElementById: (id) => pageElements[id],
+      head: { appendChild: (node) => appended.push(node) },
+    },
+    Event: function Event(type) {
+      this.type = type;
+    },
+    performance: { now: now ?? (() => ++defaultNowMs), timeOrigin: 0 },
+    requestAnimationFrame: (callback) => animationFrames.push(callback),
+    setTimeout: (callback, delayMs) => timers.push([callback, delayMs]),
     window,
+    ...globals,
   });
   vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
+  return {
+    animationFrames,
+    appended,
+    canvas,
+    consoleMessages,
+    context,
+    elements: pageElements,
+    loadingClasses,
+    timers,
+  };
+}
+
+async function runBootstrapWithoutThreads() {
+  const { window, windowHandlers } = makeWindow({ isSecureContext: false });
+  const harness = await runBootstrap({
+    canvas: makeCanvas(),
+    globals: { SharedArrayBuffer: undefined },
+    window,
+  });
   await new Promise((resolve) => setImmediate(resolve));
-  return { elements, window };
+  return { ...harness, window, windowHandlers };
 }
 
 async function loadTouchPointerBridge() {
-  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
   const handlers = new Map();
   const dispatched = [];
   const captured = [];
   const released = [];
-  const canvas = {
+  const canvas = makeCanvas({
     addEventListener(type, handler) {
       handlers.set(type, handler);
     },
     dispatchEvent(event) {
       dispatched.push(event);
     },
-    focus() {},
-    hidden: false,
     releasePointerCapture(pointerId) {
       released.push(pointerId);
     },
     setPointerCapture(pointerId) {
       captured.push(pointerId);
     },
-    style: {},
-  };
-  const elements = {
-    canvas,
-    "loading-screen": { hidden: false },
-    status: { hidden: false, textContent: "" },
-    "capability-error": { hidden: true },
-    "capability-error-detail": { textContent: "" },
-  };
-  const window = {
-    addEventListener() {},
-    isSecureContext: false,
-    PointerEvent: function PointerEvent() {},
-  };
+  });
   class MouseEvent {
     constructor(type, init) {
       this.type = type;
@@ -77,155 +135,42 @@ async function loadTouchPointerBridge() {
     }
   }
   class WheelEvent extends MouseEvent {}
-  const context = vm.createContext({
-    console,
-    document: {
-      body: { appendChild() {} },
-      getElementById: (id) => elements[id],
-    },
-    MouseEvent,
-    performance: { now: () => 0 },
-    WheelEvent,
-    SharedArrayBuffer: undefined,
+  const { window } = makeWindow({
+    isSecureContext: false,
+    PointerEvent: function PointerEvent() {},
+  });
+  await runBootstrap({
+    canvas,
+    globals: { MouseEvent, SharedArrayBuffer: undefined, WheelEvent },
     window,
   });
-  vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
   await new Promise((resolve) => setImmediate(resolve));
   return { canvas, captured, dispatched, handlers, released };
 }
 
-async function loadReadyHandoff({ devicePixelRatio } = {}) {
-  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
-  const windowHandlers = new Map();
-  const timers = [];
-  const loadingClasses = new Set();
-  const consoleMessages = { error: [], warn: [] };
-  let focusCount = 0;
-  let nowMs = 100;
-  const canvas = {
-    addEventListener() {},
-    focus() {
-      focusCount += 1;
+// A page that can start the editor, so the reveal path is reachable.
+async function loadReadyHandoff({ now } = {}) {
+  const { window, windowHandlers } = makeWindow({ isSecureContext: true });
+  const harness = await runBootstrap({
+    canvas: makeCanvas(),
+    globals: {
+      OffscreenCanvas: function OffscreenCanvas() {},
+      SharedArrayBuffer: function SharedArrayBuffer() {},
     },
-    hidden: false,
-    style: {},
-    transferControlToOffscreen() {},
-  };
-  const loadingProgress = {
-    classList: { add() {}, remove() {} },
-    removeAttribute() {},
-    setAttribute() {},
-  };
-  const elements = {
-    canvas,
-    "loading-screen": {
-      classList: { add: (name) => loadingClasses.add(name) },
-      hidden: false,
-    },
-    status: { textContent: "" },
-    "loading-progress": loadingProgress,
-    "loading-progress-fill": { style: {} },
-    "loading-detail": { textContent: "" },
-    "capability-error": { hidden: true },
-    "capability-error-detail": { textContent: "" },
-  };
-  const window = {
-    addEventListener(type, handler) {
-      windowHandlers.set(type, handler);
-    },
-    devicePixelRatio,
-    isSecureContext: true,
-  };
-  const context = vm.createContext({
-    console: {
-      error: (...args) => consoleMessages.error.push(args.join(" ")),
-      log() {},
-      warn: (...args) => consoleMessages.warn.push(args.join(" ")),
-    },
-    document: {
-      body: { appendChild() {} },
-      createElement: (tagName) => ({
-        tagName: tagName.toUpperCase(),
-        addEventListener() {},
-      }),
-      head: { appendChild() {} },
-      getElementById: (id) => elements[id],
-    },
-    Event: function Event(type) {
-      this.type = type;
-    },
-    OffscreenCanvas: function OffscreenCanvas() {},
-    SharedArrayBuffer: function SharedArrayBuffer() {},
-    performance: { now: () => ++nowMs, timeOrigin: 0 },
-    setTimeout(callback) {
-      timers.push(callback);
-    },
+    now,
     window,
   });
-  vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
-  assert.equal(context.window.__donnerBootstrapStartedAtMs, 101);
-  return {
-    context,
-    consoleMessages,
-    elements,
-    focusCount: () => focusCount,
-    loadingClasses,
-    timers,
-    windowHandlers,
-  };
+  return { ...harness, windowHandlers };
 }
 
-async function loadBootstrapAssetOrder() {
-  const source = await readFile(new URL("../editor-bootstrap.js", import.meta.url), "utf8");
-  const appended = [];
-  const canvas = {
-    addEventListener() {},
-    focus() {},
-    hidden: false,
-    style: {},
-    transferControlToOffscreen() {},
-  };
-  const loadingProgress = {
-    classList: { add() {}, remove() {} },
-    removeAttribute() {},
-    setAttribute() {},
-  };
-  const elements = {
-    canvas,
-    "loading-screen": { classList: { add() {} }, hidden: false },
-    status: { textContent: "" },
-    "loading-progress": loadingProgress,
-    "loading-progress-fill": { style: {} },
-    "loading-detail": { textContent: "" },
-    "capability-error": { hidden: true },
-    "capability-error-detail": { textContent: "" },
-  };
-  const window = {
-    addEventListener() {},
-    isSecureContext: true,
-  };
-  const document = {
-    body: { appendChild: (node) => appended.push(node) },
-    head: { appendChild: (node) => appended.push(node) },
-    createElement: (tagName) => ({
-      tagName: tagName.toUpperCase(),
-      addEventListener() {},
-    }),
-    getElementById: (id) => elements[id],
-  };
-  const context = vm.createContext({
-    console,
-    document,
-    Number,
-    OffscreenCanvas: function OffscreenCanvas() {},
-    performance: { now: () => 0, timeOrigin: 0 },
-    SharedArrayBuffer: function SharedArrayBuffer() {},
-    setTimeout() {},
-    window,
-  });
-  vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
-  await new Promise((resolve) => setImmediate(resolve));
-  return appended;
+// Drives the reveal to the point where the app has reported its first presented
+// frame and the page is waiting for that frame to reach the canvas.
+async function loadReportedFirstFrame(options) {
+  const harness = await loadReadyHandoff(options);
+  harness.context.Module.onRuntimeInitialized();
+  harness.context.window.__donnerFirstFramePresented = true;
+  harness.windowHandlers.get("donner:first-frame-presented")();
+  return harness;
 }
 
 test("bootstrap publishes the Geode-only served-page backend", async () => {
@@ -234,7 +179,7 @@ test("bootstrap publishes the Geode-only served-page backend", async () => {
 });
 
 test("bootstrap starts the Wasm download before loading JavaScript glue", async () => {
-  const appended = await loadBootstrapAssetOrder();
+  const { appended } = await loadReadyHandoff();
   assert.equal(appended[0]?.tagName, "LINK");
   assert.equal(appended[0]?.rel, "preload");
   assert.equal(appended[0]?.as, "fetch");
@@ -336,26 +281,191 @@ test("trackpad gesture bridge synthesizes ungained pinch wheel deltas", async ()
   }
 });
 
-test("loading screen remains until the editor presents its first frame", async () => {
-  const { context, elements, focusCount, loadingClasses, timers, windowHandlers } =
+test("the loader stays up until the presented frame reaches the canvas", async () => {
+  const { animationFrames, canvas, context, elements, loadingClasses, timers } =
+    await loadReportedFirstFrame();
+
+  assert.equal(
+    context.window.__donnerBootstrapStartedAtMs,
+    101,
+    "the bootstrap stamps its start time from the page clock",
+  );
+  assert.equal(context.window.__donnerRuntimeInitializedAtMs, 102, "runtime init is stamped");
+  assert.equal(context.window.__donnerFirstFramePresentedAtMs, 103, "the report is stamped");
+  assert.equal(
+    loadingClasses.has("is-complete"),
+    false,
+    "the report alone is not evidence that the frame reached the page",
+  );
+  assert.equal(canvas.focusCount, 0, "focus moves to the canvas only at the reveal");
+  assert.equal(
+    animationFrames.length,
+    1,
+    "the bootstrap must watch for the presented frame instead of revealing on a timer",
+  );
+
+  for (let frame = 1; frame <= 5; ++frame) {
+    animationFrames.shift()();
+    assert.equal(
+      loadingClasses.has("is-complete"),
+      false,
+      `frame ${frame}: the canvas still reports its boot size, so the loader must stay up`,
+    );
+    assert.equal(
+      elements["loading-screen"].hidden,
+      false,
+      `frame ${frame}: the loader must still be in the page`,
+    );
+  }
+
+  canvas.width = 1390;
+  canvas.height = 1121;
+  animationFrames.shift()();
+  assert.equal(
+    loadingClasses.has("is-complete"),
+    true,
+    "a changed backing size is the presented frame reaching the page, so reveal",
+  );
+  assert.equal(canvas.focusCount, 1, "the reveal moves focus to the canvas exactly once");
+  assert.equal(
+    elements["loading-screen"].hidden,
+    false,
+    "the loader leaves the page only after its fade",
+  );
+  assert.equal(animationFrames.length, 0, "the watch stops once it has revealed");
+  assert.ok(
+    context.window.__donnerEditorRevealedAtMs > context.window.__donnerFirstFramePresentedAtMs,
+    "the reveal must be stamped after the first-frame report",
+  );
+
+  const [hideLoader, fadeDelayMs] = timers.shift();
+  assert.equal(
+    fadeDelayMs,
+    220,
+    "the loader is hidden after its 160ms opacity transition, not on the next tick",
+  );
+  hideLoader();
+  assert.equal(elements["loading-screen"].hidden, true, "the fade timer removes the loader");
+  assert.ok(
+    context.window.__donnerLoadingScreenHiddenAtMs >= context.window.__donnerEditorRevealedAtMs,
+    "the loader is hidden no earlier than the reveal",
+  );
+});
+
+test("the editor reveals at once when the presented frame arrived before the report", async () => {
+  const { animationFrames, canvas, context, loadingClasses, windowHandlers } =
     await loadReadyHandoff();
-
   context.Module.onRuntimeInitialized();
-  assert.equal(elements["loading-screen"].hidden, false);
-  assert.equal(focusCount(), 0);
-
+  canvas.width = 1390;
+  canvas.height = 1121;
   context.window.__donnerFirstFramePresented = true;
   windowHandlers.get("donner:first-frame-presented")();
-  assert.equal(context.window.__donnerRuntimeInitializedAtMs, 102);
-  assert.equal(context.window.__donnerFirstFramePresentedAtMs, 103);
-  assert.equal(context.window.__donnerEditorRevealedAtMs, 104);
-  assert.equal(loadingClasses.has("is-complete"), true);
-  assert.equal(elements["loading-screen"].hidden, false);
-  assert.equal(focusCount(), 1);
 
-  timers.shift()();
-  assert.equal(context.window.__donnerLoadingScreenHiddenAtMs, 105);
-  assert.equal(elements["loading-screen"].hidden, true);
+  assert.equal(
+    loadingClasses.has("is-complete"),
+    true,
+    "the evidence was already on the page, so the reveal must not cost a frame",
+  );
+  assert.equal(animationFrames.length, 0, "and no watch is needed");
+  assert.equal(canvas.focusCount, 1, "the reveal moves focus to the canvas");
+});
+
+test("the reveal falls back after a bounded run of frames and says why exactly once", async () => {
+  const { animationFrames, canvas, consoleMessages, elements, loadingClasses, timers } =
+    await loadReportedFirstFrame();
+
+  assert.equal(
+    animationFrames.length,
+    1,
+    "the reveal must be watching for the presented frame, not sitting on a timer",
+  );
+  for (let frame = 1; frame < 120; ++frame) {
+    animationFrames.shift()();
+    assert.equal(
+      loadingClasses.has("is-complete"),
+      false,
+      `frame ${frame}: inside the bound the page keeps waiting for evidence`,
+    );
+  }
+  assert.equal(consoleMessages.warn.length, 0, "no warning before the bound is reached");
+
+  animationFrames.shift()();
+  assert.equal(
+    loadingClasses.has("is-complete"),
+    true,
+    "the bound must reveal so an engine that never reports the size still boots",
+  );
+  assert.equal(canvas.focusCount, 1, "the fallback reveal is a normal reveal");
+  assert.equal(animationFrames.length, 0, "the watch stops once the bound has fired");
+  assert.equal(consoleMessages.warn.length, 1, "the fallback warns exactly once");
+  assert.match(
+    consoleMessages.warn[0],
+    /without evidence that its first frame reached the page/,
+    "the warning must name the condition",
+  );
+  assert.match(
+    consoleMessages.warn[0],
+    /300x150/,
+    "the warning must report the size it still sees",
+  );
+  assert.match(consoleMessages.warn[0], /120 animation frames/, "and how long it waited");
+
+  timers.shift()[0]();
+  assert.equal(elements["loading-screen"].hidden, true, "the fallback still completes the fade");
+});
+
+// A tab switch during the download is the ordinary interruption here: the
+// browser stops delivering animation frames, wall-clock time runs on without
+// the page observing any of it, and frames resume when the tab comes back.
+test("a hidden page does not spend its bound while no frames are delivered", async () => {
+  let clockMs = 100;
+  const { animationFrames, canvas, consoleMessages, loadingClasses } = await loadReportedFirstFrame(
+    {
+      now: () => clockMs,
+    },
+  );
+
+  animationFrames.shift()();
+  assert.equal(loadingClasses.has("is-complete"), false, "no evidence yet, so no reveal");
+
+  clockMs += 60000;
+  animationFrames.shift()();
+  assert.equal(
+    loadingClasses.has("is-complete"),
+    false,
+    "the first frame back must not spend a bound the page was never awake for",
+  );
+  assert.equal(
+    consoleMessages.warn.length,
+    0,
+    "and must not warn about a wait the page never experienced",
+  );
+
+  canvas.width = 1390;
+  canvas.height = 1121;
+  animationFrames.shift()();
+  assert.equal(
+    loadingClasses.has("is-complete"),
+    true,
+    "the resumed page reveals on the evidence, as it would have without the interruption",
+  );
+  assert.equal(consoleMessages.warn.length, 0, "with no warning, because the evidence arrived");
+});
+
+test("a first-frame report cannot reveal a page that cannot start the editor", async () => {
+  const { animationFrames, context, loadingClasses, windowHandlers } =
+    await runBootstrapWithoutThreads();
+
+  assert.equal(context.window.__donnerCanStartWasm, false, "this page lacks the capabilities");
+  context.window.__donnerFirstFramePresented = true;
+  windowHandlers.get("donner:first-frame-presented")();
+
+  assert.equal(
+    animationFrames.length,
+    0,
+    "no presented-frame watch may start on a page that cannot run the editor",
+  );
+  assert.equal(loadingClasses.has("is-complete"), false, "and nothing may be revealed");
 });
 
 test("bootstrap reports the capability error and skips the download without threads", async () => {
