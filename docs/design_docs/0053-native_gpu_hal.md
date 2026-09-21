@@ -281,8 +281,15 @@ commits and their fixes together in a focused reviewable change.
       synchronization and failure-retention repairs. Native qualification passes 674 cases across
       12 targets, including 69 surface cases, with no skips or synchronization diagnostics.
       Production window integration remains a separate item.
-- [ ] Update `EditorWindow` to use acquired runtime textures directly. Exercise resize, minimized
-      windows, outdated/lost surfaces, timeout, device loss, and frame-handle invalidation.
+- [x] Update `EditorWindow` to use acquired runtime textures directly. One presentation surface
+      serves every platform through the `Device` surface hooks; a frame is carried as a runtime
+      texture borrowed for that frame, and the surface reports its format and usage as runtime
+      values. Resize, minimized windows, outdated/lost surfaces, timeout, device loss,
+      frame-handle invalidation after present and abandon, and a second acquisition before either
+      are covered by `//donner/editor/tests:editor_window_tests` and its `geode` variant. The
+      window still reaches the backend device for the platform object and for the passes that
+      have not moved to the presentation boundary; selecting a native device beneath this seam is
+      the ownership item below.
 
 ### Browser bridge
 

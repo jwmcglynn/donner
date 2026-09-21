@@ -246,6 +246,7 @@ donner_cc_test(
             "//donner/editor/gui:imgui_runtime_renderer",
             "//donner/editor/gui:ui_texture_registry",
             "//donner/gpu",
+            "//donner/gpu:gpu_test_utils",
             "//donner/svg/parser",
             "//donner/svg/renderer",
             "//donner/svg/renderer:renderer_geode",

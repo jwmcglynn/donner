@@ -15,10 +15,12 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #if defined(DONNER_EDITOR_WGPU)
 #include "donner/base/Box.h"
@@ -41,6 +43,9 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/editor/gui/UiTextureRegistry.h"
+#include "donner/gpu/Device.h"
+#include "donner/gpu/Handles.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -680,12 +685,12 @@ TEST(EditorWindowTest, SurfaceStatusesKeepTheirBrowserRetryBuckets) {
             (internal::WgpuSurfaceRetryDecision{}));
 }
 
-/// A texture handle that is never dereferenced. The frame-acquisition orchestration only checks
-/// whether a frame came back and passes the handle along, so a distinct non-null value is all a
-/// scripted surface needs to stand in for one.
-wgpu::Texture FakeFrameTexture() {
-  static int storage = 0;
-  return wgpu::Texture(reinterpret_cast<WGPUTexture>(&storage));
+/// A frame handle carrying no device-alive token. The frame-acquisition orchestration only checks
+/// whether a frame came back and passes the handle along, so a handle that is merely valid is all
+/// a scripted surface needs to stand in for one; with no token to resolve against, it releases
+/// nothing when it goes.
+gpu::Texture FakeFrameTexture() {
+  return gpu::Texture::CreateForBackend(/*slotIndex=*/0, /*generation=*/1, /*deviceId=*/1);
 }
 
 /// What the orchestration did to a scripted surface.
@@ -737,14 +742,14 @@ public:
     // report no frame at all hand back nothing.
     const bool carriesFrame =
         status == gpu::SurfaceStatus::Success || status == gpu::SurfaceStatus::Outdated;
-    return internal::AcquiredFrame{carriesFrame ? FakeFrameTexture() : wgpu::Texture(), status};
+    return internal::AcquiredFrame{carriesFrame ? FakeFrameTexture() : gpu::Texture(), status};
   }
 
   void present() override {}
   void abandon() override { ++calls_->abandons; }
   void shutdown() override { ++calls_->shutdowns; }
-  wgpu::TextureFormat format() const override { return wgpu::TextureFormat::BGRA8Unorm; }
-  wgpu::TextureUsage usage() const override { return wgpu::TextureUsage::RenderAttachment; }
+  gpu::TextureFormat format() const override { return gpu::TextureFormat::BGRA8Unorm; }
+  gpu::TextureUsage usage() const override { return gpu::TextureUsage::RenderAttachment; }
   bool premultipliedAlpha() const override { return false; }
 
 private:
@@ -764,6 +769,57 @@ std::unique_ptr<internal::PresentationSurface> ScriptedSurfaceReporting(
   return std::make_unique<ScriptedSurface>(std::move(statuses), calls);
 }
 
+TEST(EditorWindowTest, AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Success}, &calls);
+  Vector2i configuredPx(640, 480);
+
+  // A minimized window reports a framebuffer with no texels in it, which is not an extent a
+  // surface can be configured for or hand out a frame of.
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, Vector2i::Zero(), configuredPx, nullptr);
+
+  EXPECT_FALSE(outcome.texture.isValid()) << "there is no framebuffer to draw into";
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success)
+      << "nothing failed; there was simply no frame to ask for";
+  EXPECT_FALSE(outcome.released) << "the surface is still the window's; only this frame is gone";
+  EXPECT_FALSE(outcome.markDeviceLost) << "a window with nothing to draw into is not a lost device";
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(calls, (SurfaceCalls{.acquires = 0,
+                                 .abandons = 0,
+                                 .configures = 0,
+                                 .shutdowns = 0,
+                                 .lastConfigureSize = Vector2i::Zero()}))
+      << "a frame asked for and then handed straight back is an acquisition the window never "
+         "needed to open";
+  EXPECT_EQ(configuredPx, Vector2i(640, 480))
+      << "the surface still matches the extent it was configured for";
+}
+
+TEST(EditorWindowTest, ATimedOutFrameIsSkippedAndTheSurfaceKept) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Timeout}, &calls);
+  Vector2i configuredPx = kFrameSizePx;
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, nullptr);
+
+  EXPECT_FALSE(outcome.texture.isValid());
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Timeout);
+  EXPECT_FALSE(outcome.released) << "nothing became available in time; the surface is still fine";
+  EXPECT_FALSE(outcome.markDeviceLost);
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(configuredPx, kFrameSizePx) << "a dropped frame does not reconfigure the surface";
+  EXPECT_EQ(calls, (SurfaceCalls{.acquires = 1,
+                                 .abandons = 1,
+                                 .configures = 0,
+                                 .shutdowns = 0,
+                                 .lastConfigureSize = Vector2i::Zero()}))
+      << "the frame that never came is handed back once and nothing else happens";
+}
+
 TEST(EditorWindowTest, AnOutdatedFrameFollowsTheWindowAndIsRetriedOnce) {
   SurfaceCalls calls;
   std::unique_ptr<internal::PresentationSurface> surface =
@@ -773,7 +829,7 @@ TEST(EditorWindowTest, AnOutdatedFrameFollowsTheWindowAndIsRetriedOnce) {
   const internal::PresentationFrameOutcome outcome =
       internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, nullptr);
 
-  EXPECT_TRUE(static_cast<bool>(outcome.texture))
+  EXPECT_TRUE(outcome.texture.isValid())
       << "following the window produced a frame instead of costing one";
   EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success);
   EXPECT_FALSE(outcome.released);
@@ -796,7 +852,7 @@ TEST(EditorWindowTest, AnOutdatedFrameIsDroppedWhenTheWindowCannotBeFollowed) {
   const internal::PresentationFrameOutcome outcome =
       internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, nullptr);
 
-  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_FALSE(outcome.texture.isValid());
   EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Outdated);
   EXPECT_FALSE(outcome.released) << "the surface is still usable; only this frame was dropped";
   EXPECT_NE(surface, nullptr);
@@ -820,7 +876,7 @@ TEST(EditorWindowTest, ALostSurfaceIsRebuiltOnceAndKeepsRendering) {
       });
 
   EXPECT_EQ(rebuilds, 1);
-  EXPECT_TRUE(static_cast<bool>(outcome.texture));
+  EXPECT_TRUE(outcome.texture.isValid());
   EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success);
   EXPECT_FALSE(outcome.released) << "a rebuilt surface keeps the window presenting";
   EXPECT_NE(surface, nullptr);
@@ -843,7 +899,7 @@ TEST(EditorWindowTest, ALostSurfaceThatCannotBeRebuiltIsGivenUp) {
       });
 
   EXPECT_EQ(rebuilds, 1) << "rebuilding is attempted once, not repeatedly";
-  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_FALSE(outcome.texture.isValid());
   EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Lost);
   EXPECT_TRUE(outcome.released);
   EXPECT_FALSE(outcome.markDeviceLost) << "the device is fine; only the surface was lost";
@@ -887,11 +943,395 @@ TEST(EditorWindowTest, ALostDeviceIsTerminalAndIsReportedToTheRenderers) {
       });
 
   EXPECT_EQ(rebuilds, 0) << "a fresh surface does not bring back a lost device";
-  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_FALSE(outcome.texture.isValid());
   EXPECT_TRUE(outcome.released);
   EXPECT_TRUE(outcome.markDeviceLost);
   EXPECT_EQ(surface, nullptr);
   EXPECT_EQ(configuredPx, Vector2i::Zero());
+}
+
+/// A device whose surface hooks follow a script, so the editor's presentation surface can be
+/// driven without a window, a platform object, or a GPU behind it.
+///
+/// Everything that is not presentation is accepted and ignored: these cases are about which
+/// runtime surface operations one frame performs, in what order, and what the runtime does with
+/// the frame handle afterwards.
+class ScriptedSurfaceDevice final : public gpu::Device {
+public:
+  /// Submissions complete instantly; nothing here waits on one.
+  uint64_t completedSerial() const override { return lastSubmittedSerial(); }
+
+  /// What the surface reports while handing over a frame.
+  gpu::SurfaceStatus acquireStatus = gpu::SurfaceStatus::Success;
+  /// Formats the surface reports its frames may take.
+  std::vector<gpu::TextureFormat> formats{gpu::TextureFormat::BGRA8Unorm};
+  /// Usage flags the surface reports its frames may carry.
+  gpu::TextureUsage usages = gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc;
+  /// Alpha compositing the surface reports it supports.
+  std::vector<gpu::SurfaceAlphaMode> alphaModes{gpu::SurfaceAlphaMode::Opaque};
+
+  /// Platform objects surfaces were created for, in order.
+  std::vector<gpu::NativeSurfaceKind> createdSurfaces;
+  /// Extents the surface was configured for, in order.
+  std::vector<gpu::Extent2d> configuredSizes;
+  /// Configuration the most recent \ref configure applied.
+  gpu::SurfaceConfiguration lastConfiguration;
+  int presentCalls = 0;         //!< Frames handed to the platform.
+  int abandonCalls = 0;         //!< Frames handed back without being shown.
+  int destroySurfaceCalls = 0;  //!< Surfaces whose platform state was released.
+
+protected:
+  gpu::Status onCreateSurface(uint32_t, const gpu::SurfaceDescriptor& descriptor) override {
+    createdSurfaces.push_back(descriptor.native.kind);
+    return gpu::OkStatus();
+  }
+
+  gpu::Result<gpu::SurfaceCapabilities> onSurfaceCapabilities(uint32_t) const override {
+    return gpu::SurfaceCapabilities{formats, usages, {gpu::PresentMode::Fifo}, alphaModes};
+  }
+
+  gpu::Status onConfigureSurface(uint32_t,
+                                 const gpu::SurfaceConfiguration& configuration) override {
+    configuredSizes.push_back(configuration.size);
+    lastConfiguration = configuration;
+    backendHasFrame_ = false;
+    return gpu::OkStatus();
+  }
+
+  gpu::Result<gpu::SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
+    // The platform holds its own frame and holds exactly one, so a backend still holding the
+    // previous frame refuses to hand out another. The runtime refuses that first, so this models
+    // the platform faithfully rather than being the refusal any case here observes.
+    if (backendHasFrame_) {
+      return gpu::GpuError{gpu::GpuErrorType::InvalidState,
+                           "the backend is still holding the frame it handed out"};
+    }
+    if (acquireStatus == gpu::SurfaceStatus::Success ||
+        acquireStatus == gpu::SurfaceStatus::Outdated) {
+      backendHasFrame_ = true;
+    }
+    return acquireStatus;
+  }
+
+  gpu::Result<gpu::SurfaceStatus> onPresentSurface(uint32_t) override {
+    ++presentCalls;
+    backendHasFrame_ = false;
+    return gpu::SurfaceStatus::Success;
+  }
+
+  void onAbandonCurrentTexture(uint32_t) override {
+    ++abandonCalls;
+    backendHasFrame_ = false;
+  }
+
+  void onDestroySurface(uint32_t) override { ++destroySurfaceCalls; }
+
+  // The operations these cases do not model are accepted and ignored.
+  gpu::Status onCreateBuffer(uint32_t, const gpu::BufferDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateTexture(uint32_t, const gpu::TextureDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateTextureView(uint32_t, uint32_t, const gpu::TextureViewDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateSampler(uint32_t, const gpu::SamplerDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateBindGroupLayout(uint32_t, const gpu::BindGroupLayoutDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateBindGroup(uint32_t, const gpu::BindGroupDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreatePipelineLayout(uint32_t, const gpu::PipelineLayoutDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateShaderModule(uint32_t, const gpu::ShaderModuleDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateRenderPipeline(uint32_t, const gpu::RenderPipelineDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onCreateComputePipeline(uint32_t, const gpu::ComputePipelineDescriptor&) override {
+    return gpu::OkStatus();
+  }
+  void onDestroyResource(std::string_view, uint32_t) override {}
+  gpu::Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onWriteTexture(uint32_t, std::span<const uint8_t>, const gpu::TexelCopyBufferLayout&,
+                             const gpu::Extent2d&, const gpu::Origin2d&) override {
+    return gpu::OkStatus();
+  }
+  gpu::Status onSubmit(uint64_t, uint32_t, std::span<const gpu::Command>) override {
+    return gpu::OkStatus();
+  }
+
+private:
+  /// Whether the platform is still holding the frame this device handed out.
+  bool backendHasFrame_ = false;
+};
+
+/// Drives the editor's runtime presentation surface against a scripted device.
+class RuntimePresentationSurfaceTest : public testing::Test {
+protected:
+  /// A platform object the scripted device never dereferences, named the way every platform but
+  /// macOS names the surface object its window library already made.
+  static gpu::NativeSurfaceHandle NativeHandle() {
+    gpu::NativeSurfaceHandle native;
+    native.kind = gpu::NativeSurfaceKind::EmbedderSurface;
+    native.window = 0x1234;
+    return native;
+  }
+
+  /// Attaches \ref surface_ to \ref device_ and configures it, failing the case when either step
+  /// refuses. @param sizePx Framebuffer extent to configure for.
+  void attachAndConfigure(Vector2i sizePx = Vector2i(1280, 720)) {
+    ASSERT_TRUE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
+                                         /*enableReadback=*/false));
+    ASSERT_TRUE(surface_.configure(sizePx.x, sizePx.y));
+  }
+
+  /// A view of \p texture, which is how a use of a frame handle is checked.
+  /// @param texture Frame handle to use.
+  gpu::Result<gpu::TextureView> useFrame(const gpu::Texture& texture) {
+    return device_.createTextureView(texture, gpu::TextureViewDescriptor{"editorFrame"});
+  }
+
+  ScriptedSurfaceDevice device_;
+  internal::RuntimePresentationSurface surface_;
+};
+
+TEST_F(RuntimePresentationSurfaceTest, FollowsAResizeByReconfiguringTheSameSurface) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure(Vector2i(1280, 720)));
+  internal::AcquiredFrame first = surface_.acquire();
+  ASSERT_THAT(first.status, testing::Eq(gpu::SurfaceStatus::Success));
+  surface_.present();
+
+  EXPECT_TRUE(surface_.configure(800, 600));
+  internal::AcquiredFrame resized = surface_.acquire();
+  EXPECT_THAT(resized.status, testing::Eq(gpu::SurfaceStatus::Success));
+  EXPECT_TRUE(resized.texture.isValid());
+
+  EXPECT_THAT(device_.createdSurfaces,
+              testing::ElementsAre(gpu::NativeSurfaceKind::EmbedderSurface))
+      << "a resize follows the window with a new configuration, not a new surface";
+  EXPECT_THAT(device_.configuredSizes,
+              testing::ElementsAre(gpu::Extent2d{1280, 720}, gpu::Extent2d{800, 600}));
+  EXPECT_EQ(device_.destroySurfaceCalls, 0) << "the surface it reconfigured is the one it had";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, ReconfiguringHandsBackAFrameThatWasStillOutstanding) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+
+  EXPECT_TRUE(surface_.configure(800, 600)) << "a resize is a configuration the surface accepts";
+
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "the platform is holding that frame and holds exactly one, so reconfiguring gives it "
+         "back rather than leaving the next acquire to be refused";
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
+      << "the frame described a surface that no longer exists in that shape";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AConfigurationThatWasRefusedStillLeavesNoFrameHeld) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+
+  // A window with no framebuffer has no extent to configure for, which is the refusal a window
+  // can actually arrive at.
+  EXPECT_FALSE(surface_.configure(0, 0));
+
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "the outstanding frame goes back before a new configuration is asked for, so a refused "
+         "one does not leave the platform holding the only frame it has to give";
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+
+  EXPECT_TRUE(surface_.configure(800, 600));
+  internal::AcquiredFrame next = surface_.acquire();
+  EXPECT_THAT(next.status, testing::Eq(gpu::SurfaceStatus::Success));
+  EXPECT_TRUE(next.texture.isValid()) << "the window recovers on the next extent it can present";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, APresentedFrameIsNoLongerTheCallersToDrawInto) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+
+  surface_.present();
+
+  EXPECT_EQ(device_.presentCalls, 1);
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
+      << "the platform owns the frame once it has been handed over";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AnAbandonedFrameIsNoLongerTheCallersToDrawInto) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+
+  surface_.abandon();
+
+  EXPECT_EQ(device_.abandonCalls, 1);
+  EXPECT_EQ(device_.presentCalls, 0) << "a frame the window decided not to draw is not shown";
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AskingForASecondFrameWithoutResolvingTheFirstIsRefused) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame first = surface_.acquire();
+  ASSERT_TRUE(first.texture.isValid());
+
+  internal::AcquiredFrame second = surface_.acquire();
+
+  EXPECT_FALSE(second.texture.isValid());
+  EXPECT_THAT(second.status, testing::Eq(gpu::SurfaceStatus::Lost))
+      << "it is this surface that cannot serve the frame, not the device, so the window spends a "
+         "rebuild on it rather than giving the device up for good";
+  EXPECT_THAT(useFrame(first.texture), gpu::HasResult())
+      << "the frame already handed out is untouched by the refusal";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, PresentingWithNoFrameHeldDoesNothing) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+
+  // The frame loop presents unconditionally on its way out, including the frames it skipped.
+  surface_.present();
+  surface_.abandon();
+
+  EXPECT_EQ(device_.presentCalls, 0);
+  EXPECT_EQ(device_.abandonCalls, 0);
+}
+
+TEST_F(RuntimePresentationSurfaceTest, ASurfaceThatCannotPresentTheCompiledFormatIsRefused) {
+  device_.formats = {gpu::TextureFormat::RGBA8Unorm};
+
+  EXPECT_FALSE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
+                                        /*enableReadback=*/false))
+      << "the renderer's pipelines were compiled for a format this surface never presents";
+  EXPECT_EQ(device_.createdSurfaces.size(), 1u);
+
+  surface_.shutdown();
+
+  EXPECT_EQ(device_.destroySurfaceCalls, 1)
+      << "the surface it built to ask the question is given up with the refusal, not left behind";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AFrameThatDidNotArriveInTimeLeavesNothingHeld) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  device_.acquireStatus = gpu::SurfaceStatus::Timeout;
+
+  internal::AcquiredFrame frame = surface_.acquire();
+
+  EXPECT_THAT(frame.status, testing::Eq(gpu::SurfaceStatus::Timeout));
+  EXPECT_FALSE(frame.texture.isValid()) << "nothing became available to draw into";
+
+  surface_.abandon();
+  surface_.present();
+
+  EXPECT_EQ(device_.abandonCalls, 0)
+      << "a frame that never came is not one to hand back, and asking would be refused";
+  EXPECT_EQ(device_.presentCalls, 0);
+
+  device_.acquireStatus = gpu::SurfaceStatus::Success;
+  internal::AcquiredFrame next = surface_.acquire();
+  EXPECT_TRUE(next.texture.isValid()) << "the surface is still the window's and still serves";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AnOutOfDateFrameIsStillHeldUntilTheSurfaceFollowsTheWindow) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  device_.acquireStatus = gpu::SurfaceStatus::Outdated;
+
+  internal::AcquiredFrame frame = surface_.acquire();
+
+  EXPECT_THAT(frame.status, testing::Eq(gpu::SurfaceStatus::Outdated));
+  EXPECT_TRUE(frame.texture.isValid())
+      << "a configuration that has drifted out of date usually still presents";
+
+  device_.acquireStatus = gpu::SurfaceStatus::Success;
+  EXPECT_TRUE(surface_.configure(800, 600));
+
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "the frame the platform was still holding goes back as the surface follows the window";
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+  EXPECT_TRUE(surface_.acquire().texture.isValid());
+}
+
+TEST_F(RuntimePresentationSurfaceTest, ReadbackIsDroppedWhenFramesCannotBeCopiedFrom) {
+  device_.usages = gpu::TextureUsage::RenderAttachment;
+
+  ASSERT_TRUE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
+                                       /*enableReadback=*/true));
+  ASSERT_TRUE(surface_.configure(640, 480));
+
+  EXPECT_THAT(surface_.usage(), testing::Eq(gpu::TextureUsage::RenderAttachment))
+      << "a frame that cannot be copied out of is still a frame worth showing";
+  EXPECT_THAT(device_.lastConfiguration.usage, testing::Eq(gpu::TextureUsage::RenderAttachment));
+}
+
+TEST_F(RuntimePresentationSurfaceTest, ReadbackIsConfiguredWhenFramesCanBeCopiedFrom) {
+  ASSERT_TRUE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
+                                       /*enableReadback=*/true));
+  ASSERT_TRUE(surface_.configure(640, 480));
+
+  EXPECT_THAT(surface_.usage(),
+              testing::Eq(gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc));
+  EXPECT_THAT(device_.lastConfiguration.usage,
+              testing::Eq(gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc));
+}
+
+TEST(EditorWindowTest, AlphaCompositingTakesThePreferredModeOverTheOrderOffered) {
+  using gpu::SurfaceAlphaMode;
+
+  EXPECT_THAT(
+      internal::ChooseSurfaceAlphaMode({SurfaceAlphaMode::Premultiplied, SurfaceAlphaMode::Opaque},
+                                       SurfaceAlphaMode::Opaque),
+      testing::Eq(SurfaceAlphaMode::Opaque))
+      << "the window's own compositing wins over whichever mode the surface happened to list "
+         "first";
+  EXPECT_THAT(
+      internal::ChooseSurfaceAlphaMode({SurfaceAlphaMode::Opaque, SurfaceAlphaMode::Premultiplied},
+                                       SurfaceAlphaMode::Premultiplied),
+      testing::Eq(SurfaceAlphaMode::Premultiplied));
+
+  EXPECT_THAT(internal::ChooseSurfaceAlphaMode({SurfaceAlphaMode::Inherit},
+                                               SurfaceAlphaMode::Premultiplied),
+              testing::Eq(SurfaceAlphaMode::Inherit))
+      << "a preference the surface never offered would present a transparent clear as solid "
+         "black, so an offered mode is taken instead";
+
+  EXPECT_THAT(internal::ChooseSurfaceAlphaMode({}, SurfaceAlphaMode::Premultiplied),
+              testing::Eq(SurfaceAlphaMode::Opaque))
+      << "a surface that named no mode is composited opaque, which every surface does";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, AlphaCompositingFollowsWhatTheSurfaceOffers) {
+  device_.alphaModes = {gpu::SurfaceAlphaMode::Premultiplied};
+
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure(Vector2i(640, 480)));
+
+  EXPECT_TRUE(surface_.premultipliedAlpha())
+      << "a surface that only composites premultiplied is reported as doing so, because the "
+         "window's clear color depends on it";
+  EXPECT_THAT(device_.lastConfiguration.alphaMode,
+              testing::Eq(gpu::SurfaceAlphaMode::Premultiplied));
+}
+
+TEST_F(RuntimePresentationSurfaceTest, GivingUpTheSurfaceHandsBackTheFrameItHeld) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+
+  surface_.shutdown();
+
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "the platform is still holding the frame, so it is given back before the surface goes";
+  EXPECT_EQ(device_.destroySurfaceCalls, 1);
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
 }
 #endif
 
