@@ -2118,6 +2118,10 @@ std::optional<ParseDiagnostic> IncrementalLimitParseDiagnostic(const ParseDiagno
     return MakeEditDiagnostic("Incremental source edit exceeds the document total-attribute limit",
                               range);
   }
+  if (reason == "XML source exceeds maximum input size") {
+    return MakeEditDiagnostic("Incremental source edit exceeds the document input-size limit",
+                              range);
+  }
   return std::nullopt;
 }
 

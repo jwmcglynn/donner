@@ -38,7 +38,17 @@ public:
    */
   static ParseResult<XMLDocument> ParseOpeningTag(std::string_view openingTagSource);
 
-  /** Parse one opening tag using explicit XML parser resource limits. */
+  /**
+   * Parse one opening tag using explicit XML parser resource limits.
+   *
+   * \ref XMLParser::Options::maximumInputSize bounds \p openingTagSource itself, and the single
+   * synthetic self-closing slash inserted while normalizing the tag is not charged against it.
+   *
+   * @param openingTagSource Source bytes such as `<rect fill="red">`.
+   * @param options XML parser resource limits to apply. Every limit other than the input-size
+   *   ceiling is forwarded unchanged.
+   * @return Parsed temporary XML document, or a parse diagnostic.
+   */
   static ParseResult<XMLDocument> ParseOpeningTag(std::string_view openingTagSource,
                                                   const XMLParser::Options& options);
 
