@@ -1053,6 +1053,61 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxUnionsTextChildren) {
                              Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
 }
 
+// `display: none` removes an element and its whole subtree from the rendering tree, so nothing
+// inside it contributes to an ancestor's object bounding box. `display` does not inherit, so the
+// `<text>` and `<rect>` below still report boxes of their own when asked directly; it is the
+// hidden ancestor that keeps them out of the container's box.
+TEST_F(RendererRegressionTests, GroupObjectBoundingBoxExcludesDisplayNoneSubtrees) {
+  SVGDocument document = instantiateSubtree(R"(
+    <svg viewBox="0 0 400 400" font-family="Noto Sans" font-size="40">
+      <g id="group">
+        <g display="none">
+          <text id="hiddenText" x="250" y="300">Text</text>
+          <rect id="hiddenRect" x="300" y="330" width="40" height="40"/>
+        </g>
+        <g>
+          <text id="shownText" x="20" y="60">Text</text>
+        </g>
+      </g>
+    </svg>
+  )",
+                                            {}, Vector2i(500, 500));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  // Rendering prepares the text layout that the bounding box is derived from.
+  ASSERT_THAT(RenderDocumentWithBackend(document, RendererBackend::TinySkia).empty(),
+              testing::IsFalse());
+
+  auto group = document.querySelector("#group");
+  auto hiddenText = document.querySelector("#hiddenText");
+  auto hiddenRect = document.querySelector("#hiddenRect");
+  auto shownText = document.querySelector("#shownText");
+  ASSERT_THAT(group.has_value(), testing::IsTrue());
+  ASSERT_THAT(hiddenText.has_value(), testing::IsTrue());
+  ASSERT_THAT(hiddenRect.has_value(), testing::IsTrue());
+  ASSERT_THAT(shownText.has_value(), testing::IsTrue());
+
+  // The visible text inside a nested group is the whole of the expected box, which also proves the
+  // traversal is not over-pruned into skipping visible nested subtrees.
+  const Box2d expected = shownText->cast<SVGTextElement>().objectBoundingBox();
+  ASSERT_THAT(expected.isEmpty(), testing::IsFalse());
+
+  const Box2d hiddenTextBox = hiddenText->cast<SVGTextElement>().objectBoundingBox();
+  const std::optional<Box2d> hiddenRectBox =
+      components::ShapeSystem().getShapeBounds(hiddenRect->entityHandle());
+  ASSERT_THAT(hiddenTextBox.isEmpty(), testing::IsFalse());
+  ASSERT_THAT(hiddenRectBox.has_value(), testing::IsTrue());
+  // Both hidden boxes must lie outside the expected box, otherwise including them would not be
+  // observable and this test could not fail.
+  ASSERT_THAT(hiddenTextBox.topLeft.x, testing::Gt(expected.bottomRight.x));
+  ASSERT_THAT(hiddenRectBox->topLeft.x, testing::Gt(expected.bottomRight.x));
+
+  const std::optional<Box2d> actual =
+      components::ShapeSystem().getShapeBounds(group->entityHandle());
+  ASSERT_THAT(actual.has_value(), testing::IsTrue());
+  EXPECT_THAT(*actual, BoxEq(Vector2Near(expected.topLeft.x, expected.topLeft.y),
+                             Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
+}
+
 // SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
 // covers all of its text element's content must render exactly as the same effect on the text
 // element. Both forms resolve objectBoundingBox effect regions through the same glyph-cell box, so
