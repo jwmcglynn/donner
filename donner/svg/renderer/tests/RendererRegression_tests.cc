@@ -1081,10 +1081,10 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxExcludesDisplayNoneSubtree
   auto hiddenText = document.querySelector("#hiddenText");
   auto hiddenRect = document.querySelector("#hiddenRect");
   auto shownText = document.querySelector("#shownText");
-  ASSERT_THAT(group.has_value(), testing::IsTrue());
-  ASSERT_THAT(hiddenText.has_value(), testing::IsTrue());
-  ASSERT_THAT(hiddenRect.has_value(), testing::IsTrue());
-  ASSERT_THAT(shownText.has_value(), testing::IsTrue());
+  ASSERT_THAT(group, testing::Ne(std::nullopt));
+  ASSERT_THAT(hiddenText, testing::Ne(std::nullopt));
+  ASSERT_THAT(hiddenRect, testing::Ne(std::nullopt));
+  ASSERT_THAT(shownText, testing::Ne(std::nullopt));
 
   // The visible text inside a nested group is the whole of the expected box, which also proves the
   // traversal is not over-pruned into skipping visible nested subtrees.
@@ -1094,8 +1094,8 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxExcludesDisplayNoneSubtree
   const Box2d hiddenTextBox = hiddenText->cast<SVGTextElement>().objectBoundingBox();
   const std::optional<Box2d> hiddenRectBox =
       components::ShapeSystem().getShapeBounds(hiddenRect->entityHandle());
-  ASSERT_THAT(hiddenTextBox.isEmpty(), testing::IsFalse());
-  ASSERT_THAT(hiddenRectBox.has_value(), testing::IsTrue());
+  ASSERT_THAT(hiddenTextBox.isEmpty(), testing::IsFalse()) << "hidden text box: " << hiddenTextBox;
+  ASSERT_THAT(hiddenRectBox, testing::Ne(std::nullopt));
   // Both hidden boxes must lie outside the expected box, otherwise including them would not be
   // observable and this test could not fail.
   ASSERT_THAT(hiddenTextBox.topLeft.x, testing::Gt(expected.bottomRight.x));

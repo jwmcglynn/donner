@@ -354,9 +354,10 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
   }
   accumulateTextBounds(handle);
 
-  // Iterate over all children and accumulate their bounds. `display: none` removes an element and
-  // its whole subtree from the rendering tree, so a hidden element prunes: skipping only the
-  // element itself would still let its descendants widen the box.
+  // Accumulate the rest of the subtree. The walk visits `handle` again ahead of its descendants,
+  // which changes nothing because the accumulation above is idempotent under union. `display: none`
+  // removes an element and its whole subtree from the rendering tree, so a hidden element prunes:
+  // skipping only the element itself would still let its descendants widen the box.
   donner::components::ForAllChildrenRecursivePruned(
       handle, [this, &disabledSink, &accumulate, &accumulateTextBounds,
                &worldFromTarget](EntityHandle child) {

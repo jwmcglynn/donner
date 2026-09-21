@@ -313,6 +313,24 @@ TEST_F(TreeComponentTests, ForAllChildrenRecursiveVisitsWholeSubtree) {
   EXPECT_THAT(visited, ElementsAre(root, a, a1, b, b1));
 }
 
+TEST_F(TreeComponentTests, ForAllChildrenRecursiveIgnoresTheCallbackResult) {
+  auto root = createEntity();
+  auto a = createEntity();
+  auto a1 = createEntity();
+  tree(root).appendChild(registry_, a);
+  tree(a).appendChild(registry_, a1);
+
+  std::vector<Entity> visited;
+  ForAllChildrenRecursive(EntityHandle(registry_, root), [&visited](EntityHandle handle) {
+    visited.push_back(handle.entity());
+    return false;
+  });
+
+  // Forwarding the result would prune here and silently change every existing caller, which
+  // returns early from its callback to skip one entity rather than a subtree.
+  EXPECT_THAT(visited, ElementsAre(root, a, a1));
+}
+
 TEST_F(TreeComponentTests, ForAllChildrenRecursivePrunedSkipsRejectedSubtrees) {
   auto root = createEntity();
   auto a = createEntity();

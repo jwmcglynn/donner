@@ -128,7 +128,7 @@ private:
  * Returning \c false from \p func prunes: neither that entity's children nor any deeper descendant
  * is visited. Returning early from a \ref ForAllChildrenRecursive callback instead skips only the
  * current entity, so a caller whose condition covers a whole subtree (for example `display: none`,
- * which removes the subtree from the rendering tree) has to use this overload.
+ * which removes the subtree from the rendering tree) has to use this form.
  *
  * @param handle Entity handle to iterate over, which is visited first.
  * @param func Functor to call for each entity, returning whether to descend into its children.
@@ -160,11 +160,15 @@ void ForAllChildrenRecursivePruned(EntityHandle handle, const Func& func) {
 }
 
 /**
- * Iterate over all children of the given entity recursively and call the given functor for each
- * child. Iterates in pre-order traversal order.
+ * Iterate over the given entity and its descendants recursively, calling the given functor for
+ * each. Iterates in pre-order traversal order.
  *
- * @param handle Entity handle to iterate over.
- * @param func Functor to call for each child.
+ * \p handle itself is visited first, which is why a caller that wants the descendants alone
+ * compares against it. Whatever \p func returns is discarded, so returning early from it skips the
+ * current entity only; use \ref ForAllChildrenRecursivePruned to skip a whole subtree.
+ *
+ * @param handle Entity handle to iterate over, which is visited first.
+ * @param func Functor to call for each entity.
  */
 template <typename Func>
 void ForAllChildrenRecursive(EntityHandle handle, const Func& func) {
