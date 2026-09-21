@@ -1649,6 +1649,95 @@ TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForFilterRegion) {
 
   driver.draw(document);
 }
+
+/// The span of \p text whose content is exactly \p spanText, or nullptr when no span matches.
+/// A span whose range does not lie within its own text fails the test rather than reading out of
+/// bounds, which `substr` would do by throwing in a build that has no exceptions.
+const components::ComputedTextComponent::TextSpan* FindSpanWithText(
+    const components::ComputedTextComponent& text, std::string_view spanText) {
+  for (const auto& span : text.spans) {
+    const std::string_view spanSource(span.text);
+    if (span.start > span.end || span.end > spanSource.size()) {
+      ADD_FAILURE() << "Span range [" << span.start << ", " << span.end << ") is outside its "
+                    << spanSource.size() << "-byte text";
+      continue;
+    }
+
+    if (spanSource.substr(span.start, span.end - span.start) == spanText) {
+      return &span;
+    }
+  }
+
+  return nullptr;
+}
+
+TEST_F(RendererDriverTest, TextOpacityIsOwnedByTheLayerOfTheElementThatDeclaresIt) {
+  struct Case {
+    std::string_view name;
+    std::string_view markup;
+    /// Product of the `opacity` of every text content element below the element whose isolated
+    /// layer paints the span.
+    double spanOpacity;
+    /// Opacity of every isolated layer the driver pushes, in push order.
+    std::vector<double> layerOpacities;
+  };
+
+  const std::vector<Case> kCases = {
+      {"text opacity",
+       R"svg(<text x="10" y="60" font-family="sans-serif" font-size="48"
+                   opacity="0.5">S</text>)svg",
+       1.0,
+       {0.5}},
+      {"text opacity with span wrapper",
+       R"svg(<text x="10" y="60" font-family="sans-serif" font-size="48" opacity="0.5">
+              <tspan>S</tspan></text>)svg",
+       1.0,
+       {0.5}},
+      {"nested span opacity",
+       R"svg(<text x="10" y="60" font-family="sans-serif" font-size="48">
+              <tspan opacity="0.5"><tspan opacity="0.5">S</tspan></tspan></text>)svg",
+       0.25,
+       {}},
+      {"text opacity above span opacity",
+       R"svg(<text x="10" y="60" font-family="sans-serif" font-size="48" opacity="0.5">
+              <tspan opacity="0.5">S</tspan></text>)svg",
+       0.5,
+       {0.5}},
+      {"span opacity with its own effect layer",
+       R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+             <text x="10" y="60" font-family="sans-serif" font-size="48">
+              <tspan opacity="0.5" clip-path="url(#clip)">S</tspan></text>)svg",
+       1.0,
+       {0.5}},
+  };
+
+  for (const Case& testCase : kCases) {
+    SCOPED_TRACE(testCase.name);
+
+    ::testing::NiceMock<MockRendererInterface> caseRenderer;
+    RendererDriver caseDriver{caseRenderer};
+    SVGDocument document = makeDocument(testCase.markup, Vector2i(200, 200));
+
+    std::vector<double> layerOpacities;
+    std::optional<double> spanOpacity;
+    ON_CALL(caseRenderer, pushIsolatedLayer(_, _)).WillByDefault([&](double opacity, MixBlendMode) {
+      layerOpacities.push_back(opacity);
+    });
+    ON_CALL(caseRenderer, drawText(_, _, _))
+        .WillByDefault(
+            [&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+              if (const auto* span = FindSpanWithText(text, "S")) {
+                spanOpacity = span->opacity;
+              }
+            });
+
+    caseDriver.draw(document);
+
+    EXPECT_THAT(spanOpacity, ::testing::Optional(::testing::DoubleEq(testCase.spanOpacity)));
+    EXPECT_THAT(layerOpacities,
+                ::testing::Pointwise(::testing::DoubleEq(), testCase.layerOpacities));
+  }
+}
 #endif  // DONNER_TEXT_ENABLED
 
 TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph) {
