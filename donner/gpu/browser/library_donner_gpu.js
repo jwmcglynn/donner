@@ -13,6 +13,12 @@
  * reports that through `donner_gpu_owns_device`, which is what makes the runtime's ownership check
  * a real boundary rather than a convention.
  *
+ * One check is deliberately not mirrored here: the runtime refuses to destroy a texture that is
+ * some surface's frame, because the canvas owns that texture. Answering the same question on this
+ * side would need an index from texture to surface kept up to date on every acquisition, paid for
+ * on every texture destroyed, so a caller that asks for a frame texture to be destroyed is
+ * believed. Nothing the runtime issues does.
+ *
  * Structured descriptors arrive one item at a time, matching how recorded commands are replayed:
  * nothing here decodes a packed buffer, so there is no length, offset or arity arithmetic to get
  * wrong. Every numeric code below is fixed for the life of the protocol. Two things hold this list
@@ -52,9 +58,12 @@ var LibraryDonnerGpu = {
     kSurfaceDeviceLost: 4,
     kSurfaceTimeout: 5,
 
-    // Texture usage bits and canvas alpha modes by name. These are the same protocol numbers the
-    // table below pins; naming them keeps an entry point that reports a usage or answers a
-    // question about an alpha mode from spelling out a bit pattern a second time.
+    // Texture usage bits and canvas alpha modes by name. These are the numbers the table below
+    // sends for those values, and naming them keeps an entry point that reports a usage or answers
+    // a question about an alpha mode from spelling out a bit pattern a second time. What holds a
+    // name to its number is the browser-lane test that reads both out of this file: the runtime
+    // comparison checks the table's contents, which a name used in the wrong place would still
+    // satisfy.
     kUsageRenderAttachment: 1,
     kUsageTextureBinding: 2,
     kUsageCopySrc: 4,
@@ -1453,6 +1462,12 @@ var LibraryDonnerGpu = {
       // No frame is available right now; retrying is the recovery, which is what Timeout says.
       HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceTimeout;
       return DonnerGpu.kSuccess;
+    }
+    if (surface.frame !== null) {
+      // A canvas holds one frame at a time, and the identifier naming it is still live. Taking a
+      // second one would leave nothing able to name the first, so this is refused rather than
+      // quietly replacing it; the runtime refuses it above here too.
+      return DonnerGpu.kFailed;
     }
     var registered = DonnerGpu.register(DonnerGpu.kTexture, textureId, texture);
     if (registered !== DonnerGpu.kSuccess) {

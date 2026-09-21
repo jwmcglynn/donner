@@ -626,16 +626,24 @@ BridgeStatus EmscriptenBrowserBridge::surfaceCapabilities(
   // A browser canvas offers one preferred format and no choice of frame pacing: it presents when
   // the page is composited, which is what Fifo describes. Reporting the set that actually exists
   // is more useful than reporting a menu the browser does not have.
-  capabilities.formatCodes.clear();
+  //
+  // Built here and handed over at the end, so a refusal partway through leaves the caller's
+  // capabilities as it found them rather than half describing a surface it could not read.
+  BrowserSurfaceCapabilities reported;
   if (preferredFormatCode != 0) {
-    capabilities.formatCodes.push_back(preferredFormatCode);
+    reported.formatCodes.push_back(preferredFormatCode);
   }
-  capabilities.usageBits = usageBits;
-  capabilities.presentModeCodes.clear();
+  reported.usageBits = usageBits;
   if (const std::optional<uint32_t> fifo = WirePresentMode(PresentMode::Fifo); fifo.has_value()) {
-    capabilities.presentModeCodes.push_back(*fifo);
+    reported.presentModeCodes.push_back(*fifo);
   }
-  return CollectAlphaModes(surfaceId, capabilities.alphaModeCodes);
+  if (const BridgeStatus alphaStatus = CollectAlphaModes(surfaceId, reported.alphaModeCodes);
+      alphaStatus != BridgeStatus::Success) {
+    return alphaStatus;
+  }
+
+  capabilities = std::move(reported);
+  return BridgeStatus::Success;
 }
 
 BridgeStatus EmscriptenBrowserBridge::configureSurface(BrowserObjectId surfaceId,

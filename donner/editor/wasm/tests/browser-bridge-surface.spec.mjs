@@ -18,6 +18,10 @@ const librarySource = readFileSync(
   "utf8",
 );
 
+// A number this protocol assigns to nothing, for the cases that check a value is refused rather
+// than guessed at.
+const kUnassignedCode = 4000;
+
 /** A canvas whose WebGPU context records what the library did to it. */
 function createCanvas() {
   const context = {
@@ -58,11 +62,21 @@ function createDevice() {
   return { device: { queue: {}, lost, destroy() {} }, lose };
 }
 
-/** Flushes the promise chain the device request runs on. */
-async function settle() {
-  for (let tick = 0; tick < 8; ++tick) {
+/**
+ * Runs the promise chain forward until `reached` is true, or fails naming what never happened.
+ *
+ * Every stub here settles in microtasks, so this returns on the first or second turn; waiting on
+ * the state the assertions read, rather than on a fixed number of turns, is what keeps a change to
+ * the library's promise chain a named failure instead of an intermittent one.
+ */
+async function until(reached, description) {
+  for (let turn = 0; turn < 64; ++turn) {
+    if (reached()) {
+      return;
+    }
     await new Promise((resolve) => setImmediate(resolve));
   }
+  assert.fail(`the bridge never reached the state: ${description}`);
 }
 
 /**
@@ -134,13 +148,13 @@ function loadLibrary() {
     device,
     lose,
     words,
-    /** Registers a canvas under \p selector and returns it. */
+    /** Registers a canvas under the given selector and returns it. */
     addCanvas(selector) {
       const canvas = createCanvas();
       canvases.set(selector, canvas);
       return canvas;
     },
-    /** Copies \p text into the heap and returns the pointer and byte length the library takes. */
+    /** Copies text into the heap and returns the pointer and byte length the library takes. */
     string(text) {
       const encoded = encoder.encode(text);
       const pointer = allocate(encoded.length);
@@ -151,7 +165,7 @@ function loadLibrary() {
     outParameter() {
       return allocate(4);
     },
-    /** Reads the out-parameter at \p pointer. */
+    /** Reads the out-parameter at the given pointer. */
     read(pointer) {
       return words[pointer >> 2];
     },
@@ -162,7 +176,10 @@ function loadLibrary() {
 async function readyBridge() {
   const bridge = loadLibrary();
   assert.equal(bridge.entryPoints.donner_gpu_begin_device_request(), bridge.state.kSuccess);
-  await settle();
+  await until(
+    () => bridge.entryPoints.donner_gpu_device_request_state() !== bridge.state.kRequestPending,
+    "a settled device request",
+  );
   assert.equal(
     bridge.entryPoints.donner_gpu_device_request_state(),
     bridge.state.kRequestReady,
@@ -183,7 +200,7 @@ async function surfaceBridge({ selector = "#canvas", id = 1 } = {}) {
   return { bridge, canvas, id };
 }
 
-/** Configures the surface \p id at \p size with the alpha mode \p alphaModeCode. */
+/** Configures the named surface at a size with one alpha mode. */
 function configure(bridge, id, size, alphaModeCode) {
   return bridge.entryPoints.donner_gpu_configure_surface(
     id,
@@ -194,6 +211,32 @@ function configure(bridge, id, size, alphaModeCode) {
     alphaModeCode,
   );
 }
+
+test("the usage and alpha mode names stand for the numbers the protocol table sends", async () => {
+  const bridge = await readyBridge();
+  // Copied into this realm's own array: the library is evaluated in a separate one, and a strict
+  // comparison against an array built there fails on the prototype rather than the values.
+  const codes = [...bridge.state.protocolCodes];
+
+  // The runtime comparison checks this table's contents, which a name bound to the wrong number
+  // would still satisfy, so the names are pinned to their places in it here. The offsets are where
+  // each group starts: texture formats occupy the first four entries, and the alpha modes are the
+  // last group before the object kinds.
+  assert.deepEqual(codes.slice(4, 9), [
+    bridge.state.kUsageRenderAttachment,
+    bridge.state.kUsageTextureBinding,
+    bridge.state.kUsageCopySrc,
+    bridge.state.kUsageCopyDst,
+    bridge.state.kUsageStorageBinding,
+  ]);
+  assert.deepEqual(codes.slice(58, 61), [
+    bridge.state.kAlphaModeOpaque,
+    bridge.state.kAlphaModePremultiplied,
+    bridge.state.kAlphaModeInherit,
+  ]);
+  assert.equal(bridge.state.alphaMode(bridge.state.kAlphaModeOpaque), "opaque");
+  assert.equal(bridge.state.alphaMode(bridge.state.kAlphaModePremultiplied), "premultiplied");
+});
 
 test("a surface takes the WebGPU context of the canvas its selector names", async () => {
   const { bridge, canvas, id } = await surfaceBridge();
@@ -244,7 +287,7 @@ test("the alpha modes reported are the ones the canvas context can be configured
   }
 
   assert.equal(
-    bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(id, 4000, supported),
+    bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(id, kUnassignedCode, supported),
     bridge.state.kSuccess,
   );
   assert.equal(bridge.read(supported), 0);
@@ -266,7 +309,7 @@ test("configuring sizes the canvas and applies the alpha mode the runtime chose"
 test("an alpha mode this protocol assigns no code is refused before the canvas is touched", async () => {
   const { bridge, canvas, id } = await surfaceBridge();
   assert.equal(
-    configure(bridge, id, { width: 8, height: 8 }, 4000),
+    configure(bridge, id, { width: 8, height: 8 }, kUnassignedCode),
     bridge.state.kFailed,
   );
   assert.equal(canvas.context.configuration, null);
@@ -290,7 +333,7 @@ test("a frame is taken from the canvas and abandoning it gives the identifier ba
   assert.equal(canvas.context.frames, 1);
 
   assert.equal(bridge.entryPoints.donner_gpu_abandon_current_texture(id), bridge.state.kSuccess);
-  assert.equal(bridge.state.objects.has(2), false);
+  assert.deepEqual([...bridge.state.objects.keys()], [id]);
 });
 
 test("acquiring before the context is configured reports the canvas as lost", async () => {
@@ -363,6 +406,55 @@ test("a surface identifier is refused once it names nothing, and so is one of an
   );
 });
 
+test("reconfiguring gives up the frame the canvas had handed over", async () => {
+  const { bridge, canvas, id } = await surfaceBridge();
+  assert.equal(
+    configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModeOpaque),
+    bridge.state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  assert.equal(
+    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.state.kSuccess,
+  );
+
+  // Reconfiguring replaces what the context presents, so the frame taken under the old
+  // configuration is no longer anything the runtime can be holding.
+  assert.equal(
+    configure(bridge, id, { width: 16, height: 16 }, bridge.state.kAlphaModeOpaque),
+    bridge.state.kSuccess,
+  );
+  assert.deepEqual([...bridge.state.objects.keys()], [id]);
+  assert.equal(canvas.width, 16);
+
+  assert.equal(
+    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 3, status),
+    bridge.state.kSuccess,
+  );
+  assert.deepEqual([...bridge.state.objects.keys()], [id, 3]);
+});
+
+test("a second frame inside one frame is refused rather than replacing the first", async () => {
+  const { bridge, id } = await surfaceBridge();
+  assert.equal(
+    configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModeOpaque),
+    bridge.state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  assert.equal(
+    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.state.kSuccess,
+  );
+
+  // The first identifier still names the canvas's frame; replacing it would leave nothing able to
+  // give that frame back.
+  assert.equal(
+    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 3, status),
+    bridge.state.kFailed,
+  );
+  assert.deepEqual([...bridge.state.objects.keys()], [id, 2]);
+});
+
 test("a lost device refuses another frame but still takes back the one it handed over", async () => {
   const { bridge, id } = await surfaceBridge();
   assert.equal(
@@ -376,8 +468,10 @@ test("a lost device refuses another frame but still takes back the one it handed
   );
 
   bridge.lose({ reason: "destroyed", message: "the tab was discarded" });
-  await settle();
-  assert.equal(bridge.entryPoints.donner_gpu_is_device_lost(), 1);
+  await until(
+    () => bridge.entryPoints.donner_gpu_is_device_lost() === 1,
+    "the device reported lost",
+  );
 
   assert.equal(
     bridge.entryPoints.donner_gpu_acquire_current_texture(id, 3, status),

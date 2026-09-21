@@ -268,9 +268,11 @@ public:
     objects->erase(id);
     mappings_.erase(id);
     textureImages_.erase(id);
-    // A surface that is destroyed while it still names a frame gives that frame up with it: the
-    // canvas owns the texture, so nothing is left to name it once its surface is gone.
-    releaseFrame(id);
+    if (kind == BrowserObjectKind::Surface) {
+      // A surface destroyed while it still names a frame gives that frame up with it: the canvas
+      // owns the texture, so nothing is left to name it once its surface is gone.
+      releaseFrame(id);
+    }
     return BridgeStatus::Success;
   }
 

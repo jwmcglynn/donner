@@ -3,7 +3,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -20,8 +19,10 @@ namespace donner::gpu::browser {
 namespace {
 
 using testing::AllOf;
+using testing::Contains;
 using testing::ElementsAre;
 using testing::HasSubstr;
+using testing::Not;
 
 /// A device and the bridge underneath it, so a test can both drive the runtime and see what
 /// reached the browser side.
@@ -93,12 +94,6 @@ CommandBuffer RecordClearPass(Device& device, const TextureView& view) {
   return std::move(commandBuffer).result();
 }
 
-/// Whether \p calls contains \p line exactly.
-/// @param calls Recorded lines. @param line Line to look for.
-bool FindCall(const std::vector<std::string>& calls, std::string_view line) {
-  return std::find(calls.begin(), calls.end(), line) != calls.end();
-}
-
 /// A descriptor naming the canvas a browser surface presents to.
 SurfaceDescriptor CanvasSurface() {
   SurfaceDescriptor descriptor;
@@ -118,17 +113,25 @@ SurfaceConfiguration CanvasConfiguration(Extent2d size) {
   return configuration;
 }
 
-/// The lines of \p calls that name a surface, in order.
+/// The lines of \p calls belonging to a surface, in order.
 ///
-/// Every browser-side surface call spells the word in its name or in its arguments, and nothing
-/// else in a transcript does, so this is the presentation sequence on its own: what a test of the
-/// frame contract asserts, rather than the presence of one line somewhere in the whole stream.
+/// Named operation by operation rather than by searching the whole line, so a recorded argument
+/// that happens to carry one of these words cannot join the sequence. What comes back is the
+/// presentation sequence on its own: what a test of the frame contract asserts, rather than the
+/// presence of one line somewhere in the whole stream.
 /// @param calls Recorded lines.
 std::vector<std::string> SurfaceCalls(const std::vector<std::string>& calls) {
+  static constexpr std::string_view kSurfaceOperations[] = {
+      "createSurface ", "configureSurface ", "acquireCurrentTexture ", "abandonCurrentTexture ",
+      "destroyObject kind=surface "};
+
   std::vector<std::string> selected;
   for (const std::string& line : calls) {
-    if (line.find("urface") != std::string::npos) {
-      selected.push_back(line);
+    for (const std::string_view operation : kSurfaceOperations) {
+      if (line.starts_with(operation)) {
+        selected.push_back(line);
+        break;
+      }
     }
   }
   return selected;
@@ -405,15 +408,12 @@ TEST(BrowserDevice, HandsAFrameBackRatherThanDestroyingItWhenTheDeviceIsDestroye
   std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
   std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
-  SurfaceConfiguration configuration;
-  configuration.size = Extent2d{8, 8};
-  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
 
   Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
   ASSERT_THAT(acquired, HasResult());
@@ -423,8 +423,8 @@ TEST(BrowserDevice, HandsAFrameBackRatherThanDestroyingItWhenTheDeviceIsDestroye
   // surface rather than destroying it.
   fixture.device.reset();
   EXPECT_THAT(objects->size(), 0u);
-  EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);
-  EXPECT_THAT(FindCall(*calls, "destroyObject kind=texture id=2"), false);
+  EXPECT_THAT(*calls, Contains("abandonCurrentTexture surface=1"));
+  EXPECT_THAT(*calls, Not(Contains("destroyObject kind=texture id=2")));
 }
 
 TEST(BrowserDevice, SurfacesTheBrowsersRefusalAsAnIdentifierFailure) {
@@ -769,32 +769,29 @@ TEST(BrowserDevice, DoesNotYieldOnceAMappingHasSettled) {
   EXPECT_THAT(fixture.bridge->yieldCount, 0u);
 }
 
-TEST(BrowserDevice, ReusingTheSlotOfASurfaceHandsBackTheFrameItHeld) {
+TEST(BrowserDevice, ASurfaceTakingTheSlotOfADestroyedOneStartsWithNoFrame) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
   std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
-  SurfaceConfiguration configuration;
-  configuration.size = Extent2d{8, 8};
-  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
   Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
   ASSERT_THAT(acquired, HasResult());
 
   // Destroying the surface hands its frame back, so the slot the next surface takes carries no
   // record of one; what this covers is that the replacement starts from nothing either way.
   ASSERT_THAT(fixture.device->destroySurface(std::move(surface).result()), IsOk());
-  Result<Surface> replacement = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> replacement = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(replacement, HasResult());
 
   // The frame went back to the surface that supplied it rather than being left named by a slot
   // that now belongs to a different surface.
-  EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);
+  EXPECT_THAT(*calls, Contains("abandonCurrentTexture surface=1"));
   EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), false);
 }
 
@@ -837,19 +834,12 @@ TEST(BrowserDevice, PresentsOnlyWhenTheBrowserChoosesTo) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.label = RcString("canvas");
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
-  SurfaceConfiguration configuration;
-  configuration.format = TextureFormat::BGRA8Unorm;
-  configuration.usage = TextureUsage::RenderAttachment;
-  configuration.size = Extent2d{8, 8};
-  configuration.alphaMode = SurfaceAlphaMode::Premultiplied;
-  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
 
   Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
   ASSERT_THAT(acquired, HasResult());
@@ -863,15 +853,12 @@ TEST(BrowserDevice, AbandoningAFrameReleasesTheBrowserTextureBehindIt) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
-  SurfaceConfiguration configuration;
-  configuration.size = Extent2d{8, 8};
-  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
 
   Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
   ASSERT_THAT(acquired, HasResult());
@@ -881,21 +868,18 @@ TEST(BrowserDevice, AbandoningAFrameReleasesTheBrowserTextureBehindIt) {
   EXPECT_THAT(fixture.bridge->objectCount(), 1u);  // Only the surface remains.
 }
 
-TEST(BrowserDevice, ReusingTheSlotOfAnOutstandingFrameHandsTheFrameBackFirst) {
+TEST(BrowserDevice, ATextureTakingTheSlotOfAFrameGetsItsOwnIdentifier) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
   std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects = fixture.bridge->objects;
   std::shared_ptr<std::vector<std::string>> calls = fixture.bridge->calls;
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
-  SurfaceConfiguration configuration;
-  configuration.size = Extent2d{8, 8};
-  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
 
   Result<SurfaceTexture> acquired = fixture.device->acquireCurrentTexture(surface.result());
   ASSERT_THAT(acquired, HasResult());
@@ -909,15 +893,15 @@ TEST(BrowserDevice, ReusingTheSlotOfAnOutstandingFrameHandsTheFrameBackFirst) {
   // identifier is never reused, so nothing can name the frame that occupied the slot before it.
   Result<Texture> reused = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
   ASSERT_THAT(reused, HasResult());
-  EXPECT_THAT(FindCall(*calls, "abandonCurrentTexture surface=1"), true);
+  EXPECT_THAT(*calls, Contains("abandonCurrentTexture surface=1"));
   EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 2), false);
   EXPECT_THAT(fixture.bridge->hasObject(BrowserObjectKind::Texture, 3), true);
 
   // Teardown destroys the caller's texture and does not reach the frame, which the canvas owns.
   fixture.device.reset();
   EXPECT_THAT(objects->size(), 0u);
-  EXPECT_THAT(FindCall(*calls, "destroyObject kind=texture id=3"), true);
-  EXPECT_THAT(FindCall(*calls, "destroyObject kind=texture id=2"), false);
+  EXPECT_THAT(*calls, Contains("destroyObject kind=texture id=3"));
+  EXPECT_THAT(*calls, Not(Contains("destroyObject kind=texture id=2")));
 }
 
 TEST(BrowserDeviceRequest, CarriesTheBrowsersReasonOutOfAFailedBegin) {
@@ -936,15 +920,12 @@ TEST(BrowserDevice, AcquiringFromALostDeviceReportsTheLossAsASurfaceStatus) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
-  SurfaceConfiguration configuration;
-  configuration.size = Extent2d{8, 8};
-  ASSERT_THAT(fixture.device->configureSurface(surface.result(), configuration), IsOk());
+  ASSERT_THAT(
+      fixture.device->configureSurface(surface.result(), CanvasConfiguration(Extent2d{8, 8})),
+      IsOk());
 
   fixture.bridge->lost = true;
 
@@ -976,10 +957,7 @@ TEST(BrowserDevice, DecodesOnlyTheSurfaceCapabilitiesItRecognizes) {
   fixture.bridge->capabilities.presentModeCodes = {1};
   fixture.bridge->capabilities.alphaModeCodes = {2};
 
-  SurfaceDescriptor surfaceDescriptor;
-  surfaceDescriptor.native.kind = NativeSurfaceKind::CanvasSelector;
-  surfaceDescriptor.native.selector = RcString("#canvas");
-  Result<Surface> surface = fixture.device->createSurface(surfaceDescriptor);
+  Result<Surface> surface = fixture.device->createSurface(CanvasSurface());
   ASSERT_THAT(surface, HasResult());
 
   Result<SurfaceCapabilities> capabilities = fixture.device->surfaceCapabilities(surface.result());

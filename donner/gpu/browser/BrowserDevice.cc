@@ -362,11 +362,11 @@ Result<BrowserObjectId> BrowserDevice::objectFor(BrowserObjectKind kind, uint32_
 
 Result<BrowserObjectId> BrowserDevice::registerObject(BrowserObjectKind kind, uint32_t slotIndex,
                                                       std::string_view operation) {
-  // A slot is only handed out again once its occupant is gone, and every path that retires one
-  // hands the frame back first, so this is the check that the two records agree rather than the
-  // primary release. Reaching it means a texture slot changed hands while a surface still named it
-  // as its frame: hand that frame back now, or teardown would take the caller's texture while
-  // orphaning the one the canvas is still holding.
+  // The runtime hands a frame back before it retires the slot holding it, so this is not the
+  // primary release. It stays reachable because \ref releaseObject refuses a release issued from a
+  // thread that does not own the browser device: that leaves the runtime slot free while this
+  // device still records a frame against it. Hand the frame back before the slot changes hands, or
+  // teardown would take the caller's texture while orphaning the one the canvas is still holding.
   if (kind == BrowserObjectKind::Texture) {
     releaseFramesNaming(slotIndex);
   } else if (kind == BrowserObjectKind::Surface) {
