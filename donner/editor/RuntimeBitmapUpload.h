@@ -31,15 +31,12 @@ namespace donner::editor {
  * @param rowBytes Source byte stride, including any row padding.
  * @param alphaType Alpha interpretation retained by the snapshot.
  * @param allocationDimensions Backing extent, at least as large as the payload.
- * @param reusableSnapshot Optional allocation from the same logical device to update in place.
- * @return Uploaded snapshot, or null on invalid input or runtime failure. A reused snapshot can
- * have partially updated pixels if a runtime write fails; callers requiring transactional
- * replacement must omit the reusable snapshot.
+ * @return Uploaded snapshot, or null on invalid input or runtime failure. Each call allocates its
+ * own texture, so a failed write cannot disturb an allocation the caller already presents.
  */
 std::shared_ptr<svg::RendererGeodeTextureSnapshot> UploadRuntimeBitmap(
     const std::shared_ptr<geode::GeodeDevice>& device, std::span<const uint8_t> pixels,
     Vector2i dimensions, std::size_t rowBytes, svg::AlphaType alphaType,
-    Vector2i allocationDimensions,
-    const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot = nullptr);
+    Vector2i allocationDimensions);
 
 }  // namespace donner::editor

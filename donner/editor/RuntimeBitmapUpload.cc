@@ -19,11 +19,6 @@ uint32_t AlignWgpuBytesPerRow(uint32_t value) {
   return (value + kWgpuBytesPerRowAlignment - 1u) & ~(kWgpuBytesPerRowAlignment - 1u);
 }
 
-/// Backing allocation of an uploaded snapshot, which can exceed its content extent.
-Vector2i SnapshotAllocationDimensions(const svg::RendererGeodeTextureSnapshot& snapshot) {
-  return snapshot.allocationDimensions();
-}
-
 struct RuntimeBitmapUploadLayout {
   uint32_t allocationWidth = 0;
   uint32_t allocationHeight = 0;
@@ -127,13 +122,7 @@ bool WriteRuntimeBitmapUpload(gpu::Device& device, const gpu::Texture& texture,
 
 std::shared_ptr<svg::RendererGeodeTextureSnapshot> AcquireRuntimeUploadSnapshot(
     const std::shared_ptr<geode::GeodeDevice>& device, Vector2i dimensions,
-    svg::AlphaType alphaType, Vector2i allocationDimensions,
-    const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot) {
-  if (reusableSnapshot != nullptr && reusableSnapshot->runtimeTexture() != nullptr &&
-      SnapshotAllocationDimensions(*reusableSnapshot) == allocationDimensions &&
-      reusableSnapshot->alphaType() == alphaType) {
-    return reusableSnapshot;
-  }
+    svg::AlphaType alphaType, Vector2i allocationDimensions) {
   gpu::Result<gpu::Texture> texture = device->runtimeDevice().createTexture(gpu::TextureDescriptor{
       "EditorUploadedBitmap",
       {static_cast<uint32_t>(allocationDimensions.x),
@@ -158,8 +147,7 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> AcquireRuntimeUploadSnapshot(
 std::shared_ptr<svg::RendererGeodeTextureSnapshot> UploadRuntimeBitmap(
     const std::shared_ptr<geode::GeodeDevice>& device, std::span<const uint8_t> pixels,
     Vector2i dimensions, std::size_t rowBytes, svg::AlphaType alphaType,
-    Vector2i allocationDimensions,
-    const std::shared_ptr<svg::RendererGeodeTextureSnapshot>& reusableSnapshot) {
+    Vector2i allocationDimensions) {
   if (device == nullptr) {
     return nullptr;
   }
@@ -168,12 +156,8 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> UploadRuntimeBitmap(
   if (!layout.has_value()) {
     return nullptr;
   }
-  if (reusableSnapshot != nullptr && reusableSnapshot->runtimeTexture() != nullptr &&
-      reusableSnapshot->runtimeTexture()->deviceId() != device->runtimeDevice().deviceId()) {
-    return nullptr;
-  }
-  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploaded = AcquireRuntimeUploadSnapshot(
-      device, dimensions, alphaType, allocationDimensions, reusableSnapshot);
+  std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploaded =
+      AcquireRuntimeUploadSnapshot(device, dimensions, alphaType, allocationDimensions);
   if (uploaded == nullptr) {
     return nullptr;
   }

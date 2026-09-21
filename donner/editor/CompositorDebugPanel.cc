@@ -1,9 +1,5 @@
 #include "donner/editor/CompositorDebugPanel.h"
 
-#ifdef DONNER_EDITOR_WGPU
-#include "donner/editor/RuntimeBitmapUpload.h"
-#endif
-
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
@@ -11,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -22,6 +19,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/RuntimeBitmapUpload.h"
 #include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -33,6 +31,36 @@ namespace {
 
 constexpr float kThumbnailDisplayHeight = 48.0f;
 constexpr std::size_t kTelemetryHistoryLimit = 4096u;
+
+/// True when a tile's CPU thumbnail can be presented at all: its source bitmap carried pixels and
+/// the downsample covers a non-empty extent. A zero-area extent has nothing to draw and no upload
+/// path accepts it, so such a tile has no preview rather than a stale one.
+/// @param tile Composite tile whose thumbnail is being considered.
+bool TileHasPresentableThumbnail(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  return tile.hasValidBitmap && !tile.thumbnailPixels.empty() && tile.thumbnailDims.x > 0 &&
+         tile.thumbnailDims.y > 0;
+}
+
+#ifndef DONNER_EDITOR_WGPU
+/// True when a tile's thumbnail buffer holds a full tightly packed RGBA image of its own extent.
+/// The runtime uploader makes this check itself; the OpenGL path hands the buffer straight to the
+/// driver, so it has to make it here rather than read past the source.
+/// @param tile Composite tile whose thumbnail storage is being checked. Its extent must already
+///   be presentable.
+bool ThumbnailStorageCoversExtent(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  constexpr std::size_t kBytesPerPixel = 4u;
+  const std::size_t width = static_cast<std::size_t>(tile.thumbnailDims.x);
+  const std::size_t height = static_cast<std::size_t>(tile.thumbnailDims.y);
+  if (width > std::numeric_limits<std::size_t>::max() / kBytesPerPixel ||
+      width * kBytesPerPixel > std::numeric_limits<std::size_t>::max() / height) {
+    return false;
+  }
+  return tile.thumbnailPixels.size() >= width * height * kBytesPerPixel;
+}
+#endif
+
 #ifdef DONNER_EDITOR_WGPU
 constexpr std::size_t kRetiredSnapshotFrameLimit = 3;
 
@@ -201,31 +229,47 @@ std::string CompositorDebugPanel::heuristicTelemetryHistoryJson() const {
   return result;
 }
 
-CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbnail(
-    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+void CompositorDebugPanel::dropThumbnailRegistration(const std::string& id) {
+  auto it = textures_.find(id);
+  if (it == textures_.end()) {
+    return;
+  }
 #ifdef DONNER_EDITOR_WGPU
-  const bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
-  const bool hasCpuThumbnail = !tile.thumbnailPixels.empty();
+  RetiredSnapshotBatch retiredSnapshots;
+  if (it->second.texture != 0) {
+    retiredSnapshots.push_back(RetireSnapshot(it->second.texture,
+                                              std::move(it->second.textureSnapshot),
+                                              std::move(it->second.uploadedTexture)));
+  }
+  textures_.erase(it);
+  retireSnapshots(std::move(retiredSnapshots));
+#else
+  if (it->second.texture != 0) {
+    glDeleteTextures(1, &it->second.texture);
+  }
+  textures_.erase(it);
+#endif
+}
 
-  if (!hasTextureSnapshot && !hasCpuThumbnail) {
-    auto it = textures_.find(tile.id);
-    if (it != textures_.end()) {
-      RetiredSnapshotBatch retiredSnapshots;
-      if (it->second.texture != 0) {
-        retiredSnapshots.push_back(RetireSnapshot(it->second.texture,
-                                                  std::move(it->second.textureSnapshot),
-                                                  std::move(it->second.uploadedTexture)));
-      }
-      textures_.erase(it);
-      retireSnapshots(std::move(retiredSnapshots));
-    }
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::keepPreviousThumbnail(
+    const std::string& id) {
+  auto it = textures_.find(id);
+  if (it == textures_.end()) {
     return 0;
   }
+  // An entry that never published anything carries no state worth keeping around.
+  if (it->second.texture == 0) {
+    textures_.erase(it);
+    return 0;
+  }
+  return it->second.texture;
+}
 
-  auto& entry = textures_[tile.id];
-  RetiredSnapshotBatch retiredSnapshots;
-
-  if (hasTextureSnapshot) {
+#ifdef DONNER_EDITOR_WGPU
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::publishSnapshotThumbnail(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  {
+    ThumbnailTexture& entry = textures_[tile.id];
     const bool acquiredSnapshot =
         entry.textureSnapshot != tile.textureSnapshot || entry.uploadedTexture != nullptr;
     // Registering allocates a slot and holds a backing, so a tile showing the same snapshot as
@@ -237,39 +281,41 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
       entry.height = tile.bitmapDims.y;
       return entry.texture;
     }
-
-    const ThumbnailTextureHandle texture = registerSnapshotTexture(tile.textureSnapshot.get());
-    if (texture == 0) {
-      if (entry.texture != 0) {
-        retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
-                                                  std::move(entry.uploadedTexture)));
-      }
-      textures_.erase(tile.id);
-      retireSnapshots(std::move(retiredSnapshots));
-      return 0;
-    }
-
-    if (entry.texture != 0) {
-      retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
-                                                std::move(entry.uploadedTexture)));
-    }
-    entry.texture = texture;
-    entry.textureSnapshot = tile.textureSnapshot;
-    entry.uploadedTexture.reset();
-
-    entry.uploadedGeneration = tile.generation;
-    entry.width = tile.bitmapDims.x;
-    entry.height = tile.bitmapDims.y;
-    retireSnapshots(std::move(retiredSnapshots));
-    return entry.texture;
   }
 
-  const bool needsUpload = entry.texture == 0 || entry.uploadedTexture == nullptr ||
-                           entry.uploadedGeneration != tile.generation ||
-                           entry.width != tile.thumbnailDims.x ||
-                           entry.height != tile.thumbnailDims.y;
-  if (!needsUpload) {
-    return entry.texture;
+  const ThumbnailTextureHandle texture = registerSnapshotTexture(tile.textureSnapshot.get());
+  if (texture == 0) {
+    dropThumbnailRegistration(tile.id);
+    return 0;
+  }
+
+  ThumbnailTexture& entry = textures_[tile.id];
+  RetiredSnapshotBatch retiredSnapshots;
+  if (entry.texture != 0) {
+    retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
+                                              std::move(entry.uploadedTexture)));
+  }
+  entry.texture = texture;
+  entry.textureSnapshot = tile.textureSnapshot;
+  entry.uploadedTexture.reset();
+  entry.uploadedGeneration = tile.generation;
+  entry.width = tile.bitmapDims.x;
+  entry.height = tile.bitmapDims.y;
+  retireSnapshots(std::move(retiredSnapshots));
+  return entry.texture;
+}
+
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::publishCpuThumbnail(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  {
+    const ThumbnailTexture& entry = textures_[tile.id];
+    const bool needsUpload = entry.texture == 0 || entry.uploadedTexture == nullptr ||
+                             entry.uploadedGeneration != tile.generation ||
+                             entry.width != tile.thumbnailDims.x ||
+                             entry.height != tile.thumbnailDims.y;
+    if (!needsUpload) {
+      return entry.texture;
+    }
   }
 
   std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadedTexture =
@@ -277,13 +323,11 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
   const ThumbnailTextureHandle texture =
       uploadedTexture != nullptr ? registerSnapshotTexture(uploadedTexture.get()) : 0;
   if (texture == 0) {
-    const ThumbnailTextureHandle previous = entry.texture;
-    if (previous == 0) {
-      textures_.erase(tile.id);
-    }
-    return previous;
+    return keepPreviousThumbnail(tile.id);
   }
 
+  ThumbnailTexture& entry = textures_[tile.id];
+  RetiredSnapshotBatch retiredSnapshots;
   if (entry.texture != 0) {
     retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
                                               std::move(entry.uploadedTexture)));
@@ -296,18 +340,42 @@ CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbna
   entry.height = tile.thumbnailDims.y;
   retireSnapshots(std::move(retiredSnapshots));
   return entry.texture;
+}
+#endif
+
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbnail(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+#ifdef DONNER_EDITOR_WGPU
+  // A backend texture snapshot is presented directly, so only the CPU thumbnail path depends on
+  // the downsample extent.
+  const bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
+  const bool hasPresentablePayload = hasTextureSnapshot || TileHasPresentableThumbnail(tile);
 #else
-  if (!tile.hasValidBitmap || tile.thumbnailPixels.empty() || tile.thumbnailDims.x <= 0 ||
-      tile.thumbnailDims.y <= 0) {
+  const bool hasPresentablePayload = TileHasPresentableThumbnail(tile);
+#endif
+  if (!hasPresentablePayload) {
+    dropThumbnailRegistration(tile.id);
     return 0;
   }
 
-  auto& entry = textures_[tile.id];
+#ifdef DONNER_EDITOR_WGPU
+  if (hasTextureSnapshot) {
+    return publishSnapshotThumbnail(tile);
+  }
+  return publishCpuThumbnail(tile);
+#else
+  ThumbnailTexture& entry = textures_[tile.id];
   const bool needsUpload = entry.texture == 0 || entry.uploadedGeneration != tile.generation ||
                            entry.width != tile.thumbnailDims.x ||
                            entry.height != tile.thumbnailDims.y;
   if (!needsUpload) {
     return entry.texture;
+  }
+
+  // glTexImage2D reads the whole extent, so a short buffer would read past the source. A refused
+  // upload keeps whatever this tile last published, matching the runtime path.
+  if (!ThumbnailStorageCoversExtent(tile)) {
+    return keepPreviousThumbnail(tile.id);
   }
 
   if (entry.texture == 0) {

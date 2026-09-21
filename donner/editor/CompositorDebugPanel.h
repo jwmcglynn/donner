@@ -115,6 +115,16 @@ private:
   ThumbnailTextureHandle uploadThumbnail(
       const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
 
+  /// Release whatever preview resource was published for \p id, so a tile with nothing
+  /// presentable shows no preview instead of the one it last had.
+  /// @param id Composite tile identifier.
+  void dropThumbnailRegistration(const std::string& id);
+
+  /// Returns what \p id already published, for a refused upload that left it untouched. An entry
+  /// that never published anything is discarded rather than left empty.
+  /// @param id Composite tile identifier.
+  ThumbnailTextureHandle keepPreviousThumbnail(const std::string& id);
+
   /// Free textures for tiles absent from the current snapshot.
   void evictAbsentTiles(
       std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles);
@@ -146,6 +156,18 @@ private:
   /// @param textureSnapshot Snapshot whose runtime texture is registered.
   ThumbnailTextureHandle registerSnapshotTexture(
       const svg::RendererTextureSnapshot* textureSnapshot);
+
+  /// Publishes a tile's backend texture snapshot, reusing the registration it already has when
+  /// the snapshot is unchanged.
+  /// @param tile Composite tile carrying a backend texture snapshot.
+  ThumbnailTextureHandle publishSnapshotThumbnail(
+      const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
+
+  /// Uploads a tile's CPU thumbnail into a fresh runtime texture and publishes it, keeping the
+  /// previous preview when the upload is refused.
+  /// @param tile Composite tile carrying CPU thumbnail pixels.
+  ThumbnailTextureHandle publishCpuThumbnail(
+      const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
 
   std::shared_ptr<svg::RendererGeodeTextureSnapshot> uploadThumbnailPixelsToRuntime(
       const std::vector<uint8_t>& pixels, const Vector2i& dimensions);
