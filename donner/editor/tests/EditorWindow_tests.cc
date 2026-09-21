@@ -43,6 +43,7 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/editor/gui/UiTextureRegistry.h"
+#include "donner/editor/tests/CompositorDebugPanelTestAccess.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/Handles.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -56,18 +57,6 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
-#endif
-
-#ifdef DONNER_EDITOR_WGPU
-namespace donner::editor {
-struct CompositorDebugPanelTestAccess {
-  static ImTextureID upload(
-      CompositorDebugPanel& panel,
-      const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
-    return panel.uploadThumbnail(tile);
-  }
-};
-}  // namespace donner::editor
 #endif
 
 namespace donner::editor::gui {
@@ -2311,6 +2300,7 @@ svg::compositor::CompositorController::CompositeTileSnapshot CpuDebugThumbnail()
   tile.kind = decltype(tile)::Kind::Segment;
   tile.id = "seg:cpu-upload";
   tile.generation = 1;
+  tile.hasValidBitmap = true;
   tile.thumbnailDims = Vector2i(3, 2);
   tile.thumbnailPixels = {255, 0, 0, 128, 255, 0, 0, 128, 255, 0, 0, 128,
                           255, 0, 0, 128, 255, 0, 0, 128, 255, 0, 0, 128};
@@ -2423,6 +2413,49 @@ TEST(EditorWindowTest, CompositorDebugPanelFailedReplacementKeepsPreviousPreview
   ASSERT_FALSE(actual.empty());
   EXPECT_THAT(PixelAt(actual, 32, 32),
               Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
+}
+
+// A thumbnail whose extent has no area cannot be presented at all, so the panel drops whatever it
+// published for that tile rather than leaving the previous preview on screen indefinitely.
+TEST(EditorWindowTest, CompositorDebugPanelDegenerateThumbnailExtentDropsThePreview) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Compositor CPU Thumbnail Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  const std::shared_ptr<geode::GeodeDevice> device = window.geodeFramebufferDevice();
+  ASSERT_NE(device, nullptr);
+  CompositorDebugPanel panel(device);
+  auto tile = CpuDebugThumbnail();
+
+  const ImTextureID first = CompositorDebugPanelTestAccess::upload(panel, tile);
+  ASSERT_NE(first, 0u);
+  UiTextureRegistry* registry = CurrentUiTextureRegistry();
+  ASSERT_NE(registry, nullptr);
+  const size_t liveBefore = registry->liveCount();
+
+  ++tile.generation;
+  tile.thumbnailDims = Vector2i(0, 2);
+  geode::GeodeCounters counters;
+  device->setCounters(&counters);
+  const ImTextureID degenerate = CompositorDebugPanelTestAccess::upload(panel, tile);
+  device->setCounters(nullptr);
+  EXPECT_THAT(degenerate, testing::Eq(ImTextureID(0)))
+      << "A zero-area thumbnail extent has nothing to present, so the tile's registration must be "
+         "dropped instead of republishing the stale preview.";
+  EXPECT_THAT(counters.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(counters.textureWriteBytes, testing::Eq(0u));
+
+  for (int frame = 0; frame < 4; ++frame) {
+    panel.advancePresentationFrame();
+  }
+  EXPECT_THAT(registry->lookup(UiTextureId::FromImTextureId(first)).hasError(), testing::IsTrue())
+      << "The dropped registration must be released once its presentation window closes.";
+  EXPECT_THAT(registry->liveCount(), testing::Eq(liveBefore - 1u));
 }
 
 TEST(EditorWindowTest, CompositorDebugPanelRetiresReplacedUploadAfterPresentationWindow) {

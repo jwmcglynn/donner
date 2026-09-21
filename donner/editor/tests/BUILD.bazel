@@ -231,6 +231,7 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
+            ":compositor_debug_panel_test_access",
             "//donner/base:base_test_utils",
             "//donner/editor:async_renderer",
             "//donner/editor:compositor_debug_panel",
@@ -1156,6 +1157,17 @@ donner_cc_test(
         "//donner/editor:compositor_debug_panel",
         "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# One definition of the panel's test-only accessor, shared by every binary that reaches into its
+# private preview bookkeeping.
+donner_cc_library(
+    name = "compositor_debug_panel_test_access",
+    testonly = 1,
+    hdrs = ["CompositorDebugPanelTestAccess.h"],
+    deps = [
+        "//donner/editor:compositor_debug_panel",
     ],
 )
 
