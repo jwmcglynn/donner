@@ -13,6 +13,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/TreeMutationContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 
@@ -2912,6 +2913,74 @@ TEST_F(XMLDocumentTests, InsertNodeMovesSourceBackedElementBackwardBeforeReferen
   EXPECT_EQ(doc.source(), R"(<svg><a><moved/><ref/></a><b></b></svg>)");
   EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeRemoved,
                                                           XMLMutation::Kind::NodeInserted));
+}
+
+namespace {
+
+/// Attach an entity to \p parent that carries a \ref donner::components::TreeComponent but no XML
+/// node type, the shape the renderer produces when it instantiates `<use>` content into the tree.
+/// Inserted before \p referenceNode when given, appended otherwise.
+void InsertNonXmlTreeChild(XMLDocument& document, const XMLNode& parent,
+                           const XMLQualifiedNameRef& tagName,
+                           std::optional<XMLNode> referenceNode = std::nullopt) {
+  Registry& registry = document.registry();
+  const Entity entity = registry.create();
+  registry.emplace<donner::components::TreeComponent>(entity, tagName);
+  registry.get<donner::components::TreeComponent>(parent.entityHandle().entity())
+      .insertBefore(
+          registry, entity,
+          referenceNode.has_value() ? referenceNode->entityHandle().entity() : entt::null);
+}
+
+}  // namespace
+
+TEST_F(XMLDocumentTests, InsertNodeTreatsNonXmlTreeSiblingAsAbsentWhenAppending) {
+  XMLDocument doc = ParseDocument(R"(<svg><a><moved/></a><b></b></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode a = svg.firstChild().value();
+  XMLNode moved = a.firstChild().value();
+  InsertNonXmlTreeChild(doc, a, "generated");
+  const std::string sourceBefore(doc.source());
+
+  // <moved/> is already the last XML child of <a>, so appending it again must change nothing.
+  ApplySourceEditResult result = doc.insertNode(a, moved);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(MutationKinds(result), IsEmpty());
+  EXPECT_THAT(std::string(doc.source()), Eq(sourceBefore));
+}
+
+TEST_F(XMLDocumentTests, InsertNodeTreatsNonXmlTreeSiblingAsAbsentBeforeReference) {
+  XMLDocument doc = ParseDocument(R"(<svg><a><moved/><ref/></a></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode a = svg.firstChild().value();
+  XMLNode moved = a.firstChild().value();
+  XMLNode ref = moved.nextSibling().value();
+  InsertNonXmlTreeChild(doc, a, "generated", ref);
+  const std::string sourceBefore(doc.source());
+
+  // <moved/> already precedes <ref/> in the XML tree, so the move must change nothing.
+  ApplySourceEditResult result = doc.insertNode(a, moved, ref);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(MutationKinds(result), IsEmpty());
+  EXPECT_THAT(std::string(doc.source()), Eq(sourceBefore));
+}
+
+TEST_F(XMLDocumentTests, InsertNodeSerializesWithoutNonXmlTreeChildren) {
+  XMLDocument doc = ParseDocument(R"(<svg><a></a></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode a = svg.firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+  InsertNonXmlTreeChild(doc, rect, "generated");
+
+  ApplySourceEditResult result = doc.insertNode(a, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), Eq(R"(<svg><a><rect/></a></svg>)"));
 }
 
 TEST_F(XMLDocumentTests, InsertNodeRejectsReferenceFromDifferentParent) {

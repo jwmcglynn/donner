@@ -3,11 +3,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 #include "donner/base/ParseResult.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/TreeComponent.h"
 
 using testing::AllOf;
 using testing::ElementsAre;
@@ -851,6 +855,110 @@ TEST_F(XMLNodeTests, SerializeToString_RoundTrip) {
   XMLNode dataNode = *textEl.firstChild();
   EXPECT_EQ(dataNode.type(), XMLNode::Type::Data);
   EXPECT_THAT(dataNode.value(), Optional(Eq("Hello & <world>")));
+}
+
+// ---------------------------------------------------------------------------
+// Entities that share the tree but are not XML nodes
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Attach an entity to \p parent that carries a \ref donner::components::TreeComponent but no XML
+/// node type, the shape the renderer produces when it instantiates `<use>` content into the tree.
+/// Such an entity is part of the entity tree but not part of the XML document, so the XML node
+/// accessors must not surface it.
+void AppendNonXmlTreeChild(XMLDocument& document, const XMLNode& parent,
+                           const XMLQualifiedNameRef& tagName) {
+  Registry& registry = document.registry();
+  const Entity entity = registry.create();
+  registry.emplace<donner::components::TreeComponent>(entity, tagName);
+  registry.get<donner::components::TreeComponent>(parent.entityHandle().entity())
+      .appendChild(registry, entity);
+}
+
+/// Tag names reached by walking \p parent with firstChild()/nextSibling(), in document order.
+std::vector<XMLQualifiedName> ForwardChildTagNames(const XMLNode& parent) {
+  std::vector<XMLQualifiedName> names;
+  for (std::optional<XMLNode> child = parent.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    names.push_back(child->tagName());
+  }
+  return names;
+}
+
+/// Tag names reached by walking \p parent with lastChild()/previousSibling(), in reverse order.
+std::vector<XMLQualifiedName> ReverseChildTagNames(const XMLNode& parent) {
+  std::vector<XMLQualifiedName> names;
+  for (std::optional<XMLNode> child = parent.lastChild(); child.has_value();
+       child = child->previousSibling()) {
+    names.push_back(child->tagName());
+  }
+  return names;
+}
+
+/// Tag name of \p node's XML parent, or "(none)" when it has none. `std::optional<XMLNode>` has no
+/// printer, so asserting on it directly reports a raw byte dump instead of the offending parent.
+std::string ParentTagName(const XMLNode& node) {
+  const std::optional<XMLNode> parent = node.parentElement();
+  return parent.has_value() ? std::string(parent->tagName().name) : std::string("(none)");
+}
+
+}  // namespace
+
+TEST_F(XMLNodeTests, ChildTraversalSkipsNonXmlTreeEntities) {
+  XMLDocument doc;
+  XMLNode svg = XMLNode::CreateElementNode(doc, "svg");
+  doc.root().appendChild(svg);
+
+  AppendNonXmlTreeChild(doc, svg, "generated-leading");
+  svg.appendChild(XMLNode::CreateElementNode(doc, "rect"));
+  AppendNonXmlTreeChild(doc, svg, "generated-middle");
+  svg.appendChild(XMLNode::CreateElementNode(doc, "circle"));
+  AppendNonXmlTreeChild(doc, svg, "generated-trailing");
+
+  EXPECT_THAT(ForwardChildTagNames(svg),
+              ElementsAre(XMLQualifiedNameRef("rect"), XMLQualifiedNameRef("circle")));
+  EXPECT_THAT(ReverseChildTagNames(svg),
+              ElementsAre(XMLQualifiedNameRef("circle"), XMLQualifiedNameRef("rect")));
+}
+
+TEST_F(XMLNodeTests, ParentElementIsEmptyForNonXmlTreeParent) {
+  XMLDocument doc;
+  XMLNode svg = XMLNode::CreateElementNode(doc, "svg");
+  doc.root().appendChild(svg);
+  AppendNonXmlTreeChild(doc, svg, "generated");
+
+  Registry& registry = doc.registry();
+  const Entity generated =
+      registry.get<donner::components::TreeComponent>(svg.entityHandle().entity()).firstChild();
+  XMLNode adopted = XMLNode::CreateElementNode(doc, "rect");
+  registry.get<donner::components::TreeComponent>(generated).appendChild(
+      registry, adopted.entityHandle().entity());
+
+  EXPECT_THAT(ParentTagName(adopted), Eq("(none)"));
+}
+
+TEST_F(XMLNodeTests, SerializeToStringOmitsNonXmlTreeEntities) {
+  XMLDocument doc;
+  XMLNode svg = XMLNode::CreateElementNode(doc, "svg");
+  doc.root().appendChild(svg);
+  svg.appendChild(XMLNode::CreateElementNode(doc, "rect"));
+  AppendNonXmlTreeChild(doc, svg, "generated");
+
+  EXPECT_THAT(std::string(std::string_view(svg.serializeToString(0, /*prettyPrint=*/false))),
+              Eq("<svg><rect/></svg>"));
+}
+
+TEST_F(XMLNodeTests, SerializeToStringKeepsTextInlineWhenOnlyNonXmlTreeChildrenAreElements) {
+  XMLDocument doc;
+  XMLNode text = XMLNode::CreateElementNode(doc, "text");
+  doc.root().appendChild(text);
+  text.appendChild(XMLNode::CreateDataNode(doc, "Hello"));
+  AppendNonXmlTreeChild(doc, text, "generated");
+
+  // Block indentation applies only when a real XML element child exists, so the text stays inline.
+  EXPECT_THAT(std::string(std::string_view(text.serializeToString(0, /*prettyPrint=*/true))),
+              Eq("<text>Hello</text>"));
 }
 
 }  // namespace donner::xml
