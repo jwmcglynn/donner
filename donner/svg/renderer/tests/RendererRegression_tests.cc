@@ -1158,6 +1158,55 @@ TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElem
   }
 }
 
+// `visibility` is inherited, and a descendant may set it back to `visible`, so a visible span
+// nested inside a `visibility: hidden` span still paints. A span that declares `clip-path`, `mask`
+// or `filter` is painted by its own rendering instance, and the visible descendant's glyphs belong
+// to that instance, so suppressing the instance from the hidden span's own style would drop them.
+// A full-coverage clip path changes nothing it is applied to, which makes the render with the
+// effect comparable to the same markup without it.
+TEST_F(RendererRegressionTests, VisibleSpanInsideHiddenEffectSpanStillPaints) {
+  const std::string kPrefix =
+      R"svg(<clipPath id="c"><rect x="0" y="0" width="200" height="200"/></clipPath>)svg"
+      R"svg(<g font-family="Noto Sans" font-size="40">)svg";
+  const std::string kSuffix = R"svg(</g>)svg";
+  const std::string kVisibleInsideHidden =
+      R"svg(<text x="20" y="60"><tspan visibility="hidden" clip-path="url(#c)">)svg"
+      R"svg(<tspan visibility="visible">Text</tspan></tspan></text>)svg";
+  const std::string kVisibleInsideHiddenNoEffect =
+      R"svg(<text x="20" y="60"><tspan visibility="hidden">)svg"
+      R"svg(<tspan visibility="visible">Text</tspan></tspan></text>)svg";
+  const std::string kAllHidden =
+      R"svg(<text x="20" y="60"><tspan visibility="hidden" clip-path="url(#c)">Text</tspan>)svg"
+      R"svg(</text>)svg";
+
+  SVGDocument withEffect =
+      instantiateSubtree(kPrefix + kVisibleInsideHidden + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument withoutEffect =
+      instantiateSubtree(kPrefix + kVisibleInsideHiddenNoEffect + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument allHidden =
+      instantiateSubtree(kPrefix + kAllHidden + kSuffix, {}, Vector2i(200, 200));
+  SVGDocument noText = instantiateSubtree(kPrefix + kSuffix, {}, Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(withEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(withoutEffect, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(allHidden, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(noText, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(withEffect, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(withoutEffect, ActiveRendererBackend());
+  const RendererBitmap hiddenOnly = RenderDocumentWithBackend(allHidden, ActiveRendererBackend());
+  const RendererBitmap blank = RenderDocumentWithBackend(noText, ActiveRendererBackend());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  // The override has to be observable without the effect, otherwise the comparison below would
+  // hold with nothing painted on either side.
+  ExpectVisibleBitmap(expected, "visible_span_inside_hidden_span_no_effect");
+  ExpectBitmapsIdentical(actual, expected, "visible_span_inside_hidden_effect_span");
+  // A hidden span with no visible descendant still paints nothing, so the fix is a filter on the
+  // effect instance's spans rather than the removal of the visibility gate.
+  ExpectBitmapsIdentical(hiddenOnly, blank, "hidden_effect_span_without_visible_descendant");
+}
+
 // A `<use>` copy renders the referenced text through the light tree's laid-out spans, but the
 // per-span instances that carry `clip-path`, `mask`, and `filter` exist only in the light tree.
 // The copy must still paint every span; it does so without those effects, which is what it did
