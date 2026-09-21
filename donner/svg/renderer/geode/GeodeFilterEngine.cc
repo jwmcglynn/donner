@@ -417,10 +417,16 @@ struct FilterResourceArena {
   static constexpr size_t kMaxPassesPerCommandBuffer = 64;
 
   /// Passes the bound applies to: this execution's open chunk, plus the frame's host command
-  /// buffer when the chunk is destined for it. Without a lease the chunk reaches the queue
-  /// directly and cannot grow a buffer some other execution is filling.
+  /// buffer when this execution is the one filling it. Only the runtime can say that a lease
+  /// still names the installed encoder, the same authority the count's clear defers to. An
+  /// execution without a lease, or holding one the runtime has since replaced, has its chunks
+  /// queue-submitted or refused and cannot grow that buffer - nor close it, since the rotation
+  /// it would reach the bound through is refused and declares device loss.
   size_t boundedPasses() const {
-    return passesInOpenChunk_ + (hostLease_.has_value() ? hostCommandBuffer_.passes : 0);
+    const bool fillsCountedBuffer = hostLease_.has_value() &&
+                                    hostCommandBuffer_.lease == hostLease_ &&
+                                    device_.adapterDevice().hostCommandEncoderLease() == hostLease_;
+    return passesInOpenChunk_ + (fillsCountedBuffer ? hostCommandBuffer_.passes : 0);
   }
 
   /// Returns the runtime encoder for the next pass, closing the buffer that reached the bound.
@@ -438,8 +444,13 @@ struct FilterResourceArena {
     return commandEncoder_.get();
   }
 
-  /// Accounts for a chunk of \p chunkPasses passes the runtime accepted. A host-recorded chunk
-  /// joins the frame's host command buffer; a queue-submitted one is already gone.
+  /// Accounts for a chunk the runtime accepted. A host-recorded chunk joins the frame's host
+  /// command buffer; a queue-submitted one is already gone.
+  ///
+  /// @param submitted What the runtime did with the chunk.
+  /// @param boundary Whether the chunk closed at \ref kMaxPassesPerCommandBuffer, which a
+  ///   host-recorded chunk answers by rotating the host command encoder.
+  /// @param chunkPasses Passes the chunk held, read before it closed.
   bool accountSubmittedChunk(const GeodeWgpuAdapterDevice::RuntimeSubmitResult& submitted,
                              bool boundary, size_t chunkPasses) {
     switch (submitted.disposition) {
@@ -474,8 +485,9 @@ struct FilterResourceArena {
 
   /// Closes whatever holds the passes that reached \ref kMaxPassesPerCommandBuffer: this
   /// execution's open chunk, or - once earlier executions of the frame have filled it - the host
-  /// command buffer those chunks were replayed into. Only a leased execution counts that buffer,
-  /// so reaching the bound with no chunk open means there is a lease to rotate.
+  /// command buffer those chunks were replayed into. Only an execution holding the lease that
+  /// buffer is counted under counts it, so reaching the bound with no chunk open means there is
+  /// an installed lease to rotate.
   [[nodiscard]] bool closeChunkAtBound() {
     return commandEncoder_ ? submitCommandBuffer(true) : rotateHostAfterBoundary();
   }
