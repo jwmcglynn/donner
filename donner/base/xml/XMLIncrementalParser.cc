@@ -1,5 +1,7 @@
 #include "donner/base/xml/XMLIncrementalParser.h"
 
+#include <cstddef>
+#include <limits>
 #include <string>
 
 #include "donner/base/FileOffset.h"
@@ -23,17 +25,27 @@ ParseResult<XMLDocument> XMLIncrementalParser::ParseOpeningTag(std::string_view 
 
 ParseResult<XMLDocument> XMLIncrementalParser::ParseOpeningTag(std::string_view openingTagSource,
                                                                const XMLParser::Options& options) {
+  // Ordering invariant: the ceiling is enforced before the well-formedness check and the copy.
+  if (openingTagSource.size() > options.maximumInputSize) {
+    return ParseDiagnostic::Error("XML source exceeds maximum input size", FileOffset::Offset(0));
+  }
+
   if (openingTagSource.empty() || openingTagSource.back() != '>') {
     return ParseDiagnostic::Error("Opening tag is missing '>'", FileOffset::Offset(0));
   }
 
   std::string fragment(openingTagSource);
-  if (fragment.size() < 2 || fragment[fragment.size() - 2] != '/') {
+  const bool addedSyntheticSlash = fragment.size() < 2 || fragment[fragment.size() - 2] != '/';
+  if (addedSyntheticSlash) {
     fragment.insert(fragment.end() - 1, '/');
   }
 
   XMLParser::Options fragmentOptions = options;
-  fragmentOptions.maximumInputSize = fragment.size();
+  // The synthetic slash is not caller input, so it is not charged against the caller's ceiling.
+  if (addedSyntheticSlash &&
+      fragmentOptions.maximumInputSize < std::numeric_limits<std::size_t>::max()) {
+    ++fragmentOptions.maximumInputSize;
+  }
   return XMLParser::Parse(fragment, fragmentOptions);
 }
 
