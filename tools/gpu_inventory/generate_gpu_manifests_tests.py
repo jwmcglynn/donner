@@ -132,7 +132,7 @@ class BuildManifestsTest(unittest.TestCase):
         "donner/inline_shader.cc": 'constexpr std::string_view kWgsl = R"wgsl(@vertex\nfn vs() {})wgsl";\n',
         "donner/plain.cc": "int main() { return 0; }\n",
         "examples/outside.cc": "wgpu::Device d;\n",
-        "third_party/patches/imgui_wgpu_texture_cache.patch": "+WGPUTextureView view;\n",
+        "third_party/patches/vendored_webgpu_backend.patch": "+WGPUTextureView view;\n",
         "third_party/patches/glfw_bazel_build_files.patch": "+cc_library(\n",
         "third_party/vendored/lib.rs": "fn main() {}\n",
         "third_party/oracle/tests/rust_ffi/src/lib.rs": "fn f() {}\n",
@@ -185,7 +185,7 @@ class BuildManifestsTest(unittest.TestCase):
     def test_wgpu_patch_files_are_inventoried(self):
         manifest = gen.build_gpu_operations_manifest(self.FILES)
         self.assertEqual(
-            manifest["wgpuPatchFiles"], ["third_party/patches/imgui_wgpu_texture_cache.patch"]
+            manifest["wgpuPatchFiles"], ["third_party/patches/vendored_webgpu_backend.patch"]
         )
 
     def test_shader_manifest_includes_inline_wgsl(self):

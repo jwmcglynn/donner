@@ -5,15 +5,6 @@ index 5ea6d36..4db7a52 100644
 @@ -1055 +1055 @@ struct ImGui_ImplGlfw_ViewportData
 -    ImGui_ImplGlfw_ViewportData()  { memset(this, 0, sizeof(*this)); IgnoreWindowSizeEventFrame = IgnoreWindowPosEventFrame = -1; }
 +    ImGui_ImplGlfw_ViewportData()  { memset((void*)this, 0, sizeof(*this)); IgnoreWindowSizeEventFrame = IgnoreWindowPosEventFrame = -1; }
-diff --git a/backends/imgui_impl_wgpu.cpp b/backends/imgui_impl_wgpu.cpp
-index 6264f18..455257d 100644
---- a/backends/imgui_impl_wgpu.cpp
-+++ b/backends/imgui_impl_wgpu.cpp
-@@ -586,2 +586,2 @@ void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder
--        memcpy(vtx_dst, draw_list->VtxBuffer.Data, draw_list->VtxBuffer.Size * sizeof(ImDrawVert));
--        memcpy(idx_dst, draw_list->IdxBuffer.Data, draw_list->IdxBuffer.Size * sizeof(ImDrawIdx));
-+        memcpy((void*)vtx_dst, draw_list->VtxBuffer.Data, draw_list->VtxBuffer.Size * sizeof(ImDrawVert));
-+        memcpy((void*)idx_dst, draw_list->IdxBuffer.Data, draw_list->IdxBuffer.Size * sizeof(ImDrawIdx));
 diff --git a/imgui.cpp b/imgui.cpp
 index 34611e2..0616c90 100644
 --- a/imgui.cpp

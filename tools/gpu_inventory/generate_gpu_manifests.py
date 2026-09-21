@@ -337,9 +337,8 @@ def build_gpu_operations_manifest(files: dict[str, str]) -> dict[str, object]:
         if tokens:
             per_file[path] = tokens
 
-    # Patched third-party WebGPU integration code (e.g. the ImGui WebGPU backend
-    # patches) is part of the inventory even though it lives outside
-    # first-party sources.
+    # A patch that introduces WebGPU calls into a vendored dependency is part of
+    # the inventory even though it lives outside first-party sources.
     patches = sorted(
         path
         for path in files
