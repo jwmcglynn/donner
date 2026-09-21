@@ -475,6 +475,43 @@ public:
     }
   }
 
+  /**
+   * @brief Whether an instance whose own style is not `visible` still has content to paint.
+   *
+   * Only a text span instance does. It paints every span in the subtree of the span that declared
+   * `clip-path`, `mask` or `filter`, and `visibility` is inherited but a descendant may set it back
+   * to `visible`; suppressing the instance would take that descendant's glyphs with it, so the
+   * instance survives and the draw filters the hidden spans out per span. Every other instance
+   * paints the single element that is hidden.
+   *
+   * An entity with no computed style of its own inherits its nearest styled ancestor's visibility,
+   * which the walk already covers, so it needs no entry of its own.
+   *
+   * @param textSpanRoot Text root whose spans this instance paints, or `entt::null` when the
+   *   instance is not a span instance.
+   * @param styleEntity Entity supplying the instance's style, and the root of the span subtree.
+   * @return True when the instance must still be drawn.
+   */
+  bool hiddenInstancePaintsVisibleSpans(Entity textSpanRoot, Entity styleEntity) {
+    if (textSpanRoot == entt::null) {
+      return false;
+    }
+
+    bool anyVisible = false;
+    donner::components::ForAllChildrenRecursivePruned(
+        EntityHandle(registry_, styleEntity), [&anyVisible](EntityHandle handle) {
+          if (anyVisible) {
+            return false;
+          }
+
+          const auto* style = handle.try_get<ComputedStyleComponent>();
+          anyVisible = style != nullptr && style->properties.has_value() &&
+                       style->properties->visibility.get().value() == Visibility::Visible;
+          return !anyVisible;
+        });
+    return anyVisible;
+  }
+
   struct PreparedTraversalNode {
     Entity styleEntity = entt::null;
     bool traverseChildren = false;
@@ -607,7 +644,7 @@ public:
     const bool hasFilterEffect = !filterEffects.empty();
 
     if (properties.visibility.get().value() != Visibility::Visible) {
-      instance.visible = false;
+      instance.visible = hiddenInstancePaintsVisibleSpans(textSpanRoot, styleEntity);
     }
 
     if (hasFilterEffect) {
