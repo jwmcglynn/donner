@@ -731,7 +731,20 @@ function contentExtentCenter(sample: CompositedSample): { x: number; y: number }
  * pixels and the pointer displacement is in CSS pixels. Only the SIGN of the
  * projection is used, so the scale factor between them cannot change the
  * verdict; the tolerance is applied to the presented magnitude alone.
-
+ *
+ * MOVED, not merely CHANGED. A centroid is a property of the matching pixel
+ * POPULATION, and the population changes for reasons that have nothing to do
+ * with where the shape is: the editor draws its own chrome over the document,
+ * and a chip that covers part of the shape takes those pixels out of the
+ * population and drags the centroid toward whatever is left. A frame that
+ * presents a position the drag already left shows the shape TRANSLATED back,
+ * so its bounding box moves back with it; a frame that merely hides part of
+ * the shape leaves the bounding box exactly where it was. The candidate is
+ * therefore required to move the extent against the pointer as well, which is
+ * the object-identity evidence a centroid alone cannot supply. The bound on
+ * the extent is only its sign: quantising the box to whole read-back pixels
+ * costs it precision the centroid does not have, so the magnitude test stays
+ * on the centroid.
  *
  * Latency carve-out: presentation legitimately lags the pointer, and no
  * pointer-relative observer can distinguish lag from an out-of-order frame
@@ -792,7 +805,7 @@ export function dragRegressions(
           const extentDx = extent.x - previousExtent.x;
           const extentDy = extent.y - previousExtent.y;
           const extentProjection = (extentDx * pointerDx + extentDy * pointerDy) / pointerLength;
-          if (projection < -toleranceReadbackPx) {
+          if (projection < -toleranceReadbackPx && extentProjection < 0) {
             const lagStepMs = 25;
             let excusedByLatency = false;
             for (let lag = lagStepMs; lag <= maxLatencyMs && !excusedByLatency; lag += lagStepMs) {
