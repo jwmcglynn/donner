@@ -103,7 +103,7 @@ test("Crash directory creation errors fail before browser launch", (t) => {
   );
 });
 
-test("Boot config inherits the crash directory without changing its launch deadline", (t) => {
+test("Boot config inherits the crash directory and budgets a slow cold launch", (t) => {
   const { temporary, environment, baseConfig } = fixture(t);
   const bazelConfig = evaluateConfig(
     "playwright.bazel.config.js",
@@ -121,7 +121,8 @@ test("Boot config inherits the crash directory without changing its launch deadl
     bootConfig.use.launchOptions.env?.BREAKPAD_DUMP_LOCATION,
     path.join(temporary, "chromium-crashpad"),
   );
-  assert.equal(bootConfig.use.launchOptions.timeout, 15000);
+  assert.equal(bootConfig.use.launchOptions.timeout, 30000);
+  assert.equal(bootConfig.globalTimeout, 120000);
   assert.equal(bootConfig.timeout, 60000);
 });
 
