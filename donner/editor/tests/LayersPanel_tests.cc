@@ -656,6 +656,32 @@ TEST(LayersPanelTest, EyeClickTogglesVisibility) {
   EXPECT_TRUE(shown->isVisible);
 }
 
+// The eye affordance drives the `display` axis only. A row hidden by computed
+// `visibility` keeps a closed eye after a click, so the panel keeps offering
+// Show for an element it cannot actually reveal.
+TEST(LayersPanelTest, EyeClickOnVisibilityHiddenRowKeepsEyeClosed) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" visibility="hidden" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "rect1");
+  ASSERT_GE(index, 0);
+  ASSERT_FALSE(panel.rows()[static_cast<std::size_t>(index)].isVisible);
+
+  panel.handleEyeClick(app, static_cast<std::size_t>(index));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+
+  const std::optional<LayerTreeRow> row = FindRow(panel, "rect1");
+  ASSERT_TRUE(row.has_value());
+  EXPECT_FALSE(row->isVisible)
+      << "the eye toggle writes `display` and cannot clear a `visibility` hide";
+  EXPECT_EQ(row->element.getAttribute("display"), "inline");
+}
+
 TEST(LayersPanelTest, RefreshSnapshotPreservesVisibilityRenderInvalidation) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">

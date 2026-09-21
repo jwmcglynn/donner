@@ -457,6 +457,44 @@ TEST(EditorControlSessionTest, ClickLayerVisibilityButtonCapturesImmediateAndSet
   EXPECT_NE(source.body.value("text", "").find(R"(display="none")"), std::string::npos);
 }
 
+// The user-visible report behind the eye-state fix, driven through the same
+// Layers-panel handler the editor UI calls. `#Hidden` is hidden by
+// `visibility`, which the eye toggle cannot write: the click asks for Show and
+// writes `display="inline"`, and the row must still read hidden afterwards.
+TEST(EditorControlSessionTest, ClickLayerVisibilityButtonCannotRevealVisibilityHiddenElement) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <rect id="Background" width="40" height="20" fill="red"/>
+  <rect id="Hidden" visibility="hidden" x="12" y="4" width="16" height="12" fill="blue"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 40},
+                                                                {"canvas_height", 20},
+                                                                {"render_after_load", true}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult click =
+      session.handleToolCall("click_layer_button", json{{"selector", "#Hidden"},
+                                                        {"button", "visibility"},
+                                                        {"include_display_before_render", false},
+                                                        {"include_final_frame", false},
+                                                        {"include_display_frame", false}});
+
+  ASSERT_TRUE(click.body.value("ok", false)) << click.body.dump(2);
+  EXPECT_FALSE(click.body["before"].value("visible", true))
+      << "an element hidden by `visibility` starts with a closed eye";
+  ASSERT_TRUE(click.body["after"].is_object()) << click.body.dump(2);
+  EXPECT_FALSE(click.body["after"].value("visible", true))
+      << "Show writes `display`; it cannot clear a `visibility` hide, so the eye stays closed";
+
+  ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
+  EXPECT_NE(source.body.value("text", "").find(R"(display="inline")"), std::string::npos)
+      << "the click still wrote the `display` attribute it owns";
+}
+
 TEST(EditorControlSessionTest, HidingSplashBackgroundDropsGhostPixelsFromSettledFrame) {
   const donner::tests::RequiredRunfile splashFile =
       donner::tests::ReadRequiredRunfile("donner_splash.svg");
