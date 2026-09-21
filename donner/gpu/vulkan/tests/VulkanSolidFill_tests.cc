@@ -288,6 +288,61 @@ TEST_F(VulkanSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
 }
 
+/// Releasing a handle's allocation explicitly has to fail closed on a handle that does not name a
+/// live resource of this device, or it would reach whatever now occupies that slot. The shared
+/// runtime tests pin that on a fake; this pins it where the allocation is real, so a backend
+/// cannot satisfy the fake and still free the wrong Vulkan object.
+TEST_F(VulkanSolidFillTest, DestroyingABackingRefusesStaleAndForeignHandles) {
+  Texture texture =
+      unwrap(device_->createTexture(TextureDescriptor{
+                 "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}),
+             "createTexture target");
+  const uint32_t textureSlot = texture.slotIndex();
+  const uint32_t textureGeneration = texture.generation();
+  const uint64_t deviceId = texture.deviceId();
+
+  EXPECT_THAT(device_->ownsTextureBacking(texture), testing::IsTrue());
+  ASSERT_FALSE(device_->destroyTextureBacking(std::move(texture)).hasError());
+  EXPECT_THAT(texture.isValid(), testing::IsFalse()) << "the destroy contract consumes the handle";
+
+  Texture replacement =
+      unwrap(device_->createTexture(TextureDescriptor{
+                 "replacement", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}),
+             "createTexture replacement");
+  ASSERT_EQ(replacement.slotIndex(), textureSlot);
+
+  const Status stale = device_->destroyTextureBacking(
+      Texture::CreateForBackend(textureSlot, textureGeneration, deviceId));
+  ASSERT_TRUE(stale.hasError());
+  EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
+  EXPECT_THAT(device_->ownsTextureBacking(replacement), testing::IsTrue())
+      << "a stale handle must not release the allocation of the slot's new occupant";
+
+  const Status foreign = device_->destroyTextureBacking(
+      Texture::CreateForBackend(textureSlot, replacement.generation(), deviceId + 1));
+  ASSERT_TRUE(foreign.hasError());
+  EXPECT_EQ(foreign.error().type, GpuErrorType::DeviceMismatch) << foreign.error();
+  EXPECT_THAT(device_->ownsTextureBacking(replacement), testing::IsTrue());
+
+  Buffer buffer = unwrap(device_->createBuffer(BufferDescriptor{
+                             "readback", 256, BufferUsage::CopyDst | BufferUsage::MapRead}),
+                         "createBuffer readback");
+  ASSERT_FALSE(device_->destroyBufferBacking(std::move(buffer)).hasError());
+  const Status doubleDestroy = device_->destroyBufferBacking(std::move(buffer));
+  ASSERT_TRUE(doubleDestroy.hasError());
+  EXPECT_EQ(doubleDestroy.error().type, GpuErrorType::InvalidHandle) << doubleDestroy.error();
+
+  ASSERT_FALSE(device_->destroyTextureBacking(std::move(replacement)).hasError());
+}
+
+/// A bounded wait is what keeps a driver that stops answering costing one deadline rather than
+/// the process, and work that was never submitted can never complete.
+TEST_F(VulkanSolidFillTest, WaitingForASerialIsBoundedByTheCallersBudget) {
+  EXPECT_THAT(device_->waitForSerial(device_->lastSubmittedSerial() + 1, 0.05), testing::IsFalse())
+      << "work that was never submitted cannot complete";
+  EXPECT_THAT(device_->waitForSerial(device_->completedSerial(), 30.0), testing::IsTrue());
+}
+
 /// Compare two premultiplied RGBA8 renders of the same scene produced by two independent Vulkan
 /// pipelines.
 ///

@@ -1,13 +1,16 @@
 /// @file
 /// Resource lifetime and submission model tests: deferred destruction by submission serial, slot
-/// retirement while work is in flight, and submit-time re-validation of recorded command
-/// resources (design 0053 "Core types and ownership", "Command model").
+/// retirement while work is in flight, explicit release of a handle's backend allocation, bounded
+/// waits for a submission serial, and submit-time re-validation of recorded command resources.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,6 +25,8 @@ using testing::ElementsAre;
 using testing::Eq;
 using testing::HasSubstr;
 using testing::IsEmpty;
+using testing::IsFalse;
+using testing::IsTrue;
 using testing::Ne;
 using testing::Not;
 
@@ -33,7 +38,7 @@ namespace {
  * submissions asynchronously. Records every backend release in order so tests can assert exactly
  * when deferred destruction reaches the backend.
  */
-class ManualCompletionDevice final : public Device {
+class ManualCompletionDevice : public Device {
 public:
   /// Marks every submission up to \p serial as executed by the fake GPU.
   /// @param serial Serial to complete through.
@@ -678,6 +683,235 @@ TEST_F(SubmitStalenessTests, DestroyedSamplerEntryRejectsSubmit) {
               IsGpuErrorWithMessage(
                   GpuErrorType::InvalidHandle,
                   AllOf(HasSubstr("bind group \"textureGroup\""), HasSubstr("destroyed sampler"))));
+}
+
+// == Backing lifetime and bounded submission waits ============================================
+
+/// A backend that can also name memory it did not allocate, so the two answers
+/// \ref Device::ownsTextureBacking separates both exist here.
+class BorrowingDevice final : public ManualCompletionDevice {
+public:
+  /// Texture slots whose allocation belongs to someone else.
+  std::set<uint32_t> borrowedSlots;
+  /// Texture slots whose allocation this device was asked to release, in order.
+  std::vector<uint32_t> releasedTextureSlots;
+  /// Buffer slots whose allocation this device was asked to release, in order.
+  std::vector<uint32_t> releasedBufferSlots;
+
+protected:
+  bool onOwnsTextureBacking(uint32_t slotIndex) const override {
+    return !borrowedSlots.contains(slotIndex);
+  }
+  void onDestroyTextureBacking(uint32_t slotIndex) override {
+    releasedTextureSlots.push_back(slotIndex);
+  }
+  void onDestroyBufferBacking(uint32_t slotIndex) override {
+    releasedBufferSlots.push_back(slotIndex);
+  }
+};
+
+/// A backend that has failed terminally, so no submission of its can ever complete.
+class FailedCompletionDevice final : public ManualCompletionDevice {
+public:
+  /// Number of times the runtime asked this backend to wait.
+  int waitCalls = 0;
+
+protected:
+  bool onWaitForSerial(uint64_t /*serial*/, double /*timeoutSeconds*/) override {
+    ++waitCalls;
+    return false;
+  }
+};
+
+class BackingLifetimeTests : public testing::Test {
+protected:
+  Texture createTexture(const char* label = "target") {
+    return GetResultOrFail(device_.createTexture(TextureDescriptor{
+        label, Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}));
+  }
+
+  Buffer createBuffer(const char* label = "readback") {
+    return GetResultOrFail(device_.createBuffer(
+        BufferDescriptor{label, 1024, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  }
+
+  BorrowingDevice device_;
+};
+
+TEST_F(BackingLifetimeTests, ReleasesTheAllocationOfTheHandleItDestroys) {
+  Texture texture = createTexture();
+  const uint32_t slotIndex = texture.slotIndex();
+  Buffer buffer = createBuffer();
+  const uint32_t bufferSlotIndex = buffer.slotIndex();
+
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(texture)), IsOk());
+  EXPECT_THAT(device_.destroyBufferBacking(std::move(buffer)), IsOk());
+
+  EXPECT_THAT(device_.releasedTextureSlots, ElementsAre(slotIndex));
+  EXPECT_THAT(device_.releasedBufferSlots, ElementsAre(bufferSlotIndex));
+  EXPECT_THAT(device_.backendReleases(), ElementsAre("texture#" + std::to_string(slotIndex),
+                                                     "buffer#" + std::to_string(bufferSlotIndex)));
+}
+
+TEST_F(BackingLifetimeTests, AStaleHandleReachesNeitherTheRecycledSlotNorItsNewOccupant) {
+  Texture first = createTexture("first");
+  const uint32_t staleSlotIndex = first.slotIndex();
+  const uint32_t staleGeneration = first.generation();
+  const uint64_t deviceId = first.deviceId();
+  ASSERT_THAT(device_.destroyTextureBacking(std::move(first)), IsOk());
+  device_.releasedTextureSlots.clear();
+
+  // The freed slot is handed to the next texture, which is exactly the occupant the stale handle
+  // must not reach.
+  Texture replacement = createTexture("replacement");
+  ASSERT_THAT(replacement.slotIndex(), Eq(staleSlotIndex));
+
+  EXPECT_THAT(device_.destroyTextureBacking(
+                  Texture::CreateForBackend(staleSlotIndex, staleGeneration, deviceId)),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.releasedTextureSlots, IsEmpty())
+      << "a stale handle must not release the allocation of the slot's new occupant";
+  EXPECT_THAT(device_.textureExtent(replacement), HasResult())
+      << "the replacement must still be live after the stale destroy was refused";
+
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(replacement)), IsOk());
+}
+
+TEST_F(BackingLifetimeTests, RefusesAHandleBelongingToAnotherDevice) {
+  BorrowingDevice other;
+  Texture foreignTexture = GetResultOrFail(other.createTexture(TextureDescriptor{
+      "foreign", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}));
+  Buffer foreignBuffer = GetResultOrFail(other.createBuffer(
+      BufferDescriptor{"foreign", 1024, BufferUsage::CopyDst | BufferUsage::MapRead}));
+
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(foreignTexture)),
+              IsGpuError(GpuErrorType::DeviceMismatch));
+  EXPECT_THAT(device_.destroyBufferBacking(std::move(foreignBuffer)),
+              IsGpuError(GpuErrorType::DeviceMismatch));
+
+  EXPECT_THAT(device_.releasedTextureSlots, IsEmpty());
+  EXPECT_THAT(device_.releasedBufferSlots, IsEmpty());
+  EXPECT_THAT(device_.backendReleases(), IsEmpty())
+      << "a foreign handle must not destroy anything on the device it was handed to";
+  // The handle is consumed either way, so the resource it named goes back to its own device
+  // rather than being left behind on this one.
+  EXPECT_THAT(other.releasedTextureSlots, IsEmpty());
+  EXPECT_THAT(other.backendReleases(), ElementsAre("texture#0", "buffer#0"));
+}
+
+TEST_F(BackingLifetimeTests, RefusesASecondDestroyOfAMovedFromHandle) {
+  Texture texture = createTexture();
+  Buffer buffer = createBuffer();
+  ASSERT_THAT(device_.destroyTextureBacking(std::move(texture)), IsOk());
+  ASSERT_THAT(device_.destroyBufferBacking(std::move(buffer)), IsOk());
+  device_.releasedTextureSlots.clear();
+  device_.releasedBufferSlots.clear();
+
+  EXPECT_THAT(texture.isValid(), IsFalse()) << "the destroy contract consumes the handle";
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(texture)),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.destroyBufferBacking(std::move(buffer)),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.releasedTextureSlots, IsEmpty());
+  EXPECT_THAT(device_.releasedBufferSlots, IsEmpty());
+}
+
+TEST_F(BackingLifetimeTests, OwnsTextureBackingSeparatesAnAllocationFromARegistration) {
+  Texture allocated = createTexture("allocated");
+  Texture registered = createTexture("registered");
+  device_.borrowedSlots.insert(registered.slotIndex());
+
+  EXPECT_THAT(device_.ownsTextureBacking(allocated), IsTrue());
+  EXPECT_THAT(device_.ownsTextureBacking(registered), IsFalse())
+      << "a registration names memory whose owner is whoever registered it";
+
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(registered)), IsOk());
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(allocated)), IsOk());
+}
+
+TEST_F(BackingLifetimeTests, OwnsTextureBackingIsFalseForNullStaleAndForeignHandles) {
+  Texture texture = createTexture();
+  const Texture stale =
+      Texture::CreateForBackend(texture.slotIndex(), texture.generation() + 1, texture.deviceId());
+  const Texture foreign =
+      Texture::CreateForBackend(texture.slotIndex(), texture.generation(), texture.deviceId() + 1);
+
+  EXPECT_THAT(device_.ownsTextureBacking(Texture()), IsFalse());
+  EXPECT_THAT(device_.ownsTextureBacking(stale), IsFalse());
+  EXPECT_THAT(device_.ownsTextureBacking(foreign), IsFalse());
+  EXPECT_THAT(device_.ownsTextureBacking(texture), IsTrue());
+
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(texture)), IsOk());
+}
+
+class SubmissionWaitTests : public testing::Test {
+protected:
+  /// Submits an empty command stream and returns its serial.
+  uint64_t submitEmpty() {
+    std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+    CommandBuffer commands = GetResultOrFail(encoder->finish());
+    return GetResultOrFail(device_.submit(std::move(commands)));
+  }
+
+  ManualCompletionDevice device_;
+};
+
+TEST_F(SubmissionWaitTests, ReportsAnAlreadyCompletedSerialWithoutSpendingTheBudget) {
+  const uint64_t serial = submitEmpty();
+  device_.completeUpTo(serial);
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(device_.waitForSerial(serial, 30.0), IsTrue());
+  EXPECT_THAT(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+              testing::Lt(1.0))
+      << "work that is already done must not be waited on";
+}
+
+TEST_F(SubmissionWaitTests, ReturnsFalseWhenTheBudgetElapsesWithTheWorkStillPending) {
+  const uint64_t serial = submitEmpty();
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(device_.waitForSerial(serial, 0.05), IsFalse());
+  const double elapsedSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  EXPECT_THAT(elapsedSeconds, testing::Ge(0.05)) << "a timeout means the budget was actually spent";
+  EXPECT_THAT(elapsedSeconds, testing::Lt(5.0)) << "and that the wait ended at the budget";
+}
+
+TEST_F(SubmissionWaitTests, TreatsABudgetBelowZeroAsNoBudgetRatherThanAnEndlessWait) {
+  const uint64_t serial = submitEmpty();
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(device_.waitForSerial(serial, -1.0), IsFalse());
+  EXPECT_THAT(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+              testing::Lt(1.0));
+}
+
+/// The budget belongs to the backend once the runtime hands it over. A backend that knows the
+/// work can never complete says so by returning, and the runtime must take that answer rather
+/// than asking again until the budget runs out - which is how a backend's fail-fast on a lost
+/// device reaches the caller at all.
+TEST(SubmissionWait, TakesTheBackendsAnswerWithoutRetryingUntilTheBudgetRunsOut) {
+  FailedCompletionDevice device;
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  const uint64_t serial = GetResultOrFail(device.submit(GetResultOrFail(encoder->finish())));
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(device.waitForSerial(serial, 30.0), IsFalse());
+  EXPECT_THAT(device.waitCalls, Eq(1)) << "the hook must be asked once, not polled";
+  EXPECT_THAT(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+              testing::Lt(1.0))
+      << "and its answer must end the wait rather than start another";
+}
+
+TEST_F(SubmissionWaitTests, ClampsABudgetTooLargeForTheClockItIsMeasuredAgainst) {
+  const uint64_t serial = submitEmpty();
+  device_.completeUpTo(serial);
+
+  // A caller meaning "wait indefinitely" writes a number the clock's own duration cannot hold;
+  // converting it unclamped is undefined rather than patient.
+  EXPECT_THAT(device_.waitForSerial(serial, 1.0e30), IsTrue());
+  EXPECT_THAT(device_.waitForSerial(serial, std::numeric_limits<double>::infinity()), IsTrue());
 }
 
 }  // namespace

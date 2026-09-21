@@ -948,15 +948,15 @@ TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
     } else {
       beginFrame(*parent);
     }
-    ASSERT_THAT(device->adapterDevice().waitForSerial(parentPending.serial, 2.0),
+    ASSERT_THAT(device->runtimeDevice().waitForSerial(parentPending.serial, 2.0),
                 testing::IsTrue());
-    EXPECT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 0.05),
+    EXPECT_THAT(device->runtimeDevice().waitForSerial(siblingFilterSerial, 0.05),
                 testing::IsFalse());
     EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingFilterSerial));
     EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingPending.serial));
     sibling.endFrame();
-    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
-    ASSERT_THAT(device->adapterDevice().waitForSerial(siblingPending.serial, 2.0),
+    ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+    ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingPending.serial, 2.0),
                 testing::IsTrue());
     const RendererBitmap pixels = sibling.takeSnapshot();
     ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
@@ -4867,7 +4867,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTe
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
   }
   if (texture.isValid()) {
-    (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+    (void)sharedDevice()->runtimeDevice().destroyTextureBacking(std::move(texture));
   }
 }
 
@@ -4890,7 +4890,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsInvalidContentBeforeTakingOwners
       EXPECT_THAT(texture.isValid(), testing::IsTrue());
     }
     if (texture.isValid()) {
-      (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+      (void)sharedDevice()->runtimeDevice().destroyTextureBacking(std::move(texture));
     }
   }
 }
@@ -4913,7 +4913,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsForeignOwnerWithoutConsumingTheT
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
   }
   if (texture.isValid()) {
-    (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+    (void)sharedDevice()->runtimeDevice().destroyTextureBacking(std::move(texture));
   }
 }
 
@@ -4951,13 +4951,14 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsNullOwnerAndUnsupportedFormatWit
       EXPECT_THAT(texture.isValid(), testing::IsTrue());
     }
     if (texture.isValid()) {
-      (void)sharedDevice()->adapterDevice().destroyTextureBacking(std::move(texture));
+      (void)sharedDevice()->runtimeDevice().destroyTextureBacking(std::move(texture));
     }
   }
 }
 
 TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsReplacement) {
-  auto& runtime = sharedDevice()->adapterDevice();
+  gpu::Device& runtime = sharedDevice()->runtimeDevice();
+  auto& adapter = sharedDevice()->adapterDevice();
   const gpu::TextureDescriptor descriptor{"snapshot",
                                           {4, 4},
                                           gpu::TextureFormat::RGBA8Unorm,
@@ -4978,20 +4979,21 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsR
     EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
     EXPECT_THAT(stale.isValid(), testing::IsTrue());
   }
-  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(live)), testing::IsTrue());
+  EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(live)), testing::IsTrue());
   (void)runtime.destroyTextureBacking(std::move(live));
 }
 
 TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
-  auto& runtime = sharedDevice()->adapterDevice();
+  gpu::Device& runtime = sharedDevice()->runtimeDevice();
+  auto& adapter = sharedDevice()->adapterDevice();
   auto created = runtime.createTexture({"host owner",
                                         {4, 4},
                                         gpu::TextureFormat::RGBA8Unorm,
                                         gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   ASSERT_FALSE(created.hasError()) << created.error();
   gpu::Texture owner = std::move(created).result();
-  auto imported = runtime.importExternalTexture(
-      runtime.wgpuTextureOf(owner), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
+  auto imported = adapter.importExternalTexture(
+      adapter.wgpuTextureOf(owner), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc);
   ASSERT_FALSE(imported.hasError()) << imported.error();
   gpu::Texture registration = std::move(imported).result();
@@ -5002,7 +5004,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
     EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
     EXPECT_THAT(registration.isValid(), testing::IsTrue());
   }
-  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(owner)), testing::IsTrue());
+  EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(owner)), testing::IsTrue());
   registration = {};
   (void)runtime.destroyTextureBacking(std::move(owner));
 }
@@ -5109,7 +5111,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotContentAlphaAndBothByteFormatsRemainExa
   for (bool bgra : {false, true}) {
     for (bool straight : {false, true}) {
       SCOPED_TRACE(testing::Message() << "bgra=" << bgra << " straight=" << straight);
-      auto& runtime = sharedDevice()->adapterDevice();
+      gpu::Device& runtime = sharedDevice()->runtimeDevice();
       auto created = runtime.createTexture(
           {"snapshot",
            {4, 4},
@@ -5172,7 +5174,7 @@ TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
 TEST_F(RendererGeodeTest, RuntimeReadbackPreservesSampledOnlyAndCopyOnlyRoutes) {
   for (bool sampled : {false, true}) {
     SCOPED_TRACE(sampled);
-    auto& runtime = sharedDevice()->adapterDevice();
+    gpu::Device& runtime = sharedDevice()->runtimeDevice();
     auto created = runtime.createTexture(
         {"snapshot capability",
          {4, 4},
@@ -5204,7 +5206,7 @@ TEST_F(RendererGeodeTest, RuntimeReadbackPreservesSampledOnlyAndCopyOnlyRoutes) 
 }
 
 TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsUnusableCapabilitiesWithoutConsumption) {
-  auto& runtime = sharedDevice()->adapterDevice();
+  gpu::Device& runtime = sharedDevice()->runtimeDevice();
   auto created = runtime.createTexture(
       {"upload only", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::CopyDst});
   ASSERT_FALSE(created.hasError()) << created.error();
@@ -5222,7 +5224,8 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsUnusableCapabilitiesWithoutConsu
 }
 
 TEST_F(RendererGeodeTest, RuntimeSnapshotMoveAssignmentReleasesThePreviousBacking) {
-  auto& runtime = sharedDevice()->adapterDevice();
+  gpu::Device& runtime = sharedDevice()->runtimeDevice();
+  auto& adapter = sharedDevice()->adapterDevice();
   const gpu::TextureDescriptor descriptor{
       "snapshot", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled};
   auto first = runtime.createTexture(descriptor);
@@ -5239,9 +5242,9 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotMoveAssignmentReleasesThePreviousBackin
       AlphaType::Premultiplied);
   destination = std::move(source);
   EXPECT_THAT(source.isValid(), testing::IsFalse());
-  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(oldIdentity)), testing::IsTrue());
+  EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(oldIdentity)), testing::IsTrue());
   sharedDevice()->drainDeferredTextureBackings();
-  EXPECT_THAT(static_cast<bool>(runtime.wgpuTextureOf(oldIdentity)), testing::IsFalse());
+  EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(oldIdentity)), testing::IsFalse());
   ASSERT_THAT(destination.runtimeTexture(), testing::NotNull());
   EXPECT_THAT(runtime.ownsTextureBacking(*destination.runtimeTexture()), testing::IsTrue());
 }
@@ -5297,10 +5300,10 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotBackingSurvivesUntilConsumerSubmission)
                     *snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
                 testing::IsTrue());
   }
-  EXPECT_THAT(sharedDevice()->adapterDevice().ownsTextureBacking(sourceIdentity),
+  EXPECT_THAT(sharedDevice()->runtimeDevice().ownsTextureBacking(sourceIdentity),
               testing::IsTrue());
   consumer.endFrame();
-  EXPECT_THAT(sharedDevice()->adapterDevice().ownsTextureBacking(sourceIdentity),
+  EXPECT_THAT(sharedDevice()->runtimeDevice().ownsTextureBacking(sourceIdentity),
               testing::IsFalse());
   ExpectSolidRuntimeSnapshot(consumer.takeSnapshot(), {64, 64}, {255, 0, 0, 255},
                              "runtime_snapshot_pending_submission");
@@ -5347,7 +5350,7 @@ TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission
 }
 
 TEST_F(RendererGeodeTest, RuntimeSnapshotBackingIsReleasedWhenConsumerFrameIsDiscarded) {
-  auto& runtime = sharedDevice()->adapterDevice();
+  gpu::Device& runtime = sharedDevice()->runtimeDevice();
   RendererGeode consumer = createRenderer();
   beginFrame(consumer);
   gpu::Texture sourceIdentity;
@@ -5468,10 +5471,10 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotReleaseOnAnotherThreadDefersOwnerSlotRe
                                                         AlphaType::Premultiplied));
   std::thread releaser([snapshot = std::move(snapshot)]() mutable { snapshot.reset(); });
   releaser.join();
-  EXPECT_THAT(owner->adapterDevice().ownsTextureBacking(identity), testing::IsTrue());
+  EXPECT_THAT(owner->runtimeDevice().ownsTextureBacking(identity), testing::IsTrue());
   EXPECT_THAT(owner->deferredTextureDestroyCountForTesting(), testing::Eq(pendingBefore + 1));
   owner->drainDeferredDestroys();
-  EXPECT_THAT(owner->adapterDevice().ownsTextureBacking(identity), testing::IsFalse());
+  EXPECT_THAT(owner->runtimeDevice().ownsTextureBacking(identity), testing::IsFalse());
   EXPECT_THAT(owner->deferredTextureDestroyCountForTesting(), testing::Eq(pendingBefore));
 }
 

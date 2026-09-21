@@ -294,19 +294,16 @@ void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
   }
 }
 
-/// Destroys a pooled readback buffer's backend object, not just this pool's name for it.
+/// Destroys a pooled staging texture's backend object and drops the view naming it.
 ///
 /// Pooled entries are idle by construction - a set is released only after its readback unmapped
-/// - so the backing can go eagerly. Releasing the handle alone would leave the buffer resident
+/// - so the backing can go eagerly. Releasing the handle alone would leave the texture resident
 /// until the host runtime collects it, which is exactly the retained memory the pool ceiling
 /// exists to bound.
-/// @param adapter Adapter the buffer was created on, or null during teardown.
-/// @param buffer Buffer to destroy; left invalid.
-/// Destroys a pooled staging texture's backend object and drops the view naming it.
-/// @param adapter Adapter the texture was created on, or null during teardown.
+/// @param device Device the texture was created on, or null during teardown.
 /// @param view View of \p texture; left invalid.
 /// @param texture Texture to destroy; left invalid.
-void DestroyPooledReadbackTexture(GeodeWgpuAdapterDevice* adapter, gpu::TextureView& view,
+void DestroyPooledReadbackTexture(gpu::Device* device, gpu::TextureView& view,
                                   gpu::Texture& texture) {
   // The view goes first: it names the texture, and a view outliving what it views is exactly
   // what the runtime's destroy contract fails closed on.
@@ -314,23 +311,27 @@ void DestroyPooledReadbackTexture(GeodeWgpuAdapterDevice* adapter, gpu::TextureV
   if (!texture.isValid()) {
     return;
   }
-  if (adapter == nullptr) {
+  if (device == nullptr) {
     texture = gpu::Texture();
     return;
   }
-  const gpu::Status destroyed = adapter->destroyTextureBacking(std::move(texture));
+  const gpu::Status destroyed = device->destroyTextureBacking(std::move(texture));
   (void)destroyed;  // A pooled texture is always live; a stale handle is already gone.
 }
 
-void DestroyPooledReadbackBuffer(GeodeWgpuAdapterDevice* adapter, gpu::Buffer& buffer) {
+/// Destroys a pooled readback buffer's backend object, not just this pool's name for it, for the
+/// same reason \ref DestroyPooledReadbackTexture does.
+/// @param device Device the buffer was created on, or null during teardown.
+/// @param buffer Buffer to destroy; left invalid.
+void DestroyPooledReadbackBuffer(gpu::Device* device, gpu::Buffer& buffer) {
   if (!buffer.isValid()) {
     return;
   }
-  if (adapter == nullptr) {
+  if (device == nullptr) {
     buffer = gpu::Buffer();
     return;
   }
-  const gpu::Status destroyed = adapter->destroyBufferBacking(std::move(buffer));
+  const gpu::Status destroyed = device->destroyBufferBacking(std::move(buffer));
   (void)destroyed;  // A pooled buffer is always live; a stale handle is already gone.
 }
 
@@ -1430,7 +1431,7 @@ void GeodeDevice::drainDeferredTextureBackings() {
     retired.swap(impl_->textureBackingsAwaitingRetirement);
   }
   for (gpu::Texture& texture : retired) {
-    (void)impl_->adapterDevice->destroyTextureBacking(std::move(texture));
+    (void)runtimeDevice().destroyTextureBacking(std::move(texture));
   }
 }
 

@@ -1,5 +1,6 @@
 #include "donner/gpu/browser/BrowserDevice.h"
 
+#include <chrono>
 #include <cstddef>
 #include <format>
 #include <optional>
@@ -328,6 +329,44 @@ bool BrowserDevice::isDeviceLost() const {
 
 RcString BrowserDevice::deviceLostReason() const {
   return bridge_->deviceLostReason();
+}
+
+bool BrowserDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
+  if (checkUsable("waitForSerial").hasError()) {
+    // A device this thread may not drive, or one already lost, cannot be waited on here: yielding
+    // would hand the event loop over on behalf of a caller that has no claim to it.
+    return false;
+  }
+  const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          std::chrono::duration<double>(timeoutSeconds));
+  for (;;) {
+    if (bridge_->isDeviceLost()) {
+      return false;
+    }
+    if (bridge_->completedSerial() >= serial) {
+      return true;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    if (yielding_) {
+      // Entered from inside this device's own yield; a second unwind on top of the first is not
+      // something the runtime underneath can represent, so the nested wait is refused rather than
+      // taken. See the same refusal on the mapping slice path.
+      ++nestedWaitRefusals_;
+      return false;
+    }
+    // A submission completes when the browser runs the callback reporting it, and that cannot
+    // happen while this thread holds the event loop, so the budget is spent handing it over
+    // rather than resting on it.
+    const double remainingSeconds =
+        std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
+    yielding_ = true;
+    bridge_->yieldToBrowser(ClampYieldSeconds(remainingSeconds, kMaxYieldSeconds));
+    yielding_ = false;
+  }
 }
 
 Status BrowserDevice::checkUsable(std::string_view operation) const {
@@ -1182,19 +1221,23 @@ Status BrowserDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t buffe
   return OkStatus();
 }
 
-MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+MapSliceReport BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+  // The browser settles a mapping by running a promise callback on the event loop, which this
+  // device reaches by handing the thread over and asking again afterwards. There is no signal it
+  // can block on, so every slice here is a polled one.
+  constexpr MapWaitKind kWaitKind = MapWaitKind::Polled;
   if (bridge_->isDeviceLost()) {
-    return MapSliceState::DeviceLost;
+    return MapSliceReport{.state = MapSliceState::DeviceLost, .waitKind = kWaitKind};
   }
   const std::optional<BrowserObjectId> mappingId =
       objects_.find(BrowserObjectKind::BufferMapping, mappingSlotIndex);
   if (!mappingId.has_value()) {
-    return MapSliceState::Failed;
+    return MapSliceReport{.state = MapSliceState::Failed, .waitKind = kWaitKind};
   }
 
   if (const MapSliceState state = bridge_->mappingState(*mappingId);
       state != MapSliceState::Pending) {
-    return state;
+    return MapSliceReport{.state = state, .waitKind = kWaitKind};
   }
 
   if (yielding_) {
@@ -1202,7 +1245,7 @@ MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doubl
     // second stack unwind on top of the first, which the runtime underneath cannot represent, so
     // the nested wait is refused instead of taken.
     ++nestedWaitRefusals_;
-    return MapSliceState::Failed;
+    return MapSliceReport{.state = MapSliceState::Failed, .waitKind = kWaitKind};
   }
 
   // Still pending, so spend the slice giving the browser the thread rather than returning at once.
@@ -1219,9 +1262,9 @@ MapSliceState BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doubl
   const std::optional<BrowserObjectId> afterYield =
       objects_.find(BrowserObjectKind::BufferMapping, mappingSlotIndex);
   if (!afterYield.has_value()) {
-    return MapSliceState::Failed;
+    return MapSliceReport{.state = MapSliceState::Failed, .waitKind = kWaitKind};
   }
-  return bridge_->mappingState(*afterYield);
+  return MapSliceReport{.state = bridge_->mappingState(*afterYield), .waitKind = kWaitKind};
 }
 
 Result<std::span<const uint8_t>> BrowserDevice::onMappedBytes(uint32_t mappingSlotIndex) const {

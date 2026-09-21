@@ -228,7 +228,7 @@ protected:
     }
     const uint64_t serial = device_->adapterDevice().lastSubmittedSerial();
     if (serial != 0 && !device_->isDeviceLost()) {
-      EXPECT_THAT(device_->adapterDevice().waitForSerial(serial, 5.0), testing::IsTrue());
+      EXPECT_THAT(device_->runtimeDevice().waitForSerial(serial, 5.0), testing::IsTrue());
     }
   }
 
@@ -503,7 +503,7 @@ TEST_F(GeodeFilterEngineTest, RotationAcceptsEarlierFilterRangesOnTheSameExactHo
   EXPECT_THAT(second, testing::IsTrue());
   EXPECT_THAT(rotations, testing::Eq(1u));
   EXPECT_THAT(secondAcceptedChunks, testing::Eq(1u));
-  EXPECT_THAT(device_->adapterDevice().waitForSerial(firstSerial, 2.0), testing::IsTrue());
+  EXPECT_THAT(device_->runtimeDevice().waitForSerial(firstSerial, 2.0), testing::IsTrue());
   ScopedWgpuHandle<wgpu::CommandBuffer> finalCommands(host.get().finish());
   ASSERT_THAT(static_cast<bool>(finalCommands), testing::IsTrue());
   device_->queue().submit(1, &finalCommands.get());

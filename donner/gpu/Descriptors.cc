@@ -225,6 +225,43 @@ std::ostream& operator<<(std::ostream& os, SurfaceAlphaMode value) {
   return os << "Unknown";
 }
 
+std::ostream& operator<<(std::ostream& os, MapSliceState value) {
+  switch (value) {
+    case MapSliceState::Pending: return os << "Pending";
+    case MapSliceState::Ready: return os << "Ready";
+    case MapSliceState::DeviceLost: return os << "DeviceLost";
+    case MapSliceState::Failed: return os << "Failed";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, MapWaitOutcome value) {
+  switch (value) {
+    case MapWaitOutcome::Ready: return os << "Ready";
+    case MapWaitOutcome::TimedOut: return os << "TimedOut";
+    case MapWaitOutcome::Cancelled: return os << "Cancelled";
+    case MapWaitOutcome::DeviceLost: return os << "DeviceLost";
+    case MapWaitOutcome::Failed: return os << "Failed";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, MapWaitKind value) {
+  switch (value) {
+    case MapWaitKind::Polled: return os << "Polled";
+    case MapWaitKind::CompletionEvent: return os << "CompletionEvent";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, const MapSliceReport& value) {
+  return os << "{" << value.state << ", " << value.waitKind << "}";
+}
+
+std::ostream& operator<<(std::ostream& os, const MapWaitReport& value) {
+  return os << "{" << value.outcome << ", " << value.waitKind << "}";
+}
+
 std::ostream& operator<<(std::ostream& os, SurfaceStatus value) {
   switch (value) {
     case SurfaceStatus::Success: return os << "Success";

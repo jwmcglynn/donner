@@ -90,13 +90,14 @@ TEST_F(MetalBufferMappingTest, AMappingStaysPendingWhileItsSubmissionIsHeld) {
       device_->mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
   // A budget short enough to expire while the submission is still gated, which is the only way to
   // observe "not ready" without racing the GPU.
-  EXPECT_EQ(GetResultOrFail(device_->waitForMapping(mapping, MapWaitParams{0.001, 0.05}, {})),
-            MapWaitOutcome::TimedOut);
+  EXPECT_EQ(
+      GetResultOrFail(device_->waitForMapping(mapping, MapWaitParams{0.001, 0.05}, {})).outcome,
+      MapWaitOutcome::TimedOut);
   EXPECT_THAT(device_->mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState));
 
   device_->resumeSubmissionsForTest();
 
-  EXPECT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})),
+  EXPECT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
   ASSERT_NO_FATAL_FAILURE(
       ExpectSceneTexels(GetResultOrFail(device_->mappedBytes(mapping)), "released submission"));
@@ -159,7 +160,7 @@ TEST_F(MetalBufferMappingTest, AWriteStillWaitingForTheQueueBlocksMapping) {
 
   BufferMapping mapping =
       GetResultOrFail(device_->mapBufferAsync(buffer, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
   const std::span<const uint8_t> bytes = GetResultOrFail(device_->mappedBytes(mapping));
   EXPECT_EQ(bytes[0], 0x7C) << "the drained write must be what the mapping reads";
@@ -175,7 +176,7 @@ TEST_F(MetalBufferMappingTest, AMappingReadsWhatTheReadbackAccessorReads) {
 
   BufferMapping mapping = GetResultOrFail(
       device_->mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
 
   const std::span<const uint8_t> mapped = GetResultOrFail(device_->mappedBytes(mapping));

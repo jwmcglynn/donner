@@ -658,7 +658,7 @@ uint64_t MetalDevice::completedSerial() const {
   return impl_->completionState->completedSerial.load(std::memory_order_acquire);
 }
 
-bool MetalDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
+bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                             std::chrono::duration<double>(timeoutSeconds));
@@ -2076,8 +2076,11 @@ public:
 
   uint64_t completedSubmissionSerial() const override { return device_.completedSerial(); }
 
-  bool waitForSubmission(uint64_t serial, double sliceSeconds) override {
-    return device_.waitForSerial(serial, sliceSeconds);
+  MapWaitKind waitForSubmission(uint64_t serial, double sliceSeconds) override {
+    // Metal signals completion by running a handler on its own thread, so the wait underneath
+    // rechecks the counter that handler advances rather than blocking on a signal of its own.
+    (void)device_.waitForSerial(serial, sliceSeconds);
+    return MapWaitKind::Polled;
   }
 
   bool deviceLost() const override {
@@ -2120,9 +2123,9 @@ Status MetalDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferS
                                     readySerial);
 }
 
-MapSliceState MetalDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+MapSliceReport MetalDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
   if (!impl_->mappingTable) {
-    return MapSliceState::Failed;
+    return MapSliceReport{.state = MapSliceState::Failed, .waitKind = MapWaitKind::Polled};
   }
   return impl_->mappingTable->waitSlice(mappingSlotIndex, sliceSeconds);
 }

@@ -1,5 +1,6 @@
 #include "donner/gpu/Device.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -1321,6 +1322,92 @@ Status Device::destroyComputePipeline(ComputePipeline&& computePipeline) {
                          ResourceKind::ComputePipeline);
 }
 
+void Device::onDestroyBufferBacking(uint32_t /*slotIndex*/) {}
+
+void Device::onDestroyTextureBacking(uint32_t /*slotIndex*/) {}
+
+bool Device::onOwnsTextureBacking(uint32_t /*slotIndex*/) const {
+  return true;
+}
+
+Status Device::destroyBufferBacking(Buffer&& buffer) {
+  // Validated before the slot is touched, so a stale or foreign handle cannot free whatever
+  // occupies that slot now. The handle still goes through destroyBuffer either way, which is what
+  // keeps this operation on the same destroy contract as the rest of the family: the handle is
+  // consumed, and one belonging to another device is released on that device rather than left
+  // behind here.
+  const Status validated = validateBufferHandleForBackend(buffer);
+  if (!validated.hasError()) {
+    onDestroyBufferBacking(buffer.slotIndex());
+  }
+  const Status destroyed = destroyBuffer(std::move(buffer));
+  return validated.hasError() ? validated : destroyed;
+}
+
+Status Device::destroyTextureBacking(Texture&& texture) {
+  // Ownership decides whether the allocation is ours to free at all: a registration of host
+  // memory, and a frame a surface handed out, are both named by a perfectly valid handle whose
+  // memory belongs to someone else. Checking here rather than in each backend hook is what makes
+  // the guarantee hold on every backend instead of on the ones that remembered.
+  const Status validated = validateTextureHandleForBackend(texture);
+  if (!validated.hasError() && ownsTextureBacking(texture)) {
+    onDestroyTextureBacking(texture.slotIndex());
+  }
+  const Status destroyed = destroyTexture(std::move(texture));
+  return validated.hasError() ? validated : destroyed;
+}
+
+bool Device::namesAcquiredSurfaceFrame(const Texture& texture) const {
+  bool acquired = false;
+  surfaces_.forEachLive([&](const SurfaceRecord& record) {
+    acquired = acquired ||
+               (record.acquired.isValid() && record.acquired.slotIndex() == texture.slotIndex() &&
+                record.acquired.generation() == texture.generation());
+  });
+  return acquired;
+}
+
+bool Device::ownsTextureBacking(const Texture& texture) const {
+  if (validateTextureHandleForBackend(texture).hasError()) {
+    return false;
+  }
+  // The swapchain hands a frame out and takes it back; a caller that freed it would free memory
+  // the surface still owns, so no backend gets asked about one.
+  if (namesAcquiredSurfaceFrame(texture)) {
+    return false;
+  }
+  return onOwnsTextureBacking(texture.slotIndex());
+}
+
+bool Device::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
+  // Completions this backend does not signal arrive on their own, so the only thing left to do
+  // is look again; the rest is what keeps looking again from becoming a spin.
+  constexpr std::chrono::milliseconds kRecheckInterval{1};
+  const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          std::chrono::duration<double>(timeoutSeconds));
+  for (;;) {
+    if (completedSerial() >= serial) {
+      return true;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(kRecheckInterval);
+  }
+}
+
+bool Device::waitForSerial(uint64_t serial, double timeoutSeconds) {
+  // Clamped at both ends before any backend converts it: the low end so a negative budget is a
+  // question rather than an endless wait, the high end so a caller that means "indefinitely" and
+  // writes a very large number does not overflow the clock duration every backend converts into.
+  // A NaN budget fails both comparisons and clamps to zero, which is the safe reading of it.
+  const double clampedSeconds =
+      timeoutSeconds > 0.0 ? std::min(timeoutSeconds, kMaxWaitSeconds) : 0.0;
+  return onWaitForSerial(serial, clampedSeconds);
+}
+
 namespace {
 
 /// Rejects wait bounds that could never terminate or could never wait.
@@ -1379,8 +1466,8 @@ Status Device::onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*buffer
   return Err(GpuErrorType::Unsupported, "this backend does not support host buffer mapping");
 }
 
-MapSliceState Device::onWaitMappingSlice(uint32_t /*mappingSlotIndex*/, double /*sliceSeconds*/) {
-  return MapSliceState::Failed;
+MapSliceReport Device::onWaitMappingSlice(uint32_t /*mappingSlotIndex*/, double /*sliceSeconds*/) {
+  return MapSliceReport{.state = MapSliceState::Failed, .waitKind = MapWaitKind::Polled};
 }
 
 Result<std::span<const uint8_t>> Device::onMappedBytes(uint32_t /*mappingSlotIndex*/) const {
@@ -1455,10 +1542,10 @@ void Device::noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome out
   }
 }
 
-Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
-                                              const MapWaitParams& params,
-                                              const std::function<bool()>& shouldCancel,
-                                              const MapWaitTestHooks& testHooks) {
+Result<MapWaitReport> Device::waitForMapping(const BufferMapping& mapping,
+                                             const MapWaitParams& params,
+                                             const std::function<bool()>& shouldCancel,
+                                             const MapWaitTestHooks& testHooks) {
   if (Status status = ValidateMapWaitParams(params); status.hasError()) {
     return std::move(status).error();
   }
@@ -1481,16 +1568,22 @@ Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
   const std::function<void(std::chrono::microseconds)> rest = WaitRest(testHooks);
 
   const std::chrono::steady_clock::time_point start = now();
+  // Sticky across the wait's own slices: one event wait is what says this path was not reduced to
+  // polling, so a polled slice after it does not take that back.
+  MapWaitKind waitKind = MapWaitKind::Polled;
   while (true) {
     if (shouldCancel && shouldCancel()) {
-      return MapWaitOutcome::Cancelled;
+      return MapWaitReport{.outcome = MapWaitOutcome::Cancelled, .waitKind = waitKind};
     }
     const std::chrono::steady_clock::time_point sliceStart = now();
-    const std::optional<MapWaitOutcome> outcome =
-        OutcomeForSlice(onWaitMappingSlice(mapping.slotIndex(), params.sliceSeconds));
+    const MapSliceReport slice = onWaitMappingSlice(mapping.slotIndex(), params.sliceSeconds);
+    if (slice.waitKind == MapWaitKind::CompletionEvent) {
+      waitKind = MapWaitKind::CompletionEvent;
+    }
+    const std::optional<MapWaitOutcome> outcome = OutcomeForSlice(slice.state);
     if (outcome.has_value()) {
       noteMappingOutcome(mapping, *outcome);
-      return *outcome;
+      return MapWaitReport{.outcome = *outcome, .waitKind = waitKind};
     }
 
     const double sliceUsedSeconds = std::chrono::duration<double>(now() - sliceStart).count();
@@ -1499,7 +1592,7 @@ Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
           std::chrono::duration<double>(params.sliceSeconds - sliceUsedSeconds)));
     }
     if (std::chrono::duration<double>(now() - start).count() >= params.timeoutSeconds) {
-      return MapWaitOutcome::TimedOut;
+      return MapWaitReport{.outcome = MapWaitOutcome::TimedOut, .waitKind = waitKind};
     }
   }
 }

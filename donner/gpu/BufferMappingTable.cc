@@ -58,17 +58,18 @@ MapSliceState BufferMappingTable::readiness(const Entry* entry) const {
   return MapSliceState::Pending;
 }
 
-MapSliceState BufferMappingTable::waitSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
+MapSliceReport BufferMappingTable::waitSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
   const MapSliceState before = readiness(find(mappingSlotIndex));
   if (before != MapSliceState::Pending) {
-    return before;
+    // Nothing was waited on, so nothing was spent on a completion signal either.
+    return MapSliceReport{.state = before, .waitKind = MapWaitKind::Polled};
   }
 
   const uint64_t readySerial = find(mappingSlotIndex)->readySerial;
-  host_.waitForSubmission(readySerial, sliceSeconds);
+  const MapWaitKind waitKind = host_.waitForSubmission(readySerial, sliceSeconds);
   // The entry is resolved again because a wait hands control to the backend, which can retire the
   // mapped buffer while the slice is blocked.
-  return readiness(find(mappingSlotIndex));
+  return MapSliceReport{.state = readiness(find(mappingSlotIndex)), .waitKind = waitKind};
 }
 
 Result<std::span<const uint8_t>> BufferMappingTable::bytes(uint32_t mappingSlotIndex) const {

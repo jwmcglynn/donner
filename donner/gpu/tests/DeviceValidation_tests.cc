@@ -17,6 +17,7 @@
 #include "donner/gpu/tests/GpuTestUtils.h"
 
 using testing::HasSubstr;
+using testing::IsEmpty;
 
 namespace donner::gpu {
 namespace {
@@ -912,6 +913,9 @@ public:
   MapSliceState trailingState = MapSliceState::Pending;
   /// States reported by the first slices, in order.
   std::vector<MapSliceState> sliceStates;
+  /// How each slice reports having waited, in order; slices past the end report \ref
+  /// MapWaitKind::Polled.
+  std::vector<MapWaitKind> sliceWaitKinds;
   /// Number of slices the runtime asked for.
   int sliceCalls = 0;
   /// Bytes handed back once a mapping is ready.
@@ -928,6 +932,8 @@ public:
   int abandonCalls = 0;
   /// Number of times the runtime released a surface's platform state.
   int destroySurfaceCalls = 0;
+  /// Texture slots whose allocation this device was asked to release, in order.
+  std::vector<uint32_t> releasedTextureBackings;
   /// Inject failures after entering the backend, without granting ownership of a frame.
   bool failAcquire = false;
   /// Present consumes backend ownership even when it reports an error.
@@ -961,6 +967,9 @@ protected:
     return OkStatus();
   }
   void onDestroyResource(std::string_view, uint32_t) override {}
+  void onDestroyTextureBacking(uint32_t slotIndex) override {
+    releasedTextureBackings.push_back(slotIndex);
+  }
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
                         const Extent2d&, const Origin2d&) override {
@@ -1019,11 +1028,13 @@ protected:
     return OkStatus();
   }
 
-  MapSliceState onWaitMappingSlice(uint32_t /*mappingSlotIndex*/,
-                                   double /*sliceSeconds*/) override {
+  MapSliceReport onWaitMappingSlice(uint32_t /*mappingSlotIndex*/,
+                                    double /*sliceSeconds*/) override {
     const size_t index = static_cast<size_t>(sliceCalls);
     ++sliceCalls;
-    return index < sliceStates.size() ? sliceStates[index] : trailingState;
+    return MapSliceReport{
+        .state = index < sliceStates.size() ? sliceStates[index] : trailingState,
+        .waitKind = index < sliceWaitKinds.size() ? sliceWaitKinds[index] : MapWaitKind::Polled};
   }
 
   Result<std::span<const uint8_t>> onMappedBytes(uint32_t /*mappingSlotIndex*/) const override {
@@ -1079,7 +1090,7 @@ TEST_F(BufferMappingTests, ReadyMappingHandsBackItsBytes) {
   device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
 
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Ready);
   EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
 }
@@ -1109,7 +1120,7 @@ TEST_F(BufferMappingTests, ABudgetIsNotSpentUntilItsTimeHasActuallyPassed) {
 
   FakeWaitClock clock;
   const Device::MapWaitTestHooks hooks = clock.hooks();
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)).outcome,
             MapWaitOutcome::TimedOut);
   EXPECT_GE(std::chrono::duration<double>(clock.rested).count(), 1.0)
       << "A one second budget cannot run out before one second of waiting has happened";
@@ -1122,7 +1133,7 @@ TEST_F(BufferMappingTests, AReadyMappingIsNotHeldForTheRestOfTheBudget) {
 
   FakeWaitClock clock;
   const Device::MapWaitTestHooks hooks = clock.hooks();
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)).outcome,
             MapWaitOutcome::Ready);
   EXPECT_LT(std::chrono::duration<double>(clock.rested).count(), 1.0)
       << "Waiting stops when the mapping is ready, not when the budget runs out";
@@ -1132,8 +1143,9 @@ TEST_F(BufferMappingTests, CancellationIsCheckedBeforeAnySliceRuns) {
   const Buffer buffer = readableBuffer();
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
 
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), [] { return true; })),
-            MapWaitOutcome::Cancelled);
+  EXPECT_EQ(
+      GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), [] { return true; })).outcome,
+      MapWaitOutcome::Cancelled);
   EXPECT_EQ(device_.sliceCalls, 0)
       << "A caller that has already cancelled must not be made to wait a slice first";
 }
@@ -1144,9 +1156,44 @@ TEST_F(BufferMappingTests, CancellationStopsWithinOneSlice) {
 
   int checks = 0;
   const auto cancelOnSecondCheck = [&checks] { return ++checks > 1; };
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), cancelOnSecondCheck)),
-            MapWaitOutcome::Cancelled);
+  EXPECT_EQ(
+      GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), cancelOnSecondCheck)).outcome,
+      MapWaitOutcome::Cancelled);
   EXPECT_EQ(device_.sliceCalls, 1) << "Cancellation must end the wait after the slice in flight";
+}
+
+TEST_F(BufferMappingTests, ReportsACompletionEventWaitWhenAnySliceUsedOne) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Pending, MapSliceState::Ready};
+  device_.sliceWaitKinds = {MapWaitKind::Polled, MapWaitKind::CompletionEvent, MapWaitKind::Polled};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  // One event wait is what says the path was not reduced to polling; the polled slice after it
+  // does not take that back.
+  EXPECT_THAT(
+      GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+      (MapWaitReport{.outcome = MapWaitOutcome::Ready, .waitKind = MapWaitKind::CompletionEvent}));
+}
+
+TEST_F(BufferMappingTests, ReportsAPolledWaitWhenNoSliceUsedACompletionEvent) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_THAT(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+              (MapWaitReport{.outcome = MapWaitOutcome::Ready, .waitKind = MapWaitKind::Polled}));
+}
+
+TEST_F(BufferMappingTests, AWaitThatDidNotFinishStillReportsHowItsSlicesWereSpent) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceWaitKinds = {MapWaitKind::CompletionEvent};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  int checks = 0;
+  const auto cancelOnSecondCheck = [&checks] { return ++checks > 1; };
+  EXPECT_THAT(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), cancelOnSecondCheck)),
+              (MapWaitReport{.outcome = MapWaitOutcome::Cancelled,
+                             .waitKind = MapWaitKind::CompletionEvent}));
 }
 
 TEST_F(BufferMappingTests, BudgetExhaustionReportsTimedOut) {
@@ -1155,7 +1202,7 @@ TEST_F(BufferMappingTests, BudgetExhaustionReportsTimedOut) {
 
   FakeWaitClock clock;
   const Device::MapWaitTestHooks hooks = clock.hooks();
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)).outcome,
             MapWaitOutcome::TimedOut);
   EXPECT_EQ(device_.sliceCalls, 4) << "The budget must be spent in slices of the stated length";
 }
@@ -1165,7 +1212,7 @@ TEST_F(BufferMappingTests, DeviceLossEndsTheWaitImmediately) {
   device_.sliceStates = {MapSliceState::DeviceLost};
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
 
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::DeviceLost);
   EXPECT_EQ(device_.sliceCalls, 1)
       << "A lost device can never deliver the map, so the budget must not be spent on it";
@@ -1176,7 +1223,7 @@ TEST_F(BufferMappingTests, BackendFailureIsItsOwnOutcome) {
   device_.sliceStates = {MapSliceState::Failed};
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
 
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Failed);
 }
 
@@ -1184,7 +1231,7 @@ TEST_F(BufferMappingTests, ReleasingAMappingInvalidatesItsHandle) {
   const Buffer buffer = readableBuffer();
   device_.trailingState = MapSliceState::Ready;
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
-  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Ready);
 
   EXPECT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
@@ -1222,7 +1269,7 @@ TEST_F(BufferMappingTests, ReadingIsAllowedOnceAWaitHasSeenTheMappingComplete) {
       GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
   ASSERT_THAT(device_.mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState));
 
-  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Ready);
 
   EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
@@ -1235,7 +1282,7 @@ TEST_F(BufferMappingTests, AWaitThatDidNotCompleteLeavesTheMappingUnreadable) {
 
   FakeWaitClock clock;
   const Device::MapWaitTestHooks hooks = clock.hooks();
-  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)).outcome,
             MapWaitOutcome::TimedOut);
 
   EXPECT_THAT(device_.mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState));
@@ -1274,7 +1321,7 @@ TEST_F(BufferMappingTests, DestroyingTheBufferInvalidatesAnOpenMapping) {
   device_.trailingState = MapSliceState::Ready;
   const BufferMapping mapping =
       GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
-  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Ready);
 
   ASSERT_THAT(device_.destroyBuffer(std::move(buffer)), IsOk())
@@ -1295,7 +1342,7 @@ TEST_F(BufferMappingTests, ANewBufferInARecycledSlotCanStillBeMapped) {
   device_.trailingState = MapSliceState::Ready;
   const BufferMapping mapping =
       GetResultOrFail(device_.mapBufferAsync(first, MapMode::Read, 0, 64));
-  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Ready);
   ASSERT_THAT(device_.destroyBuffer(std::move(first)), IsOk());
 
@@ -1410,7 +1457,7 @@ TEST_F(BufferMappingTests, ANewBufferInARecycledSlotSubmitsAndAcceptsWrites) {
   device_.trailingState = MapSliceState::Ready;
   const BufferMapping mapping =
       GetResultOrFail(device_.mapBufferAsync(first, MapMode::Read, 0, 1024));
-  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})).outcome,
             MapWaitOutcome::Ready);
   ASSERT_THAT(device_.destroyBuffer(std::move(first)), IsOk());
 
@@ -1536,6 +1583,24 @@ TEST_F(SurfaceTests, RejectsAPayloadTheNewKindsDoNotUse) {
   EXPECT_THAT(device_.createSurface(embedderWithLayer),
               IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
                                     HasSubstr("does not use a platform object")));
+}
+
+/// A frame comes out of the swapchain and goes back into it; the handle naming it is the
+/// caller's, but the memory is not. Answering "yes, that allocation is yours" for one would invite
+/// a caller to free what the surface is still presenting from, so the frame is not owned and its
+/// allocation is never released on the caller's say-so.
+TEST_F(SurfaceTests, AnAcquiredFrameIsNotBackingTheCallerOwns) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  ASSERT_THAT(frame.texture.isValid(), testing::IsTrue());
+
+  EXPECT_THAT(device_.ownsTextureBacking(frame.texture), testing::IsFalse())
+      << "the surface owns the frame it handed out";
+
+  EXPECT_THAT(device_.destroyTextureBacking(std::move(frame.texture)), IsOk());
+  EXPECT_THAT(device_.releasedTextureBackings, IsEmpty())
+      << "destroying the handle forgets the frame; it must not free the swapchain's memory";
 }
 
 TEST_F(SurfaceTests, RejectsAConfigurationWithNoExtent) {

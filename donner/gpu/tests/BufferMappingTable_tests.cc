@@ -34,6 +34,8 @@ public:
   /// wait. Absent means no retirement happens.
   std::optional<uint32_t> retireOnWait;
   BufferMappingTable* table = nullptr;  //!< Table to notify when \ref retireOnWait fires.
+  /// How this backend reports having spent a slice.
+  MapWaitKind waitKind = MapWaitKind::CompletionEvent;
 
   std::span<const uint8_t> mappableBytes(uint32_t bufferSlotIndex) const override {
     if (bufferSlotIndex >= buffers.size()) {
@@ -44,7 +46,7 @@ public:
 
   uint64_t completedSubmissionSerial() const override { return completedSerial; }
 
-  bool waitForSubmission(uint64_t serial, double /*sliceSeconds*/) override {
+  MapWaitKind waitForSubmission(uint64_t /*serial*/, double /*sliceSeconds*/) override {
     ++waitCalls;
     if (retireOnWait.has_value() && table != nullptr) {
       table->invalidateBuffer(*retireOnWait);
@@ -53,7 +55,7 @@ public:
     if (completeOnWait.has_value()) {
       completedSerial = *completeOnWait;
     }
-    return !lost && completedSerial >= serial;
+    return waitKind;
   }
 
   bool deviceLost() const override { return lost; }
@@ -81,16 +83,48 @@ TEST_F(BufferMappingTableTests, AMappingWhoseWorkAlreadyCompletedIsReadyWithoutW
   host_.completedSerial = 7;
   ASSERT_THAT(mapWholeBuffer(7), IsOk());
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Ready);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Ready);
   EXPECT_EQ(host_.waitCalls, 0) << "A mapping that is already ready must not spend a slice";
   EXPECT_THAT(GetResultOrFail(table_.bytes(0)), ElementsAre(10, 20, 30, 40, 50, 60, 70, 80));
+}
+
+TEST_F(BufferMappingTableTests, ASliceReportsHowTheBackendSpentIt) {
+  host_.completedSerial = 2;
+  host_.completeOnWait = 5;
+  host_.waitKind = MapWaitKind::CompletionEvent;
+  ASSERT_THAT(mapWholeBuffer(5), IsOk());
+
+  EXPECT_THAT(
+      table_.waitSlice(0, 0.01),
+      (MapSliceReport{.state = MapSliceState::Ready, .waitKind = MapWaitKind::CompletionEvent}));
+}
+
+TEST_F(BufferMappingTableTests, ASliceThatPolledSaysSoRatherThanClaimingACompletionEvent) {
+  host_.completedSerial = 2;
+  host_.waitKind = MapWaitKind::Polled;
+  ASSERT_THAT(mapWholeBuffer(5), IsOk());
+
+  EXPECT_THAT(table_.waitSlice(0, 0.01),
+              (MapSliceReport{.state = MapSliceState::Pending, .waitKind = MapWaitKind::Polled}));
+}
+
+TEST_F(BufferMappingTableTests, ASliceThatNeverWaitedReportsNoCompletionEvent) {
+  host_.completedSerial = 7;
+  host_.waitKind = MapWaitKind::CompletionEvent;
+  ASSERT_THAT(mapWholeBuffer(7), IsOk());
+
+  // Ready before the slice began, so the backend was never asked to wait and nothing was spent on
+  // a completion event.
+  EXPECT_THAT(table_.waitSlice(0, 0.01),
+              (MapSliceReport{.state = MapSliceState::Ready, .waitKind = MapWaitKind::Polled}));
+  EXPECT_EQ(host_.waitCalls, 0);
 }
 
 TEST_F(BufferMappingTableTests, BytesAreRefusedWhileTheWorkIsStillOutstanding) {
   host_.completedSerial = 2;
   ASSERT_THAT(mapWholeBuffer(5), IsOk());
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Pending);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Pending);
   EXPECT_THAT(table_.bytes(0), IsGpuErrorWithMessage(GpuErrorType::InvalidState,
                                                      HasSubstr("still waiting for submission 5")));
 }
@@ -100,7 +134,7 @@ TEST_F(BufferMappingTableTests, ASliceThatSeesTheWorkCompleteReportsReady) {
   host_.completeOnWait = 5;
   ASSERT_THAT(mapWholeBuffer(5), IsOk());
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Ready);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Ready);
   EXPECT_EQ(host_.waitCalls, 1);
 }
 
@@ -109,7 +143,7 @@ TEST_F(BufferMappingTableTests, ALostDeviceEndsAPendingMapping) {
   host_.lost = true;
   ASSERT_THAT(mapWholeBuffer(5), IsOk());
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::DeviceLost);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::DeviceLost);
   EXPECT_THAT(table_.bytes(0),
               IsGpuErrorWithMessage(GpuErrorType::DeviceLost, HasSubstr("device was lost")));
 }
@@ -121,18 +155,18 @@ TEST_F(BufferMappingTableTests, ALostDeviceOutranksASerialThatLooksComplete) {
   host_.lost = true;
   ASSERT_THAT(mapWholeBuffer(5), IsOk());
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::DeviceLost);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::DeviceLost);
   EXPECT_THAT(table_.bytes(0), IsGpuError(GpuErrorType::DeviceLost));
 }
 
 TEST_F(BufferMappingTableTests, RetiringTheBufferInvalidatesItsMapping) {
   host_.completedSerial = 7;
   ASSERT_THAT(mapWholeBuffer(7), IsOk());
-  ASSERT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Ready);
+  ASSERT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Ready);
 
   table_.invalidateBuffer(0);
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Failed);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Failed);
   EXPECT_THAT(table_.bytes(0), IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
                                                      HasSubstr("destroyed while the mapping")));
 }
@@ -143,7 +177,7 @@ TEST_F(BufferMappingTableTests, ABufferRetiredDuringASliceIsNoticedWhenTheSliceR
   host_.retireOnWait = 0;
   ASSERT_THAT(mapWholeBuffer(5), IsOk());
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Failed)
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Failed)
       << "A destroy that lands while the slice is blocked must not read as Ready";
 }
 
@@ -154,7 +188,7 @@ TEST_F(BufferMappingTableTests, RetiringAnUnrelatedBufferLeavesTheMappingAlone) 
 
   table_.invalidateBuffer(1);
 
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Ready);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Ready);
   EXPECT_THAT(table_.bytes(0), HasResult());
 }
 
@@ -168,7 +202,7 @@ TEST_F(BufferMappingTableTests, ReleasingAMappingEndsAccessThroughIt) {
   EXPECT_EQ(table_.liveMappingCountForTest(), 0u);
   EXPECT_THAT(table_.bytes(0),
               IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("is not mapped")));
-  EXPECT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Failed);
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Failed);
 }
 
 TEST_F(BufferMappingTableTests, ReleasingAMappingTwiceIsHarmless) {
@@ -186,7 +220,7 @@ TEST_F(BufferMappingTableTests, AMappedRangeIsTheSubrangeItNamed) {
   ASSERT_THAT(table_.begin(/*mappingSlotIndex=*/0, /*bufferSlotIndex=*/0, /*offsetBytes=*/2,
                            /*byteCount=*/3, /*readySerial=*/0),
               IsOk());
-  ASSERT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Ready);
+  ASSERT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Ready);
 
   EXPECT_THAT(GetResultOrFail(table_.bytes(0)), ElementsAre(30, 40, 50));
 }
@@ -218,8 +252,8 @@ TEST_F(BufferMappingTableTests, SeveralMappingsOfDifferentBuffersAreIndependent)
   ASSERT_THAT(table_.begin(/*mappingSlotIndex=*/1, /*bufferSlotIndex=*/1, /*offsetBytes=*/0,
                            /*byteCount=*/4, /*readySerial=*/7),
               IsOk());
-  ASSERT_EQ(table_.waitSlice(0, 0.01), MapSliceState::Ready);
-  ASSERT_EQ(table_.waitSlice(1, 0.01), MapSliceState::Ready);
+  ASSERT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::Ready);
+  ASSERT_EQ(table_.waitSlice(1, 0.01).state, MapSliceState::Ready);
 
   table_.release(0);
 

@@ -143,7 +143,7 @@ TEST_F(VulkanBufferMappingTest, AWriteStillWaitingForTheQueueBlocksMapping) {
 
   BufferMapping mapping =
       GetResultOrFail(gated->mapBufferAsync(buffer, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(gated->waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(gated->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
   const std::span<const uint8_t> bytes = GetResultOrFail(gated->mappedBytes(mapping));
   EXPECT_EQ(bytes[0], 0x7C) << "the drained write must be what the mapping reads";
@@ -157,7 +157,7 @@ TEST_F(VulkanBufferMappingTest, AMappingReadsWhatTheReadbackAccessorReads) {
 
   BufferMapping mapping = GetResultOrFail(
       device_->mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
-  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})),
+  ASSERT_EQ(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
             MapWaitOutcome::Ready);
 
   const std::span<const uint8_t> mapped = GetResultOrFail(device_->mappedBytes(mapping));
