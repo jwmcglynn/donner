@@ -1,8 +1,18 @@
 #include "donner/gpu/DeviceLost.h"
 
 #include <cstdio>
+#include <ostream>
 
 namespace donner::gpu {
+
+std::ostream& operator<<(std::ostream& os, DeviceLostWaitSite site) {
+  switch (site) {
+    case DeviceLostWaitSite::None: return os << "None";
+    case DeviceLostWaitSite::ReadbackMap: return os << "ReadbackMap";
+    case DeviceLostWaitSite::QueueIdle: return os << "QueueIdle";
+  }
+  return os << "DeviceLostWaitSite(" << static_cast<int>(site) << ")";
+}
 
 bool DeclareDeviceLost(DeviceLostState& state) {
   return !state.lost.exchange(true, std::memory_order_acq_rel);

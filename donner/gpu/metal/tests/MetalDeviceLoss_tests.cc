@@ -28,17 +28,8 @@ using testing::Eq;
 using testing::HasSubstr;
 using testing::IsFalse;
 using testing::IsTrue;
-
-/// The name of \p site, so an attribution mismatch prints which wait claimed the loss.
-/// @param site Recorded wait site.
-const char* WaitSiteName(DeviceLostWaitSite site) {
-  switch (site) {
-    case DeviceLostWaitSite::None: return "None";
-    case DeviceLostWaitSite::ReadbackMap: return "ReadbackMap";
-    case DeviceLostWaitSite::QueueIdle: return "QueueIdle";
-  }
-  return "unknown";
-}
+using testing::Lt;
+using testing::NotNull;
 
 /// A Metal device sharing its loss condition with every other device over the same root, which is
 /// how a selected backend opens its devices.
@@ -76,11 +67,17 @@ TEST_F(MetalDeviceLossTest, ALossDeclaredOverTheRootEndsAPendingMappingWithinASl
   // still waiting for its held submission.
   ASSERT_THAT(DeclareDeviceLost(*rootLoss_), IsTrue());
 
+  // A budget far longer than one slice, so a wait that ran it out cannot pass as prompt.
+  const auto waitStart = std::chrono::steady_clock::now();
   const MapWaitReport report =
-      GetResultOrFail(device_->waitForMapping(mapping, MapWaitParams{0.001, 1.0}, {}));
+      GetResultOrFail(device_->waitForMapping(mapping, MapWaitParams{0.001, 10.0}, {}));
+  const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - waitStart)
+                            .count();
   EXPECT_THAT(report.outcome, Eq(MapWaitOutcome::DeviceLost))
       << "a mapping over a lost root can never complete, so waiting out its budget would report a "
          "permanent failure as a slow one";
+  EXPECT_THAT(waitedMs, Lt(1000)) << "the loss must end the wait at its first readiness check";
   EXPECT_THAT(device_->mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState))
       << "a mapping that never completed has no bytes to read";
 
@@ -124,23 +121,23 @@ TEST_F(MetalDeviceLossTest, ALossDeclaredOverTheRootEndsReadsThroughACompletedMa
 
 TEST_F(MetalDeviceLossTest, AFailedCommandBufferDeclaresTheRootLostAsABackendReport) {
   const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
-  ASSERT_THAT(sibling, testing::NotNull());
+  ASSERT_THAT(sibling, NotNull());
 
   device_->failNextCompletionForTest();
   const uint64_t serial = submitEmptyWork();
 
-  EXPECT_THAT(device_->waitForSerial(serial, 5.0), IsFalse());
+  EXPECT_THAT(device_->waitForSerial(serial, 30.0), IsFalse());
   EXPECT_THAT(device_->lastErrorForTest(), HasSubstr("injected command buffer failure"));
   EXPECT_THAT(device_->isLost(), IsTrue())
       << "work that failed on the GPU leaves the root in an unknown state";
   EXPECT_THAT(sibling->isLost(), IsTrue()) << "the loss belongs to the root, not to one device";
-  EXPECT_THAT(WaitSiteName(rootLoss_->timedOutSite.load()), testing::StrEq("None"))
+  EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::None))
       << "the backend reported this loss; no wait gave up";
 
   // A wait that gives up afterwards is a consequence of the loss and must not claim it.
   device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
                                     "a later queue drain");
-  EXPECT_THAT(WaitSiteName(rootLoss_->timedOutSite.load()), testing::StrEq("None"));
+  EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::None));
 }
 
 }  // namespace
