@@ -438,32 +438,12 @@ public:
   wgpu::TextureFormat textureFormat() const { return textureFormat_; }
 
   /**
-   * Enqueue a GPU buffer for deferred destruction. The buffer handle is kept
-   * alive until `drainDeferredDestroys()` is called, preventing the underlying
-   * GPU resource from being freed while an in-flight command buffer may still
-   * reference it.
-   */
-  void deferDestroy(wgpu::Buffer buffer);
-
-  /**
-   * Enqueue a GPU texture for deferred destruction. Same semantics as the
-   * buffer variant.
-   */
-  void deferDestroy(wgpu::Texture texture);
-
-  /**
-   * Enqueue a bind group for deferred destruction. Same semantics as the buffer variant: a bind
-   * group evicted from a cache may still be named by draws that have been recorded but not yet
-   * replayed to the backend, and destroying it there fails those draws closed.
+   * Enqueue a bind group for deferred destruction. The handle is kept alive until
+   * `drainDeferredDestroys()` is called: a bind group evicted from a cache may still be named by
+   * draws that have been recorded but not yet replayed to the backend, and destroying it there
+   * fails those draws closed.
    */
   void deferDestroy(gpu::BindGroup bindGroup);
-
-  /**
-   * Enqueue a runtime texture for deferred destruction. Same semantics as the buffer variant: a
-   * render target superseded mid-frame may still be named by work that has been recorded but not
-   * yet submitted, so its slot is released at the next frame boundary instead of immediately.
-   */
-  void deferDestroy(gpu::Texture texture);
 
   /**
    * Transfer owned texture backing to this context's thread-safe retirement mailbox.
@@ -490,7 +470,7 @@ public:
    */
   void drainDeferredDestroys();
 
-  /// Number of textures waiting for the next frame-boundary destroy pass.
+  /// Number of texture backings waiting for the next frame-boundary destroy pass.
   /// Exposed to pin resource-retirement behavior in renderer regression tests.
   [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const;
 
@@ -955,12 +935,9 @@ private:
   // reporting accessors.
   mutable std::shared_ptr<std::atomic<int64_t>> residentBytesGauge_;
 
-  // Deferred-destroy queues: resources enqueued via deferDestroy() are held
+  // Deferred-destroy queue: bind groups enqueued via deferDestroy() are held
   // alive until drainDeferredDestroys() drops them at the next frame boundary.
-  std::vector<ScopedWgpuHandle<wgpu::Buffer>> pendingBuffers_;
-  std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
   std::vector<gpu::BindGroup> pendingBindGroups_;
-  std::vector<gpu::Texture> pendingGpuTextures_;
 
   // Scene-batch bind groups cached across frames (see
   // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap, with

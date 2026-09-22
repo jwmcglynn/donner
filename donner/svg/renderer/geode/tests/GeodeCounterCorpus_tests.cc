@@ -323,40 +323,36 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"geode_pattern_checker",
-        /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 1},
         /*reason=*/
-        "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
         /*tracking=*/
         "clears when a pattern tile is cached per paint server and its fill gains residency",
     },
     {
         /*scene=*/"geode_pattern_nonrect",
-        /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 1},
         /*reason=*/
-        "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
         /*tracking=*/
         "clears when a pattern tile is cached per paint server and its fill gains residency",
     },
     {
         /*scene=*/"geode_pattern_offset",
-        /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 1},
         /*reason=*/
-        "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
         /*tracking=*/
         "clears when a pattern tile is cached per paint server and its fill gains residency",
     },
     {
         /*scene=*/"geode_pattern_solid",
-        /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 1},
         /*reason=*/
-        "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
         /*tracking=*/
         "clears when a pattern tile is cached per paint server and its fill gains residency",
@@ -374,36 +370,33 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"geode_text_pattern_fill",
-        /*violated=*/kPathEncodes | kTextureCreates | kBufferWrites,
-        /*ceiling=*/{4, 1, 36, 4},
+        /*violated=*/kPathEncodes | kBufferWrites,
+        /*ceiling=*/{4, 0, 24, 4},
         /*reason=*/
-        "glyph outlines re-encode every frame and the pattern tile behind them is "
-        "re-rendered into a fresh texture",
+        "glyph outlines re-encode and re-upload every frame; placed text has no path cache or "
+        "residency",
         /*tracking=*/
-        "clears when placed glyph geometry gains residency and pattern tiles are cached per "
-        "paint server",
+        "clears when placed glyph geometry gains residency",
     },
     {
         /*scene=*/"geode_text_span_gradient_over_pattern",
-        /*violated=*/kPathEncodes | kTextureCreates | kBufferWrites,
-        /*ceiling=*/{3, 1, 27, 3},
+        /*violated=*/kPathEncodes | kBufferWrites,
+        /*ceiling=*/{3, 0, 21, 3},
         /*reason=*/
-        "glyph outlines re-encode every frame and the pattern tile behind them is "
-        "re-rendered into a fresh texture",
+        "glyph outlines re-encode and re-upload every frame; placed text has no path cache or "
+        "residency",
         /*tracking=*/
-        "clears when placed glyph geometry gains residency and pattern tiles are cached per "
-        "paint server",
+        "clears when placed glyph geometry gains residency",
     },
     {
         /*scene=*/"geode_text_span_gradient_over_pattern_stroke",
-        /*violated=*/kPathEncodes | kTextureCreates | kBufferWrites,
-        /*ceiling=*/{3, 1, 27, 3},
+        /*violated=*/kPathEncodes | kBufferWrites,
+        /*ceiling=*/{3, 0, 21, 3},
         /*reason=*/
-        "glyph outlines re-encode every frame and the pattern tile behind them is "
-        "re-rendered into a fresh texture",
+        "glyph outlines re-encode and re-upload every frame; placed text has no path cache or "
+        "residency",
         /*tracking=*/
-        "clears when placed glyph geometry gains residency and pattern tiles are cached per "
-        "paint server",
+        "clears when placed glyph geometry gains residency",
     },
     {
         /*scene=*/"image_data_url_opacity",

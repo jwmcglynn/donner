@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -1870,15 +1871,39 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
-    geode::ScopedWgpuHandle<wgpu::Texture> tile;
-    /// Runtime alias for `tile`, owned by the frame's import list. Pattern slots do not outlive
-    /// the frame that recorded them, so this never outlives the alias it points at.
-    const gpu::Texture* tileHandle = nullptr;
+    PatternPaintSlot() = default;
+    ~PatternPaintSlot() = default;
+
+    // Move-only, explicitly. The tile this slot owns is a move-only runtime handle, so a copy
+    // could never have worked; deleting it matters because a container member can advertise a
+    // copy constructor that fails only once instantiated, and `std::vector` reallocation's
+    // `move_if_noexcept` reaches for that copy whenever the element's move is not `noexcept`.
+    PatternPaintSlot(const PatternPaintSlot&) = delete;
+    PatternPaintSlot& operator=(const PatternPaintSlot&) = delete;
+    PatternPaintSlot(PatternPaintSlot&&) = default;
+    PatternPaintSlot& operator=(PatternPaintSlot&&) = default;
+
+    /// Pooled tile this paint samples. The slot owns it until a fill or stroke consumes the
+    /// paint, or the frame ends without one.
+    gpu::Texture tile;
+    /// Descriptor \ref tile was acquired with, so releasing it finds the same pool bucket.
+    gpu::TextureDescriptor tileDesc;
     Vector2d rasterTileSize;
     Transform2d targetFromRaster;
   };
+  static_assert(!std::is_copy_constructible_v<PatternPaintSlot>,
+                "A copyable pattern paint slot would let a container copy its tile handle.");
 
   struct PatternStackFrame {
+    PatternStackFrame() = default;
+    ~PatternStackFrame() = default;
+
+    /// @see PatternPaintSlot for why the copy operations are deleted rather than left implicit.
+    PatternStackFrame(const PatternStackFrame&) = delete;
+    PatternStackFrame& operator=(const PatternStackFrame&) = delete;
+    PatternStackFrame(PatternStackFrame&&) = default;
+    PatternStackFrame& operator=(PatternStackFrame&&) = default;
+
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
     Transform2d savedDeviceFromLocalTransform;
@@ -1894,9 +1919,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::vector<ClipStackEntry> savedClipStack;
 
     // The pattern tile being recorded.
-    Box2d tileRect;                                      // In pattern space (topLeft at origin).
-    Transform2d targetFromPattern;                       // Transform used when the tile is sampled.
-    geode::ScopedWgpuHandle<wgpu::Texture> tileTexture;  // Sampled after recording.
+    Box2d tileRect;                 // In pattern space (topLeft at origin).
+    Transform2d targetFromPattern;  // Transform used when the tile is sampled.
+    gpu::Texture tileTexture;       // Pooled tile, sampled after recording.
+    /// Descriptor \ref tileTexture was acquired with, carried to the paint slot it promotes to.
+    gpu::TextureDescriptor tileDesc;
     int tilePixelWidth = 0;
     int tilePixelHeight = 0;
     // Scale factor applied to all `setTransform` calls while this frame is
@@ -1911,25 +1938,91 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// @see savedPatternFillPaint
     std::optional<PatternPaintSlot> savedPatternStrokePaint;
   };
+  static_assert(!std::is_copy_constructible_v<PatternStackFrame>,
+                "A copyable pattern stack frame would let vector growth copy its tile handle.");
   std::vector<PatternStackFrame> patternStack;
 
   void promotePatternTile(PatternStackFrame& frame, bool forStroke) {
     PatternPaintSlot slot;
     slot.tile = std::move(frame.tileTexture);
-    slot.tileHandle =
-        &importTexture(slot.tile.get(), textureFormat,
-                       wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-                           wgpu::TextureUsage::CopySrc);
+    slot.tileDesc = frame.tileDesc;
     slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
     slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
 
     patternFillPaint = std::move(frame.savedPatternFillPaint);
     patternStrokePaint = std::move(frame.savedPatternStrokePaint);
     std::optional<PatternPaintSlot>& targetSlot = forStroke ? patternStrokePaint : patternFillPaint;
-    if (targetSlot.has_value() && targetSlot->tile) {
-      device->deferDestroy(targetSlot->tile.take());
-    }
+    releasePatternPaintSlot(targetSlot);
     targetSlot = std::move(slot);
+  }
+
+  /// Hand a pattern paint's tile back to the pool and empty the slot.
+  ///
+  /// The tile was drawn into by this frame's encoders, so it goes back at the frame boundary
+  /// rather than immediately: a mid-frame release would let the next acquire of the same bucket
+  /// hand it out before the GPU has finished writing it.
+  /// @param slot Slot to empty; left disengaged.
+  void releasePatternPaintSlot(std::optional<PatternPaintSlot>& slot) {
+    if (!slot.has_value()) {
+      return;
+    }
+    releaseTextureAtFrameEnd(std::move(slot->tile), slot->tileDesc);
+    slot.reset();
+  }
+
+  /// Hand back the tiles of pattern state this frame did not consume.
+  ///
+  /// A promoted pattern paint is claimed by the very next fill or stroke, and an open tile is
+  /// closed by the `endPatternTile` matching its `beginPatternTile`. A document can deliver
+  /// neither. Carrying either into the next frame would name a texture that frame is free to
+  /// recycle, so both are retired here and the state that held them is dropped.
+  /// What the retirement does with the state the outermost open tile interrupted.
+  enum class OuterPatternState {
+    kRestore,  //!< Put the renderer back on it; the frame still has work to do against it.
+    kDrop,     //!< Release it; the frame it belonged to is over and the next one brings its own.
+  };
+
+  void retireUnconsumedPatternTilesAtFrameEnd(OuterPatternState outer) {
+    if (!patternStack.empty()) {
+      // The innermost tile owns the live clip stack: `beginPatternTile` saved the outer one and
+      // started the tile unclipped, so what is live now was pushed inside the tile.
+      releaseClipStackTexturesAtFrameEnd(clipStack);
+    }
+    for (std::size_t index = 0; index < patternStack.size(); ++index) {
+      PatternStackFrame& frame = patternStack[index];
+      // The encoder this tile interrupted recorded draws the frame is still going to submit, and
+      // it owns the target view they name, so it outlives the tile rather than the stack entry.
+      retireFinishedEncoder(std::move(frame.savedEncoder));
+      releaseTextureAtFrameEnd(std::move(frame.tileTexture), frame.tileDesc);
+      releasePatternPaintSlot(frame.savedPatternFillPaint);
+      releasePatternPaintSlot(frame.savedPatternStrokePaint);
+      if (index != 0) {
+        // Every saved stack but the outermost belongs to an enclosing tile, which is going away
+        // with it. The outermost one is the renderer's own and is settled below.
+        releaseClipStackTexturesAtFrameEnd(frame.savedClipStack);
+      }
+    }
+    if (!patternStack.empty()) {
+      PatternStackFrame& outermost = patternStack.front();
+      if (outer == OuterPatternState::kRestore) {
+        // Put the renderer back on the state the outermost tile interrupted, so the rest of this
+        // frame does not read a texture that just went back to the pool.
+        target = outermost.savedTarget;
+        pixelWidth = outermost.savedPixelWidth;
+        pixelHeight = outermost.savedPixelHeight;
+        deviceFromLocalTransform = outermost.savedDeviceFromLocalTransform;
+        deviceFromLocalTransformStack.clear();
+        clipStack = std::move(outermost.savedClipStack);
+      } else {
+        // The next frame supplies its own viewport, transform and target, so restoring the
+        // abandoned frame's here would render it at the wrong size under a stale clip.
+        releaseClipStackTexturesAtFrameEnd(outermost.savedClipStack);
+        target = wgpu::Texture();
+      }
+    }
+    patternStack.clear();
+    releasePatternPaintSlot(patternFillPaint);
+    releasePatternPaintSlot(patternStrokePaint);
   }
 
   // --------------------------------------------------------------------
@@ -1955,12 +2048,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return texturePool ? texturePool->stats() : RendererGeodeTexturePoolStats{};
   }
 
-  /// Detach a superseded primary target and release it at the next frame boundary.
+  /// Detach a superseded primary target and free its backing at the next frame boundary.
   ///
-  /// Dropping the handle here would free the target while work already recorded against it is
-  /// still unsubmitted. Hand it to the deferred-destroy pass instead, which holds it through the
-  /// current frame boundary; that also keeps a succession of resized targets from piling up,
-  /// which browsers, notably Safari, otherwise leave resident until their own collector runs.
+  /// Releasing it here would free the target while work already recorded against it is still
+  /// unsubmitted. Hand it to the retirement mailbox instead, which holds it through the current
+  /// frame boundary and then destroys the backing rather than only releasing the runtime slot -
+  /// a dropped handle leaves the allocation for the host runtime to collect, which is how a
+  /// succession of resized targets stays resident on runtimes, notably browsers, that collect
+  /// lazily.
   void retireOwnedTargetAtFrameBoundary() {
     target = wgpu::Texture();
     targetHandle = nullptr;
@@ -1971,10 +2066,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
 
-    if (device) {
-      device->deferDestroy(std::move(ownedTarget));
+    if (!device) {
+      ownedTarget = gpu::Texture();
+      return;
     }
-    ownedTarget = gpu::Texture();
+    // The mailbox refuses only a handle that belongs to another device, which a target allocated
+    // through this one never is; dropping it here instead would release the slot and leave the
+    // allocation behind.
+    UTILS_RELEASE_ASSERT(device->deferDestroyTextureBacking(std::move(ownedTarget)));
   }
 
   /// Cross-frame arena buffer pool. Every
@@ -2082,7 +2181,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   };
   std::vector<PendingRelease> framePendingReleases;
   std::vector<PendingRelease> failedFilterTextures;
-  std::vector<geode::ScopedWgpuHandle<wgpu::Texture>> failedRawTextures;
 
   void releaseTextureAtFrameEnd(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
@@ -2250,9 +2348,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     ~ClipStackEntry() = default;
 
     // Move-only, explicitly. The mask textures this entry owns are move-only runtime handles, so
-    // a copy could never have worked; saying so here matters because a standard library that
-    // instantiates a container's copy constructor eagerly (libstdc++ does, libc++ does not)
-    // fails to compile on the implicit copy rather than on a copy anyone wrote.
+    // a copy could never have worked; deleting it matters because the `std::deque` member below
+    // advertises a copy constructor that fails only once instantiated, and a deque's move is
+    // `noexcept` in libc++ but not in libstdc++, so `std::vector` reallocation's
+    // `move_if_noexcept` reaches for that copy on one of them and not the other.
     ClipStackEntry(const ClipStackEntry&) = delete;
     ClipStackEntry& operator=(const ClipStackEntry&) = delete;
     ClipStackEntry(ClipStackEntry&&) = default;
@@ -2311,6 +2410,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
   };
+  // Non-copyability here is incidental: the move-only `savedEncoder` and `layerTexture` members
+  // supply it, not an explicit `= delete`. The assert pins it because `savedClipStack` holds
+  // entries whose copy is a hard error; if both members ever became copyable, `std::vector`
+  // reallocation would reach for the copy on a standard library whose deque move is not
+  // `noexcept`, and the failure would surface inside the standard library rather than here.
+  static_assert(!std::is_copy_constructible_v<FilterStackFrame>,
+                "A copyable filter stack frame would let vector growth copy its clip entries.");
   std::vector<ClipStackEntry> clipStack;
   std::vector<FilterStackFrame> filterStack;
   std::size_t rejectedFilterDepth = 0;
@@ -2669,13 +2775,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return std::nullopt;
   }
 
-  /// Build a pattern paint whose shader coordinates and repeat period are both in raster-tile
-  /// pixels. The fill shader's sample position is path-local, which is also the pattern target
-  /// space supplied by the driver, so no device-space reconstruction is needed.
+  /// The encoder-facing paint for \p slot at \p opacity.
+  ///
+  /// Its shader coordinates and repeat period are both in raster-tile pixels. The fill shader's
+  /// sample position is path-local, which is also the pattern target space supplied by the
+  /// driver, so no device-space reconstruction is needed.
+  ///
+  /// The result borrows \p slot's tile rather than naming a copy of it, so it has to reach the
+  /// encoder before the slot is released. Every caller consumes it in the same statement.
+  /// @param slot Promoted pattern tile to sample.
+  /// @param opacity Opacity to apply to the sampled texels.
   geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
                                                     double opacity) const {
     geode::GeoEncoder::PatternPaint p;
-    p.tile = slot.tileHandle;
+    p.tile = &slot.tile;
     p.tileSize = slot.rasterTileSize;
     p.patternFromPath = slot.targetFromRaster.inverse();
     p.opacity = opacity;
@@ -4601,10 +4714,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       const double opacity = paint.fillOpacity;
       encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity),
                                precomputedEncoded);
-      if (patternFillPaint->tile) {
-        device->deferDestroy(patternFillPaint->tile.take());
-      }
-      patternFillPaint.reset();
+      releasePatternPaintSlot(patternFillPaint);
       return;
     }
     const double effectiveOpacity = paint.fillOpacity;
@@ -4738,10 +4848,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // die with the `Registry` they live on, and calling `.disconnect<&fn>()` from
   // a renderer dtor would UB when the registry was destroyed first.
 
-  static void releaseTextureBacking(geode::ScopedWgpuHandle<wgpu::Texture>& texture) {
-    texture.reset();
-  }
-
   static void releaseTexture(wgpu::Texture& texture) { geode::ReleaseWgpuHandle(texture); }
 
   /// Drops a runtime texture handle without pooling it, for teardown paths where the pool and
@@ -4751,6 +4857,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   static void releasePendingTexture(PendingRelease& release) {
     releaseRuntimeTexture(release.texture);
+  }
+
+  /// Hand every clip-mask texture on \p entries back to the pool at the frame boundary, and
+  /// drop the entries. Used for clip state a frame ends still holding.
+  /// @param entries Clip stack to empty.
+  void releaseClipStackTexturesAtFrameEnd(std::vector<ClipStackEntry>& entries) {
+    for (ClipStackEntry& entry : entries) {
+      for (PendingRelease& release : entry.maskLayerTextures) {
+        releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+      }
+      entry.maskLayerTextures.clear();
+      entry.maskResolveTextureHandle = nullptr;
+      entry.maskResolveViewHandle = nullptr;
+    }
+    entries.clear();
   }
 
   static void releaseClipStackTextures(std::vector<ClipStackEntry>& entries) {
@@ -4780,6 +4901,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
+    // A caller that abandons a frame without ending it leaves pattern state and pending
+    // releases behind. The recording they belonged to is gone by now, so they go back to the
+    // pool here - and they go back before the budget reset below, because that budget is the
+    // one they were charged against.
+    retireUnconsumedPatternTilesAtFrameEnd(OuterPatternState::kDrop);
+    drainPendingReleases();
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -4921,19 +5048,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  ~Impl() {
-    encoder.reset();
-    frameFinishedEncoders.clear();
-    discardFrameGpuEncoder();
-    closeFrameGeneration();
-
-    if (device && device->device()) {
-      // Bounded drain before releasing frame resources; skips (and stays
-      // skipped) once the device is lost so renderer teardown never blocks
-      // on a hung driver.
-      device->waitForQueueIdle();
-    }
-
+  /// Drop every offscreen the open push/pop stacks still hold, and the stacks with them.
+  ///
+  /// Teardown, not a frame boundary: the pool these came from is going away too, so they are
+  /// dropped rather than handed back to it.
+  void releaseOpenStackTexturesAtTeardown() {
     for (PendingRelease& release : framePendingReleases) {
       releasePendingTexture(release);
     }
@@ -4958,35 +5077,62 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     filterStack.clear();
 
     for (PatternStackFrame& frame : patternStack) {
-      releaseTextureBacking(frame.tileTexture);
+      releaseRuntimeTexture(frame.tileTexture);
     }
     patternStack.clear();
     if (patternFillPaint.has_value()) {
-      releaseTextureBacking(patternFillPaint->tile);
+      releaseRuntimeTexture(patternFillPaint->tile);
     }
     if (patternStrokePaint.has_value()) {
-      releaseTextureBacking(patternStrokePaint->tile);
+      releaseRuntimeTexture(patternStrokePaint->tile);
     }
     patternFillPaint.reset();
     patternStrokePaint.reset();
-    frameImportedTextureViews.clear();
-    frameImportedTextures.clear();
+  }
 
-    // Releasing the handle frees the target: the runtime slot it names is what holds the
-    // backend object.
+  /// Give up this renderer's render targets at teardown.
+  ///
+  /// Dropping a handle would release the runtime slot and leave the backend allocation for the
+  /// host runtime to collect, so a target this renderer allocated is destroyed explicitly; a
+  /// series of renderers sharing one device would otherwise leave one resident apiece. An
+  /// embedder's texture is only named here, so that handle is dropped.
+  void releaseFrameTargetsAtTeardown() {
+    if (device && ownedTarget.isValid()) {
+      UTILS_RELEASE_ASSERT(device->deferDestroyTextureBacking(std::move(ownedTarget)));
+    }
     ownedTarget = gpu::Texture();
     hostTargetHandle = gpu::Texture();
     targetHandle = nullptr;
     targetHandleTexture = nullptr;
+  }
+
+  /// Wait for the backend to go idle, unless the device is gone or lost.
+  ///
+  /// Bounded, and skipped once the device is lost, so renderer teardown never blocks on a hung
+  /// driver.
+  void waitForQueueIdleAtTeardown() {
+    if (device && device->device()) {
+      device->waitForQueueIdle();
+    }
+  }
+
+  ~Impl() {
+    encoder.reset();
+    frameFinishedEncoders.clear();
+    discardFrameGpuEncoder();
+    closeFrameGeneration();
+
+    waitForQueueIdleAtTeardown();
+    releaseOpenStackTexturesAtTeardown();
+    frameImportedTextureViews.clear();
+    frameImportedTextures.clear();
+    releaseFrameTargetsAtTeardown();
     texturePool.reset();
 
     if (device) {
       device->drainDeferredDestroys();
-      if (device->device()) {
-        // Bounded; a no-op when the device is already lost.
-        device->waitForQueueIdle();
-      }
     }
+    waitForQueueIdleAtTeardown();
   }
 
   /// Wire up per-renderer state against the shared GeodeDevice. Before
@@ -5391,6 +5537,10 @@ void RendererGeode::endFrame() {
   // the frame. Without this, the last run of batchable draws in the
   // frame would never emit.
   impl_->flushPendingBatch();
+
+  // Before anything is submitted, so a submission failure retains these tiles along with the
+  // rest of what the frame named rather than returning them to a pool.
+  impl_->retireUnconsumedPatternTilesAtFrameEnd(Impl::OuterPatternState::kRestore);
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting - shared-mode.
@@ -6162,27 +6312,18 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   const int tilePixelWidth = rasterMetrics->pixelWidth;
   const int tilePixelHeight = rasterMetrics->pixelHeight;
 
-  // Pattern tile target sampled by the Slug fill shader when used as paint.
-  wgpu::TextureDescriptor td = {};
-  td.label = wgpuLabel("RendererGeodePatternTile");
-  td.size = {static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight), 1u};
-  td.format = impl_->textureFormat;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-             wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  if (!impl_->reserveTextureSurface(gpu::Extent2d{static_cast<uint32_t>(tilePixelWidth),
-                                                  static_cast<uint32_t>(tilePixelHeight)})) {
+  // Pattern tile target sampled by the Slug fill shader when used as paint. It comes from the
+  // transient pool, so a document repainting the same pattern every frame allocates once.
+  const gpu::TextureDescriptor tileDesc{
+      "RendererGeodePatternTile",
+      gpu::Extent2d{static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight)},
+      impl_->gpuTextureFormat(),
+      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled |
+          gpu::TextureUsage::CopySrc};
+  gpu::Texture tileTexture = impl_->acquireTexture(tileDesc);
+  if (!tileTexture.isValid()) {
     return false;
   }
-  geode::ScopedWgpuHandle<wgpu::Texture> tileTexture(impl_->device->device().createTexture(td));
-  impl_->device->countTexture();
-  if (!tileTexture) {
-    return false;
-  }
-
-  const wgpu::Texture tileTextureHandle = tileTexture.get();
 
   // Stash the currently-active encoder/target/transform state. A nested
   // encoder can't share a render pass with the outer one, so we finish any
@@ -6221,6 +6362,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = std::move(tileTexture);
+  frame.tileDesc = tileDesc;
   frame.tilePixelWidth = tilePixelWidth;
   frame.tilePixelHeight = tilePixelHeight;
   // Map pattern-tile units onto tile-texture pixels: this factor is applied
@@ -6241,7 +6383,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // tile texture so the new encoder's MVP maps correctly.
   impl_->pixelWidth = tilePixelWidth;
   impl_->pixelHeight = tilePixelHeight;
-  impl_->target = tileTextureHandle;
+  impl_->target = impl_->backendTextureOf(impl_->patternStack.back().tileTexture);
   impl_->deviceFromLocalTransformStack.clear();
   // Initialise the current transform to the raster scale so direct draws
   // issued before the driver's next `setTransform` still land in the
@@ -6251,8 +6393,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTexture(tileTextureHandle, td), Impl::extentOf(tileTextureHandle),
-      *impl_->frameGpuEncoder);
+      impl_->patternStack.back().tileTexture, tileDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/false);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
@@ -6294,7 +6435,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-    if (frame.tileTexture) impl_->failedRawTextures.push_back(std::move(frame.tileTexture));
+    impl_->retainFailedFilterTexture(std::move(frame.tileTexture), frame.tileDesc);
     return;
   }
 
@@ -6552,10 +6693,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     impl_->encoder->fillPathPattern(strokedOutline, strokeDerived.fillRule,
                                     impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity),
                                     strokeDerived.encoded);
-    if (impl_->patternStrokePaint->tile) {
-      impl_->device->deferDestroy(impl_->patternStrokePaint->tile.take());
-    }
-    impl_->patternStrokePaint.reset();
+    impl_->releasePatternPaintSlot(impl_->patternStrokePaint);
     return;
   }
 
@@ -7333,12 +7471,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   }
 
   // Consume the element-level pattern fill/stroke slots exactly once. Even if no
-  // run actually used them (e.g. every glyph was .notdef), they must be reset
+  // run actually used them (e.g. every glyph was .notdef), they must be released
   // here so the staged pattern does not leak onto the next shape's draw.
   if (hasPatternFill) {
-    impl_->patternFillPaint.reset();
+    impl_->releasePatternPaintSlot(impl_->patternFillPaint);
   }
-  impl_->patternStrokePaint.reset();
+  impl_->releasePatternPaintSlot(impl_->patternStrokePaint);
 #else
   (void)registry;
   (void)text;
@@ -7909,7 +8047,7 @@ bool RendererGeode::submitFilterBudgetChunkForTesting() {
 }
 
 size_t RendererGeode::failedFilterTextureCountForTesting() const {
-  return impl_->failedFilterTextures.size() + impl_->failedRawTextures.size();
+  return impl_->failedFilterTextures.size();
 }
 
 bool RendererGeode::hasActiveDrawingEncoderForTesting() const {
