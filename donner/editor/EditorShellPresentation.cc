@@ -13,11 +13,6 @@
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/TracyWrapper.h"
 
-#ifdef DONNER_EDITOR_WGPU
-#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#endif
-
 namespace donner::editor {
 
 Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport,
@@ -121,7 +116,8 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
     Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
   FrameCostBreakdown::DirectPresentation cost;
   const auto totalStart = std::chrono::steady_clock::now();
-  if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0) {
+  if (!target.texture.isValid() || target.framebufferSizePx.x <= 0 ||
+      target.framebufferSizePx.y <= 0) {
     return cost;
   }
 
@@ -254,7 +250,8 @@ double DrawImmediateChromeToFramebuffer(svg::RendererGeode& renderer,
                                         const ViewportState& viewport, const Box2d& paneClipRect,
                                         const SelectionChromeSnapshot& snapshot) {
   const auto start = std::chrono::steady_clock::now();
-  if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0) {
+  if (!target.texture.isValid() || target.framebufferSizePx.x <= 0 ||
+      target.framebufferSizePx.y <= 0) {
     return 0.0;
   }
 
@@ -323,7 +320,7 @@ FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(
 int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarget& target,
                                           const Box2d& imageClipRect,
                                           const Vector2d& framebufferFromLogicalScale) {
-  if (device_ == nullptr || !target.texture) {
+  if (device_ == nullptr || !target.texture.isValid()) {
     return 0;
   }
 
@@ -345,23 +342,20 @@ int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarge
   params.originOffsetPx = Vector2d::Zero();
   params.scissorPx = scissor;
 
-  const Vector2i attachmentSizePx(static_cast<int>(target.texture.getWidth()),
-                                  static_cast<int>(target.texture.getHeight()));
-  if (attachmentSizePx != target.framebufferSizePx) {
+  gpu::Result<gpu::TextureDescriptor> descriptor =
+      device_->runtimeDevice().textureDescriptor(target.texture);
+  if (descriptor.hasError()) {
     return 0;
   }
-  geode::GeodeWgpuAdapterDevice& adapterDevice = device_->adapterDevice();
-  gpu::Result<gpu::Texture> runtimeTarget = adapterDevice.importExternalTexture(
-      target.texture, gpu::Extent2d{target.texture.getWidth(), target.texture.getHeight()},
-      geode::GpuTextureFormatFromWgpu(target.texture.getFormat()),
-      geode::GpuTextureUsageFromWgpu(target.texture.getUsage()));
-  if (runtimeTarget.hasError()) {
+  const Vector2i attachmentSizePx(static_cast<int>(descriptor.result().size.width),
+                                  static_cast<int>(descriptor.result().size.height));
+  if (attachmentSizePx != target.framebufferSizePx) {
     return 0;
   }
 
   // The document tiles are drawn on top of this in the same frame, so the
   // checkerboard overwrites the scissored region rather than blending under it.
-  return checkerboardPass_.draw(*device_, runtimeTarget.result(), attachmentSizePx, params,
+  return checkerboardPass_.draw(*device_, target.texture, attachmentSizePx, params,
                                 geode::GeodeCheckerboardPipeline::BlendMode::Replace)
              ? 1
              : 0;

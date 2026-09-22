@@ -10,9 +10,11 @@
  *   - `GeodeDevice::CreateFromExternal(config)` wraps the host's
  *     device/queue/format without taking ownership of the underlying
  *     WebGPU objects.
- *   - `RendererGeode::setTargetTexture(surfaceTex)` points the renderer at
- *     the current swap-chain texture; `draw(document)` issues work into the
- *     host's device/queue; `wgpuSurfacePresent` ships the frame.
+ *   - The host registers the current swap-chain texture with the device and
+ *     points the renderer at the name that registration returns; the renderer
+ *     names textures of its device rather than backend handles.
+ *   - `draw(document)` issues work into the host's device/queue;
+ *     `wgpuSurfacePresent` ships the frame.
  *
  * Intentionally minimal: no input handling, no resize, no DPI scaling. The
  * goal is a clean walkthrough of the embedding boundary for the
@@ -49,6 +51,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "examples/geode_embed_surface.h"
 
@@ -235,7 +238,18 @@ int main(int argc, char* argv[]) {
       }
 
       donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTex.texture));
-      renderer.setTargetTexture(target.get());
+      // The renderer names textures of its device, never backend handles, so the host registers
+      // this frame's surface texture with the device and hands over the name. The registration
+      // takes no ownership and is forgotten when `frameTarget` goes out of scope below.
+      donner::gpu::Result<donner::gpu::Texture> frameTarget =
+          geodeDevice->adapterDevice().importExternalTexture(
+              target.get(),
+              donner::gpu::Extent2d{target.get().getWidth(), target.get().getHeight()},
+              geodeDevice->textureFormat(), donner::gpu::TextureUsage::RenderAttachment);
+      if (frameTarget.hasError()) {
+        continue;
+      }
+      renderer.setTargetTexture(frameTarget.result());
       renderer.draw(document);
       renderer.clearTargetTexture();
 

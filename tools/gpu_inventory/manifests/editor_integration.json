@@ -136,14 +136,7 @@
         "WGPUSurfaceDescriptor",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
-        "WGPUTextureFormat_RGBA8Unorm",
-        "WGPUTextureUsage",
-        "WGPUTextureUsage_CopyDst",
-        "WGPUTextureUsage_CopySrc",
-        "WGPUTextureUsage_None",
-        "WGPUTextureUsage_RenderAttachment",
-        "WGPUTextureUsage_StorageBinding",
-        "WGPUTextureUsage_TextureBinding"
+        "WGPUTextureFormat_RGBA8Unorm"
       ],
       "wgpuCppTokens": [
         "Adapter",
@@ -169,9 +162,6 @@
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureUsage",
         "TextureView"
       ]
     },
@@ -185,8 +175,7 @@
       "wgpuCppTokens": [
         "Adapter",
         "Instance",
-        "Surface",
-        "Texture"
+        "Surface"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {

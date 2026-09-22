@@ -1621,7 +1621,7 @@ TEST(EditorWindowTest, WgpuDirectRenderCallbackDrawsBelowImGuiChrome) {
 
   svg::RendererGeode directRenderer(window.geodeFramebufferDevice());
   window.setWgpuDirectRenderCallback([&directRenderer](const EditorWindowWgpuRenderTarget& target) {
-    if (!target.texture) {
+    if (!target.texture.isValid()) {
       return;
     }
 
@@ -1684,7 +1684,7 @@ TEST(EditorWindowTest, WgpuUnderlayDirectRenderCallbackDrawsBelowImGui) {
   svg::RendererGeode underlayRenderer(window.geodeFramebufferDevice());
   window.setWgpuUnderlayRenderCallback(
       [&underlayRenderer, texture](const EditorWindowWgpuRenderTarget& target) {
-        if (!target.texture) {
+        if (!target.texture.isValid()) {
           return;
         }
 
@@ -1787,7 +1787,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledPromotedLayerAfterStyleMutation) {
   svg::RendererGeode underlayRenderer(window.geodeFramebufferDevice());
   window.setWgpuUnderlayRenderCallback(
       [&underlayRenderer, texture](const EditorWindowWgpuRenderTarget& renderTarget) {
-        if (!renderTarget.texture) {
+        if (!renderTarget.texture.isValid()) {
           return;
         }
 
@@ -1891,7 +1891,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledPenCreatedPromotedLayerAfterStyleMutati
   svg::RendererGeode underlayRenderer(window.geodeFramebufferDevice());
   window.setWgpuUnderlayRenderCallback(
       [&underlayRenderer, texture](const EditorWindowWgpuRenderTarget& renderTarget) {
-        if (!renderTarget.texture) {
+        if (!renderTarget.texture.isValid()) {
           return;
         }
 
@@ -1997,7 +1997,7 @@ TEST(EditorWindowTest, WgpuPresentsFilledSplashPenLayerAfterStyleMutation) {
   svg::RendererGeode underlayRenderer(window.geodeFramebufferDevice());
   window.setWgpuUnderlayRenderCallback(
       [&underlayRenderer, texture](const EditorWindowWgpuRenderTarget& renderTarget) {
-        if (!renderTarget.texture) {
+        if (!renderTarget.texture.isValid()) {
           return;
         }
 
@@ -2107,7 +2107,7 @@ TEST(EditorWindowTest, WgpuPenFillReplayViewportPublishesFilledLayerTile) {
   svg::RendererGeode underlayRenderer(window.geodeFramebufferDevice());
   window.setWgpuUnderlayRenderCallback(
       [&underlayRenderer, texture](const EditorWindowWgpuRenderTarget& renderTarget) {
-        if (!renderTarget.texture) {
+        if (!renderTarget.texture.isValid()) {
           return;
         }
 
@@ -2232,7 +2232,7 @@ TEST(EditorWindowTest, WgpuPenFillLiveSourceSyncPublishesFilledLayerTile) {
   svg::RendererGeode underlayRenderer(window.geodeFramebufferDevice());
   window.setWgpuUnderlayRenderCallback(
       [&underlayRenderer, texture](const EditorWindowWgpuRenderTarget& renderTarget) {
-        if (!renderTarget.texture) {
+        if (!renderTarget.texture.isValid()) {
           return;
         }
 

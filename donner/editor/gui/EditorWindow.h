@@ -574,8 +574,9 @@ struct EditorWindowInputOverride {
 #ifdef DONNER_EDITOR_WGPU
 /// Host framebuffer target exposed to direct Geode passes against the editor surface.
 struct EditorWindowWgpuRenderTarget {
-  /// Current swapchain texture. Valid only for the duration of the callback.
-  wgpu::Texture texture;
+  /// This frame's target, named on the framebuffer device. Borrowed: the frame keeps the texture
+  /// alive, and the name is valid only for the duration of the callback.
+  const gpu::Texture& texture;
   /// Framebuffer dimensions in physical pixels.
   Vector2i framebufferSizePx = Vector2i::Zero();
   /// Physical framebuffer pixels per ImGui logical pixel for this frame.

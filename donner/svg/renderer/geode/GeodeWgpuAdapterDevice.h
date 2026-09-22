@@ -329,10 +329,13 @@ public:
    * the returned handle only forgets the registration, and
    * \ref gpu::Device::ownsTextureBacking reports false for it.
    *
+   * The description is checked against the texture, so a caller that gets it wrong is refused
+   * here rather than by the driver at the first pass that names it.
+   *
    * @param texture Externally owned wgpu texture; must remain valid while registered.
-   * @param size Texture extent in texels.
-   * @param format Texel format matching the wgpu texture.
-   * @param usage Usage flags matching the wgpu texture's capabilities.
+   * @param size Texture extent in texels; must match \p texture.
+   * @param format Texel format; must match \p texture.
+   * @param usage Usage flags; \p texture must carry at least these.
    */
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
@@ -414,8 +417,11 @@ private:
    * here: the slot holds a borrowed alias, \ref onOwnsTextureBacking reports false for it, and
    * destroying the handle only forgets the registration.
    *
+   * Refused when \p descriptor does not describe \p backend, because nothing downstream re-reads
+   * the backend and a record that misdescribes its texture is only discovered by the driver.
+   *
    * @param backend Backend texture to name; must remain valid while the registration is live.
-   * @param descriptor How the registration describes it, as its owner does.
+   * @param descriptor How the registration describes it; must match \p backend.
    */
   gpu::Result<gpu::Texture> registerBorrowedTexture(wgpu::Texture backend,
                                                     const gpu::TextureDescriptor& descriptor);

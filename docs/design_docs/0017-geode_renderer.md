@@ -888,7 +888,7 @@ class RendererGeode : public RendererInterface {
 
   /// Render into a host-provided texture instead of an internal surface.
   /// Call this between beginFrame() and the first draw call.
-  void setTargetTexture(wgpu::Texture texture);
+  void setTargetTexture(const gpu::Texture& texture);
 };
 ```
 

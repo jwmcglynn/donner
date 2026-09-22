@@ -1033,6 +1033,28 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::registerBorrowedTexture(
     return GpuError{GpuErrorType::InvalidHandle, "registerBorrowedTexture: wgpu texture is null"};
   }
 
+  // A registration is the only look anything downstream gets at the texture: a render pass, a
+  // copy, a readback are all recorded against the record this creates, never re-reading the
+  // backend. So the record has to be what the texture is, and a caller that describes it
+  // otherwise is refused here rather than at the pass that names it - where wgpu-native answers
+  // a mismatch by aborting the process.
+  if (backend.getWidth() != descriptor.size.width ||
+      backend.getHeight() != descriptor.size.height ||
+      backend.getFormat() != WgpuTextureFormatFrom(descriptor.format) ||
+      !gpu::HasAllFlags(GpuTextureUsageFromWgpu(backend.getUsage()), descriptor.usage)) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "texture registration: the extent, format or capabilities do not describe "
+                    "the texture being registered"};
+  }
+  // The runtime's texture model is 2D, single layer, single sample and has no way to say
+  // otherwise, so a texture that is any of those things has no honest record to be given.
+  if (backend.getSampleCount() != 1 || backend.getDepthOrArrayLayers() != 1 ||
+      backend.getDimension() != wgpu::TextureDimension::_2D) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "texture registration: only a single-sample, single-layer 2D texture can be "
+                    "described"};
+  }
+
   // The slot the allocation would have gone into is claimed inside this call, so a registration
   // entered while this one is in flight would hand its texture to whichever slot resolves first.
   UTILS_RELEASE_ASSERT_MSG(!pendingRegistration_, "texture registration is not reentrant");

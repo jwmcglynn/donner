@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -186,9 +187,16 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   texDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture hostTexture = device->adapterDevice().root().device().createTexture(texDesc);
   ASSERT_TRUE(static_cast<bool>(hostTexture));
+  // The host owns the texture; the renderer only ever names a texture of its own device, so the
+  // host registers it and hands over the name.
+  const gpu::Texture hostTarget =
+      gpu::GetResultOrFail(device->adapterDevice().importExternalTexture(
+          hostTexture, {kSize, kSize}, gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+              gpu::TextureUsage::Sampled));
 
   auto renderer = createRenderer();
-  renderer.setTargetTexture(hostTexture);
+  renderer.setTargetTexture(hostTarget);
 
   // Render an empty frame - the target dimensions should come from the
   // host texture, not the viewport.
@@ -231,9 +239,13 @@ TEST_F(GeodeEmbedTest, ABlendModeOnADrawOnlyHostTargetDegradesInsteadOfFailing) 
   texDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture hostTexture = device->adapterDevice().root().device().createTexture(texDesc);
   ASSERT_THAT(static_cast<bool>(hostTexture), testing::IsTrue());
+  const gpu::Texture hostTarget =
+      gpu::GetResultOrFail(device->adapterDevice().importExternalTexture(
+          hostTexture, {kSize, kSize}, gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureUsage::RenderAttachment));
 
   auto renderer = createRenderer();
-  renderer.setTargetTexture(hostTexture);
+  renderer.setTargetTexture(hostTarget);
 
   RenderViewport viewport;
   viewport.size = Vector2d(kSize, kSize);
@@ -268,7 +280,12 @@ TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
   texDesc.sampleCount = 1;
   texDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture hostTexture = device->adapterDevice().root().device().createTexture(texDesc);
-  renderer.setTargetTexture(hostTexture);
+  const gpu::Texture hostTarget =
+      gpu::GetResultOrFail(device->adapterDevice().importExternalTexture(
+          hostTexture, {16, 16}, gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+              gpu::TextureUsage::Sampled));
+  renderer.setTargetTexture(hostTarget);
 
   RenderViewport viewport;
   viewport.size = Vector2d(16, 16);
@@ -295,6 +312,8 @@ TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
 /// names a slot on another device, and everything the frame records would resolve it against a
 /// table where that slot means something else. The frame is declined rather than recorded.
 TEST_F(GeodeEmbedTest, ATargetOfAnotherDeviceIsRefused) {
+  auto device = sharedEmbedDevice();
+  ASSERT_NE(device, nullptr);
   const std::unique_ptr<geode::GeodeDevice> elsewhere = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(elsewhere, testing::NotNull())
       << "Failed to create a second headless wgpu device. Check driver availability.";
@@ -311,9 +330,15 @@ TEST_F(GeodeEmbedTest, ATargetOfAnotherDeviceIsRefused) {
   texDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture foreignTexture = elsewhere->adapterDevice().root().device().createTexture(texDesc);
   ASSERT_THAT(static_cast<bool>(foreignTexture), testing::IsTrue());
+  // Registered with the device that allocated it, which is the only device that can name it.
+  const gpu::Texture foreignTarget =
+      gpu::GetResultOrFail(elsewhere->adapterDevice().importExternalTexture(
+          foreignTexture, {kSize, kSize}, gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+              gpu::TextureUsage::Sampled));
 
   auto renderer = createRenderer();
-  renderer.setTargetTexture(foreignTexture);
+  renderer.setTargetTexture(foreignTarget);
 
   RenderViewport viewport;
   viewport.size = Vector2d(kSize, kSize);
@@ -323,6 +348,24 @@ TEST_F(GeodeEmbedTest, ATargetOfAnotherDeviceIsRefused) {
 
   EXPECT_THAT(renderer.lastFrameTimings().counters.submits, testing::Eq(0u))
       << "a frame whose target belongs to another device must be declined, not recorded";
+
+  renderer.clearTargetTexture();
+
+  // The same frame against a target of the renderer's own device, so a submission count that is
+  // zero for every target cannot pass the assertion above.
+  texDesc.label = geode::wgpuLabel("TargetOfThisDevice");
+  wgpu::Texture ownTexture = device->adapterDevice().root().device().createTexture(texDesc);
+  ASSERT_THAT(static_cast<bool>(ownTexture), testing::IsTrue());
+  const gpu::Texture ownTarget = gpu::GetResultOrFail(device->adapterDevice().importExternalTexture(
+      ownTexture, {kSize, kSize}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+          gpu::TextureUsage::Sampled));
+  renderer.setTargetTexture(ownTarget);
+  renderer.beginFrame(viewport);
+  renderer.endFrame();
+  EXPECT_THAT(renderer.lastFrameTimings().counters.submits, testing::Gt(0u))
+      << "a frame whose target is this device's own must be recorded";
+  renderer.clearTargetTexture();
 }
 
 }  // namespace
