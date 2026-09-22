@@ -442,8 +442,12 @@ donner_cc_test(
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
         "//donner/svg/renderer/tests:rgba_test_matchers",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_multi_transitioned_test(
