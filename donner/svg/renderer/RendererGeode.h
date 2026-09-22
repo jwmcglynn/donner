@@ -330,7 +330,9 @@ public:
 
   void beginFrameResourceScope() override;
   void endFrameResourceScope() override;
+  /// A new frame retires any layer, filter, or mask scope left open by an unfinished frame.
   void beginFrame(const RenderViewport& viewport) override;
+  /// Open layer, filter, and mask scopes are dropped without compositing their offscreen content.
   void endFrame() override;
 
   void setTransform(const Transform2d& transform) override;
