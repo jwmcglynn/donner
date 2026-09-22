@@ -825,7 +825,7 @@ public:
    *
    * @param observer Observer to notify.
    */
-  Status installObserver(DeviceObserver& observer);
+  [[nodiscard]] Status installObserver(DeviceObserver& observer);
 
   /**
    * Removes \p observer when it is the installed one and otherwise changes nothing, so an owner

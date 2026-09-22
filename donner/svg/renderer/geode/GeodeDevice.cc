@@ -239,8 +239,8 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   // Allocations and submissions this context makes through the runtime are counted against it,
   // which is what keeps two contexts over one root from sharing a per-frame ceiling.
   runtimeCounterObserver_ = std::make_unique<RuntimeCounterObserver>(*this);
-  // Every factory gives each context a runtime device of its own, so a device that already
-  // reports to another observer is a second context over it, whose counts would silently vanish.
+  // Every factory gives each context a runtime device of its own, and a device reports to one
+  // observer at most, so a refusal here means a factory built a second context over one device.
   const gpu::Status installed = runtimeDevice.installObserver(*runtimeCounterObserver_);
   UTILS_RELEASE_ASSERT_MSG(!installed.hasError(),
                            "GeodeDevice: its runtime device already reports to another context");

@@ -575,7 +575,8 @@ public:
       ++counters_->pathEncodes;
     }
   }
-  /// Record draws the backend issued. @param count Draws issued.
+  /// Record the draws a submission counted (see \ref gpu::DeviceObserver::onSubmitted).
+  /// @param count Draws counted.
   void countDraws(uint64_t count) const {
     if (counters_ != nullptr) {
       counters_->drawCalls += count;

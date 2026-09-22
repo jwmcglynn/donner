@@ -29,10 +29,10 @@ using testing::HasSubstr;
 namespace donner::gpu {
 namespace {
 
-/// One reported submission: how many command buffers it carried and how many draws it issued.
+/// One reported submission: how many command buffers it carried and how many draws it counted.
 struct ObservedSubmission {
   uint64_t commandBuffers = 0;  //!< Command buffers the submission carried.
-  uint64_t draws = 0;           //!< Draws it issued.
+  uint64_t draws = 0;           //!< Draws it counted.
 
   /// Equality operator. @param other Submission to compare against.
   bool operator==(const ObservedSubmission& other) const = default;
