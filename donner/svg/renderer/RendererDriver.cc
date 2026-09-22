@@ -79,7 +79,28 @@ struct RendererDriverTextFrameCache {
     bool prepared = false;
   };
 
-  std::unordered_map<Registry*, std::unordered_map<Entity, Root>> roots;
+  using Roots = std::unordered_map<Entity, Root>;
+  std::unordered_map<Registry*, Roots> roots;
+
+  // A pattern or marker can revisit text in the same registry with a different paint context.
+  // Keep its preparations separate without evicting the caller's text between effect runs.
+  class ScopedRegistryOccurrence {
+  public:
+    ScopedRegistryOccurrence(RendererDriverTextFrameCache& cache, Registry& registry)
+        : cache_(cache), registry_(&registry) {
+      savedRoots_.swap(cache_.roots[registry_]);
+    }
+
+    ~ScopedRegistryOccurrence() { savedRoots_.swap(cache_.roots[registry_]); }
+
+    ScopedRegistryOccurrence(const ScopedRegistryOccurrence&) = delete;
+    ScopedRegistryOccurrence& operator=(const ScopedRegistryOccurrence&) = delete;
+
+  private:
+    RendererDriverTextFrameCache& cache_;
+    Registry* registry_;
+    Roots savedRoots_;
+  };
 };
 
 namespace {
@@ -3216,19 +3237,21 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   // Save and override surfaceFromCanvasTransform for pattern content rendering.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
   surfaceFromCanvasTransform_ = patternContentFromPatternTile;
-  textFrameCache_->roots.erase(&registry);
-
-  if (subtreeAhead) {
-    traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                  ref.subtreeInfo->lastRenderedEntity);
-  } else {
-    // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
-    // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
-    const RenderingInstanceView::SavedState savedPosition = view.save();
-    view.restore(RenderingInstanceView::SavedState{0});
-    traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                  ref.subtreeInfo->lastRenderedEntity);
-    view.restore(savedPosition);
+  {
+    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
+                                                                          registry);
+    if (subtreeAhead) {
+      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
+                    ref.subtreeInfo->lastRenderedEntity);
+    } else {
+      // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
+      // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
+      const RenderingInstanceView::SavedState savedPosition = view.save();
+      view.restore(RenderingInstanceView::SavedState{0});
+      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
+                    ref.subtreeInfo->lastRenderedEntity);
+      view.restore(savedPosition);
+    }
   }
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
@@ -3546,7 +3569,8 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   if (marker.subtreeInfo) {
-    textFrameCache_->roots.erase(&registry);
+    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
+                                                                          registry);
     // The marker subtree may lie *behind* the caller's cursor when it is shared with an earlier
     // instantiation (e.g. the same shape stamped through several marker branches reuses one
     // cached offscreen subtree). Rewind to the start of the snapshot so traverseRange can locate
