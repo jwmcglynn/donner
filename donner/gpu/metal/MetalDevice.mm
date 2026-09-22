@@ -586,7 +586,8 @@ struct MetalDevice::Impl {
 
 std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
                                                  uint64_t uploadStagingByteBudget,
-                                                 std::chrono::milliseconds unalignedWriteTimeout) {
+                                                 std::chrono::milliseconds unalignedWriteTimeout,
+                                                 std::shared_ptr<DeviceLostState> lostState) {
   if (uploadStagingByteBudget == 0 || unalignedWriteTimeout < std::chrono::milliseconds::zero() ||
       unalignedWriteTimeout > std::chrono::seconds(5)) {
     return nullptr;
@@ -607,6 +608,9 @@ std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
   // for a buffer nothing ever wrote from the host.
   result->impl_->unifiedMemory =
       memoryModel == MemoryModel::Detected ? (device.hasUnifiedMemory != NO) : false;
+  if (lostState) {
+    result->adoptLostState(std::move(lostState));
+  }
   return result;
 }
 

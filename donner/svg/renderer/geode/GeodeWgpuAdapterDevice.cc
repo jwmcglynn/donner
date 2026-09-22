@@ -31,6 +31,9 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#include "donner/gpu/metal/MetalDevice.h"
+#endif
 
 namespace donner::geode {
 
@@ -461,6 +464,54 @@ void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
   ReleaseDeviceLostCallbackToken(handles.deviceLostCallbackToken, /*callbackCannotRun=*/true);
 }
 
+/// Selects the native Metal backend: the system default Metal device is the root every runtime
+/// device over it opens, so the root itself carries no handles - only the kind and the loss
+/// condition its devices share. A platform without that backend is refused here rather than
+/// falling back to the transitional adapter, because a run recorded against one backend and
+/// served by another fails as if it were a rendering bug.
+///
+/// @param options Caller-supplied inputs; its surface provider still runs, because preparing what
+///   the caller presents to is its job whichever backend serves it.
+/// @param lostState Loss condition every runtime device over this root shares.
+/// @return The selected root, or null on a platform with no native Metal backend.
+std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
+    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  if (options.compatibleSurface) {
+    std::fprintf(stderr,
+                 "[Geode/metal] Selection constrained by a wgpu surface is not served by the "
+                 "native backend.\n");
+    return nullptr;
+  }
+  GeodeGpuRootCapabilities capabilities;
+  capabilities.backend = GpuBackendKind::NativeMetal;
+  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState));
+#else
+  (void)options;
+  (void)lostState;
+  std::fprintf(stderr, "[Geode] No native Metal backend on this platform.\n");
+  return nullptr;
+#endif
+}
+
+/// Opens one runtime device on the native Metal backend \p root names.
+/// @param root Root whose loss condition the device shares.
+/// @return The device, or null when no Metal device could be opened.
+std::unique_ptr<gpu::Device> CreateNativeMetalDeviceOver(const GeodeGpuRoot& root) {
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  std::unique_ptr<gpu::Device> device = gpu::metal::MetalDevice::Create(
+      gpu::metal::MetalDevice::MemoryModel::Detected, gpu::kMaxBufferByteSize,
+      std::chrono::seconds(5), root.lostState());
+  if (device == nullptr) {
+    std::fprintf(stderr, "[Geode/metal] No Metal device available.\n");
+  }
+  return device;
+#else
+  (void)root;
+  return nullptr;
+#endif
+}
+
 }  // namespace
 
 std::size_t OutstandingSelectionInstances() {
@@ -505,8 +556,38 @@ bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& ad
          (!queue || static_cast<WGPUQueue>(queue) == static_cast<WGPUQueue>(handles_.queue));
 }
 
+GpuBackendKind RequestedGpuBackendKind(GpuBackendKind fallback) {
+  const char* backendEnv = std::getenv("DONNER_GPU_BACKEND");
+  if (backendEnv == nullptr || backendEnv[0] == '\0') {
+    return fallback;
+  }
+  const std::string_view backend(backendEnv);
+  using namespace std::string_view_literals;
+  if (StringUtils::EqualsLowercase(backend, "wgpu"sv)) {
+    return GpuBackendKind::TransitionalWgpu;
+  }
+  if (StringUtils::EqualsLowercase(backend, "metal"sv)) {
+    return GpuBackendKind::NativeMetal;
+  }
+  std::fprintf(stderr, "[Geode] Ignoring unsupported DONNER_GPU_BACKEND=%.*s.\n",
+               static_cast<int>(backend.size()), backend.data());
+  return fallback;
+}
+
+bool GeodeGpuRoot::hasBackendDevice() const {
+  if (capabilities_.backend != GpuBackendKind::TransitionalWgpu) {
+    return true;
+  }
+  return static_cast<bool>(handles_.device) && static_cast<bool>(handles_.queue);
+}
+
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   auto lostState = std::make_shared<gpu::DeviceLostState>();
+  const GpuBackendKind backendKind = RequestedGpuBackendKind(options.backend);
+  if (backendKind == GpuBackendKind::NativeMetal) {
+    return SelectNativeMetalRoot(options, std::move(lostState));
+  }
+
   GeodeWgpuRoots handles;
   PartialSelection partial(handles);
 #ifdef __EMSCRIPTEN__
@@ -614,8 +695,11 @@ std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
   return std::make_shared<GeodeGpuRoot>(std::move(borrowed), capabilities, std::move(lostState));
 }
 
-std::unique_ptr<GeodeWgpuAdapterDevice> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
+std::unique_ptr<gpu::Device> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   UTILS_RELEASE_ASSERT(root != nullptr);
+  if (root->capabilities().backend == GpuBackendKind::NativeMetal) {
+    return CreateNativeMetalDeviceOver(*root);
+  }
   return std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
 }
 

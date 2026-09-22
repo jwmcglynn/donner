@@ -5086,7 +5086,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Bounded, and skipped once the device is lost, so renderer teardown never blocks on a hung
   /// driver.
   void waitForQueueIdleAtTeardown() {
-    if (device && device->adapterDevice().root().device()) {
+    if (device && device->physicalDeviceOwner()->root().hasBackendDevice()) {
       device->waitForQueueIdle();
     }
   }

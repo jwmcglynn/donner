@@ -395,7 +395,10 @@ donner_cc_library(
                "//donner/svg/components/filter:components",
                "//donner/svg/renderer:pixel_format_utils",
                "//third_party/webgpu-cpp:webgpu_cpp",
-           ] + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
+           ] + select({
+               "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+               "//conditions:default": [],
+           }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
            native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
 )

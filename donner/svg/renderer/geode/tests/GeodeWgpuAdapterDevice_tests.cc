@@ -295,13 +295,27 @@ TEST(GeodeGpuRootSelection, ASelectionItsSurfaceProviderAbandonsReleasesWhatItBu
       << "the instance an abandoned selection created has no other owner left to release it";
 }
 
+/// The runtime device \p context's owner stands up over its root, named as the transitional
+/// adapter. Every context here selects that backend, which is what makes the cast sound; a
+/// context on a native backend has no adapter and returns null.
+/// @param context Context whose owner stands up the device.
+std::unique_ptr<GeodeWgpuAdapterDevice> SiblingAdapterOf(const GeodeDevice& context) {
+  std::unique_ptr<gpu::Device> sibling = context.physicalDeviceOwner()->createLogicalDevice();
+  if (sibling == nullptr || !context.hasTransitionalAdapter()) {
+    return nullptr;
+  }
+  return std::unique_ptr<GeodeWgpuAdapterDevice>(
+      static_cast<GeodeWgpuAdapterDevice*>(sibling.release()));
+}
+
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
 protected:
   void SetUp() override {
     geodeDevice_ = GeodeDevice::CreateHeadless();
     ASSERT_NE(geodeDevice_, nullptr)
         << "Failed to create the headless wgpu device. Check driver availability.";
-    adapter_ = geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+    adapter_ = SiblingAdapterOf(*geodeDevice_);
+    ASSERT_NE(adapter_, nullptr);
     // The cases below read what this adapter allocated and submitted off the context's counters,
     // which only happens for a device the context is attributed to.
     adapter_->setCounterSink(geodeDevice_.get());
@@ -321,8 +335,8 @@ protected:
 /// registered, and the registration describes it the way its owner does rather than the way the
 /// caller says. Registering it must not make this adapter responsible for the memory.
 TEST_F(GeodeWgpuAdapterDeviceTests, ImportingFromASiblingAdapterNamesWhatTheOwnerNames) {
-  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice =
-      geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice = SiblingAdapterOf(*geodeDevice_);
+  ASSERT_THAT(siblingDevice, testing::NotNull());
   GeodeWgpuAdapterDevice& sibling = *siblingDevice;
   const gpu::TextureDescriptor descriptor{"ownedBySibling",
                                           {8, 4},
@@ -355,8 +369,8 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHand
   const std::unique_ptr<GeodeDevice> otherBackend = GeodeDevice::CreateHeadless();
   ASSERT_THAT(otherBackend, testing::NotNull())
       << "Failed to create a second headless wgpu device. Check driver availability.";
-  const std::unique_ptr<GeodeWgpuAdapterDevice> foreignDevice =
-      otherBackend->physicalDeviceOwner()->createLogicalDevice();
+  const std::unique_ptr<GeodeWgpuAdapterDevice> foreignDevice = SiblingAdapterOf(*otherBackend);
+  ASSERT_THAT(foreignDevice, testing::NotNull());
   GeodeWgpuAdapterDevice& foreign = *foreignDevice;
   const gpu::TextureDescriptor descriptor{"ownedElsewhere",
                                           {4, 4},
@@ -366,8 +380,8 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHand
   EXPECT_THAT(adapter_->importTextureFrom(foreign, onForeignBackend),
               gpu::IsGpuError(gpu::GpuErrorType::DeviceMismatch));
 
-  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice =
-      geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice = SiblingAdapterOf(*geodeDevice_);
+  ASSERT_THAT(siblingDevice, testing::NotNull());
   GeodeWgpuAdapterDevice& sibling = *siblingDevice;
   gpu::Texture retired = gpu::GetResultOrFail(sibling.createTexture(descriptor));
   const gpu::Texture stale =

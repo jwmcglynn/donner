@@ -72,8 +72,8 @@ public:
    * @param device Runtime device over \p root from the same selection; must not be null.
    * @return The owner, or null when either argument is null.
    */
-  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(
-      std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<GeodeWgpuAdapterDevice> device);
+  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(std::shared_ptr<GeodeGpuRoot> root,
+                                                          std::unique_ptr<gpu::Device> device);
 
   ~GeodePhysicalDeviceOwner();
 
@@ -90,11 +90,10 @@ public:
   /// A runtime device of its own over this owner's backend root, for a second logical context.
   /// Two contexts are two runtime devices: separate handle tables, serials and counters over the
   /// one root they share.
-  std::unique_ptr<GeodeWgpuAdapterDevice> createLogicalDevice() const;
+  std::unique_ptr<gpu::Device> createLogicalDevice() const;
 
 private:
-  GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root,
-                           std::unique_ptr<GeodeWgpuAdapterDevice> device);
+  GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<gpu::Device> device);
 
   /// Declared first so the backend root outlives every runtime device built over it.
   std::shared_ptr<GeodeGpuRoot> root_;
@@ -775,10 +774,16 @@ public:
   /// exist.
   gpu::Device& runtimeDevice() const UTILS_LIFETIME_BOUND;
 
+  /// Whether this context renders through the transitional adapter, so \ref adapterDevice names
+  /// a device. False on a native backend, where the operations that accessor exists for have no
+  /// wgpu object to reach.
+  bool hasTransitionalAdapter() const;
+
   /// The TEMPORARY transition adapter implementing \c donner::gpu::Device over this
   /// device's wgpu objects. The same object \ref runtimeDevice returns, named by its concrete
   /// type for the callers that still use operations the runtime contract does not carry yet; see
-  /// GeodeWgpuAdapterDevice.h for the removal gates.
+  /// GeodeWgpuAdapterDevice.h for the removal gates. Halts when this context renders through a
+  /// native backend; \ref hasTransitionalAdapter is what a caller that can serve both asks first.
   GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
 
   /// The recording context Geode's encoders record a frame against: this device's GPU runtime
@@ -840,9 +845,8 @@ private:
    * @param ownedRuntimeDevice Non-null when \p runtimeDevice is this context's own, so the
    *   context releases it; null when it is the owner's.
    */
-  GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice,
-              GeodeWgpuAdapterDevice& runtimeDevice,
-              std::unique_ptr<GeodeWgpuAdapterDevice> ownedRuntimeDevice);
+  GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::Device& runtimeDevice,
+              std::unique_ptr<gpu::Device> ownedRuntimeDevice);
 
   /// Builds a logical context with a runtime device of its own over \p physicalDevice's root.
   /// @param physicalDevice Owner whose root the new context renders through.
@@ -862,12 +866,17 @@ private:
   /// Held only when this context created its own runtime device; null when it renders through the
   /// owner's. Declared before \ref impl_ so the pipelines and pooled resources there, which
   /// release their handles through this device, are destroyed while it still exists.
-  std::unique_ptr<GeodeWgpuAdapterDevice> ownedRuntimeDevice_;
+  std::unique_ptr<gpu::Device> ownedRuntimeDevice_;
 
   /// This context's runtime device: \ref ownedRuntimeDevice_, or the owner's root device. Never
   /// null once construction has finished, and kept out of \ref impl_ so teardown can still drain
   /// the queue after the logical resources are gone.
-  GeodeWgpuAdapterDevice* runtimeDevice_ = nullptr;
+  gpu::Device* runtimeDevice_ = nullptr;
+
+  /// \ref runtimeDevice_ named by its concrete type when this context renders through the
+  /// transitional adapter, and null on a native backend, where the operations that accessor
+  /// exists for have no wgpu object to reach.
+  GeodeWgpuAdapterDevice* transitionalAdapter_ = nullptr;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

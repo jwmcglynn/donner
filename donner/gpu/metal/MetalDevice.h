@@ -104,11 +104,14 @@ public:
    *   Zero is invalid and returns nullptr. Each individual batch also fits \ref kMaxBufferByteSize.
    * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
    *   Must be between zero and five seconds; invalid budgets return nullptr.
+   * @param lostState Loss condition to share with every other device selected over the same
+   *   backend, or null for a private one only this device's bounded waits can set.
    */
   static std::unique_ptr<MetalDevice> Create(
       MemoryModel memoryModel = MemoryModel::Detected,
       uint64_t uploadStagingByteBudget = kMaxBufferByteSize,
-      std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5));
+      std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5),
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Whether this device's resources are built for unified memory. Test accessor.
   [[nodiscard]] bool usesUnifiedMemoryForTest() const;

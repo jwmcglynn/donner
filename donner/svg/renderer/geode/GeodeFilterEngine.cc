@@ -47,7 +47,6 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -76,7 +75,7 @@ struct FilterResourceCache {
     }
     if (runtimeIndex == runtime.size()) {
       const uint64_t bytes = std::max(aligned, svg::components::kGpuFilterParameterBlockBytes);
-      gpu::Result<gpu::Buffer> buffer = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+      gpu::Result<gpu::Buffer> buffer = device.runtimeDevice().createBuffer(gpu::BufferDescriptor{
           "FilterRuntimeParameterScratch", bytes,
           gpu::BufferUsage::Uniform | gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
       if (!buffer.hasResult()) {
@@ -268,7 +267,7 @@ struct FilterResourceArena {
       }
     }
 
-    gpu::Result<gpu::TextureView> view = device_.adapterDevice().createTextureView(
+    gpu::Result<gpu::TextureView> view = device_.runtimeDevice().createTextureView(
         texture, gpu::TextureViewDescriptor{std::move(label)});
     if (!view.hasResult()) {
       return nullptr;
@@ -291,7 +290,7 @@ struct FilterResourceArena {
     const FilterResourceCache::RuntimeParameterSlot slot =
         resourceCache_.acquireRuntimeParameterSlot(device_, data.size());
     if (slot.buffer == nullptr ||
-        device_.adapterDevice().writeBuffer(*slot.buffer, slot.offset, data).hasError()) {
+        device_.runtimeDevice().writeBuffer(*slot.buffer, slot.offset, data).hasError()) {
       return {};
     }
     return slot;
@@ -304,7 +303,7 @@ struct FilterResourceArena {
   const gpu::BindGroup* createRuntimeBindGroup(const gpu::BindGroupLayout& layout,
                                                std::vector<gpu::BindGroupEntry> entries,
                                                RcString label) {
-    gpu::Result<gpu::BindGroup> bindGroup = device_.adapterDevice().createBindGroup(
+    gpu::Result<gpu::BindGroup> bindGroup = device_.runtimeDevice().createBindGroup(
         gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
     if (!bindGroup.hasResult()) {
       return nullptr;
@@ -422,7 +421,7 @@ struct FilterResourceArena {
     }
     if (!commandEncoder_) {
       gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
-          device_.adapterDevice().createCommandEncoder();
+          device_.runtimeDevice().createCommandEncoder();
       if (!created.hasResult()) {
         return nullptr;
       }
@@ -449,7 +448,7 @@ struct FilterResourceArena {
       return !device_.isDeviceLost();
     }
 
-    gpu::Result<uint64_t> submitted = device_.adapterDevice().submit(std::move(commands));
+    gpu::Result<uint64_t> submitted = device_.runtimeDevice().submit(std::move(commands));
     if (!submitted.hasResult()) {
       forceRetain_ = true;
       device_.markDeviceLost("filter command buffer submission failed");
@@ -1327,7 +1326,7 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     : device_(device), verbose_(verbose), resourceCache_(std::make_unique<FilterResourceCache>()) {
   // Every program is built from its precompiled artifact; binding slots and workgroup shapes
   // come from reflection, so a shader edit that changes them cannot desynchronize the host.
-  gpu::Device& runtime = device_.adapterDevice();
+  gpu::Device& runtime = device_.runtimeDevice();
   blurProgram_ = CreateReflectedFilterProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(GaussianBlur),
                                               "GaussianBlur");
   offsetProgram_ =
@@ -1378,12 +1377,12 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     const auto& samples = gpu::shader::programs::ColorTransferSamples();
     static_assert(sizeof(samples) ==
                   gpu::shader::programs::kFilterResolveTransferCount * sizeof(float));
-    auto table = device_.adapterDevice().createBuffer(
+    auto table = device_.runtimeDevice().createBuffer(
         {"FilterColorTransferTable", sizeof(samples),
          gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
     if (table.hasResult()) {
       colorTransferTable_ = std::move(table).result();
-      if (device_.adapterDevice()
+      if (device_.runtimeDevice()
               .writeBuffer(colorTransferTable_, 0, UniformBytes(samples))
               .hasError()) {
         colorTransferTable_ = {};
@@ -3518,7 +3517,7 @@ FilterTexture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& are
                              gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   const std::array<uint8_t, 4> zero{};
   if (!empty ||
-      device_.adapterDevice().writeTexture(*empty.texture, zero, {0, 256, 1}, {1, 1}).hasError()) {
+      device_.runtimeDevice().writeTexture(*empty.texture, zero, {0, 256, 1}, {1, 1}).hasError()) {
     return {};
   }
 
@@ -3680,7 +3679,7 @@ FilterTexture GeodeFilterEngine::applyImage(
   if (!image) {
     return {};
   }
-  if (device_.adapterDevice()
+  if (device_.runtimeDevice()
           .writeTexture(*image.texture, premultiplied, {0, *uploadRowPitch, imgH}, {imgW, imgH})
           .hasError()) {
     return {};

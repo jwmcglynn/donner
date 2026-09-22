@@ -43,9 +43,20 @@ struct GeodeWgpuRoots {
   void* deviceLostCallbackToken = nullptr;
 };
 
+/// Which backend implementation a selection builds its runtime devices from.
+enum class GpuBackendKind : uint8_t {
+  /// The transitional wgpu-native adapter, on whichever API wgpu selects underneath.
+  TransitionalWgpu,
+  /// The native Metal backend of the Donner GPU runtime. Apple platforms only.
+  NativeMetal,
+};
+
 /// What a selection discovered about a backend root, queried once because every runtime device
 /// over the root answers these identically.
 struct GeodeGpuRootCapabilities {
+  /// Backend the selection produced. Decides which runtime device \ref CreateGpuDeviceOver
+  /// builds, and whether the wgpu handles on the root name anything.
+  GpuBackendKind backend = GpuBackendKind::TransitionalWgpu;
   /// Maximum supported width or height of a 2D texture. WebGPU guarantees at least 8,192, which
   /// is the fail-closed fallback when a device cannot report its limits.
   uint32_t maxTextureDimension2D = 8192u;
@@ -118,6 +129,11 @@ public:
   bool names(const wgpu::Instance& instance, const wgpu::Adapter& adapter,
              const wgpu::Device& device, const wgpu::Queue& queue) const;
 
+  /// Whether a runtime device over this root still has a backend to record against. The
+  /// transitional adapter records through the wgpu device and queue held here; a native backend
+  /// is reached through the runtime device itself, so this root holds no handles for it.
+  bool hasBackendDevice() const;
+
 private:
   GeodeWgpuRoots handles_;
   GeodeGpuRootCapabilities capabilities_;
@@ -140,6 +156,12 @@ struct GpuRootSelection {
   /// no surface can constrain - a Metal layer presents from any Metal adapter the system reports -
   /// so selection is left unconstrained.
   std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
+
+  /// Backend to select. The transitional adapter is the default on every platform; a native
+  /// backend the platform does not have is refused rather than silently falling back, because a
+  /// run whose expectations were recorded against one backend and which lands on another is a
+  /// failure that looks like a rendering bug.
+  GpuBackendKind backend = GpuBackendKind::TransitionalWgpu;
 
   /// Whether an absent `WGPU_BACKEND` override falls back to the platform's preferred backend
   /// rather than leaving the choice to the driver.
@@ -192,7 +214,18 @@ std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
  *
  * @param root Root to render through; must not be null.
  */
-std::unique_ptr<GeodeWgpuAdapterDevice> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
+std::unique_ptr<gpu::Device> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
+
+/**
+ * The backend kind named by `DONNER_GPU_BACKEND`, or \p fallback when it names none.
+ *
+ * One process-wide override so a suite can be run end to end against a backend that is not yet
+ * the default, without a second copy of every target. An unrecognized value is reported and
+ * ignored.
+ *
+ * @param fallback Kind to use when the variable is absent or empty.
+ */
+GpuBackendKind RequestedGpuBackendKind(GpuBackendKind fallback);
 
 /// Retained device-lost callback states this process has not yet seen the backend consume. A
 /// selection that gave up mid-retry strands at most one per attempt, so teardown tests assert this
