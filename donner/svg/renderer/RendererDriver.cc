@@ -1384,7 +1384,8 @@ Entity InstanceTextRootEntity(Registry& registry,
 void DrawInstanceText(RendererInterface& renderer, Registry& registry,
                       const components::RenderingInstanceComponent& instance, Entity entity,
                       Entity textRootEntity, const components::ComputedStyleComponent& style,
-                      const PaintParams& paint) {
+                      const PaintParams& paint,
+                      RendererDriver::TextPreparationStats& textPreparationStats) {
   const EntityHandle textRootHandle(registry, textRootEntity);
   auto* text = textRootHandle.try_get<components::ComputedTextComponent>();
   if (text == nullptr) {
@@ -1411,6 +1412,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   // only one that paints the copy. Claiming spans for instances that do not exist in this copy
   // would drop them entirely, so the copy paints every span, without the span-level effects.
   const bool spansHaveOwnEffectInstances = !instance.isShadow(registry);
+  ++textPreparationStats.spanStyleResolutions;
   resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
                        spansHaveOwnEffectInstances);
   renderer.drawText(registry, *text, textParams);
@@ -1905,7 +1907,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         textPreparationStats_);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -2484,7 +2487,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         textPreparationStats_);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         // SVG sub-document referenced by <image>.
@@ -2565,7 +2569,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         }
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         textPreparationStats_);
       }
     }
 
@@ -2738,7 +2743,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         textPreparationStats_);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         if (svgImage->subDocument) {
@@ -2787,7 +2793,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         }
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         textPreparationStats_);
       }
     }
 

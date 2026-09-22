@@ -1738,6 +1738,21 @@ TEST_F(RendererDriverTest, TextOpacityIsOwnedByTheLayerOfTheElementThatDeclaresI
                 ::testing::Pointwise(::testing::DoubleEq(), testCase.layerOpacities));
   }
 }
+
+TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
+  std::string body =
+      R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+                         <text x="10" y="60" font-family="sans-serif" font-size="48">)svg";
+  for (int span = 0; span < 12; ++span) {
+    body += R"svg(<tspan clip-path="url(#clip)">S</tspan>)svg";
+  }
+  body += "</text>";
+  SVGDocument document = makeDocument(body, Vector2i(200, 200));
+
+  driver.draw(document);
+
+  EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleResolutions, 1u);
+}
 #endif  // DONNER_TEXT_ENABLED
 
 TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph) {

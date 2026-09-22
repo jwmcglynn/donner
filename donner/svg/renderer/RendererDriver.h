@@ -58,6 +58,16 @@ public:
     components::FontResourceGraphCache::Stats nestedFontResources;
   };
 
+  /// CPU preparation work performed by this driver, for text-effect regression tests.
+  struct TextPreparationStats {
+    std::size_t spanStyleResolutions = 0;
+  };
+
+  /// Cumulative text preparation work for this driver's lifetime.
+  [[nodiscard]] TextPreparationStats textPreparationStatsForTesting() const {
+    return textPreparationStats_;
+  }
+
   /**
    * Create a renderer driver that will forward traversal output to the given
    * backend implementation.
@@ -400,6 +410,7 @@ private:
   /// `TightBoundsRotatedEllipseWithRotatingGradient`.
   Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
+  TextPreparationStats textPreparationStats_;
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
