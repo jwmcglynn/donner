@@ -337,6 +337,8 @@ public:
   void pushTransform(const Transform2d& transform) override;
   void popTransform() override;
 
+  /// An unmatched push is a caller error repaired at the frame boundary; clips never carry into
+  /// a later frame, including when the current frame ends with an open pattern tile.
   void pushClip(const ResolvedClip& clip) override;
   void popClip() override;
 

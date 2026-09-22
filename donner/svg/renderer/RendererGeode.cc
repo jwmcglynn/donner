@@ -4823,12 +4823,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
-    // A caller that abandons a frame without ending it leaves pattern state and pending
-    // releases behind. The recording they belonged to is gone by now, so they go back to the
-    // pool here - and they go back before the budget reset below, because that budget is the
-    // one they were charged against.
+    // An unfinished frame can leave pattern tiles, clips, and pending releases behind. Retire
+    // them before resetting their budget. Unsubmitted work returns to the pool; resources whose
+    // submission is uncertain stay retained until device teardown.
     retireUnconsumedPatternTilesAtFrameEnd(OuterPatternState::kDrop);
-    drainPendingReleases();
+    releaseClipStackTexturesAtFrameEnd(clipStack);
+    if (frameRecordingAbandoned) {
+      retainPendingFrameReleasesAfterFailure();
+    } else {
+      drainPendingReleases();
+    }
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -5461,6 +5465,7 @@ void RendererGeode::endFrame() {
   // Before anything is submitted, so a submission failure retains these tiles along with the
   // rest of what the frame named rather than returning them to a pool.
   impl_->retireUnconsumedPatternTilesAtFrameEnd(Impl::OuterPatternState::kRestore);
+  impl_->releaseClipStackTexturesAtFrameEnd(impl_->clipStack);
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting - shared-mode.
