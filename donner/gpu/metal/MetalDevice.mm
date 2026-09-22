@@ -584,6 +584,20 @@ struct MetalDevice::Impl {
   void releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTexture> frameTexture);
 };
 
+std::optional<MetalDevice::SystemCapabilities> MetalDevice::QuerySystemCapabilities() {
+  id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+  if (device == nil) {
+    return std::nullopt;
+  }
+  // Metal reports no texture limit directly; its feature set tables give it per GPU family. Every
+  // Mac family and Apple family 3 onward allocate 16,384 texels along a side, earlier Apple
+  // families 8,192.
+  const bool allocatesSixteenThousand =
+      [device supportsFamily:MTLGPUFamilyMac2] || [device supportsFamily:MTLGPUFamilyApple3];
+  const uint32_t familyLimit = allocatesSixteenThousand ? 16384u : 8192u;
+  return SystemCapabilities{.maxTextureDimension2D = std::min(familyLimit, kMaxTextureDimension)};
+}
+
 std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
                                                  uint64_t uploadStagingByteBudget,
                                                  std::chrono::milliseconds unalignedWriteTimeout,

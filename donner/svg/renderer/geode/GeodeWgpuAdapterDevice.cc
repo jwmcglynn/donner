@@ -465,15 +465,16 @@ void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
 }
 
 /// Selects the native Metal backend: the system default Metal device is the root every runtime
-/// device over it opens, so the root itself carries no handles - only the kind and the loss
-/// condition its devices share. A platform without that backend is refused here rather than
-/// falling back to the transitional adapter, because a run recorded against one backend and
-/// served by another fails as if it were a rendering bug.
+/// device over it opens, so the root itself carries no handles - only the kind, the capabilities
+/// that device reports, and the loss condition its devices share. A platform without that
+/// backend is refused here rather than falling back to the transitional adapter, because a run
+/// recorded against one backend and served by another fails as if it were a rendering bug.
 ///
 /// @param options Caller-supplied inputs; its surface provider still runs, because preparing what
 ///   the caller presents to is its job whichever backend serves it.
 /// @param lostState Loss condition every runtime device over this root shares.
-/// @return The selected root, or null on a platform with no native Metal backend.
+/// @return The selected root, or null on a platform with no native Metal backend or a host with
+///   no Metal device.
 std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
     const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
@@ -483,8 +484,17 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
                  "native backend.\n");
     return nullptr;
   }
+  // Asked here rather than of the first device over the root: the root is what every device over
+  // it is described by, and a root that exists is one whose device is there to be opened.
+  const std::optional<gpu::metal::MetalDevice::SystemCapabilities> metal =
+      gpu::metal::MetalDevice::QuerySystemCapabilities();
+  if (!metal.has_value()) {
+    std::fprintf(stderr, "[Geode/metal] No Metal device available.\n");
+    return nullptr;
+  }
   GeodeGpuRootCapabilities capabilities;
   capabilities.backend = GpuBackendKind::NativeMetal;
+  capabilities.maxTextureDimension2D = metal->maxTextureDimension2D;
   return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState));
 #else
   (void)options;

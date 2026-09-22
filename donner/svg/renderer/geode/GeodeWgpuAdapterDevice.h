@@ -57,8 +57,9 @@ struct GeodeGpuRootCapabilities {
   /// Backend the selection produced. Decides which runtime device \ref CreateGpuDeviceOver
   /// builds, and whether the wgpu handles on the root name anything.
   GpuBackendKind backend = GpuBackendKind::TransitionalWgpu;
-  /// Maximum supported width or height of a 2D texture. WebGPU guarantees at least 8,192, which
-  /// is the fail-closed fallback when a device cannot report its limits.
+  /// Maximum supported width or height of a 2D texture, as the selected device reports it.
+  /// WebGPU guarantees at least 8,192, which is the fail-closed fallback when a device cannot
+  /// report its limits.
   uint32_t maxTextureDimension2D = 8192u;
   /// Whether the active backend is Vulkan (Intel Arc hardware or Mesa lavapipe software).
   /// GeodeFilterEngine uses this to force the inter-pass serialization that eliminates a

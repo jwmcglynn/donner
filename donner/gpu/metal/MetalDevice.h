@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -93,6 +94,24 @@ public:
     /// steps that model needs are exercised on hardware that would otherwise never take them.
     ForceNonUnified,
   };
+
+  /// What the system default Metal device supports, which every device \ref Create opens shares.
+  struct SystemCapabilities {
+    /// Largest width or height of a 2D texture the device allocates, from its GPU family and
+    /// capped at \ref kMaxTextureDimension, the largest extent the runtime accepts.
+    uint32_t maxTextureDimension2D = 0;
+  };
+
+  /**
+   * Asks the system default Metal device, the one \ref Create opens, what it supports without
+   * opening a runtime device over it.
+   *
+   * A backend root is selected before any device over it exists, and its limits have to be the
+   * device's own rather than a portable fallback.
+   *
+   * @return The capabilities, or empty when no Metal device is available.
+   */
+  static std::optional<SystemCapabilities> QuerySystemCapabilities();
 
   /**
    * Creates a device on the system default Metal device. Returns nullptr if no Metal device is
