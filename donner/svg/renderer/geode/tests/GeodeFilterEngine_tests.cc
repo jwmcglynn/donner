@@ -84,7 +84,8 @@ public:
     retired.push_back(std::move(texture));
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture, const gpu::TextureDescriptor&) override {
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor&) override {
     retainedFailed.push_back(std::move(texture));
   }
 
@@ -145,8 +146,8 @@ public:
     pending_.push_back({std::move(texture), desc});
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture,
-                                 const gpu::TextureDescriptor& desc) override {
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor& desc) override {
     retainedFailed_.push_back({std::move(texture), desc});
   }
 
