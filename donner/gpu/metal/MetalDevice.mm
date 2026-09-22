@@ -380,8 +380,9 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
   state.handlersRun.fetch_add(1, std::memory_order_release);
 }
 
-/// Address that identifies the Metal backend in a \ref BackendDeviceIdentity.
-constexpr char kMetalTextureShareFamily = 0;
+/// Address that identifies the Metal backend in a \ref BackendDeviceIdentity. Its value differs
+/// from every other backend's tag so no constant merging can give two backends one address.
+constexpr char kMetalTextureShareFamily = 'M';
 
 /// A Metal texture exported to another runtime device over the same `MTLDevice`. Holding the
 /// texture strongly is what keeps the allocation alive for as long as any export token or

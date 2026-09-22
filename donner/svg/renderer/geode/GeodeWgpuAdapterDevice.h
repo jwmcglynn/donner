@@ -592,8 +592,9 @@ protected:
   /// @param slotIndex Validated live texture slot.
   void onDestroyTextureBacking(uint32_t slotIndex) override;
 
-  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one
-  /// named through \ref registerBorrowedTexture. @param slotIndex Validated live texture slot.
+  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one named
+  /// through \ref registerBorrowedTexture or \ref onRegisterTexture.
+  /// @param slotIndex Validated live texture slot.
   [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
 
   /// Identifies the wgpu device this adapter records against.

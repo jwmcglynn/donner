@@ -1347,8 +1347,9 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(GeodeWgpuAda
 
 namespace {
 
-/// Address that identifies this adapter in a \ref gpu::BackendDeviceIdentity.
-constexpr char kWgpuTextureShareFamily = 0;
+/// Address that identifies this adapter in a \ref gpu::BackendDeviceIdentity. Its value differs
+/// from every other backend's tag so no constant merging can give two backends one address.
+constexpr char kWgpuTextureShareFamily = 'W';
 
 /// A wgpu texture exported to a sibling adapter over the same root. It holds a reference of its
 /// own on the texture, and on the root so the wgpu device outlives that reference, because the
@@ -1356,19 +1357,28 @@ constexpr char kWgpuTextureShareFamily = 0;
 class WgpuExportedTexture final : public gpu::ExportedTextureBacking {
 public:
   WgpuExportedTexture(wgpu::Texture texture, std::shared_ptr<GeodeGpuRoot> root)
-      : root_(std::move(root)), texture_(std::move(texture)) {
-    texture_.addRef();
-  }
-  ~WgpuExportedTexture() override { texture_.release(); }
+      : root_(std::move(root)), texture_(AddedReference(std::move(texture))) {}
+
+  /// Destroys the texture's backing, for an owner that released its backing while a sibling still
+  /// read it; the sibling has let go by the time this runs.
+  void releaseBackingNow() const override { texture_.destroyBackingAndReset(); }
 
   /// The exported texture; borrowed, this object holds the reference.
-  const wgpu::Texture& texture() const UTILS_LIFETIME_BOUND { return texture_; }
+  const wgpu::Texture& texture() const UTILS_LIFETIME_BOUND { return texture_.get(); }
   /// The root the exporting adapter records against.
   const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
 
 private:
+  /// \p texture with a reference of its own taken. @param texture Texture to reference.
+  static wgpu::Texture AddedReference(wgpu::Texture texture) {
+    texture.addRef();
+    return texture;
+  }
+
   std::shared_ptr<GeodeGpuRoot> root_;
-  wgpu::Texture texture_;
+  /// Mutable because the release above runs through the const handle every holder shares, once,
+  /// after every other holder is gone.
+  mutable ScopedWgpuHandle<wgpu::Texture> texture_;
 };
 
 }  // namespace

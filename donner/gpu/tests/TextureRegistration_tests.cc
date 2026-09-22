@@ -35,9 +35,11 @@ namespace {
 constexpr char kSharingFamily = 0;
 constexpr char kOtherFamily = 1;
 
-/// A native device two runtime devices can share, counting the native textures still alive.
+/// A native device two runtime devices can share, counting the native textures still alive and
+/// the explicit releases a producer deferred until nothing else held the texture.
 struct FakeNativeDevice {
   std::atomic<int> liveTextures{0};
+  std::atomic<int> deferredBackingReleases{0};
 };
 
 /// One native texture allocation; alive while any device slot, export or registration holds it.
@@ -55,13 +57,19 @@ private:
   FakeNativeDevice& device_;
 };
 
-/// The test backend's export: a reference to the native texture.
+/// The test backend's export: the only strong reference to the native texture outside its
+/// producer, so the allocation outlives the producer only if the runtime keeps the export alive.
 class FakeExportedTexture final : public ExportedTextureBacking {
 public:
-  explicit FakeExportedTexture(std::shared_ptr<FakeNativeTexture> native)
-      : native(std::move(native)) {}
+  FakeExportedTexture(std::shared_ptr<FakeNativeTexture> native, FakeNativeDevice& device)
+      : native(std::move(native)), device_(device) {}
+
+  void releaseBackingNow() const override { device_.deferredBackingReleases.fetch_add(1); }
 
   std::shared_ptr<FakeNativeTexture> native;
+
+private:
+  FakeNativeDevice& device_;
 };
 
 /// Completion the test drives, shared with every export of the device that owns it.
@@ -115,25 +123,28 @@ protected:
   }
   Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override {
     BackendTextureExport exported;
-    exported.backing = std::make_shared<const FakeExportedTexture>(textures_.at(slotIndex));
+    exported.backing =
+        std::make_shared<const FakeExportedTexture>(textures_.at(slotIndex).owned, native_);
     exported.ordering = options_.ordering;
     exported.completion = completion_;
     exported.writePending = queuedWrite_;
     return exported;
   }
   Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override {
-    slot(slotIndex) = static_cast<const FakeExportedTexture&>(backing).native;
+    // A borrowed name, like the transitional adapter's: the registration's lifetime has to come
+    // from the runtime's hold on the export, not from this slot.
+    slot(slotIndex).alias = static_cast<const FakeExportedTexture&>(backing).native.get();
     return OkStatus();
   }
   bool onTextureWritePending(uint32_t) const override { return writesPending_; }
   void onDestroyTextureBacking(uint32_t slotIndex) override {
     ++explicitBackingReleases_;
-    slot(slotIndex).reset();
+    slot(slotIndex) = {};
   }
 
   Status onCreateBuffer(uint32_t, const BufferDescriptor&) override { return OkStatus(); }
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor&) override {
-    slot(slotIndex) = std::make_shared<FakeNativeTexture>(native_);
+    slot(slotIndex).owned = std::make_shared<FakeNativeTexture>(native_);
     return OkStatus();
   }
   Status onCreateTextureView(uint32_t, uint32_t, const TextureViewDescriptor&) override {
@@ -158,7 +169,7 @@ protected:
   }
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override {
     if (resourceName == TextureTag::kName) {
-      slot(slotIndex).reset();
+      slot(slotIndex) = {};
     }
   }
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
@@ -176,7 +187,13 @@ protected:
   }
 
 private:
-  std::shared_ptr<FakeNativeTexture>& slot(uint32_t slotIndex) {
+  /// One texture slot: the allocation this device made, or a borrowed name for another's.
+  struct TextureSlot {
+    std::shared_ptr<FakeNativeTexture> owned;  //!< Allocation this device made, or null.
+    FakeNativeTexture* alias = nullptr;        //!< Registration of another device's texture.
+  };
+
+  TextureSlot& slot(uint32_t slotIndex) {
     if (slotIndex >= textures_.size()) {
       textures_.resize(slotIndex + 1);
     }
@@ -186,7 +203,7 @@ private:
   FakeNativeDevice& native_;
   SharingOptions options_;
   std::shared_ptr<FakeCompletion> completion_ = std::make_shared<FakeCompletion>();
-  std::vector<std::shared_ptr<FakeNativeTexture>> textures_;
+  std::vector<TextureSlot> textures_;
   bool held_ = false;
   bool writesPending_ = false;
   bool queuedWrite_ = false;  //!< A write waits for the next submission.
@@ -365,6 +382,54 @@ TEST_F(TextureRegistrationTest, AnUnsharedTextureStillReleasesItsBackingAtOnce) 
 
   ASSERT_THAT(producer_->destroyTextureBacking(std::move(owned)), IsOk());
   EXPECT_THAT(producer_->explicitBackingReleases(), Eq(1));
+  EXPECT_THAT(native_.liveTextures.load(), Eq(0));
+}
+
+/// An export token alone keeps the allocation alive after the producer released its handle, and
+/// lets it go with the token.
+TEST_F(TextureRegistrationTest, AnExportTokenAloneKeepsTheAllocationAlive) {
+  Texture owned = MakeTexture(*producer_);
+  std::optional<TextureExport> exported = GetResultOrFail(producer_->exportTexture(owned));
+
+  ASSERT_THAT(producer_->destroyTexture(std::move(owned)), IsOk());
+  EXPECT_THAT(native_.liveTextures.load(), Eq(1)) << "the token still holds the allocation";
+
+  exported.reset();
+  EXPECT_THAT(native_.liveTextures.load(), Eq(0));
+}
+
+/// A producer that asks for its backing back while another device reads it gets the release
+/// when that reader lets go: deferred, never dropped.
+TEST_F(TextureRegistrationTest, ADeferredBackingReleaseHappensWhenTheLastHolderLetsGo) {
+  Texture owned = MakeTexture(*producer_);
+  Texture registered =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
+  consumer_->holdCompletion();
+  ASSERT_THAT(SubmitRead(*consumer_, registered), HasResult());
+
+  ASSERT_THAT(producer_->destroyTextureBacking(std::move(owned)), IsOk());
+  EXPECT_THAT(producer_->explicitBackingReleases(), Eq(0));
+  EXPECT_THAT(native_.deferredBackingReleases.load(), Eq(0));
+
+  ASSERT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
+  EXPECT_THAT(native_.deferredBackingReleases.load(), Eq(0))
+      << "the consumer's read has not completed, so its registration still holds the texture";
+
+  consumer_->releaseCompletion();
+  consumer_->poll();
+  EXPECT_THAT(native_.deferredBackingReleases.load(), Eq(1));
+  EXPECT_THAT(native_.liveTextures.load(), Eq(0));
+  EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(0u));
+}
+
+/// A plain destroy of a shared texture is not a request to release its backing early.
+TEST_F(TextureRegistrationTest, DestroyingASharedTextureRequestsNoEarlyRelease) {
+  Texture owned = MakeTexture(*producer_);
+  Texture registered =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
+  ASSERT_THAT(producer_->destroyTexture(std::move(owned)), IsOk());
+  ASSERT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
+  EXPECT_THAT(native_.deferredBackingReleases.load(), Eq(0));
   EXPECT_THAT(native_.liveTextures.load(), Eq(0));
 }
 
@@ -569,8 +634,11 @@ TEST_F(TextureRegistrationTest, ADevicesOwnTextureNeedsNoSourceWait) {
 }
 
 /// The consumer half never touches the producer device, so each device can stay on its own
-/// thread: the producer keeps allocating, submitting and retiring while the consumer registers,
-/// reads and drops what it was handed.
+/// thread. While the consumer registers, orders, reads and drops what it was handed, the producer
+/// keeps doing everything a producer does to those same shares: it submits work reading them,
+/// queues writes to them that its next submission carries, and releases some of them. Under the
+/// thread sanitizer this is the regression for a consumer that reads producer state it does not
+/// share through the export.
 TEST_F(TextureRegistrationTest, RegisteringOnAnotherThreadNeverTouchesTheProducer) {
   constexpr int kTextures = 32;
   std::vector<Texture> owned;
@@ -582,18 +650,36 @@ TEST_F(TextureRegistrationTest, RegisteringOnAnotherThreadNeverTouchesTheProduce
 
   std::atomic<bool> consumerDone{false};
   std::thread producerThread([&] {
-    while (!consumerDone.load()) {
+    producer_->setWritesPending(true);
+    const std::array<uint8_t, 256 * 4> texels{};
+    for (int round = 0; !consumerDone.load(); ++round) {
+      const size_t index = static_cast<size_t>(round) % owned.size();
+      if (owned[index].isValid()) {
+        EXPECT_THAT(SubmitRead(*producer_, owned[index]), HasResult());
+        EXPECT_THAT(producer_->writeTexture(owned[index], texels, {0, 256, 4}, kExtent), IsOk());
+        if (round % 7 == 3) {
+          EXPECT_THAT(producer_->destroyTexture(std::move(owned[index])), IsOk());
+        }
+      }
       Texture churn = MakeTexture(*producer_);
       EXPECT_THAT(SubmitRead(*producer_, churn), HasResult());
       EXPECT_THAT(producer_->destroyTexture(std::move(churn)), IsOk());
     }
   });
   std::thread consumerThread([&] {
-    for (const TextureExport& exported : exports) {
-      Texture registered = GetResultOrFail(consumer_->registerTexture(exported));
-      EXPECT_THAT(consumer_->waitForTextureSource(registered, 1.0), IsTrue());
-      EXPECT_THAT(SubmitRead(*consumer_, registered), HasResult());
-      EXPECT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
+    for (int pass = 0; pass < 8; ++pass) {
+      for (const TextureExport& exported : exports) {
+        Result<Texture> registered = consumer_->registerTexture(exported);
+        if (registered.hasError()) {
+          // A queued write not yet carried, or a texture the producer has since released.
+          EXPECT_THAT(registered.error().type, testing::AnyOf(Eq(GpuErrorType::InvalidState),
+                                                              Eq(GpuErrorType::InvalidHandle)));
+          continue;
+        }
+        EXPECT_THAT(consumer_->waitForTextureSource(registered.result(), 1.0), IsTrue());
+        EXPECT_THAT(SubmitRead(*consumer_, registered.result()), HasResult());
+        EXPECT_THAT(consumer_->destroyTexture(std::move(registered).result()), IsOk());
+      }
     }
     consumerDone.store(true);
   });

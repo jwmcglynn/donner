@@ -54,6 +54,16 @@ public:
 
   ExportedTextureBacking(const ExportedTextureBacking&) = delete;
   ExportedTextureBacking& operator=(const ExportedTextureBacking&) = delete;
+
+  /**
+   * Releases the allocation at once, for a producer that asked to give its backing back while
+   * another device still read it. Called exactly once, by whichever thread drops the last holder,
+   * after the producer has released its handle; nothing names the texture afterwards.
+   *
+   * The default does nothing, which is right for a backend whose allocation goes away with its
+   * last reference.
+   */
+  virtual void releaseBackingNow() const;
 };
 
 /// How work a consumer submits against a registration is ordered after the producer's work.
@@ -170,6 +180,9 @@ public:
   void release();
   /// The producer released its handle; the allocation now lives only as long as other holders.
   void releaseProducer();
+  /// The producer asked to release the allocation at once while another holder still had it;
+  /// the release happens when the last holder lets go.
+  void requestBackingRelease();
 
   /// Whether the producer has released its handle.
   bool producerReleased() const;
@@ -177,7 +190,8 @@ public:
   bool heldElsewhere() const;
 
 private:
-  /// Adds or removes this texture's bytes from the tail gauge when the tail condition changed.
+  /// Adds or removes this texture's bytes from the tail gauge when the tail condition changed,
+  /// and releases the allocation once a requested release has no holder left to wait for.
   /// Requires \ref mutex_.
   void updateTailLocked();
 
@@ -196,6 +210,8 @@ private:
   uint32_t holders_ = 0;           //!< Guarded by mutex_.
   bool producerReleased_ = false;  //!< Guarded by mutex_.
   bool countedInTail_ = false;     //!< Guarded by mutex_.
+  bool releaseRequested_ = false;  //!< Guarded by mutex_.
+  bool backingReleased_ = false;   //!< Guarded by mutex_.
 };
 
 /// One holder of a share: every copy of one export token shares one lease, and each registration

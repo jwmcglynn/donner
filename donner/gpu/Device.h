@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -578,7 +579,10 @@ public:
    * registration after this device released its own handle.
    *
    * That memory is still resident, and no other device counts it as its allocation, so a working
-   * set measured from allocation accounting alone would miss it. Readable from any thread.
+   * set measured from allocation accounting alone would miss it. Readable from any thread. The
+   * gauge belongs to this device: bytes still held after this device is destroyed are counted in a
+   * gauge nothing reads any more, so a holder that outlives its producer device is a working-set
+   * blind spot.
    */
   [[nodiscard]] uint64_t sharedTextureTailBytes() const;
 
@@ -1665,10 +1669,16 @@ private:
     /// Producer serial whose completion consumer work naming this texture must follow.
     uint64_t orderAfterSerial = 0;
   };
+  // Lives in a growing vector, so reallocation must move it without throwing.
+  static_assert(std::is_nothrow_move_constructible_v<TextureRegistration>);
+
+  /// Releases a texture's allocation at once, or, while an export or another device's
+  /// registration still holds it, when the last holder lets go. @param slotIndex Texture slot.
+  void releaseTextureBackingOrDefer(uint32_t slotIndex);
 
   /// Refuses exporting a texture of a lost device, a registration, or a surface's frame.
-  /// @param texture Already-resolved texture. @param label Its label, for the message.
-  Status checkTextureExportable(const Texture& texture, std::string_view label) const;
+  /// @param texture Already-resolved texture. @param descriptor Its record, for the message.
+  Status checkTextureExportable(const Texture& texture, const TextureDescriptor& descriptor) const;
 
   /// Asks the backend to export a texture and records the share every token will hold.
   /// @param slotIndex Exportable texture slot. @param descriptor Its record.
@@ -1695,9 +1705,9 @@ private:
   /// The registration in a texture slot, or null. @param slotIndex Texture slot.
   const TextureRegistration* textureRegistrationOf(uint32_t slotIndex) const;
 
-  /// Whether an export token or another device's registration still holds the allocation of a
-  /// texture of this device. @param slotIndex Texture slot.
-  bool textureHeldElsewhere(uint32_t slotIndex) const;
+  /// Refuses one registration a submission names when its producer work has not completed or
+  /// either device is lost or failed. @param entry Registration. @param slotIndex Its slot.
+  Status checkTextureSourceReady(const TextureRegistration& entry, uint32_t slotIndex) const;
 
   /// Refuses a submission naming a registration whose producer work has not completed, or whose
   /// producer or this device is lost. @param uses Resources the submission references.

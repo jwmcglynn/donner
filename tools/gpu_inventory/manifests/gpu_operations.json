@@ -453,6 +453,7 @@
         "createSampler",
         "createTexture",
         "destroy",
+        "poll",
         "writeBuffer",
         "writeTexture"
       ],
@@ -518,7 +519,6 @@
         "mapAsync",
         "poll",
         "present",
-        "release",
         "requestAdapter",
         "requestDevice",
         "setBindGroup",

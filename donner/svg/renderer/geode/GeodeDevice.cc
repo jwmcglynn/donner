@@ -511,7 +511,19 @@ gpu::Result<gpu::Texture> GeodeDevice::registerCaptureSource(const gpu::TextureE
   return runtimeDevice_->registerTexture(source);
 }
 
+void GeodeDevice::pollIdleSnapshotCaptureContext() {
+  // The capture context is used only under its lease, from whatever thread captures; an owner
+  // that finds it busy leaves the poll to that capture's own end.
+  std::unique_lock lock(impl_->snapshotCaptureMutex, std::try_to_lock);
+  if (lock.owns_lock() && impl_->snapshotCaptureContext) {
+    impl_->snapshotCaptureContext->runtimeDevice().poll();
+  }
+}
+
 void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
+  // A capture that ended before its readback completed still names its source in retirement;
+  // recycling what has completed is what lets the source's owner release the texture.
+  context.runtimeDevice().poll();
   const ReadbackStats stats = context.consumeReadbackStats();
   readbackCount_.fetch_add(stats.count, std::memory_order_relaxed);
   readbackPollIterations_.fetch_add(stats.pollIterations, std::memory_order_relaxed);
@@ -1026,6 +1038,7 @@ void GeodeDevice::drainDeferredTextureBackings() {
   if (!impl_) {
     return;
   }
+  pollIdleSnapshotCaptureContext();
   std::vector<gpu::Texture> retired;
   {
     std::lock_guard lock(impl_->textureBackingRetirementMutex);

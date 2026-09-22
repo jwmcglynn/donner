@@ -6,6 +6,8 @@ namespace donner::gpu {
 
 ExportedTextureBacking::~ExportedTextureBacking() = default;
 
+void ExportedTextureBacking::releaseBackingNow() const {}
+
 SubmissionCompletion::~SubmissionCompletion() = default;
 
 std::ostream& operator<<(std::ostream& os, SourceOrdering value) {
@@ -76,6 +78,12 @@ void TextureShare::releaseProducer() {
   updateTailLocked();
 }
 
+void TextureShare::requestBackingRelease() {
+  std::lock_guard lock(mutex_);
+  releaseRequested_ = true;
+  updateTailLocked();
+}
+
 bool TextureShare::producerReleased() const {
   std::lock_guard lock(mutex_);
   return producerReleased_;
@@ -88,15 +96,18 @@ bool TextureShare::heldElsewhere() const {
 
 void TextureShare::updateTailLocked() {
   const bool inTail = producerReleased_ && holders_ > 0;
-  if (inTail == countedInTail_) {
-    return;
+  if (inTail != countedInTail_) {
+    if (inTail) {
+      tailBytes_->fetch_add(allocationBytes_, std::memory_order_relaxed);
+    } else {
+      tailBytes_->fetch_sub(allocationBytes_, std::memory_order_relaxed);
+    }
+    countedInTail_ = inTail;
   }
-  if (inTail) {
-    tailBytes_->fetch_add(allocationBytes_, std::memory_order_relaxed);
-  } else {
-    tailBytes_->fetch_sub(allocationBytes_, std::memory_order_relaxed);
+  if (releaseRequested_ && producerReleased_ && holders_ == 0 && !backingReleased_) {
+    backingReleased_ = true;
+    backend_.backing->releaseBackingNow();
   }
-  countedInTail_ = inTail;
 }
 
 TextureShareLease::TextureShareLease(std::shared_ptr<TextureShare> share)

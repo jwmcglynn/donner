@@ -893,6 +893,17 @@ private:
                                                const std::function<bool()>& shouldCancel,
                                                std::chrono::steady_clock::time_point deadline);
   void finishSnapshotCapture(GeodeDevice& context);
+
+  /**
+   * Recycles what the snapshot capture context has retired and the GPU has finished with, when no
+   * capture holds the context.
+   *
+   * A capture that ends before its readback completes (cancelled, past its deadline, or failed)
+   * retires its registration of the source texture with that readback in flight, and only a poll
+   * of the capture context recycles it. Until then the registration holds the texture, so the
+   * owner could not release it. The owner calls this before releasing textures.
+   */
+  void pollIdleSnapshotCaptureContext();
   void recordSnapshotCaptureTimeout();
   void notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase phase) const;
   GeodeSnapshotReadbackPipeline& snapshotReadbackPipeline() const;
