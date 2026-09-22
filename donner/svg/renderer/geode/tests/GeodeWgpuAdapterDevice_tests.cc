@@ -345,6 +345,57 @@ TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsTheTransitionalAdapter) 
   }
 }
 
+/// The variable names a backend in any letter case, and naming the transitional adapter
+/// explicitly selects it just as leaving the variable unset does.
+TEST(GeodeGpuRootSelection, ARequestNamesItsBackendInAnyLetterCase) {
+  for (const char* request : {"wgpu", "WGPU", "Wgpu"}) {
+    SCOPED_TRACE(request);
+    const ScopedGpuBackendRequest scoped(request);
+    GpuRootSelection selection;
+    selection.label = "RequestedTransitionalSelection";
+    const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+    ASSERT_THAT(root, testing::NotNull()) << "no wgpu adapter is available on this host";
+    EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::TransitionalWgpu));
+  }
+  for (const char* request : {"metal", "METAL", "Metal"}) {
+    SCOPED_TRACE(request);
+    const ScopedGpuBackendRequest scoped(request);
+    const gpu::Result<GpuBackendKind> kind = ProcessDefaultGpuBackendKind();
+    ASSERT_THAT(kind, gpu::HasResult());
+    EXPECT_THAT(kind.result(), testing::Eq(GpuBackendKind::NativeMetal));
+  }
+}
+
+#if defined(__APPLE__)
+/// On a platform with the native Metal backend, the variable selects it for every selection that
+/// names no backend.
+TEST(GeodeGpuRootSelection, ARequestForMetalSelectsTheNativeBackendByDefault) {
+  const ScopedGpuBackendRequest scoped("metal");
+  GpuRootSelection selection;
+  selection.label = "RequestedNativeSelection";
+  const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+  ASSERT_THAT(root, testing::NotNull()) << "no Metal device is available on this host";
+  EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::NativeMetal));
+}
+#endif
+
+/// A surface provider that gives up is the caller's failure rather than the backend's, so a
+/// requested backend still returns a null root the caller handles, as it does when nothing was
+/// requested, instead of halting as if the backend could not be served.
+TEST(GeodeGpuRootSelection, ASurfaceProviderThatGivesUpIsTheCallersFailureNotTheBackends) {
+  const ScopedGpuBackendRequest scoped("wgpu");
+  bool providerRan = false;
+  GpuRootSelection selection;
+  selection.label = "AbandonedRequestedSelection";
+  selection.compatibleSurface =
+      [&providerRan](const wgpu::Instance&) -> std::optional<wgpu::Surface> {
+    providerRan = true;
+    return std::nullopt;
+  };
+  EXPECT_THAT(SelectGpuRoot(selection), testing::IsNull());
+  EXPECT_TRUE(providerRan) << "the selection never asked the surface provider";
+}
+
 /// A caller that names a backend gets that backend whatever the process asks for by default. A
 /// case about one backend that silently ran on another because a lane changed the default would
 /// report on the wrong implementation.
@@ -394,12 +445,13 @@ TEST(GeodeGpuRootSelectionDeathTest, ARequestTheHostCannotServeHaltsRatherThanRe
 /// context on a native backend has no adapter and returns null.
 /// @param context Context whose owner stands up the device.
 std::unique_ptr<GeodeWgpuAdapterDevice> SiblingAdapterOf(const GeodeDevice& context) {
-  std::unique_ptr<gpu::Device> sibling = context.physicalDeviceOwner()->createLogicalDevice();
-  if (sibling == nullptr || !context.hasTransitionalAdapter()) {
+  GeodeRuntimeDevice sibling = context.physicalDeviceOwner()->createLogicalDevice();
+  if (sibling.device == nullptr || sibling.transitionalAdapter == nullptr) {
     return nullptr;
   }
-  return std::unique_ptr<GeodeWgpuAdapterDevice>(
-      static_cast<GeodeWgpuAdapterDevice*>(sibling.release()));
+  // The adapter view names the same device, so ownership moves to it without a conversion.
+  (void)sibling.device.release();
+  return std::unique_ptr<GeodeWgpuAdapterDevice>(sibling.transitionalAdapter);
 }
 
 class GeodeWgpuAdapterDeviceTests : public testing::Test {

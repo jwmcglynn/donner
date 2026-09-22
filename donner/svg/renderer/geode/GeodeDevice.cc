@@ -29,12 +29,12 @@ GeodePhysicalDeviceOwner::GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot>
 }
 
 std::shared_ptr<GeodePhysicalDeviceOwner> GeodePhysicalDeviceOwner::Create(
-    std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<gpu::Device> device) {
-  if (root == nullptr || device == nullptr) {
+    std::shared_ptr<GeodeGpuRoot> root, GeodeRuntimeDevice device) {
+  if (root == nullptr || device.device == nullptr) {
     return nullptr;
   }
   return std::shared_ptr<GeodePhysicalDeviceOwner>(
-      new GeodePhysicalDeviceOwner(std::move(root), std::move(device)));
+      new GeodePhysicalDeviceOwner(std::move(root), std::move(device.device)));
 }
 
 GeodePhysicalDeviceOwner::~GeodePhysicalDeviceOwner() = default;
@@ -43,7 +43,7 @@ const std::shared_ptr<GeodeDeviceLostState>& GeodePhysicalDeviceOwner::lostState
   return root_->lostState();
 }
 
-std::unique_ptr<gpu::Device> GeodePhysicalDeviceOwner::createLogicalDevice() const {
+GeodeRuntimeDevice GeodePhysicalDeviceOwner::createLogicalDevice() const {
   return CreateGpuDeviceOver(root_);
 }
 
@@ -197,18 +197,25 @@ uint64_t GeodeDevice::AllocateBufferId() {
 }
 
 GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice,
-                         gpu::Device& runtimeDevice,
+                         gpu::Device& runtimeDevice, GeodeWgpuAdapterDevice* transitionalAdapter,
                          std::unique_ptr<gpu::Device> ownedRuntimeDevice)
     : physicalDevice_(std::move(physicalDevice)),
       impl_(std::make_unique<Impl>()),
       deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1) {
   UTILS_RELEASE_ASSERT(physicalDevice_ != nullptr);
+  // The adapter view is recorded where the device is built, so it names this very device and
+  // exists exactly when the root selected the transitional adapter.
+  UTILS_RELEASE_ASSERT(
+      (transitionalAdapter != nullptr) ==
+      (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu));
+  UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
+                       static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice);
   ownedRuntimeDevice_ = std::move(ownedRuntimeDevice);
   runtimeDevice_ = &runtimeDevice;
+  transitionalAdapter_ = transitionalAdapter;
   impl_->runtimeDevice = &runtimeDevice;
   impl_->runtimeDeviceId = runtimeDevice.deviceId();
-  if (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu) {
-    transitionalAdapter_ = static_cast<GeodeWgpuAdapterDevice*>(&runtimeDevice);
+  if (transitionalAdapter_ != nullptr) {
     // Allocations and submissions this context makes through the runtime are counted against it,
     // which is what keeps two contexts over one root from sharing a per-frame ceiling.
     transitionalAdapter_->setCounterSink(this);
@@ -217,13 +224,14 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
     std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice) {
-  std::unique_ptr<gpu::Device> runtimeDevice = physicalDevice->createLogicalDevice();
-  if (runtimeDevice == nullptr) {
+  GeodeRuntimeDevice runtimeDevice = physicalDevice->createLogicalDevice();
+  if (runtimeDevice.device == nullptr) {
     return nullptr;
   }
-  gpu::Device& borrowed = *runtimeDevice;
-  return std::unique_ptr<GeodeDevice>(
-      new GeodeDevice(std::move(physicalDevice), borrowed, std::move(runtimeDevice)));
+  gpu::Device& borrowed = *runtimeDevice.device;
+  GeodeWgpuAdapterDevice* const transitionalAdapter = runtimeDevice.transitionalAdapter;
+  return std::unique_ptr<GeodeDevice>(new GeodeDevice(
+      std::move(physicalDevice), borrowed, transitionalAdapter, std::move(runtimeDevice.device)));
 }
 
 GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
@@ -527,11 +535,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(gpu::TextureFormat text
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,
                                                                  gpu::TextureFormat textureFormat) {
-  std::unique_ptr<gpu::Device> rootDevice = CreateGpuDeviceOver(root);
-  if (rootDevice == nullptr) {
+  GeodeRuntimeDevice rootDevice = CreateGpuDeviceOver(root);
+  if (rootDevice.device == nullptr) {
     return nullptr;
   }
-  gpu::Device& borrowed = *rootDevice;
+  gpu::Device& borrowed = *rootDevice.device;
+  GeodeWgpuAdapterDevice* const transitionalAdapter = rootDevice.transitionalAdapter;
   std::shared_ptr<GeodePhysicalDeviceOwner> owner =
       GeodePhysicalDeviceOwner::Create(std::move(root), std::move(rootDevice));
   if (owner == nullptr) {
@@ -540,7 +549,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr
 
   // The context created together with its owner renders through the owner's root device rather
   // than standing up a second one; later contexts over the same root get their own.
-  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice(std::move(owner), borrowed, nullptr));
+  auto result = std::unique_ptr<GeodeDevice>(
+      new GeodeDevice(std::move(owner), borrowed, transitionalAdapter, nullptr));
   result->textureFormat_ = textureFormat;
   result->initSharedPipelines();
   return result;

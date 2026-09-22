@@ -596,12 +596,13 @@ TEST(GeodeDeviceLost, ATeardownDrainThatOverrunsDoesNotDeclareTheRootLost) {
   ASSERT_NE(context, nullptr);
   ASSERT_FALSE(context->isDeviceLost());
 
-  std::unique_ptr<gpu::Device> siblingRuntime =
-      context->physicalDeviceOwner()->createLogicalDevice();
-  ASSERT_NE(siblingRuntime, nullptr);
-  ASSERT_TRUE(context->hasTransitionalAdapter());
-  std::unique_ptr<GeodeWgpuAdapterDevice> sibling(
-      static_cast<GeodeWgpuAdapterDevice*>(siblingRuntime.release()));
+  GeodeRuntimeDevice siblingRuntime = context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_NE(siblingRuntime.device, nullptr);
+  ASSERT_THAT(siblingRuntime.transitionalAdapter, NotNull())
+      << "this case holds work through the transitional adapter's test seam";
+  // The adapter view names the same device, so ownership moves to it without a conversion.
+  (void)siblingRuntime.device.release();
+  std::unique_ptr<GeodeWgpuAdapterDevice> sibling(siblingRuntime.transitionalAdapter);
   const uint64_t submitted = SubmitEmptyCommandBuffer(*sibling);
   ASSERT_THAT(submitted, testing::Gt(0u));
   sibling->holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));

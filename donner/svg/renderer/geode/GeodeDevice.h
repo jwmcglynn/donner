@@ -50,6 +50,7 @@ class GeodeMaskPipeline;
 class GeodeFilterEngine;
 class GeodeGpuRoot;
 struct GeodeEmbedConfig;
+struct GeodeRuntimeDevice;
 class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
 
@@ -62,19 +63,6 @@ class GeodeSnapshotReadbackPipeline;
  */
 class GeodePhysicalDeviceOwner {
 public:
-  /**
-   * Retains the selected runtime device and the backend root it drives.
-   *
-   * Both come from the one selection factory, which is what keeps a caller from assembling a
-   * half-populated root by hand.
-   *
-   * @param root Backend root the selection produced or adopted; must not be null.
-   * @param device Runtime device over \p root from the same selection; must not be null.
-   * @return The owner, or null when either argument is null.
-   */
-  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(std::shared_ptr<GeodeGpuRoot> root,
-                                                          std::unique_ptr<gpu::Device> device);
-
   ~GeodePhysicalDeviceOwner();
 
   GeodePhysicalDeviceOwner(const GeodePhysicalDeviceOwner&) = delete;
@@ -88,11 +76,25 @@ public:
   const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND;
 
   /// A runtime device of its own over this owner's backend root, for a second logical context.
-  /// Two contexts are two runtime devices: separate handle tables, serials and counters over the
-  /// one root they share.
-  std::unique_ptr<gpu::Device> createLogicalDevice() const;
+  /// Two contexts are two runtime devices: separate handle tables and serials over the one root
+  /// they share.
+  GeodeRuntimeDevice createLogicalDevice() const;
 
 private:
+  /// Only a context builds an owner, from a root and the device \ref CreateGpuDeviceOver opened
+  /// over it, so a device can never be paired with a root of another backend.
+  friend class GeodeDevice;
+
+  /**
+   * Retains the selected runtime device and the backend root it drives.
+   *
+   * @param root Backend root the selection produced or adopted; must not be null.
+   * @param device Runtime device \ref CreateGpuDeviceOver opened over \p root.
+   * @return The owner, or null when either is missing.
+   */
+  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(std::shared_ptr<GeodeGpuRoot> root,
+                                                          GeodeRuntimeDevice device);
+
   GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<gpu::Device> device);
 
   /// Declared first so the backend root outlives every runtime device built over it.
@@ -842,10 +844,13 @@ private:
    * @param runtimeDevice Runtime device to render through; either the owner's root device, which
    *   the context created together with the owner takes, or one of its own from
    *   \ref GeodePhysicalDeviceOwner::createLogicalDevice.
+   * @param transitionalAdapter \p runtimeDevice named as the transitional adapter, as
+   *   \ref CreateGpuDeviceOver recorded it; null on a native backend.
    * @param ownedRuntimeDevice Non-null when \p runtimeDevice is this context's own, so the
    *   context releases it; null when it is the owner's.
    */
   GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::Device& runtimeDevice,
+              GeodeWgpuAdapterDevice* transitionalAdapter,
               std::unique_ptr<gpu::Device> ownedRuntimeDevice);
 
   /// Builds a logical context with a runtime device of its own over \p physicalDevice's root.
