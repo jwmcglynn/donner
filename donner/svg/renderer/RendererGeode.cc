@@ -2410,11 +2410,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
   };
-  // Copyability here is supplied by accident: the `std::unique_ptr` member is what deletes the
-  // copy, while `savedClipStack` holds entries whose copy is a hard error. Removing that member
-  // would make `std::vector` reallocation reach for the copy on a standard library whose deque
-  // move is not `noexcept`, and the failure would surface inside the standard library rather
-  // than here.
+  // Non-copyability here is incidental: the move-only `savedEncoder` and `layerTexture` members
+  // supply it, not an explicit `= delete`. The assert pins it because `savedClipStack` holds
+  // entries whose copy is a hard error; if both members ever became copyable, `std::vector`
+  // reallocation would reach for the copy on a standard library whose deque move is not
+  // `noexcept`, and the failure would surface inside the standard library rather than here.
   static_assert(!std::is_copy_constructible_v<FilterStackFrame>,
                 "A copyable filter stack frame would let vector growth copy its clip entries.");
   std::vector<ClipStackEntry> clipStack;
