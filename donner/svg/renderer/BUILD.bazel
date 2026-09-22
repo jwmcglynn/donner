@@ -418,7 +418,6 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_resource_budget",
         "//donner/svg/renderer/geode:geode_fill_tolerance",
         "//donner/svg/renderer/geode:geode_stroke_tolerance",
-        "//donner/svg/renderer/geode:geode_wgpu_util",
         "//donner/svg/resources:image_resource",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ] + select({

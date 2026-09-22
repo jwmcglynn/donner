@@ -72,26 +72,29 @@ TEST_F(DeviceValidationTests, CreateTextureAcceptsValidDescriptor) {
       HasResult());
 }
 
-TEST_F(DeviceValidationTests, TextureExtentReturnsLiveExtentByValue) {
+TEST_F(DeviceValidationTests, TextureDescriptorReturnsTheCreationDescriptorByValue) {
   const Texture texture = GetResultOrFail(device_.createTexture(TextureDescriptor{
       "target", Extent2d{16, 9}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
-  EXPECT_EQ(GetResultOrFail(device_.textureExtent(texture)), (Extent2d{16, 9}));
+  const TextureDescriptor descriptor = GetResultOrFail(device_.textureDescriptor(texture));
+  EXPECT_EQ(descriptor.size, (Extent2d{16, 9}));
+  EXPECT_EQ(descriptor.format, TextureFormat::RGBA8Unorm);
+  EXPECT_EQ(descriptor.usage, TextureUsage::RenderAttachment);
 }
 
-TEST_F(DeviceValidationTests, TextureExtentRejectsNullStaleAndForeignHandles) {
-  EXPECT_THAT(device_.textureExtent(Texture()), IsGpuError(GpuErrorType::InvalidHandle));
+TEST_F(DeviceValidationTests, TextureDescriptorRejectsNullStaleAndForeignHandles) {
+  EXPECT_THAT(device_.textureDescriptor(Texture()), IsGpuError(GpuErrorType::InvalidHandle));
 
   Texture stale = GetResultOrFail(device_.createTexture(TextureDescriptor{
       "stale", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
   const Texture staleHandle =
       Texture::CreateForBackend(stale.slotIndex(), stale.generation(), stale.deviceId());
   ASSERT_THAT(device_.destroyTexture(std::move(stale)), IsOk());
-  EXPECT_THAT(device_.textureExtent(staleHandle), IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.textureDescriptor(staleHandle), IsGpuError(GpuErrorType::InvalidHandle));
 
   RecordingDevice other;
   const Texture foreign = GetResultOrFail(other.createTexture(TextureDescriptor{
       "foreign", Extent2d{5, 3}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
-  EXPECT_THAT(device_.textureExtent(foreign), IsGpuError(GpuErrorType::DeviceMismatch));
+  EXPECT_THAT(device_.textureDescriptor(foreign), IsGpuError(GpuErrorType::DeviceMismatch));
 }
 
 TEST_F(DeviceValidationTests, CreateTextureRejectsZeroDimension) {

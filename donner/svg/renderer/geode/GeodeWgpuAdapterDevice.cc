@@ -407,6 +407,29 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
   return result;
 }
 
+gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(
+    const GeodeWgpuAdapterDevice& owner, const gpu::Texture& texture) {
+  if (static_cast<WGPUDevice>(owner.geodeDevice_.device()) !=
+          static_cast<WGPUDevice>(geodeDevice_.device()) ||
+      static_cast<WGPUQueue>(owner.geodeDevice_.queue()) !=
+          static_cast<WGPUQueue>(geodeDevice_.queue())) {
+    return GpuError{GpuErrorType::DeviceMismatch,
+                    "importTextureFrom: the owning device drives a different backend device"};
+  }
+
+  gpu::Result<gpu::TextureDescriptor> descriptor = owner.textureDescriptor(texture);
+  if (descriptor.hasError()) {
+    return std::move(descriptor).error();
+  }
+  const wgpu::Texture backend = owner.wgpuTextureOf(texture);
+  if (!backend) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    "importTextureFrom: the owning device has no backend texture for this handle"};
+  }
+  return importExternalTexture(backend, descriptor.result().size, descriptor.result().format,
+                               descriptor.result().usage);
+}
+
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
   // Full base-class validation (null, device identity, AND generation), so a stale or forged
   // handle cannot bridge the slot's new occupant to raw wgpu.

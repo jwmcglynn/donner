@@ -5,6 +5,7 @@
 
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::editor {
@@ -73,37 +74,27 @@ ImTextureID RegisterUiSnapshotTexture(const svg::RendererTextureSnapshot& snapsh
   }
 
   const gpu::Texture* runtimeTexture = geodeSnapshot.runtimeTexture();
-  const uint64_t uiDeviceId = renderer->device().deviceId();
-  if (runtimeTexture != nullptr && runtimeTexture->deviceId() == uiDeviceId) {
+  if (runtimeTexture == nullptr) {
+    return 0;
+  }
+  const UiTextureAlphaMode alphaMode = UiAlphaModeOf(geodeSnapshot.alphaType());
+  if (runtimeTexture->deviceId() == renderer->device().deviceId()) {
     return Register(*renderer,
                     renderer->device().createTextureView(*runtimeTexture,
                                                          gpu::TextureViewDescriptor{"uiSnapshot"}),
-                    dimensions, UiAlphaModeOf(geodeSnapshot.alphaType()), backing);
+                    dimensions, alphaMode, backing);
   }
 
-  if (!geodeSnapshot.runtimeFormat().has_value()) {
-    return 0;
-  }
-  return RegisterUiImportedTexture(geodeSnapshot.texture(), dimensions,
-                                   *geodeSnapshot.runtimeFormat(),
-                                   UiAlphaModeOf(geodeSnapshot.alphaType()), backing);
-}
-
-ImTextureID RegisterUiImportedTexture(const wgpu::Texture& texture, const Vector2i& dimensions,
-                                      gpu::TextureFormat format, UiTextureAlphaMode alphaMode,
-                                      UiTextureBacking* backing) {
-  ImGuiRuntimeRenderer* renderer = CurrentImGuiRuntimeRenderer();
-  if (renderer == nullptr || dimensions.x <= 0 || dimensions.y <= 0) {
-    return 0;
-  }
-
+  // Rendered on a different device than the interface is drawn on, so it reaches the interface
+  // only by being registered on the drawing device - which needs the producing device to still
+  // own it, and is why a snapshot that only borrows a frame target cannot be registered here.
   geode::GeodeWgpuAdapterDevice* importDevice = ImportDeviceFor(*renderer);
-  if (importDevice == nullptr) {
+  const std::shared_ptr<geode::GeodeDevice>& owner = geodeSnapshot.owningDevice();
+  if (importDevice == nullptr || owner == nullptr) {
     return 0;
   }
-  gpu::Result<gpu::Texture> imported = importDevice->importExternalTexture(
-      texture, {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y)}, format,
-      gpu::TextureUsage::Sampled);
+  gpu::Result<gpu::Texture> imported =
+      importDevice->importTextureFrom(owner->adapterDevice(), *runtimeTexture);
   if (imported.hasError()) {
     return 0;
   }

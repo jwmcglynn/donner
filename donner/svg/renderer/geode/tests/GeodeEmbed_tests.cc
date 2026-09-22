@@ -166,6 +166,49 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   renderer.clearTargetTexture();
 }
 
+/// A blend mode must not take the renderer down on a draw-only host target.
+///
+/// `mix-blend-mode` reads the parent's pixels back as a backdrop, which copies out of the frame
+/// target. An embedder is free to hand over a surface it never asked to be copyable - the editor's
+/// swapchain is exactly that unless framebuffer readback is turned on - and the blend mode comes
+/// from the document, so the two meeting has to degrade to an unblended composite rather than
+/// record a copy the runtime refuses.
+TEST_F(GeodeEmbedTest, ABlendModeOnADrawOnlyHostTargetDegradesInsteadOfFailing) {
+  auto device = sharedEmbedDevice();
+  ASSERT_THAT(device, testing::NotNull());
+
+  constexpr uint32_t kSize = 32;
+  wgpu::TextureDescriptor texDesc = {};
+  texDesc.label = geode::wgpuLabel("DrawOnlyHostTarget");
+  texDesc.size = {kSize, kSize, 1};
+  texDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+  texDesc.usage = wgpu::TextureUsage::RenderAttachment;  // No CopySrc, no TextureBinding.
+  texDesc.mipLevelCount = 1;
+  texDesc.sampleCount = 1;
+  texDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture hostTexture = device->device().createTexture(texDesc);
+  ASSERT_THAT(static_cast<bool>(hostTexture), testing::IsTrue());
+
+  auto renderer = createRenderer();
+  renderer.setTargetTexture(hostTexture);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(kSize, kSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Multiply);
+  renderer.drawRect(Box2d({0, 0}, {kSize, kSize}), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse())
+      << "A blend mode the target cannot serve must cost the blend, not the device";
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue())
+      << "A target the embedder did not make copyable cannot be read back";
+
+  renderer.clearTargetTexture();
+}
+
 /// After clearTargetTexture, the renderer goes back to internal targets.
 TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
   auto renderer = createRenderer();

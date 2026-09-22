@@ -56,7 +56,6 @@
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
@@ -68,11 +67,6 @@
 #endif
 
 namespace donner::svg {
-
-// Pull the Geode-local label helper into this namespace so that the many
-// `.label = wgpuLabel("...")` sites below can stay unqualified. See
-// GeodeWgpuUtil.h for the helper rationale.
-using ::donner::geode::wgpuLabel;
 
 namespace {
 std::optional<gpu::TextureFormat> SnapshotRuntimeFormat(wgpu::TextureFormat format) {
@@ -89,101 +83,80 @@ bool SnapshotExtentFits(Vector2i content, Vector2i allocation) {
   return content.x > 0 && content.y > 0 && content.x <= allocation.x && content.y <= allocation.y;
 }
 
-Vector2i SnapshotAllocationExtent(const wgpu::Texture& texture) {
-  if (!texture || texture.getWidth() > uint32_t(std::numeric_limits<int>::max()) ||
-      texture.getHeight() > uint32_t(std::numeric_limits<int>::max())) {
+Vector2i SnapshotAllocationExtent(const gpu::Extent2d& size) {
+  if (size.width > uint32_t(std::numeric_limits<int>::max()) ||
+      size.height > uint32_t(std::numeric_limits<int>::max())) {
     return Vector2i::Zero();
   }
-  return {static_cast<int>(texture.getWidth()), static_cast<int>(texture.getHeight())};
+  return {static_cast<int>(size.width), static_cast<int>(size.height)};
+}
+
+/// Capabilities that let a snapshot's texture be presented or read back.
+constexpr gpu::TextureUsage kSnapshotUsableCapabilities =
+    gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc;
+
+/// Whether a snapshot may name a texture of this format: the presentation and readback paths
+/// handle the two 8-bit RGBA orderings and nothing else.
+/// @param format Format to test.
+bool IsSnapshotFormat(gpu::TextureFormat format) {
+  return format == gpu::TextureFormat::RGBA8Unorm || format == gpu::TextureFormat::BGRA8Unorm;
+}
+
+/// Whether \p owner still names \p texture as something a consumer may sample.
+/// @param owner Device that owns the texture. @param texture Handle to resolve.
+bool SnapshotTextureIsSampleable(const gpu::Device& owner, const gpu::Texture& texture) {
+  const gpu::Result<gpu::TextureDescriptor> descriptor = owner.textureDescriptor(texture);
+  return descriptor.hasResult() && IsSnapshotFormat(descriptor.result().format) &&
+         gpu::HasAllFlags(descriptor.result().usage, gpu::TextureUsage::Sampled);
 }
 }  // namespace
 
 struct RendererGeodeTextureSnapshot::Backing {
   std::shared_ptr<geode::GeodeDevice> device;
   gpu::Texture runtimeTexture;
-  geode::ScopedWgpuHandle<wgpu::Texture> hostTexture;
 
   ~Backing() {
-    if (hostTexture) {
-      hostTexture.destroyBackingAndReset();
-    }
     if (runtimeTexture.isValid() && device) {
       UTILS_RELEASE_ASSERT(device->deferDestroyTextureBacking(std::move(runtimeTexture)));
     }
   }
 };
 
-RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
-    std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture, Vector2i dimensions,
-    wgpu::TextureFormat format, AlphaType alphaType)
-    : device_(std::move(device)), format_(format), alphaType_(alphaType) {
-  if (device_) {
-    runtimeDeviceId_ = device_->runtimeDevice().deviceId();
-    nativeDevice_ = static_cast<WGPUDevice>(device_->device());
-    nativeQueue_ = static_cast<WGPUQueue>(device_->queue());
-  }
-  if (texture) {
-    backing_ = std::make_shared<Backing>();
-    backing_->device = device_;
-    backing_->hostTexture.reset(texture);
-    textureUsage_ = texture.getUsage();
-  }
-  texture_ = texture;
-  allocationDimensions_ = SnapshotAllocationExtent(texture_);
-  runtimeFormat_ = texture_ ? SnapshotRuntimeFormat(texture_.getFormat()) : std::nullopt;
-  if (texture && (texture.getSampleCount() != 1 || texture.getDepthOrArrayLayers() != 1 ||
-                  texture.getDimension() != wgpu::TextureDimension::_2D)) {
-    allocationDimensions_ = Vector2i::Zero();
-  }
-  (void)setDimensions(dimensions);
-}
-
 RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
     std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
     wgpu::TextureFormat format, AlphaType alphaType) {
-  RendererGeodeTextureSnapshot result(nullptr, {}, Vector2i::Zero(),
-                                      wgpu::TextureFormat::Undefined);
+  RendererGeodeTextureSnapshot result;
   if (!device || !device->runtimeDevice().ownsTextureBacking(texture)) {
     return result;
   }
-  const wgpu::Texture backend = device->adapterDevice().wgpuTextureOf(texture);
+  const gpu::Result<gpu::TextureDescriptor> descriptor =
+      device->runtimeDevice().textureDescriptor(texture);
   const auto runtimeFormat = SnapshotRuntimeFormat(format);
-  const Vector2i allocation = SnapshotAllocationExtent(backend);
-  const auto usableCapabilities =
-      static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding) |
-      static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc);
-  if (!backend || !runtimeFormat || backend.getFormat() != format ||
-      backend.getSampleCount() != 1 || backend.getDepthOrArrayLayers() != 1 ||
-      backend.getDimension() != wgpu::TextureDimension::_2D ||
-      (static_cast<WGPUTextureUsage>(backend.getUsage()) & usableCapabilities) == 0u ||
-      !SnapshotExtentFits(dimensions, allocation)) {
+  if (descriptor.hasError() || !runtimeFormat || descriptor.result().format != *runtimeFormat ||
+      descriptor.result().sampleCount != 1 ||
+      (descriptor.result().usage & kSnapshotUsableCapabilities) == gpu::TextureUsage::None ||
+      !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(descriptor.result().size))) {
     return result;
   }
   result.device_ = std::move(device);
-  result.runtimeDeviceId_ = texture.deviceId();
-  result.nativeDevice_ = static_cast<WGPUDevice>(result.device_->device());
-  result.nativeQueue_ = static_cast<WGPUQueue>(result.device_->queue());
-  result.textureUsage_ = backend.getUsage();
   result.backing_ = std::make_shared<Backing>();
   result.backing_->device = result.device_;
   result.backing_->runtimeTexture = std::move(texture);
-  result.texture_ = backend;
-  result.allocationDimensions_ = allocation;
+  result.allocationDimensions_ = SnapshotAllocationExtent(descriptor.result().size);
   result.runtimeFormat_ = runtimeFormat;
   result.dimensions_ = dimensions;
-  result.format_ = format;
   result.alphaType_ = alphaType;
   return result;
 }
 
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
-    RendererGeodeTextureSnapshot&& other) noexcept
-    : RendererGeodeTextureSnapshot(nullptr, {}, Vector2i::Zero(), wgpu::TextureFormat::Undefined) {
+    RendererGeodeTextureSnapshot&& other) noexcept {
   *this = std::move(other);
 }
 
 bool RendererGeodeTextureSnapshot::isValid() const {
-  return texture_ && SnapshotExtentFits(dimensions_, allocationDimensions_);
+  return runtimeTexture() != nullptr && runtimeFormat_.has_value() &&
+         SnapshotExtentFits(dimensions_, allocationDimensions_);
 }
 
 const gpu::Texture* RendererGeodeTextureSnapshot::runtimeTexture() const {
@@ -198,7 +171,8 @@ gpu::Texture RendererGeodeTextureSnapshot::takeRuntimeRegistrationForTesting() {
 }
 
 uint64_t RendererGeodeTextureSnapshot::deviceId() const {
-  return runtimeDeviceId_;
+  const gpu::Texture* runtime = runtimeTexture();
+  return runtime != nullptr ? runtime->deviceId() : 0;
 }
 
 bool RendererGeodeTextureSnapshot::setDimensions(Vector2i dimensions) {
@@ -221,55 +195,35 @@ RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
 
   destroyOwnedBacking();
   device_ = std::move(other.device_);
-  runtimeDeviceId_ = std::exchange(other.runtimeDeviceId_, 0);
-  nativeDevice_ = std::exchange(other.nativeDevice_, nullptr);
-  nativeQueue_ = std::exchange(other.nativeQueue_, nullptr);
-  textureUsage_ = std::exchange(other.textureUsage_, wgpu::TextureUsage::None);
   backing_ = std::move(other.backing_);
   borrowedGpuTexture_ = std::move(other.borrowedGpuTexture_);
   allocationDimensions_ = std::exchange(other.allocationDimensions_, Vector2i::Zero());
   runtimeFormat_ = std::exchange(other.runtimeFormat_, std::nullopt);
-  texture_ = std::exchange(other.texture_, wgpu::Texture());
-  textureView_ = std::move(other.textureView_);
   dimensions_ = std::exchange(other.dimensions_, Vector2i::Zero());
-  format_ = std::exchange(other.format_, wgpu::TextureFormat::Undefined);
   alphaType_ = std::exchange(other.alphaType_, AlphaType::Premultiplied);
   return *this;
 }
 
 void RendererGeodeTextureSnapshot::destroyOwnedBacking() noexcept {
-  textureView_.reset();
   backing_.reset();
   borrowedGpuTexture_ = {};
   allocationDimensions_ = Vector2i::Zero();
   runtimeFormat_.reset();
-  texture_ = wgpu::Texture();
-  runtimeDeviceId_ = 0;
-  nativeDevice_ = nullptr;
-  nativeQueue_ = nullptr;
-  textureUsage_ = wgpu::TextureUsage::None;
 }
 
 RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::BorrowCurrentFrame(
-    const gpu::Texture& runtimeTexture, wgpu::Texture texture, Vector2i dimensions,
-    wgpu::TextureFormat format) {
-  RendererGeodeTextureSnapshot result(nullptr, {}, Vector2i::Zero(), format);
-  result.texture_ = texture;
-  result.runtimeDeviceId_ = runtimeTexture.deviceId();
-  result.textureUsage_ = texture.getUsage();
+    const gpu::Device& owner, const gpu::Texture& runtimeTexture, Vector2i dimensions) {
+  RendererGeodeTextureSnapshot result;
+  const gpu::Result<gpu::TextureDescriptor> descriptor = owner.textureDescriptor(runtimeTexture);
+  if (descriptor.hasError() || !IsSnapshotFormat(descriptor.result().format)) {
+    return result;
+  }
   result.borrowedGpuTexture_ = gpu::Texture::CreateForBackend(
       runtimeTexture.slotIndex(), runtimeTexture.generation(), runtimeTexture.deviceId());
-  result.allocationDimensions_ = SnapshotAllocationExtent(texture);
-  result.runtimeFormat_ = SnapshotRuntimeFormat(format);
+  result.allocationDimensions_ = SnapshotAllocationExtent(descriptor.result().size);
+  result.runtimeFormat_ = descriptor.result().format;
   (void)result.setDimensions(dimensions);
   return result;
-}
-
-const wgpu::TextureView& RendererGeodeTextureSnapshot::textureView() const {
-  if (!textureView_ && texture_) {
-    textureView_.reset(texture_.createView());
-  }
-  return textureView_.get();
 }
 
 namespace {
@@ -294,8 +248,8 @@ std::optional<Vector2i> CheckedViewportPixels(const RenderViewport& viewport) {
   return Vector2i(static_cast<int>(width), static_cast<int>(height));
 }
 
-bool IsBgraTextureFormat(wgpu::TextureFormat format) {
-  return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
+bool IsBgraTextureFormat(gpu::TextureFormat format) {
+  return format == gpu::TextureFormat::BGRA8Unorm;
 }
 
 // NOTE: `transformPath` now lives in the shared (text-gated) PlacedTextGeometry
@@ -1484,20 +1438,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // the textures are reused; otherwise they're reallocated.
   int targetWidth = 0;
   int targetHeight = 0;
-  wgpu::Texture target;  // Borrowed active render target.
+  /// Names whatever the renderer is drawing into right now: the primary target, or the layer,
+  /// mask, pattern or filter texture that has taken its place mid-frame. Identity only - the
+  /// owner of each of those keeps it alive, and this never releases anything.
+  gpu::Texture target;
   /// Primary render target this renderer allocated, held as the runtime handle that owns it.
   /// Null while the embedder supplies the target instead.
   gpu::Texture ownedTarget;
   /// Runtime name for an embedder-supplied target. The embedder owns that texture; this only
   /// names it for the frame's encoders, and is refreshed whenever the supplied target changes.
   gpu::Texture hostTargetHandle;
-  /// The runtime handle for the frame's primary target, owned or embedder-supplied. Null when
-  /// there is no usable target this frame.
-  const gpu::Texture* targetHandle = nullptr;
-  /// Backend identity of the texture \ref targetHandle names. Layers, masks, patterns and filter
-  /// buffers redirect \ref target to pooled backend textures mid-frame, so the handle is used
-  /// only while the two still name the same texture rather than on the assumption that they do.
-  WGPUTexture targetHandleTexture = nullptr;
   std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
 
   // The frame's command buffers, in the order they must execute. endFrame submits all of them
@@ -1542,24 +1492,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // embedding host; these handles only name them, so they are dropped at the
   // frame boundary, before a recycled texture could be reached through a stale
   // handle.
-  std::deque<gpu::Texture> frameImportedTextures;
   std::deque<gpu::TextureView> frameImportedTextureViews;
   std::unordered_set<std::shared_ptr<RendererGeodeTextureSnapshot::Backing>> frameSnapshotBackings;
   /// Consumer-local borrowed registrations; the retained backing owns the source texture.
   std::unordered_map<const RendererGeodeTextureSnapshot::Backing*, gpu::Texture>
       frameSnapshotImports;
-
-  /// Names a backend-owned texture as a runtime texture handle valid for the rest of the frame.
-  /// The extent comes from the texture itself, so a caller can never describe it wrongly.
-  const gpu::Texture& importTexture(const wgpu::Texture& texture, wgpu::TextureFormat format,
-                                    wgpu::TextureUsage usage) {
-    gpu::Result<gpu::Texture> imported = device->adapterDevice().importExternalTexture(
-        texture, gpu::Extent2d{texture.getWidth(), texture.getHeight()},
-        geode::GpuTextureFormatFromWgpu(format), geode::GpuTextureUsageFromWgpu(usage));
-    UTILS_RELEASE_ASSERT_MSG(imported.hasResult(), "Failed to name a render target as a texture");
-    frameImportedTextures.push_back(std::move(imported).result());
-    return frameImportedTextures.back();
-  }
 
   /// Opens a runtime view over an already-named texture, valid for the rest of the frame. Views
   /// cover the whole texture, so this addresses exactly the texels any other full-texture view of
@@ -1597,54 +1534,39 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                                                      : sourceGraphicDesc;
   }
 
-  /// Names a pooled texture as a runtime handle, taking its capabilities from the descriptor it
-  /// was created from.
-  const gpu::Texture& importTexture(const wgpu::Texture& texture,
-                                    const wgpu::TextureDescriptor& desc) {
-    return importTexture(texture, desc.format, desc.usage);
+  /// An identity-only name for \p texture: it resolves to the same resource but releases
+  /// nothing, so whoever owns the texture stays the only thing that can free it.
+  /// @param texture Handle to alias.
+  static gpu::Texture aliasOf(const gpu::Texture& texture) {
+    return gpu::Texture::CreateForBackend(texture.slotIndex(), texture.generation(),
+                                          texture.deviceId());
   }
 
   /// Runtime name for whatever the renderer is drawing into right now.
-  ///
-  /// The primary target already has one, because the runtime allocated it or named the
-  /// embedder's texture once for the frame. Anything else is a pooled backend texture that gets
-  /// a frame-lived name here.
-  const gpu::Texture& activeTarget() {
-    if (targetHandle != nullptr && static_cast<WGPUTexture>(target) == targetHandleTexture) {
-      return *targetHandle;
-    }
-    return importTarget(target);
-  }
-
-  /// Names the active render target, which always carries render-attachment, sampled and
-  /// copy-source capability so layers can be composited and read back.
-  const gpu::Texture& importTarget(const wgpu::Texture& texture) {
-    return importTexture(texture, textureFormat,
-                         wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-                             wgpu::TextureUsage::CopySrc);
-  }
-
-  /// The backend texture behind a runtime handle, for the subsystems that still record through
-  /// wgpu directly (the filter engine, and the target alias the snapshot and readback paths
-  /// borrow). Borrowed: the runtime handle is what owns it.
-  /// @param texture Live runtime texture handle.
-  wgpu::Texture backendTextureOf(const gpu::Texture& texture) const {
-    return device->adapterDevice().wgpuTextureOf(texture);
-  }
+  const gpu::Texture& activeTarget() const { return target; }
 
   /// The runtime's spelling of the renderer's surface format.
   gpu::TextureFormat gpuTextureFormat() const {
     return geode::GpuTextureFormatFromWgpu(textureFormat);
   }
 
-  /// Extent of the active render target, in texels, read from the target itself.
-  gpu::Extent2d targetExtent() const {
-    return gpu::Extent2d{target.getWidth(), target.getHeight()};
+  /// Whether \p texture may be the source of a copy, which an embedder-supplied target only is
+  /// when the embedder gave it that capability.
+  /// @param texture Live runtime texture handle.
+  [[nodiscard]] bool canCopyFrom(const gpu::Texture& texture) const {
+    const gpu::Result<gpu::TextureDescriptor> descriptor =
+        device->runtimeDevice().textureDescriptor(texture);
+    return descriptor.hasResult() &&
+           gpu::HasAllFlags(descriptor.result().usage, gpu::TextureUsage::CopySrc);
   }
 
-  /// Extent of a backend texture, in texels, as the runtime spells it.
-  static gpu::Extent2d extentOf(const wgpu::Texture& texture) {
-    return gpu::Extent2d{texture.getWidth(), texture.getHeight()};
+  /// Extent of the active render target, in texels, as its owning device recorded it.
+  gpu::Extent2d targetExtent() const {
+    const gpu::Result<gpu::TextureDescriptor> descriptor =
+        device->runtimeDevice().textureDescriptor(target);
+    UTILS_RELEASE_ASSERT_MSG(descriptor.hasResult(),
+                             "The active render target is not a live texture of this device");
+    return descriptor.result().size;
   }
 
   /// Open a runtime encoder for the frame to record into.
@@ -1783,7 +1705,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameRetainedFilterResources.clear();
     frameRecordingOpen = false;
     frameImportedTextureViews.clear();
-    frameImportedTextures.clear();
     frameSnapshotImports.clear();
     frameSnapshotBackings.clear();
     if (device) {
@@ -1791,8 +1712,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  void abandonFrameRecordingAfterFilterFailure(const wgpu::Texture& savedTarget) {
-    target = savedTarget;
+  void abandonFrameRecordingAfterFilterFailure(const gpu::Texture& savedTarget) {
+    target = aliasOf(savedTarget);
     encoder.reset();
     discardFrameGpuEncoder();
     retainPendingFrameReleasesAfterFailure();
@@ -1803,7 +1724,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// the filter-failure path: nothing submitted, and everything the frame recorded against
   /// retained rather than returned to a reusable pool.
   void abandonFrameRecording() {
-    const wgpu::Texture currentTarget = target;
+    const gpu::Texture currentTarget = aliasOf(target);
     abandonFrameRecordingAfterFilterFailure(currentTarget);
   }
 
@@ -1909,7 +1830,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     PatternStackFrame& operator=(PatternStackFrame&&) = default;
 
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;
+    gpu::Texture savedTarget;
     Transform2d savedDeviceFromLocalTransform;
     std::vector<Transform2d> savedDeviceFromLocalTransformStack;
     int savedPixelWidth = 0;
@@ -2011,7 +1932,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (outer == OuterPatternState::kRestore) {
         // Put the renderer back on the state the outermost tile interrupted, so the rest of this
         // frame does not read a texture that just went back to the pool.
-        target = outermost.savedTarget;
+        target = aliasOf(outermost.savedTarget);
         pixelWidth = outermost.savedPixelWidth;
         pixelHeight = outermost.savedPixelHeight;
         deviceFromLocalTransform = outermost.savedDeviceFromLocalTransform;
@@ -2021,7 +1942,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         // The next frame supplies its own viewport, transform and target, so restoring the
         // abandoned frame's here would render it at the wrong size under a stale clip.
         releaseClipStackTexturesAtFrameEnd(outermost.savedClipStack);
-        target = wgpu::Texture();
+        target = gpu::Texture();
       }
     }
     patternStack.clear();
@@ -2061,9 +1982,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// succession of resized targets stays resident on runtimes, notably browsers, that collect
   /// lazily.
   void retireOwnedTargetAtFrameBoundary() {
-    target = wgpu::Texture();
-    targetHandle = nullptr;
-    targetHandleTexture = nullptr;
+    target = gpu::Texture();
     targetWidth = 0;
     targetHeight = 0;
     if (!ownedTarget.isValid()) {
@@ -2228,7 +2147,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   bool submitFilterBudgetChunk() {
     const bool forced = std::exchange(forceFilterBudgetChunkForTesting, false);
-    if (!device || !frameRecordingOpen || !target || !filterStack.empty() ||
+    if (!device || !frameRecordingOpen || !target.isValid() || !filterStack.empty() ||
         (!forced && !filterBudgetNeedsChunkSubmit())) {
       return false;
     }
@@ -2275,7 +2194,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// onto the saved target with the stored opacity.
   struct LayerStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;
+    gpu::Texture savedTarget;
     gpu::Texture layerTexture;
     /// Descriptors captured at push time so `popIsolatedLayer` can
     /// release the textures back to the correct pool bucket via
@@ -2288,6 +2207,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// variant that snapshots the parent and uses the W3C formulas.
     MixBlendMode blendMode = MixBlendMode::Normal;
   };
+  static_assert(!std::is_copy_constructible_v<LayerStackFrame>,
+                "A copyable layer stack frame would let vector growth copy its texture handles.");
   std::vector<LayerStackFrame> layerStack;
 
   /// GPU filter-graph executor. Non-owning pointer into the
@@ -2308,7 +2229,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     enum class Phase { Capturing, Content };
     Phase phase = Phase::Capturing;
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;
+    gpu::Texture savedTarget;
     gpu::Texture maskTexture;     // Mask element's content (RGBA).
     gpu::Texture contentTexture;  // Masked element's content (RGBA).
     /// Descriptors captured at push for texture-pool release.
@@ -2325,6 +2246,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Transform2d maskBoundsTransform;
     MaskType maskType = MaskType::Luminance;
   };
+  static_assert(!std::is_copy_constructible_v<MaskStackFrame>,
+                "A copyable mask stack frame would let vector growth copy its texture handles.");
   std::vector<MaskStackFrame> maskStack;
 
   std::optional<PatternPaintSlot> patternFillPaint;
@@ -2397,7 +2320,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// composites the result back onto the outer target.
   struct FilterStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;
+    gpu::Texture savedTarget;
     gpu::Texture layerTexture;
     /// Descriptors captured at push for texture-pool release.
     gpu::TextureDescriptor layerDesc = {};
@@ -2466,7 +2389,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void pushRejectedFilterFrame() {
     FilterStackFrame frame;
     frame.savedEncoder = std::move(encoder);
-    frame.savedTarget = target;
+    frame.savedTarget = aliasOf(target);
     frame.allocationRejected = true;
     filterStack.push_back(std::move(frame));
     ++rejectedFilterDepth;
@@ -2490,7 +2413,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder->finish();
     FilterStackFrame frame;
     frame.savedEncoder = std::move(encoder);
-    frame.savedTarget = target;
+    frame.savedTarget = aliasOf(target);
     frame.layerDesc = textureDesc;
     frame.filterGraph = filterGraph;
     frame.fullFilterPlan = admission.fullPlan;
@@ -2506,10 +2429,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     clipStack.clear();
 
     frame.layerTexture = std::move(layerTexture);
-    target = backendTextureOf(frame.layerTexture);
-    auto newEncoder = std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline,
-                                                          *imagePipeline, importTarget(target),
-                                                          textureDesc.size, *frameGpuEncoder);
+    target = aliasOf(frame.layerTexture);
+    auto newEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            target, textureDesc.size, *frameGpuEncoder);
     configurePathEncoder(*newEncoder, /*collectGeometry=*/true, admission.bufferOffsetX,
                          admission.bufferOffsetY);
     newEncoder->clear(css::RGBA(0, 0, 0, 0));
@@ -2610,10 +2533,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
         Transform2d::Translate(geometry->paddedRegion.topLeft.x, geometry->paddedRegion.topLeft.y) *
         frame.deviceFromFilter;
-    target = frame.savedTarget;
-    auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
-        *device, *pipeline, *gradientPipeline, *imagePipeline, importTarget(frame.savedTarget),
-        targetExtent(), *frameGpuEncoder);
+    target = aliasOf(frame.savedTarget);
+    auto compositeEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            frame.savedTarget, targetExtent(), *frameGpuEncoder);
     configurePathEncoder(*compositeEncoder);
     compositeEncoder->setLoadPreserve();
     replaceActiveEncoder(std::move(compositeEncoder));
@@ -3099,7 +3022,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// The replay encoder intentionally has no geometry sink, preventing the
   /// overlay path from recursively observing itself.
   void emitGeometryDebugOverlay() {
-    if (!debugGeometryOverlay || geometryDebugEdges.empty() || !target ||
+    if (!debugGeometryOverlay || geometryDebugEdges.empty() || !target.isValid() ||
         frameGpuEncoder == nullptr) {
       return;
     }
@@ -4957,18 +4880,36 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+  /// Whether the embedder's texture is a surface this renderer can draw a frame into.
+  ///
+  /// Registering an externally owned texture is the only look the runtime gets at it: nothing
+  /// downstream re-reads the backend, so everything that later names it - a render pass, a layer
+  /// composite, a readback copy - is recorded against the registration. Check the shape against
+  /// the texture itself once, here, where the embedder hands it over. Capabilities are not
+  /// checked beyond being drawable, because the registration below carries the ones the texture
+  /// actually has: an embedder that supplies a draw-only surface gets its frame, and the
+  /// operations that surface cannot serve are refused where they are asked for.
+  [[nodiscard]] bool hostTargetIsDrawable() const {
+    return hostTarget.getFormat() == textureFormat && hostTarget.getSampleCount() == 1 &&
+           hostTarget.getDepthOrArrayLayers() == 1 &&
+           hostTarget.getDimension() == wgpu::TextureDimension::_2D &&
+           (static_cast<WGPUTextureUsage>(hostTarget.getUsage()) &
+            static_cast<WGPUTextureUsage>(wgpu::TextureUsage::RenderAttachment)) != 0u;
+  }
+
   bool prepareHostFrameTarget() {
     retireOwnedTargetAtFrameBoundary();
     if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        !hostTargetIsDrawable()) {
       (void)surfaceBudget->reserve(-1, -1);
-      target = wgpu::Texture();
+      target = gpu::Texture();
       return false;
     }
     pixelWidth = static_cast<int>(hostTarget.getWidth());
     pixelHeight = static_cast<int>(hostTarget.getHeight());
     if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
-      target = wgpu::Texture();
+      target = gpu::Texture();
       return false;
     }
     // The embedder owns this texture, so the runtime only names it. That name is refreshed
@@ -4977,23 +4918,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
         hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()},
         geode::GpuTextureFormatFromWgpu(textureFormat),
-        geode::GpuTextureUsageFromWgpu(wgpu::TextureUsage::RenderAttachment |
-                                       wgpu::TextureUsage::TextureBinding |
-                                       wgpu::TextureUsage::CopySrc));
+        geode::GpuTextureUsageFromWgpu(hostTarget.getUsage()));
     if (!named.hasResult()) {
-      target = wgpu::Texture();
+      target = gpu::Texture();
       return false;
     }
     hostTargetHandle = std::move(named).result();
-    targetHandle = &hostTargetHandle;
-    target = hostTarget;
-    targetHandleTexture = static_cast<WGPUTexture>(target);
+    target = aliasOf(hostTargetHandle);
     return true;
   }
 
   bool prepareOwnedFrameTarget() {
     if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
-      target = wgpu::Texture();
+      target = gpu::Texture();
       return false;
     }
 
@@ -5009,7 +4946,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                   gpu::TextureUsage::Sampled});
       if (!created.hasResult()) {
-        target = wgpu::Texture();
+        target = gpu::Texture();
         return false;
       }
       // The runtime counts the creation itself, so there is no explicit tick here.
@@ -5017,11 +4954,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       targetWidth = pixelWidth;
       targetHeight = pixelHeight;
     }
-    targetHandle = &ownedTarget;
-    // Readback and the layer-snapshot copy still name the target through the backend; both
-    // borrow, and the runtime handle above is what owns it.
-    target = device->adapterDevice().wgpuTextureOf(ownedTarget);
-    targetHandleTexture = static_cast<WGPUTexture>(target);
+    target = aliasOf(ownedTarget);
     return true;
   }
 
@@ -5106,8 +5039,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     ownedTarget = gpu::Texture();
     hostTargetHandle = gpu::Texture();
-    targetHandle = nullptr;
-    targetHandleTexture = nullptr;
   }
 
   /// Wait for the backend to go idle, unless the device is gone or lost.
@@ -5129,7 +5060,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     waitForQueueIdleAtTeardown();
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
-    frameImportedTextures.clear();
     releaseFrameTargetsAtTeardown();
     texturePool.reset();
 
@@ -5578,7 +5508,6 @@ void RendererGeode::endFrame() {
     // about to be recycled, so drop them before any of them can be handed out again.
     impl_->frameRetainedFilterResources.clear();
     impl_->frameImportedTextureViews.clear();
-    impl_->frameImportedTextures.clear();
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
     impl_->device->drainDeferredTextureBackings();
@@ -5872,16 +5801,16 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
 
   Impl::LayerStackFrame frame;
   frame.savedEncoder = std::move(impl_->encoder);
-  frame.savedTarget = impl_->target;
+  frame.savedTarget = Impl::aliasOf(impl_->target);
   frame.layerTexture = std::move(layerTexture);
   frame.layerDesc = td;
   frame.opacity = opacity;
   frame.blendMode = blendMode;
 
-  impl_->target = impl_->backendTextureOf(frame.layerTexture);
+  impl_->target = Impl::aliasOf(frame.layerTexture);
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTarget(impl_->target), td.size, *impl_->frameGpuEncoder);
+      impl_->target, td.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -5909,14 +5838,14 @@ void RendererGeode::popIsolatedLayer() {
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (impl_->frameRecordingAbandoned) {
-    impl_->target = frame.savedTarget;
+    impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
 
   // Restore outer target references.
-  impl_->target = frame.savedTarget;
+  impl_->target = Impl::aliasOf(frame.savedTarget);
 
   if (frame.blendMode != MixBlendMode::Normal) {
     // SVG `mix-blend-mode`. The fragment shader needs the parent's current pixels as a
@@ -5929,10 +5858,15 @@ void RendererGeode::popIsolatedLayer() {
                                                         static_cast<uint32_t>(impl_->pixelHeight)},
                                           impl_->gpuTextureFormat(),
                                           gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst};
-    gpu::Texture snapshot = impl_->acquireTexture(snapDesc);
+    // Reading the backdrop copies out of the parent target, which an embedder-supplied one can
+    // only serve if the embedder asked for that capability. A document must not be able to take
+    // the renderer down by naming a blend mode, so a target that cannot be copied from falls
+    // through to the unblended path below rather than recording a copy the runtime refuses.
+    gpu::Texture snapshot =
+        impl_->canCopyFrom(frame.savedTarget) ? impl_->acquireTexture(snapDesc) : gpu::Texture();
 
     if (snapshot.isValid()) {
-      const gpu::Texture& savedTargetHandle = impl_->importTarget(frame.savedTarget);
+      const gpu::Texture& savedTargetHandle = frame.savedTarget;
       const gpu::Texture& snapshotHandle = snapshot;
 
       // The layer's render pass ended when its encoder was retired above, so the copy can be
@@ -5976,8 +5910,8 @@ void RendererGeode::popIsolatedLayer() {
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
-    // If snapshot allocation failed fall through to the Normal path -
-    // at least the layer content shows up even if unblended.
+    // If the backdrop could not be captured fall through to the Normal path - at least the
+    // layer content shows up even if unblended.
   }
 
   // Plain premultiplied source-over (the `Normal` case). Create a
@@ -5985,7 +5919,7 @@ void RendererGeode::popIsolatedLayer() {
   // texture across the target with the stored opacity as compositing alpha.
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
+      frame.savedTarget, impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6044,7 +5978,7 @@ void RendererGeode::popFilterLayer() {
       --impl_->rejectedFilterDepth;
     }
     if (frame.savedEncoder) {
-      impl_->target = frame.savedTarget;
+      impl_->target = Impl::aliasOf(frame.savedTarget);
       impl_->replaceActiveEncoder(std::move(frame.savedEncoder));
       impl_->updateEncoderScissor();
     }
@@ -6061,7 +5995,7 @@ void RendererGeode::popFilterLayer() {
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (impl_->frameRecordingAbandoned) {
-    impl_->target = frame.savedTarget;
+    impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
     impl_->filterExecutionBudget->release(frame.filterReservation);
@@ -6100,10 +6034,10 @@ void RendererGeode::popFilterLayer() {
   // Restore outer target and create a fresh encoder that preserves its
   // existing contents. Composite the filtered texture back with full
   // opacity (filter results are already premultiplied).
-  impl_->target = frame.savedTarget;
+  impl_->target = Impl::aliasOf(frame.savedTarget);
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
+      frame.savedTarget, impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6194,13 +6128,13 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   impl_->encoder->finish();
 
   frame.savedEncoder = std::move(impl_->encoder);
-  frame.savedTarget = impl_->target;
+  frame.savedTarget = Impl::aliasOf(impl_->target);
   frame.phase = Impl::MaskStackFrame::Phase::Capturing;
 
-  impl_->target = impl_->backendTextureOf(frame.maskTexture);
+  impl_->target = Impl::aliasOf(frame.maskTexture);
   auto captureEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTarget(impl_->target), frame.maskDesc.size, *impl_->frameGpuEncoder);
+      impl_->target, frame.maskDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*captureEncoder);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->replaceActiveEncoder(std::move(captureEncoder));
@@ -6230,10 +6164,10 @@ void RendererGeode::transitionMaskToContent() {
     return;
   }
 
-  impl_->target = impl_->backendTextureOf(frame.contentTexture);
+  impl_->target = Impl::aliasOf(frame.contentTexture);
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTarget(impl_->target), frame.contentDesc.size, *impl_->frameGpuEncoder);
+      impl_->target, frame.contentDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*contentEncoder);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->replaceActiveEncoder(std::move(contentEncoder));
@@ -6260,7 +6194,7 @@ void RendererGeode::popMask() {
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (impl_->frameRecordingAbandoned) {
-    impl_->target = frame.savedTarget;
+    impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
     impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
     impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
@@ -6268,10 +6202,10 @@ void RendererGeode::popMask() {
   }
 
   // Restore the outer target and reopen a new encoder with load-preserve.
-  impl_->target = frame.savedTarget;
+  impl_->target = Impl::aliasOf(frame.savedTarget);
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
+      frame.savedTarget, impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6346,7 +6280,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     impl_->encoder->finish();
   }
   frame.savedEncoder = std::move(impl_->encoder);
-  frame.savedTarget = impl_->target;
+  frame.savedTarget = Impl::aliasOf(impl_->target);
   frame.savedDeviceFromLocalTransform = impl_->deviceFromLocalTransform;
   frame.savedDeviceFromLocalTransformStack = std::move(impl_->deviceFromLocalTransformStack);
   frame.savedPixelWidth = impl_->pixelWidth;
@@ -6387,7 +6321,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // tile texture so the new encoder's MVP maps correctly.
   impl_->pixelWidth = tilePixelWidth;
   impl_->pixelHeight = tilePixelHeight;
-  impl_->target = impl_->backendTextureOf(impl_->patternStack.back().tileTexture);
+  impl_->target = Impl::aliasOf(impl_->patternStack.back().tileTexture);
   impl_->deviceFromLocalTransformStack.clear();
   // Initialise the current transform to the raster scale so direct draws
   // issued before the driver's next `setTransform` still land in the
@@ -6425,7 +6359,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   // Restore outer state.
-  impl_->target = frame.savedTarget;
+  impl_->target = Impl::aliasOf(frame.savedTarget);
   impl_->pixelWidth = frame.savedPixelWidth;
   impl_->pixelHeight = frame.savedPixelHeight;
   impl_->deviceFromLocalTransform = frame.savedDeviceFromLocalTransform;
@@ -6468,10 +6402,10 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // when there's been at least one prior submission. This requires
   // extending GeoEncoder; see the `reopen` helper added below.
   if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
-      frame.savedTarget) {
+      frame.savedTarget.isValid()) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-        impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
+        frame.savedTarget, impl_->targetExtent(), *impl_->frameGpuEncoder);
     impl_->configurePathEncoder(*newEncoder);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
@@ -6790,20 +6724,18 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
 }
 
 bool RendererGeodeTextureSnapshot::canSampleWith(const geode::GeodeDevice& device) const {
-  if (!isValid() || !runtimeFormat_ || SnapshotRuntimeFormat(format_) != runtimeFormat_ ||
-      (static_cast<WGPUTextureUsage>(textureUsage_) &
-       static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) == 0u) {
+  if (!isValid()) {
     return false;
   }
-  if (runtimeDeviceId_ == device.runtimeDevice().deviceId()) {
-    const gpu::Texture* runtime = runtimeTexture();
-    return runtime == nullptr ||
-           static_cast<WGPUTexture>(device.adapterDevice().wgpuTextureOf(*runtime)) ==
-               static_cast<WGPUTexture>(texture_);
+  const gpu::Texture* runtime = runtimeTexture();
+  if (runtime->deviceId() == device.runtimeDevice().deviceId()) {
+    return SnapshotTextureIsSampleable(device.runtimeDevice(), *runtime);
   }
-  return backing_ && nativeDevice_ != nullptr && nativeQueue_ != nullptr &&
-         nativeDevice_ == static_cast<WGPUDevice>(device.device()) &&
-         nativeQueue_ == static_cast<WGPUQueue>(device.queue());
+  // Reaching another context means registering this texture there, which needs it to still be
+  // alive when that registration is made. A frame-local borrow gives no such promise - the
+  // producer takes its target back at the frame boundary - so only an owning lease may cross.
+  return backing_ != nullptr && device_ != nullptr &&
+         SnapshotTextureIsSampleable(device_->runtimeDevice(), *runtime);
 }
 
 bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
@@ -6838,17 +6770,15 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
   if (geodeTexture->backing_) {
     impl_->frameSnapshotBackings.insert(geodeTexture->backing_);
   }
+  // `canSampleWith` admitted this snapshot, which means it names a texture.
   const gpu::Texture* source = geodeTexture->runtimeTexture();
-  if (source == nullptr || source->deviceId() != impl_->device->runtimeDevice().deviceId()) {
+  UTILS_RELEASE_ASSERT(source != nullptr);
+  if (source->deviceId() != impl_->device->runtimeDevice().deviceId()) {
     const auto key = geodeTexture->backing_.get();
     auto found = impl_->frameSnapshotImports.find(key);
     if (found == impl_->frameSnapshotImports.end()) {
-      auto imported = impl_->device->adapterDevice().importExternalTexture(
-          geodeTexture->texture(),
-          {static_cast<uint32_t>(geodeTexture->allocationDimensions().x),
-           static_cast<uint32_t>(geodeTexture->allocationDimensions().y)},
-          *geodeTexture->runtimeFormat(),
-          geode::GpuTextureUsageFromWgpu(geodeTexture->textureUsage_));
+      gpu::Result<gpu::Texture> imported = impl_->device->adapterDevice().importTextureFrom(
+          geodeTexture->device_->adapterDevice(), *source);
       if (imported.hasError()) {
         return false;
       }
@@ -7539,9 +7469,7 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
   if (!snapshot.isValid()) {
     return nullptr;
   }
-  impl_->target = wgpu::Texture();
-  impl_->targetHandle = nullptr;
-  impl_->targetHandleTexture = nullptr;
+  impl_->target = gpu::Texture();
   impl_->targetWidth = 0;
   impl_->targetHeight = 0;
   return std::make_shared<RendererGeodeTextureSnapshot>(std::move(snapshot));
@@ -7555,8 +7483,8 @@ const RendererTextureSnapshot* RendererGeode::borrowTextureSnapshot() {
   }
 
   impl_->borrowedTargetSnapshot.emplace(RendererGeodeTextureSnapshot::BorrowCurrentFrame(
-      impl_->ownedTarget, impl_->device->adapterDevice().wgpuTextureOf(impl_->ownedTarget),
-      Vector2i(impl_->pixelWidth, impl_->pixelHeight), impl_->textureFormat));
+      impl_->device->runtimeDevice(), impl_->ownedTarget,
+      Vector2i(impl_->pixelWidth, impl_->pixelHeight)));
   if (!impl_->borrowedTargetSnapshot->isValid()) {
     impl_->borrowedTargetSnapshot.reset();
     return nullptr;
@@ -7808,29 +7736,35 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
   return !runtime.submit(std::move(commands).result()).hasError();
 }
 
-bool CanReadSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
-                     const wgpu::Texture& texture, Vector2i dimensions,
-                     wgpu::TextureFormat format) {
-  return device && texture && SnapshotRuntimeFormat(format).has_value() &&
-         texture.getFormat() == format && texture.getSampleCount() == 1 &&
-         texture.getDepthOrArrayLayers() == 1 &&
-         texture.getDimension() == wgpu::TextureDimension::_2D &&
-         SnapshotExtentFits(dimensions, SnapshotAllocationExtent(texture));
+/// The descriptor a snapshot readback may run against, or nothing when \p texture is not a
+/// readable snapshot of \p device at \p dimensions.
+/// @param device Device that owns the texture. @param texture Texture to read.
+/// @param dimensions Content extent to read, anchored at the texture origin.
+std::optional<gpu::TextureDescriptor> ReadableSnapshotDescriptor(
+    const std::shared_ptr<geode::GeodeDevice>& device, const gpu::Texture& texture,
+    Vector2i dimensions) {
+  if (!device) {
+    return std::nullopt;
+  }
+  gpu::Result<gpu::TextureDescriptor> descriptor =
+      device->runtimeDevice().textureDescriptor(texture);
+  if (descriptor.hasError() || descriptor.result().sampleCount != 1 ||
+      !IsSnapshotFormat(descriptor.result().format) ||
+      !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(descriptor.result().size))) {
+    return std::nullopt;
+  }
+  return std::move(descriptor).result();
 }
 
-bool CanUnpremultiplySnapshotOnGpu(const wgpu::Texture& texture, wgpu::TextureFormat format,
-                                   AlphaType alphaType) {
-  return alphaType == AlphaType::Premultiplied && format == wgpu::TextureFormat::RGBA8Unorm &&
-         texture.getFormat() == format &&
-         (static_cast<WGPUTextureUsage>(texture.getUsage()) &
-          static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) != 0u;
+bool CanUnpremultiplySnapshotOnGpu(const gpu::TextureDescriptor& descriptor, AlphaType alphaType) {
+  return alphaType == AlphaType::Premultiplied &&
+         descriptor.format == gpu::TextureFormat::RGBA8Unorm &&
+         gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::Sampled);
 }
 
-bool SnapshotHasReadbackRoute(const wgpu::Texture& texture, wgpu::TextureFormat format,
-                              AlphaType alphaType) {
-  const bool canCopy = (static_cast<WGPUTextureUsage>(texture.getUsage()) &
-                        static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc)) != 0u;
-  return canCopy || CanUnpremultiplySnapshotOnGpu(texture, format, alphaType);
+bool SnapshotHasReadbackRoute(const gpu::TextureDescriptor& descriptor, AlphaType alphaType) {
+  return gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::CopySrc) ||
+         CanUnpremultiplySnapshotOnGpu(descriptor, alphaType);
 }
 }  // namespace
 
@@ -7858,7 +7792,7 @@ struct RendererGeodeTextureSnapshot::ReadbackControl {
 
 RendererBitmap RendererGeodeTextureSnapshot::readMappedTexture(
     geode::GeodeDevice& context, gpu::BufferMapping& mapping, uint32_t width, uint32_t height,
-    wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
+    gpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
   auto mappedBytes = context.runtimeDevice().mappedBytes(mapping);
   if (mappedBytes.hasError()) {
     (void)context.runtimeDevice().unmapBuffer(std::move(mapping));
@@ -7903,7 +7837,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& 
   control.status = mapped.status;
   if (mapped.status != ReadbackMapStatus::Success) return {};
   RendererBitmap bitmap =
-      readMappedTexture(context, mapped.mapping, width, height, wgpu::TextureFormat::RGBA8Unorm,
+      readMappedTexture(context, mapped.mapping, width, height, gpu::TextureFormat::RGBA8Unorm,
                         AlphaType::Unpremultiplied, control);
   if (bitmap.empty()) return {};
   context.releaseSnapshotReadbackResources(std::move(resources));
@@ -7912,7 +7846,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& 
 
 RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
     geode::GeodeDevice& context, const gpu::Texture& texture, uint32_t width, uint32_t height,
-    wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
+    gpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
   if (control.stopped()) return {};
   geode::GeodeWgpuAdapterDevice& runtime = context.adapterDevice();
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
@@ -7943,21 +7877,23 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
-    geode::GeodeDevice& context, wgpu::Texture texture, Vector2i dimensions,
-    wgpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
+    geode::GeodeDevice& context, geode::GeodeDevice& owner, const gpu::Texture& texture,
+    Vector2i dimensions, const gpu::TextureDescriptor& descriptor, AlphaType alphaType,
+    ReadbackControl& control) {
   if (control.stopped()) return {};
   if (context.isDeviceLost()) {
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
   }
-  auto imported = context.adapterDevice().importExternalTexture(
-      texture, {texture.getWidth(), texture.getHeight()}, geode::GpuTextureFormatFromWgpu(format),
-      geode::GpuTextureUsageFromWgpu(texture.getUsage()));
+  // The capture context is its own runtime device, so the texture has to be registered there
+  // before anything recorded here may name it.
+  gpu::Result<gpu::Texture> imported =
+      context.adapterDevice().importTextureFrom(owner.adapterDevice(), texture);
   if (imported.hasError()) return {};
   const gpu::Texture source = std::move(imported).result();
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
-  if (CanUnpremultiplySnapshotOnGpu(texture, format, alphaType)) {
+  if (CanUnpremultiplySnapshotOnGpu(descriptor, alphaType)) {
     RendererBitmap bitmap = readTextureGpu(context, source, width, height, control);
     if (!bitmap.empty()) return bitmap;
   }
@@ -7966,16 +7902,13 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
   }
-  const bool canCopy = (static_cast<WGPUTextureUsage>(texture.getUsage()) &
-                        static_cast<WGPUTextureUsage>(wgpu::TextureUsage::CopySrc)) != 0u;
-  if (!canCopy) return {};
-  return readTextureCpu(context, source, width, height, format, alphaType, control);
+  if (!gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::CopySrc)) return {};
+  return readTextureCpu(context, source, width, height, descriptor.format, alphaType, control);
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::GeodeDevice> device,
-                                                         wgpu::Texture texture, Vector2i dimensions,
-                                                         wgpu::TextureFormat format,
-                                                         AlphaType alphaType,
+                                                         const gpu::Texture& texture,
+                                                         Vector2i dimensions, AlphaType alphaType,
                                                          const std::function<bool()>& shouldCancel,
                                                          std::shared_ptr<Backing> backing) {
   (void)backing;  // Keep the source allocation leased through context-local resource teardown.
@@ -7997,13 +7930,14 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
     }
     return {};
   }
-  if (!CanReadSnapshot(device, texture, dimensions, format)) return {};
-  if (!SnapshotHasReadbackRoute(texture, format, alphaType)) return {};
+  const std::optional<gpu::TextureDescriptor> descriptor =
+      ReadableSnapshotDescriptor(device, texture, dimensions);
+  if (!descriptor || !SnapshotHasReadbackRoute(*descriptor, alphaType)) return {};
   if (device->isDeviceLost()) return {};
   auto capture = device->acquireSnapshotCapture(shouldCancel, deadline);
   if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) return {};
-  RendererBitmap bitmap =
-      readTextureWithContext(*capture.context, texture, dimensions, format, alphaType, control);
+  RendererBitmap bitmap = readTextureWithContext(*capture.context, *device, texture, dimensions,
+                                                 *descriptor, alphaType, control);
   if (control.status == ReadbackMapStatus::Cancelled) {
     device->readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
   } else if (control.status == ReadbackMapStatus::TimedOut) {
@@ -8016,18 +7950,19 @@ RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
   if (!isValid()) {
     return {};
   }
-  return readTexture(device_, texture_, dimensions_, format_, alphaType_,
+  return readTexture(device_, *runtimeTexture(), dimensions_, alphaType_,
                      /*shouldCancel=*/{}, backing_);
 }
 
 RendererBitmap RendererGeode::takeSnapshotInterruptibly(
     const std::function<bool()>& shouldCancel) const {
-  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+  if (!impl_->device || !impl_->target.isValid() || impl_->pixelWidth <= 0 ||
+      impl_->pixelHeight <= 0) {
     return RendererBitmap{};
   }
-  return RendererGeodeTextureSnapshot::readTexture(
-      impl_->device, impl_->target, Vector2i(impl_->pixelWidth, impl_->pixelHeight),
-      impl_->textureFormat, AlphaType::Premultiplied, shouldCancel);
+  return RendererGeodeTextureSnapshot::readTexture(impl_->device, impl_->target,
+                                                   Vector2i(impl_->pixelWidth, impl_->pixelHeight),
+                                                   AlphaType::Premultiplied, shouldCancel);
 }
 
 void RendererGeode::injectDeviceLossForTesting() {

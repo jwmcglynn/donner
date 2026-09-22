@@ -771,7 +771,7 @@ TEST_F(BackingLifetimeTests, AStaleHandleReachesNeitherTheRecycledSlotNorItsNewO
               IsGpuError(GpuErrorType::InvalidHandle));
   EXPECT_THAT(device_.releasedTextureSlots, IsEmpty())
       << "a stale handle must not release the allocation of the slot's new occupant";
-  EXPECT_THAT(device_.textureExtent(replacement), HasResult())
+  EXPECT_THAT(device_.textureDescriptor(replacement), HasResult())
       << "the replacement must still be live after the stale destroy was refused";
 
   EXPECT_THAT(device_.destroyTextureBacking(std::move(replacement)), IsOk());

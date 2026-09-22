@@ -95,6 +95,27 @@ public:
                                                   gpu::TextureUsage usage);
 
   /**
+   * Registers a texture \p owner holds as a texture of this adapter, so code recording against
+   * this adapter can name it.
+   *
+   * Two adapters driving the same backend device and queue are separate runtime devices, and a
+   * texture of one is not a texture of the other: this registration is what makes it reachable
+   * here. It is refused when \p owner drives a different backend device or queue - nothing this
+   * adapter records could sample or copy that memory - and when \p texture is not a live texture
+   * of \p owner, so a stale or forged handle cannot bridge whatever now occupies its slot. The
+   * extent, format and capabilities come from \p owner's record of the texture, so a caller
+   * cannot describe it differently than its owner does.
+   *
+   * This adapter does NOT take ownership: destroying the returned handle only forgets the
+   * registration, and \p owner must keep the texture alive for as long as it is registered.
+   *
+   * @param owner Adapter that owns \p texture.
+   * @param texture Live texture handle of \p owner.
+   */
+  gpu::Result<gpu::Texture> importTextureFrom(const GeodeWgpuAdapterDevice& owner,
+                                              const gpu::Texture& texture);
+
+  /**
    * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
    * wgpu texture behind \p texture, or a null handle if the handle does not name a live texture of
    * this adapter. Borrowed; the adapter (or the external owner) retains ownership.

@@ -495,21 +495,25 @@ std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSn
     return nullptr;
   }
 
-  wgpu::TextureDescriptor textureDesc = {};
-  textureDesc.size = {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y), 1};
-  textureDesc.mipLevelCount = 1;
-  textureDesc.sampleCount = 1;
-  textureDesc.dimension = wgpu::TextureDimension::_2D;
-  textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-  textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-  wgpu::Texture texture = device->device().createTexture(textureDesc);
-  if (!texture) {
+  gpu::Result<gpu::Texture> created = device->runtimeDevice().createTexture(gpu::TextureDescriptor{
+      "countingSnapshot",
+      {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y)},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (created.hasError()) {
+    return nullptr;
+  }
+
+  svg::RendererGeodeTextureSnapshot snapshot =
+      svg::RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+          device, std::move(created).result(), dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          svg::AlphaType::Premultiplied);
+  if (!snapshot.isValid()) {
     return nullptr;
   }
 
   return std::shared_ptr<const svg::RendererTextureSnapshot>(
-      new svg::RendererGeodeTextureSnapshot(device, texture, dimensions,
-                                            wgpu::TextureFormat::RGBA8Unorm),
+      new svg::RendererGeodeTextureSnapshot(std::move(snapshot)),
       [destructionCount](const svg::RendererTextureSnapshot* snapshot) {
         delete snapshot;
         ++(*destructionCount);

@@ -175,16 +175,6 @@
         "Texture"
       ]
     },
-    "donner/editor/gui/UiTextureRegistration.cc": {
-      "wgpuCppTokens": [
-        "Texture"
-      ]
-    },
-    "donner/editor/gui/UiTextureRegistration.h": {
-      "wgpuCppTokens": [
-        "Texture"
-      ]
-    },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -234,10 +224,7 @@
       ],
       "wgpuCppTokens": [
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/editor/tests/ViewportInteractionController_tests.cc": {
@@ -444,42 +431,27 @@
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
-        "createView",
         "draw",
         "submit"
       ],
       "wgpuCFunctions": [
-        "wgpuDevicePoll",
-        "wgpuLabel",
-        "wgpuTextureOf"
+        "wgpuDevicePoll"
       ],
       "wgpuCTypes": [
-        "WGPUDevice",
-        "WGPUQueue",
-        "WGPUTexture",
-        "WGPUTextureFormat",
-        "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureUsage"
       ],
       "wgpuCppTokens": [
         "Texture",
-        "TextureDescriptor",
         "TextureDimension",
         "TextureFormat",
-        "TextureUsage",
-        "TextureView"
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
-      "wgpuCTypes": [
-        "WGPUDevice",
-        "WGPUQueue"
-      ],
       "wgpuCppTokens": [
         "Texture",
         "TextureFormat",
-        "TextureUsage",
-        "TextureView"
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/geode/GeodeCallbackState.h": {
@@ -659,11 +631,13 @@
         "WGPUCompositeAlphaMode",
         "WGPUCompositeAlphaMode_Inherit",
         "WGPUCompositeAlphaMode_Premultiplied",
+        "WGPUDevice",
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
         "WGPUPresentMode",
         "WGPUPresentMode_Immediate",
         "WGPUPresentMode_Mailbox",
+        "WGPUQueue",
         "WGPUShaderStage",
         "WGPUStringView",
         "WGPUSurface",
@@ -814,6 +788,7 @@
         "getConstMappedRange",
         "mapAsync",
         "poll",
+        "setScissorRect",
         "submit",
         "unmap",
         "writeBuffer",
@@ -990,22 +965,10 @@
     "donner/svg/renderer/geode/tests/GeodeSnapshotReadback_tests.cc": {
       "operations": [
         "createTexture",
-        "getQueue",
         "writeTexture"
       ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
       "wgpuCppTokens": [
-        "Device",
-        "Extent3D",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
-        "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc": {
@@ -1036,7 +999,8 @@
       "wgpuCTypes": [
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
-        "WGPUStringView"
+        "WGPUStringView",
+        "WGPUTexture"
       ],
       "wgpuCppTokens": [
         "Buffer",
@@ -1075,15 +1039,13 @@
       "wgpuCFunctions": [
         "wgpuTextureOf"
       ],
+      "wgpuCTypes": [
+        "WGPUDevice",
+        "WGPUQueue"
+      ],
       "wgpuCppTokens": [
-        "Extent3D",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/svg/renderer/tests/RendererTestBackendGeode.cc": {

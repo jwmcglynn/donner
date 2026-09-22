@@ -204,16 +204,6 @@
         "Texture"
       ]
     },
-    "donner/editor/gui/UiTextureRegistration.cc": {
-      "wgpuCppTokens": [
-        "Texture"
-      ]
-    },
-    "donner/editor/gui/UiTextureRegistration.h": {
-      "wgpuCppTokens": [
-        "Texture"
-      ]
-    },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -269,10 +259,7 @@
       "usesEditorWgpuDefine": true,
       "wgpuCppTokens": [
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/editor/tests/LayersPanel_tests.cc": {

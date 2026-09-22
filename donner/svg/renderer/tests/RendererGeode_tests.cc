@@ -1683,8 +1683,8 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   EXPECT_EQ(texture->dimensions(),
             Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
   const auto* geodeTexture = static_cast<const RendererGeodeTextureSnapshot*>(texture.get());
-  EXPECT_TRUE(static_cast<bool>(geodeTexture->texture()));
-  EXPECT_TRUE(static_cast<bool>(geodeTexture->textureView()));
+  EXPECT_THAT(geodeTexture->runtimeTexture(), testing::NotNull());
+  EXPECT_THAT(geodeTexture->runtimeFormat(), testing::Optional(gpu::TextureFormat::RGBA8Unorm));
   const RendererBitmap textureBitmap = texture->takeSnapshot();
   ASSERT_FALSE(textureBitmap.empty());
   EXPECT_THAT(pixelAt(textureBitmap, 8, 8), RgbaEq(255, 0, 0, 255));
@@ -5253,7 +5253,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTe
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
         sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::BGRA8Unorm,
         AlphaType::Premultiplied);
-    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
   }
   if (texture.isValid()) {
@@ -5276,7 +5276,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsInvalidContentBeforeTakingOwners
       auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
           sharedDevice(), std::move(texture), dimensions, wgpu::TextureFormat::RGBA8Unorm,
           AlphaType::Premultiplied);
-      EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+      EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
       EXPECT_THAT(texture.isValid(), testing::IsTrue());
     }
     if (texture.isValid()) {
@@ -5299,7 +5299,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsForeignOwnerWithoutConsumingTheT
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
         other, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
-    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
   }
   if (texture.isValid()) {
@@ -5337,7 +5337,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsNullOwnerAndUnsupportedFormatWit
           missingOwner ? nullptr : sharedDevice(), std::move(texture), {4, 4},
           missingOwner ? wgpu::TextureFormat::RGBA8Unorm : wgpu::TextureFormat::R8Unorm,
           AlphaType::Premultiplied);
-      EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+      EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
       EXPECT_THAT(texture.isValid(), testing::IsTrue());
     }
     if (texture.isValid()) {
@@ -5366,7 +5366,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsR
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
         sharedDevice(), std::move(stale), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
-    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(stale.isValid(), testing::IsTrue());
   }
   EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(live)), testing::IsTrue());
@@ -5391,7 +5391,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
         sharedDevice(), std::move(registration), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
-    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(registration.isValid(), testing::IsTrue());
   }
   EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(owner)), testing::IsTrue());
@@ -5439,8 +5439,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotMovesPreserveTheResourceIdentity) {
   EXPECT_THAT(moved.runtimeTexture()->slotIndex(), testing::Eq(slot));
   EXPECT_THAT(moved.runtimeTexture()->generation(), testing::Eq(generation));
   EXPECT_THAT(moved.deviceId(), testing::Eq(sharedDevice()->adapterDevice().deviceId()));
-  RendererGeodeTextureSnapshot assigned(nullptr, {}, Vector2i::Zero(),
-                                        wgpu::TextureFormat::Undefined);
+  RendererGeodeTextureSnapshot assigned;
   assigned = std::move(moved);
   EXPECT_THAT(moved.isValid(), testing::IsFalse());
   ASSERT_THAT(assigned.runtimeTexture(), testing::NotNull());
@@ -5605,7 +5604,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsUnusableCapabilitiesWithoutConsu
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
         sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
-    EXPECT_THAT(static_cast<bool>(snapshot.texture()), testing::IsFalse());
+    EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
   }
   if (texture.isValid()) {
@@ -5703,31 +5702,28 @@ TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission
   RendererGeode consumer = createRenderer();
   beginFrame(consumer);
   {
-    wgpu::TextureDescriptor descriptor{};
-    descriptor.dimension = wgpu::TextureDimension::_2D;
-    descriptor.size = {4, 4, 1};
-    descriptor.mipLevelCount = 1;
-    descriptor.sampleCount = 1;
-    descriptor.format = wgpu::TextureFormat::RGBA8Unorm;
-    descriptor.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
-    wgpu::Texture texture = sharedDevice()->device().createTexture(descriptor);
-    ASSERT_THAT(static_cast<bool>(texture), testing::IsTrue());
-    std::array<uint8_t, 64> pixels;
-    for (size_t i = 0; i < pixels.size(); i += 4) {
-      pixels[i] = 255;
-      pixels[i + 1] = 0;
-      pixels[i + 2] = 0;
-      pixels[i + 3] = 255;
+    auto created = sharedDevice()->runtimeDevice().createTexture(
+        {"uploaded snapshot",
+         {4, 4},
+         gpu::TextureFormat::RGBA8Unorm,
+         gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    ASSERT_FALSE(created.hasError()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    // Laid out on the runtime's row pitch, which is wider than the four texels each row holds.
+    std::array<uint8_t, 1024> pixels{};
+    for (size_t y = 0; y < 4; ++y) {
+      for (size_t x = 0; x < 4; ++x) {
+        pixels[y * 256 + x * 4] = 255;
+        pixels[y * 256 + x * 4 + 3] = 255;
+      }
     }
-    wgpu::TexelCopyTextureInfo destination{};
-    destination.texture = texture;
-    wgpu::TexelCopyBufferLayout layout{};
-    layout.bytesPerRow = 16;
-    layout.rowsPerImage = 4;
-    const wgpu::Extent3D size{4, 4, 1};
-    sharedDevice()->queue().writeTexture(destination, pixels.data(), pixels.size(), layout, size);
-    RendererGeodeTextureSnapshot snapshot(sharedDevice(), texture, {4, 4},
-                                          wgpu::TextureFormat::RGBA8Unorm);
+    const gpu::Status written =
+        sharedDevice()->adapterDevice().writeTexture(texture, pixels, {0, 256, 4}, {4, 4});
+    ASSERT_FALSE(written.hasError()) << written.error();
+    auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        AlphaType::Premultiplied);
+    ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
     for (int draw = 0; draw < 100; ++draw) {
       EXPECT_THAT(consumer.drawTextureSnapshot(
                       snapshot, Box2d({0, 0}, {kViewportSize, kViewportSize}), 1, true),
