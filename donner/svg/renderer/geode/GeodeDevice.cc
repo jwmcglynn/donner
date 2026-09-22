@@ -498,6 +498,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(gpu::TextureFormat text
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,
                                                                  gpu::TextureFormat textureFormat) {
   std::unique_ptr<GeodeWgpuAdapterDevice> rootDevice = CreateGpuDeviceOver(root);
+  if (rootDevice == nullptr) {
+    return nullptr;
+  }
   GeodeWgpuAdapterDevice& borrowed = *rootDevice;
   std::shared_ptr<GeodePhysicalDeviceOwner> owner =
       GeodePhysicalDeviceOwner::Create(std::move(root), std::move(rootDevice));

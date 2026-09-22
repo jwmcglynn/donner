@@ -59,6 +59,35 @@ std::atomic<std::size_t> gSelectionInstances{0};
 /// @param handles Backend objects to release; left null.
 void ReleaseSelectedHandles(GeodeWgpuRoots& handles);
 
+/// Releases the backend objects a selection has built so far unless the selection completes.
+///
+/// Until the root exists there is no other owner of them: every failure exit after the instance
+/// is created would otherwise strand an instance, and past the adapter and device requests an
+/// adapter, an undestroyed device and a retained device-lost callback as well. Adapter
+/// acquisition failing is the routine outcome on a host with no usable GPU, so those exits are
+/// taken often rather than exceptionally.
+class PartialSelection {
+public:
+  /// Takes responsibility for \p handles until \ref keep is called.
+  /// @param handles Backend objects the selection is filling in.
+  explicit PartialSelection(GeodeWgpuRoots& handles) : handles_(&handles) {}
+
+  ~PartialSelection() {
+    if (handles_ != nullptr) {
+      ReleaseSelectedHandles(*handles_);
+    }
+  }
+
+  PartialSelection(const PartialSelection&) = delete;
+  PartialSelection& operator=(const PartialSelection&) = delete;
+
+  /// Hands the objects to the root that is about to be built, so they outlive this scope.
+  void keep() { handles_ = nullptr; }
+
+private:
+  GeodeWgpuRoots* handles_;
+};
+
 #ifndef __EMSCRIPTEN__
 std::atomic<std::size_t> gOutstandingDeviceLostCallbacks{0};
 
@@ -443,6 +472,7 @@ bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& ad
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   auto lostState = std::make_shared<gpu::DeviceLostState>();
   GeodeWgpuRoots handles;
+  PartialSelection partial(handles);
 #ifdef __EMSCRIPTEN__
   if (!ImportBrowserRoot(handles, options)) {
     return nullptr;
@@ -526,8 +556,11 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   }
 #endif
 
-  return std::make_shared<GeodeGpuRoot>(std::move(handles), QueryRootCapabilities(handles),
-                                        std::move(lostState));
+  // Queried before the handles are moved from: reading and moving them in one argument list is
+  // unsequenced.
+  const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
+  partial.keep();
+  return std::make_shared<GeodeGpuRoot>(std::move(handles), capabilities, std::move(lostState));
 }
 
 std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
@@ -541,8 +574,8 @@ std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
   // and the embedder outlives every context built over them.
   borrowed.owned = false;
   borrowed.deviceLostCallbackToken = nullptr;
-  return std::make_shared<GeodeGpuRoot>(std::move(borrowed), QueryRootCapabilities(handles),
-                                        std::move(lostState));
+  const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
+  return std::make_shared<GeodeGpuRoot>(std::move(borrowed), capabilities, std::move(lostState));
 }
 
 std::unique_ptr<GeodeWgpuAdapterDevice> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
