@@ -5818,6 +5818,55 @@ TEST_F(RendererGeodeTest, SharedBackendSnapshotPreservesIdentityAndCroppedConten
                              "shared_backend_snapshot_cropped_content");
 }
 
+TEST_F(RendererGeodeTest, SharedBackendSnapshotNeedsARegistrationNotMatchingBackendHandles) {
+  auto producer = CreateSharedBackendContext(sharedDevice());
+  auto consumer = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(producer, testing::NotNull());
+  ASSERT_THAT(consumer, testing::NotNull());
+  ASSERT_THAT(static_cast<WGPUDevice>(producer->device()),
+              testing::Eq(static_cast<WGPUDevice>(consumer->device())));
+  ASSERT_THAT(static_cast<WGPUQueue>(producer->queue()),
+              testing::Eq(static_cast<WGPUQueue>(consumer->queue())));
+  auto created = producer->adapterDevice().createTexture(
+      {"unregistered snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(created.hasError()) << created.error();
+  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      producer, std::move(created).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+  // A second snapshot of the same shape on the same producer, left intact, is the control: the
+  // consumer admits it, so the refusal below is about the registration and not about the context.
+  auto control = producer->adapterDevice().createTexture(
+      {"registered snapshot",
+       {4, 4},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_FALSE(control.hasError()) << control.error();
+  auto registeredSnapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      producer, std::move(control).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
+
+  // The texture and its registration stay alive here, so the consumer is refused for the one
+  // reason under test: the snapshot it was handed no longer names them.
+  gpu::Texture registration = snapshot.takeRuntimeRegistrationForTesting();
+  ASSERT_THAT(registration.isValid(), testing::IsTrue());
+
+  RendererGeode renderer(consumer);
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.drawTextureSnapshot(registeredSnapshot, Box2d({0, 0}, {64, 64}), 1, true),
+              testing::IsTrue())
+      << "The consuming context shares the producer's backend, so a snapshot that still names its "
+         "texture must be admitted";
+  EXPECT_THAT(renderer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {64, 64}), 1, true),
+              testing::IsFalse())
+      << "A snapshot that no longer names a texture must be refused, however well its producer's "
+         "backend device and queue handles match the consuming context's";
+  renderer.endFrame();
+  (void)producer->runtimeDevice().destroyTextureBacking(std::move(registration));
+}
+
 TEST_F(RendererGeodeTest, SharedBackendSnapshotSurvivesProducerScopeUntilConsumerSubmission) {
   auto producer = CreateSharedBackendContext(sharedDevice());
   auto consumer = CreateSharedBackendContext(sharedDevice());

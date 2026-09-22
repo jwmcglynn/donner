@@ -193,6 +193,10 @@ const gpu::Texture* RendererGeodeTextureSnapshot::runtimeTexture() const {
   return borrowedGpuTexture_.isValid() ? &borrowedGpuTexture_ : nullptr;
 }
 
+gpu::Texture RendererGeodeTextureSnapshot::takeRuntimeRegistrationForTesting() {
+  return backing_ ? std::move(backing_->runtimeTexture) : gpu::Texture();
+}
+
 uint64_t RendererGeodeTextureSnapshot::deviceId() const {
   return runtimeDeviceId_;
 }

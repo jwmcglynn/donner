@@ -106,6 +106,10 @@ public:
   [[nodiscard]] Vector2i allocationDimensions() const { return allocationDimensions_; }
   /// Runtime format, if the backend format has a supported runtime representation.
   [[nodiscard]] std::optional<gpu::TextureFormat> runtimeFormat() const { return runtimeFormat_; }
+  /// Takes the owning device's name for this snapshot's texture out of the snapshot, so a test can
+  /// present a snapshot that no longer names what its backend handles point at. The caller becomes
+  /// the owner of the returned handle and keeps the texture alive.
+  [[nodiscard]] gpu::Texture takeRuntimeRegistrationForTesting();
   /// Valid content extent in device pixels, anchored at the texture origin. Sampling and
   /// readback are confined to this region even when the backing texture is larger.
   [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
