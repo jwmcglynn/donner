@@ -13,9 +13,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -280,6 +282,8 @@ TEST(GeodeGpuRootSelection, ASelectionItsSurfaceProviderAbandonsReleasesWhatItBu
   bool providerSawAnInstance = false;
   GpuRootSelection selection;
   selection.label = "AbandonedSelection";
+  // The instance and surface provider are the transitional adapter's selection machinery.
+  selection.backend = GpuBackendKind::TransitionalWgpu;
   selection.compatibleSurface =
       [&providerSawAnInstance](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
     providerSawAnInstance = static_cast<bool>(instance);
@@ -293,6 +297,96 @@ TEST(GeodeGpuRootSelection, ASelectionItsSurfaceProviderAbandonsReleasesWhatItBu
       << "the selection created no instance to abandon, so this host cannot exercise the leak";
   EXPECT_THAT(OutstandingSelectionInstances(), testing::Eq(instancesBefore))
       << "the instance an abandoned selection created has no other owner left to release it";
+}
+
+/// Sets `DONNER_GPU_BACKEND` for the rest of a scope and restores what the process had, so a case
+/// about the process default leaves the lane's own request in place for the cases after it.
+class ScopedGpuBackendRequest {
+public:
+  /// @param value Value to request, or null to leave the variable unset.
+  explicit ScopedGpuBackendRequest(const char* value) {
+    if (const char* previous = std::getenv(kVariable)) {
+      previous_ = std::string(previous);
+    }
+    if (value != nullptr) {
+      setenv(kVariable, value, /*overwrite=*/1);
+    } else {
+      unsetenv(kVariable);
+    }
+  }
+
+  ~ScopedGpuBackendRequest() {
+    if (previous_.has_value()) {
+      setenv(kVariable, previous_->c_str(), /*overwrite=*/1);
+    } else {
+      unsetenv(kVariable);
+    }
+  }
+
+  ScopedGpuBackendRequest(const ScopedGpuBackendRequest&) = delete;
+  ScopedGpuBackendRequest& operator=(const ScopedGpuBackendRequest&) = delete;
+
+private:
+  static constexpr const char* kVariable = "DONNER_GPU_BACKEND";
+  std::optional<std::string> previous_;
+};
+
+/// A process that asks for no backend, or asks with an empty value, renders through the
+/// transitional adapter: it is the production path until a platform's suites pass natively.
+TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsTheTransitionalAdapter) {
+  for (const char* request : {static_cast<const char*>(nullptr), ""}) {
+    SCOPED_TRACE(request == nullptr ? "DONNER_GPU_BACKEND unset" : "DONNER_GPU_BACKEND empty");
+    const ScopedGpuBackendRequest scoped(request);
+    GpuRootSelection selection;
+    selection.label = "ProcessDefaultSelection";
+    const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+    ASSERT_THAT(root, testing::NotNull()) << "no wgpu adapter is available on this host";
+    EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::TransitionalWgpu));
+  }
+}
+
+/// A caller that names a backend gets that backend whatever the process asks for by default. A
+/// case about one backend that silently ran on another because a lane changed the default would
+/// report on the wrong implementation.
+TEST(GeodeGpuRootSelection, ACallerThatNamesABackendGetsItWhateverTheProcessDefault) {
+  const ScopedGpuBackendRequest scoped("metal");
+  GpuRootSelection selection;
+  selection.label = "NamedBackendSelection";
+  selection.backend = GpuBackendKind::TransitionalWgpu;
+  const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+  ASSERT_THAT(root, testing::NotNull())
+      << "the selection did not serve the backend its caller named";
+  EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::TransitionalWgpu))
+      << "the process default overrode the backend the caller named";
+}
+
+/// A request that names no backend this build knows - a misspelling, or a kind that does not
+/// exist yet - must not be served by the default. The whole suite would then run on the
+/// transitional adapter and pass, reporting a native run that never happened. It halts rather
+/// than refusing the selection because callers treat a missing device as a host without a GPU and
+/// skip, which would turn the same mistake into a passing run.
+TEST(GeodeGpuRootSelectionDeathTest, AnUnrecognizedRequestHaltsRatherThanFallingBack) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  const ScopedGpuBackendRequest scoped("metl");
+  GpuRootSelection selection;
+  selection.label = "UnrecognizedRequest";
+  EXPECT_DEATH((void)SelectGpuRoot(selection),
+               "DONNER_GPU_BACKEND=metl names no GPU backend; accepted values: wgpu, metal");
+}
+
+/// A request the host cannot serve halts for the same reason. A selection constrained to a wgpu
+/// surface is one no native backend serves on any platform, so it stands in for every way a
+/// requested backend can be unavailable.
+TEST(GeodeGpuRootSelectionDeathTest, ARequestTheHostCannotServeHaltsRatherThanRefusing) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  const ScopedGpuBackendRequest scoped("metal");
+  GpuRootSelection selection;
+  selection.label = "UnservableRequest";
+  selection.compatibleSurface = [](const wgpu::Instance&) -> std::optional<wgpu::Surface> {
+    return wgpu::Surface{};
+  };
+  EXPECT_DEATH((void)SelectGpuRoot(selection),
+               "DONNER_GPU_BACKEND=metal asked for the native Metal backend");
 }
 
 /// The runtime device \p context's owner stands up over its root, named as the transitional
