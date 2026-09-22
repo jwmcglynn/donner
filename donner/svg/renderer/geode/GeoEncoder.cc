@@ -1113,9 +1113,14 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   }
 
   /// Open the render pass on demand.
-  void ensurePassOpen() {
+  ///
+  /// Opening it can fail - the backend refuses a target without render-attachment capability,
+  /// among other reasons - and there is nothing to record against when it does, so every caller
+  /// stops rather than reaching for a pass that was never opened.
+  /// @return Whether a pass is open.
+  [[nodiscard]] bool ensurePassOpen() {
     if (passOpen) {
-      return;
+      return true;
     }
     gpu::Result<gpu::RenderPassEncoder*> opened =
         commandEncoder->beginRenderPass(gpu::RenderPassDescriptor{
@@ -1124,7 +1129,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                                             loadPreserve ? gpu::LoadOp::Load : gpu::LoadOp::Clear,
                                             gpu::StoreOp::Store, clearColor}}});
     if (opened.hasError()) {
-      return;
+      return false;
     }
     pass = opened.result();
     // Pipelines are set per-draw - `fillPath` / `fillPathLinearGradient` /
@@ -1139,6 +1144,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     // encoder). Also ensures a fresh pass re-applies the scissor if a
     // previous pass was finished and a new one opened.
     applyScissorIfPassOpen();
+    return true;
   }
 
   /// Track which pipeline is currently bound so we can emit `SetPipeline`
@@ -2034,7 +2040,9 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
 
 bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                               const FillDrawArgs& args) {
-  ensurePassOpen();
+  if (!ensurePassOpen()) {
+    return false;
+  }
   bindSolidPipeline();
 
   if (!ensureResidentSceneRecordImpl(slot, encoded, args, transform, nullptr, nullptr,
@@ -2442,7 +2450,9 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   if (!impl_->validateAndConsumeSceneBatch(binding)) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindSolidBatchedPipeline();
 
   // Batch-level uniform: orthographic mapping only (the caller set the
@@ -2616,7 +2626,9 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
                                 bool requireAdmission) {
   // Dummy resources are pre-created in the encoder constructor; no
   // per-draw ensure call is needed.
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   // `bindSolidPipeline` is the single source of truth for the current
   // pipeline - it issues `setPipeline` only when the tracker reports a
   // change (from image / gradient / None). Calling `setPipeline`
@@ -2841,7 +2853,9 @@ void GeoEncoder::Impl::buildRadialGradientUniforms(GradientUniforms& u,
 
 void GeoEncoder::Impl::submitGradientArenaFallback(GradientUniforms& u,
                                                    const EncodedPath& encoded) {
-  ensurePassOpen();
+  if (!ensurePassOpen()) {
+    return;
+  }
   bindGradientPipeline();
   submitGradientDraw(u, encoded);
 }
@@ -2983,7 +2997,9 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
   u.gridVBandCount = encoded.vBandCount;
   writeBoundingPolygonUniforms(u, encoded);
 
-  ensurePassOpen();
+  if (!ensurePassOpen()) {
+    return false;
+  }
   bindGradientPipeline();
 
   // Same residence / invalidation guards as `submitResidentFillDraw`.
@@ -3138,7 +3154,9 @@ void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity) {
   if (!src.isValid()) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Identity MVP: map target-pixel coords (0..W, 0..H) directly to clip
@@ -3181,7 +3199,9 @@ void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Te
   if (!content.isValid() || !mask.isValid()) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Identity MVP for target-pixel → clip space, same as blitFullTarget.
@@ -3223,7 +3243,9 @@ void GeoEncoder::blitFullTargetBlended(const gpu::Texture& layer, const gpu::Tex
   if (!layer.isValid() || !dstSnapshot.isValid() || blendMode == 0u) {
     return;
   }
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Identity MVP for target-pixel → clip space, same as blitFullTarget.
@@ -3328,7 +3350,9 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
     return;
   }
 
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Interpolation happens in premultiplied space so transparent colored texels cannot fringe.
@@ -3362,7 +3386,9 @@ void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
     return;
   }
 
-  impl_->ensurePassOpen();
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   float mvp[16];
@@ -3391,10 +3417,9 @@ void GeoEncoder::finish() {
     (void)impl_->pass->end();
     impl_->pass = nullptr;
     impl_->passOpen = false;
-  } else if (impl_->hasExplicitClear) {
+  } else if (impl_->hasExplicitClear && impl_->ensurePassOpen()) {
     // No draws but a clear was requested - open and immediately close a pass
     // so the clear actually happens.
-    impl_->ensurePassOpen();
     (void)impl_->pass->end();
     impl_->pass = nullptr;
     impl_->passOpen = false;
