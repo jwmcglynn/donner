@@ -124,7 +124,8 @@ public:
    * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
    *   Must be between zero and five seconds; invalid budgets return nullptr.
    * @param lostState Loss condition to share with every other device selected over the same
-   *   backend, or null for a private one only this device's bounded waits can set.
+   *   backend, or null for a private one. The device reports it through \ref Device::isLost;
+   *   the loss is declared by whoever observes it, such as a context's bounded wait.
    */
   static std::unique_ptr<MetalDevice> Create(
       MemoryModel memoryModel = MemoryModel::Detected,

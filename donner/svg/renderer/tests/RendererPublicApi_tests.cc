@@ -518,7 +518,6 @@ TEST(RendererTinySkiaSecurityTest, RetainedClipEpochMasksHaveAFrameSurfaceEnvelo
 
 // -- Pixel access and custom matchers --
 
-/// Return RGBA pixel at (x,y) from a normalized snapshot.
 MATCHER_P4(Rgba, rMatcher, gMatcher, bMatcher, aMatcher, "has RGBA channels") {
   const std::array<int, 4> channels = {static_cast<int>(arg[0]), static_cast<int>(arg[1]),
                                        static_cast<int>(arg[2]), static_cast<int>(arg[3])};

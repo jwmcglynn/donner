@@ -43,10 +43,15 @@ std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
       ADD_FAILURE_AT(caller.file_name(), caller.line())
           << "read pixel (" << x << ", " << y << ") of an empty snapshot: the renderer returned no "
           << "pixels, so the frame was not read back";
-    } else {
+    } else if (!inside) {
       ADD_FAILURE_AT(caller.file_name(), caller.line())
           << "read pixel (" << x << ", " << y << ") outside a " << bitmap.dimensions.x << "x"
-          << bitmap.dimensions.y << " snapshot of " << bitmap.pixels.size() << " bytes";
+          << bitmap.dimensions.y << " snapshot";
+    } else {
+      ADD_FAILURE_AT(caller.file_name(), caller.line())
+          << "read pixel (" << x << ", " << y << ") of a " << bitmap.dimensions.x << "x"
+          << bitmap.dimensions.y << " snapshot whose " << bitmap.pixels.size()
+          << " bytes end before it";
     }
     return {0, 0, 0, 0};
   }

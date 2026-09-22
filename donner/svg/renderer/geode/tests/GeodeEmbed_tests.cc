@@ -28,7 +28,6 @@ constexpr double kViewportSize = 32.0;
 
 using test::IsTransparent;
 
-/// RGBA pixel at (x, y) in a tightly packed snapshot bitmap.
 // ---------------------------------------------------------------------------
 // GeodeDevice::CreateFromExternal
 // ---------------------------------------------------------------------------

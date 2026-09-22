@@ -58,8 +58,6 @@ SVGDocument ParseSvg(std::string_view svg) {
   return std::move(maybeResult.result());
 }
 
-/// RGBA pixel at (x, y) in a tightly packed snapshot bitmap. Returns transparent for a pixel
-/// outside the bitmap so an assertion fails cleanly instead of reading out of bounds.
 /// Counts pixels with alpha above \p threshold in the given device row.
 int CountOpaqueInRow(const RendererBitmap& bitmap, int y, uint8_t threshold = 128) {
   int count = 0;

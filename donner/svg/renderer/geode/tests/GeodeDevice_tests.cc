@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -759,30 +760,27 @@ int64_t MillisecondsSince(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
-/// The texture limit a native root reports is what its devices allocate. The renderer refuses
-/// images, filter regions and layers past this limit, so a root that reports less than its
-/// device allocates drops content the device can draw, and one that reports more hands the device
-/// work it refuses. The limit therefore has to hold from both sides: a texture at the limit is
-/// allocated and one a texel past it is refused as over the limit.
-TEST(GeodeNativeMetalRoot, ReportsTheLargestTextureItsDevicesAllocate) {
+/// A native root reports the texture limit its device reports, not the 8,192-texel fallback a
+/// root uses when it has no device to ask. The renderer refuses images, filter regions and layers
+/// past this limit, so a root that reports the fallback on a device that allocates more drops
+/// content the device can draw. The device also allocates a texture at the limit its root reports.
+TEST(GeodeNativeMetalRoot, ReportsTheTextureLimitItsDeviceReports) {
   std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
   ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  const std::optional<gpu::metal::MetalDevice::SystemCapabilities> device =
+      gpu::metal::MetalDevice::QuerySystemCapabilities();
+  ASSERT_TRUE(device.has_value()) << kNoMetalDevice;
 
   const uint32_t limit = context->maxTextureDimension2D();
-  gpu::Device& runtime = context->runtimeDevice();
-  EXPECT_THAT(runtime.createTexture(gpu::TextureDescriptor{"AtTheReportedLimit",
-                                                           {limit, 1},
-                                                           gpu::TextureFormat::RGBA8Unorm,
-                                                           gpu::TextureUsage::Sampled}),
-              gpu::HasResult())
+  EXPECT_THAT(limit, Eq(device->maxTextureDimension2D))
+      << "the root reports a texture limit other than the one its Metal device reports";
+  EXPECT_THAT(
+      context->runtimeDevice().createTexture(gpu::TextureDescriptor{"AtTheReportedLimit",
+                                                                    {limit, 1},
+                                                                    gpu::TextureFormat::RGBA8Unorm,
+                                                                    gpu::TextureUsage::Sampled}),
+      gpu::HasResult())
       << "the device refused a texture at the limit its root reports, " << limit << " texels";
-  EXPECT_THAT(runtime.createTexture(gpu::TextureDescriptor{"PastTheReportedLimit",
-                                                           {limit + 1, 1},
-                                                           gpu::TextureFormat::RGBA8Unorm,
-                                                           gpu::TextureUsage::Sampled}),
-              gpu::IsGpuError(gpu::GpuErrorType::LimitExceeded))
-      << "the device allocated a texture past the limit its root reports, " << limit
-      << " texels, so the renderer refuses content the device can draw";
 }
 
 /// A native backend has no poll that reports an empty queue: the queue is idle exactly when the
@@ -810,7 +808,9 @@ TEST(GeodeNativeMetalRoot, QueueIdleOnHeldWorkSpendsItsBudgetThenDeclaresTheLoss
   EXPECT_THAT(metal.completedSerial(), Lt(submitted))
       << "the held submission retired anyway, so this case observed no held work";
   EXPECT_THAT(elapsedMs, Ge(kBudget.count())) << "the wait gave up before its budget was spent";
-  EXPECT_THAT(elapsedMs, Lt(kBudget.count() + 5000))
+  // Well under the 5 s default budget, so a wait that spends a budget other than the caller's
+  // fails here rather than passing.
+  EXPECT_THAT(elapsedMs, Lt(kBudget.count() + 1000))
       << "the wait outlived its budget, so a driver that stopped answering costs more than one "
          "deadline";
   EXPECT_TRUE(context->isDeviceLost()) << "a drain that spent its deadline must publish the loss";
@@ -844,6 +844,33 @@ TEST(GeodeNativeMetalRoot, QueueIdleReturnsOnceTheLastSubmissionRetires) {
   EXPECT_THAT(completedAtReturn, Ge(submitted))
       << "the wait reported the queue idle while its last submission was still held";
   EXPECT_FALSE(context->isDeviceLost()) << "a drain that completed observed nothing to declare";
+}
+
+/// A loss declared while the drain waits is reported as that loss rather than as the drain's own
+/// timeout: the drain did not observe the device stop answering, so it must not claim it did.
+/// The submission stays held, and the loss is declared from another thread partway through the
+/// wait, as a driver-reported loss on the shared root would be.
+TEST(GeodeNativeMetalRoot, QueueIdleReportsALossDeclaredDuringTheWait) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  const uint64_t submitted = SubmitEmptyCommandBuffer(metal);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  std::thread declarer([&context] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    context->markDeviceLost("test-injected loss during a queue drain");
+  });
+  const GpuWaitResult result = context->waitForQueueIdle(std::chrono::milliseconds(200));
+  declarer.join();
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::DeviceLost))
+      << "a loss declared during the drain is reported as the loss, not as a drain timeout";
+  EXPECT_THAT(context->consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::None))
+      << "the drain must not attribute a loss it did not observe to its own deadline";
+
+  metal.resumeSubmissionsForTest();
 }
 
 #endif  // defined(__APPLE__)

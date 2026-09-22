@@ -255,6 +255,10 @@ public:
    * not report queue-idle, and browser device hangs surface through the
    * readback map deadline and the browser's own device-loss reporting.
    *
+   * On a native backend there is no poll that reports an empty queue: the
+   * wait is for this context's last submitted serial to complete, within the
+   * same budget, and so observes only this context's own submissions.
+   *
    * @param timeout Wait budget; defaults to the shared generous bound.
    * @return `Complete` when the queue drained, `TimedOut` when the deadline
    *   expired (the device is now marked lost), `DeviceLost` when the device
