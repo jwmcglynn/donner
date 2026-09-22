@@ -16,6 +16,10 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/resources/FontManager.h"
+#endif
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -324,6 +328,41 @@ TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
   EXPECT_FALSE(static_cast<bool>(replayedImageParams.back().sourceEntity))
       << "a replayed drawImage must not carry a handle into the live document registry";
 }
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
+  SVGDocument document = MakeDocument(R"svg(
+    <defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+    <text x="10" y="60" font-family="sans-serif" font-size="48"
+          text-decoration="underline">A<tspan clip-path="url(#clip)">B</tspan>C</text>
+  )svg");
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+
+  std::size_t drawCount = 0;
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent& text,
+                          const TextParams& params) {
+        ++drawCount;
+        ASSERT_TRUE(params.preparedTextDraw);
+        const auto& fonts = registry.ctx().get<FontManager>();
+        for (const TextRun& run : params.preparedTextDraw->runs) {
+          if (!run.glyphs.empty()) {
+            EXPECT_FALSE(fonts.fontData(run.font).empty());
+          }
+        }
+        for (const auto& span : text.spans) {
+          if (span.decorationFont) {
+            EXPECT_FALSE(fonts.fontData(span.decorationFont->font).empty());
+          }
+        }
+      });
+
+  driver.draw(snapshot);
+  EXPECT_GE(drawCount, 2u);
+}
+#endif  // DONNER_TEXT_ENABLED
 
 TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
   SVGDocument document = MakeDocument(R"svg(
