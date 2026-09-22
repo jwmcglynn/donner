@@ -778,6 +778,35 @@ TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
 }
 
+TEST_F(RendererGeodeTest, EarlyAbandonmentRetainsAnUnmatchedPathClipMask) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+
+  ResolvedClip clip;
+  ClipPathShape shape;
+  shape.path = PathBuilder().addRect(Box2d::FromXYWH(0.0, 0.0, 32.0, 32.0)).build();
+  clip.clipPaths.push_back(std::move(shape));
+  const uint64_t textureCreatesBefore = device->counters()->textureCreates;
+  renderer.pushClip(clip);
+  ASSERT_GT(device->counters()->textureCreates, textureCreatesBefore);
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.injectFrameEncoderCloseFailureForTesting();
+  (void)renderer.submitFilterBudgetChunkForTesting();
+  ASSERT_THAT(renderer.deviceLost(), testing::IsTrue());
+
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+  const std::size_t retainedBefore = renderer.failedFilterTextureCountForTesting();
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.texturePoolStats().textureCount, pooledBefore);
+  EXPECT_GT(renderer.failedFilterTextureCountForTesting(), retainedBefore);
+}
+
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
