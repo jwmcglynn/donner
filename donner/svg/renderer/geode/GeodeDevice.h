@@ -779,6 +779,23 @@ private:
 
   SnapshotCaptureLease acquireSnapshotCapture(const std::function<bool()>& shouldCancel,
                                               std::chrono::steady_clock::time_point deadline);
+
+  /**
+   * Registers \p texture, which \p producer owns, as a texture of this capture context.
+   *
+   * A capture context is a runtime device of its own, so a texture of the producer is not a
+   * texture of the capture until it is named here. The registration is borrowed: it describes the
+   * texture the way its producer does, takes no ownership of the allocation, and is forgotten
+   * when the returned handle goes away. It is refused for a producer over a different backend
+   * device, and for a handle its producer no longer resolves. Only a capture context may
+   * register a source.
+   *
+   * @param producer Context that owns \p texture.
+   * @param texture Live texture handle of \p producer.
+   */
+  gpu::Result<gpu::Texture> registerCaptureSource(const GeodeDevice& producer,
+                                                  const gpu::Texture& texture);
+
   SnapshotCaptureStatus waitForSnapshotCapture(std::unique_lock<std::timed_mutex>& lock,
                                                const std::function<bool()>& shouldCancel,
                                                std::chrono::steady_clock::time_point deadline);

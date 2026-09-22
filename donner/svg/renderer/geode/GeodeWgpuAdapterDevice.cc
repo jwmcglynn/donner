@@ -1027,19 +1027,27 @@ void GeodeWgpuAdapterDevice::onDestroyBufferBacking(uint32_t slotIndex) {
   }
 }
 
+gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::registerBorrowedTexture(
+    wgpu::Texture backend, const gpu::TextureDescriptor& descriptor) {
+  if (!backend) {
+    return GpuError{GpuErrorType::InvalidHandle, "registerBorrowedTexture: wgpu texture is null"};
+  }
+
+  // The slot the allocation would have gone into is claimed inside this call, so a registration
+  // entered while this one is in flight would hand its texture to whichever slot resolves first.
+  UTILS_RELEASE_ASSERT_MSG(!pendingRegistration_, "texture registration is not reentrant");
+  pendingRegistration_ = std::move(backend);
+  gpu::Result<gpu::Texture> result = createTexture(descriptor);
+  pendingRegistration_ = wgpu::Texture();  // Cleared on the failure paths too.
+  return result;
+}
+
 gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Texture texture,
                                                                         const gpu::Extent2d& size,
                                                                         gpu::TextureFormat format,
                                                                         gpu::TextureUsage usage) {
-  if (!texture) {
-    return GpuError{GpuErrorType::InvalidHandle, "importExternalTexture: wgpu texture is null"};
-  }
-
-  pendingImport_ = texture;
-  gpu::Result<gpu::Texture> result =
-      createTexture(gpu::TextureDescriptor{"externalTexture", size, format, usage});
-  pendingImport_ = wgpu::Texture();  // Cleared on the failure paths too.
-  return result;
+  return registerBorrowedTexture(std::move(texture),
+                                 gpu::TextureDescriptor{"externalTexture", size, format, usage});
 }
 
 gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(
@@ -1054,16 +1062,15 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(
   if (descriptor.hasError()) {
     return std::move(descriptor).error();
   }
-  const wgpu::Texture backend = owner.wgpuTextureOf(texture);
+  const wgpu::Texture backend = owner.liveBackendTexture(texture);
   if (!backend) {
     return GpuError{GpuErrorType::InvalidHandle,
                     "importTextureFrom: the owning device has no backend texture for this handle"};
   }
-  return importExternalTexture(backend, descriptor.result().size, descriptor.result().format,
-                               descriptor.result().usage);
+  return registerBorrowedTexture(backend, descriptor.result());
 }
 
-wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
+wgpu::Texture GeodeWgpuAdapterDevice::liveBackendTexture(const gpu::Texture& texture) const {
   // Full base-class validation (null, device identity, AND generation), so a stale or forged
   // handle cannot bridge the slot's new occupant to raw wgpu.
   if (validateTextureHandleForBackend(texture).hasError() ||
@@ -1071,6 +1078,10 @@ wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture)
     return wgpu::Texture();
   }
   return slotTextures_[texture.slotIndex()].texture;
+}
+
+wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
+  return liveBackendTexture(texture);
 }
 
 wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
@@ -1616,10 +1627,11 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
                                                     const gpu::TextureDescriptor& descriptor) {
-  if (pendingImport_) {
-    // importExternalTexture path: register the borrowed texture; no ownership is taken.
+  if (pendingRegistration_) {
+    // Registration path: name the borrowed texture in this slot; no ownership is taken and
+    // nothing is allocated, so the allocation counters stay a count of real allocations.
     SetSlot(slotTextures_, slotIndex,
-            TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), pendingImport_});
+            TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), pendingRegistration_});
     return OkStatus();
   }
 

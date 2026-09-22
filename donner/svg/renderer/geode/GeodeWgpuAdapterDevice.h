@@ -322,7 +322,7 @@ public:
   void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
 
   /**
-   * TEMPORARY escape hatch (deleted with the readback and presentation migration): registers an
+   * TEMPORARY escape hatch (deleted with the presentation migration): registers an
    * externally owned wgpu texture - e.g. a render target created by the host or an earlier
    * non-migrated subsystem - as a \c donner::gpu::Texture of this adapter so migrated code can
    * reference it in render passes and copies. The adapter does NOT take ownership; destroying
@@ -360,9 +360,11 @@ public:
                                               const gpu::Texture& texture);
 
   /**
-   * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
-   * wgpu texture behind \p texture, or a null handle if the handle does not name a live texture of
-   * this adapter. Borrowed; the adapter (or the external owner) retains ownership.
+   * TEMPORARY escape hatch (deleted with the presentation migration): the public form of this
+   * adapter's handle-to-backend resolution, for the presentation call sites that still hand a
+   * backend texture to something outside the runtime. Returns a null handle if \p texture does not
+   * name a live texture of this adapter. Borrowed; the adapter (or the external owner) retains
+   * ownership.
    *
    * @param texture Live texture handle of this adapter.
    */
@@ -405,6 +407,28 @@ protected:
   bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
 
 private:
+  /**
+   * Names \p backend in a fresh texture slot of this adapter, describing it with \p descriptor.
+   *
+   * This is the one mechanism by which a texture this adapter did not allocate becomes nameable
+   * here: the slot holds a borrowed alias, \ref onOwnsTextureBacking reports false for it, and
+   * destroying the handle only forgets the registration.
+   *
+   * @param backend Backend texture to name; must remain valid while the registration is live.
+   * @param descriptor How the registration describes it, as its owner does.
+   */
+  gpu::Result<gpu::Texture> registerBorrowedTexture(wgpu::Texture backend,
+                                                    const gpu::TextureDescriptor& descriptor);
+
+  /**
+   * The backend texture \p texture names, or a null handle when it does not name a live texture
+   * of this adapter. Validation is the full handle check (null, device identity, and generation),
+   * so a stale or forged handle cannot reach the slot's new occupant.
+   *
+   * @param texture Texture handle to resolve.
+   */
+  wgpu::Texture liveBackendTexture(const gpu::Texture& texture) const;
+
   /// Second bound on \ref waitForSerialBounded, for a driver whose poll returns without either
   /// progressing or costing wall time. It keeps such a wait from spinning a core; it is not a
   /// deadline, and reaching it with the budget unspent says nothing about the device.
@@ -484,8 +508,8 @@ protected:
   /// @param slotIndex Validated live texture slot.
   void onDestroyTextureBacking(uint32_t slotIndex) override;
 
-  /// Whether \p slotIndex holds a texture this adapter allocated, rather than one registered
-  /// through \ref importExternalTexture. @param slotIndex Validated live texture slot.
+  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one
+  /// named through \ref registerBorrowedTexture. @param slotIndex Validated live texture slot.
   [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
   gpu::Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
@@ -771,9 +795,9 @@ private:
 
   std::shared_ptr<CompletionState> completionState_ = std::make_shared<CompletionState>();
 
-  /// Set only inside \ref importExternalTexture so \ref onCreateTexture registers the external
-  /// texture instead of creating a new one.
-  wgpu::Texture pendingImport_;
+  /// Set only inside \ref registerBorrowedTexture so \ref onCreateTexture names that texture in
+  /// the slot instead of allocating one.
+  wgpu::Texture pendingRegistration_;
 };
 
 /**

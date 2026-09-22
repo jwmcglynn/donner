@@ -7689,13 +7689,18 @@ void CopyReadbackRow(uint8_t* destination, const uint8_t* source, uint32_t width
   }
 }
 
-/// Submit unpremultiplication and staging-copy work through the isolated runtime.
+/// Submit unpremultiplication and staging-copy work on the capture context's own queue.
+/// @param context Capture context to record and submit on.
+/// @param pipeline Unpremultiply compute pipeline of \p context.
+/// @param texture Source texture, named in \p context.
+/// @param resources Staging texture, its view, and the buffer the result is copied into.
+/// @param width Content width in pixels. @param height Content height in pixels.
 bool RecordGpuReadback(geode::GeodeDevice& context,
                        const geode::GeodeSnapshotReadbackPipeline& pipeline,
                        const gpu::Texture& texture,
                        const geode::SnapshotReadbackResources& resources, uint32_t width,
                        uint32_t height) {
-  geode::GeodeWgpuAdapterDevice& runtime = context.adapterDevice();
+  gpu::Device& runtime = context.runtimeDevice();
   auto createdView = runtime.createTextureView(
       texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
   if (createdView.hasError()) return false;
@@ -7845,7 +7850,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
     geode::GeodeDevice& context, const gpu::Texture& texture, uint32_t width, uint32_t height,
     gpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
   if (control.stopped()) return {};
-  geode::GeodeWgpuAdapterDevice& runtime = context.adapterDevice();
+  gpu::Device& runtime = context.runtimeDevice();
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
   const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * height;
   auto createdBuffer = runtime.createBuffer(gpu::BufferDescriptor{
@@ -7882,12 +7887,12 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
   }
-  // The capture context is its own runtime device, so the texture has to be registered there
-  // before anything recorded here may name it.
-  gpu::Result<gpu::Texture> imported =
-      context.adapterDevice().importTextureFrom(owner.adapterDevice(), texture);
-  if (imported.hasError()) return {};
-  const gpu::Texture source = std::move(imported).result();
+  // The capture context is its own runtime device, so the producer's texture has to be
+  // registered there before anything recorded here may name it. The registration is borrowed and
+  // lasts exactly as long as this capture: the producer keeps the allocation.
+  gpu::Result<gpu::Texture> registered = context.registerCaptureSource(owner, texture);
+  if (registered.hasError()) return {};
+  const gpu::Texture source = std::move(registered).result();
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
   if (CanUnpremultiplySnapshotOnGpu(descriptor, alphaType)) {

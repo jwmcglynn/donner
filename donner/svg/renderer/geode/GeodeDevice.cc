@@ -443,6 +443,12 @@ GeodeDevice::SnapshotCaptureLease GeodeDevice::acquireSnapshotCapture(
   return lease;
 }
 
+gpu::Result<gpu::Texture> GeodeDevice::registerCaptureSource(const GeodeDevice& producer,
+                                                             const gpu::Texture& texture) {
+  UTILS_RELEASE_ASSERT(readbackOnly_);
+  return runtimeDevice_->importTextureFrom(*producer.runtimeDevice_, texture);
+}
+
 void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
   const ReadbackStats stats = context.consumeReadbackStats();
   readbackCount_.fetch_add(stats.count, std::memory_order_relaxed);

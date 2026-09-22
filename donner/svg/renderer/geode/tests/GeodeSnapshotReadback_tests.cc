@@ -18,6 +18,7 @@
 
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/RecordingDevice.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -221,6 +222,67 @@ TEST_F(GeodeSnapshotReadbackTest, DeviceLostWhileTheMappingIsOpenEndsTheCapture)
   EXPECT_TRUE(stats.deviceLost);
   EXPECT_EQ(stats.poolEntries, 0u)
       << "The readback set of a capture that died mid-map must not be pooled for reuse";
+}
+
+/// A capture registers the producer's texture in the capture context; it does not take it. The
+/// producer still owns the allocation afterwards and the same snapshot reads the same bytes
+/// again, which a capture that had consumed or released the source could not do. The source here
+/// carries no CopySrc, so the only route that can read it is the GPU one: the compute pass, the
+/// staging copy and the map all run on the capture context.
+TEST_F(GeodeSnapshotReadbackTest, ACaptureBorrowsItsSourceAndLeavesItWithItsProducer) {
+  auto device = sharedDevice();
+  ASSERT_NE(device, nullptr);
+
+  RendererGeodeTextureSnapshot snapshot = createTestSnapshot(device, gpu::TextureUsage::Sampled);
+  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
+  const gpu::Texture* source = snapshot.runtimeTexture();
+  ASSERT_THAT(source, testing::NotNull());
+
+  const RendererBitmap first = snapshot.takeSnapshot();
+  ASSERT_THAT(first.pixels, testing::Not(testing::IsEmpty()))
+      << "the capture must produce bytes; a source it could not name reads nothing";
+
+  EXPECT_THAT(device->runtimeDevice().ownsTextureBacking(*source), testing::IsTrue())
+      << "the capture names the producer's texture; the allocation stays the producer's";
+
+  const RendererBitmap second = snapshot.takeSnapshot();
+  ASSERT_THAT(second.pixels, testing::Not(testing::IsEmpty()))
+      << "a source the first capture had consumed or released could not be read again";
+  EXPECT_THAT(second.pixels, testing::ElementsAreArray(first.pixels))
+      << "a source retained across the capture reads the same bytes the next time";
+  EXPECT_THAT(second.dimensions, testing::Eq(first.dimensions));
+  EXPECT_THAT(second.alphaType, testing::Eq(first.alphaType));
+}
+
+/// A texture belongs to the runtime device that allocated it: a handle is a slot plus a
+/// generation, and both mean something else on another device. Admission is where that is
+/// caught, so a snapshot refuses to name one device's texture against another's rather than
+/// carry a handle a capture would later resolve against the wrong table.
+TEST_F(GeodeSnapshotReadbackTest, AdoptingATextureOfAnotherDeviceIsRefused) {
+  std::shared_ptr<geode::GeodeDevice> producer(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(producer, nullptr);
+  auto consumer = sharedDevice();
+  ASSERT_NE(consumer, nullptr);
+
+  gpu::Texture ownedElsewhere =
+      gpu::GetResultOrFail(producer->runtimeDevice().createTexture(gpu::TextureDescriptor{
+          "OwnedByAnotherDevice",
+          {kWidth, kHeight},
+          gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc | gpu::TextureUsage::CopyDst}));
+  // Identity only, so the assertion below reads the producer's record rather than a handle the
+  // refused admission may or may not have left alone.
+  const gpu::Texture probe = gpu::Texture::CreateForBackend(
+      ownedElsewhere.slotIndex(), ownedElsewhere.generation(), ownedElsewhere.deviceId());
+
+  const RendererGeodeTextureSnapshot foreign = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      consumer, std::move(ownedElsewhere),
+      Vector2i(static_cast<int>(kWidth), static_cast<int>(kHeight)),
+      wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
+  EXPECT_THAT(foreign.isValid(), testing::IsFalse())
+      << "a texture of another device must not be admitted as a snapshot of this one";
+  EXPECT_THAT(producer->runtimeDevice().ownsTextureBacking(probe), testing::IsTrue())
+      << "a refused admission leaves the texture with the device that allocated it";
 }
 
 /// RendererGeode surfaces the device-lost condition of its backing device.
