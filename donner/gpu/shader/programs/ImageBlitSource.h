@@ -35,8 +35,8 @@ struct Uniforms {
   // Target dimensions in pixels. Used to map fragment positions to the
   // path-clip mask texture's normalized UVs.
   targetSize: vec2f,
-  // Overall multiplier applied to the sampled texel. Used for
-  // `ImageParams::opacity * paint.opacity` on the draw path.
+  // Overall multiplier applied to the sampled texel for layer and pattern composites.
+  // Direct image draws use 1; the element's opacity belongs to its isolated layer.
   opacity: f32,
   // 0 = texture stores STRAIGHT alpha. The fragment shader will premultiply
   // by `alpha * opacity` before writing.
