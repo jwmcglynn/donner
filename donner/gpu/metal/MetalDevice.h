@@ -102,6 +102,23 @@ public:
     uint32_t maxTextureDimension2D = 0;
   };
 
+  /// The GPU families a Metal device belongs to, as far as its 2D texture limit depends on them.
+  struct GpuFamilies {
+    /// Any Mac family. Every Metal device on macOS is in one, Apple silicon included.
+    bool mac = false;
+    /// Apple family 3 or later.
+    bool apple3OrLater = false;
+  };
+
+  /**
+   * Largest width or height of a 2D texture a device of \p families allocates, from Metal's
+   * feature set tables: 16,384 for every Mac family and for Apple family 3 onward, and 8,192 for
+   * the earlier Apple families. Capped at \ref kMaxTextureDimension.
+   *
+   * @param families Families the device belongs to.
+   */
+  static uint32_t MaxTextureDimension2DFor(GpuFamilies families);
+
   /**
    * Asks the system default Metal device, the one \ref Create opens, what it supports without
    * opening a runtime device over it.

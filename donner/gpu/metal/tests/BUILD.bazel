@@ -33,6 +33,18 @@ donner_cc_test(
     ],
 )
 
+# The GPU-family to texture-limit mapping, checked for every family without needing a device of
+# each one.
+donner_cc_test(
+    name = "metal_texture_limit_tests",
+    srcs = ["MetalTextureLimit_tests.cc"],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # The Metal solid-fill vertical slice: donner::gpu + emitted MSL only (no
 # wgpu-based dependencies, not geode-gated). Metal API validation is enabled
 # so validation issues abort loudly.

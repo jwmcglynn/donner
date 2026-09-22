@@ -6,6 +6,7 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <TargetConditionals.h>
 
 #include <algorithm>
 #include <array>
@@ -584,18 +585,25 @@ struct MetalDevice::Impl {
   void releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTexture> frameTexture);
 };
 
+uint32_t MetalDevice::MaxTextureDimension2DFor(GpuFamilies families) {
+  const uint32_t familyLimit = (families.mac || families.apple3OrLater) ? 16384u : 8192u;
+  return std::min(familyLimit, kMaxTextureDimension);
+}
+
 std::optional<MetalDevice::SystemCapabilities> MetalDevice::QuerySystemCapabilities() {
   id<MTLDevice> device = MTLCreateSystemDefaultDevice();
   if (device == nil) {
     return std::nullopt;
   }
-  // Metal reports no texture limit directly; its feature set tables give it per GPU family. Every
-  // Mac family and Apple family 3 onward allocate 16,384 texels along a side, earlier Apple
-  // families 8,192.
-  const bool allocatesSixteenThousand =
-      [device supportsFamily:MTLGPUFamilyMac2] || [device supportsFamily:MTLGPUFamilyApple3];
-  const uint32_t familyLimit = allocatesSixteenThousand ? 16384u : 8192u;
-  return SystemCapabilities{.maxTextureDimension2D = std::min(familyLimit, kMaxTextureDimension)};
+  // Metal reports no texture limit directly; its feature set tables give it per GPU family.
+  GpuFamilies families;
+#if TARGET_OS_OSX
+  // Every Metal device on macOS is in a Mac family. That is a fact of the platform, so it is not
+  // asked of the device, whose first Mac family symbol is deprecated.
+  families.mac = true;
+#endif
+  families.apple3OrLater = [device supportsFamily:MTLGPUFamilyApple3];
+  return SystemCapabilities{.maxTextureDimension2D = MaxTextureDimension2DFor(families)};
 }
 
 std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
