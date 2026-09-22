@@ -12,7 +12,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -45,45 +44,6 @@ class GeodeDevice;
  */
 class GeodeWgpuAdapterDevice final : public gpu::Device {
 public:
-  /// Physical outcome of one runtime command-buffer handoff.
-  enum class RuntimeSubmitDisposition : uint8_t {
-    RefusedBeforeReplay,  //!< Exact host validation failed before any command was encoded.
-    HostRecorded,         //!< Commands were replayed into the exact leased host.
-    QueueSubmitted,       //!< Commands were physically accepted by the queue.
-  };
-
-  struct RuntimeSubmitResult {
-    uint64_t serial = 0;
-    RuntimeSubmitDisposition disposition = RuntimeSubmitDisposition::RefusedBeforeReplay;
-  };
-
-  class HostEncoderLease {
-  public:
-    HostEncoderLease() = default;
-    explicit operator bool() const { return owner_ != 0; }
-    bool operator==(const HostEncoderLease&) const = default;
-
-  private:
-    friend class GeodeWgpuAdapterDevice;
-    HostEncoderLease(uint64_t runtimeDeviceId, uint64_t owner, uint64_t generation)
-        : runtimeDeviceId_(runtimeDeviceId), owner_(owner), generation_(generation) {}
-    uint64_t runtimeDeviceId_ = 0;
-    uint64_t owner_ = 0;
-    uint64_t generation_ = 0;
-  };
-
-  enum class HostRotationStage : uint8_t {
-    RejectedBeforeQueueAcceptance,
-    QueueAcceptedReplacementFailed,
-    QueueAcceptedAndReplaced,
-  };
-
-  struct HostRotationResult {
-    HostRotationStage stage = HostRotationStage::RejectedBeforeQueueAcceptance;
-    std::optional<HostEncoderLease> replacementLease;
-  };
-
-  using HostEncoderRotation = std::function<HostRotationResult(HostEncoderLease)>;
   /**
    * Constructs the adapter over \p geodeDevice.
    *
@@ -133,115 +93,6 @@ public:
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
                                                   gpu::TextureUsage usage);
-
-  /**
-   * Installs \p encoder as the host command encoder: while one is installed, a submitted
-   * command stream is replayed into it instead of into an encoder this adapter owns, and this
-   * adapter performs no queue submit of its own. One command buffer therefore still carries a
-   * whole frame in recording order, including the spans a caller records directly into the same
-   * encoder around the replayed ones.
-   *
-   * Temporary bridge: it exists because a frame encoder is shared with subsystems that have not
-   * migrated onto the runtime yet, so their spans cannot be replayed through it. It is removed
-   * once every subsystem sharing the frame encoder records through the runtime.
-   *
-   * The caller owns \p encoder, must keep it alive until it is replaced or cleared, and must
-   * call \ref notifyHostSubmitted after each queue submit of a command buffer finished from it.
-   * Until then the serials replayed into it are deliberately not observable as complete.
-   *
-   * @param encoder Host-owned command encoder to replay into.
-   */
-  HostEncoderLease setHostCommandEncoder(wgpu::CommandEncoder encoder);
-
-  /// Replaces the exact leased host while retaining its owner and advancing its generation.
-  std::optional<HostEncoderLease> replaceHostCommandEncoder(HostEncoderLease expected,
-                                                            wgpu::CommandEncoder encoder);
-
-  /// Returns the exact lease of the installed host, if any.
-  std::optional<HostEncoderLease> hostCommandEncoderLease() const;
-
-  /**
-   * Submits or host-replays commands after validating the exact runtime-device lease.
-   * A known lease mismatch returns the `RefusedBeforeReplay` disposition with serial zero;
-   * errors are reserved for failures after validation begins the ordinary submit path.
-   */
-  gpu::Result<RuntimeSubmitResult> submitForCurrentFrame(
-      gpu::CommandBuffer&& commands, std::optional<HostEncoderLease> expectedHost);
-
-  HostEncoderLease setHostCommandEncoderRotation(HostEncoderLease expected,
-                                                 HostEncoderRotation rotate);
-  bool clearHostCommandEncoderRotation(HostEncoderLease expected);
-  HostRotationResult rotateHostCommandEncoderForFilterChunk(HostEncoderLease expected);
-
-  /// Uninstalls the host command encoder, returning this adapter to owning and submitting the
-  /// encoders it records into. Serials already replayed into a host encoder stay incomplete
-  /// until \ref notifyHostSubmitted reports their submit.
-  /// Uninstalls the active host binding. Pending lease records remain valid for later notification.
-  void clearHostCommandEncoder();
-  bool clearHostCommandEncoder(HostEncoderLease expected);
-
-  /// True while a host command encoder is installed, i.e. while submissions are replayed into
-  /// it instead of reaching the queue.
-  ///
-  /// This device is shared by everything drawing through one \ref GeodeDevice, but a host
-  /// encoder belongs to the single caller that installed it. Anything else submitting during
-  /// that window would be spliced into a command buffer it does not own, at a point in that
-  /// buffer it cannot reason about, and its \ref submit would report success for work that has
-  /// not reached the queue. A caller whose submission must stand on its own checks this first
-  /// and declines.
-  bool hasHostCommandEncoder() const;
-
-  /**
-   * True when \p encoder is the installed host command encoder.
-   *
-   * "Some host encoder is installed" is not the question a caller replacing its own encoder is
-   * asking: reporting a submit for an encoder this adapter never replayed into would retire work
-   * that has not reached the queue.
-   *
-   * @param encoder Encoder to compare identity against.
-   */
-  bool hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const;
-
-  /**
-   * Reports the queue submission of every stream replayed into \p encoder. Its serials remain
-   * incomplete until that submission's callback runs, and completion cannot pass another host's
-   * unfinished serials. A no-op when this encoder has no replayed streams awaiting submission.
-   *
-   * @param encoder Host encoder whose finished command buffer was submitted.
-   */
-  void notifyHostSubmitted(wgpu::CommandEncoder encoder);
-  bool notifyHostSubmitted(HostEncoderLease expected);
-
-  /**
-   * Discards every unsubmitted stream replayed into \p encoder. Retires those serials only once
-   * earlier queued work has drained. The caller must not subsequently submit the discarded work.
-   *
-   * @param encoder Host encoder being abandoned before submission.
-   */
-  void notifyHostDiscarded(wgpu::CommandEncoder encoder);
-  bool notifyHostDiscarded(HostEncoderLease expected);
-
-  /**
-   * Submits \p commands straight to the queue, even while a host command encoder is installed.
-   *
-   * \ref submit replays into that encoder so a frame stays one command buffer in recording
-   * order, and a caller whose work must stand on its own is otherwise told to decline. The
-   * snapshot readback cannot decline: it is asked for while another renderer's frame may be open,
-   * and it has its own completion to wait on. Splicing it into that frame's buffer would leave it
-   * unsubmitted until the frame ends, and the readback would wait out its whole deadline for a
-   * map of work that had not reached the queue.
-   *
-   * Bypassing the frame is correct here by construction rather than by timing: the readback
-   * reads textures whose contents were submitted before it was asked for, and writes only its own
-   * staging texture and readback buffer, so it shares no resource with the spans the open frame
-   * is still recording. A caller that cannot say the same must use \ref submit.
-   *
-   * Bridge machinery, removed with the host-encoder bridge itself.
-   *
-   * @param commands Finished command buffer; consumed.
-   * @return Submission serial, or an error if encoding or submission failed.
-   */
-  gpu::Result<uint64_t> submitStandalone(gpu::CommandBuffer&& commands);
 
   /**
    * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
@@ -344,19 +195,14 @@ private:
 
   /// State retained by callbacks after their adapter may have been destroyed.
   struct CompletionState {
-    /// One host's interleaved logical serials, or one standalone submission.
+    /// One queued submission, named by the ticket its completion callback retains.
     struct Pending {
-      WGPUCommandEncoder host = nullptr;  //!< Non-null only until the host submits or discards.
-      uint64_t firstSerial = 0;           //!< Unique ticket retained by its completion callback.
-      uint64_t lastSerial = 0;            //!< Highest serial in this submission.
+      uint64_t firstSerial = 0;  //!< Unique ticket retained by its completion callback.
+      uint64_t lastSerial = 0;   //!< Highest serial in this submission.
     };
 
-    /// Records a logical submission; a null host denotes a standalone queue submission.
-    /// @param host Host identity, or null for standalone work. @param serial Logical serial.
-    void record(WGPUCommandEncoder host, uint64_t serial);
-    /// Freezes a host range for its callback, returning its ticket or zero if no work is pending.
-    /// @param host Host whose work was queued or discarded.
-    uint64_t closeHost(WGPUCommandEncoder host);
+    /// Records a queued submission. @param serial Logical serial.
+    void record(uint64_t serial);
     /// Completes exactly one queued range and publishes the contiguous completed prefix.
     /// @param ticket Unique first serial of the completed range.
     void complete(uint64_t ticket);
@@ -369,10 +215,7 @@ private:
 
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
-    /// Owned encoder, used when no host encoder is installed; empty while replaying.
-    ScopedWgpuHandle<wgpu::CommandEncoder> ownedEncoder;
-    /// Encoder actually recorded into: \ref ownedEncoder, or the borrowed host encoder.
-    wgpu::CommandEncoder encoder;
+    ScopedWgpuHandle<wgpu::CommandEncoder> encoder;          //!< Encoder this adapter records into.
     ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;          //!< Active render pass, or empty.
     ScopedWgpuHandle<wgpu::ComputePassEncoder> computePass;  //!< Active compute pass, or empty.
   };
@@ -475,25 +318,6 @@ private:
   void completeWhenQueueDrains(uint64_t ticket);
 
   GeodeDevice& geodeDevice_;
-
-  /// Host-owned command encoder to replay into, or null when this adapter owns its encoders.
-  wgpu::CommandEncoder hostCommandEncoder_;
-  HostEncoderLease hostCommandEncoderLease_;
-  struct HostLeaseRecord {
-    HostEncoderLease lease;
-    wgpu::CommandEncoder encoder;
-  };
-  std::vector<HostLeaseRecord> hostLeaseRecords_;
-  uint64_t nextHostOwner_ = 1;
-  HostEncoderLease hostRotationLease_;
-  HostEncoderRotation hostEncoderRotation_;
-  /// Set for the duration of one \ref submitStandalone so the submit below takes the
-  /// adapter-owned encoder path even while a host encoder is installed.
-  bool bypassHostEncoderForSubmit_ = false;
-
-  /// Whether the next submit replays into the host encoder rather than reaching the queue: a
-  /// host encoder is installed and this submit is not a standalone one.
-  bool replaysIntoHostEncoder() const;
 
   /// State of one pending or completed host mapping.
   ///

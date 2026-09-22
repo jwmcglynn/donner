@@ -13,18 +13,19 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <array>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <string_view>
+#include <type_traits>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {
@@ -132,6 +133,57 @@ public:
   /// the owning device is torn down or another backend-specific completion proof exists.
   virtual void retainFailedFilterTexture(gpu::Texture texture,
                                          const gpu::TextureDescriptor& desc) = 0;
+};
+
+/// Runtime handles a filter execution's recorded commands reference, moved to whatever outlives
+/// those commands.
+struct RetainedFilterResources {
+  RetainedFilterResources() = default;
+  ~RetainedFilterResources() = default;
+
+  // Move-only, explicitly. The handles this holds are move-only, so a copy could never have
+  // worked; deleting it matters because a `std::deque` member advertises a copy constructor that
+  // fails only once instantiated, and its move is `noexcept` in one standard library but not
+  // another, so `std::vector` reallocation reached for that copy on one of them and not the other.
+  RetainedFilterResources(const RetainedFilterResources&) = delete;
+  RetainedFilterResources& operator=(const RetainedFilterResources&) = delete;
+  RetainedFilterResources(RetainedFilterResources&&) = default;
+  RetainedFilterResources& operator=(RetainedFilterResources&&) = default;
+
+  std::deque<gpu::TextureView> textureViews;  //!< Views the commands attach to or sample.
+  std::deque<gpu::BindGroup> bindGroups;      //!< Bind groups the commands bind.
+};
+
+static_assert(!std::is_copy_constructible_v<RetainedFilterResources>,
+              "RetainedFilterResources owns move-only handles: a copy must be rejected here on "
+              "every standard library, not only on one whose containers reach for it");
+static_assert(std::is_move_constructible_v<RetainedFilterResources>,
+              "RetainedFilterResources is moved into the frame that outlives the execution");
+
+/**
+ * Renderer-owned collection point for the command buffers one frame records.
+ *
+ * A filter executing inside a frame adds its command buffers here instead of submitting them, so
+ * the whole frame stays one submission whose buffers execute in the order they were added. An
+ * execution handed no sink submits each of its command buffers on its own.
+ */
+class FrameCommandBufferSink {
+public:
+  virtual ~FrameCommandBufferSink() = default;
+
+  /// Adds \p commandBuffer to the frame, after everything already added.
+  /// @param commandBuffer Finished command buffer; consumed.
+  /// @return False when the frame cannot take it, which fails the execution recording it.
+  [[nodiscard]] virtual bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) = 0;
+
+  /// Keeps the handles a command buffer added here references alive until the frame submits.
+  ///
+  /// A submission re-validates every resource a recorded command names, so anything an execution
+  /// would otherwise drop when it finishes has to outlive the frame it recorded into rather than
+  /// the execution that recorded it.
+  ///
+  /// @param resources Handles the added command buffers reference; consumed.
+  virtual void retainUntilFrameSubmits(RetainedFilterResources resources) = 0;
 };
 
 /**
@@ -283,10 +335,11 @@ public:
    * @p textureAllocator before this call returns.
    *
    * Filter compute, copy and clear commands are recorded into command-encoder chunks this
-   * execution owns. Each chunk is replayed into the leased frame command encoder, so a graph
-   * that stays below the per-command-buffer pass bound costs no queue submission of its own;
-   * crossing that bound rotates the frame command encoder, which does reach the queue. The
-   * caller restores its following frame encoder before compositing the result.
+   * execution owns. With a frame sink, each finished chunk joins the frame's single submission,
+   * so no chunk of the graph reaches the queue on its own and crossing the per-command-buffer
+   * pass bound costs a command buffer rather than a submission. Without one, each chunk is
+   * submitted as it closes. The caller restores its following frame encoder before compositing
+   * the result.
    *
    * @param graph The filter graph to execute.
    * @param sourceGraphic The input texture (layer snapshot), borrowed for the call.
@@ -303,23 +356,22 @@ public:
    * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
    *   this layout even if shared scratch state or planning preferences change. Invalid plans or
    *   failed execution-time budgets fail the execution instead of bypassing the filter.
-   * @param hostLease Lease of the caller's frame command encoder, or `std::nullopt` when the
-   *   execution submits to the queue on its own. When given, it must be the lease currently
-   *   installed on the device, and the caller must have submitted its source rendering before
-   *   the call; a stale or foreign lease fails the execution before anything is replayed.
+   * @param frameSink Collection point for the caller's open frame, or null when the execution
+   *   submits on its own. When given, the caller must have closed its own recording into that
+   *   frame before the call, so the source rendering this graph samples is ordered ahead of it.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
-  FilterExecutionResult execute(
-      const svg::components::FilterGraph& graph, const gpu::Texture& sourceGraphic,
-      const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
-      const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
-      svg::components::FilterExecutionBudget* executionBudget = nullptr,
-      std::optional<FilterTilePlan> admittedPlan = std::nullopt,
-      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease = std::nullopt);
+  FilterExecutionResult execute(const svg::components::FilterGraph& graph,
+                                const gpu::Texture& sourceGraphic,
+                                const gpu::TextureDescriptor& sourceGraphicDesc,
+                                const Box2d& filterRegion, const Transform2d& deviceFromFilter,
+                                FilterTextureAllocator& textureAllocator,
+                                svg::components::FilterExecutionBudget* executionBudget = nullptr,
+                                std::optional<FilterTilePlan> admittedPlan = std::nullopt,
+                                FrameCommandBufferSink* frameSink = nullptr);
 
   /**
-   * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor and the
-   * count of filter passes in the host command buffer the frame records through.
+   * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.
    *
    * The renderer calls this once per frame from its own beginFrame, BEFORE
    * the filter texture pool runs its stale-bucket eviction, and before any
@@ -350,9 +402,8 @@ public:
   void setChunkSubmittedHookForTesting(std::function<void(size_t)> hook);
 
   /// Records exactly p passCount transparent-clear passes through the chunking state machine.
-  bool recordPassesForTesting(
-      size_t passCount, FilterTextureAllocator& textureAllocator,
-      std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> hostLease = std::nullopt);
+  bool recordPassesForTesting(size_t passCount, FilterTextureAllocator& textureAllocator,
+                              FrameCommandBufferSink* frameSink = nullptr);
 
   /// Observed allocation footprint of the most recent execution; does not own resources.
   FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
@@ -682,22 +733,6 @@ private:
   uint32_t preferredTileExtent_ = 512;
   bool adaptiveTiles_ = true;
 
-  /// Filter passes already replayed into one host command buffer, and the lease naming it.
-  struct HostCommandBufferPasses {
-    /// Host command buffer \ref passes describes, or `std::nullopt` before one is leased.
-    std::optional<GeodeWgpuAdapterDevice::HostEncoderLease> lease;
-    size_t passes = 0;  //!< Filter passes replayed into that buffer.
-  };
-
-  /// Filter passes the frame has replayed into the host command buffer it is recording through.
-  /// An execution's final partial chunk is replayed into that buffer rather than queue-submitted,
-  /// so the bound on one command buffer has to count every execution of the frame: a document
-  /// with many small filter graphs would otherwise fill it without any single graph reaching the
-  /// bound. Cleared by \ref beginFrame, by the rotation that puts the buffer on the queue, and
-  /// whenever the runtime confirms a different buffer is leased. One count serves the device, so
-  /// two renderers must not interleave executions of different frames on it; \ref beginFrame
-  /// already requires callers to serialize one frame per device.
-  HostCommandBufferPasses hostCommandBufferPasses_;
   std::function<void(size_t)> chunkSubmittedHookForTesting_;
 };
 

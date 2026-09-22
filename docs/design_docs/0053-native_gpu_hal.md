@@ -247,9 +247,9 @@ commits and their fixes together in a focused reviewable change.
       submission serial, and the wait kind a mapping's slices used are runtime operations
       implemented on Metal, Vulkan, the browser bridge and the transitional adapter, so the
       renderer expresses them without naming a backend. It still binds the transitional adapter
-      type statically for the two operations that remain without a runtime equivalent
-      (`importExternalTexture` and `submitStandalone`), so a native device does not yet serve
-      production readback; replacing that reference belongs with device ownership below.
+      type statically for the one operation that remains without a runtime equivalent
+      (`importExternalTexture`), so a native device does not yet serve production readback;
+      replacing that reference belongs with device ownership below.
 - [ ] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
       and that unmap, retirement, and loss invalidate access at the documented boundary. Native
       cancellation, device-loss and invalidation tests pass with the merged mapping hooks. Renderer

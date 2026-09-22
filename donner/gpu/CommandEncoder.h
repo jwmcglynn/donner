@@ -303,6 +303,11 @@ public:
    */
   Result<CommandBuffer> finish();
 
+  /// Number of commands recorded so far; zero until the first operation records one, and frozen
+  /// once \ref finish has transferred them. A caller that splits its work across command buffers
+  /// reads it to tell an encoder with nothing in it from one worth finishing.
+  size_t recordedCommandCount() const { return commands_.size(); }
+
 private:
   friend class Device;
   friend class RenderPassEncoder;

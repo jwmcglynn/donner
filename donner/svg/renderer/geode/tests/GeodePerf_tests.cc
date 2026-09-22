@@ -110,12 +110,12 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
   std::fprintf(stderr,
                "[GeodePerf] %-40s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
                "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64
-               "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64
+               "  commandBuffers=%3" PRIu64 "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64
                "  sameSourceDrawPairs=%3" PRIu64 "  bufferWrites=%5" PRIu64
                "  bufferWriteBytes=%9" PRIu64 "  textureWriteBytes=%9" PRIu64 "\n",
                label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates,
-               c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs, c.bufferWrites,
-               c.bufferWriteBytes, c.textureWriteBytes);
+               c.submits, c.commandBuffers, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs,
+               c.bufferWrites, c.bufferWriteBytes, c.textureWriteBytes);
 }
 
 /// Render one frame and include its isolated snapshot cost in the returned test sample.
@@ -457,8 +457,16 @@ TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device);
   const geode::GeodeCounters counters = renderAndGetCounters(kChunkedMorphologySvg, device);
-  EXPECT_GE(counters.submits, 3u);
-  EXPECT_LE(counters.submits, 6u);
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), counters);
+
+  // The graph decomposes into far more passes than one command buffer may hold, so it must still
+  // be split; the split costs command buffers, not submissions. The submission ceiling below
+  // holds only while the frame stays under the most buffers one submission carries, which this
+  // fixture does by a wide margin.
+  EXPECT_GE(counters.commandBuffers, 3u);
+  EXPECT_LE(counters.commandBuffers, 16u);
+  EXPECT_LE(counters.submits, 2u)
+      << "the frame's command buffers belong to one submission, plus the snapshot readback's own";
 }
 
 TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {

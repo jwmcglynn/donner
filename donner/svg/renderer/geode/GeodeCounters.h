@@ -42,10 +42,20 @@ struct GeodeCounters {
   /// repeat-render at the same size.
   uint64_t textureCreates = 0;
 
-  /// `wgpu::Queue::submit` calls. Steady-state target with the shared
-  /// CommandEncoder: `== 1` per frame regardless of layer/filter/mask
-  /// push depth.
+  /// `wgpu::Queue::submit` calls. Steady-state target with the frame's command
+  /// buffers submitted together: `== 1` per frame regardless of layer / filter /
+  /// mask push depth. A frame that reaches the most command buffers one
+  /// submission carries, or that a memory-limited filter budget forces to submit
+  /// mid-frame, costs more than one.
   uint64_t submits = 0;
+
+  /// Command buffers those submissions carried. A frame records through several
+  /// independently finished command buffers - one per encoder the renderer
+  /// closes, plus one per filter chunk that reaches the bound on command-buffer
+  /// size - and submits them together, so this grows with how finely a frame is
+  /// split while \ref submits stays flat until the frame reaches the bound on
+  /// one submission.
+  uint64_t commandBuffers = 0;
 
   /// `GeodePathEncoder::encode` calls (CPU-side path → bands). Steady-
   /// state target with the path-encode cache: `== 0` on an unchanged-

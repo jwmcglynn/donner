@@ -1425,7 +1425,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeBeginRenderPass(
   passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
   passDescriptor.colorAttachmentCount = colorAttachments.size();
   passDescriptor.colorAttachments = colorAttachments.data();
-  state.pass.reset(state.encoder.beginRenderPass(passDescriptor));
+  state.pass.reset(state.encoder.get().beginRenderPass(passDescriptor));
   if (!state.pass) {
     return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
   }
@@ -1542,7 +1542,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeBeginComputePass(
     EncodingState& state, const gpu::BeginComputePassCommand& beginPass) {
   wgpu::ComputePassDescriptor passDescriptor = {};
   passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
-  state.computePass.reset(state.encoder.beginComputePass(passDescriptor));
+  state.computePass.reset(state.encoder.get().beginComputePass(passDescriptor));
   if (!state.computePass) {
     return GpuError{GpuErrorType::InvalidState, "wgpu compute pass creation failed"};
   }
@@ -1602,7 +1602,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToBuffer(
   destination.layout.bytesPerRow = copy.layout.bytesPerRow;
   destination.layout.rowsPerImage = copy.layout.rowsPerImage;
   const wgpu::Extent3D extent = {copy.copySize.width, copy.copySize.height, 1u};
-  state.encoder.copyTextureToBuffer(source, destination, extent);
+  state.encoder.get().copyTextureToBuffer(source, destination, extent);
   return OkStatus();
 }
 
@@ -1628,7 +1628,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToTexture(
   destination.texture = destinationTexture;
   destination.origin = {textureCopy.destinationOrigin.x, textureCopy.destinationOrigin.y, 0u};
   const wgpu::Extent3D extent = {textureCopy.copySize.width, textureCopy.copySize.height, 1u};
-  state.encoder.copyTextureToTexture(source, destination, extent);
+  state.encoder.get().copyTextureToTexture(source, destination, extent);
   return OkStatus();
 }
 
@@ -1689,149 +1689,15 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
       command);
 }
 
-GeodeWgpuAdapterDevice::HostEncoderLease GeodeWgpuAdapterDevice::setHostCommandEncoder(
-    wgpu::CommandEncoder encoder) {
-  if (hostCommandEncoderIs(encoder) && hostCommandEncoderLease_) {
-    return hostCommandEncoderLease_;
-  }
-  const auto existing = std::find_if(hostLeaseRecords_.begin(), hostLeaseRecords_.end(),
-                                     [&](const HostLeaseRecord& record) {
-                                       return static_cast<WGPUCommandEncoder>(record.encoder) ==
-                                              static_cast<WGPUCommandEncoder>(encoder);
-                                     });
-  hostCommandEncoder_ = std::move(encoder);
-  if (existing != hostLeaseRecords_.end()) {
-    hostCommandEncoderLease_ = existing->lease;
-  } else if (hostCommandEncoder_) {
-    hostCommandEncoderLease_ = HostEncoderLease(deviceId(), nextHostOwner_++, 1);
-    hostLeaseRecords_.push_back({hostCommandEncoderLease_, hostCommandEncoder_});
-  } else {
-    hostCommandEncoderLease_ = {};
-  }
-  hostEncoderRotation_ = {};
-  hostRotationLease_ = {};
-  return hostCommandEncoderLease_;
-}
-
-std::optional<GeodeWgpuAdapterDevice::HostEncoderLease>
-GeodeWgpuAdapterDevice::replaceHostCommandEncoder(HostEncoderLease expected,
-                                                  wgpu::CommandEncoder encoder) {
-  if (!expected || expected != hostCommandEncoderLease_ || !hostCommandEncoder_ || !encoder) {
-    return std::nullopt;
-  }
-  if (hostCommandEncoderIs(encoder)) {
-    return hostCommandEncoderLease_;
-  }
-  hostCommandEncoder_ = std::move(encoder);
-  hostCommandEncoderLease_ =
-      HostEncoderLease(deviceId(), expected.owner_, expected.generation_ + 1);
-  hostLeaseRecords_.push_back({hostCommandEncoderLease_, hostCommandEncoder_});
-  return hostCommandEncoderLease_;
-}
-
-std::optional<GeodeWgpuAdapterDevice::HostEncoderLease>
-GeodeWgpuAdapterDevice::hostCommandEncoderLease() const {
-  if (!hostCommandEncoderLease_) return std::nullopt;
-  return hostCommandEncoderLease_;
-}
-
-gpu::Result<GeodeWgpuAdapterDevice::RuntimeSubmitResult>
-GeodeWgpuAdapterDevice::submitForCurrentFrame(gpu::CommandBuffer&& commands,
-                                              std::optional<HostEncoderLease> expectedHost) {
-  const bool hasHost = static_cast<bool>(hostCommandEncoder_);
-  if ((expectedHost.has_value() && (!hasHost || *expectedHost != hostCommandEncoderLease_)) ||
-      (!expectedHost.has_value() && hasHost)) {
-    return RuntimeSubmitResult{0, RuntimeSubmitDisposition::RefusedBeforeReplay};
-  }
-  const RuntimeSubmitDisposition disposition =
-      hasHost ? RuntimeSubmitDisposition::HostRecorded : RuntimeSubmitDisposition::QueueSubmitted;
-  gpu::Result<uint64_t> submitted = submit(std::move(commands));
-  if (!submitted.hasResult()) return std::move(submitted).error();
-  return RuntimeSubmitResult{submitted.result(), disposition};
-}
-
-GeodeWgpuAdapterDevice::HostEncoderLease GeodeWgpuAdapterDevice::setHostCommandEncoderRotation(
-    HostEncoderLease expected, HostEncoderRotation rotate) {
-  if (!expected || expected != hostCommandEncoderLease_ || !hostCommandEncoder_) return {};
-  hostRotationLease_ = expected;
-  hostEncoderRotation_ = std::move(rotate);
-  return expected;
-}
-
-bool GeodeWgpuAdapterDevice::clearHostCommandEncoderRotation(HostEncoderLease expected) {
-  if (!expected || expected != hostRotationLease_) return false;
-  hostEncoderRotation_ = {};
-  hostRotationLease_ = {};
-  return true;
-}
-
-GeodeWgpuAdapterDevice::HostRotationResult
-GeodeWgpuAdapterDevice::rotateHostCommandEncoderForFilterChunk(HostEncoderLease expected) {
-  if (!expected || expected != hostCommandEncoderLease_ || expected != hostRotationLease_ ||
-      !hostEncoderRotation_) {
-    return {};
-  }
-  HostEncoderRotation rotation = hostEncoderRotation_;
-  HostRotationResult result = rotation(expected);
-  if (hostRotationLease_ == expected && result.replacementLease.has_value() &&
-      *result.replacementLease == hostCommandEncoderLease_) {
-    hostRotationLease_ = *result.replacementLease;
-  }
-  return result;
-}
-
-bool GeodeWgpuAdapterDevice::hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const {
-  return static_cast<WGPUCommandEncoder>(hostCommandEncoder_) ==
-         static_cast<WGPUCommandEncoder>(encoder);
-}
-
-void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
-  hostCommandEncoder_ = wgpu::CommandEncoder();
-  hostCommandEncoderLease_ = {};
-  hostEncoderRotation_ = {};
-  hostRotationLease_ = {};
-}
-
-bool GeodeWgpuAdapterDevice::clearHostCommandEncoder(HostEncoderLease expected) {
-  if (!expected || expected != hostCommandEncoderLease_) return false;
-  clearHostCommandEncoder();
-  return true;
-}
-
-bool GeodeWgpuAdapterDevice::hasHostCommandEncoder() const {
-  return static_cast<bool>(hostCommandEncoder_);
-}
-
-void GeodeWgpuAdapterDevice::CompletionState::record(WGPUCommandEncoder host, uint64_t serial) {
+void GeodeWgpuAdapterDevice::CompletionState::record(uint64_t serial) {
   std::scoped_lock lock(mutex);
-  if (host != nullptr) {
-    for (Pending& range : pending) {
-      if (range.host == host) {
-        range.lastSerial = serial;
-        return;
-      }
-    }
-  }
-  pending.push_back(Pending{host, serial, serial});
-}
-
-uint64_t GeodeWgpuAdapterDevice::CompletionState::closeHost(WGPUCommandEncoder host) {
-  std::scoped_lock lock(mutex);
-  if (host != nullptr) {
-    for (Pending& range : pending) {
-      if (range.host == host) {
-        range.host = nullptr;
-        return range.firstSerial;
-      }
-    }
-  }
-  return 0;
+  pending.push_back(Pending{serial, serial});
 }
 
 void GeodeWgpuAdapterDevice::CompletionState::complete(uint64_t ticket) {
   std::scoped_lock lock(mutex);
   const auto range = std::find_if(pending.begin(), pending.end(), [ticket](const Pending& entry) {
-    return entry.firstSerial == ticket && entry.host == nullptr;
+    return entry.firstSerial == ticket;
   });
   if (range == pending.end()) {
     return;
@@ -1846,44 +1712,6 @@ void GeodeWgpuAdapterDevice::CompletionState::complete(uint64_t ticket) {
   completedSerial.store(prefix, std::memory_order_release);
 }
 
-void GeodeWgpuAdapterDevice::notifyHostSubmitted(wgpu::CommandEncoder encoder) {
-  const WGPUCommandEncoder raw = static_cast<WGPUCommandEncoder>(encoder);
-  const uint64_t ticket = completionState_->closeHost(static_cast<WGPUCommandEncoder>(encoder));
-  if (ticket != 0) {
-    completeWhenQueueDrains(ticket);
-  }
-  std::erase_if(hostLeaseRecords_, [&](const HostLeaseRecord& record) {
-    return static_cast<WGPUCommandEncoder>(record.encoder) == raw;
-  });
-}
-
-bool GeodeWgpuAdapterDevice::notifyHostSubmitted(HostEncoderLease expected) {
-  const auto record =
-      std::find_if(hostLeaseRecords_.begin(), hostLeaseRecords_.end(),
-                   [&](const HostLeaseRecord& entry) { return entry.lease == expected; });
-  if (record == hostLeaseRecords_.end()) return false;
-  notifyHostSubmitted(record->encoder);
-  return true;
-}
-
-void GeodeWgpuAdapterDevice::notifyHostDiscarded(wgpu::CommandEncoder encoder) {
-  // A discarded range still waits for older queue work before its resources may retire.
-  notifyHostSubmitted(encoder);
-  if (hostCommandEncoderIs(encoder)) {
-    clearHostCommandEncoder();
-  }
-}
-
-bool GeodeWgpuAdapterDevice::notifyHostDiscarded(HostEncoderLease expected) {
-  const auto record =
-      std::find_if(hostLeaseRecords_.begin(), hostLeaseRecords_.end(),
-                   [&](const HostLeaseRecord& entry) { return entry.lease == expected; });
-  if (record == hostLeaseRecords_.end()) return false;
-  wgpu::CommandEncoder encoder = record->encoder;
-  notifyHostDiscarded(std::move(encoder));
-  return true;
-}
-
 void GeodeWgpuAdapterDevice::completeWhenQueueDrains(uint64_t ticket) {
   struct WorkDoneState {
     std::shared_ptr<CompletionState> completion;  //!< State independent of adapter lifetime.
@@ -1895,21 +1723,6 @@ void GeodeWgpuAdapterDevice::completeWhenQueueDrains(uint64_t ticket) {
   workDoneState->completion = completionState_;
   workDoneState->ticket = ticket;
   notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
-}
-
-bool GeodeWgpuAdapterDevice::replaysIntoHostEncoder() const {
-  return static_cast<bool>(hostCommandEncoder_) && !bypassHostEncoderForSubmit_;
-}
-
-gpu::Result<uint64_t> GeodeWgpuAdapterDevice::submitStandalone(gpu::CommandBuffer&& commands) {
-  // Scoped rather than a separate encode path: the standalone submit differs from an ordinary
-  // one only in ignoring the host encoder, so it runs the same encoding and the same completion
-  // bookkeeping.
-  const bool previous = std::exchange(bypassHostEncoderForSubmit_, true);
-  gpu::Result<uint64_t> serial = submit(std::move(commands));
-  bypassHostEncoderForSubmit_ = previous;
-
-  return serial;
 }
 
 gpu::Status GeodeWgpuAdapterDevice::encodeSubmittedCommandBuffer(
@@ -1949,49 +1762,24 @@ gpu::Status GeodeWgpuAdapterDevice::encodeSubmittedCommandBuffer(
 
 gpu::Status GeodeWgpuAdapterDevice::onSubmit(
     uint64_t submissionSerial, std::span<const gpu::SubmittedCommandBuffer> commandBuffers) {
-  // Replay into the host's encoder when one is installed, so a caller that also records spans
-  // this runtime cannot express keeps one command buffer covering the whole frame in order.
-  const bool replayingIntoHost = replaysIntoHostEncoder();
-
-  // Each submitted buffer gets its own encoder when this runtime owns the queue, so the caller's
-  // split survives to the queue; they are finished but not submitted until all of them encode,
-  // and then handed over together, which keeps the submission ordered and completing once.
+  // Each submitted buffer gets its own encoder, so the caller's split survives to the queue; they
+  // are finished but not submitted until all of them encode, and then handed over together, which
+  // keeps the submission ordered and completing once.
   std::vector<ScopedWgpuHandle<wgpu::CommandBuffer>> finished;
   finished.reserve(commandBuffers.size());
   for (const gpu::SubmittedCommandBuffer& commandBuffer : commandBuffers) {
     EncodingState state;
-    if (replayingIntoHost) {
-      state.encoder = hostCommandEncoder_;
-    } else {
-      state.ownedEncoder.reset(geodeDevice_.device().createCommandEncoder());
-      state.encoder = state.ownedEncoder.get();
-    }
+    state.encoder.reset(geodeDevice_.device().createCommandEncoder());
 
     if (gpu::Status status = encodeSubmittedCommandBuffer(state, commandBuffer.commands);
         status.hasError()) {
-      // Unlike the owned-queue path below, the host path cannot leave the queue as it was: the
-      // buffers encoded before this one are already in the host's encoder, which the host will
-      // finish and submit, while no serial is burned for them. The host owns that encoder and is
-      // the only thing that could drop it.
       return status;
     }
-    if (replayingIntoHost) {
-      continue;
-    }
 
-    finished.emplace_back(state.encoder.finish());
+    finished.emplace_back(state.encoder.get().finish());
     if (!finished.back()) {
       return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
     }
-  }
-
-  if (replayingIntoHost) {
-    // The host owns finish + submit for its encoder. Hold the serial back until it reports that
-    // submit: reporting completion before the work is even submitted would be a lie the deferred
-    // destruction and wait paths both act on.
-    completionState_->record(static_cast<WGPUCommandEncoder>(hostCommandEncoder_),
-                             submissionSerial);
-    return OkStatus();
   }
 
   std::vector<WGPUCommandBuffer> rawCommandBuffers;
@@ -1999,9 +1787,10 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(
   for (ScopedWgpuHandle<wgpu::CommandBuffer>& commandBuffer : finished) {
     rawCommandBuffers.push_back(static_cast<WGPUCommandBuffer>(commandBuffer.get()));
   }
-  completionState_->record(nullptr, submissionSerial);
+  completionState_->record(submissionSerial);
   geodeDevice_.queue().submit(rawCommandBuffers);
   geodeDevice_.countSubmit();
+  geodeDevice_.countCommandBuffers(rawCommandBuffers.size());
 
   completeWhenQueueDrains(submissionSerial);
   return OkStatus();

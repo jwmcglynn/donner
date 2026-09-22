@@ -1393,11 +1393,17 @@ constexpr bool kEnableSceneBatching = true;
 
 struct RendererGeode::Impl : public geode::GeometryDebugSink,
                              public geode::GeometryAdmission,
-                             public geode::FilterTextureAllocator {
+                             public geode::FilterTextureAllocator,
+                             public geode::FrameCommandBufferSink {
   bool verbose = false;
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
   bool failFilterFrameSuspensionForTesting = false;
+  /// Closes of the frame's recorded draws to let through before one fails, as a backend refusal
+  /// would; empty when no failure is armed.
+  std::optional<size_t> failFrameEncoderCloseForTesting;
+  /// One-shot: the next filter-budget split runs without a budget rejection asking for it.
+  bool forceFilterBudgetChunkForTesting = false;
   bool failFilterFrameRestoreForTesting = false;
   bool frameRecordingAbandoned = false;
 
@@ -1489,29 +1495,40 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   WGPUTexture targetHandleTexture = nullptr;
   std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
 
-  // Single CommandEncoder owned by RendererGeode for the whole frame.
-  // All GeoEncoder instances created during the frame (base + push/pop
-  // layer / filter / mask) share this CommandEncoder, so push/pop
-  // boundaries no longer force a queue().submit(). Finalised + submitted
-  // once in endFrame. The filter engine may chunk this slot mid-frame
-  // (finish + submit + replace every 64 filter passes) to bound
-  // command-buffer size for pathological filter graphs; the final
-  // encoder in the slot is the one endFrame submits.
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
-  std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> frameHostEncoderLease;
+  // The frame's command buffers, in the order they must execute. endFrame submits all of them
+  // as one submission, so every recorded render pass (base + every pushed layer / filter / mask)
+  // runs in program order off one queue handoff. A frame is split across buffers wherever its
+  // recording interleaves with something recording its own: each GeoEncoder retire closes one,
+  // and a filter execution inside the frame adds the chunks it closes here.
+  std::vector<gpu::CommandBuffer> frameCommandBuffers;
 
-  // Runtime command encoder for the frame. It records into `frameCommandEncoder`
-  // rather than owning a command buffer of its own: filter passes are still
-  // recorded directly on the backend encoder, and pass ordering only holds if
-  // every pass appends to the same command buffer. Recreated alongside
-  // `frameCommandEncoder` whenever that slot is replaced.
+  // Runtime handles the filter executions of this frame recorded against. They belong to
+  // executions that have already finished, and the frame's submission re-validates every resource
+  // its command buffers name, so they are dropped only once that submission has happened.
+  std::vector<geode::RetainedFilterResources> frameRetainedFilterResources;
+
+  // Whether a frame is open for recording. Distinct from `frameGpuEncoder`, which is null while
+  // a filter executes between the frame's own encoders.
+  bool frameRecordingOpen = false;
+
+  // Most command buffers this renderer puts in one submission.
   //
-  // A runtime encoder is single-use: what it records reaches the backend encoder only when it is
-  // finished and submitted. Because filter passes are recorded on the backend encoder directly,
-  // that replay has to happen at each point in the frame where the two interleave, so the frame
-  // holds a succession of runtime encoders rather than one. Every encoder stays alive until the
-  // frame ends: a finished one records nothing more, but the GeoEncoders that recorded through it
-  // still hold a reference to it.
+  // Well below what the runtime refuses, because the wgpu backend acquires a backend command
+  // buffer per element and commits none of them until the whole span has encoded, while the
+  // backend queue caps how many may be outstanding at once and blocks the encoding thread at
+  // that cap. Measured on the wgpu Metal path (2026-09-21): a span of 54 blocks indefinitely,
+  // and 32 blocks as well, while 16 leaves room for the readback contexts and sibling renderers
+  // sharing the same queue. Ordinary frames run to a handful of buffers, so only a pathological
+  // one - a filter graph of thousands of passes - is split across submissions at all, and the
+  // split keeps recording order because submissions execute in the order they are made.
+  static constexpr size_t kMaxFrameCommandBuffersPerSubmission = 16;
+
+  // Runtime command encoder the frame is recording into right now.
+  //
+  // A runtime encoder is single-use: what it records becomes a command buffer when it is
+  // finished, and the frame keeps that buffer until it submits. Every encoder stays alive until
+  // the frame ends: a finished one records nothing more, but the GeoEncoders that recorded
+  // through it still hold a reference to it.
   std::deque<std::unique_ptr<gpu::CommandEncoder>> frameGpuEncoders;
   gpu::CommandEncoder* frameGpuEncoder = nullptr;
 
@@ -1625,21 +1642,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return gpu::Extent2d{texture.getWidth(), texture.getHeight()};
   }
 
-  [[nodiscard]] bool publishFrameHostEncoder() {
-    frameHostEncoderLease =
-        device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
-    return frameHostEncoderLease.has_value() &&
-           device->adapterDevice().setHostCommandEncoderRotation(
-               *frameHostEncoderLease,
-               [this](geode::GeodeWgpuAdapterDevice::HostEncoderLease expected) {
-                 return rotateFrameCommandEncoderForFilter(expected);
-               });
-  }
-
-  /// Point the runtime device at the current frame command encoder and open a runtime encoder
-  /// that records into it. Returns false when the runtime refuses the encoder.
+  /// Open a runtime encoder for the frame to record into.
   [[nodiscard]] bool openFrameGpuEncoder() {
-    if (!publishFrameHostEncoder()) return false;
     gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
         device->runtimeDevice().createCommandEncoder();
     if (!created.hasResult()) {
@@ -1650,135 +1654,131 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return frameGpuEncoder != nullptr;
   }
 
-  /// Replay what the runtime encoder has recorded into the frame command encoder and open a fresh
-  /// one. Call before recording on the frame command encoder directly and before finishing it, so
-  /// the two streams reach the backend in the order they were written.
-  [[nodiscard]] bool flushFrameGpuEncoder() { return replayFrameGpuEncoder(true); }
+  /// Submit what the frame holds so far and let the backend finish it before recording resumes.
+  ///
+  /// Splitting a frame is a cross-submit edge for whatever recorded the buffers on either side of
+  /// it: a pass in the next submission may sample a storage texture the submitted one wrote, and
+  /// on hardware Vulkan the automatic barrier for that races the async queue and produces
+  /// nondeterministic large-area corruption. The wait is bounded, and a timeout is reported as a
+  /// failure so the frame is abandoned rather than recorded against unproven work.
+  [[nodiscard]] bool splitFrameSubmission() {
+    if (frameCommandBuffers.empty()) {
+      return true;  // Nothing was split, so there is no edge to wait across.
+    }
+    if (!submitFrameCommandBuffers()) {
+      return false;
+    }
+    return !device->isVulkan() || device->waitForQueueIdle() == geode::GpuWaitResult::Complete;
+  }
 
-  [[nodiscard]] bool replayFrameGpuEncoder(bool reopen) {
+  /// Add \p commandBuffer to the frame, splitting the submission first when the frame has
+  /// already reached \ref kMaxFrameCommandBuffersPerSubmission.
+  [[nodiscard]] bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
+    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission &&
+        !splitFrameSubmission()) {
+      return false;
+    }
+    frameCommandBuffers.push_back(std::move(commandBuffer));
+    return true;
+  }
+
+  /// Keep what a filter execution's command buffers reference alive until the frame submits.
+  void retainUntilFrameSubmits(geode::RetainedFilterResources resources) override {
+    frameRetainedFilterResources.push_back(std::move(resources));
+  }
+
+  /// Submit every command buffer the frame has accumulated as one submission, in recording order.
+  [[nodiscard]] bool submitFrameCommandBuffers() {
+    if (frameCommandBuffers.empty()) {
+      return true;
+    }
+    gpu::Result<uint64_t> submitted = device->runtimeDevice().submit(frameCommandBuffers);
+    frameCommandBuffers.clear();
+    if (submitted.hasError()) {
+      std::fprintf(stderr, "[Geode] submitting the frame's command buffers failed: %s\n",
+                   submitted.error().message.c_str());
+      return false;
+    }
+    return true;
+  }
+
+  /// Close what the frame's runtime encoder has recorded into a command buffer of the frame and
+  /// open a fresh one. Call before anything else records a command buffer of its own, so the two
+  /// streams reach the queue in the order they were written.
+  [[nodiscard]] bool flushFrameGpuEncoder() { return closeFrameGpuEncoder(true); }
+
+  /// Close the frame's runtime encoder into the frame's command buffers.
+  /// @param reopen Whether to open a fresh encoder for the frame to keep recording into.
+  [[nodiscard]] bool closeFrameGpuEncoder(bool reopen) {
     if (frameGpuEncoder == nullptr) {
       return true;
     }
-    if (!publishFrameHostEncoder()) {
-      return false;
-    }
-    gpu::Result<gpu::CommandBuffer> commandBuffer = frameGpuEncoder->finish();
-    if (!commandBuffer.hasError()) {
-      gpu::Result<geode::GeodeWgpuAdapterDevice::RuntimeSubmitResult> submitted =
-          device->adapterDevice().submitForCurrentFrame(std::move(commandBuffer).result(),
-                                                        frameHostEncoderLease);
-      if (submitted.hasError() ||
-          submitted.result().disposition !=
-              geode::GeodeWgpuAdapterDevice::RuntimeSubmitDisposition::HostRecorded) {
-        std::fprintf(stderr, "[Geode] replaying the frame's recorded draws failed: %s\n",
-                     submitted.hasError() ? submitted.error().message.c_str()
-                                          : "host replay was refused before encoding");
+    if (failFrameEncoderCloseForTesting.has_value()) {
+      if (*failFrameEncoderCloseForTesting == 0) {
+        failFrameEncoderCloseForTesting.reset();
+        // Refuse in the state a real handover failure leaves behind: the encoder is gone, so a
+        // caller that records afterwards without noticing has nothing to record through. Failing
+        // with one still installed would be a state this never reaches in production.
+        frameGpuEncoder = nullptr;
         return false;
       }
-    } else {
+      --*failFrameEncoderCloseForTesting;
+    }
+    if (frameGpuEncoder->recordedCommandCount() == 0) {
+      // Finishing an encoder that recorded nothing would spend one of the submission's command
+      // buffers on a buffer with no work in it, and the frame closes its encoder at every
+      // boundary whether or not anything was drawn between two of them.
+      if (reopen) return true;
+      frameGpuEncoder = nullptr;
+      return true;
+    }
+    gpu::Result<gpu::CommandBuffer> commandBuffer = frameGpuEncoder->finish();
+    if (commandBuffer.hasError()) {
       std::fprintf(stderr, "[Geode] closing the frame's recorded draws failed: %s\n",
                    commandBuffer.error().message.c_str());
       return false;
     }
     frameGpuEncoder = nullptr;
+    if (!appendFrameCommandBuffer(std::move(commandBuffer).result())) {
+      return false;
+    }
     return !reopen || openFrameGpuEncoder();
   }
 
-  void clearAcceptedFrameHost(geode::GeodeWgpuAdapterDevice::HostEncoderLease acceptedLease) {
-    device->adapterDevice().clearHostCommandEncoderRotation(acceptedLease);
-    device->adapterDevice().clearHostCommandEncoder(acceptedLease);
-    frameCommandEncoder.reset();
-    frameHostEncoderLease.reset();
-  }
-
-  std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> publishFilterChunkReplacement(
-      geode::GeodeWgpuAdapterDevice::HostEncoderLease acceptedLease) {
-    wgpu::CommandEncoderDescriptor descriptor = {};
-    descriptor.label = wgpuLabel("RendererGeodeFilterChunkCE");
-    geode::ScopedWgpuHandle<wgpu::CommandEncoder> replacement(
-        device->device().createCommandEncoder(descriptor));
-    if (!replacement || device->isDeviceLost()) return std::nullopt;
-    frameCommandEncoder = std::move(replacement);
-    return device->adapterDevice().replaceHostCommandEncoder(acceptedLease,
-                                                             frameCommandEncoder.get());
-  }
-
-  geode::GeodeWgpuAdapterDevice::HostRotationResult rotateFrameCommandEncoderForFilter(
-      geode::GeodeWgpuAdapterDevice::HostEncoderLease expected) {
-    using RotationResult = geode::GeodeWgpuAdapterDevice::HostRotationResult;
-    using RotationStage = geode::GeodeWgpuAdapterDevice::HostRotationStage;
-    if (!frameHostEncoderLease.has_value() || *frameHostEncoderLease != expected ||
-        !frameCommandEncoder ||
-        !device->adapterDevice().hostCommandEncoderIs(frameCommandEncoder.get())) {
-      return {};
-    }
-    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(frameCommandEncoder.get().finish());
-    if (!commands) return {};
-    device->queue().submit(1, &commands.get());
-    device->countSubmit();
-    device->adapterDevice().notifyHostSubmitted(expected);
-    frameFinishedEncoders.clear();
-    frameGpuEncoders.clear();
-    frameGpuEncoder = nullptr;
-
-    std::optional<geode::GeodeWgpuAdapterDevice::HostEncoderLease> replacementLease =
-        publishFilterChunkReplacement(expected);
-    if (!replacementLease.has_value()) {
-      clearAcceptedFrameHost(expected);
-      return RotationResult{RotationStage::QueueAcceptedReplacementFailed, std::nullopt};
-    }
-    frameHostEncoderLease = *replacementLease;
-    return RotationResult{RotationStage::QueueAcceptedAndReplaced, replacementLease};
-  }
-
-  /// Close the runtime encoder after the frame command encoder it recorded into has been
-  /// submitted, so the runtime can retire the work it recorded.
-  void closeFrameGpuEncoderAfterSubmit() {
-    frameGpuEncoders.clear();
-    frameGpuEncoder = nullptr;
-    if (frameHostEncoderLease.has_value()) {
-      device->adapterDevice().notifyHostSubmitted(*frameHostEncoderLease);
-      device->adapterDevice().clearHostCommandEncoderRotation(*frameHostEncoderLease);
-      device->adapterDevice().clearHostCommandEncoder(*frameHostEncoderLease);
-    }
-    frameHostEncoderLease.reset();
-  }
-
-  /// Submits all source rendering and disables host replay before standalone filter execution.
+  /// Close the frame's own recording before a filter execution records command buffers of its
+  /// own, so the source rendering the filter samples is ordered ahead of it.
   [[nodiscard]] bool suspendFrameForFilter() {
     if (std::exchange(failFilterFrameSuspensionForTesting, false)) {
       discardFrameGpuEncoder();
       return false;
     }
-    if (!frameCommandEncoder || !replayFrameGpuEncoder(false)) {
+    if (!frameRecordingOpen || !closeFrameGpuEncoder(false)) {
       discardFrameGpuEncoder();
       return false;
     }
     return true;
   }
 
-  /// Opens the fresh raw/runtime encoder pair that records the post-filter composite.
+  /// Opens the fresh runtime encoder that records the post-filter composite.
   [[nodiscard]] bool restoreFrameAfterFilter() {
     if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
     if (!device || device->isDeviceLost()) return false;
-    if (!frameCommandEncoder || !frameHostEncoderLease.has_value() || device->isDeviceLost() ||
-        !openFrameGpuEncoder() || device->isDeviceLost()) {
+    if (!frameRecordingOpen || !openFrameGpuEncoder() || device->isDeviceLost()) {
       discardFrameGpuEncoder();
       return false;
     }
     return true;
   }
 
-  /// Abandon this frame without completing any other renderer's recorded work.
+  /// Abandon this frame, dropping everything it recorded without submitting any of it.
   void discardFrameGpuEncoder() {
-    if (device && frameHostEncoderLease.has_value()) {
-      device->adapterDevice().clearHostCommandEncoderRotation(*frameHostEncoderLease);
-      device->adapterDevice().notifyHostDiscarded(*frameHostEncoderLease);
-    }
-    frameHostEncoderLease.reset();
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
-    frameCommandEncoder.reset();
+    frameCommandBuffers.clear();
+    frameRetainedFilterResources.clear();
+    frameRecordingOpen = false;
+    frameImportedTextureViews.clear();
+    frameImportedTextures.clear();
     frameSnapshotImports.clear();
     frameSnapshotBackings.clear();
     if (device) {
@@ -1794,6 +1794,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameRecordingAbandoned = true;
   }
 
+  /// Abandon the frame where there is no outer target to go back to, leaving the same state as
+  /// the filter-failure path: nothing submitted, and everything the frame recorded against
+  /// retained rather than returned to a reusable pool.
+  void abandonFrameRecording() {
+    const wgpu::Texture currentTarget = target;
+    abandonFrameRecordingAfterFilterFailure(currentTarget);
+  }
+
   std::unique_ptr<geode::GeoEncoder> encoder;
   std::vector<std::unique_ptr<geode::GeoEncoder>> frameFinishedEncoders;
 
@@ -1803,16 +1811,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+  /// Installs \p nextEncoder as the active one, keeping whatever it replaces alive until the
+  /// frame ends. A GeoEncoder owns runtime handles - its target view above all - that its
+  /// recorded draws reference, and the frame's submission re-validates every one of them, so one
+  /// destroyed mid-frame would fail the submission of work it had already recorded.
+  /// @param nextEncoder Encoder to make active, or null to leave none active.
+  void replaceActiveEncoder(std::unique_ptr<geode::GeoEncoder> nextEncoder) {
+    retireFinishedEncoder(std::move(encoder));
+    encoder = std::move(nextEncoder);
+  }
+
   void retireActiveEncoder() {
     if (!encoder) {
       return;
     }
     encoder->finish();
-    // Replay before the encoder's recorded draws can outlive what they name: the resources a
+    // Close before the encoder's recorded draws can outlive what they name: the resources a
     // draw references stay alive only as long as whoever recorded it keeps them, and a
     // subsequent encoder is free to re-upload over them.
-    (void)flushFrameGpuEncoder();
+    const bool closed = flushFrameGpuEncoder();
     retireFinishedEncoder(std::move(encoder));
+    if (!closed) {
+      // The frame has no encoder to record into any more, and every later push and pop records
+      // through one. Abandon here so those take their abandoned path instead of recording
+      // against nothing.
+      device->markDeviceLost("the frame's recorded draws could not be closed");
+      abandonFrameRecording();
+    }
   }
 
   // Reusable scratch storage for gradient stop vectors - keeps the
@@ -2021,7 +2046,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// acquire with the original descriptor will miss the bucket.
   ///
   /// Prefer `releaseTextureAtFrameEnd` for textures whose GPU work was
-  /// recorded into the shared `frameCommandEncoder`: releasing those
+  /// recorded into one of the frame's command buffers: releasing those
   /// mid-frame would let a subsequent `acquireTexture` on the same
   /// bucket hand the texture back out before the GPU has finished
   /// writing it.
@@ -2090,42 +2115,50 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     framePendingReleases.clear();
   }
 
+  /// Whether a memory-limited filter budget is holding bytes it can only free once the work
+  /// naming them has reached the queue.
+  [[nodiscard]] bool filterBudgetNeedsChunkSubmit() const {
+    return filterExecutionBudget->rejectionReason() ==
+               components::FilterExecutionBudget::RejectionReason::MemoryLimit &&
+           filterExecutionBudget->activeGpuReservations() == 0 &&
+           filterExecutionBudget->retainedGpuBytes() != 0;
+  }
+
   bool submitFilterBudgetChunk() {
-    if (!device || !frameCommandEncoder || !target || !filterStack.empty() ||
-        filterExecutionBudget->rejectionReason() !=
-            components::FilterExecutionBudget::RejectionReason::MemoryLimit ||
-        filterExecutionBudget->activeGpuReservations() != 0 ||
-        filterExecutionBudget->retainedGpuBytes() == 0) {
+    const bool forced = std::exchange(forceFilterBudgetChunkForTesting, false);
+    if (!device || !frameRecordingOpen || !target || !filterStack.empty() ||
+        (!forced && !filterBudgetNeedsChunkSubmit())) {
       return false;
     }
 
     retireActiveEncoder();
-    if (!flushFrameGpuEncoder()) {
+    if (frameRecordingAbandoned) {
+      return false;  // Closing the frame's recorded draws failed, which abandoned the frame.
+    }
+    // A memory-limited filter budget only frees its retained bytes once the work holding them has
+    // reached the queue, so this splits the frame the same way reaching the bound on one
+    // submission does.
+    if (!closeFrameGpuEncoder(false) || !splitFrameSubmission()) {
+      // The frame has no encoder to record into any more, and every later push and pop records
+      // through one. The caller reads a refusal here as "no room for this filter" and carries on
+      // drawing, so the abandonment has to be declared rather than reported through the return.
+      device->markDeviceLost("the frame's recorded draws could not be split mid-frame");
+      abandonFrameRecording();
       return false;
     }
-    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(frameCommandEncoder.get().finish());
-    if (!commandBuffer) {
-      return false;
-    }
-    device->queue().submit(1, &commandBuffer.get());
-    device->countSubmit();
-    closeFrameGpuEncoderAfterSubmit();
+    frameGpuEncoders.clear();
 
     frameFinishedEncoders.clear();
     drainPendingReleases();
 
-    wgpu::CommandEncoderDescriptor descriptor = {};
-    descriptor.label = wgpuLabel("RendererGeodeFilterBudgetChunk");
-    frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
-    if (!frameCommandEncoder) {
-      return false;
-    }
     if (!openFrameGpuEncoder()) {
+      device->markDeviceLost("the frame's encoder could not be reopened after a mid-frame split");
+      abandonFrameRecording();
       return false;
     }
-    encoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            activeTarget(), targetExtent(), *frameGpuEncoder);
+    replaceActiveEncoder(std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline,
+                                                             *imagePipeline, activeTarget(),
+                                                             targetExtent(), *frameGpuEncoder));
     configurePathEncoder(*encoder);
     encoder->setLoadPreserve();
     updateEncoderScissor();
@@ -2370,7 +2403,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     configurePathEncoder(*newEncoder, /*collectGeometry=*/true, admission.bufferOffsetX,
                          admission.bufferOffsetY);
     newEncoder->clear(css::RGBA(0, 0, 0, 0));
-    encoder = std::move(newEncoder);
+    replaceActiveEncoder(std::move(newEncoder));
     if (admission.bufferOffsetX != 0 || admission.bufferOffsetY != 0) {
       deviceFromLocalTransform =
           deviceFromLocalTransform *
@@ -2422,16 +2455,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                         Transform2d::Translate(-geometry->paddedRegion.topLeft.x,
                                                                -geometry->paddedRegion.topLeft.y) *
                                         Transform2d::Scale(geometry->scaleX, geometry->scaleY);
-    geode::GeoEncoder resampleEncoder(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                      localTexture, localDesc.size, *frameGpuEncoder);
-    configureEncoder(resampleEncoder);
-    resampleEncoder.setTransform(localFromDevice);
-    resampleEncoder.drawTexture(
+    auto resampleEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            localTexture, localDesc.size, *frameGpuEncoder);
+    configureEncoder(*resampleEncoder);
+    resampleEncoder->setTransform(localFromDevice);
+    resampleEncoder->drawTexture(
         frame.layerTexture,
         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
                         static_cast<double>(frame.layerDesc.size.height)),
         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
-    resampleEncoder.finish();
+    resampleEncoder->finish();
+    retireFinishedEncoder(std::move(resampleEncoder));
 
     const Transform2d localDeviceFromFilter =
         Transform2d::Scale(geometry->scaleX, geometry->scaleY);
@@ -2449,9 +2484,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return TransformedFilterResult::FrameAbandoned;
     }
-    geode::FilterExecutionResult localFiltered = filterEngine->execute(
-        frame.filterGraph, localTexture, localDesc, localFilterRegion, localDeviceFromFilter, *this,
-        nullptr, frame.localFilterPlan, frameHostEncoderLease);
+    geode::FilterExecutionResult localFiltered =
+        filterEngine->execute(frame.filterGraph, localTexture, localDesc, localFilterRegion,
+                              localDeviceFromFilter, *this, nullptr, frame.localFilterPlan, this);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
@@ -2471,7 +2506,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         targetExtent(), *frameGpuEncoder);
     configurePathEncoder(*compositeEncoder);
     compositeEncoder->setLoadPreserve();
-    encoder = std::move(compositeEncoder);
+    replaceActiveEncoder(std::move(compositeEncoder));
     updateEncoderScissor();
     if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
       encoder->setTransform(deviceFromLocal);
@@ -2511,7 +2546,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     } else {
       filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
                                        frame.filterRegion, bufferDeviceFromFilter, *this, nullptr,
-                                       frame.fullFilterPlan, frameHostEncoderLease);
+                                       frame.fullFilterPlan, this);
     }
     if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
@@ -2947,7 +2982,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// The replay encoder intentionally has no geometry sink, preventing the
   /// overlay path from recursively observing itself.
   void emitGeometryDebugOverlay() {
-    if (!debugGeometryOverlay || geometryDebugEdges.empty() || !target || !frameCommandEncoder) {
+    if (!debugGeometryOverlay || geometryDebugEdges.empty() || !target ||
+        frameGpuEncoder == nullptr) {
       return;
     }
 
@@ -2966,9 +3002,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           .closePath();
     }
 
-    encoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            activeTarget(), targetExtent(), *frameGpuEncoder);
+    replaceActiveEncoder(std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline,
+                                                             *imagePipeline, activeTarget(),
+                                                             targetExtent(), *frameGpuEncoder));
     configureEncoder(*encoder);
     encoder->setLoadPreserve();
     encoder->setTransform(Transform2d());
@@ -4872,9 +4908,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void createFrameEncoder() {
-    wgpu::CommandEncoderDescriptor commandEncoderDesc = {};
-    commandEncoderDesc.label = wgpuLabel("RendererGeodeFrameCE");
-    frameCommandEncoder.reset(device->device().createCommandEncoder(commandEncoderDesc));
+    frameRecordingOpen = true;
     UTILS_RELEASE_ASSERT_MSG(openFrameGpuEncoder(), "Failed to open the frame command encoder");
     encoder =
         std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
@@ -5371,28 +5405,35 @@ void RendererGeode::endFrame() {
     impl_->retireActiveEncoder();
   }
 
-  // Finalise and submit the single frame-wide CommandEncoder. After
-  // this one submit, all recorded render passes (base + every pushed
-  // layer / filter / mask) execute on the GPU in program order.
-  if (impl_->frameCommandEncoder) {
-    UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
-                             "Failed to replay the frame's recorded draws");
-    {
-      geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(
-          impl_->frameCommandEncoder.get().finish());
-      impl_->device->queue().submit(1, &cmdBuf.get());
-      impl_->device->countSubmit();
+  // Hand the frame's command buffers to the queue together. After this one submit, all recorded
+  // render passes (base + every pushed layer / filter / mask) execute on the GPU in program
+  // order.
+  if (impl_->frameRecordingOpen) {
+    // That submission re-validates every resource the frame's command buffers name, so a handle
+    // dropped anywhere in the frame fails here. Drop the frame, not the process: a document must
+    // not be able to take the renderer down.
+    const bool submitted = impl_->closeFrameGpuEncoder(false) && impl_->submitFrameCommandBuffers();
+    if (!submitted) {
+      impl_->device->markDeviceLost("the frame's command buffers could not be submitted");
     }
-    impl_->closeFrameGpuEncoderAfterSubmit();
-    impl_->frameCommandEncoder.reset();
+    impl_->frameRecordingOpen = false;
+    impl_->frameGpuEncoders.clear();
     impl_->frameFinishedEncoders.clear();
+    impl_->frameCommandBuffers.clear();
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
+    impl_->frameRetainedFilterResources.clear();
     impl_->frameImportedTextureViews.clear();
     impl_->frameImportedTextures.clear();
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
     impl_->device->drainDeferredTextureBackings();
+    if (!submitted) {
+      // Whether any of what the frame recorded reached the queue is exactly what the failure
+      // leaves unknown, so nothing it named may go back to a reusable pool.
+      impl_->retainPendingFrameReleasesAfterFailure();
+      impl_->frameRecordingAbandoned = true;
+    }
   }
 
   // The frame's work is submitted, so nothing it recorded can still be waiting
@@ -5689,7 +5730,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
       impl_->importTarget(impl_->target), td.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->layerStack.push_back(std::move(frame));
   // The layer inherits the outer clip stack - reapply it to the new
   // encoder so scissors carry through.
@@ -5707,18 +5748,18 @@ void RendererGeode::popIsolatedLayer() {
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
   }
-  if (impl_->frameRecordingAbandoned) {
-    impl_->target = frame.savedTarget;
-    impl_->encoder.reset();
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
-    return;
-  }
-
-  // Finish the layer's render pass so the texture contents are ready.
+  // Finish the layer's render pass so the texture contents are ready. Closing it can fail, which
+  // abandons the frame, so everything below is gated on the check after it rather than before.
   if (impl_->encoder) {
     impl_->retireActiveEncoder();
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->replaceActiveEncoder(nullptr);
+    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    return;
+  }
 
   // Restore outer target references.
   impl_->target = frame.savedTarget;
@@ -5769,13 +5810,13 @@ void RendererGeode::popIsolatedLayer() {
           savedTargetHandle, impl_->targetExtent(), *impl_->frameGpuEncoder);
       impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
-      impl_->encoder = std::move(newEncoder);
+      impl_->replaceActiveEncoder(std::move(newEncoder));
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshotHandle,
                                             static_cast<uint32_t>(frame.blendMode), frame.opacity);
       // Defer release: `blitFullTargetBlended` recorded samples from
       // both `frame.layerTexture` and `snapshot` into the shared
-      // frameCommandEncoder; they must stay alive until that buffer
+      // one of the frame's command buffers; they must stay alive until it
       // is submitted at `endFrame`.
       impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
@@ -5793,7 +5834,7 @@ void RendererGeode::popIsolatedLayer() {
       impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
   // Same deferred-release rationale as the blend-mode branch above.
@@ -5850,7 +5891,7 @@ void RendererGeode::popFilterLayer() {
     }
     if (frame.savedEncoder) {
       impl_->target = frame.savedTarget;
-      impl_->encoder = std::move(frame.savedEncoder);
+      impl_->replaceActiveEncoder(std::move(frame.savedEncoder));
       impl_->updateEncoderScissor();
     }
     return;
@@ -5859,19 +5900,19 @@ void RendererGeode::popFilterLayer() {
   if (!frame.layerTexture.isValid()) {
     return;  // Placeholder frame from the headless/error path.
   }
-  if (impl_->frameRecordingAbandoned) {
-    impl_->target = frame.savedTarget;
-    impl_->encoder.reset();
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
-    impl_->filterExecutionBudget->release(frame.filterReservation);
-    return;
-  }
-
-  // Finish the filter layer's render pass so the texture is ready.
+  // Finish the filter layer's render pass so the texture is ready. Closing it can fail, which
+  // abandons the frame, so everything below is gated on the check after it rather than before.
   if (impl_->encoder) {
     impl_->retireActiveEncoder();
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->replaceActiveEncoder(nullptr);
+    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->filterExecutionBudget->release(frame.filterReservation);
+    return;
+  }
 
   // When the filter buffer was expanded to capture negative-coordinate content, adjust
   // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
@@ -5911,7 +5952,7 @@ void RendererGeode::popFilterLayer() {
       impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
   if (filteredTexture == nullptr) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
@@ -6008,7 +6049,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
       impl_->importTarget(impl_->target), frame.maskDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*captureEncoder);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(captureEncoder);
+  impl_->replaceActiveEncoder(std::move(captureEncoder));
   impl_->maskStack.push_back(std::move(frame));
   impl_->updateEncoderScissor();
 }
@@ -6028,8 +6069,12 @@ void RendererGeode::transitionMaskToContent() {
   }
 
   // Flush the mask-capture encoder so the mask texture is ready to
-  // sample in popMask.
+  // sample in popMask. Closing it can fail, which abandons the frame.
   impl_->retireActiveEncoder();
+  if (impl_->frameRecordingAbandoned) {
+    frame.phase = Impl::MaskStackFrame::Phase::Content;
+    return;
+  }
 
   impl_->target = impl_->backendTextureOf(frame.contentTexture);
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
@@ -6037,7 +6082,7 @@ void RendererGeode::transitionMaskToContent() {
       impl_->importTarget(impl_->target), frame.contentDesc.size, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*contentEncoder);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(contentEncoder);
+  impl_->replaceActiveEncoder(std::move(contentEncoder));
   frame.phase = Impl::MaskStackFrame::Phase::Content;
   impl_->updateEncoderScissor();
 }
@@ -6054,19 +6099,19 @@ void RendererGeode::popMask() {
     // Placeholder frame from the headless path - nothing to do.
     return;
   }
-  if (impl_->frameRecordingAbandoned) {
-    impl_->target = frame.savedTarget;
-    impl_->encoder.reset();
-    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
-    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
-    return;
-  }
-
-  // Finish the content encoder so its target is ready to sample.
+  // Finish the content encoder so its target is ready to sample. Closing it can fail, which
+  // abandons the frame, so everything below is gated on the check after it rather than before.
   if (impl_->encoder) {
     impl_->retireActiveEncoder();
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
+  if (impl_->frameRecordingAbandoned) {
+    impl_->target = frame.savedTarget;
+    impl_->replaceActiveEncoder(nullptr);
+    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
+    return;
+  }
 
   // Restore the outer target and reopen a new encoder with load-preserve.
   impl_->target = frame.savedTarget;
@@ -6075,7 +6120,7 @@ void RendererGeode::popMask() {
       impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
 
   // Lift the raw mask-bounds rect into device-pixel space using the
@@ -6211,7 +6256,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/false);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(newEncoder);
+  impl_->replaceActiveEncoder(std::move(newEncoder));
   // Apply the (now-empty) clip stack so the fresh tile encoder has no scissor.
   impl_->updateEncoderScissor();
 
@@ -6246,7 +6291,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   impl_->clipStack = std::move(frame.savedClipStack);
 
   if (impl_->frameRecordingAbandoned) {
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
     if (frame.tileTexture) impl_->failedRawTextures.push_back(std::move(frame.tileTexture));
@@ -6290,7 +6335,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     // transparent clearValue; call setLoadPreserve() to switch it to
     // LoadOp::Load for the next render pass.
     newEncoder->setLoadPreserve();
-    impl_->encoder = std::move(newEncoder);
+    impl_->replaceActiveEncoder(std::move(newEncoder));
     // Re-apply the active clip stack to the freshly-created encoder.
     // The scissor state lived on the OLD encoder (finished inside
     // beginPatternTile) and doesn't carry over automatically - without
@@ -6300,7 +6345,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     // popIsolatedLayer.
     impl_->updateEncoderScissor();
   } else {
-    impl_->encoder.reset();
+    impl_->replaceActiveEncoder(nullptr);
   }
 
   impl_->promotePatternTile(frame, forStroke);
@@ -7618,7 +7663,7 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
     return false;
   auto commands = encoder->finish();
   if (commands.hasError()) return false;
-  return !runtime.submitStandalone(std::move(commands).result()).hasError();
+  return !runtime.submit(std::move(commands).result()).hasError();
 }
 
 bool CanReadSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
@@ -7747,7 +7792,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
   auto commands = encoder->finish();
   if (commands.hasError()) return {};
   if (control.stopped()) return {};
-  if (runtime.submitStandalone(std::move(commands).result()).hasError()) return {};
+  if (runtime.submit(std::move(commands).result()).hasError()) return {};
   ReadbackMapResult mapped = MapAndWaitReadback(context, buffer, mapSize, control.shouldCancel,
                                                 control.deadline, control.mapRequested);
   control.status = mapped.status;
@@ -7852,6 +7897,15 @@ void RendererGeode::injectDeviceLossForTesting() {
 void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {
   impl_->failFilterFrameSuspensionForTesting = true;
   impl_->failFilterFrameRestoreForTesting = true;
+}
+
+void RendererGeode::injectFrameEncoderCloseFailureForTesting(std::size_t successfulCloses) {
+  impl_->failFrameEncoderCloseForTesting = successfulCloses;
+}
+
+bool RendererGeode::submitFilterBudgetChunkForTesting() {
+  impl_->forceFilterBudgetChunkForTesting = true;
+  return impl_->submitFilterBudgetChunk();
 }
 
 size_t RendererGeode::failedFilterTextureCountForTesting() const {

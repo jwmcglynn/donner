@@ -641,6 +641,11 @@ public:
   void countSubmit() const {
     if (counters_) ++counters_->submits;
   }
+  /// Record the command buffers one submission carried.
+  /// @param count Command buffers handed to the queue together.
+  void countCommandBuffers(uint64_t count) const {
+    if (counters_) counters_->commandBuffers += count;
+  }
   void countPathEncode() const {
     if (counters_) ++counters_->pathEncodes;
   }

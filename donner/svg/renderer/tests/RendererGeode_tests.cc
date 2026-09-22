@@ -487,7 +487,10 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
   renderer.popFilterLayer();
 
   EXPECT_THAT(acceptedChunks, testing::Eq(1u));
-  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary))
+      << "a chunk boundary inside a frame closes a command buffer, so losing the device there "
+         "must leave the frame's work unsubmitted";
+  EXPECT_THAT(device->counters()->commandBuffers, testing::Eq(0u));
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
@@ -522,7 +525,10 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
   renderer.popFilterLayer();
 
   EXPECT_THAT(acceptedChunks, testing::Eq(1u));
-  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary + 1));
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBeforeBoundary))
+      << "a chunk boundary inside a frame closes a command buffer, so losing the device there "
+         "must leave the frame's work unsubmitted";
+  EXPECT_THAT(device->counters()->commandBuffers, testing::Eq(0u));
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
@@ -533,6 +539,241 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
   EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(retainedAfterLoss));
   EXPECT_THAT(device->counters()->submits, testing::Eq(submitsAfterLoss));
   renderer.endFrame();
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, FilterChunkBoundaryInsideAFrameClosesBuffersWithoutSubmittingOrWaiting) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  // Armed for one wait: the completion wait a chunk boundary used to force would consume it and
+  // report a hang, which is terminal. A boundary inside one submission may not take that wait,
+  // because the passes on both sides of it belong to that submission and are ordered by it.
+  device->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
+
+  renderer.pushFilterLayer(MultiChunkMorphologyGraph(),
+                           Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse())
+      << "crossing the per-command-buffer pass bound inside a frame must not wait on the queue";
+  EXPECT_THAT(counters->submits, testing::Eq(0u))
+      << "crossing that bound must close a command buffer, not submit one";
+  device->setQueueWaitResultForTesting(std::nullopt);
+
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(counters->submits, testing::Eq(1u));
+  EXPECT_THAT(counters->commandBuffers, testing::Ge(3u))
+      << "the graph's passes must still be spread across several command buffers";
+}
+
+/// Draws a filter whose chunks pass the most command buffers one submission carries, so the
+/// frame has to split. The graph is ordinary; what multiplies its passes is the small working
+/// tile the caller sets on the engine, which keeps the document (and the case) small.
+/// @param renderer Renderer with an open frame, on a device whose maximum tile extent is small.
+void DrawFilterGraphPastTheSubmissionBound(RendererGeode& renderer) {
+  using namespace components;
+  FilterGraph graph;
+  graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+  graph.elementBoundingBox = Box2d({0, 0}, Vector2d(1.1, 1.1));
+  FilterNode flood;
+  flood.primitive =
+      filter_primitive::Flood{.floodColor = css::Color(css::RGBA(255, 255, 255, 255))};
+  graph.nodes.push_back(flood);
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 2.0, .stdDeviationY = 2.0};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::Scale(1.1));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+  renderer.popFilterLayer();
+}
+
+TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndStillRenders) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  device->filterEngine().setMaximumTileExtentForTesting(16);
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+
+  DrawFilterGraphPastTheSubmissionBound(renderer);
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(counters->commandBuffers, testing::Gt(16u))
+      << "the fixture must actually pass the bound, or it pins nothing";
+  EXPECT_THAT(counters->submits, testing::Gt(1u))
+      << "a frame past the bound splits across submissions rather than handing the backend a "
+         "span it cannot acquire command buffers for";
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsFalse());
+}
+
+TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  if (!device->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  device->filterEngine().setMaximumTileExtentForTesting(16);
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  // Armed for one wait. A split puts the pass that samples what the submitted buffers wrote in a
+  // later submission, which hardware Vulkan does not order automatically, so the split must wait
+  // that work out - and a wait that reports a hang must fail the frame closed.
+  device->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
+
+  DrawFilterGraphPastTheSubmissionBound(renderer);
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(counters->submits, testing::Eq(1u))
+      << "the forced split is where the wait runs, so exactly that submission happened and the "
+         "frame never reached its own";
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  // A wait on an already-lost device reports the loss without consuming the injection, so
+  // disarm it rather than leaving it for whatever waits next.
+  device->setQueueWaitResultForTesting(std::nullopt);
+}
+
+/// Closing the frame's recorded draws can fail at any encoder retire, which abandons the frame.
+/// Every pop that retires an encoder records through the frame right afterwards, so each has to
+/// notice the abandonment its own retire caused rather than the one it checked for on entry.
+class FrameEncoderCloseFailureTest : public RendererGeodeTest,
+                                     public testing::WithParamInterface<const char*> {};
+
+TEST_P(FrameEncoderCloseFailureTest, APopWhoseCloseFailsAbandonsInsteadOfRecording) {
+  using namespace components;
+  const std::string_view kind = GetParam();
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+
+  if (kind == "IsolatedLayer") {
+    renderer.pushIsolatedLayer(0.8, MixBlendMode::Normal);
+  } else if (kind == "BlendedLayer") {
+    renderer.pushIsolatedLayer(0.8, MixBlendMode::Multiply);
+  } else if (kind == "Mask") {
+    renderer.pushMask(std::nullopt, MaskType::Luminance);
+  } else if (kind == "PatternTile") {
+    ASSERT_THAT(renderer.beginPatternTile(Box2d({0, 0}, {32, 32}), Transform2d()),
+                testing::IsTrue());
+  } else {
+    renderer.pushFilterLayer(FilterGraph{}, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  }
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectFrameEncoderCloseFailureForTesting();
+
+  if (kind == "Mask") {
+    renderer.transitionMaskToContent();
+    renderer.popMask();
+  } else if (kind == "PatternTile") {
+    renderer.endPatternTile(/*forStroke=*/false);
+  } else if (kind == "Filter") {
+    renderer.popFilterLayer();
+  } else {
+    renderer.popIsolatedLayer();
+  }
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+
+  renderer.endFrame();
+
+  EXPECT_THAT(counters->submits, testing::Eq(0u))
+      << "a frame abandoned by a failed close must reach the queue with nothing";
+  EXPECT_THAT(counters->commandBuffers, testing::Eq(0u));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+INSTANTIATE_TEST_SUITE_P(EveryPopThatRetires, FrameEncoderCloseFailureTest,
+                         testing::Values("IsolatedLayer", "BlendedLayer", "Mask", "PatternTile",
+                                         "Filter"),
+                         [](const testing::TestParamInfo<const char*>& info) {
+                           return std::string(info.param);
+                         });
+
+/// Splitting a frame mid-frame for a memory-limited filter budget has two ways to leave it with
+/// no encoder: the retire it starts with, and its own close. The caller reads a refusal as "no
+/// room for this filter" and keeps drawing, so both have to abandon rather than report through
+/// the return value.
+/// @param closesBeforeFailure Closes to let through, choosing which of the two exits fails.
+void expectMidFrameSplitFailureAbandonsTheFrame(size_t closesBeforeFailure) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  renderer.beginFrame(viewport);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  renderer.pushIsolatedLayer(0.8, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectFrameEncoderCloseFailureForTesting(closesBeforeFailure);
+
+  // The return value says nothing here: a forced split reports whether the budget can begin a
+  // chunk after it, and this budget never rejected anything. The frame's state is the evidence.
+  (void)renderer.submitFilterBudgetChunkForTesting();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  // The layer opened before the split still has to unwind, and it records through the frame.
+  renderer.popIsolatedLayer();
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  renderer.endFrame();
+  EXPECT_THAT(counters->submits, testing::Eq(0u));
+  EXPECT_THAT(counters->commandBuffers, testing::Eq(0u));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, AMidFrameSplitAbandonsWhenItsOpeningRetireFails) {
+  expectMidFrameSplitFailureAbandonsTheFrame(/*closesBeforeFailure=*/0);
+}
+
+TEST_F(RendererGeodeTest, AMidFrameSplitAbandonsWhenItsOwnCloseFails) {
+  expectMidFrameSplitFailureAbandonsTheFrame(/*closesBeforeFailure=*/1);
+}
+
+TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const geode::GeodeCounters* counters = device->counters();
+  const uint64_t serialBefore = device->adapterDevice().lastSubmittedSerial();
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.injectFilterFrameSuspensionAndRestoreFailureForTesting();
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(counters->submits, testing::Eq(0u));
+  EXPECT_THAT(counters->commandBuffers, testing::Eq(0u));
+  EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(serialBefore))
+      << "an abandoned frame must consume no submission serial";
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
 }
 
@@ -932,32 +1173,27 @@ TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
     };
     beginFrame(*parent);
     drawFlood(*parent, css::RGBA(255, 0, 0, 255));
-    const uint64_t parentFilterSerial = device->adapterDevice().lastSubmittedSerial();
-    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
     const PendingHostCopy parentPending = registerPendingHostCopy();
-    ASSERT_THAT(parentPending.serial, testing::Gt(parentFilterSerial));
     beginFrame(sibling);
     drawFlood(sibling, css::RGBA(0, 0, 255, 255));
-    const uint64_t siblingFilterSerial = device->adapterDevice().lastSubmittedSerial();
-    ASSERT_THAT(device->adapterDevice().hasHostCommandEncoder(), testing::IsTrue());
     const PendingHostCopy siblingPending = registerPendingHostCopy();
-    ASSERT_THAT(siblingFilterSerial, testing::Gt(parentPending.serial));
-    ASSERT_THAT(siblingPending.serial, testing::Gt(siblingFilterSerial));
+    ASSERT_THAT(siblingPending.serial, testing::Gt(parentPending.serial));
+    // Neither frame has reached the queue, so nothing either of them recorded can have taken a
+    // serial of its own between the two copies above.
+    ASSERT_THAT(siblingPending.serial, testing::Eq(parentPending.serial + 1));
+
     if (destroy) {
       parent.reset();
     } else {
       beginFrame(*parent);
     }
-    ASSERT_THAT(device->runtimeDevice().waitForSerial(parentPending.serial, 2.0),
-                testing::IsTrue());
-    EXPECT_THAT(device->runtimeDevice().waitForSerial(siblingFilterSerial, 0.05),
-                testing::IsFalse());
-    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingFilterSerial));
-    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingPending.serial));
-    sibling.endFrame();
-    ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingFilterSerial, 2.0), testing::IsTrue());
+
     ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingPending.serial, 2.0),
                 testing::IsTrue());
+    sibling.endFrame();
+    const uint64_t siblingFrameSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(siblingFrameSerial, testing::Gt(siblingPending.serial));
+    ASSERT_THAT(device->runtimeDevice().waitForSerial(siblingFrameSerial, 2.0), testing::IsTrue());
     const RendererBitmap pixels = sibling.takeSnapshot();
     ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
     EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(0, 0, 255, 255));
@@ -1256,7 +1492,7 @@ TEST_F(RendererGeodeTest, CheckerboardOriginOffsetShiftsTheAnchor) {
   EXPECT_THAT(shiftedNegative.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
 }
 
-TEST_F(RendererGeodeTest, CheckerboardRefusesWhileAnotherFrameOwnsTheDeviceCommandStream) {
+TEST_F(RendererGeodeTest, CheckerboardReachesItsTargetWhileAnotherFrameIsOpen) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.endFrame();
@@ -1264,32 +1500,29 @@ TEST_F(RendererGeodeTest, CheckerboardRefusesWhileAnotherFrameOwnsTheDeviceComma
   const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
   ASSERT_NE(frame, nullptr);
 
-  // A second renderer sharing the device opens a frame. From here until its `endFrame`, that
-  // frame owns the device's command stream: every submission through the shared runtime device
-  // is appended to the frame's command buffer instead of reaching the queue. A checkerboard
-  // spliced in there would neither reach the target now nor land where its caller asked for it.
+  // A second renderer sharing the device opens a frame. What that frame records accumulates in
+  // command buffers of its own, so a submission asked for here is its own command buffer on the
+  // queue rather than a span spliced into someone else's recording.
   RendererGeode other = createRenderer();
   beginFrame(other);
 
-  EXPECT_FALSE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}))
-      << "Drawing while another frame owns the device's command stream must fail, not report "
-         "success for a pass that never reaches the queue";
+  ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
 
   const RendererBitmap duringOtherFrame = frame->takeSnapshot();
   ASSERT_FALSE(duringOtherFrame.empty());
-  EXPECT_THAT(pixelAt(duringOtherFrame, kCheckerCell / 2, kCheckerCell / 2), RgbaEq(0, 0, 0, 0))
-      << "A refused pass must leave the target exactly as it was";
+  EXPECT_THAT(pixelAt(duringOtherFrame, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "An open frame elsewhere on the device must not keep a checkerboard from its target";
 
   other.endFrame();
 
-  // With that frame closed the identical call succeeds and the pixels land, so the refusal is
-  // scoped to the overlap rather than disabling the pass for the rest of the device's life.
+  // The same call after that frame closes behaves identically, so nothing about it depended on
+  // the overlap.
   ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
   const RendererBitmap afterOtherFrame = frame->takeSnapshot();
   ASSERT_FALSE(afterOtherFrame.empty());
   EXPECT_THAT(pixelAt(afterOtherFrame, kCheckerCell / 2, kCheckerCell / 2),
-              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
-      << "Once the device's command stream is free the checkerboard must reach the target";
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
 }
 
 TEST_F(RendererGeodeTest, CheckerboardCellsAreLogicalPixelsNotDevicePixels) {
