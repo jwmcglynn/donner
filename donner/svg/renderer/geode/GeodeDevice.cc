@@ -209,7 +209,8 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
       (transitionalAdapter != nullptr) ==
       (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu));
   UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
-                       static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice);
+                       (static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice &&
+                        &transitionalAdapter->root() == &physicalDevice_->root()));
   ownedRuntimeDevice_ = std::move(ownedRuntimeDevice);
   runtimeDevice_ = &runtimeDevice;
   transitionalAdapter_ = transitionalAdapter;

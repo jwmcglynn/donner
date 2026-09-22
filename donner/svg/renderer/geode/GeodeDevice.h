@@ -262,7 +262,8 @@ public:
    * @param timeout Wait budget; defaults to the shared generous bound.
    * @return `Complete` when the queue drained, `TimedOut` when the deadline
    *   expired (the device is now marked lost), `DeviceLost` when the device
-   *   was already lost and no wait was performed.
+   *   was already lost and no wait was performed, or, on a native backend,
+   *   when a loss was declared while the wait was running.
    */
   GpuWaitResult waitForQueueIdle(std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout) const;
 

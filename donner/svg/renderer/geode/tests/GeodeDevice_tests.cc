@@ -858,15 +858,22 @@ TEST(GeodeNativeMetalRoot, QueueIdleReportsALossDeclaredDuringTheWait) {
   const uint64_t submitted = SubmitEmptyCommandBuffer(metal);
   ASSERT_THAT(submitted, testing::Gt(0u));
 
+  // The loss comes early in a long budget, so a loaded host that delays the declaring thread
+  // still declares it well before the drain could give up on its own.
+  constexpr std::chrono::milliseconds kBudget(1500);
   std::thread declarer([&context] {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     context->markDeviceLost("test-injected loss during a queue drain");
   });
-  const GpuWaitResult result = context->waitForQueueIdle(std::chrono::milliseconds(200));
+  const auto start = std::chrono::steady_clock::now();
+  const GpuWaitResult result = context->waitForQueueIdle(kBudget);
+  const int64_t elapsedMs = MillisecondsSince(start);
   declarer.join();
 
   EXPECT_THAT(result, Eq(GpuWaitResult::DeviceLost))
       << "a loss declared during the drain is reported as the loss, not as a drain timeout";
+  EXPECT_THAT(elapsedMs, Lt(kBudget.count() + 1000))
+      << "the drain outlived its own budget after the loss was declared";
   EXPECT_THAT(context->consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::None))
       << "the drain must not attribute a loss it did not observe to its own deadline";
 
