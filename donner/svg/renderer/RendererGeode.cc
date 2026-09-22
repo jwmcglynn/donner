@@ -2112,9 +2112,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(texture), desc);
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture,
-                                 const gpu::TextureDescriptor& desc) override {
-    if (texture.isValid()) failedFilterTextures.push_back({std::move(texture), desc});
+  /// Keep unresolved frame resources alive until device teardown instead of recycling them.
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor& desc) override {
+    if (texture.isValid()) {
+      failedFilterTextures.push_back({std::move(texture), desc});
+    }
   }
 
   void retainPendingFrameReleasesAfterFailure() {
@@ -2503,8 +2506,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                            geometry->blurPadding + frame.filterRegion.height()));
     if (!suspendFrameForFilter()) {
       device->markDeviceLost("frame commands could not be submitted before filter execution");
-      retainFailedFilterTexture(std::move(localTexture), localDesc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       frame.localRasterRequiredForBudget = true;
       if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
         device->markDeviceLost("frame encoder could not be restored after filter suspension");
@@ -2517,9 +2520,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                               localDeviceFromFilter, *this, nullptr, frame.localFilterPlan, this);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
-      retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
-      retainFailedFilterTexture(std::move(localTexture), localDesc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(localFiltered.texture), localFiltered.desc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return TransformedFilterResult::FrameAbandoned;
     }
@@ -2569,7 +2572,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
     if (!suspendFrameForFilter()) {
       device->markDeviceLost("frame commands could not be submitted before filter execution");
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
     } else {
       filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
@@ -2579,8 +2582,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       filterExecutionBudget->release(frame.filterReservation);
-      retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(filtered.texture), filtered.desc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return std::nullopt;
     }
@@ -5737,7 +5740,7 @@ void RendererGeode::popClip() {
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
       if (impl_->frameRecordingAbandoned) {
-        impl_->retainFailedFilterTexture(std::move(release.texture), release.desc);
+        impl_->retainTextureWithoutCompletionProof(std::move(release.texture), release.desc);
       } else {
         impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
       }
@@ -5826,7 +5829,7 @@ void RendererGeode::popIsolatedLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
 
@@ -5983,7 +5986,7 @@ void RendererGeode::popFilterLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
     impl_->filterExecutionBudget->release(frame.filterReservation);
     return;
   }
@@ -6182,8 +6185,8 @@ void RendererGeode::popMask() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
-    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.contentTexture), frame.contentDesc);
     return;
   }
 
@@ -6359,7 +6362,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-    impl_->retainFailedFilterTexture(std::move(frame.tileTexture), frame.tileDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.tileTexture), frame.tileDesc);
     return;
   }
 

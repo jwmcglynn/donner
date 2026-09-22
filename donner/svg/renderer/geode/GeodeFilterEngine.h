@@ -127,12 +127,12 @@ public:
   virtual void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                               const gpu::TextureDescriptor& desc) = 0;
 
-  /// Retains a texture whose commands may have been accepted but lack completion proof.
+  /// Retains a texture whose recorded commands lack completion proof, regardless of its caller.
   ///
   /// The texture must not return to a reusable pool. The allocator keeps its backing alive until
   /// the owning device is torn down or another backend-specific completion proof exists.
-  virtual void retainFailedFilterTexture(gpu::Texture texture,
-                                         const gpu::TextureDescriptor& desc) = 0;
+  virtual void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                                   const gpu::TextureDescriptor& desc) = 0;
 };
 
 /// Runtime handles a filter execution's recorded commands reference, moved to whatever outlives
