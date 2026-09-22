@@ -13,6 +13,8 @@
 #include <latch>
 #include <limits>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -1915,6 +1917,76 @@ TEST_F(RendererGeodeTest, AFrameAbandonedWithATileOpenLeavesNothingOfItselfInThe
       << "An abandoned tile still on the stack would scale this frame's transform by its raster "
          "scale - 4x here, a 2x transform supersampled 2x - painting the rect four times as wide";
 }
+
+class UnclosedFrameStackTest : public RendererGeodeTest,
+                               public testing::WithParamInterface<const char*> {};
+
+void PushFrameStack(RendererGeode& renderer, std::string_view kind) {
+  if (kind == "Layer") {
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  } else if (kind == "Filter") {
+    renderer.pushFilterLayer(components::FilterGraph{},
+                             Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize));
+  } else {
+    renderer.pushMask(std::nullopt, MaskType::Alpha);
+  }
+}
+
+std::size_t OpenStackTextureCount(std::string_view kind) {
+  return kind == "Mask" ? 2u : 1u;
+}
+
+TEST_P(UnclosedFrameStackTest, EndFrameRetiresOpenStackWithoutCompositingIt) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+
+  PushFrameStack(renderer, GetParam());
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.texturePoolStats().textureCount,
+            pooledBefore + OpenStackTextureCount(GetParam()));
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
+
+  beginFrame(renderer);
+  PushFrameStack(renderer, GetParam());
+  renderer.endFrame();
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+TEST_P(UnclosedFrameStackTest, BeginFrameRetiresStackFromAbandonedFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  PushFrameStack(renderer, GetParam());
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+
+  beginFrame(renderer);
+  PushFrameStack(renderer, GetParam());
+  renderer.endFrame();
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+INSTANTIATE_TEST_SUITE_P(OpenLayerFilterAndMask, UnclosedFrameStackTest,
+                         testing::Values("Layer", "Filter", "Mask"),
+                         [](const testing::TestParamInfo<const char*>& info) {
+                           return std::string(info.param);
+                         });
 
 TEST_F(RendererGeodeTest, ARecycledPatternTileNeverShowsWhatTheLastFramePaintedIntoIt) {
   ASSERT_TRUE(sharedDevice() != nullptr);
