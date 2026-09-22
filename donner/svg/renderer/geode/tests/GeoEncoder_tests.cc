@@ -202,6 +202,85 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
   EXPECT_THAT(pixel, RgbaEq(0, 128, 255, 255));
 }
 
+/// A target the backend refuses to open a render pass on must not be drawn into.
+///
+/// `beginRenderPass` rejects a target without render-attachment capability, which leaves the
+/// encoder with no pass. Every recording entry point has to notice that rather than record
+/// against it.
+TEST_F(GeoEncoderTest, ATargetThatCannotOpenARenderPassRecordsNothing) {
+  auto sampledOnly = device_->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"SampledOnlyTarget", kTargetSize, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_TRUE(sampledOnly.hasResult());
+  const gpu::Texture unusableTarget = std::move(sampledOnly).result();
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, unusableTarget,
+                     kTargetSize);
+  // A clear with no draws takes `finish` through the branch that opens a pass just to run the
+  // clear, which is the one an undrawn pooled tile relies on.
+  encoder.clear(css::RGBA(0, 128, 255, 255));
+  encoder.finish();
+
+  // A draw against the same target must be refused on the same terms.
+  GeoEncoder drawEncoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, unusableTarget,
+                         kTargetSize);
+  drawEncoder.fillPath(PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build(),
+                       css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  drawEncoder.finish();
+
+  SUCCEED() << "Neither encoder dereferenced a render pass the backend never opened";
+}
+
+/// A scissor set before the first draw must reach the render pass.
+///
+/// The pass is opened on demand, so a scissor the renderer installs before anything is recorded
+/// has nowhere to go yet and is kept until the pass opens. Every encoder created at a layer, mask,
+/// filter or pattern boundary is scissored exactly that way, before its first draw, so a scissor
+/// that never reached the pass would let all of them paint outside their clip.
+///
+/// The draw is a blit rather than a fill because only the blit depends on this. A solo fill
+/// carries the clip rectangle in its own uniforms and the fragment shader drops the samples
+/// outside it, so a fill stays inside its clip whether or not the rasterizer was ever told; the
+/// image-blit pipeline has no such data clip, and the layer, mask and filter composites are all
+/// blits.
+TEST_F(GeoEncoderTest, AScissorSetBeforeTheFirstBlitStillClipsIt) {
+  constexpr uint32_t kSourceDim = 4;
+  auto sourceResult = device_->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"ScissoredBlitSource",
+                             {kSourceDim, kSourceDim},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  ASSERT_TRUE(sourceResult.hasResult()) << sourceResult.error();
+  const gpu::Texture source = std::move(sourceResult).result();
+  std::array<uint8_t, gpu::kTexelRowPitchAlignment * kSourceDim> sourcePixels{};
+  for (uint32_t y = 0; y < kSourceDim; ++y) {
+    for (uint32_t x = 0; x < kSourceDim; ++x) {
+      uint8_t* texel = sourcePixels.data() + y * gpu::kTexelRowPitchAlignment + x * 4;
+      texel[0] = 255;
+      texel[3] = 255;
+    }
+  }
+  const gpu::Status written = device_->adapterDevice().writeTexture(
+      source, sourcePixels, {0, gpu::kTexelRowPitchAlignment, kSourceDim},
+      {kSourceDim, kSourceDim});
+  ASSERT_TRUE(written.hasResult()) << written.error();
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  encoder.clear(css::RGBA(0, 0, 0, 255));
+  encoder.setScissorRect(0, 0, 32, 32);
+  encoder.blitFullTarget(source, 1.0);
+  encoder.finish();
+
+  const auto pixels = readback();
+  EXPECT_THAT(pixelAt(pixels, 16, 16), RgbaEq(255, 0, 0, 255))
+      << "Inside the scissor the blit must land";
+  EXPECT_THAT(pixelAt(pixels, 48, 48), RgbaEq(0, 0, 0, 255))
+      << "Outside the scissor the target must keep what the clear left";
+  EXPECT_THAT(pixelAt(pixels, 48, 16), RgbaEq(0, 0, 0, 255));
+  EXPECT_THAT(pixelAt(pixels, 16, 48), RgbaEq(0, 0, 0, 255));
+}
+
 /// Fill an axis-aligned rectangle and verify a center pixel is the fill color.
 TEST_F(GeoEncoderTest, FillRect) {
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();

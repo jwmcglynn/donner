@@ -9,22 +9,22 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory>
 #include <utility>
 
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep - provides wgpuLabel
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::svg {
-
-using ::donner::geode::wgpuLabel;
 
 namespace {
 
@@ -69,27 +69,39 @@ const std::array<uint8_t, kWidth * kHeight * 4>& premultipliedTestPixels() {
   return pixels;
 }
 
-/// Create a texture with the given usage flags and upload the test pixels.
-wgpu::Texture createTestTexture(const wgpu::Device& device, wgpu::TextureUsage usage) {
-  wgpu::TextureDescriptor desc = {};
-  desc.label = wgpuLabel("SnapshotReadbackParity");
-  desc.size = {kWidth, kHeight, 1};
-  desc.format = wgpu::TextureFormat::RGBA8Unorm;
-  desc.usage = usage | wgpu::TextureUsage::CopyDst;
-  desc.mipLevelCount = 1;
-  desc.sampleCount = 1;
-  desc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture texture = device.createTexture(desc);
-
-  wgpu::TexelCopyTextureInfo destination = {};
-  destination.texture = texture;
-  wgpu::TexelCopyBufferLayout dataLayout = {};
-  dataLayout.bytesPerRow = kWidth * 4u;
-  dataLayout.rowsPerImage = kHeight;
-  wgpu::Extent3D writeSize = {kWidth, kHeight, 1};
-  device.getQueue().writeTexture(destination, premultipliedTestPixels().data(),
-                                 premultipliedTestPixels().size(), dataLayout, writeSize);
-  return texture;
+/// A snapshot of a texture with the given capabilities, holding the test pixels.
+/// @param device Device to allocate on. @param usage Capabilities the readback path must use.
+RendererGeodeTextureSnapshot createTestSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
+                                                gpu::TextureUsage usage) {
+  gpu::Result<gpu::Texture> created = device->runtimeDevice().createTexture(
+      gpu::TextureDescriptor{"SnapshotReadbackParity",
+                             {kWidth, kHeight},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             usage | gpu::TextureUsage::CopyDst});
+  if (created.hasError()) {
+    ADD_FAILURE() << "could not allocate the readback source: " << created.error();
+    return {};
+  }
+  gpu::Texture texture = std::move(created).result();
+  // Uploads are laid out on the runtime's row pitch, which is wider than one row of texels.
+  std::array<uint8_t, gpu::kTexelRowPitchAlignment * kHeight> rows{};
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    std::copy_n(premultipliedTestPixels().begin() + static_cast<size_t>(y) * kWidth * 4u,
+                kWidth * 4u, rows.begin() + static_cast<size_t>(y) * gpu::kTexelRowPitchAlignment);
+  }
+  const gpu::Status written = device->adapterDevice().writeTexture(
+      texture, rows, {0, gpu::kTexelRowPitchAlignment, kHeight}, {kWidth, kHeight});
+  if (written.hasError()) {
+    ADD_FAILURE() << "could not upload the readback source: " << written.error();
+    return {};
+  }
+  RendererGeodeTextureSnapshot snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+      device, std::move(texture), Vector2i(static_cast<int>(kWidth), static_cast<int>(kHeight)),
+      wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
+  if (!snapshot.isValid()) {
+    ADD_FAILURE() << "the readback source was refused as a snapshot";
+  }
+  return snapshot;
 }
 
 class GeodeSnapshotReadbackTest : public ::testing::Test {
@@ -112,14 +124,11 @@ TEST_F(GeodeSnapshotReadbackTest, GpuAndCpuPathsAreByteIdentical) {
   auto device = sharedDevice();
   ASSERT_NE(device, nullptr);
 
-  wgpu::Texture gpuTex = createTestTexture(device->device(), wgpu::TextureUsage::TextureBinding);
-  wgpu::Texture cpuTex = createTestTexture(device->device(), wgpu::TextureUsage::CopySrc);
-
   const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
-  RendererGeodeTextureSnapshot gpuSnapshot(device, std::move(gpuTex), dimensions,
-                                           wgpu::TextureFormat::RGBA8Unorm);
-  RendererGeodeTextureSnapshot cpuSnapshot(device, std::move(cpuTex), dimensions,
-                                           wgpu::TextureFormat::RGBA8Unorm);
+  RendererGeodeTextureSnapshot gpuSnapshot = createTestSnapshot(device, gpu::TextureUsage::Sampled);
+  RendererGeodeTextureSnapshot cpuSnapshot = createTestSnapshot(device, gpu::TextureUsage::CopySrc);
+  ASSERT_THAT(gpuSnapshot.isValid(), testing::IsTrue());
+  ASSERT_THAT(cpuSnapshot.isValid(), testing::IsTrue());
 
   RendererBitmap gpuBitmap = gpuSnapshot.takeSnapshot();
   ASSERT_FALSE(gpuBitmap.empty());
@@ -141,10 +150,8 @@ TEST_F(GeodeSnapshotReadbackTest, ACompletedReadbackAccountsForTheSlicesItRan) {
   auto device = sharedDevice();
   ASSERT_NE(device, nullptr);
 
-  wgpu::Texture texture = createTestTexture(device->device(), wgpu::TextureUsage::TextureBinding);
-  const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
-  RendererGeodeTextureSnapshot snapshot(device, std::move(texture), dimensions,
-                                        wgpu::TextureFormat::RGBA8Unorm);
+  RendererGeodeTextureSnapshot snapshot = createTestSnapshot(device, gpu::TextureUsage::Sampled);
+  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
   RendererGeode renderer(device);
 
   (void)renderer.consumeReadbackStats();  // Drop anything an earlier case in this suite left.
@@ -169,11 +176,9 @@ TEST_F(GeodeSnapshotReadbackTest, SnapshotOnLostDeviceFailsFast) {
   std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
   ASSERT_NE(device, nullptr);
 
-  wgpu::Texture texture = createTestTexture(
-      device->device(), wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
-  const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
-  RendererGeodeTextureSnapshot snapshot(device, std::move(texture), dimensions,
-                                        wgpu::TextureFormat::RGBA8Unorm);
+  RendererGeodeTextureSnapshot snapshot =
+      createTestSnapshot(device, gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc);
+  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
 
   device->markDeviceLost("test-injected loss");
 
@@ -194,11 +199,9 @@ TEST_F(GeodeSnapshotReadbackTest, DeviceLostWhileTheMappingIsOpenEndsTheCapture)
   std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
   ASSERT_NE(device, nullptr);
 
-  wgpu::Texture texture = createTestTexture(
-      device->device(), wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
-  const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
-  RendererGeodeTextureSnapshot snapshot(device, std::move(texture), dimensions,
-                                        wgpu::TextureFormat::RGBA8Unorm);
+  RendererGeodeTextureSnapshot snapshot =
+      createTestSnapshot(device, gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc);
+  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
 
   // Declaring the loss from the MapRequested phase puts the device into the lost state while this
   // capture's mapping is open, rather than before it ever started.

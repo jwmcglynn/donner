@@ -23,7 +23,6 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 class GeodeDevice;
@@ -52,21 +51,9 @@ namespace donner::svg {
  */
 class RendererGeodeTextureSnapshot final : public RendererTextureSnapshot {
 public:
-  /**
-   * Construct a Geode texture snapshot.
-   *
-   * @param device Shared Geode device that owns the WebGPU handle lifetime.
-   * @param texture Resolved single-sample texture containing the rendered frame.
-   * @param dimensions Valid content dimensions in device pixels, anchored at the texture
-   *   origin. May be smaller than the texture when the producer keeps an oversized
-   *   allocation.
-   * @param format Texture format.
-   * @param alphaType Alpha interpretation of the stored texels. Geode render targets are
-   *   premultiplied; host-uploaded CPU bitmaps generally are not.
-   */
-  RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
-                               Vector2i dimensions, wgpu::TextureFormat format,
-                               AlphaType alphaType = AlphaType::Premultiplied);
+  /// Constructs an empty snapshot, naming nothing.
+  RendererGeodeTextureSnapshot() = default;
+
   /**
    * Takes over a target the runtime allocated, so the snapshot keeps it alive after the renderer
    * has let go of it.
@@ -97,15 +84,23 @@ public:
   }
   /// Whether the snapshot names valid content in a backing allocation.
   [[nodiscard]] bool isValid() const;
-  /// Runtime identity when owned or borrowed from the renderer, otherwise null for legacy uploads.
+  /// Runtime identity of the texture this snapshot names, or null when it names nothing.
   /// The returned handle borrows this snapshot's lifetime and must never be consumed.
   [[nodiscard]] const gpu::Texture* runtimeTexture() const UTILS_LIFETIME_BOUND;
-  /// Device identity used to reject cross-device presentation before recording.
+  /// Device that owns the texture this snapshot names, or null when the snapshot only borrows a
+  /// producer's frame target. A consumer on another device needs this to register the texture.
+  [[nodiscard]] const std::shared_ptr<geode::GeodeDevice>& owningDevice() const { return device_; }
+  /// Identity of the runtime device the named texture belongs to, or zero when this snapshot
+  /// names nothing.
   [[nodiscard]] uint64_t deviceId() const;
   /// Actual allocation extent; content may use a smaller prefix.
   [[nodiscard]] Vector2i allocationDimensions() const { return allocationDimensions_; }
   /// Runtime format, if the backend format has a supported runtime representation.
   [[nodiscard]] std::optional<gpu::TextureFormat> runtimeFormat() const { return runtimeFormat_; }
+  /// Takes the owning device's name for this snapshot's texture out of the snapshot, so a test can
+  /// present a snapshot that no longer names what its backend handles point at. The caller becomes
+  /// the owner of the returned handle and keeps the texture alive.
+  [[nodiscard]] gpu::Texture takeRuntimeRegistrationForTesting();
   /// Valid content extent in device pixels, anchored at the texture origin. Sampling and
   /// readback are confined to this region even when the backing texture is larger.
   [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
@@ -124,23 +119,16 @@ public:
    */
   bool setDimensions(Vector2i dimensions);
 
-  /// Resolved single-sample WebGPU texture.
-  [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
-
-  /// Lazily-created single-sample view of the resolved texture, for sampling it as a UI texture.
-  [[nodiscard]] const wgpu::TextureView& textureView() const;
-
-  /// WebGPU texture format.
-  [[nodiscard]] wgpu::TextureFormat format() const { return format_; }
-
 private:
   friend class RendererGeode;
 
   /// Construct a frame-local view that does not retain or release the texture backing.
   /// The renderer destroys this view before replacing, detaching, or releasing its target.
-  static RendererGeodeTextureSnapshot BorrowCurrentFrame(const gpu::Texture& runtimeTexture,
-                                                         wgpu::Texture texture, Vector2i dimensions,
-                                                         wgpu::TextureFormat format);
+  /// @param owner Device that owns \p runtimeTexture. @param runtimeTexture Texture to name.
+  /// @param dimensions Valid content extent in device pixels.
+  static RendererGeodeTextureSnapshot BorrowCurrentFrame(const gpu::Device& owner,
+                                                         const gpu::Texture& runtimeTexture,
+                                                         Vector2i dimensions);
 
   void destroyOwnedBacking() noexcept;
   [[nodiscard]] bool canSampleWith(const geode::GeodeDevice& device) const;
@@ -148,37 +136,30 @@ private:
   struct Backing;
   struct ReadbackControl;
   static RendererBitmap readTexture(std::shared_ptr<geode::GeodeDevice> device,
-                                    wgpu::Texture texture, Vector2i dimensions,
-                                    wgpu::TextureFormat format, AlphaType alphaType,
-                                    const std::function<bool()>& shouldCancel,
+                                    const gpu::Texture& texture, Vector2i dimensions,
+                                    AlphaType alphaType, const std::function<bool()>& shouldCancel,
                                     std::shared_ptr<Backing> backing = {});
-  static RendererBitmap readTextureWithContext(geode::GeodeDevice& context, wgpu::Texture texture,
-                                               Vector2i dimensions, wgpu::TextureFormat format,
+  static RendererBitmap readTextureWithContext(geode::GeodeDevice& context,
+                                               geode::GeodeDevice& owner,
+                                               const gpu::Texture& texture, Vector2i dimensions,
+                                               const gpu::TextureDescriptor& descriptor,
                                                AlphaType alphaType, ReadbackControl& control);
   static RendererBitmap readTextureGpu(geode::GeodeDevice& context, const gpu::Texture& texture,
                                        uint32_t width, uint32_t height, ReadbackControl& control);
   static RendererBitmap readTextureCpu(geode::GeodeDevice& context, const gpu::Texture& texture,
-                                       uint32_t width, uint32_t height, wgpu::TextureFormat format,
+                                       uint32_t width, uint32_t height, gpu::TextureFormat format,
                                        AlphaType alphaType, ReadbackControl& control);
   static RendererBitmap readMappedTexture(geode::GeodeDevice& context, gpu::BufferMapping& mapping,
                                           uint32_t width, uint32_t height,
-                                          wgpu::TextureFormat format, AlphaType alphaType,
+                                          gpu::TextureFormat format, AlphaType alphaType,
                                           ReadbackControl& control);
   std::shared_ptr<geode::GeodeDevice> device_;
-  /// Origin-side stamps avoid reading producer context state during shared-backend presentation.
-  uint64_t runtimeDeviceId_ = 0;
-  WGPUDevice nativeDevice_ = nullptr;
-  WGPUQueue nativeQueue_ = nullptr;
-  wgpu::TextureUsage textureUsage_ = wgpu::TextureUsage::None;
   /// Shared with consuming frames until their recorded draws have been submitted.
   std::shared_ptr<Backing> backing_;
   gpu::Texture borrowedGpuTexture_;  //!< Identity-only handle; never owns the renderer target.
   Vector2i allocationDimensions_ = Vector2i::Zero();
   std::optional<gpu::TextureFormat> runtimeFormat_;
-  wgpu::Texture texture_;
-  mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();
-  wgpu::TextureFormat format_ = wgpu::TextureFormat::Undefined;
   AlphaType alphaType_ = AlphaType::Premultiplied;
 };
 

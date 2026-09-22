@@ -119,10 +119,11 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const gpu::Texture& target
     return false;
   }
 
-  const gpu::Result<gpu::Extent2d> targetExtent = device.adapterDevice().textureExtent(target);
-  if (targetExtent.hasError() ||
-      targetExtent.result() != gpu::Extent2d{static_cast<std::uint32_t>(targetSizePx.x),
-                                             static_cast<std::uint32_t>(targetSizePx.y)}) {
+  const gpu::Result<gpu::TextureDescriptor> targetDesc =
+      device.adapterDevice().textureDescriptor(target);
+  if (targetDesc.hasError() ||
+      targetDesc.result().size != gpu::Extent2d{static_cast<std::uint32_t>(targetSizePx.x),
+                                                static_cast<std::uint32_t>(targetSizePx.y)}) {
     return false;
   }
   std::optional<PreparedTargetPass> prepared = PrepareTargetPass(device, target, blendMode);

@@ -279,6 +279,61 @@ protected:
   std::unique_ptr<GeodeWgpuAdapterDevice> adapter_;
 };
 
+/// A texture of another adapter over the same backend device becomes nameable here only by being
+/// registered, and the registration describes it the way its owner does rather than the way the
+/// caller says. Registering it must not make this adapter responsible for the memory.
+TEST_F(GeodeWgpuAdapterDeviceTests, ImportingFromASiblingAdapterNamesWhatTheOwnerNames) {
+  GeodeWgpuAdapterDevice sibling(*geodeDevice_);
+  const gpu::TextureDescriptor descriptor{"ownedBySibling",
+                                          {8, 4},
+                                          gpu::TextureFormat::RGBA8Unorm,
+                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
+  gpu::Texture owned = gpu::GetResultOrFail(sibling.createTexture(descriptor));
+
+  gpu::Texture registered = gpu::GetResultOrFail(adapter_->importTextureFrom(sibling, owned));
+  EXPECT_THAT(registered.deviceId(), testing::Eq(adapter_->deviceId()));
+  const gpu::TextureDescriptor registeredDescriptor =
+      gpu::GetResultOrFail(adapter_->textureDescriptor(registered));
+  EXPECT_THAT(registeredDescriptor.size, testing::Eq(descriptor.size));
+  EXPECT_THAT(registeredDescriptor.format, testing::Eq(descriptor.format));
+  EXPECT_THAT(registeredDescriptor.usage, testing::Eq(descriptor.usage));
+  EXPECT_THAT(static_cast<WGPUTexture>(adapter_->wgpuTextureOf(registered)),
+              testing::Eq(static_cast<WGPUTexture>(sibling.wgpuTextureOf(owned))));
+  EXPECT_THAT(adapter_->ownsTextureBacking(registered), testing::IsFalse())
+      << "a registration names memory this adapter did not allocate";
+
+  // Dropping the registration forgets it and leaves the owner holding the texture.
+  EXPECT_THAT(adapter_->destroyTextureBacking(std::move(registered)), gpu::IsOk());
+  EXPECT_THAT(static_cast<bool>(sibling.wgpuTextureOf(owned)), testing::IsTrue());
+  EXPECT_THAT(sibling.ownsTextureBacking(owned), testing::IsTrue());
+}
+
+/// Registration is what admits a texture, so it has to refuse everything nothing here could
+/// sample or copy: a texture whose owner drives a different backend device, and a handle its own
+/// owner no longer resolves.
+TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHandle) {
+  const std::unique_ptr<GeodeDevice> otherBackend = GeodeDevice::CreateHeadless();
+  ASSERT_THAT(otherBackend, testing::NotNull())
+      << "Failed to create a second headless wgpu device. Check driver availability.";
+  GeodeWgpuAdapterDevice foreign(*otherBackend);
+  const gpu::TextureDescriptor descriptor{"ownedElsewhere",
+                                          {4, 4},
+                                          gpu::TextureFormat::RGBA8Unorm,
+                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
+  gpu::Texture onForeignBackend = gpu::GetResultOrFail(foreign.createTexture(descriptor));
+  EXPECT_THAT(adapter_->importTextureFrom(foreign, onForeignBackend),
+              gpu::IsGpuError(gpu::GpuErrorType::DeviceMismatch));
+
+  GeodeWgpuAdapterDevice sibling(*geodeDevice_);
+  gpu::Texture retired = gpu::GetResultOrFail(sibling.createTexture(descriptor));
+  const gpu::Texture stale =
+      gpu::Texture::CreateForBackend(retired.slotIndex(), retired.generation(), retired.deviceId());
+  ASSERT_THAT(sibling.destroyTextureBacking(std::move(retired)), gpu::IsOk());
+  EXPECT_THAT(adapter_->importTextureFrom(sibling, stale),
+              gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
+      << "a handle the owner no longer resolves must not bridge whatever now occupies its slot";
+}
+
 TEST_F(GeodeWgpuAdapterDeviceTests, MinimalLastRowUploadDoesNotReadBeyondCallerSpan) {
   const gpu::Texture texture = gpu::GetResultOrFail(adapter_->createTexture(
       gpu::TextureDescriptor{"minimalUpload", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,

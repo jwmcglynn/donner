@@ -366,17 +366,18 @@ public:
     const auto& geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot&>(texture);
     const Vector2i dimensions = geodeTexture.dimensions();
     const gpu::Texture* runtimeTexture = geodeTexture.runtimeTexture();
-    // A snapshot that owns a runtime texture is registered directly; one that still carries only
-    // a backend texture enters the runtime as an import whose backing it does not own.
-    if (runtimeTexture == nullptr || runtimeTexture->deviceId() != device.deviceId()) {
-      if (!geodeTexture.runtimeFormat().has_value()) {
+    if (runtimeTexture == nullptr) {
+      return;
+    }
+    // A texture of the drawing device is registered directly; one rendered on another device is
+    // registered here through its owner, which is what makes it nameable on this one.
+    if (runtimeTexture->deviceId() != device.deviceId()) {
+      if (geodeTexture.owningDevice() == nullptr) {
         return;
       }
       gpu::Result<gpu::Texture> imported =
-          static_cast<geode::GeodeWgpuAdapterDevice&>(device).importExternalTexture(
-              geodeTexture.texture(),
-              {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y)},
-              *geodeTexture.runtimeFormat(), gpu::TextureUsage::Sampled);
+          static_cast<geode::GeodeWgpuAdapterDevice&>(device).importTextureFrom(
+              geodeTexture.owningDevice()->adapterDevice(), *runtimeTexture);
       if (imported.hasError()) {
         return;
       }

@@ -12,10 +12,6 @@ namespace donner::svg {
 class RendererTextureSnapshot;
 }  // namespace donner::svg
 
-namespace wgpu {
-class Texture;
-}  // namespace wgpu
-
 namespace donner::geode {
 class GeodeWgpuAdapterDevice;
 }  // namespace donner::geode
@@ -47,28 +43,14 @@ bool HasUiTextureRegistry();
  * for it, or zero when there is no UI renderer, \p snapshot is not a backend snapshot, or the
  * registration is refused. The alpha interpretation comes from the snapshot.
  *
- * A snapshot that already owns a texture on the UI device is registered directly; one that does
- * not, including one whose texture belongs to the device its pixels were rendered on rather than
- * the device the interface is drawn on, is imported first.
+ * A texture of the device the interface is drawn on is registered directly; one rendered on a
+ * different device is registered through the device that owns it, so a snapshot that only borrows
+ * a producer's frame target cannot be registered at all.
  *
  * @param snapshot Snapshot to register.
  * @param backing Receives the handles keeping the registration's backing reachable.
  */
 ImTextureID RegisterUiSnapshotTexture(const svg::RendererTextureSnapshot& snapshot,
-                                      UiTextureBacking* backing);
-
-/**
- * Registers \p texture, a backend texture the caller uploaded itself, with the UI texture
- * registry. Returns zero when there is no UI renderer or the registration is refused.
- *
- * @param texture Backend texture to import and register.
- * @param dimensions Sampled extent in pixels.
- * @param format Runtime format of \p texture.
- * @param alphaMode Alpha interpretation of the sampled texels.
- * @param backing Receives the handles keeping the registration's backing reachable.
- */
-ImTextureID RegisterUiImportedTexture(const wgpu::Texture& texture, const Vector2i& dimensions,
-                                      gpu::TextureFormat format, UiTextureAlphaMode alphaMode,
                                       UiTextureBacking* backing);
 
 /**

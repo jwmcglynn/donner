@@ -309,14 +309,17 @@ public:
   Result<Texture> createTexture(const TextureDescriptor& descriptor);
 
   /**
-   * Returns the validated extent of \p texture by value.
+   * Returns the descriptor \p texture was created with, by value.
    *
-   * Null, foreign-device, and stale handles fail with the same resource errors as other texture
-   * operations.
+   * This is what the device itself validated the texture against, so a caller reading its extent,
+   * format or capabilities from here cannot describe the texture differently than the device
+   * does. Null, foreign-device, and stale handles fail with the same resource errors as other
+   * texture operations, which makes this also the answer to "does this handle still name a
+   * texture of mine?".
    *
    * @param texture Live texture owned by this device.
    */
-  Result<Extent2d> textureExtent(const Texture& texture) const;
+  Result<TextureDescriptor> textureDescriptor(const Texture& texture) const;
 
   /**
    * Creates a view of \p texture covering the whole texture.
