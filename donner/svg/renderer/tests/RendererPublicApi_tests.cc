@@ -314,6 +314,50 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
   EXPECT_EQ(limitedSnapshot.dimensions, referenceSnapshot.dimensions);
   EXPECT_THAT(limitedSnapshot.pixels, testing::ContainerEq(referenceSnapshot.pixels));
 }
+
+/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1).
+std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1) {
+  const RendererBitmap normalized = NormalizeSnapshot(snapshot);
+  std::size_t covered = 0;
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * normalized.rowBytes + static_cast<std::size_t>(x) * 4u + 3u;
+      if (normalized.pixels[offset] != 0) {
+        ++covered;
+      }
+    }
+  }
+  return covered;
+}
+
+/// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
+/// then a sentinel glyph alone in the bottom-right corner.
+std::string ManyDistinctGlyphsDocument() {
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">)";
+  for (int i = 0; i < 26; ++i) {
+    svg += "<text x=\"0\" y=\"" + std::to_string(10 + 7 * i) + "\" font-size=\"" +
+           std::to_string(8 + i) + "\">abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ</text>";
+  }
+  svg += R"(<text x="350" y="390" font-size="40">H</text></svg>)";
+  return svg;
+}
+
+TEST(RendererPublicApiTest, TextPastOneThousandTwentyFourDistinctGlyphsStillDraws) {
+  SVGDocument document = ParseDocument(ManyDistinctGlyphsDocument());
+  Renderer renderer;
+  renderer.draw(document);
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_FALSE(stats.textMaterializationBudgetRejected);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+  EXPECT_THAT(stats.textUniqueOutlines, Gt(1024u));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_EQ(snapshot.dimensions, Vector2i(400, 400));
+  EXPECT_THAT(CoveredPixels(snapshot, 340, 340, 400, 400), Gt(0u))
+      << "The sentinel glyph after the first 1352 was not drawn.";
+}
 #endif
 
 void SetStrokePaint(RendererInterface& renderer) {
