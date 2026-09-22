@@ -901,6 +901,35 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# One document drawn by renderers on two devices, including from two threads, the way a render
+# worker and a UI-thread thumbnail pass share an editor document.
+donner_cc_test(
+    name = "geode_document_residency_tests_impl",
+    srcs = ["tests/GeodeDocumentResidency_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_counters",
+        ":geode_device",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_geode",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_document_residency_tests",
+    size = "small",
+    testonly = 1,
+    dep = ":geode_document_residency_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_cc_test(
     name = "geode_filter_engine_tests_impl",
     # Filter graphs built and executed on a real device: 54 s uninstrumented on a
