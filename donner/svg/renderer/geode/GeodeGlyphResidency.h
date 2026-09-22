@@ -24,12 +24,14 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Path.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
+#include "donner/svg/renderer/geode/GeodePerDevice.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 
 namespace donner::geode {
@@ -157,7 +159,7 @@ struct GeodeGlyphResidentEntry {
  * Document-scoped cache of unique glyph outlines and their GPU residence.
  *
  * Bound to one device exactly like `GeodeResidentSlab`: a document rendered by
- * a second device gets a fresh cache, so no entry can hand a stale device's
+ * several devices keeps one cache per device, so no entry can hand one device's
  * buffer or bind group to another device's render pass.
  *
  * Eviction is generation-based rather than strictly ordered: entries carry the
@@ -414,7 +416,8 @@ private:
  * keeps a static text frame off the zero-bytes steady state the rest of the
  * renderer reaches.
  *
- * So the slots live on the text element and persist. Occurrence `i` of the
+ * So the slots live on the text element, one set per device that draws it
+ * (\ref GeodeTextInstanceResidencyComponent), and persist. Occurrence `i` of the
  * element always writes slot `i`, the bytes are compared before writing, and an
  * unchanged frame writes nothing. Slots are bump-allocated together on first
  * use, which keeps their indices consecutive - exactly the property a batch
@@ -637,5 +640,16 @@ private:
   uint64_t cpuOccurrenceBytes = 0;
   bool occurrenceReservationPending = false;
 };
+
+/// One text element's persistent occurrence records, one \ref GeodeTextInstanceRecordComponent per
+/// device that draws it: records hold slots in that device's record slab, and a device's frame
+/// generation means nothing to another device.
+struct GeodeTextInstanceResidencyComponent {
+  GeodePerDevice<GeodeTextInstanceRecordComponent> devices;  //!< Records per drawing device.
+};
+static_assert(!std::is_copy_constructible_v<GeodeTextInstanceResidencyComponent> &&
+                  std::is_nothrow_move_constructible_v<GeodeTextInstanceResidencyComponent> &&
+                  std::is_nothrow_move_assignable_v<GeodeTextInstanceResidencyComponent>,
+              "the registry moves components when it compacts, and a component owns its records");
 
 }  // namespace donner::geode

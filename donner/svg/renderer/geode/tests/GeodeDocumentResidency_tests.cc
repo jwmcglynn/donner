@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <thread>
 #include <utility>
@@ -192,6 +193,31 @@ TEST_F(GeodeDocumentResidencyTest, TwoDevicesOnTwoThreadsShareOneDocument) {
   EXPECT_THAT(uiIncompleteFrames, Eq(0));
   EXPECT_THAT(workerIncompleteFrames.load(), Eq(0));
   EXPECT_THAT(onUi.deviceLost(), IsFalse());
+}
+
+TEST_F(GeodeDocumentResidencyTest, ADocumentDestroyedOnAnotherThreadHandsEachDeviceItsHandles) {
+  std::optional<SVGDocument> document = ParseShapes();
+  RendererGeode onFirst(first_);
+  onFirst.draw(*document);
+  RendererGeode onSecond(second_);
+  onSecond.draw(*document);
+  ASSERT_THAT(first_->retiredHandleCountForTesting(), Eq(0u));
+  ASSERT_THAT(second_->retiredHandleCountForTesting(), Eq(0u));
+
+  // The document goes on a thread that is neither device's.
+  std::thread([&] { document.reset(); }).join();
+
+  EXPECT_THAT(first_->retiredHandleCountForTesting(), Gt(0u))
+      << "the document's residence on this device must come back to it, not be released on the "
+         "thread that destroyed the document";
+  EXPECT_THAT(second_->retiredHandleCountForTesting(), Gt(0u));
+
+  // Each device releases what came back at its next frame boundary, on its own thread.
+  SVGDocument next = ParseShapes();
+  onFirst.draw(next);
+  onSecond.draw(next);
+  EXPECT_THAT(first_->retiredHandleCountForTesting(), Eq(0u));
+  EXPECT_THAT(second_->retiredHandleCountForTesting(), Eq(0u));
 }
 
 TEST_F(GeodeDocumentResidencyTest, ADocumentOutlivesADeviceThatDrewIt) {

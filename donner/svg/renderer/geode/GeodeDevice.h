@@ -20,6 +20,7 @@
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
+#include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg {
@@ -80,6 +81,14 @@ public:
   /// they share.
   GeodeRuntimeDevice createLogicalDevice() const;
 
+  /// Retirement for the context that renders through this owner's root device (see
+  /// \ref GeodeDevice::handleRetirement). The owner keeps it because the root device outlives that
+  /// context.
+  const std::shared_ptr<GeodeHandleRetirement>& rootDeviceHandleRetirement() const
+      UTILS_LIFETIME_BOUND {
+    return rootDeviceRetirement_;
+  }
+
 private:
   /// Only a context builds an owner, from a root and the device \ref CreateGpuDeviceOver opened
   /// over it, so a device can never be paired with a root of another backend.
@@ -99,6 +108,9 @@ private:
 
   /// Declared first so the backend root outlives every runtime device built over it.
   std::shared_ptr<GeodeGpuRoot> root_;
+  /// Retirement of the context that renders through \ref rootDevice_. Held here and declared before
+  /// it so that handles retired after that context closed go only once the device is gone.
+  std::shared_ptr<GeodeHandleRetirement> rootDeviceRetirement_;
   /// The selected runtime device, held for its lifetime rather than read through here: the
   /// logical context created together with this owner is what renders through it, and every
   /// later context over the same root gets its own from \ref createLogicalDevice.
@@ -392,6 +404,23 @@ public:
 
   /// Destroy queued texture backing on the owning rendering context or during exclusive teardown.
   void drainDeferredTextureBackings();
+
+  /**
+   * Where state kept for this context on another thread's behalf - a document's resident slabs,
+   * say - hands back this context's buffers and bind groups when it is destroyed, so they are
+   * released on this context's thread (see \ref GeodeHandleRetirement). Shared so that state can
+   * tell whether this context still exists: it is closed when the context is destroyed.
+   */
+  const std::shared_ptr<GeodeHandleRetirement>& handleRetirement() const UTILS_LIFETIME_BOUND {
+    return handleRetirement_;
+  }
+
+  /// Releases the handles other threads retired to this context. Call on this context's thread;
+  /// the renderer does at every frame boundary.
+  void releaseRetiredHandles();
+
+  /// Handles retired to this context and not yet released. Test accessor.
+  [[nodiscard]] std::size_t retiredHandleCountForTesting() const;
 
   /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
@@ -888,6 +917,12 @@ private:
 
   // Declared before every logical resource so it is destroyed last.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice_;
+
+  /// See \ref handleRetirement: the owner's root-device retirement when this context renders
+  /// through the root device, else one of its own. Closed at teardown while the runtime device
+  /// still exists, and declared before \ref ownedRuntimeDevice_ so an own retirement, and the
+  /// handles retired to it after it closed, go only once that device is gone.
+  std::shared_ptr<GeodeHandleRetirement> handleRetirement_;
 
   /// Held only when this context created its own runtime device; null when it renders through the
   /// owner's. Declared before \ref impl_ so the pipelines and pooled resources there, which

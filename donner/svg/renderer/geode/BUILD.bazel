@@ -142,6 +142,32 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Handles let go of on a thread other than their device's, released on that device's own thread,
+# and the per-device container a document keeps its GPU residence in. No WebGPU dependency, so it
+# builds and is tested regardless of the enable_geode flag.
+donner_cc_library(
+    name = "geode_handle_retirement",
+    srcs = ["GeodeHandleRetirement.cc"],
+    hdrs = [
+        "GeodeHandleRetirement.h",
+        "GeodePerDevice.h",
+    ],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = ["//donner/gpu"],
+)
+
+donner_cc_test(
+    name = "geode_handle_retirement_tests",
+    srcs = ["tests/GeodeHandleRetirement_tests.cc"],
+    deps = [
+        ":geode_handle_retirement",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+    ],
+)
+
 # Bounded CPU-side waits on GPU progress plus the shared device-lost flag.
 # Pure chrono/functional code with no WebGPU dependency, so the timeout
 # policy is unit-testable without a GPU and builds regardless of the
@@ -225,6 +251,7 @@ donner_cc_library(
         # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
         # this is a link dependency and not just an include.
         ":geode_device",
+        ":geode_handle_retirement",
         ":geode_resource_budget",
     ],
 )
@@ -238,6 +265,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
+        ":geode_handle_retirement",
         ":geode_path_encoder",
         ":geode_resident_path_component",
         "//donner/base",
@@ -385,6 +413,7 @@ donner_cc_library(
                ":checkerboard_pipeline",
                ":geode_counters",
                ":geode_gpu_wait",
+               ":geode_handle_retirement",
                ":geode_shader_selection",
                ":geode_shaders",
                ":geode_wgpu_util",

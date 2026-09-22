@@ -51,6 +51,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
+#include "donner/svg/renderer/geode/GeodePerDevice.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
@@ -1317,6 +1318,25 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                               localPlan};
 }
 
+/// The GPU residence one device keeps for a document: its geometry slab, record slab and glyph
+/// cache. Declared in destruction order last-first, so cached glyphs return their slab ranges
+/// before the slabs go.
+struct DocumentDeviceResidency {
+  std::shared_ptr<geode::GeodeResidentSlab> geometry;  //!< Resident path geometry.
+  std::shared_ptr<geode::GeodeRecordSlab> records;     //!< Painter-ordered instance records.
+  std::shared_ptr<geode::GeodeGlyphCache> glyphs;      //!< Resident glyph outlines.
+};
+
+/// Residence of every device that draws a document, kept in the document's registry context.
+///
+/// A document can be drawn by renderers on several devices - an editor's render worker and its
+/// UI thread's thumbnail pass, say. Each device keeps its own entry: one device drawing the
+/// document neither releases nor rebuilds another's, and none of it is destroyed on another
+/// device's thread (see `geode::GeodeHandleRetirement`).
+struct DocumentResidency {
+  geode::GeodePerDevice<DocumentDeviceResidency> devices;  //!< Residence per drawing device.
+};
+
 }  // namespace
 
 /// Gate for ordered cross-entity batching. Enabled: a batch's single draw can
@@ -1722,6 +1742,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameSnapshotBackings.clear();
     if (device) {
       device->drainDeferredTextureBackings();
+      device->releaseRetiredHandles();
     }
   }
 
@@ -3412,8 +3433,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         flushPendingBatch();
       }
       if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-        resident->fillSlot.reset();
-        resident->gradientFillSlot.reset();
+        // Every device's residence was uploaded from the encode being replaced.
+        resident->devices.forEach([](geode::GeodeResidentPathSlots& slots) {
+          slots.fillSlot.reset();
+          slots.gradientFillSlot.reset();
+        });
       }
       cache.fillTolerance = std::any_of(path.commands().begin(), path.commands().end(),
                                         [](const Path::Command& command) {
@@ -3435,32 +3459,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return getFillEncode(source, path, rule);
   }
 
-  /// GPU-residence slot for `source`'s fill encode. Returns null for a null
-  /// source (editor/overlay draws stay on the arena path). The slot lives on
-  /// a `GeodeResidentPathComponent` beside the CPU encode cache and is
-  /// invalidated by the same listener.
-  /// Document-scoped resident slab: one growable chunk-set per registry,
-  /// bound to the current device. The slab is swapped when the document is
-  /// rendered by a different device, and freed with the registry.
-  /// Returns the registry's resident slab, shared so slots can keep the
-  /// old slab alive across a device change.
-  /// Document-scoped painter-ordered record slab (ordered
-  /// batching). Mirrors `residentSlab`'s registry-context wiring: one slab
-  /// per document, swapped when a different device renders the document.
+  /// This device's painter-ordered record slab (ordered batching) for the document in
+  /// \p registry. One per device per document, like `residentSlab`, and freed with the registry.
   std::shared_ptr<geode::GeodeRecordSlab> recordSlab(Registry& registry) {
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
         documentGeometryBudget(registry);
-    auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeRecordSlab>>();
-    if (slabPtr == nullptr) {
-      registry.ctx().emplace<std::shared_ptr<geode::GeodeRecordSlab>>(nullptr);
-      slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeRecordSlab>>();
+    DocumentDeviceResidency& residency = documentResidency(registry);
+    if (!residency.records) {
+      residency.records = std::make_shared<geode::GeodeRecordSlab>(
+          device->deviceId(), std::move(documentBudget), device->handleRetirement());
     }
-    std::shared_ptr<geode::GeodeRecordSlab>& slab = *slabPtr;
-    if (!slab || slab->owningDeviceId() != device->deviceId()) {
-      slab =
-          std::make_shared<geode::GeodeRecordSlab>(device->deviceId(), std::move(documentBudget));
-    }
-    return slab;
+    return residency.records;
   }
 
   /// Ensure `slot` has a record-slab slot on the current device's slab, and
@@ -3475,9 +3484,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool ensureRecordSlot(geode::GeodeResidentSlot& slot, Registry& registry) {
     std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
     if (slot.recordSlab.get() != slab.get()) {
-      // Device change: the old slab is retired with the registry-context
-      // swap; drop the stale slot handle and allocate fresh on the new
-      // slab.
+      // The slot has no record in this device's slab yet: allocate one there.
       slot.recordSlab = std::move(slab);
       slot.recordSlot = geode::GeodeRecordSlab::Slot{};
     }
@@ -3504,22 +3511,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// the previous frame has submitted and its pending batch has been discarded.
   std::deque<geode::GeodeGlyphResidentEntry> transientGlyphEntries;
 
-  /// Document-scoped glyph-outline residency. Mirrors `residentSlab`'s
-  /// registry-context wiring: one cache per document, replaced when a
-  /// different device renders the document, because every cached entry holds
-  /// that device's buffer and bind group.
+  /// This device's glyph-outline residency for the document in \p registry. One per device per
+  /// document, like `residentSlab`, because every cached entry holds that device's buffer and
+  /// bind group.
   std::shared_ptr<geode::GeodeGlyphCache> glyphCache(Registry& registry) {
-    auto* cachePtr = registry.ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
-    if (cachePtr == nullptr) {
-      registry.ctx().emplace<std::shared_ptr<geode::GeodeGlyphCache>>(nullptr);
-      cachePtr = registry.ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
-    }
-    std::shared_ptr<geode::GeodeGlyphCache>& cache = *cachePtr;
-    if (!cache || cache->owningDeviceId() != device->deviceId()) {
-      cache = std::make_shared<geode::GeodeGlyphCache>(device->deviceId(),
-                                                       documentGeometryBudget(registry));
-    } else {
-      (void)documentGeometryBudget(registry);
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+        documentGeometryBudget(registry);
+    std::shared_ptr<geode::GeodeGlyphCache>& cache = documentResidency(registry).glyphs;
+    if (!cache) {
+      cache =
+          std::make_shared<geode::GeodeGlyphCache>(device->deviceId(), std::move(documentBudget));
     }
     // Trim to budget at the first touch of each frame, the same shape (and for
     // the same reason) as the slabs' pending-free merge: dropping an entry
@@ -3558,11 +3559,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!handle) {
       return cursor;
     }
-    auto& component = handle.get_or_emplace<geode::GeodeTextInstanceRecordComponent>();
+    geode::GeodeTextInstanceRecordComponent& component =
+        handle.get_or_emplace<geode::GeodeTextInstanceResidencyComponent>().devices.forDevice(
+            deviceKey());
     std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
     if (component.recordSlab.get() != slab.get()) {
-      // Device change retired the old slab with the registry-context swap;
-      // the held slots belong to it, so drop them and start fresh.
+      // The held slots belong to another slab, so drop them and start fresh.
       component.freeRecordSlots();
       component.recordSlab = std::move(slab);
     }
@@ -3880,18 +3882,36 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return budget;
   }
 
+  /// This renderer's device, as the key of state kept per device.
+  geode::GeodeDeviceKey deviceKey() const {
+    return geode::GeodeDeviceKey{device->deviceId(), device->handleRetirement()};
+  }
+
+  /// This device's residence for the document in \p registry, created empty on first use.
+  DocumentDeviceResidency& documentResidency(Registry& registry) {
+    auto* residencyPtr = registry.ctx().find<std::shared_ptr<DocumentResidency>>();
+    if (residencyPtr == nullptr) {
+      residencyPtr = &registry.ctx().emplace<std::shared_ptr<DocumentResidency>>(
+          std::make_shared<DocumentResidency>());
+    }
+    return (*residencyPtr)->devices.forDevice(deviceKey());
+  }
+
+  /// This device's residence slots on \p source, created empty on first use.
+  geode::GeodeResidentPathSlots& residentPathSlots(EntityHandle source) {
+    return source.get_or_emplace<geode::GeodeResidentPathComponent>().devices.forDevice(
+        deviceKey());
+  }
+
+  /// This device's resident slab for the document in \p registry: one growable chunk set per
+  /// device per document, freed with the registry. Shared so a slot keeps its slab alive.
   std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
         documentGeometryBudget(registry);
-    auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
-    if (slabPtr == nullptr) {
-      registry.ctx().emplace<std::shared_ptr<geode::GeodeResidentSlab>>(nullptr);
-      slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
-    }
-    std::shared_ptr<geode::GeodeResidentSlab>& slab = *slabPtr;
-    if (!slab || slab->owningDeviceId() != device->deviceId()) {
-      slab =
-          std::make_shared<geode::GeodeResidentSlab>(device->deviceId(), std::move(documentBudget));
+    std::shared_ptr<geode::GeodeResidentSlab>& slab = documentResidency(registry).geometry;
+    if (!slab) {
+      slab = std::make_shared<geode::GeodeResidentSlab>(
+          device->deviceId(), std::move(documentBudget), device->handleRetirement());
     }
     // Merge the previous frame's freed ranges, at most once per frame (the
     // slab gates on the index). Gating here rather than at one draw entry
@@ -3903,19 +3923,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return slab;
   }
 
+  /// This device's GPU-residence slot for `source`'s fill encode. Returns null for a null
+  /// source (editor/overlay draws stay on the arena path). The slot lives on a
+  /// `GeodeResidentPathComponent` beside the CPU encode cache and is invalidated by the same
+  /// listener.
   geode::GeodeResidentSlot* residentFillSlot(EntityHandle source) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentSlot& slot =
-        source.get_or_emplace<geode::GeodeResidentPathComponent>().fillSlot;
+    geode::GeodeResidentSlot& slot = residentPathSlots(source).fillSlot;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
-      // The registry's slab changed (device change): the slot's borrowed
-      // buffer may reference a released chunk, so its residence is stale
-      // and must re-upload from the new slab. reset() keeps the old slab
-      // reference alive via this slot until the swap below.
+      // The slot's residence lives in another slab, so it must re-upload into this one. reset()
+      // keeps the old slab alive through this slot until the assignment below.
       slot.reset();
     }
     slot.slab = std::move(slab);
@@ -3928,8 +3949,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentSlot& slot =
-        source.get_or_emplace<geode::GeodeResidentPathComponent>().strokeSlot;
+    geode::GeodeResidentSlot& slot = residentPathSlots(source).strokeSlot;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -3946,8 +3966,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentGradientSlot& slot =
-        source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientStrokeSlot;
+    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientStrokeSlot;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -3965,8 +3984,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentGradientSlot& slot =
-        source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientFillSlot;
+    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientFillSlot;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -4564,8 +4582,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       flushPendingBatch();
     }
     if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-      resident->strokeSlot.reset();
-      resident->gradientStrokeSlot.reset();
+      // Every device's residence was uploaded from the stroke encode being replaced.
+      resident->devices.forEach([](geode::GeodeResidentPathSlots& slots) {
+        slots.strokeSlot.reset();
+        slots.gradientStrokeSlot.reset();
+      });
     }
   }
 
@@ -5570,12 +5591,13 @@ size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
   if (!impl_->device) {
     return 0;
   }
-  auto* cachePtr = document.registry().ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
-  if (cachePtr == nullptr || !*cachePtr ||
-      (*cachePtr)->owningDeviceId() != impl_->device->deviceId()) {
+  auto* residencyPtr = document.registry().ctx().find<std::shared_ptr<DocumentResidency>>();
+  if (residencyPtr == nullptr || !*residencyPtr) {
     return 0;
   }
-  return (*cachePtr)->size();
+  const DocumentDeviceResidency* residency =
+      (*residencyPtr)->devices.find(impl_->device->deviceId());
+  return residency != nullptr && residency->glyphs ? residency->glyphs->size() : 0;
 }
 
 void RendererGeode::beginFrameResourceScope() {
@@ -5651,6 +5673,7 @@ void RendererGeode::endFrame() {
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
     impl_->device->drainDeferredTextureBackings();
+    impl_->device->releaseRetiredHandles();
     if (!submitted) {
       // Whether any of what the frame recorded reached the queue is exactly what the failure
       // leaves unknown, so nothing it named may go back to a reusable pool.

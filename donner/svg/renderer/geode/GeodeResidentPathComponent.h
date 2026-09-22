@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,8 @@
 #include "donner/gpu/Handles.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
+#include "donner/svg/renderer/geode/GeodePerDevice.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 
 namespace donner::geode {
@@ -49,6 +52,20 @@ namespace donner::geode {
 /// buffer range's start (chunk-relative for resident geometry).
 using InstanceRecord = gpu::shader::programs::SlugFillInstance;
 static_assert(sizeof(InstanceRecord) == 256, "InstanceRecord struct layout mismatch");
+
+/// Hands \p buffers and \p bindGroups to \p owner, to be released on the thread of the context
+/// that created them. They are dropped here only without an owner, or once it is gone, which is
+/// after their device is gone and their release is skipped.
+/// @param owner Retirement of the context that created the handles.
+/// @param buffers Buffers to let go of.
+/// @param bindGroups Bind groups to let go of.
+inline void RetireSlabHandles(const std::weak_ptr<GeodeHandleRetirement>& owner,
+                              std::vector<gpu::Buffer> buffers,
+                              std::vector<gpu::BindGroup> bindGroups) {
+  if (const std::shared_ptr<GeodeHandleRetirement> retirement = owner.lock()) {
+    retirement->retire(buffers, bindGroups);
+  }
+}
 
 /**
  * Document-scoped, painter-ordered record slab for ordered draw batching
@@ -83,14 +100,29 @@ public:
     uint64_t bufferId = 0;
   };
 
+  /// @param deviceId Device the slab's buffers are created on.
+  /// @param budget Document budget its bytes are charged to, if any.
+  /// @param owner Retirement of the context that owns the device. The slab's buffers and bind
+  ///   groups are handed there when it is destroyed, so they are released on that context's
+  ///   thread whichever thread destroys the slab. Without one they are released where the slab is
+  ///   destroyed, which is only right on the device's own thread.
   explicit GeodeRecordSlab(uint64_t deviceId,
-                           std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
-      : owningDeviceId_(deviceId), budget_(std::move(budget)) {}
+                           std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr,
+                           std::weak_ptr<GeodeHandleRetirement> owner = {})
+      : owningDeviceId_(deviceId), budget_(std::move(budget)), owner_(std::move(owner)) {}
 
   ~GeodeRecordSlab() {
     if (budget_ && accountedBytes_ != 0) {
       budget_->releaseResidentBytes(accountedBytes_);
     }
+    std::vector<gpu::Buffer> buffers;
+    for (Chunk& chunk : chunks_) {
+      buffers.push_back(std::move(chunk.buffer));
+    }
+    for (BatchUniform& uniform : batchUniforms_) {
+      buffers.push_back(std::move(uniform.buffer));
+    }
+    RetireSlabHandles(owner_, std::move(buffers), std::move(retiredBindGroups_));
   }
 
   GeodeRecordSlab(const GeodeRecordSlab&) = delete;
@@ -391,6 +423,8 @@ private:
   uint64_t cpuRetainedBytes_ = 0;
   uint64_t cpuPayloadBytes_ = 0;
   uint64_t accountedBytes_ = 0;
+  /// Retirement of the owning context; see the constructor.
+  std::weak_ptr<GeodeHandleRetirement> owner_;
 };
 
 class GeodeDevice;
@@ -415,13 +449,14 @@ class GeodeDevice;
  * per-slot accounting.
  *
  * The slab is bound to one device (`GeodeDevice::deviceId()`): a document
- * rendered by a second device gets a fresh slab, and the old chunks are
- * released without touching the old device's objects (WebGPU retains any
- * still-referenced buffers through submitted command buffers).
+ * rendered by several devices keeps one slab per device, so no device reuses
+ * or replaces another's.
  *
  * Not thread-safe: allocate/free/beginFrame mutate the free list and bump
- * cursors without locking. The renderer serializes one frame per device at
- * a time, so a document's slab is only touched from one thread.
+ * cursors without locking. Every caller holds the document it belongs to, which
+ * serializes them. Destroying it releases nothing on the calling thread: its
+ * buffers and bind groups go to the owning context's retirement (see the
+ * constructor), because the device's own thread may be using its tables.
  */
 class GeodeResidentSlab {
 public:
@@ -462,9 +497,12 @@ public:
 
   /// Create an empty slab bound to `deviceId` (usually the current
   /// renderer's device). Chunks are allocated lazily on first use.
+  /// @param owner Retirement of the context that owns the device; see
+  ///   \ref GeodeRecordSlab::GeodeRecordSlab.
   explicit GeodeResidentSlab(uint64_t deviceId,
-                             std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
-      : owningDeviceId_(deviceId), budget_(std::move(budget)) {}
+                             std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr,
+                             std::weak_ptr<GeodeHandleRetirement> owner = {})
+      : owningDeviceId_(deviceId), budget_(std::move(budget)), owner_(std::move(owner)) {}
 
   ~GeodeResidentSlab() {
     if (budget_ && accountedBytes_ > 0) {
@@ -473,6 +511,11 @@ public:
     if (gauge_ && accountedBytes_ != 0) {
       gauge_->fetch_sub(accountedBytes_, std::memory_order_relaxed);
     }
+    std::vector<gpu::Buffer> buffers;
+    for (Chunk& chunk : chunks_) {
+      buffers.push_back(std::move(chunk.buffer));
+    }
+    RetireSlabHandles(owner_, std::move(buffers), std::move(retiredBindGroups_));
   }
 
   GeodeResidentSlab(const GeodeResidentSlab&) = delete;
@@ -685,6 +728,8 @@ private:
   std::shared_ptr<std::atomic<int64_t>> gauge_;
   std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
   int64_t accountedBytes_ = 0;
+  /// Retirement of the owning context; see the constructor.
+  std::weak_ptr<GeodeHandleRetirement> owner_;
 };
 
 /// GPU-resident geometry for one cached `EncodedPath` (a fill slot or a
@@ -1145,7 +1190,7 @@ struct GeodeResidentGradientSlot {
 /// entity's fill and stroke encodes. Installed lazily by `RendererGeode`
 /// at the solid-fill draw sites; removed by the same entt listener that
 /// clears `GeodePathCacheComponent` when geometry changes.
-struct GeodeResidentPathComponent {
+struct GeodeResidentPathSlots {
   GeodeResidentSlot fillSlot;
   GeodeResidentSlot strokeSlot;
   /// Gradient-painted fill residence.
@@ -1155,5 +1200,15 @@ struct GeodeResidentPathComponent {
   /// an unchanged gradient-stroked outline re-uploads zero geometry.
   GeodeResidentGradientSlot gradientStrokeSlot;
 };
+
+/// One entity's GPU residence, one set of slots per device that draws it: a second device
+/// neither reuses the first one's slots nor resets them.
+struct GeodeResidentPathComponent {
+  GeodePerDevice<GeodeResidentPathSlots> devices;  //!< Slots per drawing device.
+};
+static_assert(!std::is_copy_constructible_v<GeodeResidentPathComponent> &&
+                  std::is_nothrow_move_constructible_v<GeodeResidentPathComponent> &&
+                  std::is_nothrow_move_assignable_v<GeodeResidentPathComponent>,
+              "the registry moves components when it compacts, and a component owns its slots");
 
 }  // namespace donner::geode
