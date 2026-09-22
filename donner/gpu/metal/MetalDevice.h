@@ -198,10 +198,30 @@ public:
   /// Releases the event installed by \ref pauseSubmissionsForTest. Safe when no pause is active.
   void resumeSubmissionsForTest();
 
-  /// Makes the next submission to complete report an execution error, as a command buffer the
-  /// GPU faulted on does, through the same completion path. A deterministic test seam: a real
-  /// fault cannot be produced on demand without hanging or corrupting the GPU.
-  void failNextCompletionForTest();
+  /**
+   * Makes one command buffer of the next submission report an execution error when it completes,
+   * as a command buffer the GPU faulted on does, through the same completion path. A deterministic
+   * test seam: a real fault cannot be produced on demand without hanging or corrupting the GPU.
+   *
+   * @param commandBufferIndex Index of the failing buffer within the submission; its last buffer
+   *   when absent or past the end.
+   */
+  void failNextSubmissionForTest(std::optional<size_t> commandBufferIndex = std::nullopt);
+
+  /// Parks the completion of the next submission when its handler runs, as a GPU that has not
+  /// finished that work yet looks: the handler records its outcome but publishes nothing until
+  /// \ref releaseHeldCompletionForTest. Later submissions complete normally meanwhile.
+  void holdNextCompletionForTest();
+
+  /// Publishes the completion \ref holdNextCompletionForTest parked, from the calling thread, or
+  /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
+  void releaseHeldCompletionForTest();
+
+  /// Waits until \p count completion handlers have run on this device, including parked ones.
+  /// Test seam for ordering completions deterministically.
+  /// @param count Handlers to wait for. @param timeoutSeconds Longest to wait.
+  /// @return True once that many have run.
+  [[nodiscard]] bool waitForCompletionHandlersForTest(uint64_t count, double timeoutSeconds) const;
 
   /// Destructor; releases all Metal objects still alive.
   ~MetalDevice() override;

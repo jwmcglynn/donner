@@ -6,7 +6,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -46,10 +49,22 @@ protected:
                                std::chrono::seconds(5), rootLoss_);
   }
 
+  /// Finishes one empty command buffer on the device under test.
+  CommandBuffer emptyCommandBuffer() {
+    return GetResultOrFail(GetResultOrFail(device_->createCommandEncoder())->finish());
+  }
+
   /// Submits one empty command buffer and returns its serial.
-  uint64_t submitEmptyWork() {
-    return GetResultOrFail(device_->submit(
-        GetResultOrFail(GetResultOrFail(device_->createCommandEncoder())->finish())));
+  uint64_t submitEmptyWork() { return GetResultOrFail(device_->submit(emptyCommandBuffer())); }
+
+  /// Milliseconds \p action took.
+  /// @param action Work to time.
+  static int64_t MillisecondsTaken(const std::function<void()>& action) {
+    const auto start = std::chrono::steady_clock::now();
+    action();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                 start)
+        .count();
   }
 
   std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
@@ -123,8 +138,9 @@ TEST_F(MetalDeviceLossTest, AFailedCommandBufferDeclaresTheRootLostAsABackendRep
   const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
   ASSERT_THAT(sibling, NotNull());
 
-  device_->failNextCompletionForTest();
+  device_->failNextSubmissionForTest();
   const uint64_t serial = submitEmptyWork();
+  ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, 30.0), IsTrue());
 
   EXPECT_THAT(device_->waitForSerial(serial, 30.0), IsFalse());
   EXPECT_THAT(device_->lastErrorForTest(), HasSubstr("injected command buffer failure"));
@@ -138,6 +154,79 @@ TEST_F(MetalDeviceLossTest, AFailedCommandBufferDeclaresTheRootLostAsABackendRep
   device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
                                     "a later queue drain");
   EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::None));
+}
+
+TEST_F(MetalDeviceLossTest, AFailedEarlierCommandBufferFailsItsWholeSubmission) {
+  const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
+  ASSERT_THAT(sibling, NotNull());
+
+  // A frame submits several command buffers at once; the first one fails and the last does not.
+  device_->failNextSubmissionForTest(/*commandBufferIndex=*/0);
+  std::array<CommandBuffer, 2> frame{emptyCommandBuffer(), emptyCommandBuffer()};
+  const uint64_t serial = GetResultOrFail(device_->submit(frame));
+  ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, 30.0), IsTrue());
+
+  EXPECT_THAT(device_->waitForSerial(serial, 30.0), IsFalse())
+      << "a submission whose earlier buffer failed must not read as finished";
+  EXPECT_THAT(device_->lastErrorForTest(), HasSubstr("injected command buffer failure"));
+  EXPECT_THAT(device_->isLost(), IsTrue());
+  EXPECT_THAT(sibling->isLost(), IsTrue());
+}
+
+TEST_F(MetalDeviceLossTest, ALaterSuccessDoesNotCompleteAnEarlierSubmissionStillFinishing) {
+  // The earlier submission fails, but its completion is not published yet when the later,
+  // successful one completes.
+  device_->failNextSubmissionForTest();
+  device_->holdNextCompletionForTest();
+  const uint64_t earlier = submitEmptyWork();
+  const uint64_t later = submitEmptyWork();
+  ASSERT_THAT(device_->waitForCompletionHandlersForTest(2, 30.0), IsTrue());
+
+  EXPECT_THAT(device_->completedSerial(), Lt(earlier));
+  EXPECT_THAT(device_->waitForSerial(earlier, 0.2), IsFalse())
+      << "work whose outcome is not known yet must not read as finished";
+
+  device_->releaseHeldCompletionForTest();
+
+  EXPECT_THAT(device_->isLost(), IsTrue());
+  EXPECT_THAT(device_->waitForSerial(earlier, 30.0), IsFalse());
+  EXPECT_THAT(device_->waitForSerial(later, 30.0), IsFalse())
+      << "a submission after failed work runs on a lost root";
+}
+
+TEST_F(MetalDeviceLossTest, AWaitEndsAtOnceWhenASiblingDeclaresTheRootLost) {
+  const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
+  ASSERT_THAT(sibling, NotNull());
+  device_->holdNextCompletionForTest();
+  const uint64_t serial = submitEmptyWork();
+  ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, 30.0), IsTrue());
+
+  sibling->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a sibling's queue drain gave up");
+
+  bool completed = true;
+  const int64_t waitedMs =
+      MillisecondsTaken([&] { completed = device_->waitForSerial(serial, 5.0); });
+  EXPECT_THAT(completed, IsFalse());
+  EXPECT_THAT(waitedMs, Lt(1000)) << "a wait on a lost root must not spend its budget";
+
+  device_->releaseHeldCompletionForTest();
+}
+
+TEST_F(MetalDeviceLossTest, TeardownAfterASiblingDeclaredTheRootLostReturnsPromptly) {
+  const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
+  ASSERT_THAT(sibling, NotNull());
+  // Work that never finishes, as on a GPU that stopped answering.
+  device_->holdNextCompletionForTest();
+  (void)submitEmptyWork();
+  ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, 30.0), IsTrue());
+
+  sibling->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a sibling's queue drain gave up");
+
+  const int64_t teardownMs = MillisecondsTaken([&] { device_.reset(); });
+  EXPECT_THAT(teardownMs, Lt(1000))
+      << "teardown skips GPU waits once the root is lost, rather than waiting out a hung GPU";
 }
 
 }  // namespace

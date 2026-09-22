@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -194,19 +195,74 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
 /// the caller indefinitely.
 constexpr double kPresentCompletionTimeoutSeconds = 5.0;
 
+/// A completion whose publication \ref MetalDevice::holdNextCompletionForTest parked.
+struct ParkedCompletion {
+  uint64_t serial = 0;        //!< Serial of the parked submission.
+  NSError* error = nil;       //!< Execution error the handler observed, or nil.
+  uint64_t uploadBytes = 0;   //!< Staging bytes the submission reserved.
+  uint64_t payloadBytes = 0;  //!< Payload bytes the submission reserved.
+};
+
 struct CompletionState {
   std::atomic<uint64_t> completedSerial{0};       //!< Highest completed submission serial.
   std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
   std::atomic<uint64_t> inFlightPayloadBytes{0};  //!< Logical bytes charged to the upload budget.
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
-  /// Set by \ref MetalDevice::failNextCompletionForTest; consumed by the next completion.
-  std::atomic<bool> failNextCompletion{false};
+  /// Completion handlers that have finished running, parked ones included. Test observable.
+  std::atomic<uint64_t> handlersRun{0};
   /// Loss condition of the backend root, shared with every device over it. A failed command
   /// buffer declares it, so the handler holds it rather than reaching through the device.
   std::shared_ptr<DeviceLostState> rootLoss;
-  std::mutex mutex;          //!< Guards errorMessage.
-  std::string errorMessage;  //!< Message of the first captured execution error.
+  std::mutex mutex;                        //!< Guards errorMessage, heldSerial and parked.
+  std::string errorMessage;                //!< Message of the first captured execution error.
+  std::optional<uint64_t> heldSerial;      //!< Serial whose completion a test holds.
+  std::optional<ParkedCompletion> parked;  //!< That completion, once its handler ran.
 };
+
+/// The execution error an injected command-buffer failure reports.
+NSError* InjectedCommandBufferFailure() {
+  return
+      [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                          code:MTLCommandBufferErrorInternal
+                      userInfo:@{NSLocalizedDescriptionKey : @"injected command buffer failure"}];
+}
+
+/// Publishes one submission's completion: its execution error, if any, then its returned upload
+/// reservation, then its serial.
+/// @param state Completion state of the device. @param serial Serial of the submission.
+/// @param executionError Error the submission's work reported, or nil.
+/// @param uploadBytes Staging bytes to return. @param payloadBytes Payload bytes to return.
+void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executionError,
+                       uint64_t uploadBytes, uint64_t payloadBytes) {
+  if (executionError != nil) {
+    const std::string message =
+        DescribeNSError(executionError, "Metal command buffer execution failed");
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      if (state.errorMessage.empty()) {
+        state.errorMessage = message;
+      }
+    }
+    // Work that failed on the GPU leaves the root in an unknown state for every device over
+    // it. The backend reported this loss, so it carries no wait site, and it is declared before
+    // the error flag and the serial below so that no waiter that sees either one can give up
+    // first and claim the loss as its own timeout.
+    if (DeclareDeviceLost(*state.rootLoss)) {
+      LogDeclaredDeviceLoss(("a Metal command buffer failed: " + message).c_str());
+    }
+    state.hadError.store(true, std::memory_order_release);
+  }
+
+  // Make the reservation available before a completion waiter observes this serial.
+  state.inFlightStagingBytes.fetch_sub(uploadBytes, std::memory_order_release);
+  state.inFlightPayloadBytes.fetch_sub(payloadBytes, std::memory_order_release);
+
+  // Monotonic max: handlers may complete out of order across command buffers.
+  uint64_t previous = state.completedSerial.load(std::memory_order_relaxed);
+  while (previous < serial &&
+         !state.completedSerial.compare_exchange_weak(previous, serial, std::memory_order_release,
+                                                      std::memory_order_relaxed)) {}
+}
 
 }  // namespace
 
@@ -522,9 +578,16 @@ struct MetalDevice::Impl {
 
   /// Attaches the completion handler that latches execution errors and advances the completed
   /// serial monotonically.
-  /// @param state Encoding state.
+  /// @param states Encoding states of the submission's command buffers, in commit order.
   /// @param submissionSerial Serial assigned to this submission.
-  void attachCompletionHandler(EncodingState& state, uint64_t submissionSerial);
+  void attachCompletionHandler(std::span<EncodingState> states, uint64_t submissionSerial);
+
+  /// Set by \ref MetalDevice::failNextSubmissionForTest; consumed by the next submission.
+  bool failNextSubmission = false;
+  /// Index of the buffer that fails, or the last one when absent.
+  std::optional<size_t> failedCommandBufferIndex;
+  /// Set by \ref MetalDevice::holdNextCompletionForTest; consumed by the next submission.
+  bool holdNextCompletion = false;
 
   /// Whether resources are built for unified memory; decides every storage mode below.
   bool unifiedMemory = true;
@@ -685,8 +748,40 @@ void MetalDevice::resumeSubmissionsForTest() {
   }
 }
 
-void MetalDevice::failNextCompletionForTest() {
-  impl_->completionState->failNextCompletion.store(true, std::memory_order_release);
+void MetalDevice::failNextSubmissionForTest(std::optional<size_t> commandBufferIndex) {
+  impl_->failNextSubmission = true;
+  impl_->failedCommandBufferIndex = commandBufferIndex;
+}
+
+void MetalDevice::holdNextCompletionForTest() {
+  impl_->holdNextCompletion = true;
+}
+
+void MetalDevice::releaseHeldCompletionForTest() {
+  CompletionState& state = *impl_->completionState;
+  std::optional<ParkedCompletion> parked;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.heldSerial.reset();
+    parked = std::exchange(state.parked, std::nullopt);
+  }
+  if (parked.has_value()) {
+    PublishCompletion(state, parked->serial, parked->error, parked->uploadBytes,
+                      parked->payloadBytes);
+  }
+}
+
+bool MetalDevice::waitForCompletionHandlersForTest(uint64_t count, double timeoutSeconds) const {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<double>(timeoutSeconds));
+  while (impl_->completionState->handlersRun.load(std::memory_order_acquire) < count) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return true;
 }
 
 MetalDevice::~MetalDevice() {
@@ -1796,49 +1891,42 @@ Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& com
   return OkStatus();
 }
 
-void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t submissionSerial) {
+void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
+                                                uint64_t submissionSerial) {
   std::shared_ptr<CompletionState> sharedState = completionState;
   const uint64_t uploadBytes = pendingStagingBytes;
   const uint64_t payloadBytes = pendingPayloadBytes;
   sharedState->inFlightStagingBytes.fetch_add(uploadBytes, std::memory_order_relaxed);
   sharedState->inFlightPayloadBytes.fetch_add(payloadBytes, std::memory_order_relaxed);
-  [state.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
+
+  const size_t lastIndex = states.size() - 1;
+  std::optional<size_t> injectedFailureIndex;
+  if (std::exchange(failNextSubmission, false)) {
+    injectedFailureIndex = std::min(failedCommandBufferIndex.value_or(lastIndex), lastIndex);
+  }
+  if (std::exchange(holdNextCompletion, false)) {
+    std::lock_guard<std::mutex> lock(sharedState->mutex);
+    sharedState->heldSerial = submissionSerial;
+  }
+
+  [states.back().commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
     NSError* executionError = completedBuffer.error;
-    if (executionError == nil &&
-        sharedState->failNextCompletion.exchange(false, std::memory_order_acq_rel)) {
-      executionError = [NSError
-          errorWithDomain:MTLCommandBufferErrorDomain
-                     code:MTLCommandBufferErrorInternal
-                 userInfo:@{NSLocalizedDescriptionKey : @"injected command buffer failure"}];
+    if (executionError == nil && injectedFailureIndex == lastIndex) {
+      executionError = InjectedCommandBufferFailure();
     }
-    if (executionError != nil) {
-      const std::string message =
-          DescribeNSError(executionError, "Metal command buffer execution failed");
-      {
-        std::lock_guard<std::mutex> lock(sharedState->mutex);
-        if (sharedState->errorMessage.empty()) {
-          sharedState->errorMessage = message;
-        }
+    bool parked = false;
+    {
+      std::lock_guard<std::mutex> lock(sharedState->mutex);
+      if (sharedState->heldSerial == submissionSerial) {
+        sharedState->parked =
+            ParkedCompletion{submissionSerial, executionError, uploadBytes, payloadBytes};
+        parked = true;
       }
-      // Work that failed on the GPU leaves the root in an unknown state for every device over
-      // it. The backend reported this loss, so it carries no wait site, and it is declared before
-      // the error flag and the serial below so that no waiter that sees either one can give up
-      // first and claim the loss as its own timeout.
-      if (DeclareDeviceLost(*sharedState->rootLoss)) {
-        LogDeclaredDeviceLoss(("a Metal command buffer failed: " + message).c_str());
-      }
-      sharedState->hadError.store(true, std::memory_order_release);
     }
-
-    // Make the reservation available before a completion waiter observes this serial.
-    sharedState->inFlightStagingBytes.fetch_sub(uploadBytes, std::memory_order_release);
-    sharedState->inFlightPayloadBytes.fetch_sub(payloadBytes, std::memory_order_release);
-
-    // Monotonic max: handlers may complete out of order across command buffers.
-    uint64_t previous = sharedState->completedSerial.load(std::memory_order_relaxed);
-    while (previous < submissionSerial &&
-           !sharedState->completedSerial.compare_exchange_weak(
-               previous, submissionSerial, std::memory_order_release, std::memory_order_relaxed)) {}
+    if (!parked) {
+      PublishCompletion(*sharedState, submissionSerial, executionError, uploadBytes, payloadBytes);
+    }
+    sharedState->handlersRun.fetch_add(1, std::memory_order_release);
   }];
 }
 
@@ -2027,7 +2115,7 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial,
 
   // The handler goes on the last buffer alone: the queue finishes them in commit order, so the
   // submission is complete exactly when that one is, and one serial gets one completion.
-  impl_->attachCompletionHandler(states.back(), submissionSerial);
+  impl_->attachCompletionHandler(states, submissionSerial);
   for (Impl::EncodingState& state : states) {
     [state.commandBuffer commit];
   }
