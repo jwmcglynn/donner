@@ -52,6 +52,9 @@ void PublishWasmPinchZoomPolicy(double wheelDeltaPerLnScale) {
 }
 #else
 
+// clang-format off: every EM_JS body below is JavaScript, which clang-format reformats as C++ -
+// it has already split a `===` into `== =`, which is a SyntaxError the browser reports only when
+// the arm is built.
 EM_JS(void, InitializeWasmEditorFrameScheduling, (), {
   window['__donnerEditorFrameRequested'] = true;
   window['__donnerMainLoopRenderedFrames'] = 0;
@@ -142,7 +145,7 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
   // result. Stamp it exactly once so probes can pair the two product
   // timestamps.
   const workerStats = window['__donnerWorkerStats'];
-  if (workerStats && workerStats['presentedAtMs'] == = undefined) {
+  if (workerStats && workerStats['presentedAtMs'] === undefined) {
     workerStats['presentedAtMs'] = performance.now();
   }
 });
@@ -154,6 +157,7 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
 // runtime initialization.
 EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
       { window['__donnerPinchWheelDeltaPerLnScale'] = wheelDeltaPerLnScale; });
+// clang-format on
 #endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 #else
 #include "donner/base/FailureSignalHandler.h"
