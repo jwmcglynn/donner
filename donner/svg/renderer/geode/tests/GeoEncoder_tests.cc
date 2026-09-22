@@ -202,6 +202,35 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
   EXPECT_THAT(pixel, RgbaEq(0, 128, 255, 255));
 }
 
+/// A target the backend refuses to open a render pass on must not be drawn into.
+///
+/// `beginRenderPass` rejects a target without render-attachment capability, which leaves the
+/// encoder with no pass. Every recording entry point has to notice that rather than record
+/// against it.
+TEST_F(GeoEncoderTest, ATargetThatCannotOpenARenderPassRecordsNothing) {
+  auto sampledOnly = device_->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"SampledOnlyTarget", kTargetSize, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_TRUE(sampledOnly.hasResult());
+  const gpu::Texture unusableTarget = std::move(sampledOnly).result();
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, unusableTarget,
+                     kTargetSize);
+  // A clear with no draws takes `finish` through the branch that opens a pass just to run the
+  // clear, which is the one an undrawn pooled tile relies on.
+  encoder.clear(css::RGBA(0, 128, 255, 255));
+  encoder.finish();
+
+  // A draw against the same target must be refused on the same terms.
+  GeoEncoder drawEncoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, unusableTarget,
+                         kTargetSize);
+  drawEncoder.fillPath(PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build(),
+                       css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  drawEncoder.finish();
+
+  SUCCEED() << "Neither encoder dereferenced a render pass the backend never opened";
+}
+
 /// Fill an axis-aligned rectangle and verify a center pixel is the fill color.
 TEST_F(GeoEncoderTest, FillRect) {
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
