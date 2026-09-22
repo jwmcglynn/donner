@@ -634,6 +634,21 @@ TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {
   EXPECT_EQ(textEngine->layoutCallCountForTesting(), 2u);
 }
 
+TEST_F(RendererRegressionTests, ExternalTextEffectContextPaintIsResolvedForEachUse) {
+  const std::filesystem::path testdata = "donner/svg/renderer/testdata";
+  SVGDocument shared =
+      loadSVG("donner/svg/renderer/testdata/use-external-text-effect-context-shared.svg", testdata);
+  SVGDocument separate = loadSVG(
+      "donner/svg/renderer/testdata/use-external-text-effect-context-separate.svg", testdata);
+  RegisterFontsFromDirectoryForTesting(shared, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(separate, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(shared, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(separate, ActiveRendererBackend());
+  ExpectVisibleBitmap(expected, "external_text_effect_context_visible");
+  ExpectBitmapsIdentical(actual, expected, "external_text_effect_context_per_use");
+}
+
 TEST_F(RendererRegressionTests, TextOpacityWithSpanWrapperAppliesOnceLikeGroupOpacity) {
   const RendererBitmap textOpacity = RenderTextOpacityCase(
       R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120" opacity="0.5">
