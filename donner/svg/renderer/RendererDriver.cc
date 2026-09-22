@@ -56,7 +56,9 @@
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#endif
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
@@ -1388,6 +1390,7 @@ Entity InstanceTextRootEntity(Registry& registry,
              : entt::null;
 }
 
+#ifdef DONNER_TEXT_ENABLED
 void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
                      components::ComputedTextComponent& text, const TextParams& params,
                      const PaintParams& paint, RendererDriverTextFrameCache::Root& preparedRoot,
@@ -1422,6 +1425,7 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
   }
   preparedRoot.prepared = true;
 }
+#endif
 
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
@@ -1467,26 +1471,29 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   // only one that paints the copy. Claiming spans for instances that do not exist in this copy
   // would drop them entirely, so the copy paints every span, without the span-level effects.
   const bool spansHaveOwnEffectInstances = !instance.isShadow(registry);
-  if (!spansHaveOwnEffectInstances || !registry.ctx().contains<TextEngine>()) {
-    ++textPreparationStats.spanStyleResolutions;
-    resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                         spansHaveOwnEffectInstances);
-    renderer.drawText(registry, *text, textParams);
+#ifdef DONNER_TEXT_ENABLED
+  if (spansHaveOwnEffectInstances && registry.ctx().contains<TextEngine>()) {
+    auto& preparedRoot = textFrameCache.roots[&registry][textRootEntity];
+    if (!preparedRoot.prepared) {
+      PrepareTextRoot(registry, textRootHandle, *text, textParams, paint, preparedRoot,
+                      textPreparationStats);
+    }
+    auto& group = preparedRoot.groups[textParams.spanEffectOwner];
+    if (!group.prepared) {
+      group.prepared = std::make_shared<PreparedTextDraw>();
+      group.prepared->elementBounds = preparedRoot.elementBounds;
+    }
+    textParams.preparedTextDraw = group.prepared;
+    renderer.drawText(registry, group.text, textParams);
     return;
   }
-
-  auto& preparedRoot = textFrameCache.roots[&registry][textRootEntity];
-  if (!preparedRoot.prepared) {
-    PrepareTextRoot(registry, textRootHandle, *text, textParams, paint, preparedRoot,
-                    textPreparationStats);
-  }
-  auto& group = preparedRoot.groups[textParams.spanEffectOwner];
-  if (!group.prepared) {
-    group.prepared = std::make_shared<PreparedTextDraw>();
-    group.prepared->elementBounds = preparedRoot.elementBounds;
-  }
-  textParams.preparedTextDraw = group.prepared;
-  renderer.drawText(registry, group.text, textParams);
+#else
+  (void)textFrameCache;
+#endif
+  ++textPreparationStats.spanStyleResolutions;
+  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
+                       spansHaveOwnEffectInstances);
+  renderer.drawText(registry, *text, textParams);
 }
 
 std::optional<ImageParams> toImageParams(const components::RenderingInstanceComponent& instance,
@@ -3547,6 +3554,8 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
 
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
+  // One child registry can be traversed by several external uses with different context paints.
+  textFrameCache_->roots.erase(&registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
