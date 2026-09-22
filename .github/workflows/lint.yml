@@ -15,6 +15,7 @@ concurrency:
 
 # Fast lint jobs covering checks that don't live inside `bazel test //...`:
 #
+# - clang-format 18 for every tracked project C++ source (excluding third_party/)
 # - build_defs/check_banned_patterns.py (covers the examples/ dir which
 #   is not fully enumerated by the donner_cc_* py_test lint macros)
 # - check_design_doc_provenance.py (ratchets exact model metadata on design docs)
@@ -69,6 +70,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install clang-format 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+
       - name: Cache Bazel
         uses: actions/cache@v6
         with:
@@ -87,9 +93,12 @@ jobs:
       # target enumerates are all covered now. `tools/lint.sh` is also the
       # documented local command, so this job and a contributor's machine run
       # exactly the same check.
-      - name: Check banned patterns
+      - name: Check source lint and formatting
         shell: bash
         run: tools/lint.sh
+
+      - name: Check brace lint regression
+        run: python3 tools/lint_braces_tests.py
 
       - name: Check design document provenance
         run: python3 tools/check_design_doc_provenance.py
