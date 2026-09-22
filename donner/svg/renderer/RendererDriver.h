@@ -62,7 +62,10 @@ public:
 
   /// CPU preparation work performed by this driver, for text-effect regression tests.
   struct TextPreparationStats {
-    std::size_t spanStyleResolutions = 0;
+    /// Full text-root layout/style preparations across rendered frames.
+    std::size_t fullElementStylePasses = 0;
+    /// Span entries visited while resolving renderer-facing paints and decoration.
+    std::size_t spanStyleVisits = 0;
   };
 
   /// Cumulative text preparation work for this driver's lifetime.

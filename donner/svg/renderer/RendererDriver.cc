@@ -70,6 +70,7 @@ struct RendererDriverTextFrameCache {
   struct Group {
     components::ComputedTextComponent text;
     std::shared_ptr<PreparedTextDraw> prepared;
+    bool stylesResolved = false;
   };
 
   struct Root {
@@ -451,13 +452,16 @@ SpanLayerOwnership ResolveSpanLayerOwnership(Registry& registry, Entity textRoot
 /// `spansHaveOwnEffectInstances` says whether the copy being drawn has the per-span rendering
 /// instances that carry span-level `clip-path` / `mask` / `filter`. When it does not, every span is
 /// left for this draw to paint, without those effects.
+/// An owner slice that already has layout and layer ownership may skip refreshing those fields.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
                           const components::ResolvedPaintServer& contextStroke,
-                          bool spansHaveOwnEffectInstances) {
-  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-    textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+                          bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership) {
+  if (refreshLayoutAndOwnership) {
+    if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+      textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+    }
   }
 
   const auto resolveSpanPaint = [&](const PaintServer& paint) -> components::ResolvedPaintServer {
@@ -475,10 +479,12 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       continue;
     }
 
-    const SpanLayerOwnership ownership = ResolveSpanLayerOwnership(
-        registry, textRootHandle.entity(), span.sourceEntity, spansHaveOwnEffectInstances);
-    span.effectOwner = ownership.effectOwner;
-    span.opacity = ownership.opacity;
+    if (refreshLayoutAndOwnership) {
+      const SpanLayerOwnership ownership = ResolveSpanLayerOwnership(
+          registry, textRootHandle.entity(), span.sourceEntity, spansHaveOwnEffectInstances);
+      span.effectOwner = ownership.effectOwner;
+      span.opacity = ownership.opacity;
+    }
 
     const Box2d viewBox =
         textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
@@ -1393,13 +1399,11 @@ Entity InstanceTextRootEntity(Registry& registry,
 #ifdef DONNER_TEXT_ENABLED
 void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
                      components::ComputedTextComponent& text, const TextParams& params,
-                     const PaintParams& paint, RendererDriverTextFrameCache::Root& preparedRoot,
+                     RendererDriverTextFrameCache::Root& preparedRoot,
                      RendererDriver::TextPreparationStats& stats) {
-  ++stats.spanStyleResolutions;
-  resolvePerSpanStyles(registry, text, textRootHandle, paint.fill, paint.stroke,
-                       /*spansHaveOwnEffectInstances=*/true);
-
+  ++stats.fullElementStylePasses;
   TextEngine& textEngine = registry.ctx().get<TextEngine>();
+  textEngine.resolvePerSpanLayoutStyles(textRootHandle, text);
   std::vector<TextRun> runs;
   if (const auto* cached =
           registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
@@ -1411,8 +1415,16 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
   preparedRoot.elementBounds = ComputeTextBounds(textEngine, runs);
 
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
-    const Entity owner =
-        runIndex < text.spans.size() ? text.spans[runIndex].effectOwner : entt::null;
+    Entity owner = entt::null;
+    if (runIndex < text.spans.size() && text.spans[runIndex].sourceEntity != entt::null) {
+      auto& span = text.spans[runIndex];
+      const SpanLayerOwnership ownership =
+          ResolveSpanLayerOwnership(registry, textRootHandle.entity(), span.sourceEntity,
+                                    /*spansHaveOwnEffectInstances=*/true);
+      span.effectOwner = ownership.effectOwner;
+      span.opacity = ownership.opacity;
+      owner = span.effectOwner;
+    }
     auto& group = preparedRoot.groups[owner];
     if (!group.prepared) {
       group.prepared = std::make_shared<PreparedTextDraw>();
@@ -1475,13 +1487,20 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   if (spansHaveOwnEffectInstances && registry.ctx().contains<TextEngine>()) {
     auto& preparedRoot = textFrameCache.roots[&registry][textRootEntity];
     if (!preparedRoot.prepared) {
-      PrepareTextRoot(registry, textRootHandle, *text, textParams, paint, preparedRoot,
+      PrepareTextRoot(registry, textRootHandle, *text, textParams, preparedRoot,
                       textPreparationStats);
     }
     auto& group = preparedRoot.groups[textParams.spanEffectOwner];
     if (!group.prepared) {
       group.prepared = std::make_shared<PreparedTextDraw>();
       group.prepared->elementBounds = preparedRoot.elementBounds;
+    }
+    if (!group.stylesResolved) {
+      textPreparationStats.spanStyleVisits += group.text.spans.size();
+      resolvePerSpanStyles(registry, group.text, textRootHandle, paint.fill, paint.stroke,
+                           /*spansHaveOwnEffectInstances=*/true,
+                           /*refreshLayoutAndOwnership=*/false);
+      group.stylesResolved = true;
     }
     textParams.preparedTextDraw = group.prepared;
     renderer.drawText(registry, group.text, textParams);
@@ -1490,9 +1509,10 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
 #else
   (void)textFrameCache;
 #endif
-  ++textPreparationStats.spanStyleResolutions;
+  ++textPreparationStats.fullElementStylePasses;
+  textPreparationStats.spanStyleVisits += text->spans.size();
   resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                       spansHaveOwnEffectInstances);
+                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true);
   renderer.drawText(registry, *text, textParams);
 }
 
@@ -3196,6 +3216,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   // Save and override surfaceFromCanvasTransform for pattern content rendering.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
   surfaceFromCanvasTransform_ = patternContentFromPatternTile;
+  textFrameCache_->roots.erase(&registry);
 
   if (subtreeAhead) {
     traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
@@ -3525,6 +3546,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   if (marker.subtreeInfo) {
+    textFrameCache_->roots.erase(&registry);
     // The marker subtree may lie *behind* the caller's cursor when it is shared with an earlier
     // instantiation (e.g. the same shape stamped through several marker branches reuses one
     // cached offscreen subtree). Rewind to the start of the snapshot so traverseRange can locate
