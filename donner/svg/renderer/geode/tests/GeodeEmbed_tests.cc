@@ -291,5 +291,39 @@ TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
   EXPECT_EQ(snap.dimensions.x, 32);
 }
 
+/// A target the renderer's device does not own is not a surface it can draw into: the handle
+/// names a slot on another device, and everything the frame records would resolve it against a
+/// table where that slot means something else. The frame is declined rather than recorded.
+TEST_F(GeodeEmbedTest, ATargetOfAnotherDeviceIsRefused) {
+  const std::unique_ptr<geode::GeodeDevice> elsewhere = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(elsewhere, testing::NotNull())
+      << "Failed to create a second headless wgpu device. Check driver availability.";
+
+  constexpr uint32_t kSize = 32;
+  wgpu::TextureDescriptor texDesc = {};
+  texDesc.label = geode::wgpuLabel("TargetOfAnotherDevice");
+  texDesc.size = {kSize, kSize, 1};
+  texDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+  texDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
+                  wgpu::TextureUsage::TextureBinding;
+  texDesc.mipLevelCount = 1;
+  texDesc.sampleCount = 1;
+  texDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture foreignTexture = elsewhere->adapterDevice().root().device().createTexture(texDesc);
+  ASSERT_THAT(static_cast<bool>(foreignTexture), testing::IsTrue());
+
+  auto renderer = createRenderer();
+  renderer.setTargetTexture(foreignTexture);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(kSize, kSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.lastFrameTimings().counters.submits, testing::Eq(0u))
+      << "a frame whose target belongs to another device must be declined, not recorded";
+}
+
 }  // namespace
 }  // namespace donner::svg
