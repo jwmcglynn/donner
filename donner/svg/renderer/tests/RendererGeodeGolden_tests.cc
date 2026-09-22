@@ -406,8 +406,16 @@ TEST_F(RendererGeodeGoldenTests, ImageDataUrlPixelated) {
 /// default (bilinear) sampling filter. Exercises the isolated-layer composite
 /// and premultiplied-source-over blend path.
 TEST_F(RendererGeodeGoldenTests, ImageDataUrlOpacity) {
-  compareWithGeodeGolden("donner/svg/renderer/testdata/image_data_url_opacity.svg",
-                         "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity.png",
+#if defined(__linux__)
+  // Lavapipe and Metal differ by 1-2 channel values in the half-alpha composite. Both match the
+  // equivalent group-opacity render on their own backend, so pin each output at strict identity.
+  constexpr const char* kGolden =
+      "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity_linux.png";
+#else
+  constexpr const char* kGolden =
+      "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity.png";
+#endif
+  compareWithGeodeGolden("donner/svg/renderer/testdata/image_data_url_opacity.svg", kGolden,
                          strictGeodeParams());
 }
 
