@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import tempfile
@@ -369,6 +370,11 @@ class CheckBannedPatternsTests(unittest.TestCase):
                 Path(__file__).resolve().parents[1] / "tools" / "lint.sh",
                 repo / "tools" / "lint.sh",
             )
+            # These cases isolate complexity-baseline behavior. The brace regression runs
+            # the real formatter separately; keep this temporary repository tool-agnostic.
+            formatter = repo / "tools" / "fake-clang-format"
+            formatter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            formatter.chmod(0o755)
 
             def write_source(decision_points: int) -> None:
                 branches = "\n".join(
@@ -415,6 +421,7 @@ class CheckBannedPatternsTests(unittest.TestCase):
             return subprocess.run(
                 [str(repo / "tools" / "lint.sh")],
                 cwd=repo,
+                env={**os.environ, "DONNER_CLANG_FORMAT": str(formatter)},
                 check=False,
                 capture_output=True,
                 text=True,

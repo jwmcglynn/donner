@@ -2095,10 +2095,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  /// Defer a release until after the frame's command buffer has been
-  /// submitted. Used by `popIsolatedLayer` / `popFilterLayer` / etc.,
-  /// where the layer texture is still referenced by commands recorded
-  /// into the frame encoder and must not be recycled mid-frame.
+  /// Defer a release until after submission, or retain it if the frame's submission is uncertain.
+  /// Layer, filter, mask, and clip textures may still be named by recorded commands.
   struct PendingRelease {
     gpu::Texture texture;
     gpu::TextureDescriptor desc;
@@ -2110,6 +2108,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!texture.isValid()) {
       return;
     }
+    if (frameRecordingAbandoned) {
+      failedFilterTextures.push_back({std::move(texture), desc});
+      return;
+    }
     framePendingReleases.push_back({std::move(texture), desc});
   }
 
@@ -2118,8 +2120,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(texture), desc);
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture,
-                                 const gpu::TextureDescriptor& desc) override {
+  /// Keep unresolved frame resources alive until device teardown instead of recycling them.
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor& desc) override {
     if (texture.isValid()) {
       failedFilterTextures.push_back({std::move(texture), desc});
     }
@@ -2511,8 +2514,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                            geometry->blurPadding + frame.filterRegion.height()));
     if (!suspendFrameForFilter()) {
       device->markDeviceLost("frame commands could not be submitted before filter execution");
-      retainFailedFilterTexture(std::move(localTexture), localDesc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       frame.localRasterRequiredForBudget = true;
       if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
         device->markDeviceLost("frame encoder could not be restored after filter suspension");
@@ -2525,9 +2528,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                               localDeviceFromFilter, *this, nullptr, frame.localFilterPlan, this);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
-      retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
-      retainFailedFilterTexture(std::move(localTexture), localDesc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(localFiltered.texture), localFiltered.desc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return TransformedFilterResult::FrameAbandoned;
     }
@@ -2577,7 +2580,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
     if (!suspendFrameForFilter()) {
       device->markDeviceLost("frame commands could not be submitted before filter execution");
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
     } else {
       filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
@@ -2587,8 +2590,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       filterExecutionBudget->release(frame.filterReservation);
-      retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(filtered.texture), filtered.desc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return std::nullopt;
     }
@@ -4831,12 +4834,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
-    // A caller that abandons a frame without ending it leaves pattern state and pending
-    // releases behind. The recording they belonged to is gone by now, so they go back to the
-    // pool here - and they go back before the budget reset below, because that budget is the
-    // one they were charged against.
+    // An unfinished frame can leave pattern tiles, clips, and pending releases behind. Retire
+    // them before resetting their budget. Unsubmitted work returns to the pool; resources whose
+    // submission is uncertain stay retained until device teardown.
     retireUnconsumedPatternTilesAtFrameEnd(OuterPatternState::kDrop);
-    drainPendingReleases();
+    releaseClipStackTexturesAtFrameEnd(clipStack);
+    if (frameRecordingAbandoned) {
+      retainPendingFrameReleasesAfterFailure();
+    } else {
+      drainPendingReleases();
+    }
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -5469,6 +5476,7 @@ void RendererGeode::endFrame() {
   // Before anything is submitted, so a submission failure retains these tiles along with the
   // rest of what the frame named rather than returning them to a pool.
   impl_->retireUnconsumedPatternTilesAtFrameEnd(Impl::OuterPatternState::kRestore);
+  impl_->releaseClipStackTexturesAtFrameEnd(impl_->clipStack);
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting - shared-mode.
@@ -5745,7 +5753,7 @@ void RendererGeode::popClip() {
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
       if (impl_->frameRecordingAbandoned) {
-        impl_->retainFailedFilterTexture(std::move(release.texture), release.desc);
+        impl_->retainTextureWithoutCompletionProof(std::move(release.texture), release.desc);
       } else {
         impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
       }
@@ -5834,7 +5842,7 @@ void RendererGeode::popIsolatedLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
 
@@ -5991,7 +5999,7 @@ void RendererGeode::popFilterLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
     impl_->filterExecutionBudget->release(frame.filterReservation);
     return;
   }
@@ -6192,8 +6200,8 @@ void RendererGeode::popMask() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
-    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.contentTexture), frame.contentDesc);
     return;
   }
 
@@ -6369,7 +6377,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-    impl_->retainFailedFilterTexture(std::move(frame.tileTexture), frame.tileDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.tileTexture), frame.tileDesc);
     return;
   }
 

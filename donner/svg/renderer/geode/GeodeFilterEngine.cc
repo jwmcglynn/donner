@@ -135,7 +135,8 @@ struct FilterResourceArena {
       if (owned.texture.isValid()) {
         if (executionFailed_ && (submissionUncertain_ || forceRetain_ || framePendingChunks_ != 0 ||
                                  completedQueueChunks_ != queueSubmittedChunks_)) {
-          textureAllocator_.retainFailedFilterTexture(std::move(owned.texture), owned.desc);
+          textureAllocator_.retainTextureWithoutCompletionProof(std::move(owned.texture),
+                                                                owned.desc);
         } else {
           textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
         }
