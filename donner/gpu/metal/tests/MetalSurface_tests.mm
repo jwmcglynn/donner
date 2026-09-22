@@ -210,6 +210,17 @@ TEST_F(MetalSurfaceTest, AFrameIsARenderTargetTheRuntimeCanDrawIntoAndReadBack) 
       << "The layer owns the frame once it has been handed over";
 }
 
+/// A frame belongs to the surface that handed it out and is invalidated when it is presented or
+/// abandoned, so no other runtime device may be given a name for it.
+TEST_F(MetalSurfaceTest, AnAcquiredFrameCannotBeExportedToAnotherDevice) {
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(frame.texture.isValid());
+
+  EXPECT_THAT(device_->exportTexture(frame.texture), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
+}
+
 TEST_F(MetalSurfaceTest, RefusesAFrameWhoseExtentDoesNotMatchTheConfiguration) {
   const Surface surface = configuredSurface();
 

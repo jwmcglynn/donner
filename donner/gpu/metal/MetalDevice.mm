@@ -380,6 +380,39 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
   state.handlersRun.fetch_add(1, std::memory_order_release);
 }
 
+/// Address that identifies the Metal backend in a \ref BackendDeviceIdentity.
+constexpr char kMetalTextureShareFamily = 0;
+
+/// A Metal texture exported to another runtime device over the same `MTLDevice`. Holding the
+/// texture strongly is what keeps the allocation alive for as long as any export token or
+/// registration names it; ARC releases it on whichever thread drops the last reference.
+class MetalExportedTexture final : public ExportedTextureBacking {
+public:
+  explicit MetalExportedTexture(id<MTLTexture> texture) : texture_(texture) {}
+
+  /// The exported texture.
+  id<MTLTexture> texture() const { return texture_; }
+
+private:
+  id<MTLTexture> texture_;
+};
+
+/// A device's completion as consumers on other threads read it: the counter the command-buffer
+/// handlers advance and the error flag they set.
+class MetalSubmissionCompletion final : public SubmissionCompletion {
+public:
+  explicit MetalSubmissionCompletion(std::shared_ptr<CompletionState> state)
+      : state_(std::move(state)) {}
+
+  uint64_t completedSerial() const override {
+    return state_->completedSerial.load(std::memory_order_acquire);
+  }
+  bool failed() const override { return state_->hadError.load(std::memory_order_acquire); }
+
+private:
+  std::shared_ptr<CompletionState> state_;
+};
+
 }  // namespace
 
 /// Objective-C++ state of a MetalDevice: the Metal device and queue plus per-resource slot
@@ -430,6 +463,9 @@ struct MetalDevice::Impl {
 
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
+  /// \ref completionState as exports of this device's textures report it; created on the first
+  /// export.
+  std::shared_ptr<const SubmissionCompletion> exportCompletion;
 
   /// Open host mappings and the Metal facts they are judged against. Created on the first
   /// mapping; the concrete host is defined with the mapping hooks at the end of this file.
@@ -1038,6 +1074,47 @@ Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor&
   SetSlot(impl_->textures, slotIndex, texture);
   SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
   return OkStatus();
+}
+
+BackendDeviceIdentity MetalDevice::backendDeviceIdentity() const {
+  return {&kMetalTextureShareFamily, (__bridge const void*)impl_->device};
+}
+
+Result<BackendTextureExport> MetalDevice::onExportTexture(uint32_t slotIndex) {
+  id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
+  if (texture == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("texture slot {} has no Metal texture to export", slotIndex)};
+  }
+  if (impl_->exportCompletion == nullptr) {
+    impl_->exportCompletion = std::make_shared<MetalSubmissionCompletion>(impl_->completionState);
+  }
+  BackendTextureExport exported;
+  exported.backing = std::make_shared<const MetalExportedTexture>(texture);
+  // Each runtime device submits to its own command queue, and nothing orders one queue's work
+  // after another's, so a consumer waits for this device's work to complete.
+  exported.ordering = SourceOrdering::WaitForSource;
+  exported.completion = impl_->exportCompletion;
+  // An upload carried by a submission that never named the texture is recorded only here.
+  exported.contentSerial = GetSlot(impl_->textureUploadSerials, slotIndex);
+  exported.writePending = impl_->hasPendingWrite(nil, texture);
+  return exported;
+}
+
+Status MetalDevice::onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) {
+  id<MTLTexture> texture = static_cast<const MetalExportedTexture&>(backing).texture();
+  // Metal accepts a texture only in command buffers of the device object that created it.
+  if (texture == nil || texture.device != impl_->device) {
+    return GpuError{GpuErrorType::DeviceMismatch,
+                    "registerTexture: the Metal texture belongs to a different MTLDevice"};
+  }
+  SetSlot(impl_->textures, slotIndex, texture);
+  SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
+  return OkStatus();
+}
+
+bool MetalDevice::onTextureWritePending(uint32_t slotIndex) const {
+  return impl_->hasPendingWrite(nil, GetSlot(impl_->textures, slotIndex));
 }
 
 Status MetalDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,

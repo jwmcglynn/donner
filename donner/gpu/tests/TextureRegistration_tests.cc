@@ -102,7 +102,7 @@ public:
   }
   /// Reports a terminal execution failure, as a backend does for a failed command buffer.
   void failExecution() { completion_->failedFlag.store(true); }
-  /// Whether a texture write waits for the next submission.
+  /// Whether texture writes wait for the next submission.
   void setWritesPending(bool pending) { writesPending_ = pending; }
   /// How many explicit backing releases reached this backend.
   int explicitBackingReleases() const { return explicitBackingReleases_; }
@@ -118,6 +118,7 @@ protected:
     exported.backing = std::make_shared<const FakeExportedTexture>(textures_.at(slotIndex));
     exported.ordering = options_.ordering;
     exported.completion = completion_;
+    exported.writePending = queuedWrite_;
     return exported;
   }
   Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override {
@@ -163,9 +164,11 @@ protected:
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
                         const Extent2d&, const Origin2d&) override {
+    queuedWrite_ = queuedWrite_ || writesPending_;
     return OkStatus();
   }
   Status onSubmit(uint64_t submissionSerial, std::span<const SubmittedCommandBuffer>) override {
+    queuedWrite_ = false;
     if (!held_) {
       completion_->completed.store(submissionSerial);
     }
@@ -186,6 +189,7 @@ private:
   std::vector<std::shared_ptr<FakeNativeTexture>> textures_;
   bool held_ = false;
   bool writesPending_ = false;
+  bool queuedWrite_ = false;  //!< A write waits for the next submission.
   int explicitBackingReleases_ = 0;
 };
 
@@ -472,6 +476,21 @@ TEST_F(TextureRegistrationTest, AQueuedProducerWriteRefusesRegistrationUntilItIs
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsFalse());
   producer_->releaseCompletion();
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsTrue());
+}
+
+/// A write the backend queued before the texture was exported is just as unordered: the export
+/// reports it, and the next producer submission carries it.
+TEST_F(TextureRegistrationTest, AWriteQueuedBeforeTheExportIsCarriedByTheNextSubmission) {
+  const Texture owned = MakeTexture(*producer_);
+  producer_->setWritesPending(true);
+  const std::array<uint8_t, 256 * 4> texels{};
+  ASSERT_THAT(producer_->writeTexture(owned, texels, {0, 256, 4}, kExtent), IsOk());
+  const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
+  EXPECT_THAT(consumer_->registerTexture(exported), IsGpuError(GpuErrorType::InvalidState));
+
+  const Texture unrelated = MakeTexture(*producer_);
+  ASSERT_THAT(SubmitRead(*producer_, unrelated), HasResult());
+  EXPECT_THAT(consumer_->registerTexture(exported), HasResult());
 }
 
 /// Devices that feed one native queue are ordered by submission order alone.
