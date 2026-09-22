@@ -1757,7 +1757,7 @@ TEST_F(RendererGeodeTest, SynchronousDirectPresentationReusesSameSizeRenderTarge
          "detaching the renderer's reusable full-canvas target.";
 }
 
-TEST_F(RendererGeodeTest, ResizingDefersSupersededPrimaryTargetDestruction) {
+TEST_F(RendererGeodeTest, ResizingRetiresTheSupersededTargetBackingAtTheFrameBoundary) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   sharedDevice()->drainDeferredDestroys();
   RendererGeode renderer = createRenderer();
@@ -1777,15 +1777,172 @@ TEST_F(RendererGeodeTest, ResizingDefersSupersededPrimaryTargetDestruction) {
   viewport.size = Vector2d(96.0, 64.0);
   renderer.beginFrame(viewport);
   EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 1u)
-      << "Replacing the primary target must retain its handle until a later frame boundary, then "
-         "explicitly destroy its GPU backing";
+      << "A superseded primary target must be queued for an explicit backing destroy while the "
+         "frame that replaced it is still recording, not destroyed under it";
   renderer.endFrame();
+  EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 0u)
+      << "That backing must be freed at the frame boundary, rather than having only its runtime "
+         "slot released and its allocation left for the host runtime to collect";
 
   viewport.size = Vector2d(128.0, 64.0);
   renderer.beginFrame(viewport);
   EXPECT_EQ(sharedDevice()->deferredTextureDestroyCountForTesting(), 1u)
-      << "Each resize must drain the prior retirement before queuing the newly superseded target";
+      << "Each resize must queue the newly superseded target in its turn";
   renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, RepeatedPatternTilesOfOneSizeAllocateNoTexturesInSteadyState) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+
+  const auto renderPatternFrame = [&](int frameIndex) {
+    SCOPED_TRACE(testing::Message() << "pattern frame " << frameIndex);
+    beginFrame(renderer);
+    ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()))
+        << "the tile must be admitted, otherwise a zero allocation count proves nothing";
+    renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
+    renderer.endPatternTile(/*forStroke=*/false);
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+    renderer.endFrame();
+  };
+
+  renderPatternFrame(1);
+  renderPatternFrame(2);
+  renderPatternFrame(3);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u)
+      << "A pattern tile of an already-seen extent must come back out of the transient texture "
+         "pool instead of allocating a new texture every frame";
+}
+
+TEST_F(RendererGeodeTest, APatternPaintTheFrameNeverConsumedIsRetiredNotCarriedForward) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+
+  beginFrame(renderer);
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+  ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
+  // No fill or stroke follows, so the promoted pattern paint is never consumed.
+  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.texturePoolStats().textureCount, pooledBefore + 1u)
+      << "An unconsumed pattern tile must go back to the transient texture pool at the frame "
+         "boundary rather than being destroyed outside it";
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  EXPECT_THAT(pixelAt(bitmap, 32, 32), Rgba(255, 0, 0, 255))
+      << "A pattern paint left over from the previous frame names a tile this frame may already "
+         "have recycled, so the next fill must use its own paint instead";
+}
+
+TEST_F(RendererGeodeTest, APatternTileLeftOpenAcrossTheFrameBoundaryIsRefusedNotPromoted) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+
+  beginFrame(renderer);
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+  ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
+  // The matching endPatternTile never arrives before the frame ends.
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.texturePoolStats().textureCount, pooledBefore + 1u)
+      << "A tile whose pattern was still open at the frame boundary must be handed back to the "
+         "transient texture pool";
+
+  beginFrame(renderer);
+  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  EXPECT_THAT(pixelAt(bitmap, 32, 32), Rgba(255, 0, 0, 255))
+      << "Promoting a tile the previous frame recycled would sample whatever now occupies its "
+         "slot, so the unmatched endPatternTile must be refused";
+}
+
+TEST_F(RendererGeodeTest, AFrameAbandonedWithATileOpenLeavesNothingOfItselfInTheNextFrame) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+
+  // An 8x8 tile under a 2x transform, which supersampling takes to a 4x raster scale, so the
+  // scale left behind is distinguishable from the identity the next frame must start on.
+  RenderViewport abandonedViewport;
+  abandonedViewport.size = Vector2d(kViewportSize, kViewportSize);
+  abandonedViewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(abandonedViewport);
+  // A scissor small enough to exclude the pixel the next frame checks, so carrying this clip
+  // forward would be visible rather than harmless.
+  ResolvedClip abandonedClip;
+  abandonedClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 2.0, 2.0);
+  renderer.pushClip(abandonedClip);
+  ASSERT_TRUE(
+      renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d::Scale(2.0, 2.0)));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
+  // Neither endPatternTile nor endFrame arrives; the next beginFrame inherits whatever is left.
+
+  RenderViewport nextViewport;
+  nextViewport.size = Vector2d(kViewportSize / 2.0, kViewportSize / 2.0);
+  nextViewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(nextViewport);
+  EXPECT_EQ(renderer.width(), static_cast<int>(kViewportSize / 2.0))
+      << "The new frame's extent comes from its own viewport, not from the frame that was "
+         "abandoned";
+  EXPECT_EQ(renderer.height(), static_cast<int>(kViewportSize / 2.0));
+
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
+  renderer.endFrame();
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  EXPECT_THAT(pixelAt(bitmap, 4, 4), Rgba(255, 0, 0, 255))
+      << "The abandoned frame's clip must not scissor this one";
+  EXPECT_THAT(pixelAt(bitmap, 12, 12), IsTransparent())
+      << "An abandoned tile still on the stack would scale this frame's transform by its raster "
+         "scale - 4x here, a 2x transform supersampled 2x - painting the rect four times as wide";
+}
+
+TEST_F(RendererGeodeTest, ARecycledPatternTileNeverShowsWhatTheLastFramePaintedIntoIt) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+
+  // Paint the tile opaque, and consume it, so it goes back to the pool holding those texels.
+  beginFrame(renderer);
+  ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
+  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  // Same extent, so the pool hands the same texture back, and this tile is drawn into by nothing.
+  beginFrame(renderer);
+  ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
+  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  ASSERT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u)
+      << "The second tile must be the recycled one, otherwise this proves nothing about reuse";
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  EXPECT_THAT(pixelAt(bitmap, 32, 32), IsTransparent())
+      << "A tile out of the pool carries whatever was last rendered into it, which may belong to "
+         "another document sharing the device, so an undrawn tile must sample as cleared";
 }
 
 TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcrossSizeChurn) {
