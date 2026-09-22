@@ -200,7 +200,10 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/components/filter:computed_filter_resource_budget",
         "//donner/svg/renderer/common",
     ] + select({
-        ":text_enabled": ["//donner/svg/text:text_engine"],
+        ":text_enabled": [
+            ":placed_text_geometry",
+            "//donner/svg/text:text_engine",
+        ],
         "//conditions:default": [],
     }),
 )
@@ -240,6 +243,7 @@ donner_perf_sensitive_cc_library(
     hdrs = ["PlacedTextGeometry.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":renderer_interface",
         "//donner/base",
         "//donner/svg/components/text:components",
         "//donner/svg/text:text_engine",

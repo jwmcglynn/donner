@@ -59,7 +59,6 @@
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
@@ -258,22 +257,6 @@ bool IsBgraTextureFormat(gpu::TextureFormat format) {
 // DONNER_TEXT_ENABLED region.
 
 #ifdef DONNER_TEXT_ENABLED
-TextLayoutParams toTextLayoutParams(const TextParams& params) {
-  TextLayoutParams layoutParams;
-  layoutParams.fontFamilies = params.fontFamilies;
-  layoutParams.fontSize = params.fontSize;
-  layoutParams.viewBox = params.viewBox;
-  layoutParams.fontMetrics = params.fontMetrics;
-  layoutParams.textAnchor = params.textAnchor;
-  layoutParams.writingMode = params.writingMode;
-  layoutParams.letterSpacingPx = params.letterSpacingPx;
-  layoutParams.wordSpacingPx = params.wordSpacingPx;
-  layoutParams.textLength = params.textLength;
-  layoutParams.lengthAdjust = params.lengthAdjust;
-  layoutParams.inlineSizePx = params.inlineSizePx;
-  return layoutParams;
-}
-
 std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
     const FontManager::GlyphOutlineComplexity& complexity) {
   constexpr std::size_t kCommandCopiesPerVertex = 6;
@@ -6795,32 +6778,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   auto& textEngine = registry.ctx().get<TextEngine>();
   auto& fontManager = registry.ctx().get<FontManager>();
 
-  // Use cached layout runs from `ComputedTextGeometryComponent` when
-  // available; otherwise lay out fresh via the engine. This matches
-  // the pattern in `RendererTinySkia::drawText`.
-  std::vector<TextRun> runs;
-  if (params.textRootEntity != entt::null) {
-    if (const auto* cache =
-            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
-      runs = cache->runs;
-    }
-  }
-  if (runs.empty()) {
-    const TextLayoutParams layoutParams = toTextLayoutParams(params);
-    runs = textEngine.layout(text, layoutParams);
-  }
-
-  // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
-  // has no bbox, so span gradient/pattern paint maps through this element-level
-  // box - same computation as `RendererTinySkia::drawText` (shared helper). The
-  // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
-  // while the glyph outline is the *draw* path. Every draw of this element sees the same box, so
-  // it is taken across all spans, before the ones this draw does not paint are dropped.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
-
-  // Drop the spans this draw is not responsible for before charging the glyph budget, so a text
-  // whose spans own effects is not charged once per draw for the glyphs it does not paint.
-  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
+  TextDrawGeometry drawGeometry = PrepareTextDrawGeometry(registry, text, params, textEngine);
+  std::vector<TextRun>& runs = drawGeometry.runs;
+  const Box2d& textBounds = drawGeometry.elementBounds;
 
   impl_->admitTextRuns(runs);
 

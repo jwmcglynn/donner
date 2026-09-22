@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -47,6 +48,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/core/ImageRendering.h"
@@ -54,12 +56,28 @@
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
+
+struct RendererDriverTextFrameCache {
+  struct Group {
+    components::ComputedTextComponent text;
+    std::shared_ptr<PreparedTextDraw> prepared;
+  };
+
+  struct Root {
+    std::unordered_map<Entity, Group> groups;
+    Box2d elementBounds;
+    bool prepared = false;
+  };
+
+  std::unordered_map<Registry*, std::unordered_map<Entity, Root>> roots;
+};
 
 namespace {
 
@@ -1370,6 +1388,41 @@ Entity InstanceTextRootEntity(Registry& registry,
              : entt::null;
 }
 
+void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
+                     components::ComputedTextComponent& text, const TextParams& params,
+                     const PaintParams& paint, RendererDriverTextFrameCache::Root& preparedRoot,
+                     RendererDriver::TextPreparationStats& stats) {
+  ++stats.spanStyleResolutions;
+  resolvePerSpanStyles(registry, text, textRootHandle, paint.fill, paint.stroke,
+                       /*spansHaveOwnEffectInstances=*/true);
+
+  TextEngine& textEngine = registry.ctx().get<TextEngine>();
+  std::vector<TextRun> runs;
+  if (const auto* cached =
+          registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
+      cached != nullptr && !cached->runs.empty()) {
+    runs = cached->runs;
+  } else {
+    runs = textEngine.layout(text, ToTextLayoutParams(params));
+  }
+  preparedRoot.elementBounds = ComputeTextBounds(textEngine, runs);
+
+  for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+    const Entity owner =
+        runIndex < text.spans.size() ? text.spans[runIndex].effectOwner : entt::null;
+    auto& group = preparedRoot.groups[owner];
+    if (!group.prepared) {
+      group.prepared = std::make_shared<PreparedTextDraw>();
+      group.prepared->elementBounds = preparedRoot.elementBounds;
+    }
+    if (runIndex < text.spans.size()) {
+      group.text.spans.push_back(text.spans[runIndex]);
+    }
+    group.prepared->runs.push_back(std::move(runs[runIndex]));
+  }
+  preparedRoot.prepared = true;
+}
+
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
  *
@@ -1380,11 +1433,13 @@ Entity InstanceTextRootEntity(Registry& registry,
  * @param textRootEntity Root text entity supplying the laid-out spans.
  * @param style Computed style of \p entity.
  * @param paint Paint already resolved for \p instance.
+ * @param textFrameCache Prepared text shared by all effect instances in this traversal.
+ * @param textPreparationStats Counter evidence for full-span style work.
  */
 void DrawInstanceText(RendererInterface& renderer, Registry& registry,
                       const components::RenderingInstanceComponent& instance, Entity entity,
                       Entity textRootEntity, const components::ComputedStyleComponent& style,
-                      const PaintParams& paint,
+                      const PaintParams& paint, RendererDriverTextFrameCache& textFrameCache,
                       RendererDriver::TextPreparationStats& textPreparationStats) {
   const EntityHandle textRootHandle(registry, textRootEntity);
   auto* text = textRootHandle.try_get<components::ComputedTextComponent>();
@@ -1404,7 +1459,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   const CapturePaintFontDependencies captureFontDependencies(registry, entity,
                                                              /*preparesReferences=*/false);
   const auto* textComp = textRootHandle.try_get<components::TextComponent>();
-  const TextParams textParams =
+  TextParams textParams =
       toTextParams(registry, instance, *textRootStyle, textComp, textRootHandle);
 
   // A shadow instance (from `<use>`) paints the light tree's text, but the span instances that
@@ -1412,10 +1467,26 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   // only one that paints the copy. Claiming spans for instances that do not exist in this copy
   // would drop them entirely, so the copy paints every span, without the span-level effects.
   const bool spansHaveOwnEffectInstances = !instance.isShadow(registry);
-  ++textPreparationStats.spanStyleResolutions;
-  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                       spansHaveOwnEffectInstances);
-  renderer.drawText(registry, *text, textParams);
+  if (!spansHaveOwnEffectInstances || !registry.ctx().contains<TextEngine>()) {
+    ++textPreparationStats.spanStyleResolutions;
+    resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
+                         spansHaveOwnEffectInstances);
+    renderer.drawText(registry, *text, textParams);
+    return;
+  }
+
+  auto& preparedRoot = textFrameCache.roots[&registry][textRootEntity];
+  if (!preparedRoot.prepared) {
+    PrepareTextRoot(registry, textRootHandle, *text, textParams, paint, preparedRoot,
+                    textPreparationStats);
+  }
+  auto& group = preparedRoot.groups[textParams.spanEffectOwner];
+  if (!group.prepared) {
+    group.prepared = std::make_shared<PreparedTextDraw>();
+    group.prepared->elementBounds = preparedRoot.elementBounds;
+  }
+  textParams.preparedTextDraw = group.prepared;
+  renderer.drawText(registry, group.text, textParams);
 }
 
 std::optional<ImageParams> toImageParams(const components::RenderingInstanceComponent& instance,
@@ -1459,11 +1530,16 @@ void RendererDriver::syncFilterPreparationStats() {
 
 RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
                                SecurityStats* securityStats)
-    : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {
+    : renderer_(renderer),
+      verbose_(verbose),
+      textFrameCache_(std::make_unique<RendererDriverTextFrameCache>()),
+      securityStats_(securityStats) {
   if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
     filterPreparationBudget_ = shared;
   }
 }
+
+RendererDriver::~RendererDriver() = default;
 
 void RendererDriver::resetOwnedSecurityBudgets() {
   if (filterPreparationBudget_ == &ownedFilterPreparationBudget_) {
@@ -1625,6 +1701,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
@@ -1680,6 +1757,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1702,6 +1780,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1751,6 +1830,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -1908,7 +1988,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
         DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
-                         textPreparationStats_);
+                         *textFrameCache_, textPreparationStats_);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -2488,7 +2568,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
         DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
-                         textPreparationStats_);
+                         *textFrameCache_, textPreparationStats_);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         // SVG sub-document referenced by <image>.
@@ -2570,7 +2650,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
         DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
-                         textPreparationStats_);
+                         *textFrameCache_, textPreparationStats_);
       }
     }
 
@@ -2744,7 +2824,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
         DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
-                         textPreparationStats_);
+                         *textFrameCache_, textPreparationStats_);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         if (svgImage->subDocument) {
@@ -2794,7 +2874,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
         DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
-                         textPreparationStats_);
+                         *textFrameCache_, textPreparationStats_);
       }
     }
 

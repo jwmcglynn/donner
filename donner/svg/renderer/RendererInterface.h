@@ -40,6 +40,7 @@
 namespace donner::svg {
 
 class SVGDocument;
+struct PreparedTextDraw;
 
 /**
  * Describes the viewport for a render pass.
@@ -919,6 +920,9 @@ struct TextParams {
   /// that no span-level `clip-path`, `mask`, or `filter` claims, which is what the text root's own
   /// draw paints.
   entt::entity spanEffectOwner = entt::null;
+  /// Optional driver-prepared runs for this draw. Shared ownership keeps them alive through the
+  /// synchronous backend call; the runs align with the text spans passed to drawText.
+  std::shared_ptr<const PreparedTextDraw> preparedTextDraw;
 };
 
 /**

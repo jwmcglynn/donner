@@ -26,6 +26,28 @@
 
 namespace donner::svg {
 
+struct TextParams;
+
+/// Immutable layout slice and full-element bounds prepared once for a text effect owner.
+struct PreparedTextDraw {
+  std::vector<TextRun> runs;
+  Box2d elementBounds;
+};
+
+/// Mutable per-call run copy after effect ownership and visibility filtering.
+struct TextDrawGeometry {
+  std::vector<TextRun> runs;
+  Box2d elementBounds;
+};
+
+/// Convert renderer-facing text parameters to the shared layout engine's input.
+[[nodiscard]] TextLayoutParams ToTextLayoutParams(const TextParams& params);
+
+/// Resolve one backend draw from a shared element preparation or the direct-caller fallback.
+[[nodiscard]] TextDrawGeometry PrepareTextDrawGeometry(
+    Registry& registry, const components::ComputedTextComponent& text, const TextParams& params,
+    TextEngine& textEngine);
+
 /**
  * @brief Apply an affine transform to every point of a path.
  *

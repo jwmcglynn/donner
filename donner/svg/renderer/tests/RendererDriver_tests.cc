@@ -1752,6 +1752,8 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
   driver.draw(document);
 
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleResolutions, 1u);
+  driver.draw(document);
+  EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleResolutions, 2u);
 }
 #endif  // DONNER_TEXT_ENABLED
 

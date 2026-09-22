@@ -23,6 +23,8 @@
 
 namespace donner::svg {
 
+struct RendererDriverTextFrameCache;
+
 /**
  * Backend-agnostic renderer driver that prepares documents for rendering and
  * emits drawing commands through a \ref RendererInterface implementation.
@@ -78,6 +80,8 @@ public:
    */
   explicit RendererDriver(RendererInterface& renderer, bool verbose = false,
                           SecurityStats* securityStats = nullptr);
+
+  ~RendererDriver();
 
   /**
    * Render the given \ref SVGDocument using the configured backend.
@@ -411,6 +415,7 @@ private:
   Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
   TextPreparationStats textPreparationStats_;
+  std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver

@@ -627,7 +627,11 @@ TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {
   ExpectVisibleBitmap(bitmap, "effect_span_layout_visible");
   const auto* textEngine = document.registry().ctx().find<TextEngine>();
   ASSERT_NE(textEngine, nullptr);
-  EXPECT_LE(textEngine->layoutCallCountForTesting(), 2u);
+  EXPECT_EQ(textEngine->layoutCallCountForTesting(), 1u);
+
+  const RendererBitmap second = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ExpectBitmapsIdentical(second, bitmap, "effect_span_second_frame_matches_first");
+  EXPECT_EQ(textEngine->layoutCallCountForTesting(), 2u);
 }
 
 TEST_F(RendererRegressionTests, TextOpacityWithSpanWrapperAppliesOnceLikeGroupOpacity) {
