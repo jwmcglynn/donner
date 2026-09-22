@@ -159,14 +159,23 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
   ASSERT_NE(ownerContext, nullptr);
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();
-  auto borrowedOwner = GeodePhysicalDeviceOwner::CreateBorrowed(
-      ownerContext->instance(), ownerContext->adapter(), ownerContext->device(),
-      ownerContext->queue(), lostState);
+  GeodeEmbedConfig borrowed;
+  borrowed.instance = ownerContext->instance();
+  borrowed.adapter = ownerContext->adapter();
+  borrowed.device = ownerContext->device();
+  borrowed.queue = ownerContext->queue();
+  borrowed.lostState = lostState;
+  auto borrowedContext = GeodeDevice::CreateFromExternal(borrowed);
+  ASSERT_NE(borrowedContext, nullptr);
   lostState->lost.store(true, std::memory_order_release);
 
   GeodeEmbedConfig config;
-  config.physicalDevice = std::move(borrowedOwner);
+  config.physicalDevice = borrowedContext->physicalDeviceOwner();
   EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
+
+  // A lost root skips every teardown wait, so let the borrowed context go before the headless
+  // owner whose backend objects it names.
+  borrowedContext.reset();
 }
 
 /// Can we allocate an offscreen render-target texture?

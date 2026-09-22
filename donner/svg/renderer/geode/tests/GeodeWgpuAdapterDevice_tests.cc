@@ -272,7 +272,16 @@ protected:
     geodeDevice_ = GeodeDevice::CreateHeadless();
     ASSERT_NE(geodeDevice_, nullptr)
         << "Failed to create the headless wgpu device. Check driver availability.";
-    adapter_ = std::make_unique<GeodeWgpuAdapterDevice>(*geodeDevice_);
+    adapter_ = geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+    // The cases below read what this adapter allocated and submitted off the context's counters,
+    // which only happens for a device the context is attributed to.
+    adapter_->setCounterSink(geodeDevice_.get());
+  }
+
+  void TearDown() override {
+    if (adapter_) {
+      adapter_->setCounterSink(nullptr);
+    }
   }
 
   std::unique_ptr<GeodeDevice> geodeDevice_;
@@ -283,7 +292,9 @@ protected:
 /// registered, and the registration describes it the way its owner does rather than the way the
 /// caller says. Registering it must not make this adapter responsible for the memory.
 TEST_F(GeodeWgpuAdapterDeviceTests, ImportingFromASiblingAdapterNamesWhatTheOwnerNames) {
-  GeodeWgpuAdapterDevice sibling(*geodeDevice_);
+  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice =
+      geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+  GeodeWgpuAdapterDevice& sibling = *siblingDevice;
   const gpu::TextureDescriptor descriptor{"ownedBySibling",
                                           {8, 4},
                                           gpu::TextureFormat::RGBA8Unorm,
@@ -315,7 +326,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHand
   const std::unique_ptr<GeodeDevice> otherBackend = GeodeDevice::CreateHeadless();
   ASSERT_THAT(otherBackend, testing::NotNull())
       << "Failed to create a second headless wgpu device. Check driver availability.";
-  GeodeWgpuAdapterDevice foreign(*otherBackend);
+  const std::unique_ptr<GeodeWgpuAdapterDevice> foreignDevice =
+      otherBackend->physicalDeviceOwner()->createLogicalDevice();
+  GeodeWgpuAdapterDevice& foreign = *foreignDevice;
   const gpu::TextureDescriptor descriptor{"ownedElsewhere",
                                           {4, 4},
                                           gpu::TextureFormat::RGBA8Unorm,
@@ -324,7 +337,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHand
   EXPECT_THAT(adapter_->importTextureFrom(foreign, onForeignBackend),
               gpu::IsGpuError(gpu::GpuErrorType::DeviceMismatch));
 
-  GeodeWgpuAdapterDevice sibling(*geodeDevice_);
+  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice =
+      geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+  GeodeWgpuAdapterDevice& sibling = *siblingDevice;
   gpu::Texture retired = gpu::GetResultOrFail(sibling.createTexture(descriptor));
   const gpu::Texture stale =
       gpu::Texture::CreateForBackend(retired.slotIndex(), retired.generation(), retired.deviceId());

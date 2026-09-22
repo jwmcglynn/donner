@@ -39,6 +39,11 @@ const geodeDeviceSource = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.cc", import.meta.url),
   "utf8",
 );
+// Backend-root selection, including the browser device import, lives with the wgpu adapter.
+const geodeSelectionSource = await readFile(
+  new URL("../../../svg/renderer/geode/GeodeWgpuAdapterDevice.cc", import.meta.url),
+  "utf8",
+);
 const geodeDeviceHeader = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.h", import.meta.url),
   "utf8",
@@ -431,47 +436,41 @@ test("shared Basic Shapes visual gates settle first-use thumbnails before replac
 test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
   assert.doesNotMatch(geodeDeviceHeader, /CreateHeadlessAsync/);
   assert.doesNotMatch(geodeDeviceHeader, /donnerGeodeCompleteHeadlessImport/);
-  assert.doesNotMatch(geodeDeviceSource, /donnerGeodeCompleteHeadlessImport/);
-  assert.match(geodeDeviceSource, /EM_JS\(void, G,/);
+  assert.doesNotMatch(geodeSelectionSource, /donnerGeodeCompleteHeadlessImport/);
+  const browserBridge = geodeSelectionSource.match(/EM_JS\(void, G,([\s\S]*?)\n}\);/);
+  assert.ok(browserBridge, "expected the browser Promise bridge");
   assert.equal(
-    [...geodeDeviceSource.matchAll(/navigator\.gpu\.requestAdapter\(\)/g)].length,
+    [...browserBridge[1].matchAll(/navigator\.gpu\.requestAdapter\(\)/g)].length,
     1,
-    "browser adapter acquisition must have one Promise root",
+    "browser adapter acquisition must happen exactly once",
   );
   assert.equal(
-    [...geodeDeviceSource.matchAll(/adapter\.requestDevice\(/g)].length,
+    [...browserBridge[1].matchAll(/adapter\.requestDevice\(/g)].length,
     1,
     "browser device acquisition must continue from that adapter exactly once",
   );
-  assert.doesNotMatch(geodeDeviceSource, /WebGPU\.importJsAdapter/);
-  assert.match(geodeDeviceSource, /WebGPU\.importJsDevice\(device, instance\)/);
-  assert.match(geodeDeviceSource, /\.catch\(\(\) => 1\)/);
-  assert.doesNotMatch(geodeDeviceSource, /Module\["_.*Geode.*"\]/);
+  assert.doesNotMatch(geodeSelectionSource, /WebGPU\.importJsAdapter/);
+  assert.match(geodeSelectionSource, /WebGPU\.importJsDevice\(device, instance\)/);
+  assert.match(geodeSelectionSource, /\.catch\(\(\) => 1\)/);
+  assert.doesNotMatch(geodeSelectionSource, /Module\["_.*Geode.*"\]/);
   assert.match(
-    geodeDeviceSource,
+    geodeSelectionSource,
     /Atomics\.store\(HEAP32, deviceOut >> 2, devicePtr\)/,
   );
   assert.match(
-    geodeDeviceSource,
+    geodeSelectionSource,
     /setTimeout\([\s\S]*Atomics\.store\(HEAP32, deviceOut >> 2, devicePtr\)/,
     "the result store must cross a browser task before releasing the waiting pthread",
   );
 
-  const blockingStartup = geodeDeviceSource.match(
-    /std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless\([\s\S]*?\n}/,
+  const browserImport = geodeSelectionSource.match(
+    /bool ImportBrowserRoot\(GeodeWgpuRoots& handles,[\s\S]*?\)\s*{([\s\S]*?)\n}/,
   );
-  assert.ok(blockingStartup, "expected the renderer's headless device entry point");
-  const browserStartup = blockingStartup[0].match(
-    /#ifdef __EMSCRIPTEN__([\s\S]*?)#else/,
-  );
-  assert.ok(browserStartup, "expected a browser-specific headless device path");
-  assert.match(
-    browserStartup[1],
-    /G\(&state\.device, result->physicalDevice_->instance_\)/,
-  );
-  assert.match(browserStartup[1], /emscripten_sleep\(1\)/);
-  assert.doesNotMatch(browserStartup[1], /RequestAdapterCallbackInfo/);
-  assert.doesNotMatch(browserStartup[1], /RequestDeviceCallbackInfo/);
+  assert.ok(browserImport, "expected the browser device import the selection uses");
+  assert.match(browserImport[1], /G\(&state\.device, handles\.instance\)/);
+  assert.match(browserImport[1], /emscripten_sleep\(1\)/);
+  assert.doesNotMatch(browserImport[1], /RequestAdapterCallbackInfo/);
+  assert.doesNotMatch(browserImport[1], /RequestDeviceCallbackInfo/);
 
   const deviceDestructor = geodeDeviceSource.match(
     /GeodeDevice::~GeodeDevice\(\)([\s\S]*?)\n}/,
@@ -492,6 +491,11 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
     "the unbounded submitted-work wait stays deleted; teardown drains are bounded",
   );
   assert.doesNotMatch(
+    geodeSelectionSource,
+    /WaitForSubmittedWork/,
+    "the unbounded submitted-work wait stays deleted; teardown drains are bounded",
+  );
+  assert.doesNotMatch(
     deviceDestructor[1],
     /poll\(true/,
     "teardown must never block inside the driver without a deadline",
@@ -499,14 +503,10 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
 });
 
 test("worker WebGPU startup enables event-driven timed readback waits", () => {
-  const blockingStartup = geodeDeviceSource.match(
-    /std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless\([\s\S]*?\n}/,
+  const browserStartup = geodeSelectionSource.match(
+    /bool ImportBrowserRoot\(GeodeWgpuRoots& handles,[\s\S]*?\)\s*{([\s\S]*?)\n}/,
   );
-  assert.ok(blockingStartup, "expected the renderer's headless device entry point");
-  const browserStartup = blockingStartup[0].match(
-    /#ifdef __EMSCRIPTEN__([\s\S]*?)#else/,
-  );
-  assert.ok(browserStartup, "expected a browser-specific headless device path");
+  assert.ok(browserStartup, "expected a browser-specific root selection path");
   assert.match(
     browserStartup[1],
     /WGPUInstanceFeatureName_TimedWaitAny/,

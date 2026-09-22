@@ -121,24 +121,6 @@ void TerminateGlfw() {
 }
 
 #ifdef DONNER_EDITOR_WGPU
-void OnEditorWgpuUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type,
-                                 WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
-  std::fprintf(stderr, "[Editor/WGPU] Uncaptured error (type=%d): %.*s\n", static_cast<int>(type),
-               static_cast<int>(message.length), message.data ? message.data : "");
-}
-
-wgpu::Instance CreateEditorWgpuInstance() {
-#ifdef __EMSCRIPTEN__
-  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
-  wgpu::InstanceDescriptor descriptor{wgpu::Default};
-  descriptor.requiredFeatureCount = 1;
-  descriptor.requiredFeatures = &timedWaitFeature;
-  return wgpu::createInstance(descriptor);
-#else
-  return wgpu::createInstance();
-#endif
-}
-
 /// WebGPU requires texture-to-buffer rows to be 256-byte aligned.
 constexpr uint32_t AlignTextureCopyBytesPerRow(uint32_t unpaddedBytesPerRow) {
   constexpr uint32_t kAlignment = 256u;
@@ -1424,6 +1406,9 @@ struct EditorWindow::WgpuState {
   // Declared first so every context, renderer, registry, presentation object,
   // and texture below is destroyed before the shared physical roots.
   std::shared_ptr<geode::GeodePhysicalDeviceOwner> physicalDevice;
+  /// The backend objects the contexts below render through, reached through the selected runtime
+  /// device rather than held separately, so there is one owner of them.
+  const geode::GeodeGpuRoot* root = nullptr;
   donner::geode::ScopedWgpuHandle<wgpu::Texture> offscreenTexture;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
   gpu::TextureUsage surfaceUsage = gpu::TextureUsage::RenderAttachment;
@@ -1598,64 +1583,40 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
 #ifdef DONNER_EDITOR_WGPU
   wgpuState_ = std::make_unique<WgpuState>();
-  wgpuState_->physicalDevice = geode::GeodePhysicalDeviceOwner::CreateOwned();
-  wgpuState_->physicalDevice->instance_ = CreateEditorWgpuInstance();
-  if (!wgpuState_->physicalDevice->instance_) {
-    std::fprintf(stderr, "EditorWindow: wgpuCreateInstance failed\n");
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
-    return;
-  }
-  // The browser readback-stats lane keeps the real canvas surface: pixel
-  // probes flow through the asynchronous smoke-readback path against the
-  // presented swapchain (with CopySrc usage), not an offscreen mirror.
+  // The browser readback-stats lane keeps the real canvas surface: pixel probes flow through the
+  // asynchronous smoke-readback path against the presented swapchain (with CopySrc usage), not an
+  // offscreen mirror.
   const bool useOffscreenWgpuTarget = useNullPlatform || options_.forceOffscreenRenderTarget;
+  bool surfaceAttachFailed = false;
+
+  geode::GpuRootSelection selection;
+  selection.label = "DonnerEditorWGPUDevice";
   if (!useOffscreenWgpuTarget) {
-    wgpuState_->presentation = internal::CreateEditorPresentationSurface();
-    if (!wgpuState_->presentation->attachToWindow(wgpuState_->physicalDevice->instance_, window_)) {
-      std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
-      return;
-    }
+    // The window surface has to exist before an adapter is chosen, because the adapter has to be
+    // able to present to it. The selection hands over the instance for exactly that.
+    selection.compatibleSurface =
+        [this,
+         &surfaceAttachFailed](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
+      wgpuState_->presentation = internal::CreateEditorPresentationSurface();
+      if (!wgpuState_->presentation->attachToWindow(instance, window_)) {
+        surfaceAttachFailed = true;
+        return std::nullopt;
+      }
+      // Null here is a surface that constrains nothing, not a failure.
+      return wgpuState_->presentation->adapterSelectionSurface();
+    };
   }
-  wgpu::RequestAdapterOptions adapterOptions = {};
-  adapterOptions.forceFallbackAdapter = geode::wgpuForceFallbackAdapterRequested();
-  if (wgpuState_->presentation != nullptr) {
-    adapterOptions.compatibleSurface = wgpuState_->presentation->adapterSelectionSurface();
-  }
-  wgpuState_->physicalDevice->adapter_ =
-      wgpuState_->physicalDevice->instance_.requestAdapter(adapterOptions);
-  if (!wgpuState_->physicalDevice->adapter_) {
-    std::fprintf(stderr, "EditorWindow: no WebGPU adapter available\n");
+
+  std::shared_ptr<geode::GeodeGpuRoot> root = geode::SelectGpuRoot(selection);
+  if (root == nullptr) {
+    std::fprintf(stderr, surfaceAttachFailed ? "EditorWindow: failed to create WebGPU surface\n"
+                                             : "EditorWindow: no usable WebGPU device available\n");
+    wgpuState_->presentation.reset();
     glfwDestroyWindow(window_);
     window_ = nullptr;
     TerminateGlfw();
     return;
   }
-  wgpu::DeviceDescriptor deviceDesc = {};
-  deviceDesc.label = wgpu::StringView{std::string_view{"DonnerEditorWGPUDevice"}};
-  deviceDesc.uncapturedErrorCallbackInfo.callback = OnEditorWgpuUncapturedError;
-  deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
-  deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
-#ifndef __EMSCRIPTEN__
-  // Route driver-reported device loss into the shared lost flag that the
-  // Geode wrappers below observe, so a real loss and a bounded-wait timeout
-  // converge on the same detectable condition.
-  wgpuState_->physicalDevice->configureDeviceLostCallback(deviceDesc);
-#endif
-  wgpuState_->physicalDevice->device_ =
-      wgpuState_->physicalDevice->adapter_.requestDevice(deviceDesc);
-  if (!wgpuState_->physicalDevice->device_) {
-    std::fprintf(stderr, "EditorWindow: failed to create WebGPU device\n");
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
-    return;
-  }
-  wgpuState_->physicalDevice->queue_ = wgpuState_->physicalDevice->device_.getQueue();
 
   bool enableSurfaceReadback = options_.enableFramebufferReadback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
@@ -1663,8 +1624,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
   wgpuState_->surfaceReadbackEnabled = enableSurfaceReadback;
   if (wgpuState_->presentation != nullptr) {
-    if (!wgpuState_->presentation->chooseConfiguration(wgpuState_->physicalDevice->adapter_,
-                                                       enableSurfaceReadback)) {
+    if (!wgpuState_->presentation->chooseConfiguration(root->adapter(), enableSurfaceReadback)) {
       std::fprintf(stderr, "EditorWindow: the window surface cannot present editor frames\n");
       glfwDestroyWindow(window_);
       window_ = nullptr;
@@ -1691,19 +1651,20 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   surfaceWidth = std::max(1, surfaceWidth);
   surfaceHeight = std::max(1, surfaceHeight);
 
-  geode::GeodeEmbedConfig embedConfig;
-  embedConfig.physicalDevice = wgpuState_->physicalDevice;
-  embedConfig.textureFormat = WgpuFormatOf(wgpuState_->surfaceFormat);
-  // Both native Geode wrappers retain the same physical owner. Their mutable
-  // runtime state stays isolated, while loss and root lifetime are shared.
-  wgpuState_->geodeDevice = geode::GeodeDevice::CreateFromExternal(embedConfig);
+  wgpuState_->root = root.get();
+  wgpuState_->geodeDevice = geode::GeodeDevice::CreateOverSelectedRoot(
+      std::move(root), WgpuFormatOf(wgpuState_->surfaceFormat));
   if (wgpuState_->geodeDevice == nullptr) {
-    std::fprintf(stderr, "EditorWindow: GeodeDevice::CreateFromExternal failed\n");
+    std::fprintf(stderr,
+                 "EditorWindow: could not build a Geode context over the selected device\n");
     glfwDestroyWindow(window_);
     window_ = nullptr;
     TerminateGlfw();
     return;
   }
+  // Retained separately so it outlives both contexts below: it is declared before them, so the
+  // selected device and its backend objects are released only after the last context is gone.
+  wgpuState_->physicalDevice = wgpuState_->geodeDevice->physicalDeviceOwner();
 #ifdef __EMSCRIPTEN__
   static_assert(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
   // The Wasm render worker owns a separate device, leaving both users of this
@@ -1716,7 +1677,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // thread. Keep the UI framebuffer's mutable counters and deferred-destroy
   // queues isolated in a second wrapper even though both wrap the same raw
   // WebGPU device and queue.
-  geode::GeodeEmbedConfig framebufferEmbedConfig = embedConfig;
+  geode::GeodeEmbedConfig framebufferEmbedConfig;
+  framebufferEmbedConfig.physicalDevice = wgpuState_->physicalDevice;
+  framebufferEmbedConfig.textureFormat = WgpuFormatOf(wgpuState_->surfaceFormat);
   wgpuState_->framebufferGeodeDevice =
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
   if (wgpuState_->framebufferGeodeDevice == nullptr) {
@@ -1757,9 +1720,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     }
 #endif
   } else {
-    wgpuState_->offscreenTexture.reset(CreateOffscreenTargetTexture(
-        wgpuState_->physicalDevice->device_, surfaceWidth, surfaceHeight, wgpuState_->surfaceFormat,
-        wgpuState_->surfaceUsage));
+    wgpuState_->offscreenTexture.reset(
+        CreateOffscreenTargetTexture(wgpuState_->root->device(), surfaceWidth, surfaceHeight,
+                                     wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
     if (!wgpuState_->offscreenTexture) {
       std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
       glfwDestroyWindow(window_);
@@ -2162,8 +2125,8 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
   // window hands one over.
   std::unique_ptr<internal::PresentationSurface> replacement =
       internal::CreateEditorPresentationSurface();
-  if (!replacement->attachToWindow(wgpuState_->physicalDevice->instance_, window_) ||
-      !replacement->chooseConfiguration(wgpuState_->physicalDevice->adapter_,
+  if (!replacement->attachToWindow(wgpuState_->root->instance(), window_) ||
+      !replacement->chooseConfiguration(wgpuState_->root->adapter(),
                                         wgpuState_->surfaceReadbackEnabled)) {
     return nullptr;
   }
@@ -2251,8 +2214,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
-  if (wgpuState_ == nullptr || !wgpuState_->physicalDevice->device_ || displayW <= 0 ||
-      displayH <= 0 || (wgpuState_->presentation == nullptr && !wgpuState_->offscreenTexture)) {
+  if (wgpuState_ == nullptr || !wgpuState_->root->device() || displayW <= 0 || displayH <= 0 ||
+      (wgpuState_->presentation == nullptr && !wgpuState_->offscreenTexture)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
     // There is no persistent WGPU state in which to count retries. Complete this diagnostic
     // request as a terminal setup failure rather than rearming an impossible capture forever.
@@ -2317,7 +2280,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       }
     } else {
       wgpuState_->offscreenTexture.reset(
-          CreateOffscreenTargetTexture(wgpuState_->physicalDevice->device_, displayW, displayH,
+          CreateOffscreenTargetTexture(wgpuState_->root->device(), displayW, displayH,
                                        wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
       if (!wgpuState_->offscreenTexture) {
         return;
@@ -2367,7 +2330,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     readbackDesc.label = donner::geode::wgpuLabel("EditorWindowSurfaceReadback");
     readbackDesc.size = readbackBufferSize;
     readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    readbackBuffer.reset(wgpuState_->physicalDevice->device_.createBuffer(readbackDesc));
+    readbackBuffer.reset(wgpuState_->root->device().createBuffer(readbackDesc));
   }
 
   const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
@@ -2380,7 +2343,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       return;
     }
     donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
-        wgpuState_->physicalDevice->device_.createCommandEncoder());
+        wgpuState_->root->device().createCommandEncoder());
     if (!clearEncoder) {
       return;
     }
@@ -2406,7 +2369,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     if (!clearCommands) {
       return;
     }
-    wgpuState_->physicalDevice->queue_.submit(1, &clearCommands.get());
+    wgpuState_->root->queue().submit(1, &clearCommands.get());
 
     if (hasUnderlayRenderCallback) {
       EditorWindowWgpuRenderTarget underlayTarget{
@@ -2458,7 +2421,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (readbackBuffer) {
     const auto readbackStart = std::chrono::steady_clock::now();
     donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-        wgpuState_->physicalDevice->device_.createCommandEncoder());
+        wgpuState_->root->device().createCommandEncoder());
     if (!encoder) {
       return;
     }
@@ -2468,12 +2431,12 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     if (!commands) {
       return;
     }
-    wgpuState_->physicalDevice->queue_.submit(1, &commands.get());
+    wgpuState_->root->queue().submit(1, &commands.get());
     timing.readbackMs += ElapsedMs(readbackStart);
   }
   if (targetReadback != nullptr && readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->physicalDevice->device_, readbackBuffer.get(),
-                        readbackBufferSize, wgpuState_->framebufferGeodeDevice)) {
+      MapReadbackBuffer(wgpuState_->root->device(), readbackBuffer.get(), readbackBufferSize,
+                        wgpuState_->framebufferGeodeDevice)) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));

@@ -418,6 +418,7 @@ js_test(
         "//donner/editor/wasm:index.html",
         "//donner/svg/renderer/geode:GeodeDevice.cc",
         "//donner/svg/renderer/geode:GeodeDevice.h",
+        "//donner/svg/renderer/geode:GeodeWgpuAdapterDevice.cc",
         "//third_party/emdawnwebgpu:webgpu/src/library_webgpu.js",
         "//tools:run-browser-ci.sh",
     ],
