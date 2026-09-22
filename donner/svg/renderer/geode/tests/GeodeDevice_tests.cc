@@ -565,7 +565,9 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
   runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
 
   EXPECT_THAT(runtime.waitForSerial(submitted, 0.0), testing::IsFalse());
-  EXPECT_FALSE(device->isDeviceLost());
+  EXPECT_FALSE(device->isDeviceLost())
+      << "a question about what is already known is not a wait, so its negative answer is no "
+         "evidence that the device stopped answering";
 
   runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
                                       std::chrono::milliseconds(0));

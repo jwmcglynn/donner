@@ -53,8 +53,6 @@ struct GeodeGpuRootCapabilities {
   /// nondeterministic cross-submit storage-write to sampled-read visibility race seen only there;
   /// Metal keeps the fast multi-submit path.
   bool isVulkan = false;
-  /// Whether the driver supports GPU timestamp queries.
-  bool supportsTimestamps = false;
 };
 
 /**
@@ -103,8 +101,6 @@ public:
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
   }
-  /// Whether Donner releases these handles when the last runtime device over them goes.
-  bool ownsHandles() const { return handles_.owned; }
 
   /**
    * Whether every non-null handle named here is the one this root holds.

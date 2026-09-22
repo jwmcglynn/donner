@@ -70,6 +70,7 @@ public:
    *
    * @param root Backend root the selection produced or adopted; must not be null.
    * @param device Runtime device over \p root from the same selection; must not be null.
+   * @return The owner, or null when either argument is null.
    */
   static std::shared_ptr<GeodePhysicalDeviceOwner> Create(
       std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<GeodeWgpuAdapterDevice> device);
@@ -78,16 +79,6 @@ public:
 
   GeodePhysicalDeviceOwner(const GeodePhysicalDeviceOwner&) = delete;
   GeodePhysicalDeviceOwner& operator=(const GeodePhysicalDeviceOwner&) = delete;
-
-  /// The selected runtime device. The logical context created together with this owner renders
-  /// through it; every later context over the same root gets its own, see \ref createLogicalDevice.
-  gpu::Device& rootDevice() const UTILS_LIFETIME_BOUND { return *rootDevice_; }
-
-  /// The same object \ref rootDevice returns, named by the TEMPORARY transition type for the
-  /// callers that still use operations the runtime contract does not carry yet.
-  GeodeWgpuAdapterDevice& rootAdapterDevice() const UTILS_LIFETIME_BOUND {
-    return *rootAdapterDevice_;
-  }
 
   /// The backend root every runtime device over this owner drives.
   const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
@@ -107,9 +98,9 @@ private:
 
   /// Declared first so the backend root outlives every runtime device built over it.
   std::shared_ptr<GeodeGpuRoot> root_;
-  /// The same object as \ref rootDevice_, typed. Non-owning, and declared before it so the
-  /// constructor can read the pointer out before the owning handle is moved from.
-  GeodeWgpuAdapterDevice* rootAdapterDevice_ = nullptr;
+  /// The selected runtime device, held for its lifetime rather than read through here: the
+  /// logical context created together with this owner is what renders through it, and every
+  /// later context over the same root gets its own from \ref createLogicalDevice.
   std::unique_ptr<gpu::Device> rootDevice_;
 };
 
@@ -814,6 +805,7 @@ private:
 
   /// Builds a logical context with a runtime device of its own over \p physicalDevice's root.
   /// @param physicalDevice Owner whose root the new context renders through.
+  /// @return The context, or null when the owner could not stand up a runtime device.
   static std::unique_ptr<GeodeDevice> CreateLogicalContext(
       std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice);
 

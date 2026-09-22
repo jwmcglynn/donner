@@ -520,12 +520,6 @@ uint64_t Device::NextDeviceId() {
 
 Device::Device() : deviceId_(NextDeviceId()), aliveToken_(std::make_shared<Device*>(this)) {}
 
-void Device::markLost(const char* reason) const {
-  if (DeclareDeviceLost(*lostState_)) {
-    LogDeclaredDeviceLoss(reason);
-  }
-}
-
 void Device::markLostAfterWaitTimeout(DeviceLostWaitSite site, std::chrono::milliseconds elapsed,
                                       const char* reason) const {
   if (DeclareDeviceLostAfterWaitTimeout(*lostState_, site, elapsed)) {

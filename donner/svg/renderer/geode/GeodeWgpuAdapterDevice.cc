@@ -275,6 +275,7 @@ constexpr int kRequestBackoffMs[] = {50, 200, 800};
 /// Whether a failed backend request should be retried, sleeping for its backoff first.
 /// @param attempt Zero-based attempt that just failed.
 /// @param what Name of the request, for the log line.
+/// @return True when the caller should re-request; false once the schedule is exhausted.
 bool RetryBackendRequest(int attempt, const char* what) {
   if (attempt >= static_cast<int>(std::size(kRequestBackoffMs))) {
     std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %zu %s retries.\n",
@@ -297,6 +298,7 @@ bool RetryBackendRequest(int attempt, const char* what) {
 /// real Vulkan device the filter-engine serialization silently disables, which is accepted
 /// residual risk rather than a reason to fail the selection.
 /// @param adapter Adapter to describe.
+/// @return Whether the adapter reports a Vulkan backend; false when the query failed.
 bool DescribeSelectedAdapter(const wgpu::Adapter& adapter) {
   WGPUAdapterInfo info = {};
   if (wgpuAdapterGetInfo(adapter, &info) != WGPUStatus_Success) {
@@ -354,7 +356,6 @@ GeodeGpuRootCapabilities QueryRootCapabilities(const GeodeWgpuRoots& handles) {
       limits.maxTextureDimension2D > 0) {
     capabilities.maxTextureDimension2D = limits.maxTextureDimension2D;
   }
-  capabilities.supportsTimestamps = handles.device.hasFeature(wgpu::FeatureName::TimestampQuery);
 #ifndef __EMSCRIPTEN__
   if (handles.adapter) {
     capabilities.isVulkan = DescribeSelectedAdapter(handles.adapter);

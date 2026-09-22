@@ -24,8 +24,8 @@ namespace donner::geode {
 
 GeodePhysicalDeviceOwner::GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root,
                                                    std::unique_ptr<GeodeWgpuAdapterDevice> device)
-    : root_(std::move(root)), rootAdapterDevice_(device.get()), rootDevice_(std::move(device)) {
-  UTILS_RELEASE_ASSERT(root_ != nullptr && rootAdapterDevice_ != nullptr);
+    : root_(std::move(root)), rootDevice_(std::move(device)) {
+  UTILS_RELEASE_ASSERT(root_ != nullptr && rootDevice_ != nullptr);
 }
 
 std::shared_ptr<GeodePhysicalDeviceOwner> GeodePhysicalDeviceOwner::Create(

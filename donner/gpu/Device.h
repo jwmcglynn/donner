@@ -293,40 +293,22 @@ public:
   bool isLost() const { return lostState_->lost.load(std::memory_order_acquire); }
 
   /**
-   * Declares this device's backend root lost, with no bounded wait to attribute it to.
-   *
-   * For losses the backend reports, and for embedders whose own device-lost signal is not shared
-   * through \ref lostState. Idempotent; only the first call logs @p reason. Const because
-   * observers treat the condition as shared diagnostic state and the waits that discover a hang
-   * run through const accessors.
-   *
-   * @param reason Human-readable cause, logged once.
-   */
-  void markLost(const char* reason) const;
-
-  /**
    * Declares this device's backend root lost because a bounded wait gave up, recording which wait
    * it was and how long it actually ran.
    *
-   * Prefer this over \ref markLost at every deadline: the attribution is what turns "rendering
-   * stopped" into a diagnosable report, and it is only available at the wait site. Loss stays
-   * sticky, and only the call that declares it records an attribution; see
-   * \ref DeclareDeviceLostAfterWaitTimeout for why that rule is what keeps a backend-reported
-   * loss from being relabelled as a wait timeout.
+   * The attribution is what turns "rendering stopped" into a diagnosable report, and it is only
+   * available at the wait site. Loss stays sticky, and only the call that declares it records an
+   * attribution; see \ref DeclareDeviceLostAfterWaitTimeout for why that rule is what keeps a
+   * backend-reported loss from being relabelled as a wait timeout. Const because observers treat
+   * the condition as shared diagnostic state and the waits that discover a hang run through const
+   * accessors.
    *
    * @param site Which bounded wait gave up.
    * @param elapsed Wall time that wait spent before giving up.
-   * @param reason Human-readable cause, logged once like \ref markLost.
+   * @param reason Human-readable cause, logged once.
    */
   void markLostAfterWaitTimeout(DeviceLostWaitSite site, std::chrono::milliseconds elapsed,
                                 const char* reason) const;
-
-  /// The sticky loss condition of this device's backend root, retained so a backend callback that
-  /// outlives this device can still publish into it, and so a sibling device over the same root
-  /// can be given the same condition through \ref adoptLostState.
-  const std::shared_ptr<DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
-    return lostState_;
-  }
 
   /// Shader representation accepted by this device. Recording and WebGPU devices use WGSL;
   /// native backends override this so callers select the matching build-time artifact.
