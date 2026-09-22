@@ -649,6 +649,21 @@ TEST_F(RendererRegressionTests, ExternalTextEffectContextPaintIsResolvedForEachU
   ExpectBitmapsIdentical(actual, expected, "external_text_effect_context_per_use");
 }
 
+TEST_F(RendererRegressionTests, EffectOwnerContextPaintOverridesTheTextRootPaint) {
+  const std::filesystem::path testdata = "donner/svg/renderer/testdata";
+  SVGDocument context =
+      loadSVG("donner/svg/renderer/testdata/use-external-text-effect-owner-context.svg", testdata);
+  SVGDocument explicitPaint =
+      loadSVG("donner/svg/renderer/testdata/use-external-text-effect-owner-explicit.svg", testdata);
+  RegisterFontsFromDirectoryForTesting(context, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(explicitPaint, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(context, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(explicitPaint, ActiveRendererBackend());
+  ExpectVisibleBitmap(expected, "effect_owner_context_paint_visible");
+  ExpectBitmapsIdentical(actual, expected, "effect_owner_context_paint_matches_explicit_red");
+}
+
 TEST_F(RendererRegressionTests, TextOpacityWithSpanWrapperAppliesOnceLikeGroupOpacity) {
   const RendererBitmap textOpacity = RenderTextOpacityCase(
       R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120" opacity="0.5">
