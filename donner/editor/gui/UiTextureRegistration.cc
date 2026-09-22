@@ -6,23 +6,10 @@
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::editor {
 
 namespace {
-
-/// \p renderer's import device when it is the one \p renderer draws on, or null. A renderer with
-/// no import path is not an error: it means a backend texture cannot reach the interface on that
-/// device, which the caller reports as a refused registration.
-/// @param renderer Installed UI renderer.
-geode::GeodeWgpuAdapterDevice* ImportDeviceFor(ImGuiRuntimeRenderer& renderer) {
-  geode::GeodeWgpuAdapterDevice* device = renderer.importDevice();
-  if (device == nullptr || device->deviceId() != renderer.device().deviceId()) {
-    return nullptr;
-  }
-  return device;
-}
 
 /// The UI alpha interpretation matching \p alphaType.
 /// @param alphaType Snapshot's alpha interpretation.
@@ -89,12 +76,11 @@ ImTextureID RegisterUiSnapshotTexture(const svg::RendererTextureSnapshot& snapsh
   // only by being registered on the drawing device, from the export the snapshot took on its
   // producer's thread. This thread never touches the producing device, which another thread may be
   // rendering on; a snapshot that only borrows a frame target has no export and is refused.
-  geode::GeodeWgpuAdapterDevice* importDevice = ImportDeviceFor(*renderer);
   const gpu::TextureExport* exported = geodeSnapshot.textureExport();
-  if (importDevice == nullptr || exported == nullptr) {
+  if (exported == nullptr) {
     return 0;
   }
-  gpu::Result<gpu::Texture> imported = geode::RegisterOrderedTexture(*importDevice, *exported);
+  gpu::Result<gpu::Texture> imported = geode::RegisterOrderedTexture(renderer->device(), *exported);
   if (imported.hasError()) {
     return 0;
   }

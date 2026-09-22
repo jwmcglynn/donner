@@ -307,7 +307,6 @@ std::unique_ptr<ImGuiRuntimeRenderer> InstallTestUiRenderer(
   }
   std::unique_ptr<ImGuiRuntimeRenderer> renderer = std::move(created).result();
   renderer->install();
-  renderer->setImportDevice(&device);
   return renderer;
 }
 
@@ -625,7 +624,6 @@ TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsRelea
   ASSERT_FALSE(created.hasError());
   std::unique_ptr<ImGuiRuntimeRenderer> renderer = std::move(created).result();
   renderer->install();
-  renderer->setImportDevice(&runtimeDevice);
 
   GlTextureCache cache(device);
   int firstDestructionCount = 0;

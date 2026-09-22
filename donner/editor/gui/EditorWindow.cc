@@ -1292,7 +1292,6 @@ std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(geode::GeodeWgpuAdapterDe
   }
   std::unique_ptr<ImGuiRuntimeRenderer> created = std::move(renderer).result();
   created->install();
-  created->setImportDevice(&device);
   if (const gpu::Status uploaded = created->buildFontAtlas(fonts); uploaded.hasError()) {
     std::fprintf(stderr, "EditorWindow: UI font atlas upload failed: %s\n",
                  uploaded.error().toString().c_str());

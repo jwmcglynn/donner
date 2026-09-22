@@ -449,7 +449,6 @@ void ImGuiRuntimeRenderer::uninstall() {
   }
   gInstalledContext = nullptr;
   gInstalledRenderer = nullptr;
-  importDevice_ = nullptr;
 }
 
 ImGuiRuntimeRenderer* CurrentImGuiRuntimeRenderer() {
