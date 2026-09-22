@@ -57,10 +57,13 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
 namespace {
+
+using test::PixelAt;
 
 constexpr std::string_view kTinySvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -95,19 +98,6 @@ void SaveSnapshotForDiagnostics(const RendererBitmap& bitmap, const char* outNam
   }
 }
 
-// Sample an RGBA pixel from `bitmap` at the given device coords, returning
-// `{0, 0, 0, 0}` on out-of-bounds.
-std::array<uint8_t, 4> SamplePixel(const RendererBitmap& bitmap, int x, int y) {
-  if (x < 0 || y < 0 || x >= bitmap.dimensions.x || y >= bitmap.dimensions.y) {
-    return {0, 0, 0, 0};
-  }
-  const size_t stride =
-      bitmap.rowBytes ? bitmap.rowBytes : static_cast<size_t>(bitmap.dimensions.x) * 4;
-  const size_t offset = static_cast<size_t>(y) * stride + static_cast<size_t>(x) * 4;
-  return {bitmap.pixels[offset + 0], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
-          bitmap.pixels[offset + 3]};
-}
-
 // Mean of `|luma(lo) - luma(hi)|` over a patch centered at `(lowX, lowY)`
 // in `lowZoom` and the proportionally-scaled point in `highZoom`. Used to
 // detect a filter going missing: with the blur on, the halo's luma matches
@@ -124,9 +114,9 @@ double MeanLumaDelta(const RendererBitmap& lowZoom, const RendererBitmap& highZo
   int count = 0;
   for (int dy = -patchRadius; dy <= patchRadius; ++dy) {
     for (int dx = -patchRadius; dx <= patchRadius; ++dx) {
-      const auto lo = SamplePixel(lowZoom, lowX + dx, lowY + dy);
-      const auto hi = SamplePixel(highZoom, static_cast<int>(std::round((lowX + dx) * scaleX)),
-                                  static_cast<int>(std::round((lowY + dy) * scaleY)));
+      const auto lo = PixelAt(lowZoom, lowX + dx, lowY + dy);
+      const auto hi = PixelAt(highZoom, static_cast<int>(std::round((lowX + dx) * scaleX)),
+                              static_cast<int>(std::round((lowY + dy) * scaleY)));
       // ITU-R BT.601 luma.
       const double lumaLo = 0.299 * lo[0] + 0.587 * lo[1] + 0.114 * lo[2];
       const double lumaHi = 0.299 * hi[0] + 0.587 * hi[1] + 0.114 * hi[2];

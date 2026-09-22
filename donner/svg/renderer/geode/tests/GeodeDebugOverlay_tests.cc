@@ -24,9 +24,12 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
 namespace {
+
+using test::PixelAt;
 
 /// Fixture with a fill, a stroked path, and a curve so the overlay
 /// exercises fill encodes, stroke encodes, and multi-band paths.
@@ -148,12 +151,6 @@ bool bitmapsIdentical(const RendererBitmap& a, const RendererBitmap& b) {
   return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.pixels == b.pixels;
 }
 
-std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
-  const uint8_t* pixel =
-      bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4;
-  return {pixel[0], pixel[1], pixel[2], pixel[3]};
-}
-
 /// Count pixels in the overlay's magenta family. The frame-final wireframe
 /// is opaque magenta, while antialiasing over arbitrary content keeps R and
 /// B high and G low near its edges.
@@ -189,7 +186,7 @@ bool isMagentaFamily(const std::array<uint8_t, 4>& pixel) {
 bool hasMagentaFamilyPixel(const RendererBitmap& bitmap, int x0, int y0, int x1, int y1) {
   for (int y = y0; y <= y1; ++y) {
     for (int x = x0; x <= x1; ++x) {
-      if (isMagentaFamily(pixelAt(bitmap, x, y))) {
+      if (isMagentaFamily(PixelAt(bitmap, x, y))) {
         return true;
       }
     }
@@ -201,7 +198,7 @@ bool hasPixelDifference(const RendererBitmap& a, const RendererBitmap& b, int x0
                         int y1) {
   for (int y = y0; y <= y1; ++y) {
     for (int x = x0; x <= x1; ++x) {
-      if (pixelAt(a, x, y) != pixelAt(b, x, y)) {
+      if (PixelAt(a, x, y) != PixelAt(b, x, y)) {
         return true;
       }
     }
@@ -277,11 +274,11 @@ TEST_F(GeodeDebugOverlayTest, OnDrawsActualTriangleEdgesWithoutTintingInterior) 
   // wireframe changes the diagonal and outer edge only. Regressing to a filled
   // bounding polygon turns the entire rectangle magenta and fails the interior
   // assertion.
-  EXPECT_NE(pixelAt(off, 55, 55), pixelAt(on, 55, 55))
+  EXPECT_NE(PixelAt(off, 55, 55), PixelAt(on, 55, 55))
       << "The shared edge between the two emitted Slug triangles must be visible.";
   EXPECT_TRUE(hasPixelDifference(off, on, 90, 52, 92, 58))
       << "The dynamically-dilated Slug triangle's outer edge must be visible.";
-  EXPECT_EQ(pixelAt(off, 40, 70), pixelAt(on, 40, 70))
+  EXPECT_EQ(PixelAt(off, 40, 70), PixelAt(on, 40, 70))
       << "Geometry debug mode must preserve normal pixels away from triangle edges.";
 }
 
@@ -314,7 +311,7 @@ TEST_F(GeodeDebugOverlayTest, LaterPaintCannotOccludeEarlierTriangleEdges) {
   // inline overlay, so only a frame-final pass keeps that edge visible.
   EXPECT_FALSE(hasMagentaFamilyPixel(off, 90, 52, 92, 58));
   EXPECT_TRUE(hasMagentaFamilyPixel(on, 90, 52, 92, 58));
-  EXPECT_EQ(pixelAt(off, 40, 70), pixelAt(on, 40, 70))
+  EXPECT_EQ(PixelAt(off, 40, 70), PixelAt(on, 40, 70))
       << "Final geometry rendering must remain a sparse wireframe.";
 }
 
@@ -330,7 +327,7 @@ TEST_F(GeodeDebugOverlayTest, FillTriangleEdgesRenderAboveItsLaterWideStroke) {
   // frame-final overlay restores it above the later stroke.
   EXPECT_FALSE(hasMagentaFamilyPixel(off, 140, 87, 142, 93));
   EXPECT_TRUE(hasMagentaFamilyPixel(on, 140, 87, 142, 93));
-  EXPECT_EQ(pixelAt(off, 70, 120), pixelAt(on, 70, 120));
+  EXPECT_EQ(PixelAt(off, 70, 120), PixelAt(on, 70, 120));
 }
 
 TEST_F(GeodeDebugOverlayTest, TriangleEdgesRetainTheSubmittedTransform) {
@@ -343,9 +340,9 @@ TEST_F(GeodeDebugOverlayTest, TriangleEdgesRetainTheSubmittedTransform) {
   // matrix(2,0,0,1.5,30,25) maps the source rect to
   // (70,55)-(190,115). Check both the transformed shared diagonal and outer
   // edge, plus an interior point away from either.
-  EXPECT_NE(pixelAt(off, 130, 85), pixelAt(on, 130, 85));
+  EXPECT_NE(PixelAt(off, 130, 85), PixelAt(on, 130, 85));
   EXPECT_TRUE(hasPixelDifference(off, on, 190, 82, 192, 88));
-  EXPECT_EQ(pixelAt(off, 90, 100), pixelAt(on, 90, 100));
+  EXPECT_EQ(PixelAt(off, 90, 100), PixelAt(on, 90, 100));
 }
 
 TEST_F(GeodeDebugOverlayTest, IsolatedOpacityDoesNotFadeTriangleEdges) {
@@ -358,7 +355,7 @@ TEST_F(GeodeDebugOverlayTest, IsolatedOpacityDoesNotFadeTriangleEdges) {
   EXPECT_FALSE(hasMagentaFamilyPixel(off, 140, 87, 142, 93));
   EXPECT_TRUE(hasMagentaFamilyPixel(on, 140, 87, 142, 93))
       << "Debug geometry must be composited after element opacity.";
-  EXPECT_EQ(pixelAt(off, 70, 120), pixelAt(on, 70, 120));
+  EXPECT_EQ(PixelAt(off, 70, 120), PixelAt(on, 70, 120));
 }
 
 TEST_F(GeodeDebugOverlayTest, OnEmitsExtraDrawsAndTogglesCleanly) {
@@ -427,7 +424,7 @@ TEST_F(GeodeDebugOverlayTest, GradientAndClipMaskSubmissionPathsAreCaptured) {
       << "Clip-mask Slug submissions must contribute their post-dilated edge";
   EXPECT_TRUE(hasPixelDifference(off, on, 100, 47, 102, 53))
       << "Gradient Slug submissions must contribute their post-dilated edge even beyond the clip";
-  EXPECT_EQ(pixelAt(off, 40, 70), pixelAt(on, 40, 70));
+  EXPECT_EQ(PixelAt(off, 40, 70), PixelAt(on, 40, 70));
 }
 
 }  // namespace

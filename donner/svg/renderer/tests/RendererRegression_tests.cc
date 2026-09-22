@@ -27,6 +27,8 @@
 namespace donner::svg {
 namespace {
 
+using test::PixelAt;
+
 using Params = ImageComparisonParams;
 
 std::filesystem::path ResvgResourceRoot() {
@@ -58,15 +60,6 @@ SVGDocument ParseSvg(std::string_view svg) {
 
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap. Returns transparent for a pixel
 /// outside the bitmap so an assertion fails cleanly instead of reading out of bounds.
-std::array<uint8_t, 4> PixelAt(const RendererBitmap& bitmap, int x, int y) {
-  const size_t offset = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
-  if (offset + 4 > bitmap.pixels.size()) {
-    return {0, 0, 0, 0};
-  }
-  return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
-          bitmap.pixels[offset + 3]};
-}
-
 /// Counts pixels with alpha above \p threshold in the given device row.
 int CountOpaqueInRow(const RendererBitmap& bitmap, int y, uint8_t threshold = 128) {
   int count = 0;
