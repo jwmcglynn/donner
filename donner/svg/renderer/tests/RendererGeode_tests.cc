@@ -1937,6 +1937,26 @@ TEST_F(RendererGeodeTest, AnUnmatchedClipAtFrameEndDoesNotClipTheNextFrame) {
   EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
 }
 
+TEST_F(RendererGeodeTest, AnUnmatchedClipInAnAbandonedFrameDoesNotClipTheNextFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(clip);
+
+  beginFrame(renderer);
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, AnOpenPatternRestoresNoUnmatchedOuterClipIntoTheNextFrame) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
