@@ -403,23 +403,12 @@ TEST_F(RendererGeodeGoldenTests, ImageDataUrlPixelated) {
 }
 
 /// Same 2x2 PNG over an opaque white background at 50% opacity using the
-/// default (bilinear) sampling filter. Exercises both the `opacity`
-/// uniform and the premultiplied-source-over blend path.
-//
-// Widened after the `pushIsolatedLayer` landing: the golden was
-// captured when Geode's layer stub dropped group opacity silently,
-// so the image drew at full alpha and only `params.opacity` from the
-// image-specific attribute ended up in the output. Now the element's
-// `opacity` attribute routes through an isolated layer which
-// composites the image correctly at 0.5. The 1100-pixel widening
-// absorbs the alpha delta across the opaque rectangular image region.
-// TODO(geode): regen this golden once the layer pipeline is fully
-// stable.
+/// default (bilinear) sampling filter. Exercises the isolated-layer composite
+/// and premultiplied-source-over blend path.
 TEST_F(RendererGeodeGoldenTests, ImageDataUrlOpacity) {
-  compareWithGeodeGolden(
-      "donner/svg/renderer/testdata/image_data_url_opacity.svg",
-      "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity.png",
-      ImageComparisonParams::WithThreshold(0.0f, 1100).includeAntiAliasingDifferences());
+  compareWithGeodeGolden("donner/svg/renderer/testdata/image_data_url_opacity.svg",
+                         "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity.png",
+                         strictGeodeParams());
 }
 
 // ----------------------------------------------------------------------------

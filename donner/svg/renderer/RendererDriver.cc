@@ -1431,7 +1431,6 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   }
 
   ImageParams params;
-  params.opacity = style.properties->opacity.get().value();
   params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
   params.sourceEntity = instance.dataHandle(registry);
 

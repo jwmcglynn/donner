@@ -6691,22 +6691,12 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
   if (!impl_->encoder) {
     return;
   }
-  // The element's own `opacity` is handled by `pushIsolatedLayer` in the
-  // driver before this call lands, so we do NOT multiply it back in here
-  // (doing so would double-apply the group opacity, producing opacity²).
-  // Match RendererTinySkia's behavior in `drawImage`: use `params.opacity`
-  // (which is the image-specific opacity component) without the
-  // paint.opacity factor.
-  const double combinedOpacity = params.opacity;
-  if (combinedOpacity <= 0.0) {
-    return;
-  }
   impl_->syncTransform();
   ImageRendering imageRendering = params.imageRendering;
   if (imageRendering == ImageRendering::Auto && params.imageRenderingPixelated) {
     imageRendering = ImageRendering::Pixelated;
   }
-  impl_->encoder->drawImage(image, params.targetRect, combinedOpacity, imageRendering);
+  impl_->encoder->drawImage(image, params.targetRect, 1.0, imageRendering);
 }
 
 bool RendererGeodeTextureSnapshot::canSampleWith(const geode::GeodeDevice& device) const {
