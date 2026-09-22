@@ -165,12 +165,14 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   bufferDescriptor.label = wgpuLabel("readbackStaging");
   bufferDescriptor.size = byteSize;
   bufferDescriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  ScopedWgpuHandle<wgpu::Buffer> readback(device.device().createBuffer(bufferDescriptor));
+  ScopedWgpuHandle<wgpu::Buffer> readback(
+      device.adapterDevice().root().device().createBuffer(bufferDescriptor));
   if (!readback) {
     return {};
   }
 
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device.device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+      device.adapterDevice().root().device().createCommandEncoder());
   wgpu::TexelCopyTextureInfo source = {};
   source.texture = texture;
   wgpu::TexelCopyBufferInfo destination = {};
@@ -180,7 +182,7 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   const wgpu::Extent3D copySize = {sceneSize, sceneSize, 1};
   encoder.get().copyTextureToBuffer(source, destination, copySize);
   ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(encoder.get().finish());
-  device.queue().submit(1, &commandBuffer.get());
+  device.adapterDevice().root().queue().submit(1, &commandBuffer.get());
 
   struct MapState {
     std::atomic<bool> done = false;
@@ -200,7 +202,7 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   readback.get().mapAsync(wgpu::MapMode::Read, 0, byteSize, mapCallback);
   for (int pollIter = 0; pollIter < 2000 && !mapState->done.load(std::memory_order_acquire);
        ++pollIter) {
-    device.device().poll(true, nullptr);
+    device.adapterDevice().root().device().poll(true, nullptr);
   }
   if (!mapState->ok.load(std::memory_order_relaxed)) {
     return {};
@@ -856,7 +858,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportedExternalTextureIsUsableAndNotOwned) 
   externalDescriptor.sampleCount = 1;
   externalDescriptor.dimension = wgpu::TextureDimension::_2D;
   ScopedWgpuHandle<wgpu::Texture> externalTexture(
-      geodeDevice_->device().createTexture(externalDescriptor));
+      geodeDevice_->adapterDevice().root().device().createTexture(externalDescriptor));
   ASSERT_TRUE(static_cast<bool>(externalTexture));
 
   gpu::Texture imported = gpu::GetResultOrFail(adapter_->importExternalTexture(
@@ -1100,7 +1102,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AMappingReleasedBeforeItsCallbackStillUnmaps
 
   // Let the abandoned map run to completion.
   for (int poll = 0; poll < 2000; ++poll) {
-    (void)geodeDevice_->pollSuspending(false);
+    (void)geodeDevice_->adapterDevice().pollSuspending(false);
   }
 
   // A buffer left mapped with nothing able to unmap it cannot be mapped again, so mapping it a

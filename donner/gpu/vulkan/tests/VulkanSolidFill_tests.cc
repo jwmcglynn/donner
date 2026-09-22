@@ -97,7 +97,7 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture target = device->device().createTexture(td);
+  wgpu::Texture target = device->adapterDevice().root().device().createTexture(td);
   gpu::Result<gpu::Texture> targetHandleResult = device->adapterDevice().importExternalTexture(
       target, gpu::Extent2d{kBaselineSize, kBaselineSize}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc);
@@ -110,7 +110,7 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   bd.label = geode::wgpuLabel("VulkanSliceBaselineReadback");
   bd.size = kBytesPerRow * kBaselineSize;
   bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = device->device().createBuffer(bd);
+  wgpu::Buffer readback = device->adapterDevice().root().device().createBuffer(bd);
 
   {
     geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, targetHandle,
@@ -125,7 +125,7 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
 
   // Copy the render target into the mappable readback buffer.
   {
-    wgpu::CommandEncoder enc = device->device().createCommandEncoder();
+    wgpu::CommandEncoder enc = device->adapterDevice().root().device().createCommandEncoder();
     wgpu::TexelCopyTextureInfo src = {};
     src.texture = target;
     src.mipLevel = 0;
@@ -137,7 +137,7 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
     wgpu::Extent3D copySize = {kBaselineSize, kBaselineSize, 1};
     enc.copyTextureToBuffer(src, dst, copySize);
     wgpu::CommandBuffer cmd = enc.finish();
-    device->queue().submit(1, &cmd);
+    device->adapterDevice().root().queue().submit(1, &cmd);
   }
 
   struct MapState {
@@ -156,7 +156,7 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   mapCb.userdata2 = nullptr;
   readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kBaselineSize, mapCb);
   while (!mapState->done.load(std::memory_order_acquire)) {
-    device->device().poll(true, nullptr);
+    device->adapterDevice().root().device().poll(true, nullptr);
   }
   if (!mapState->ok.load(std::memory_order_relaxed)) {
     return std::nullopt;

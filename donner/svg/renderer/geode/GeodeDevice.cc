@@ -13,6 +13,7 @@
 
 #include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -244,13 +245,13 @@ GeodeDevice::~GeodeDevice() {
   // on a hung driver can block forever, in the worst case in uninterruptible
   // kernel sleep, and a leak is strictly better than a hung thread.
 #ifndef __EMSCRIPTEN__
-  if (device() && queue()) {
+  if (physicalDevice_->root().device() && physicalDevice_->root().queue()) {
     waitForQueueIdle();
   }
 #endif
   drainDeferredDestroys();
   impl_.reset();
-  if (device()) {
+  if (physicalDevice_->root().device()) {
 #ifndef __EMSCRIPTEN__
     // Second drain after the pipelines and pooled resources released above;
     // returns immediately if the first wait already declared the device lost.
@@ -259,32 +260,12 @@ GeodeDevice::~GeodeDevice() {
   }
 }
 
-const wgpu::Device& GeodeDevice::device() const {
-  return physicalDevice_->root().device();
-}
-
-const wgpu::Queue& GeodeDevice::queue() const {
-  return physicalDevice_->root().queue();
-}
-
-const wgpu::Instance& GeodeDevice::instance() const {
-  return physicalDevice_->root().instance();
-}
-
-const wgpu::Adapter& GeodeDevice::adapter() const {
-  return physicalDevice_->root().adapter();
-}
-
 uint32_t GeodeDevice::maxTextureDimension2D() const {
   return physicalDevice_->root().capabilities().maxTextureDimension2D;
 }
 
 bool GeodeDevice::isVulkan() const {
   return physicalDevice_->root().capabilities().isVulkan;
-}
-
-bool GeodeDevice::pollSuspending(bool wait) const {
-  return adapterDevice().pollSuspending(wait);
 }
 
 void GeodeDevice::markDeviceLost(const char* reason) const {
@@ -315,7 +296,7 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
     }
     return result;
   }
-  if (!device()) {
+  if (!physicalDevice_->root().device()) {
     return GpuWaitResult::Complete;
   }
 #ifdef __EMSCRIPTEN__
@@ -325,11 +306,12 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
   // this path always performed; browser device hangs surface through the
   // readback map deadline instead.
   (void)timeout;
-  pollSuspending(true);
+  adapterDevice().pollSuspending(true);
   return GpuWaitResult::Complete;
 #else
   const auto queueWaitStart = std::chrono::steady_clock::now();
-  const GpuWaitResult result = BoundedGpuWait([this] { return pollSuspending(false); }, timeout);
+  const GpuWaitResult result =
+      BoundedGpuWait([this] { return adapterDevice().pollSuspending(false); }, timeout);
   if (result == GpuWaitResult::TimedOut) {
     // Report the wait that actually ran, not the budget it was given: the
     // budget is a constant the reader already knows, while the measurement
@@ -501,7 +483,7 @@ std::size_t GeodeDevice::outstandingDeviceLostCallbacksForTesting() {
   return OutstandingDeviceLostCallbacks();
 }
 
-std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat textureFormat) {
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(gpu::TextureFormat textureFormat) {
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
 
   GpuRootSelection selection;
@@ -513,8 +495,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   return CreateOverSelectedRoot(std::move(root), textureFormat);
 }
 
-std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(
-    std::shared_ptr<GeodeGpuRoot> root, wgpu::TextureFormat textureFormat) {
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,
+                                                                 gpu::TextureFormat textureFormat) {
   std::unique_ptr<GeodeWgpuAdapterDevice> rootDevice = CreateGpuDeviceOver(root);
   GeodeWgpuAdapterDevice& borrowed = *rootDevice;
   std::shared_ptr<GeodePhysicalDeviceOwner> owner =
@@ -655,8 +637,7 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
     // checkerboard; other consumers should not pay the pipeline-compile cost
     // at startup.
     impl_->checkerboardPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        runtimeDevice(), GpuTextureFormatFromWgpu(textureFormat_),
-        GeodeCheckerboardPipeline::BlendMode::Replace);
+        runtimeDevice(), textureFormat_, GeodeCheckerboardPipeline::BlendMode::Replace);
   }
   return *impl_->checkerboardPipeline;
 }
@@ -666,8 +647,7 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
     // it because a consumer normally draws through exactly one of the two:
     // before the document pixels (replace) or after them (destination-over).
     impl_->checkerboardUnderlayPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        runtimeDevice(), GpuTextureFormatFromWgpu(textureFormat_),
-        GeodeCheckerboardPipeline::BlendMode::DestinationOver);
+        runtimeDevice(), textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }
   return *impl_->checkerboardUnderlayPipeline;
 }
@@ -693,7 +673,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
     if (result == nullptr) {
       return nullptr;
     }
-    result->textureFormat_ = config.textureFormat;
+    result->textureFormat_ = GpuTextureFormatFromWgpu(config.textureFormat);
     result->initSharedPipelines();
     return result;
   }
@@ -708,7 +688,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
     std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
     return nullptr;
   }
-  return CreateOverSelectedRoot(std::move(root), config.textureFormat);
+  return CreateOverSelectedRoot(std::move(root), GpuTextureFormatFromWgpu(config.textureFormat));
 }
 
 void GeodeDevice::initSharedBindSlotResources() {
@@ -872,9 +852,9 @@ GeodeMaskPipeline& GeodeGpuContext::maskPipeline() const {
 }
 
 void GeodeDevice::initSharedPipelines() {
-  // Requires the physical device/queue and textureFormat_ to be fully populated.
-  // `CreateHeadless` and `CreateFromExternal` both call this as the final step.
-  const gpu::TextureFormat fmt = GpuTextureFormatFromWgpu(textureFormat_);
+  // Requires the runtime device and `textureFormat_` to be fully populated; every creation path
+  // calls this as its final step.
+  const gpu::TextureFormat fmt = textureFormat_;
 
   initSharedBindSlotResources();
   impl_->pipeline = std::make_unique<GeodePipeline>(runtimeDevice(), fmt);

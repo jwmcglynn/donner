@@ -702,6 +702,14 @@ private:
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format);
 
 /**
+ * Maps a \c donner::gpu render-target format onto the wgpu format enum, for the call sites that
+ * still describe a backend texture. Halts (release assert) on a format the backend cannot name.
+ *
+ * @param format Runtime texture format to map.
+ */
+wgpu::TextureFormat WgpuTextureFormatFrom(gpu::TextureFormat format);
+
+/**
  * Maps wgpu texture usage flags onto the \c donner::gpu usage flags. Flags with no runtime
  * equivalent are dropped, so the result describes exactly the capabilities the runtime can
  * express for the texture.

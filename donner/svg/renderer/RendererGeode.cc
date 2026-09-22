@@ -1427,7 +1427,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   // Texture format for all render targets. Matches the GeodeDevice's configured
   // format (RGBA8Unorm for headless, host-specified for embedded mode).
-  wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
+  gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm;
 
   // Per-frame resources, recreated in `beginFrame`.
   RenderViewport viewport;
@@ -1546,9 +1546,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   const gpu::Texture& activeTarget() const { return target; }
 
   /// The runtime's spelling of the renderer's surface format.
-  gpu::TextureFormat gpuTextureFormat() const {
-    return geode::GpuTextureFormatFromWgpu(textureFormat);
-  }
+  gpu::TextureFormat gpuTextureFormat() const { return textureFormat; }
 
   /// Whether \p texture may be the source of a copy, which an embedder-supplied target only is
   /// when the embedder gave it that capability.
@@ -4890,8 +4888,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// actually has: an embedder that supplies a draw-only surface gets its frame, and the
   /// operations that surface cannot serve are refused where they are asked for.
   [[nodiscard]] bool hostTargetIsDrawable() const {
-    return hostTarget.getFormat() == textureFormat && hostTarget.getSampleCount() == 1 &&
-           hostTarget.getDepthOrArrayLayers() == 1 &&
+    return hostTarget.getFormat() == geode::WgpuTextureFormatFrom(textureFormat) &&
+           hostTarget.getSampleCount() == 1 && hostTarget.getDepthOrArrayLayers() == 1 &&
            hostTarget.getDimension() == wgpu::TextureDimension::_2D &&
            (static_cast<WGPUTextureUsage>(hostTarget.getUsage()) &
             static_cast<WGPUTextureUsage>(wgpu::TextureUsage::RenderAttachment)) != 0u;
@@ -4916,8 +4914,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // every frame because the embedder is free to hand over a different texture at any time.
     hostTargetHandle = gpu::Texture();
     gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
-        hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()},
-        geode::GpuTextureFormatFromWgpu(textureFormat),
+        hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()}, textureFormat,
         geode::GpuTextureUsageFromWgpu(hostTarget.getUsage()));
     if (!named.hasResult()) {
       target = gpu::Texture();
@@ -4942,7 +4939,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           device->runtimeDevice().createTexture(gpu::TextureDescriptor{
               "RendererGeodeTarget",
               gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
-              geode::GpuTextureFormatFromWgpu(textureFormat),
+              textureFormat,
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                   gpu::TextureUsage::Sampled});
       if (!created.hasResult()) {
@@ -5046,7 +5043,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Bounded, and skipped once the device is lost, so renderer teardown never blocks on a hung
   /// driver.
   void waitForQueueIdleAtTeardown() {
-    if (device && device->device()) {
+    if (device && device->adapterDevice().root().device()) {
       device->waitForQueueIdle();
     }
   }
@@ -7464,8 +7461,8 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
 
   const Vector2i dimensions(impl_->pixelWidth, impl_->pixelHeight);
   auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      impl_->device, std::move(impl_->ownedTarget), dimensions, impl_->textureFormat,
-      AlphaType::Premultiplied);
+      impl_->device, std::move(impl_->ownedTarget), dimensions,
+      geode::WgpuTextureFormatFrom(impl_->textureFormat), AlphaType::Premultiplied);
   if (!snapshot.isValid()) {
     return nullptr;
   }

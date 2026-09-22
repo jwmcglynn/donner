@@ -59,6 +59,7 @@ extern "C" {
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -132,19 +133,6 @@ gpu::TextureUsage RenderTargetUsage(bool enableReadback) {
                         : gpu::TextureUsage::RenderAttachment;
 }
 
-/// The backend format matching \p format. @param format Runtime format.
-wgpu::TextureFormat WgpuFormatOf(gpu::TextureFormat format) {
-  switch (format) {
-    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
-    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
-    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
-    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
-  }
-  // Every format the runtime describes is named above; this is the surface format the editor
-  // falls back to everywhere else, for a value that is none of them.
-  return wgpu::TextureFormat::BGRA8Unorm;
-}
-
 /// The backend usage matching \p usage. @param usage Runtime usage flags.
 wgpu::TextureUsage WgpuUsageOf(gpu::TextureUsage usage) {
   WGPUTextureUsage backendUsage = WGPUTextureUsage_None;
@@ -177,7 +165,7 @@ wgpu::Texture CreateOffscreenTargetTexture(const wgpu::Device& device, int width
   textureDesc.mipLevelCount = 1;
   textureDesc.sampleCount = 1;
   textureDesc.dimension = wgpu::TextureDimension::_2D;
-  textureDesc.format = WgpuFormatOf(format);
+  textureDesc.format = geode::WgpuTextureFormatFrom(format);
   textureDesc.usage = WgpuUsageOf(usage);
   return device.createTexture(textureDesc);
 }
@@ -1652,8 +1640,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   surfaceHeight = std::max(1, surfaceHeight);
 
   wgpuState_->root = root.get();
-  wgpuState_->geodeDevice = geode::GeodeDevice::CreateOverSelectedRoot(
-      std::move(root), WgpuFormatOf(wgpuState_->surfaceFormat));
+  wgpuState_->geodeDevice =
+      geode::GeodeDevice::CreateOverSelectedRoot(std::move(root), wgpuState_->surfaceFormat);
   if (wgpuState_->geodeDevice == nullptr) {
     std::fprintf(stderr,
                  "EditorWindow: could not build a Geode context over the selected device\n");
@@ -1679,7 +1667,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // WebGPU device and queue.
   geode::GeodeEmbedConfig framebufferEmbedConfig;
   framebufferEmbedConfig.physicalDevice = wgpuState_->physicalDevice;
-  framebufferEmbedConfig.textureFormat = WgpuFormatOf(wgpuState_->surfaceFormat);
+  framebufferEmbedConfig.textureFormat = geode::WgpuTextureFormatFrom(wgpuState_->surfaceFormat);
   wgpuState_->framebufferGeodeDevice =
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
   if (wgpuState_->framebufferGeodeDevice == nullptr) {

@@ -37,6 +37,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -2747,10 +2748,10 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   ASSERT_TRUE(host != nullptr);
 
   geode::GeodeEmbedConfig config;
-  config.device = host->device();
-  config.queue = host->queue();
-  config.adapter = host->adapter();
-  config.textureFormat = host->textureFormat();
+  config.device = host->adapterDevice().root().device();
+  config.queue = host->adapterDevice().root().queue();
+  config.adapter = host->adapterDevice().root().adapter();
+  config.textureFormat = geode::WgpuTextureFormatFrom(host->textureFormat());
   auto embeddedUnique = geode::GeodeDevice::CreateFromExternal(config);
   ASSERT_NE(embeddedUnique, nullptr);
 
@@ -2783,9 +2784,9 @@ TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   ASSERT_TRUE(host != nullptr);
 
   geode::GeodeEmbedConfig config;
-  config.device = host->device();
-  config.queue = host->queue();
-  config.adapter = host->adapter();
+  config.device = host->adapterDevice().root().device();
+  config.queue = host->adapterDevice().root().queue();
+  config.adapter = host->adapterDevice().root().adapter();
   config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
   auto embeddedUnique = geode::GeodeDevice::CreateFromExternal(config);
   ASSERT_NE(embeddedUnique, nullptr);
@@ -5764,10 +5765,10 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotBackingIsReleasedWhenConsumerFrameIsDis
 std::shared_ptr<geode::GeodeDevice> CreateSharedBackendContext(
     const std::shared_ptr<geode::GeodeDevice>& device) {
   geode::GeodeEmbedConfig config;
-  config.device = device->device();
-  config.queue = device->queue();
-  config.adapter = device->adapter();
-  config.textureFormat = device->textureFormat();
+  config.device = device->adapterDevice().root().device();
+  config.queue = device->adapterDevice().root().queue();
+  config.adapter = device->adapterDevice().root().adapter();
+  config.textureFormat = geode::WgpuTextureFormatFrom(device->textureFormat());
   return geode::GeodeDevice::CreateFromExternal(config);
 }
 
@@ -5819,10 +5820,10 @@ TEST_F(RendererGeodeTest, SharedBackendSnapshotNeedsARegistrationNotMatchingBack
   auto consumer = CreateSharedBackendContext(sharedDevice());
   ASSERT_THAT(producer, testing::NotNull());
   ASSERT_THAT(consumer, testing::NotNull());
-  ASSERT_THAT(static_cast<WGPUDevice>(producer->device()),
-              testing::Eq(static_cast<WGPUDevice>(consumer->device())));
-  ASSERT_THAT(static_cast<WGPUQueue>(producer->queue()),
-              testing::Eq(static_cast<WGPUQueue>(consumer->queue())));
+  ASSERT_THAT(static_cast<WGPUDevice>(producer->adapterDevice().root().device()),
+              testing::Eq(static_cast<WGPUDevice>(consumer->adapterDevice().root().device())));
+  ASSERT_THAT(static_cast<WGPUQueue>(producer->adapterDevice().root().queue()),
+              testing::Eq(static_cast<WGPUQueue>(consumer->adapterDevice().root().queue())));
   auto created = producer->adapterDevice().createTexture(
       {"unregistered snapshot",
        {4, 4},

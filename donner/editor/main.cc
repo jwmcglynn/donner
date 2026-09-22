@@ -16,6 +16,7 @@
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
@@ -141,7 +142,7 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
   // result. Stamp it exactly once so probes can pair the two product
   // timestamps.
   const workerStats = window['__donnerWorkerStats'];
-  if (workerStats && workerStats['presentedAtMs'] === undefined) {
+  if (workerStats && workerStats['presentedAtMs'] == = undefined) {
     workerStats['presentedAtMs'] = performance.now();
   }
 });
@@ -305,7 +306,7 @@ void RunWasmEditorFrame(void* userdata) {
     // raster thread burning 265 poll round trips. A non-blocking poll on
     // every skipped tick is nanoseconds when nothing is pending.
     if (const std::shared_ptr<donner::geode::GeodeDevice> device = state->window->geodeDevice()) {
-      device->pollSuspending(false);
+      device->adapterDevice().pollSuspending(false);
     }
     return;
   }

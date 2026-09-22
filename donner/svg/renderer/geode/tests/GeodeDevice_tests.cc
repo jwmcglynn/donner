@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -57,9 +58,9 @@ TEST(GeodeDevice, CreateHeadlessSucceeds) {
   ASSERT_NE(device, nullptr) << "Failed to create headless Dawn device. Check driver availability "
                                 "(Metal on macOS, Vulkan/SwiftShader on Linux).";
 
-  EXPECT_TRUE(static_cast<bool>(device->device()));
-  EXPECT_TRUE(static_cast<bool>(device->queue()));
-  EXPECT_TRUE(static_cast<bool>(device->adapter()));
+  EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().device()));
+  EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().queue()));
+  EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().adapter()));
 }
 
 TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
@@ -86,13 +87,19 @@ struct EmbedConfigConflictArm {
 
 constexpr auto kEmbedConfigConflictArms = std::to_array<EmbedConfigConflictArm>(
     {{"device",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.device = foreign.device(); }},
-     {"queue",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.queue = foreign.queue(); }},
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) {
+        config.device = foreign.adapterDevice().root().device();
+      }},
+     {"queue", [](GeodeEmbedConfig& config,
+                  GeodeDevice& foreign) { config.queue = foreign.adapterDevice().root().queue(); }},
      {"instance",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.instance = foreign.instance(); }},
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) {
+        config.instance = foreign.adapterDevice().root().instance();
+      }},
      {"adapter",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) { config.adapter = foreign.adapter(); }},
+      [](GeodeEmbedConfig& config, GeodeDevice& foreign) {
+        config.adapter = foreign.adapterDevice().root().adapter();
+      }},
      // The owner's own loss state is private to GeodeDevice and EditorWindow, so a second
      // context's flag is not reachable here. The check is shared_ptr identity, so any distinct
      // state is a faithful conflict.
@@ -117,7 +124,7 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
   // JavaScript side, and borrowing that null adapter would make the adapter arm assert nothing
   // about the adapter comparison and then fail for a reason that has nothing to do with it. Say so
   // here instead.
-  ASSERT_THAT(static_cast<WGPUAdapter>(foreignContext->adapter()), NotNull())
+  ASSERT_THAT(static_cast<WGPUAdapter>(foreignContext->adapterDevice().root().adapter()), NotNull())
       << "the conflict arms need a second context with every root populated";
 
   for (const EmbedConfigConflictArm& arm : kEmbedConfigConflictArms) {
@@ -136,10 +143,10 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
   // would leave all five arms green while the comparisons they cover stopped running.
   GeodeEmbedConfig agreeing;
   agreeing.physicalDevice = ownerContext->physicalDeviceOwner();
-  agreeing.device = ownerContext->device();
-  agreeing.queue = ownerContext->queue();
-  agreeing.instance = ownerContext->instance();
-  agreeing.adapter = ownerContext->adapter();
+  agreeing.device = ownerContext->adapterDevice().root().device();
+  agreeing.queue = ownerContext->adapterDevice().root().queue();
+  agreeing.instance = ownerContext->adapterDevice().root().instance();
+  agreeing.adapter = ownerContext->adapterDevice().root().adapter();
   EXPECT_THAT(GeodeDevice::CreateFromExternal(agreeing), NotNull())
       << "CreateFromExternal refused a config that repeats its own physical owner's roots";
 }
@@ -148,9 +155,12 @@ TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
   auto ownerContext = GeodeDevice::CreateHeadless();
   ASSERT_NE(ownerContext, nullptr);
 
-  GeodeEmbedConfig config{ownerContext->instance(), ownerContext->device(),
-                          ownerContext->queue(),    wgpu::TextureFormat::RGBA8Unorm,
-                          ownerContext->adapter(),  std::make_shared<GeodeDeviceLostState>()};
+  GeodeEmbedConfig config{ownerContext->adapterDevice().root().instance(),
+                          ownerContext->adapterDevice().root().device(),
+                          ownerContext->adapterDevice().root().queue(),
+                          wgpu::TextureFormat::RGBA8Unorm,
+                          ownerContext->adapterDevice().root().adapter(),
+                          std::make_shared<GeodeDeviceLostState>()};
   EXPECT_NE(GeodeDevice::CreateFromExternal(config), nullptr);
 }
 
@@ -160,10 +170,10 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();
   GeodeEmbedConfig borrowed;
-  borrowed.instance = ownerContext->instance();
-  borrowed.adapter = ownerContext->adapter();
-  borrowed.device = ownerContext->device();
-  borrowed.queue = ownerContext->queue();
+  borrowed.instance = ownerContext->adapterDevice().root().instance();
+  borrowed.adapter = ownerContext->adapterDevice().root().adapter();
+  borrowed.device = ownerContext->adapterDevice().root().device();
+  borrowed.queue = ownerContext->adapterDevice().root().queue();
   borrowed.lostState = lostState;
   auto borrowedContext = GeodeDevice::CreateFromExternal(borrowed);
   ASSERT_NE(borrowedContext, nullptr);
@@ -192,7 +202,7 @@ TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   desc.sampleCount = 1;
   desc.dimension = wgpu::TextureDimension::_2D;
 
-  wgpu::Texture texture = device->device().createTexture(desc);
+  wgpu::Texture texture = device->adapterDevice().root().device().createTexture(desc);
   ASSERT_TRUE(static_cast<bool>(texture));
   EXPECT_EQ(texture.getWidth(), 64u);
   EXPECT_EQ(texture.getHeight(), 64u);
@@ -208,7 +218,7 @@ TEST(GeodeDevice, CanCreateReadbackBuffer) {
   desc.size = 1024;
   desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
 
-  wgpu::Buffer buffer = device->device().createBuffer(desc);
+  wgpu::Buffer buffer = device->adapterDevice().root().device().createBuffer(desc);
   ASSERT_TRUE(static_cast<bool>(buffer));
   EXPECT_EQ(buffer.getSize(), 1024u);
 }
@@ -219,8 +229,8 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
 
-  const wgpu::Device& device = geodeDevice->device();
-  const wgpu::Queue& queue = geodeDevice->queue();
+  const wgpu::Device& device = geodeDevice->adapterDevice().root().device();
+  const wgpu::Queue& queue = geodeDevice->adapterDevice().root().queue();
 
   constexpr uint32_t kSize = 4;  // Small texture for a quick test.
 
@@ -551,9 +561,9 @@ TEST(GeodeDeviceLost, WaitForQueueIdleCompletesOnHealthyDevice) {
   ASSERT_NE(device, nullptr);
 
   // Submit a trivial command buffer so the wait has real work to drain.
-  wgpu::CommandEncoder encoder = device->device().createCommandEncoder();
+  wgpu::CommandEncoder encoder = device->adapterDevice().root().device().createCommandEncoder();
   wgpu::CommandBuffer cmd = encoder.finish();
-  device->queue().submit(1, &cmd);
+  device->adapterDevice().root().queue().submit(1, &cmd);
 
   EXPECT_EQ(device->waitForQueueIdle(), GpuWaitResult::Complete);
 }
@@ -567,9 +577,9 @@ TEST(GeodeDeviceLost, TeardownAfterLossSkipsGpuWaits) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
 
-  wgpu::CommandEncoder encoder = device->device().createCommandEncoder();
+  wgpu::CommandEncoder encoder = device->adapterDevice().root().device().createCommandEncoder();
   wgpu::CommandBuffer cmd = encoder.finish();
-  device->queue().submit(1, &cmd);
+  device->adapterDevice().root().queue().submit(1, &cmd);
   device->markDeviceLost("test-injected loss before teardown");
 
   const auto start = std::chrono::steady_clock::now();
@@ -588,8 +598,8 @@ TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();
   GeodeEmbedConfig config;
-  config.device = headless->device();
-  config.queue = headless->queue();
+  config.device = headless->adapterDevice().root().device();
+  config.queue = headless->adapterDevice().root().queue();
   config.lostState = lostState;
   auto external = GeodeDevice::CreateFromExternal(config);
   ASSERT_NE(external, nullptr);

@@ -40,6 +40,8 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::svg {
 namespace {
@@ -93,7 +95,7 @@ protected:
 std::unique_ptr<geode::GeodeDevice> siblingContextOf(const geode::GeodeDevice& root) {
   geode::GeodeEmbedConfig config;
   config.physicalDevice = root.physicalDeviceOwner();
-  config.textureFormat = root.textureFormat();
+  config.textureFormat = geode::WgpuTextureFormatFrom(root.textureFormat());
   return geode::GeodeDevice::CreateFromExternal(config);
 }
 

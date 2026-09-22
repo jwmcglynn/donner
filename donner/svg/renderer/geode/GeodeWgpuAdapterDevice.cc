@@ -610,17 +610,6 @@ struct Overloaded : Ts... {
 template <typename... Ts>
 Overloaded(Ts...) -> Overloaded<Ts...>;
 
-wgpu::TextureFormat ToWgpuTextureFormat(gpu::TextureFormat format) {
-  switch (format) {
-    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
-    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
-    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
-    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
-  }
-  UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
-  return wgpu::TextureFormat::RGBA8Unorm;
-}
-
 wgpu::BufferUsage ToWgpuBufferUsage(gpu::BufferUsage usage) {
   WGPUBufferUsage result = wgpu::BufferUsage::None;
   if (gpu::HasAllFlags(usage, gpu::BufferUsage::Vertex)) {
@@ -823,7 +812,7 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
       return;
     case gpu::BindingType::WriteOnlyStorageTexture2d:
       entry.storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-      entry.storageTexture.format = ToWgpuTextureFormat(layoutEntry.storageTextureFormat);
+      entry.storageTexture.format = WgpuTextureFormatFrom(layoutEntry.storageTextureFormat);
       entry.storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
       return;
   }
@@ -977,6 +966,17 @@ wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
     return wgpu::TextureView();
   }
   return GetHandle(slotTextureViews_, textureView.slotIndex());
+}
+
+wgpu::TextureFormat WgpuTextureFormatFrom(gpu::TextureFormat format) {
+  switch (format) {
+    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
+    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
+    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
+    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
+  }
+  UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
+  return wgpu::TextureFormat::RGBA8Unorm;
 }
 
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
@@ -1156,7 +1156,7 @@ gpu::Status GeodeWgpuAdapterDevice::onConfigureSurface(
 
   wgpu::SurfaceConfiguration backendConfiguration(wgpu::Default);
   backendConfiguration.device = root_->device();
-  backendConfiguration.format = ToWgpuTextureFormat(configuration.format);
+  backendConfiguration.format = WgpuTextureFormatFrom(configuration.format);
   backendConfiguration.usage = ToWgpuTextureUsage(configuration.usage);
   backendConfiguration.width = configuration.size.width;
   backendConfiguration.height = configuration.size.height;
@@ -1510,7 +1510,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
   wgpu::TextureDescriptor textureDescriptor = {};
   textureDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
   textureDescriptor.size = {descriptor.size.width, descriptor.size.height, 1u};
-  textureDescriptor.format = ToWgpuTextureFormat(descriptor.format);
+  textureDescriptor.format = WgpuTextureFormatFrom(descriptor.format);
   textureDescriptor.usage = ToWgpuTextureUsage(descriptor.usage);
   textureDescriptor.mipLevelCount = 1;
   textureDescriptor.sampleCount = 1;
@@ -1764,7 +1764,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
   std::vector<wgpu::ColorTargetState> targets(descriptor.fragment.targets.size());
   for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
     const gpu::ColorTargetState& target = descriptor.fragment.targets[i];
-    targets[i].format = ToWgpuTextureFormat(target.format);
+    targets[i].format = WgpuTextureFormatFrom(target.format);
     targets[i].writeMask = ToWgpuColorWriteMask(target.writeMask);
     if (target.blend.has_value()) {
       blendStorage[i].color.srcFactor = ToWgpuBlendFactor(target.blend->color.srcFactor);

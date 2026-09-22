@@ -171,7 +171,7 @@ protected:
     buffer.mapAsync(wgpu::MapMode::Read, 0, 256, callback);
     const GpuWaitResult waited = BoundedGpuWait(
         [&] {
-          device()->device().poll(false, nullptr);
+          device()->adapterDevice().root().device().poll(false, nullptr);
           return state->done.load(std::memory_order_acquire);
         },
         kDefaultGpuWaitTimeout);
@@ -299,7 +299,7 @@ fn endpoint_coverage() {
   }
 
   static ProbePipeline createProbePipeline(const std::string& wgsl) {
-    const auto& runtime = device()->device();
+    const auto& runtime = device()->adapterDevice().root().device();
     wgpu::ShaderSourceWGSL wgslSource{wgpu::Default};
     wgslSource.code = wgpuLabel(wgsl);
     wgpu::ShaderModuleDescriptor moduleDesc{wgpu::Default};
@@ -319,8 +319,9 @@ fn endpoint_coverage() {
     wgpu::BufferDescriptor descriptor{};
     descriptor.size = size;
     descriptor.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-    const wgpu::Buffer buffer = resources.retain(device()->device().createBuffer(descriptor));
-    device()->queue().writeBuffer(buffer, 0, data, size);
+    const wgpu::Buffer buffer =
+        resources.retain(device()->adapterDevice().root().device().createBuffer(descriptor));
+    device()->adapterDevice().root().queue().writeBuffer(buffer, 0, data, size);
     return buffer;
   }
 
@@ -357,14 +358,15 @@ fn endpoint_coverage() {
     groupDesc.layout = result.layout.get();
     groupDesc.entries = entries.data();
     groupDesc.entryCount = typed ? 2 : 3;
-    result.group = resources.retain(device()->device().createBindGroup(groupDesc));
+    result.group =
+        resources.retain(device()->adapterDevice().root().device().createBindGroup(groupDesc));
     return result;
   }
 
   static ProbeOutput createProbeOutput(ScopedWgpuResourceArena& resources,
                                        const wgpu::ComputePipeline& pipeline,
                                        const std::array<float, 2>& sample) {
-    const auto& runtime = device()->device();
+    const auto& runtime = device()->adapterDevice().root().device();
     wgpu::TextureDescriptor textureDesc{};
     textureDesc.size = {1, 1, 1};
     textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
@@ -397,7 +399,8 @@ fn endpoint_coverage() {
   static svg::RendererBitmap dispatchCoverage(const wgpu::ComputePipeline& pipeline,
                                               const wgpu::BindGroup& geometry,
                                               const ProbeOutput& output) {
-    const ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device()->device().createCommandEncoder());
+    const ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+        device()->adapterDevice().root().device().createCommandEncoder());
     const ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass());
     pass.get().setPipeline(pipeline);
     pass.get().setBindGroup(0, geometry, 0, nullptr);
@@ -413,7 +416,7 @@ fn endpoint_coverage() {
     const wgpu::Extent3D extent{1, 1, 1};
     encoder.get().copyTextureToBuffer(from, to, extent);
     const ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-    device()->queue().submit(1, &commands.get());
+    device()->adapterDevice().root().queue().submit(1, &commands.get());
     return svg::RendererBitmap{Vector2i(1, 1), readback(output.readbackBuffer), 4};
   }
 

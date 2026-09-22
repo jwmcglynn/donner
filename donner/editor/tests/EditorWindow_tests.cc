@@ -1510,10 +1510,11 @@ TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
   EXPECT_EQ(window.geodeFramebufferDevice()->physicalDeviceOwner(),
             window.geodeDevice()->physicalDeviceOwner());
   EXPECT_NE(window.geodeFramebufferDevice()->deviceId(), window.geodeDevice()->deviceId());
-  EXPECT_EQ(static_cast<WGPUDevice>(window.geodeFramebufferDevice()->device()),
-            static_cast<WGPUDevice>(window.geodeDevice()->device()));
-  EXPECT_EQ(static_cast<WGPUQueue>(window.geodeFramebufferDevice()->queue()),
-            static_cast<WGPUQueue>(window.geodeDevice()->queue()));
+  EXPECT_EQ(
+      static_cast<WGPUDevice>(window.geodeFramebufferDevice()->adapterDevice().root().device()),
+      static_cast<WGPUDevice>(window.geodeDevice()->adapterDevice().root().device()));
+  EXPECT_EQ(static_cast<WGPUQueue>(window.geodeFramebufferDevice()->adapterDevice().root().queue()),
+            static_cast<WGPUQueue>(window.geodeDevice()->adapterDevice().root().queue()));
 #endif
 }
 
@@ -1536,14 +1537,14 @@ TEST(EditorWindowTest, WgpuPhysicalDeviceOutlivesWindowWhenContextIsRetained) {
   }
 
   ASSERT_FALSE(physicalOwner.expired());
-  ASSERT_TRUE(static_cast<bool>(retainedContext->device()));
+  ASSERT_TRUE(static_cast<bool>(retainedContext->adapterDevice().root().device()));
   wgpu::BufferDescriptor descriptor = {};
   descriptor.label = geode::wgpuLabel("RetainedContextBuffer");
   descriptor.size = 16;
   descriptor.usage = wgpu::BufferUsage::CopyDst;
   {
     geode::ScopedWgpuHandle<wgpu::Buffer> buffer(
-        retainedContext->device().createBuffer(descriptor));
+        retainedContext->adapterDevice().root().device().createBuffer(descriptor));
     EXPECT_TRUE(static_cast<bool>(buffer));
   }
 
