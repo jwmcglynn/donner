@@ -20,6 +20,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
+#include "donner/gpu/TextureExport.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
@@ -136,12 +137,18 @@ private:
   struct Backing;
   struct ReadbackControl;
   static RendererBitmap readTexture(std::shared_ptr<geode::GeodeDevice> device,
-                                    const gpu::Texture& texture, Vector2i dimensions,
+                                    const gpu::TextureExport& exported, Vector2i dimensions,
                                     AlphaType alphaType, const std::function<bool()>& shouldCancel,
                                     std::shared_ptr<Backing> backing = {});
+  /// Waits, in slices the capture's cancellation and deadline can stop, until the producer work
+  /// \p source follows has completed. False when the capture ends first or a device is lost.
+  /// @param context Capture context. @param source Registration of the captured texture.
+  /// @param control The capture's cancellation, deadline and outcome.
+  static bool waitForCaptureSource(geode::GeodeDevice& context, const gpu::Texture& source,
+                                   ReadbackControl& control);
   static RendererBitmap readTextureWithContext(geode::GeodeDevice& context,
-                                               geode::GeodeDevice& owner,
-                                               const gpu::Texture& texture, Vector2i dimensions,
+                                               const gpu::TextureExport& exported,
+                                               Vector2i dimensions,
                                                const gpu::TextureDescriptor& descriptor,
                                                AlphaType alphaType, ReadbackControl& control);
   static RendererBitmap readTextureGpu(geode::GeodeDevice& context, const gpu::Texture& texture,

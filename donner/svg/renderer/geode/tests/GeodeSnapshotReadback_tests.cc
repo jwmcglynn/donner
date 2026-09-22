@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "donner/gpu/GpuLimits.h"
@@ -342,6 +343,32 @@ TEST_F(GeodeSnapshotReadbackTest, QueueIdleTimeoutIsReportedAsItsOwnWaitSite) {
   EXPECT_TRUE(stats.deviceLost);
   EXPECT_EQ(stats.timedOutWaitSite, GpuWaitTimeoutSite::QueueIdle);
   EXPECT_EQ(stats.timedOutWaitMs, static_cast<int>(geode::kDefaultGpuWaitTimeout.count()));
+}
+
+/// Memory another context still holds after its producer released it is resident but no longer
+/// the producer's allocation. The readback statistics report those bytes, so a working set
+/// measured through them does not lose the memory, and stop reporting them once the last holder
+/// lets go.
+TEST_F(GeodeSnapshotReadbackTest, ReadbackStatsReportBytesHeldAfterTheProducerReleasedThem) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+  RendererGeode renderer(device);
+  gpu::Device& runtime = device->runtimeDevice();
+
+  gpu::Texture texture = gpu::GetResultOrFail(runtime.createTexture(
+      gpu::TextureDescriptor{"heldElsewhere",
+                             {16, 8},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  std::optional<gpu::TextureExport> exported = gpu::GetResultOrFail(runtime.exportTexture(texture));
+  EXPECT_EQ(renderer.consumeReadbackStats().sharedTextureTailBytes, 0u)
+      << "the producer still holds the texture";
+
+  ASSERT_THAT(runtime.destroyTexture(std::move(texture)), gpu::IsOk());
+  EXPECT_EQ(renderer.consumeReadbackStats().sharedTextureTailBytes, 16u * 8u * 4u);
+
+  exported.reset();
+  EXPECT_EQ(renderer.consumeReadbackStats().sharedTextureTailBytes, 0u);
 }
 
 }  // namespace

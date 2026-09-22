@@ -349,6 +349,10 @@ public:
     /// Idle pooled resource sets and their logical backing bytes after the latest capture.
     uint64_t poolEntries = 0;
     uint64_t poolBytes = 0;
+    /// Bytes of this context's textures still resident because another context registered them
+    /// or an export of them is alive, after this context released its own handle. No context
+    /// counts that memory as its allocation, so a working set has to add it.
+    uint64_t sharedTextureTailBytes = 0;
   };
 
   /// Override the total capture budget for deterministic cancellation/deadline tests.
@@ -871,20 +875,19 @@ private:
                                               std::chrono::steady_clock::time_point deadline);
 
   /**
-   * Registers \p texture, which \p producer owns, as a texture of this capture context.
+   * Registers a texture the producer exported as a texture of this capture context.
    *
    * A capture context is a runtime device of its own, so a texture of the producer is not a
-   * texture of the capture until it is named here. The registration is borrowed: it describes the
-   * texture the way its producer does, takes no ownership of the allocation, and is forgotten
-   * when the returned handle goes away. It is refused for a producer over a different backend
-   * device, and for a handle its producer no longer resolves. Only a capture context may
-   * register a source.
+   * texture of the capture until it is named here. The export was made on the producer's thread,
+   * so registering it never reads the producer's tables. The registration describes the texture
+   * the way its producer does, never owns the allocation, and is forgotten when the returned
+   * handle goes away; the runtime refuses it for a producer over a different backend device, for a
+   * texture its producer has released, and on a backend that cannot share textures. Only a
+   * capture context may register a source.
    *
-   * @param producer Context that owns \p texture.
-   * @param texture Live texture handle of \p producer.
+   * @param source Export of the texture to capture.
    */
-  gpu::Result<gpu::Texture> registerCaptureSource(const GeodeDevice& producer,
-                                                  const gpu::Texture& texture);
+  gpu::Result<gpu::Texture> registerCaptureSource(const gpu::TextureExport& source);
 
   SnapshotCaptureStatus waitForSnapshotCapture(std::unique_lock<std::timed_mutex>& lock,
                                                const std::function<bool()>& shouldCancel,

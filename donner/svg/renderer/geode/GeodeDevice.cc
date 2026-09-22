@@ -420,6 +420,7 @@ GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
       .submits = readbackSubmits_.exchange(0, std::memory_order_relaxed),
       .poolEntries = readbackPoolEntries_.load(std::memory_order_relaxed),
       .poolBytes = readbackPoolBytes_.load(std::memory_order_relaxed),
+      .sharedTextureTailBytes = runtimeDevice_->sharedTextureTailBytes(),
   };
 }
 
@@ -505,15 +506,9 @@ GeodeDevice::SnapshotCaptureLease GeodeDevice::acquireSnapshotCapture(
   return lease;
 }
 
-gpu::Result<gpu::Texture> GeodeDevice::registerCaptureSource(const GeodeDevice& producer,
-                                                             const gpu::Texture& texture) {
+gpu::Result<gpu::Texture> GeodeDevice::registerCaptureSource(const gpu::TextureExport& source) {
   UTILS_RELEASE_ASSERT(readbackOnly_);
-  if (transitionalAdapter_ == nullptr || !producer.hasTransitionalAdapter()) {
-    return gpu::GpuError{gpu::GpuErrorType::Unsupported,
-                         "registerCaptureSource: the native backend cannot yet name a texture of "
-                         "another runtime device"};
-  }
-  return transitionalAdapter_->importTextureFrom(producer.adapterDevice(), texture);
+  return runtimeDevice_->registerTexture(source);
 }
 
 void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {

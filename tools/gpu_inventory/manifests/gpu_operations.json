@@ -518,6 +518,7 @@
         "mapAsync",
         "poll",
         "present",
+        "release",
         "requestAdapter",
         "requestDevice",
         "setBindGroup",
