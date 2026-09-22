@@ -567,7 +567,6 @@
       "wgpuCppTokens": [
         "Adapter",
         "BackendType",
-        "Buffer",
         "CallbackMode",
         "Default",
         "Device",
@@ -581,7 +580,6 @@
         "RequestAdapterOptions",
         "Status",
         "StringView",
-        "Texture",
         "TextureFormat",
         "createInstance"
       ]
@@ -598,12 +596,10 @@
       ],
       "wgpuCppTokens": [
         "Adapter",
-        "Buffer",
         "Device",
         "DeviceDescriptor",
         "Instance",
         "Queue",
-        "Texture",
         "TextureFormat"
       ]
     },
@@ -868,8 +864,7 @@
         "mapAsync",
         "poll",
         "submit",
-        "unmap",
-        "writeBuffer"
+        "unmap"
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -903,8 +898,7 @@
         "TextureDescriptor",
         "TextureDimension",
         "TextureFormat",
-        "TextureUsage",
-        "TextureView"
+        "TextureUsage"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeEmbed_tests.cc": {

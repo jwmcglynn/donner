@@ -1388,27 +1388,9 @@ const gpu::BindGroup& GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBind
   return inserted.first->second;
 }
 
-void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {
-  if (buffer) {
-    pendingBuffers_.push_back(ScopedWgpuHandle<wgpu::Buffer>(std::move(buffer)));
-  }
-}
-
-void GeodeDevice::deferDestroy(wgpu::Texture texture) {
-  if (texture) {
-    pendingTextures_.push_back(ScopedWgpuHandle<wgpu::Texture>(std::move(texture)));
-  }
-}
-
 void GeodeDevice::deferDestroy(gpu::BindGroup bindGroup) {
   if (bindGroup.isValid()) {
     pendingBindGroups_.push_back(std::move(bindGroup));
-  }
-}
-
-void GeodeDevice::deferDestroy(gpu::Texture texture) {
-  if (texture.isValid()) {
-    pendingGpuTextures_.push_back(std::move(texture));
   }
 }
 
@@ -1437,16 +1419,12 @@ void GeodeDevice::drainDeferredTextureBackings() {
 
 std::size_t GeodeDevice::deferredTextureDestroyCountForTesting() const {
   std::lock_guard lock(impl_->textureBackingRetirementMutex);
-  return pendingTextures_.size() + pendingGpuTextures_.size() +
-         impl_->textureBackingsAwaitingRetirement.size();
+  return impl_->textureBackingsAwaitingRetirement.size();
 }
 
 void GeodeDevice::drainDeferredDestroys() {
   drainDeferredTextureBackings();
-  pendingBuffers_.clear();
-  pendingTextures_.clear();
   pendingBindGroups_.clear();
-  pendingGpuTextures_.clear();
 }
 
 }  // namespace donner::geode
